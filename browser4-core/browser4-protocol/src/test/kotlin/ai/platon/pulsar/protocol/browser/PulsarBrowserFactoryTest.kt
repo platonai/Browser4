@@ -7,10 +7,12 @@ import ai.platon.pulsar.common.AppPaths
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Disabled
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+@Tag("RequiresBrowser")
 class PulsarBrowserFactoryTest {
 
     private lateinit var browserFactory: PulsarBrowserFactory
@@ -57,6 +59,7 @@ class PulsarBrowserFactoryTest {
     }
 
     @Test
+    @Tag("Slow")
     fun testLaunchNextSequentialBrowser() {
         val browser1 = browserFactory.launchNextSequentialBrowser()
         browsers.add(browser1)

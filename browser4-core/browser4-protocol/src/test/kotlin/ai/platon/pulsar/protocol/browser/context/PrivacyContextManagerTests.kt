@@ -21,6 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.apache.commons.lang3.RandomStringUtils
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Tag
 import java.net.URI
 import java.nio.file.Files
 import java.time.Duration
@@ -31,6 +32,7 @@ import kotlin.random.Random
 import kotlin.test.*
 import kotlin.time.Duration.Companion.milliseconds
 
+@Tag("RequiresBrowser")
 class PrivacyContextManagerTests {
     private val logger = getLogger(this)
     private val contextPathBase = Files.createTempDirectory("test-")
@@ -177,6 +179,7 @@ class PrivacyContextManagerTests {
     }
 
     @Test
+    @Tag("Slow")
     @DisplayName("When tasks run then contexts rotates")
     fun whenTasksRunThenContextsRotates() {
         val manager = MultiPrivacyContextManager(driverPoolManager, conf)

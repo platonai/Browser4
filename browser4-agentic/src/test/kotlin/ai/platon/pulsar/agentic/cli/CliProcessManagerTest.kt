@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
@@ -54,6 +55,7 @@ class CliProcessManagerTest {
     }
 
     @Test
+    @Tag("Slow")
     @DisplayName("timeout and cancel are mutually exclusive: timeout wins")
     fun timeoutAttribution() = runBlocking {
         val mgr = manager()
@@ -67,6 +69,7 @@ class CliProcessManagerTest {
     }
 
     @Test
+    @Tag("Slow")
     @DisplayName("cancel token produces aborted (not timedOut)")
     fun abortAttribution() = runBlocking {
         val mgr = manager()
@@ -99,6 +102,7 @@ class CliProcessManagerTest {
     }
 
     @Test
+    @Tag("Slow")
     @DisplayName("tree kill: grandchild is terminated with the parent")
     fun treeKill() = runBlocking {
         assumeTrue(isWindows, "tree-kill test uses Windows process tree")

@@ -7,6 +7,7 @@ import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import io.mockk.mockk
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
@@ -35,6 +36,7 @@ class RobustBrowserAgentMemoryWiringTest {
     }
 
     @Test
+    @Tag("Slow")
     @DisplayName("agentMemory initialization registers tools and binds the per-agent target")
     fun testAgentMemoryWiring() {
         // Isolate the PEM knowledge store into the temp dir (the default would

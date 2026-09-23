@@ -17,6 +17,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
@@ -91,6 +92,7 @@ class StatefulAgentRunnerTest {
     }
 
     @Test
+    @Tag("Slow")
     @DisplayName("failed run still stores a task-scoped, detached history snapshot")
     fun failedRunStoresTaskScopedDetachedSnapshot() = runBlocking {
         val agent = mockAgent(

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
@@ -61,6 +62,7 @@ class B4CliToolExecutorJobTest {
     }
 
     @Test
+    @Tag("Slow")
     @DisplayName("long commands escalate to a job handle, then status/wait/kill work")
     fun longCommandEscalatesToJob() = runBlocking {
         val ex = executor(jobYieldMs = 500)

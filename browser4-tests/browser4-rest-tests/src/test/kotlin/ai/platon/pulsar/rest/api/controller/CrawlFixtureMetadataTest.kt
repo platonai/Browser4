@@ -33,8 +33,12 @@ import java.time.Instant
  * each stored title still matches its URL.
  *
  * Tagged [IntegrationTest] so it runs in main CI + nightly (not PR CI).
+ * Measured 232 s for 5 tests (2026-09), so it is also [Heavy] and needs a real
+ * browser ([RequiresBrowser]).
  */
 @Tag("IntegrationTest")
+@Tag("Heavy")
+@Tag("RequiresBrowser")
 class CrawlFixtureMetadataTest : RestAPITestBase() {
 
     private val crawlBase: String by lazy { TestUrls.MOCK_CRAWL_BASE }

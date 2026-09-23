@@ -48,6 +48,7 @@ class CrawlXSqlE2ETest : RestAPITestBase() {
     }
 
     @Test
+    @Tag("Slow")
     @DisplayName("a crawl with an X-SQL extracts from its own page and never fetches it again")
     fun testCrawlWithSqlExtractsWithoutASecondFetch() {
         // Fresh paths on every run, for three reasons: a second crawl of a url already in the page

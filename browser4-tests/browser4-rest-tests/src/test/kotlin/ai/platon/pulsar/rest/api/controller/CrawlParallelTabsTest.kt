@@ -35,9 +35,12 @@ import java.time.Instant
  * the probe counting unrelated requests.
  *
  * Tagged [IntegrationTest]: needs a real browser, the driver pool and the mock
- * site, so it runs in main CI + nightly (not PR CI).
+ * site, so it runs in main CI + nightly (not PR CI).  Measured 81 s for 5 tests
+ * (2026-09), hence [Heavy] and [RequiresBrowser].
  */
 @Tag("IntegrationTest")
+@Tag("Heavy")
+@Tag("RequiresBrowser")
 class CrawlParallelTabsTest : RestAPITestBase() {
 
     private val probeBase: String by lazy { "${TestUrls.MOCK_CRAWL_BASE.substringBefore("/generated")}/__probe" }
