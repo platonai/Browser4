@@ -164,7 +164,11 @@ class CrawlXSqlE2ETest : RestAPITestBase() {
             .returnResult()
             .responseBody
         val body = requireNotNull(raw) { "empty /__probe/stats body" }
+        // `/stats` also carries the per-id `flakyHits` map (a delivery retry is only
+        // observable from the site's side), which is not a scalar counter, so only the
+        // numeric entries are read here.  `CrawlDeliveryRetryTest.flakyHits()` reads the map.
         return jacksonObjectMapper().readValue(body, Map::class.java)
-            .entries.associate { (k, v) -> k.toString() to (v as Number).toInt() }
+            .entries.mapNotNull { (k, v) -> (v as? Number)?.let { k.toString() to it.toInt() } }
+            .toMap()
     }
 }
