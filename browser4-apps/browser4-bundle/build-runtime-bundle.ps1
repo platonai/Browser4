@@ -796,7 +796,16 @@ $mvnCmd = Resolve-MavenCommand -repositoryRoot $repoRoot
 # runs `mvn install` before invoking this script and passes -SkipMavenInstall).
 if (-not $SkipMavenInstall) {
     Write-Host "Ensuring main modules are installed to ~/.m2 ..."
-    $installArgs = @('install', '-Pall-main-modules,asset-bundle', '-DskipTests')
+    # -Dmaven.jar.forceCreation=true is load-bearing, not belt-and-braces: the jar
+    # plugin skips repackaging when it believes nothing changed, and it compares
+    # the output jar against the *classes directory* mtime, which does not move
+    # when only the contents of existing class files change.  Without this, an
+    # incremental `mvn install` can leave a module jar older than the sources it
+    # was compiled from — exactly the staleness dev mode refuses to serve.
+    $installArgs = @(
+        'install', '-Pall-main-modules,asset-bundle', '-DskipTests',
+        '-Dmaven.jar.forceCreation=true'
+    )
     if (-not $ShowMavenOutput) {
         $installArgs += '-q'
     }
@@ -1035,6 +1044,22 @@ $libJarCountAfter = (Get-ChildItem -Path $libDirectory -File -Filter '*.jar' | M
 $removedCount = $libJarCount - $libJarCountAfter
 if ($removedCount -gt 0) {
     Write-Host "Cleaned up $removedCount unnecessary JARs ($libJarCountAfter remaining in lib/)" -ForegroundColor Green
+}
+
+# Record that the jars under lib/ were assembled from the checked-out sources at
+# this moment.  The dev-mode launcher compares source timestamps against the jar
+# timestamps, but this project builds reproducibly, so Maven leaves a jar whose
+# recompiled content is byte-identical with its original timestamp — a jar mtime
+# alone can never prove the bundle is current.  Only written when Maven ran (see
+# -SkipMavenInstall), because otherwise lib/ may hold jars installed by an
+# earlier build.
+if (-not $SkipMavenInstall) {
+    $stampPath = Join-Path $libDirectory '.browser4-bundle-build-stamp'
+    try {
+        Set-Content -Path $stampPath -Value 'rebuilt from the checked-out sources' -Encoding ascii -NoNewline
+    } catch {
+        Write-Warning "Could not write the bundle build stamp at ${stampPath}: $_"
+    }
 }
 
 # --------------------------------------------------------------------------

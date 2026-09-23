@@ -98,6 +98,8 @@ browser4-cli snapshot -v 0 --auto-diff    # shows what changed after form submis
 
 The diff marks elements as added (`+`), removed (`-`), or modified (`~`), making it easy to spot navigation results, error messages, or confirmation text.
 
+> **`wait --load networkidle` only proves the network went quiet.** A page that computes results in JS after load (dashboards, bot-detection verdicts) can still be blank when the wait reports success, and a diff then shows nothing. Poll the result element first — `wait "<result-selector>"` — and treat `networkidle` as a network-settling extra step.
+
 > **Note:** `--auto-diff` requires a previous snapshot in the same session. If no previous snapshot exists, it behaves like a normal capture with a warning.
 
 ## Snapshot Grep
@@ -202,7 +204,7 @@ browser4-cli snapshot -v 0                         # observe: find email ref, pa
 browser4-cli fill <email-ref> "user@example.com"   # interact
 browser4-cli fill <password-ref> "password"
 browser4-cli click <submit-ref>
-browser4-cli wait --load networkidle
+browser4-cli wait --load networkidle               # network settled — nothing more
 browser4-cli snapshot -v 0 --auto-diff             # verify: see what changed
 ```
 

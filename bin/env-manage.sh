@@ -50,6 +50,7 @@ KNOWN_VARS=(
   # ---- CLI: Build & Bundle ----
   "BROWSER4_CLI_FORCE_REMOTE_BUNDLE|cli||Set to 1/true/yes/on to force download from remote releases|"
   "BROWSER4_CLI_FORCE_REBUILD_BUNDLE|cli||Set to 1/true/yes/on to force rebuild from source|"
+  "BROWSER4_CLI_ALLOW_STALE_BUNDLE|cli||Set to 1/true/yes/on to start against a bundle that does not match the checkout (dev mode refuses by default)|"
 
   # ---- CLI: Timeouts ----
   "BROWSER4_CLI_HTTP_TIMEOUT_SECS|cli|30|Default HTTP request timeout (seconds)|"
