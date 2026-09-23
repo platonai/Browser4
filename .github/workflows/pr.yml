@@ -125,6 +125,18 @@ jobs:
           if [ "${{ steps.run-tests.outputs.test_status }}" != "success" ]; then
             echo "❌ Tests failed with status: ${{ steps.run-tests.outputs.test_status }}"
             echo "📊 Total: ${{ steps.run-tests.outputs.test_count }} | Failed: ${{ steps.run-tests.outputs.failed_count }} | Passed: ${{ steps.run-tests.outputs.passed_count }}"
+            echo "Maven exit code: ${{ steps.run-tests.outputs.run_exit_code }}"
+            echo "Surefire reports produced: ${{ steps.run-tests.outputs.reports_found }}"
+            if [ "${{ steps.run-tests.outputs.failed_count }}" = "0" ]; then
+              echo ""
+              echo "ℹ️  No surefire test failure was parsed, so the reactor failed outside the tests."
+              echo "    In this gate that is most often the JaCoCo instruction floor"
+              echo "    (quality-gate profile, minimum 0.20 per module) — open"
+              echo "    'target/site/jacoco/index.html' from the test-reports artifact, or grep the"
+              echo "    'Run Tests' step for the JaCoCo rule violation. A module with no tests and"
+              echo "    no exec file fails the floor by design; a compile error or a dead test JVM"
+              echo "    shows up the same way."
+            fi
             FAILED_LIST="${{ steps.run-tests.outputs.failed_test_list }}"
             if [ -n "$FAILED_LIST" ]; then
               echo ""

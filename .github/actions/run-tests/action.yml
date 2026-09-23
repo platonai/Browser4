@@ -46,6 +46,10 @@ inputs:
     description: 'Name suffix for test reports artifact (default: test-reports)'
     required: false
     default: 'test-reports'
+  maven_args:
+    description: 'Extra Maven arguments appended verbatim to the test command (e.g. "-Djacoco.check.skip=true")'
+    required: false
+    default: ''
 
 outputs:
   test_status:
@@ -69,6 +73,9 @@ outputs:
   failed_test_list:
     description: 'Newline-separated list of failed test class names'
     value: ${{ steps.test-summary.outputs.failed_test_list }}
+  reports_found:
+    description: '1 when at least one Surefire XML report was produced, 0 otherwise'
+    value: ${{ steps.test-summary.outputs.reports_found }}
 
 runs:
   using: "composite"
@@ -132,6 +139,7 @@ runs:
         echo "  - Parallel: ${{ inputs.parallel_tests }}"
         echo "  - Reports: ${{ inputs.test_reports }}"
         echo "  - Run Pulsar Tests: ${{ inputs.run_pulsar_tests }}"
+        echo "  - Extra Maven Args: ${{ inputs.maven_args }}"
 
         # Build test command
         test_cmd="$MAVEN_CMD test"
@@ -178,6 +186,13 @@ runs:
 
         # Add batch mode and other options
         test_cmd="$test_cmd -B"
+
+        # Extra caller-supplied Maven arguments (e.g. -Djacoco.check.skip=true for
+        # an observe-only coverage run).  Appended verbatim so a caller can widen
+        # or narrow the run without this action growing a flag per use case.
+        if [ -n "${{ inputs.maven_args }}" ]; then
+          test_cmd="$test_cmd ${{ inputs.maven_args }}"
+        fi
 
         echo "🚀 Executing: $test_cmd"
         echo ""
@@ -301,6 +316,39 @@ runs:
         echo "passed_count=$passed_tests" >> $GITHUB_OUTPUT
         echo "skipped_count=$skipped_tests" >> $GITHUB_OUTPUT
         echo "failed_test_list=${FAILED_TEST_LIST}" >> $GITHUB_OUTPUT
+        # 1 when the reactor actually produced surefire XML.  The reconcile step
+        # uses this to refuse a "zero failures" success when nothing ran at all.
+        echo "reports_found=$TEST_FILES_EXIST" >> $GITHUB_OUTPUT
+
+        # Surface the totals in the run UI: raw surefire XML lives in an artifact
+        # that expires after 7 days, and "Tests: N | Failed: N" in the job log is
+        # the only number anyone reads.
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          {
+            echo "### Test summary (\`${{ inputs.maven_profiles }}\`)"
+            echo ""
+            echo "| Metric | Value |"
+            echo "| --- | --- |"
+            echo "| Total | ${total_tests} |"
+            echo "| Passed | ${passed_tests} |"
+            echo "| Failed | ${failed_tests} |"
+            echo "| Skipped | ${skipped_tests} |"
+            echo "| Surefire reports found | ${TEST_FILES_EXIST} |"
+            echo "| Maven exit code | ${{ steps.run-tests.outputs.run_exit_code }} |"
+            echo "| Excluded tags | \`${{ inputs.excluded_groups }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${FAILED_TEST_LIST}" ] && [ "${FAILED_TEST_LIST}" != " " ]; then
+            {
+              echo ""
+              echo "**Failed classes:**"
+              echo ""
+              for test_class in ${FAILED_TEST_LIST}; do
+                test_class=$(echo "$test_class" | xargs)
+                [ -n "$test_class" ] && echo "- \`${test_class}\`"
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+        fi
 
         # Generate test report summary
         if [ "${{ inputs.test_reports }}" == "true" ]; then
@@ -325,32 +373,51 @@ runs:
         EXEC_STATUS="${{ steps.run-tests.outputs.status }}"
         RUN_EXIT_CODE="${{ steps.run-tests.outputs.run_exit_code }}"
         FAILED_COUNT="${{ steps.test-summary.outputs.failed_count }}"
+        REPORTS_FOUND="${{ steps.test-summary.outputs.reports_found }}"
 
         # Set defaults if empty
         EXEC_STATUS="${EXEC_STATUS:-failed}"
         RUN_EXIT_CODE="${RUN_EXIT_CODE:-0}"
         FAILED_COUNT="${FAILED_COUNT:-0}"
+        REPORTS_FOUND="${REPORTS_FOUND:-0}"
 
         echo "🔍 Status Analysis:"
         echo "  - Execution Status: $EXEC_STATUS"
         echo "  - Maven exit code: $RUN_EXIT_CODE"
         echo "  - Failed Test Count: $FAILED_COUNT"
+        echo "  - Surefire reports found: $REPORTS_FOUND"
 
-        # A timeout (exit 124) means Maven was killed before the reactor
-        # finished, so the modules that never ran contributed no surefire XML:
-        # FAILED_COUNT == 0 then only says "nothing that ran failed".  Never
-        # reconcile a truncated run to success.
+        # The Maven exit code is the truth.  Reconciling a non-zero exit to
+        # "success" because no surefire failure was parsed is exactly how a red
+        # run (or a breached coverage floor) becomes a green one while whole
+        # modules never executed:
+        #   * a module failed to compile or resolve dependencies,
+        #   * the quality-gate profile's JaCoCo coverage check rejected the build,
+        #   * a surefire fork died before writing its report,
+        #   * the reactor stopped at the first failing module (partial runs).
+        # A stripped or partially executed run must never read as a pass.
         if [ "$RUN_EXIT_CODE" == "124" ] || [ "$EXEC_STATUS" == "timeout" ]; then
           FINAL_STATUS="failed"
           echo "  - Final Status: failed (test run timed out — results are incomplete)"
-        # Reconcile: if no tests failed, override status to success
-        # This handles cases where Maven exits non-zero for non-test-failure reasons
-        elif [ "$FAILED_COUNT" == "0" ]; then
-          FINAL_STATUS="success"
-          echo "  - Final Status: success (no test failures detected)"
+        elif [ "$RUN_EXIT_CODE" != "0" ]; then
+          FINAL_STATUS="failed"
+          echo "  - Final Status: failed (Maven exit code $RUN_EXIT_CODE)"
+          if [ "$FAILED_COUNT" == "0" ]; then
+            echo "    No surefire test failure was parsed, so the reactor failed outside the tests:"
+            echo "      * module compile / dependency-resolution error,"
+            echo "      * a build gate (e.g. the JaCoCo coverage floor) rejected the build,"
+            echo "      * or a test JVM died before writing its report."
+            echo "    Inspect the 'Run Tests' step output above for the Maven error."
+          fi
+        elif [ "$REPORTS_FOUND" != "1" ]; then
+          FINAL_STATUS="failed"
+          echo "  - Final Status: failed (Maven exited 0 but produced no surefire XML — no test actually ran)"
+        elif [ "$FAILED_COUNT" != "0" ]; then
+          FINAL_STATUS="failed"
+          echo "  - Final Status: failed ($FAILED_COUNT test failure(s) recorded)"
         else
-          FINAL_STATUS="$EXEC_STATUS"
-          echo "  - Final Status: $EXEC_STATUS (test failures detected)"
+          FINAL_STATUS="success"
+          echo "  - Final Status: success"
         fi
 
         # Update the status output
