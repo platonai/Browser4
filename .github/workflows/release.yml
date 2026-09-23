@@ -1542,11 +1542,14 @@ jobs:
         if: success()
         shell: bash
         # Must exceed sync-to-oss.yml's own worst case (its job timeout is
-        # 30 min) plus its queue time, so that the step reports the sync's
-        # verdict rather than timing out on top of it.  v4.13.21 gave up after
-        # 15 minutes on a sync whose "Upload to OSS" step had stalled, and the
-        # release job went red with nothing but "timed out" to say.
-        timeout-minutes: 50
+        # 60 min, its upload step 45 min) plus its queue time, so that the step
+        # reports the sync's verdict rather than timing out on top of it.
+        # v4.13.21 gave up after 15 minutes on a sync whose "Upload to OSS" step
+        # had stalled, and the release job went red with nothing but "timed out"
+        # to say.  Both numbers are raised again because a re-sync is genuinely
+        # slow: the GitHub runner reached Aliyun at ~400 KB/s for 551 MB, while
+        # the first sync of a tag had managed ~4 MB/s.
+        timeout-minutes: 75
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ needs.prepare.outputs.tag }}

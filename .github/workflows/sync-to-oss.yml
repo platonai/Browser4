@@ -25,7 +25,10 @@ jobs:
     # v4.13.21 this job was still "in_progress" an hour in -- its "Upload to
     # OSS" step had stalled -- and the release job, whose own budget ran out
     # first, could only report that it had given up.
-    timeout-minutes: 30
+    #
+    # Kept above the upload step's own 45-minute bound so a slow transfer is
+    # bounded by the step (which names itself) rather than by the job.
+    timeout-minutes: 60
     steps:
       - name: Resolve Tag
         id: resolve
@@ -94,12 +97,17 @@ jobs:
 
       - name: Upload to OSS
         # ~2 minutes for the 11 release assets in every earlier release (the
-        # largest single file: 43 s), so a 20-minute budget cannot fire on a
-        # slow day -- only on a stalled transfer.  v4.13.21 stalled on the
-        # first asset: this step never returned, and Browser4.jar for v4.13.21
-        # is still absent from the mirror (HTTP 404) while v4.13.20's is there.
-        # That is what left release.yml with nothing to report.
-        timeout-minutes: 20
+        # largest single file: 43 s).  A re-sync is slower and legitimately so:
+        # the destination objects already exist, and on 2026-09-23 the GitHub
+        # runner reached Aliyun at ~200 KB/s instead of ~4 MB/s, so the full
+        # 551 MB took longer than the old 20-minute budget.
+        #
+        # `--force` is load-bearing, not tidiness: `ossutil cp` asks
+        # "cp: overwrite '<path>' (y or N)?" when the destination exists, and a
+        # CI step has nobody to answer it -- the run then hangs until the step
+        # timeout.  That is what produced the 46-minute stall on v4.13.21 (and
+        # what the first two bounded retries tripped over again).
+        timeout-minutes: 45
         env:
           OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
           OSS_REGION: cn-beijing
@@ -123,7 +131,8 @@ jobs:
               -e "$OSS_ENDPOINT" \
               --region "$OSS_REGION" \
               --acl public-read \
-              --retry-times 3; then
+              --retry-times 3 \
+              --force; then
               ((uploaded++)) || true
             else
               echo "::error::Failed to upload $asset_name"
@@ -179,7 +188,8 @@ jobs:
               -e "$OSS_ENDPOINT" \
               --region "$OSS_REGION" \
               --acl public-read \
-              --retry-times 3; then
+              --retry-times 3 \
+              --force; then
               echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/releases/download/${TAG_NAME}/${script}"
             else
               echo "::error::Failed to upload ${script} to versioned path"
@@ -295,7 +305,8 @@ jobs:
               -e "$OSS_ENDPOINT" \
               --region "$OSS_REGION" \
               --acl public-read \
-              --retry-times 3; then
+              --retry-times 3 \
+              --force; then
               ((uploaded++)) || true
             else
               echo "::error::Failed to upload ${name}"

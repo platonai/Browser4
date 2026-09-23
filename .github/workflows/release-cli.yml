@@ -697,8 +697,9 @@ jobs:
         if: success()
         shell: bash
         # See release.yml: this must exceed sync-to-oss.yml's own worst case
-        # (30 min) so the step reports the sync's verdict instead of racing it.
-        timeout-minutes: 50
+        # (job 60 min, upload step 45 min) so the step reports the sync's
+        # verdict instead of racing it.
+        timeout-minutes: 75
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.latest.outputs.tag }}

@@ -2053,3 +2053,57 @@ run id，之后只接受不在该集合里的 run；id 基线列不出来时，�
 * **套件覆盖的是脚本的判断逻辑，不是 `gh` 的行为**：打桩意味着"`gh run list` 新的在前"这一前提是**断言**
   而非**被测**（本轮用真实 `gh` 只读核对了过滤器，见 29.4）。`gh` 若改变排序或字段语义，套件不会红——
   这是刻意取舍，让套件能在没有网络、没有 token 的 CI 里跑。
+
+---
+
+## 30. `sync-to-oss.yml` `v4.13.21` 重试：`ossutil cp` 在等交互式确认，且回传链路退化（4.13.x，2026-09-23）
+
+§29.5 留下了一句"第一次挂住的原因未知"。补跑 v4.13.21 的镜像同步后，日志把两个原因都摊开了。
+
+### 30.1 重试确定性地卡在 `cp: overwrite ... (y or N)?`
+
+第二次和第三次重试的日志里都有这一行：
+
+```text
+13:51:56  Uploading: Browser4.jar → oss://browser4/releases/download/v4.13.21/Browser4.jar
+13:51:56  cp: overwrite 'oss://browser4/releases/download/v4.13.21/Browser4.jar' (y or N)?
+13:51:57  Uploading: browser4-bundle-runtime-darwin-arm64.tar.gz → ...
+13:51:57  cp: overwrite '...darwin-arm64.tar.gz' (y or N)?
+```
+
+`ossutil cp` 在目标已存在时会**问一句要不要覆盖**，而 CI 步骤里没人能回答——于是它一直等到步骤超时。只要同步是"重跑"（目标对象已存在），这就必然发生，与网络快慢无关。
+
+`sync-to-oss.yml` 里三处 `cp` 因此补上了 `--force`（发布资产、版本化安装脚本、校验和文件；`latest` 符号链接和 metadata 那几处本来就有）。`--force` 不是"顺手加的整洁"，而是这条重试路径能成立的前提。
+
+### 30.2 另一半原因：GitHub runner → 阿里云的回传速率退化
+
+第一次运行的日志（目标为空，因此没有覆盖提示）：
+
+```text
+13:05:21  Uploading: Browser4.jar
+13:38:29  Uploading: browser4-bundle-runtime-darwin-arm64.tar.gz     # 13 MB 用了 33 分钟
+13:45:56  Uploading: browser4-bundle-runtime-linux-x64.tar.gz        # 再 7.5 分钟
+```
+
+13 MB / 33 分钟 ≈ 6.7 KB/s；而首发的历史值是 551 MB / 2 分钟 ≈ 4.4 MB/s。重试期间回升到约 200-400 KB/s，仍比首发慢一个数量级。这一半**不在仓库里**，只能在预算上认账。
+
+### 30.3 因此调整的预算
+
+| 位置 | 旧 | 新 | 依据 |
+|---|---|---|---|
+| `sync-to-oss.yml` job | 30 min | 60 min | 上传步骤的上限必须在 job 之内先触发，才能指名卡住的步骤 |
+| `sync-to-oss.yml` `Upload to OSS` | 20 min | 45 min | 551 MB 在约 400 KB/s 下需要约 23 分钟，20 分钟上限会在"只是慢"时误杀 |
+| `wait-for-oss-sync.sh` 默认 `--timeout` | 2700 s | 3900 s | 必须高于被等 job 的最坏情况（60 min）+ 排队时间 |
+| `release.yml` / `release-cli.yml` 等待步骤 | 50 min | 75 min | 同上；否则等待方又先于同步得出结论 |
+
+顺序是关键：**步骤上限 < job 上限 < 等待方上限**，这样超时永远指向真正卡住的那一层。
+
+### 30.4 镜像现状与验证
+
+同步过（部分）资产之后，`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/v4.13.21/` 的
+`Browser4.jar`、三个 runtime bundle、`browser4-cli-darwin-arm64` 均已返回 200；本轮重试补齐其余资产。
+因为这些对象**全部**产生于 v4.13.21 重新打 tag 之后（第一次触发同步的时间晚于重新打 tag），所以镜像里
+不存在旧构建的混合。
+
+验证：`yaml.safe_load` 解析三个 workflow 通过；`cli/scripts/tests/wait-for-oss-sync.tests.sh` 19/19 通过
+（预算改动未触碰其断言，测试只用 `--timeout 4` 跑）。

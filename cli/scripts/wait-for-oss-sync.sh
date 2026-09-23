@@ -8,7 +8,7 @@
 #                        [--timeout <seconds>] [--interval <seconds>]
 #                        [--discovery-timeout <seconds>]
 #
-# Defaults: --workflow sync-to-oss.yml, --timeout 2700 s, --interval 15 s,
+# Defaults: --workflow sync-to-oss.yml, --timeout 3900 s, --interval 15 s,
 #           --discovery-timeout 120 s.
 #
 # release.yml and release-cli.yml used to inline this whole dance:
@@ -68,7 +68,11 @@ set -euo pipefail
 TAG=''
 REPO=''
 WORKFLOW='sync-to-oss.yml'
-TIMEOUT_SECONDS=2700
+# 65 min: above sync-to-oss.yml's worst case (job 60 min) plus queue time, so the
+# waiter reports the sync's verdict instead of expiring first.  Sized for a
+# re-sync, where the destination objects already exist and the transfer runs at
+# roughly a tenth of a first sync's speed.
+TIMEOUT_SECONDS=3900
 POLL_INTERVAL_SECONDS=15
 DISCOVERY_TIMEOUT_SECONDS=120
 
