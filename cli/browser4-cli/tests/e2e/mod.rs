@@ -36,6 +36,12 @@
 //! (batch-command and install/upgrade scenarios); pass `--enable-all` to
 //! include them, or `--batch-only` to run only excluded-by-default scenarios.
 //!
+//! Up to `MAX_ALLOWED_FAILED_SCENARIOS` (5) failing scenarios are tolerated so a
+//! single known-flaky scenario does not fail the whole suite.  Tolerated
+//! failures are printed with the pass rate and, under GitHub Actions, surfaced
+//! as `::warning::` annotations.  Pass `--max-failures=0` to make every failing
+//! scenario fail the run — CI gates that must not hide damage use that.
+//!
 //! The Browser4 service is resolved in this order:
 //! 1. `BROWSER4_E2E_SERVICE_URL` environment variable – connect to an already-running
 //!    service (Docker-friendly; no JAR is needed).
@@ -5520,6 +5526,10 @@ struct RunOptions {
     quiet: bool,
     /// Stream CLI child-process output to the terminal for debugging.
     verbose: bool,
+    /// Number of failing scenarios tolerated before the run fails
+    /// (`--max-failures=<count>`, default [`MAX_ALLOWED_FAILED_SCENARIOS`]).
+    /// `0` means "every failure fails the run".
+    max_allowed_failures: usize,
 }
 
 fn parse_scenario_limit(raw: &str) -> usize {
@@ -5542,6 +5552,23 @@ fn parse_scenario_limit(raw: &str) -> usize {
     );
 
     limit
+}
+
+/// Parse the `--max-failures=<count>` value.  `0` is valid and means "fail on
+/// the first failing scenario".
+fn parse_max_failures(raw: &str) -> usize {
+    let normalized = raw.trim();
+    assert!(
+        !normalized.is_empty(),
+        "Missing value for --max-failures. Use --max-failures=<count>"
+    );
+
+    normalized.parse::<usize>().unwrap_or_else(|_| {
+        panic!(
+            "Invalid --max-failures '{}'. Expected a non-negative integer (0 = no tolerance).",
+            normalized
+        )
+    })
 }
 
 fn apply_scenario_limit_filter(
@@ -5634,6 +5661,7 @@ fn parse_run_options() -> RunOptions {
     let mut force_rebuild_bundle = false;
     let mut quiet = false;
     let mut verbose = false;
+    let mut max_allowed_failures = MAX_ALLOWED_FAILED_SCENARIOS;
     let mut groups: Vec<String> = Vec::new();
     let mut max_level = scenarios::ScenarioLevel::Basic;
 
@@ -5771,6 +5799,14 @@ fn parse_run_options() -> RunOptions {
             continue;
         }
 
+        // --max-failures=<count>
+        if let Some(value) = parse_value_flag(&arg, "max-failures", &mut args, |raw| {
+            parse_max_failures(&raw)
+        }) {
+            max_allowed_failures = value;
+            continue;
+        }
+
         // --scenario-range (deprecated)
         if arg == "--scenario-range" || arg.starts_with("--scenario-range=") {
             eprintln!(
@@ -5812,6 +5848,7 @@ fn parse_run_options() -> RunOptions {
 
     if !quiet {
         println!("[e2e] max scenario level: {}", max_level);
+        println!("[e2e] tolerated failing scenarios: {}", max_allowed_failures);
     }
 
     RunOptions {
@@ -5829,6 +5866,7 @@ fn parse_run_options() -> RunOptions {
         max_level,
         quiet,
         verbose,
+        max_allowed_failures,
     }
 }
 
@@ -6330,28 +6368,56 @@ fn main() {
                 total_tests,
             );
 
+            let tolerated = run_options.max_allowed_failures;
+            let pass_rate = if total_tests == 0 {
+                100.0
+            } else {
+                (passed as f64) * 100.0 / (total_tests as f64)
+            };
+
             if failed_scenario_count == 0 {
                 println!(
                     "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; {} filtered out",
                     total_tests, filtered_out
                 );
-            } else if failed_scenario_count <= MAX_ALLOWED_FAILED_SCENARIOS {
+            } else if failed_scenario_count <= tolerated {
                 println!(
-                    "test result: ok (tolerated). {} passed; {} failed; 0 ignored; 0 measured; {} filtered out ({} failure entries; tolerated <= {})",
+                    "test result: ok (tolerated). {} passed; {} failed; 0 ignored; 0 measured; {} filtered out ({} failure entries; tolerated <= {}; pass rate {:.2}%)",
                     passed,
                     failed_scenario_count,
                     filtered_out,
                     scenario_failures.len(),
-                    MAX_ALLOWED_FAILED_SCENARIOS
+                    tolerated,
+                    pass_rate
                 );
+                // A tolerated failure must never be silent: list what was
+                // allowed to pass, and annotate it under GitHub Actions so the
+                // damage is visible in the PR/run UI instead of only in a log
+                // that nobody greps.
+                let github_actions = std::env::var("GITHUB_ACTIONS").is_ok();
+                eprintln!(
+                    "⚠️  tolerated damage: {} of {} scenario(s) failed (pass rate {:.2}%, tolerance {}):",
+                    failed_scenario_count, total_tests, pass_rate, tolerated
+                );
+                for scenario_name in &failed_scenarios {
+                    eprintln!("   - {}", scenario_name);
+                    if github_actions {
+                        println!(
+                            "::warning title=Tolerated e2e failure::{} failed but the run still \
+                             passed (tolerance {}). Pass --max-failures=0 to make it fatal.",
+                            scenario_name, tolerated
+                        );
+                    }
+                }
             } else {
                 println!(
-                    "test result: FAILED. {} passed; {} failed; 0 ignored; 0 measured; {} filtered out ({} failure entries; allowed <= {})",
+                    "test result: FAILED. {} passed; {} failed; 0 ignored; 0 measured; {} filtered out ({} failure entries; allowed <= {}; pass rate {:.2}%)",
                     passed,
                     failed_scenario_count,
                     filtered_out,
                     scenario_failures.len(),
-                    MAX_ALLOWED_FAILED_SCENARIOS
+                    tolerated,
+                    pass_rate
                 );
             }
             if !run_options.quiet {
@@ -6432,11 +6498,10 @@ fn main() {
                 println!("final cleanup:");
                 print_timing_steps(&final_cleanup_steps);
             }
-            if failed_scenario_count > MAX_ALLOWED_FAILED_SCENARIOS {
+            if failed_scenario_count > run_options.max_allowed_failures {
                 panic!(
                     "{} failed scenario(s) exceeded allowed tolerance (<= {}). See failure summary above.",
-                    failed_scenario_count,
-                    MAX_ALLOWED_FAILED_SCENARIOS
+                    failed_scenario_count, run_options.max_allowed_failures
                 );
             }
         }

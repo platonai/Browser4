@@ -494,12 +494,14 @@ cargo test --test e2e -- --nocapture --scenario test_e2e_swarm_*
 # Re-run scenarios that failed last time
 cargo test --test e2e -- --nocapture --failed
 
-# Enable batch / swarm scenarios (skipped by default)
-cargo test --test e2e -- --nocapture --enable-batch-scenario
-cargo test --test e2e -- --nocapture --enable-swarm-scenario
+# Fail on every failing scenario (default tolerates up to 5)
+cargo test --test e2e -- --nocapture --max-failures 0
+
+# Enable scenarios excluded by default (batch, install/upgrade, mock-LLM agent)
+cargo test --test e2e -- --nocapture --enable-all
 
 # Combine flags
-cargo test --test e2e -- --nocapture --failed --enable-batch-scenario
+cargo test --test e2e -- --nocapture --failed --enable-all
 
 # List all available scenarios without running them
 cargo test --test e2e -- --list
@@ -508,9 +510,9 @@ cargo test --test e2e -- --list
 cargo test --test e2e -- --nocapture
 cargo test --test e2e -- --nocapture --level Basic
 cargo test --test e2e -- --nocapture --scenario-limit 1
-cargo test --test e2e -- --nocapture --enable-batch-scenario
-cargo test --test e2e -- --nocapture --enable-install-scenario
+cargo test --test e2e -- --nocapture --enable-all
 cargo test --test e2e -- --nocapture --batch-only
+cargo test --test e2e -- --nocapture --max-failures 0
 cargo test --test e2e -- --nocapture --scenario *open*
 cargo test --test e2e -- --nocapture --scenario test_e2e_batch_*
 cargo test --test e2e -- --nocapture --scenario test_e2e_swarm_*
@@ -522,8 +524,8 @@ cargo test --test e2e -- --nocapture --failed
 cargo test --test e2e -- --nocapture --scenario test_e2e_eval_command --fail-fast
 cargo test --test e2e -- --nocapture --force-remote-bundle
 
-# Nightly regression testing (runs all scenarios)
-cargo test --test e2e -- --nocapture --level All --force-remote-bundle --enable-batch-scenario --enable-install-scenario
+# Nightly regression testing (runs all scenarios, no failure tolerance)
+cargo test --test e2e -- --nocapture --level All --enable-all --max-failures 0
 ```
 
 ### File-backed mock LLM scenarios (`agent run`)

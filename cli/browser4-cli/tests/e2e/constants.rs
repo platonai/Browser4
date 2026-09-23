@@ -122,6 +122,9 @@ pub const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attemp
 
 pub const OUTPUT_COLLECTOR_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Default number of failing scenarios the harness tolerates before the run
+/// fails.  Overridable per run with `--max-failures=<count>`; CI gates that must
+/// not hide damage pass `--max-failures=0`.
 pub const MAX_ALLOWED_FAILED_SCENARIOS: usize = 5;
 
 pub const COVERAGE_TEST_NAME: &str = "test_e2e_command_coverage";
@@ -154,6 +157,11 @@ Output control:
 
 Execution:
   --fail-fast, -F                   Stop after the first failure
+  --max-failures=<count>            Tolerate up to <count> failing scenarios
+                                    before the run fails (default: 5).  Pass 0
+                                    in CI gates that must not hide damage;
+                                    tolerated failures are printed with the
+                                    pass rate and annotated on GitHub Actions
   --force-remote-bundle, -R         Download runtime bundle from remote release
                                     (sets BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1)
   --force-rebuild-bundle            Rebuild the local runtime bundle (Maven package
