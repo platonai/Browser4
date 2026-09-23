@@ -161,15 +161,28 @@ class BrowserTabToolExecutorTest {
         runBlocking {
             // The mock must be a PulsarWebDriver so the executor's
             // `driver is PulsarWebDriver` check routes to the fallback path.
-            // The fallback now reuses the shared Browser4WebDriver.fillValueJs
-            // helper via evaluateValue(selector, functionDeclaration) — capture
-            // the function declaration (2nd argument) and assert it matches the
-            // shared helper (constraint-aware, `this`-bound element).
+            // The fallback probes the target first (so an unmatched selector
+            // fails loudly instead of reporting a successful no-op fill) and then
+            // reuses the shared Browser4WebDriver.fillValueJs helper via
+            // evaluateValue(selector, functionDeclaration).  Capture every
+            // function declaration (2nd argument) and assert the LAST one — the
+            // fill itself — matches the shared helper (constraint-aware,
+            // `this`-bound element).
             val driver = Mockito.mock(PulsarWebDriver::class.java)
-            val captured = java.util.concurrent.atomic.AtomicReference<String>()
+            val captured = java.util.concurrent.CopyOnWriteArrayList<String>()
             Mockito.doAnswer { inv ->
-                captured.set(inv.getArgument(1))
-                null
+                val js = inv.getArgument<String>(1)
+                captured.add(js)
+                // The target probe must report a usable element, otherwise the
+                // fallback correctly refuses to write and the fill never runs.
+                if (js == Browser4WebDriver.inputTargetProbeJs()) {
+                    mapOf(
+                        "found" to true, "kind" to "input",
+                        "disabled" to false, "readOnly" to false, "text" to ""
+                    )
+                } else {
+                    null
+                }
             }.`when`(driver).evaluateValue(Mockito.anyString(), Mockito.anyString())
 
             executor.callFunctionOn(
@@ -180,7 +193,9 @@ class BrowserTabToolExecutorTest {
                 driver
             )
 
-            val js = captured.get()
+            assertEquals(2, captured.size, "expected a target probe followed by the fill: $captured")
+            assertEquals(Browser4WebDriver.inputTargetProbeJs(), captured.first())
+            val js = captured.last()
             assertEquals(Browser4WebDriver.fillValueJs("42"), js)
             // read-only/disabled inputs keep their value (user input blocked)
             assertTrue(js.contains("el.disabled || el.readOnly"), "JS must skip disabled/readonly: $js")
@@ -449,6 +464,62 @@ class BrowserTabToolExecutorTest {
             verify(driver).scrollToViewport(2.0)
             // Rect uses the actual scrollY returned by scrollToViewport
             verify(driver).screenshot(ai.platon.pulsar.common.math.geometric.RectD(0.0, 2160.0, 1920.0, 1080.0))
+        }
+    }
+
+    @Test
+    fun `screenshot fullPage routes the format to the browser4 capture`() {
+        runBlocking {
+            val driver = Mockito.mock(Browser4WebDriver::class.java)
+
+            executor.callFunctionOn(
+                ToolCall(
+                    "tab", "screenshot",
+                    mutableMapOf<String, Any?>("fullPage" to true, "format" to "jpeg")
+                ),
+                driver
+            )
+
+            // The base full-page path is JPEG-only, so the requested format only
+            // reaches the page through the browser4 capture.
+            verify(driver).screenshotFullPage("jpeg")
+            Mockito.verify(driver, Mockito.never()).screenshot(true)
+        }
+    }
+
+    @Test
+    fun `screenshot fullPage defaults the browser4 capture to the driver default`() {
+        runBlocking {
+            val driver = Mockito.mock(Browser4WebDriver::class.java)
+
+            executor.callFunctionOn(
+                ToolCall("tab", "screenshot", mutableMapOf<String, Any?>("fullPage" to true)),
+                driver
+            )
+
+            verify(driver).screenshotFullPage(null)
+        }
+    }
+
+    @Test
+    fun `screenshot format without fullPage is rejected`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "screenshot",
+                    mutableMapOf<String, Any?>("fullPage" to false, "format" to "png")
+                ),
+                driver
+            )
+
+            assertTrue(
+                result.exception?.cause?.message?.contains("'format'") == true,
+                "expected a format-without-fullPage error, got ${result.exception?.cause?.message}"
+            )
+            Mockito.verify(driver, Mockito.never()).screenshot(Mockito.anyBoolean())
+            Unit
         }
     }
 

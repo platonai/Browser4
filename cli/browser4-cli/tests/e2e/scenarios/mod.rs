@@ -3,6 +3,7 @@ pub(crate) mod agent_run;
 pub(crate) mod batch;
 pub(crate) mod browser;
 pub(crate) mod mock_server;
+pub(crate) mod stealth;
 pub(crate) mod swarm;
 
 use super::*;
@@ -83,6 +84,14 @@ impl ScenarioDef {
     pub(super) fn effective_test_count(self) -> usize {
         self.test_count.max(1)
     }
+
+    /// Stealth scenarios talk to the public internet (one of them for minutes, against
+    /// third-party bot-detection services), so they are disabled by default and need
+    /// `--enable-stealth-scenario`.
+    pub(super) fn is_stealth_scenario(self) -> bool {
+        self.name.contains("_stealth_")
+    }
+
 
     /// Returns true when this scenario belongs to `group_name`.
     pub(super) fn in_group(self, group_name: &str) -> bool {
@@ -2734,6 +2743,37 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_htmlsnapshot_error_propagation,
         group: Some("htmlsnapshot"),
+        level: ScenarioLevel::Basic,
+        exclude_by_default: false,
+        exclusion_reason: None,
+        estimated_duration_ms: None,
+    },
+    // ---- Stealth (opt-in: --enable-stealth-scenario, needs the public internet) ----
+    // `exclude_by_default` stays false on purpose: stealth is gated by its own
+    // `--enable-stealth-scenario` flag (see `exclude_stealth_scenarios` in
+    // tests/e2e/mod.rs), so `--enable-all` must not opt them in — nightly runs with
+    // `--enable-all` and must not hammer third-party bot-detection services.
+    ScenarioDef {
+        name: "test_e2e_stealth_navigator_invariants",
+        short_name: "test_stealth_navigator_invariants",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: stealth::test_e2e_stealth_navigator_invariants,
+        group: Some("stealth"),
+        level: ScenarioLevel::Basic,
+        exclude_by_default: false,
+        exclusion_reason: None,
+        estimated_duration_ms: None,
+    },
+    ScenarioDef {
+        name: "test_e2e_stealth_detector_sweep",
+        short_name: "test_stealth_detector_sweep",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: stealth::test_e2e_stealth_detector_sweep,
+        group: Some("stealth"),
         level: ScenarioLevel::Basic,
         exclude_by_default: false,
         exclusion_reason: None,

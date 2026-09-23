@@ -2274,6 +2274,424 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
     Write-Host 'Exited interactive scenario picker.' -ForegroundColor DarkGray
 }
 
+# ═══════════════════════════════════════════════════════════════════════
+# Streaming child-process runner (used by `rws sc|dir|task`)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Scenario runs are agent-driven and routinely take 15-60 minutes, so the
+# runner must never look like a hang and must never hide the child's output.
+# It therefore:
+#   * reads the child's stdout/stderr through .NET pipes with async handlers
+#     (the same mechanism Start-NativeCommand already uses for the agent),
+#   * echoes every line to the caller the moment it is written,
+#   * tees every line to a per-run log file so output survives a lost
+#     terminal and can be inspected later,
+#   * keeps the last lines in a ring buffer and prints a heartbeat with the
+#     elapsed time while the child is silent,
+#   * warns loudly when a child produced no output at all instead of printing
+#     an empty "child output" section.
+#
+# Why not `Start-Process -RedirectStandardOutput <tempfile>` + polling?
+#   That relay depends on PowerShell's own stdout pump copying the child's
+#   output into the temp file.  When that pump does not run — observed on
+#   Windows as a 0-byte capture file for an 18-minute run that still exited 0 —
+#   the runner printed nothing whatsoever and the caller could not tell a slow
+#   scenario from a broken one.
+
+function Get-PwshExecutable {
+    <#
+    .SYNOPSIS
+        Resolve the pwsh executable used to launch child runs.
+
+    .DESCRIPTION
+        Prefers the executable of the current PowerShell process so children
+        always use the same build as their parent and are never re-resolved
+        through PATH, where an App-Execution-Alias or shim entry can silently
+        produce a process that inherits no stdout handle.
+
+    .OUTPUTS
+        String — absolute path to a pwsh executable (falls back to 'pwsh').
+    #>
+    try {
+        $current = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        if ($current -and (Test-Path -LiteralPath $current -PathType Leaf)) {
+            return $current
+        }
+    } catch { }
+
+    if ($PSHOME) {
+        $candidate = Join-Path $PSHOME $(if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'pwsh.exe' } else { 'pwsh' })
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+
+    $cmd = Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd -and $cmd.Source) { return $cmd.Source }
+
+    return 'pwsh'
+}
+
+function Initialize-ChildOutputRelay {
+    <#
+    .SYNOPSIS
+        Compile the C# helper that echoes and logs child process output.
+
+    .DESCRIPTION
+        DataReceived handlers run on .NET threadpool threads where no
+        PowerShell runspace is available, so the handler is implemented in C#
+        (compiled once per process) rather than as a PowerShell scriptblock.
+        Mirrors NativeCommandOutputHandler in the RWS scripts.
+
+    .OUTPUTS
+        Boolean — $true when the relay type is available, $false when it
+        could not be compiled (callers must then fall back to inherited
+        stdio instead of silently capturing nothing).
+    #>
+    if ($script:ChildOutputRelayAvailable) { return $true }
+
+    if (-not ('B4ChildOutputRelay' -as [type])) {
+        try {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+
+/// <summary>
+/// Echoes a child process' stdout/stderr to the console while teeing every
+/// line to a log file and remembering the most recent lines for heartbeats.
+/// </summary>
+public sealed class B4ChildOutputRelay
+{
+    private readonly string _logPath;
+    private readonly UTF8Encoding _utf8 = new UTF8Encoding(false);
+    private readonly object _sync = new object();
+    private readonly string[] _tail;
+    private int _tailNext;
+    private int _tailCount;
+    private long _lines;
+    private long _stderrLines;
+    private long _chars;
+    private DateTime _lastOutputUtc = DateTime.UtcNow;
+    private string _lastLine = string.Empty;
+
+    public B4ChildOutputRelay(string logPath, int tailSize)
+    {
+        _logPath = string.IsNullOrEmpty(logPath) ? null : logPath;
+        if (tailSize < 1) { tailSize = 1; }
+        _tail = new string[tailSize];
+    }
+
+    public void OnStdout(object sender, DataReceivedEventArgs e)
+    {
+        Emit(e == null ? null : e.Data, false);
+    }
+
+    public void OnStderr(object sender, DataReceivedEventArgs e)
+    {
+        Emit(e == null ? null : e.Data, true);
+    }
+
+    private void Emit(string line, bool isStdErr)
+    {
+        if (line == null) { return; }
+
+        // Console first: the caller must see output as it arrives.
+        if (isStdErr) { Console.Error.WriteLine(line); }
+        else { Console.Out.WriteLine(line); }
+
+        lock (_sync)
+        {
+            _lines++;
+            if (isStdErr) { _stderrLines++; }
+            _chars += line.Length + Environment.NewLine.Length;
+            _lastOutputUtc = DateTime.UtcNow;
+            _lastLine = line;
+            _tail[_tailNext] = line;
+            _tailNext = (_tailNext + 1) % _tail.Length;
+            if (_tailCount < _tail.Length) { _tailCount++; }
+
+            if (_logPath != null)
+            {
+                try { File.AppendAllText(_logPath, line + Environment.NewLine, _utf8); }
+                catch { }
+            }
+        }
+    }
+
+    public long Lines { get { lock (_sync) { return _lines; } } }
+    public long StderrLines { get { lock (_sync) { return _stderrLines; } } }
+    public long Chars { get { lock (_sync) { return _chars; } } }
+    public string LastLine { get { lock (_sync) { return _lastLine; } } }
+
+    public double SecondsSinceLastOutput
+    {
+        get { lock (_sync) { return (DateTime.UtcNow - _lastOutputUtc).TotalSeconds; } }
+    }
+
+    public string[] GetTail()
+    {
+        lock (_sync)
+        {
+            string[] result = new string[_tailCount];
+            int start = (_tailNext - _tailCount + _tail.Length) % _tail.Length;
+            for (int i = 0; i < _tailCount; i++)
+            {
+                result[i] = _tail[(start + i) % _tail.Length];
+            }
+            return result;
+        }
+    }
+}
+'@
+        } catch {
+            Write-Host "  Note: streaming output relay unavailable ($($_.Exception.Message))" -ForegroundColor DarkYellow
+            $script:ChildOutputRelayAvailable = $false
+            return $false
+        }
+    }
+
+    $script:ChildOutputRelayAvailable = $true
+    return $true
+}
+
+function Write-ChildHeartbeat {
+    <#
+    .SYNOPSIS
+        Print one heartbeat line for a running child process.
+
+    .PARAMETER Relay
+        The B4ChildOutputRelay instance collecting the child's output.
+
+    .PARAMETER Elapsed
+        Seconds elapsed since the child was started.
+
+    .PARAMETER ChildPid
+        Process id of the child, so the caller can inspect or kill it.
+
+    .PARAMETER SilentThresholdSec
+        Seconds of child silence after which the recent output lines are
+        echoed as well, so a quiet child still shows where it got to.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] $Relay,
+        [Parameter(Mandatory = $true)] [double] $Elapsed,
+        [int] $ChildPid = 0,
+        [int] $SilentThresholdSec = 20
+    )
+
+    $minutes = [Math]::Floor($Elapsed / 60)
+    $seconds = [Math]::Floor($Elapsed % 60)
+    $lineCount = $Relay.Lines
+    $silentFor = [Math]::Round($Relay.SecondsSinceLastOutput)
+
+    if ($lineCount -eq 0) {
+        $statusText = 'no output yet'
+    } else {
+        $statusText = "$lineCount line(s) so far, last output ${silentFor}s ago"
+    }
+
+    Write-Host "  · child (PID $ChildPid) still running — ${minutes}m ${seconds}s elapsed; $statusText" -ForegroundColor DarkGray
+
+    # Only dump the tail while the child is quiet: when it is chatty the
+    # caller already sees the output itself.
+    if ($silentFor -lt $SilentThresholdSec) { return }
+
+    $tail = @($Relay.GetTail())
+    if ($tail.Count -eq 0) { return }
+
+    Write-Host '    ── last lines ──' -ForegroundColor DarkGray
+    foreach ($line in $tail) {
+        Write-Host "    │ $line" -ForegroundColor DarkGray
+    }
+}
+
+function Invoke-ChildProcessStreaming {
+    <#
+    .SYNOPSIS
+        Run a child process, streaming its output live with heartbeats.
+
+    .DESCRIPTION
+        Starts the child with .NET pipes for stdout/stderr, echoes every line
+        to the console as it arrives, tees it to a log file, and prints a
+        heartbeat (elapsed time + tail) while the child is silent.  When the
+        C# relay cannot be compiled the child is started with inherited stdio
+        instead, so output still reaches the caller.
+
+        Streaming is line-oriented (DataReceived semantics): a child that
+        redraws a single line with carriage returns is echoed once that line
+        is completed by a newline, not on every redraw.
+
+        Unlike `Start-Process -RedirectStandardOutput` + polling, a child that
+        produces no output can never leave the caller staring at an empty
+        section: the heartbeat keeps running and the caller warns afterwards.
+
+    .PARAMETER FilePath
+        Executable to run (see Get-PwshExecutable).
+
+    .PARAMETER ArgumentList
+        Arguments passed one by one (no manual quoting needed).
+
+    .PARAMETER WorkingDirectory
+        Working directory for the child.  Defaults to the caller's.
+
+    .PARAMETER LogFile
+        File that receives every line (UTF-8, no BOM).  A temp file is used
+        and removed afterwards when omitted.
+
+    .PARAMETER HeartbeatSeconds
+        Base heartbeat interval (progressive backoff is applied).  0 disables
+        heartbeats.
+
+    .OUTPUTS
+        Hashtable with ExitCode, DurationSec, LogFile, OutputLines,
+        StderrLines, OutputChars and ChildPid.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $FilePath,
+        [string[]] $ArgumentList = @(),
+        [string] $WorkingDirectory = '',
+        [string] $LogFile = '',
+        [int] $HeartbeatSeconds = 20
+    )
+
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $relayAvailable = Initialize-ChildOutputRelay
+
+    # ── Log file ----------------------------------------------------------
+    $logPath = $LogFile
+    $deleteLog = $false
+    if (-not $logPath) {
+        $logPath = [System.IO.Path]::GetTempFileName()
+        $deleteLog = $true
+    } elseif ($relayAvailable) {
+        try {
+            $logDir = Split-Path -Parent $logPath
+            if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+                $null = New-Item -ItemType Directory -Path $logDir -Force
+            }
+            # Start from an empty file so the log always describes this run only.
+            [System.IO.File]::WriteAllText($logPath, '', $utf8NoBom)
+        } catch {
+            # An unwritable log path must never abort the scenario itself.
+            Write-Host "  Note: cannot use '$logPath' as the run log ($($_.Exception.Message)) — using a temp file" -ForegroundColor DarkYellow
+            $logPath = [System.IO.Path]::GetTempFileName()
+            $deleteLog = $true
+        }
+    }
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $proc = $null
+    $relay = $null
+    $stdoutHandler = $null
+    $stderrHandler = $null
+    $childPid = 0
+
+    try {
+        if ($relayAvailable) {
+            # ── Primary path: capture through .NET pipes -------------------
+            $relay = [B4ChildOutputRelay]::new($logPath, 10)
+            $stdoutHandler = [Delegate]::CreateDelegate(
+                [System.Diagnostics.DataReceivedEventHandler], $relay, 'OnStdout')
+            $stderrHandler = [Delegate]::CreateDelegate(
+                [System.Diagnostics.DataReceivedEventHandler], $relay, 'OnStderr')
+
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $FilePath
+            foreach ($arg in $ArgumentList) { $psi.ArgumentList.Add([string]$arg) }
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.StandardOutputEncoding = $utf8NoBom
+            $psi.StandardErrorEncoding = $utf8NoBom
+            $psi.CreateNoWindow = $true
+            if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
+
+            $proc = [System.Diagnostics.Process]::new()
+            $proc.StartInfo = $psi
+            $proc.add_OutputDataReceived($stdoutHandler)
+            $proc.add_ErrorDataReceived($stderrHandler)
+
+            $proc.Start() | Out-Null
+            $childPid = $proc.Id
+            $proc.BeginOutputReadLine()
+            $proc.BeginErrorReadLine()
+
+            $nextHeartbeat = if ($HeartbeatSeconds -gt 0) { [double]$HeartbeatSeconds } else { [double]::MaxValue }
+            while (-not $proc.HasExited) {
+                $null = $proc.WaitForExit(1000)
+                if ($proc.HasExited) { break }
+
+                $elapsed = $sw.Elapsed.TotalSeconds
+                if ($HeartbeatSeconds -gt 0 -and $elapsed -ge $nextHeartbeat) {
+                    # Progressive backoff: 20s early, 40s after 5 min, 60s after 15 min.
+                    $interval = if ($elapsed -lt 300) { $HeartbeatSeconds }
+                                elseif ($elapsed -lt 900) { $HeartbeatSeconds * 2 }
+                                else { $HeartbeatSeconds * 3 }
+                    $nextHeartbeat = $elapsed + $interval
+                    Write-ChildHeartbeat -Relay $relay -Elapsed $elapsed -ChildPid $childPid `
+                        -SilentThresholdSec $HeartbeatSeconds
+                }
+            }
+
+            # The parameterless overload also waits for the async readers to
+            # drain, so no output is lost between exit and this return.
+            $proc.WaitForExit()
+        } else {
+            # ── Fallback: inherited stdio (no capture, no log) -------------
+            # Still better than capturing into a file nothing ever reads.
+            $startArgs = @{
+                FilePath     = $FilePath
+                ArgumentList = $ArgumentList
+                NoNewWindow  = $true
+                PassThru     = $true
+            }
+            if ($WorkingDirectory) { $startArgs['WorkingDirectory'] = $WorkingDirectory }
+            $proc = Start-Process @startArgs
+            $childPid = $proc.Id
+
+            $nextHeartbeat = if ($HeartbeatSeconds -gt 0) { [double]$HeartbeatSeconds } else { [double]::MaxValue }
+            while (-not $proc.HasExited) {
+                $null = $proc.WaitForExit(1000)
+                if ($proc.HasExited) { break }
+
+                $elapsed = $sw.Elapsed.TotalSeconds
+                if ($HeartbeatSeconds -gt 0 -and $elapsed -ge $nextHeartbeat) {
+                    $nextHeartbeat = $elapsed + $HeartbeatSeconds
+                    $minutes = [Math]::Floor($elapsed / 60)
+                    $seconds = [Math]::Floor($elapsed % 60)
+                    Write-Host "  · child (PID $childPid) still running — ${minutes}m ${seconds}s elapsed" -ForegroundColor DarkGray
+                }
+            }
+            $proc.WaitForExit()
+        }
+    } finally {
+        $sw.Stop()
+        if ($proc) {
+            if ($stdoutHandler) { try { $proc.remove_OutputDataReceived($stdoutHandler) } catch { } }
+            if ($stderrHandler) { try { $proc.remove_ErrorDataReceived($stderrHandler) } catch { } }
+        }
+    }
+
+    $result = @{
+        ExitCode    = if ($proc) { $proc.ExitCode } else { 127 }
+        DurationSec = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
+        # Only report a log path the caller can still read: a temp log that we
+        # are about to delete (caller passed no -LogFile) would be a dead end.
+        LogFile     = if ($relayAvailable -and -not $deleteLog) { $logPath } else { '' }
+        OutputLines = if ($relay) { $relay.Lines } else { 0 }
+        StderrLines = if ($relay) { $relay.StderrLines } else { 0 }
+        OutputChars = if ($relay) { $relay.Chars } else { 0 }
+        ChildPid    = $childPid
+    }
+
+    if ($proc) { $proc.Dispose() }
+    if ($deleteLog -and (Test-Path -LiteralPath $logPath)) {
+        Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    }
+
+    return $result
+}
+
 function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'scripts'
     $scenarioRunner = Join-Path $rwsScriptsDir 'run-tests.ps1'
@@ -3019,124 +3437,72 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
     $pwshArgs += $passThroughArgs
 
     # -- Show / DryRun --------------------------------------------------------
-    if ($script:Show) {
+    # Report the executable that would actually be launched (Get-PwshExecutable
+    # prefers the running build over a PATH lookup) plus the run log path.
+    if ($script:Show -or $script:DryRun) {
         $envHint = if ($setProduction) { '$env:BROWSER4CLI_MODE=production ' } else { '' }
-        Write-CommandBanner -Label '[SHOW] Would execute:' -Subtitle "  ${envHint}pwsh $($pwshArgs -join ' ')"
+        $label = if ($script:Show) { '[SHOW] Would execute:' } else { '[DRY RUN] Would execute:' }
+        Write-CommandBanner -Label $label `
+            -Subtitle "  ${envHint}$(Get-PwshExecutable) $($pwshArgs -join ' ')"
         return
     }
 
-    if ($script:DryRun) {
-        $envHint = if ($setProduction) { '$env:BROWSER4CLI_MODE=production ' } else { '' }
-        Write-CommandBanner -Label '[DRY RUN] Would execute:' -Subtitle "  ${envHint}pwsh $($pwshArgs -join ' ')"
-        return
-    }
+    # -- Execute with live output streaming --------------------------------
+    # The child's stdout/stderr are read through .NET pipes, echoed line by
+    # line and tee'd to a per-run log file; a heartbeat keeps the caller
+    # informed while the child stays silent.  See Invoke-ChildProcessStreaming
+    # for why the old redirect-to-temp-file + polling relay was replaced.
+    if ($setProduction) { $env:BROWSER4CLI_MODE = 'production' }
 
-    # -- Execute with real-time output monitoring --------------------------
-    # We capture ALL child pwsh stdout/stderr by redirecting to temp files
-    # and polling them.  This avoids the fragility of Console.WriteLine
-    # through a deep process chain (Start-Process -NoNewWindow uses
-    # CREATE_NO_WINDOW on Windows, which detaches the console and can
-    # discard output from grandchild processes like the agent).
+    $childExe = Get-PwshExecutable
+
+    $runLogName = switch ($mode) {
+        'scenarios' { 'rws-scenarios' }
+        'dir'       { 'rws-dir' }
+        'task'      { 'rws-task' }
+        default     { 'rws-run' }
+    }
+    $childLogFile = Join-Path $script:TestLogDir "$runLogName.log"
+    $silentRun = $passThroughArgs -contains '-Silent'
+
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $global:LASTEXITCODE = 0
 
-    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-
-    # Temp files for stdout / stderr capture
-    $tmpOut = [System.IO.Path]::GetTempFileName()
-    $tmpErr = [System.IO.Path]::GetTempFileName()
+    Write-Host ''
+    Write-Rule
+    Write-Host 'Child process output (live):' -ForegroundColor DarkCyan
+    Write-Host "  log: $childLogFile" -ForegroundColor DarkGray
+    Write-Rule
 
     try {
-        if ($repoRoot) { Push-Location $repoRoot }
-        $global:LASTEXITCODE = 0
-
-        if ($setProduction) { $env:BROWSER4CLI_MODE = 'production' }
-
-        Write-Host ''
-        Write-Rule
-        Write-Host "Child process output (live):" -ForegroundColor DarkCyan
-        Write-Rule
-
-        # -- Start child pwsh with redirected stdout / stderr ------------
-        $proc = Start-Process -FilePath 'pwsh' -ArgumentList $pwshArgs `
-            -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr `
-            -NoNewWindow -PassThru
-
-        $lastOutSize = 0
-        $lastErrSize = 0
-
-        while (-not $proc.HasExited) {
-            # -- Display new stdout content -------------------------------
-            if (Test-Path -LiteralPath $tmpOut) {
-                try {
-                    $currentSize = (Get-Item -LiteralPath $tmpOut).Length
-                    if ($currentSize -gt $lastOutSize) {
-                        $content = [System.IO.File]::ReadAllText($tmpOut, $utf8NoBom)
-                        if ($content.Length -gt $lastOutSize) {
-                            $newContent = $content.Substring($lastOutSize)
-                            Write-Host $newContent -NoNewline
-                            $lastOutSize = $content.Length
-                        }
-                    }
-                } catch { }
-            }
-
-            # -- Display new stderr content -------------------------------
-            if (Test-Path -LiteralPath $tmpErr) {
-                try {
-                    $currentSize = (Get-Item -LiteralPath $tmpErr).Length
-                    if ($currentSize -gt $lastErrSize) {
-                        $content = [System.IO.File]::ReadAllText($tmpErr, $utf8NoBom)
-                        if ($content.Length -gt $lastErrSize) {
-                            $newContent = $content.Substring($lastErrSize)
-                            Write-Host $newContent -NoNewline -ForegroundColor Red
-                            $lastErrSize = $content.Length
-                        }
-                    }
-                } catch { }
-            }
-
-            $proc.Refresh()
-            Start-Sleep -Milliseconds 500
-        }
-
-        # -- Final drain of remaining output ------------------------------
-        $proc.WaitForExit()
-
-        foreach ($pair in @(@($tmpOut, $false, [ref]$lastOutSize),
-                            @($tmpErr, $true,  [ref]$lastErrSize))) {
-            $path = $pair[0]; $isError = $pair[1]; $lastRef = $pair[2]
-            if (Test-Path -LiteralPath $path) {
-                try {
-                    $content = [System.IO.File]::ReadAllText($path, $utf8NoBom)
-                    if ($content.Length -gt $lastRef.Value) {
-                        $newContent = $content.Substring($lastRef.Value)
-                        if ($isError) {
-                            Write-Host $newContent -NoNewline -ForegroundColor Red
-                        } else {
-                            Write-Host $newContent -NoNewline
-                        }
-                    }
-                } catch { }
-            }
-        }
-
-        Write-Rule
-        Write-Host 'End of child process output' -ForegroundColor DarkGray
-        Write-Rule
-        Write-Host ''
-
-        $global:LASTEXITCODE = $proc.ExitCode
-        $proc.Dispose()
-
+        $run = Invoke-ChildProcessStreaming -FilePath $childExe -ArgumentList $pwshArgs `
+            -WorkingDirectory $repoRoot -LogFile $childLogFile `
+            -HeartbeatSeconds $(if ($silentRun) { 0 } else { 20 })
     } catch {
         Write-Error "Failed to execute $modeLabel`: $_"
         exit 1
-    } finally {
-        # Clean up temp files
-        Remove-Item $tmpOut, $tmpErr -ErrorAction SilentlyContinue
-        if ($repoRoot) { Pop-Location }
     }
 
+    Write-Rule
+    Write-Host 'End of child process output' -ForegroundColor DarkGray
+    Write-Rule
+    Write-Host ''
+
+    # -- Report how much the child actually said ---------------------------
+    # An empty section must never again leave the caller guessing whether the
+    # run was slow, silent or silently broken.
+    if ($run.OutputLines -eq 0) {
+        Write-Host "WARNING: the child process produced no output (exit code $($run.ExitCode))." -ForegroundColor Yellow
+        Write-Host "  command: $childExe $($pwshArgs -join ' ')" -ForegroundColor DarkGray
+        Write-Host "  log:     $childLogFile" -ForegroundColor DarkGray
+        Write-Host '  The child ran but nothing reached the caller — check the log file above.' -ForegroundColor DarkGray
+    } elseif ($run.StderrLines -gt 0) {
+        Write-Host "  $($run.OutputLines) line(s) of output ($($run.StderrLines) on stderr) — log: $childLogFile" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  $($run.OutputLines) line(s) of output — log: $childLogFile" -ForegroundColor DarkGray
+    }
+
+    $global:LASTEXITCODE = $run.ExitCode
     $exitCode = $LASTEXITCODE
     $sw.Stop()
 
@@ -3146,6 +3512,7 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
         if ($exitCode -eq 124) {
             Write-Host '  Task timed out.' -ForegroundColor Yellow
         }
+        Write-Host "  Full child output: $childLogFile" -ForegroundColor DarkGray
     } else {
         Write-CommandBanner -Label "$modeLabel completed successfully" -Icon '[PASS]'
     }

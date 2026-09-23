@@ -1440,11 +1440,17 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         b4Driver.fillSafe(selector, text)
                     } else {
                         // Fallback: same constraint-aware fill as Browser4WebDriver.fillSafe,
-                        // via the shared fillValueJs helper.  evaluateValue resolves
+                        // via the shared probe/fill helpers.  evaluateValue resolves
                         // CSS/XPath/backend locators and binds `this` to the element,
                         // matching fillSafe exactly.  The upstream PulsarWebDriver.fill()
                         // is known to fail on constrained inputs (e.g. <input type=number>).
                         if (driver is PulsarWebDriver) {
+                            // Probe before writing, exactly like fillSafe: the fill JS is
+                            // a no-op when the locator resolves to nothing, and a silent
+                            // no-op is reported to the user as a successful fill.
+                            val probe = driver.evaluateValue(selector, Browser4WebDriver.inputTargetProbeJs())
+                            Browser4WebDriver.inputTargetError("fill", selector, probe)
+                                ?.let { throw IllegalArgumentException(it) }
                             driver.evaluateValue(selector, Browser4WebDriver.fillValueJs(text))
                         } else {
                             driver.fill(selector, text)
@@ -1929,9 +1935,24 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     }
 
                     args.containsKey("fullPage") -> {
-                        validateArgs(args, allowed("fullPage"), setOf("fullPage"), functionName); driver.screenshot(
-                            paramBool(args, "fullPage", functionName)!!
-                        )
+                        validateArgs(args, allowed("fullPage", "format"), setOf("fullPage"), functionName)
+                        val fullPage = paramBool(args, "fullPage", functionName)!!
+                        val format = paramString(args, "format", functionName, required = false)
+                        val b4Driver = driver as? Browser4WebDriver
+                        if (b4Driver != null && fullPage) {
+                            // Browser4WebDriver.screenshotFullPage encodes the requested
+                            // format (PNG by default); the base full-page path is
+                            // JPEG-only, which silently disagreed with a `*.png` output
+                            // name.
+                            b4Driver.screenshotFullPage(format)
+                        } else {
+                            if (format != null) {
+                                throw IllegalArgumentException(
+                                    "screenshot 'format' is only supported together with 'fullPage=true'"
+                                )
+                            }
+                            driver.screenshot(fullPage)
+                        }
                     }
 
                     args.containsKey("viewport") -> {

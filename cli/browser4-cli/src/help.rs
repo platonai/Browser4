@@ -897,6 +897,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    • load — wait for a page-load state: domcontentloaded, load, or networkidle"
                 .to_string(),
         );
+        lines.push(wrap_text(
+            "networkidle only settles the network — it does not mean late-rendered results exist. \
+             Poll the result element instead: browser4-cli wait \"<result-selector>\".",
+            "      ",
+            6,
+        ));
         lines.push(
             "    • fn — wait until a custom JavaScript expression returns true"
                 .to_string(),

@@ -147,6 +147,10 @@ Scenario selection:
 Scenario inclusion (disabled by default):
   --enable-all, -a                  Include scenarios excluded by default
                                     (batch-command, install/upgrade, etc.)
+  --enable-stealth-scenario, -t     Include the stealth scenarios, which drive real
+                                    bot-detection services over the public internet
+                                    (takes minutes; also selectable with
+                                    --group=stealth)
   --batch-only                      Run only excluded-by-default scenarios
 
 Output control:

@@ -53,6 +53,7 @@ $KnownVars = @(
     # ---- CLI: Build & Bundle ----
     @{Name='BROWSER4_CLI_FORCE_REMOTE_BUNDLE';         Category='cli';           Default='';   Desc='Set to 1/true/yes/on to force download from remote releases'}
     @{Name='BROWSER4_CLI_FORCE_REBUILD_BUNDLE';        Category='cli';           Default='';   Desc='Set to 1/true/yes/on to force rebuild from source'}
+    @{Name='BROWSER4_CLI_ALLOW_STALE_BUNDLE';          Category='cli';           Default='';   Desc='Set to 1/true/yes/on to start against a bundle that does not match the checkout (dev mode refuses by default)'}
 
     # ---- CLI: Timeouts ----
     @{Name='BROWSER4_CLI_HTTP_TIMEOUT_SECS';           Category='cli';           Default='30';  Desc='Default HTTP request timeout (seconds)'}

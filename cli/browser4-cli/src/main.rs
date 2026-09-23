@@ -72,7 +72,10 @@ use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, stop_workspace_servers_forcibly,
     ManagedServerProcess, ShutdownResult,
 };
-use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_filename};
+use snapshot::{
+    reconcile_screenshot_path, requested_screenshot_format, resolve_output_path, save_binary, save_snapshot,
+    timestamped_filename, ImageFormat,
+};
 use state::{
     clear_all_state, clear_state, epoch_millis_to_display, format_async_task_list,
     format_timestamp_display, read_async_tasks, read_state, resolve_default_state_dir, resolve_ref,
@@ -2515,6 +2518,7 @@ async fn handle_open(
                 if !result.is_empty() {
                     cli_println!("{}", result);
                 }
+                warn_if_page_looks_blocked(client, base_url, &session_id, url).await;
                 post_command_snapshot(client, base_url, &session_id).await;
 
                 // Headed launches should show a visible window. Diagnose the
@@ -2595,6 +2599,7 @@ async fn handle_open(
                 if !retry_result.is_empty() {
                     cli_println!("{}", retry_result);
                 }
+                warn_if_page_looks_blocked(client, base_url, &retry_id, url).await;
                 post_command_snapshot(client, base_url, &retry_id).await;
             }
         }
@@ -2655,8 +2660,9 @@ async fn handle_goto(
                     cli_println!("Navigated to {}", target_url);
                 }
                 if !json_active() {
-                    cli_println!("Page loaded. Use `wait --load networkidle` if content appears incomplete (e.g. async-rendered SPAs).");
+                    cli_println!("{}", page_loaded_hint());
                 }
+                warn_if_page_looks_blocked(client, base_url, &session_id, target_url).await;
             }
             warn_if_url_has_encoded_quotes(target_url);
             post_command_snapshot(client, base_url, &session_id).await;
@@ -2699,8 +2705,9 @@ async fn handle_goto(
                         cli_println!("Navigated to {}", target_url);
                     }
                     if !json_active() {
-                        cli_println!("Page loaded. Use `wait --load networkidle` if content appears incomplete (e.g. async-rendered SPAs).");
+                        cli_println!("{}", page_loaded_hint());
                     }
+                    warn_if_page_looks_blocked(client, base_url, &retry_id, target_url).await;
                     warn_if_url_has_encoded_quotes(target_url);
                     post_command_snapshot(client, base_url, &retry_id).await;
                 }
@@ -3077,6 +3084,18 @@ async fn handle_page_info(
         return Ok(());
     }
 
+    // Whether the page is a bot challenge / blocked shell is part of its identity,
+    // and asking here is the only way to assert it for a page this CLI did not
+    // navigate to itself (e.g. after `attach`).  Advisory: a failed probe reports
+    // "no challenge detected" rather than failing the command.
+    let active_url = tabs
+        .iter()
+        .find(|tab| tab.active)
+        .or_else(|| tabs.first())
+        .map(|tab| tab.url.clone())
+        .unwrap_or_default();
+    let challenge = session_challenge_signature(client, base_url, session_name, &active_url).await;
+
     if json_active() {
         let json_tabs: Vec<Value> = tabs
             .iter()
@@ -3092,6 +3111,13 @@ async fn handle_page_info(
             .collect();
         json_field("pages", json!(json_tabs));
         json_field("count", json!(tabs.len()));
+        json_field("challenge_detected", json!(challenge.is_some()));
+        if let Some(signature) = &challenge {
+            json_field(
+                "challenge_signature",
+                json!(describe_block_signature(signature)),
+            );
+        }
     } else {
         // Compact page-identity view — title first, then URL.
         // Highlight the active tab when known.
@@ -3133,6 +3159,9 @@ async fn handle_page_info(
                     tab.url,
                 );
             }
+        }
+        if let Some(signature) = &challenge {
+            eprintln!("{}", format_block_warning(signature));
         }
     }
 
@@ -6924,10 +6953,24 @@ async fn handle_screenshot(
         .get("filename")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    // The output file extension is the format request: a file named `*.png` must hold
+    // PNG bytes.  The backend's full-page capture defaults to PNG, so only a JPEG
+    // request has to travel to it.
+    let requested_format = requested_screenshot_format(filename.as_deref());
+    let full_page = tool_params
+        .get("fullPage")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let capture_args = {
         let mut a = tool_params.clone();
         if let Value::Object(ref mut m) = a {
             m.remove("filename");
+            if full_page && requested_format == ImageFormat::Jpeg {
+                m.insert(
+                    "format".to_string(),
+                    json!(requested_format.param_value()),
+                );
+            }
         }
         a
     };
@@ -6946,7 +6989,11 @@ async fn handle_screenshot(
         .decode(base64_data.trim())
         .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
 
-    let out_path = resolve_output_path(filename.as_deref(), "screenshot", "png");
+    // Paths the backend cannot encode in the requested format (element and viewport
+    // captures are JPEG-only in the driver) get the extension their bytes actually
+    // have, so the printed link always names a decodable file.
+    let requested_path = resolve_output_path(filename.as_deref(), "screenshot", "png");
+    let out_path = reconcile_screenshot_path(&requested_path, &bytes);
     save_binary(&out_path, &bytes).map_err(|e| describe_io_error(&e))?;
     cli_println!("[Screenshot]({})", out_path.display());
     Ok(())
@@ -7238,6 +7285,12 @@ async fn handle_tool_command_with_options(
         let formatted = format_wait_result(tool_name, tool_params, &result);
         cli_println!("{}", formatted);
         json_field("result", json!(&result));
+        // A quiet network window does not mean the page is done fetching: say so
+        // when resources are still in flight, instead of letting the caller read
+        // a half-rendered page as "nothing to report".
+        if tool_name == "wait_for_function" && is_network_idle_wait(tool_params) {
+            warn_if_resources_still_loading(client, base_url, session_name).await;
+        }
     } else if tool_name == "scroll_by" {
         // scroll_by returns the absolute scrollY position.  Format it with the
         // requested direction and pixel count for a descriptive output.
@@ -20308,6 +20361,19 @@ async fn handle_status(
         );
     }
 
+    // Dev-mode provenance: which locally assembled bundle the backend is (or
+    // would be) started from, and whether it still matches the checkout.  The
+    // launcher refuses to serve a stale bundle, so this is how a test run's
+    // provenance can be audited after the fact.
+    if let Some(bundle) = daemon::local_bundle_provenance() {
+        cli_println!("");
+        cli_println!("Local runtime bundle (dev mode):");
+        for (label, value) in bundle.report_rows() {
+            cli_println!("  {}: {}", label, value);
+        }
+        json_field("local_bundle", bundle.to_json());
+    }
+
     // Check server health and, if reachable, get the running backend's actual
     // version.  Comparing against the live backend prevents false "version
     // mismatch" warnings when the installed bundle is a different version than
@@ -20578,6 +20644,18 @@ async fn handle_doctor(
             cli_println!("  Installed runtime: not installed (run 'browser4-cli install')");
         }
         json_field("installed_runtime", json!(null));
+    }
+
+    // ---- Local Runtime Bundle (dev-mode provenance) ----
+    // The same facts the launcher refuses to start on: which bundle dev mode
+    // would serve, when it was built, and whether it matches the checkout.
+    if let Some(bundle) = daemon::local_bundle_provenance() {
+        cli_println!("");
+        cli_println!("-- Local Runtime Bundle (dev mode) --");
+        for (label, value) in bundle.report_rows() {
+            cli_println!("  {}: {}", label, value);
+        }
+        json_field("local_bundle", bundle.to_json());
     }
 
     // ---- Backend Build Info (conditional) ----
@@ -23299,7 +23377,10 @@ fn render_batch_result(
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(encoded.trim())
                 .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
-            save_binary(path, &bytes).map_err(|e| describe_io_error(&e))?;
+            // Same contract as the single command: the file extension must match the
+            // bytes, so the printed link never names a file that cannot be decoded.
+            let path = reconcile_screenshot_path(path, &bytes);
+            save_binary(&path, &bytes).map_err(|e| describe_io_error(&e))?;
             cli_println!("[Screenshot]({})", path.display());
         }
         PlannedBatchOutput::Pdf { path } => {
@@ -23844,6 +23925,54 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
     prev[n]
 }
 
+/// Error message for a leading token that is an *option* rather than a command.
+///
+/// `browser4-cli -s hd --headed open "about:blank"` puts an option of `open`
+/// where the command belongs. The command lookup sees an unknown word and, before
+/// this, answered `Unknown command: '--headed'` — which sends the user looking for
+/// a command that does not exist instead of at the flag's placement.
+///
+/// Returns `None` for a token that is not option-shaped, so the caller keeps the
+/// existing unknown-command wording (with its "did you mean" suggestions) for
+/// genuinely mistyped commands.
+fn misplaced_option_message(token: &str) -> Option<String> {
+    let token = token.trim();
+    if !token.starts_with('-') {
+        return None;
+    }
+
+    let owners = commands::commands_defining_option(token);
+    if owners.is_empty() {
+        return Some(format!(
+            "Unknown option: '{}'. Run `browser4-cli help` for the command list.",
+            token
+        ));
+    }
+
+    const MAX_OWNERS: usize = 5;
+    let (first_command, long_key) = owners[0];
+    let named = owners
+        .iter()
+        .take(MAX_OWNERS)
+        .map(|(command, _)| format!("`{}`", command))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remainder = owners.len().saturating_sub(MAX_OWNERS);
+
+    let mut message = format!(
+        "Unknown option: '{}' — it is an option of {} (as `--{}`), not a global flag or a command.",
+        token, named, long_key
+    );
+    if remainder > 0 {
+        message.push_str(&format!(" (and {} more command(s))", remainder));
+    }
+    message.push_str(&format!(
+        "\nTry: browser4-cli {} --{} <url>\nRun `browser4-cli {} --help` for its options.",
+        first_command, long_key, first_command
+    ));
+    Some(message)
+}
+
 /// Find commands similar to the given input, sorted by Levenshtein distance.
 fn suggest_similar_commands(
     input: &str,
@@ -24083,6 +24212,13 @@ async fn run(
                 ensure_server_running(&base_url, should_enforce_server_version(global)).await?;
                 let client = make_client();
                 return handle_dynamic_plugin_command(&client, &base_url, domain, global).await;
+            }
+
+            if let Some(message) = misplaced_option_message(command) {
+                // A misplaced option is not a mistyped command: name the commands
+                // that define it instead of printing the whole command list, which
+                // is what sends a user hunting for a command that never existed.
+                return Err(CliError(ExitCode::Usage, message));
             }
 
             let suggestions = suggest_similar_commands(command, 3, 5);
@@ -25603,7 +25739,14 @@ fn print_declared_help(target: Option<&str>, specs: &[CliToolSpec]) -> bool {
 /// that is meaningless to users. This function maps them to readable messages.
 fn format_wait_result(tool_name: &str, tool_params: &Value, result: &str) -> String {
     if tool_name == "wait_for_function" {
-        "✓ Wait complete".to_string()
+        if is_network_idle_wait(tool_params) {
+            // `networkidle` proves only that the network went quiet — the
+            // page's own JS can still be computing results, so the success
+            // line must not read as "the page is ready to read".
+            network_idle_success_message().to_string()
+        } else {
+            "✓ Wait complete".to_string()
+        }
     } else if tool_name == "wait_for_page" {
         "✓ URL matched".to_string()
     } else if tool_name == "delay" {
@@ -25621,6 +25764,371 @@ fn format_wait_result(tool_name: &str, tool_params: &Value, result: &str) -> Str
     } else {
         result.to_string()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Page-health advisories: honest network-idle waits and blocked-page detection
+// ---------------------------------------------------------------------------
+
+/// Post-navigation hint printed by `goto` (and any navigation path that prints
+/// the same line).
+///
+/// `networkidle` is a network-quiet heuristic: a page whose results are
+/// computed by client-side JS after load is still empty when the wait reports
+/// success.  Recommend the stronger primitive first (waiting for the result
+/// element) and describe `networkidle` for what it actually proves.
+fn page_loaded_hint() -> &'static str {
+    "Page loaded. If results render asynchronously, wait for the result element \
+     (wait <selector>) — `wait --load networkidle` only proves the network went quiet."
+}
+
+/// True when the wait came from `wait --load networkidle`.
+///
+/// The strategy name is not part of the tool call — the CLI sends the built
+/// expression as `pageFunction` — so the network-idle tracker marker identifies
+/// it.
+fn is_network_idle_wait(tool_params: &Value) -> bool {
+    tool_params
+        .get("pageFunction")
+        .and_then(|value| value.as_str())
+        .is_some_and(|expression| expression.contains(commands::NETWORK_IDLE_MARKER))
+}
+
+/// What a successful `wait --load networkidle` proves — and what it does not:
+/// a quiet network window says nothing about JS that computes results after load.
+fn network_idle_success_message() -> &'static str {
+    "✓ Wait complete (network idle for 500ms; page JS may still be rendering results)"
+}
+
+/// JavaScript that counts the resources a page still has in flight.
+///
+/// Only DOM/BOM signals are used (images, fonts, resource-timing entries): page
+/// globals such as the network-idle tracker are not reliably visible from the
+/// evaluation context.  The whole check is one cheap round trip — no polling.
+const STILL_LOADING_PROBE_JS: &str = r#"(function(){
+var images=document.images||[],imagesPending=0;
+for(var i=0;i<images.length;i++){if(!images[i].complete){imagesPending++}}
+var fontsPending=(document.fonts&&document.fonts.status==='loading')?1:0;
+var entries=[];
+try{entries=performance.getEntriesByType('resource')||[]}catch(e){}
+var networkPending=0;
+for(var j=0;j<entries.length;j++){var entry=entries[j];if(entry.responseEnd===0&&entry.duration===0){networkPending++}}
+return JSON.stringify({images:imagesPending,fonts:fontsPending,network:networkPending});
+})()"#;
+
+/// Parse the JSON document an eval probe returned.
+///
+/// A transport may hand the evaluated string back either raw (`{"a":1}`) or
+/// JSON-encoded as a quoted string (`"{\"a\":1}"`), depending on how the backend
+/// serialises an expression whose value is itself a string.  One layer is
+/// unwrapped so the probe payload is read the same way in both cases; anything
+/// that is not a JSON document returns `None`, which callers treat as "no
+/// signal" rather than as a detection.
+fn parse_probe_json(raw: &str) -> Option<Value> {
+    let value: Value = serde_json::from_str(raw.trim()).ok()?;
+    match value {
+        Value::String(inner) => serde_json::from_str(inner.trim()).ok(),
+        other => Some(other),
+    }
+}
+
+/// Sum the still-in-flight resource counters of [STILL_LOADING_PROBE_JS].
+///
+/// Returns `None` when the payload is not the probe's JSON object, so an
+/// unexpected result degrades to "no hint" instead of a bogus warning.  Any
+/// non-zero count means the page is fetching something after the quiet window.
+fn count_still_loading_resources(probe_result: &str) -> Option<usize> {
+    let payload = parse_probe_json(probe_result)?;
+    let mut total = 0usize;
+    let mut found = false;
+    for key in ["images", "fonts", "network"] {
+        if let Some(value) = payload.get(key).and_then(|value| value.as_u64()) {
+            total += value as usize;
+            found = true;
+        }
+    }
+    if found {
+        Some(total)
+    } else {
+        None
+    }
+}
+
+/// After `wait --load networkidle` succeeds, note (advisory, stderr) when the
+/// page is still fetching resources.
+///
+/// Never fails the command, never changes the exit code, and never polls: a
+/// failed probe stays silent.
+async fn warn_if_resources_still_loading(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) {
+    let probe_result = match call_session_tool(
+        client,
+        base_url,
+        session_name,
+        "browser_evaluate",
+        json!({ "expression": STILL_LOADING_PROBE_JS }),
+    )
+    .await
+    {
+        Ok(result) => result,
+        // The wait itself succeeded — a failed probe must not become a failure.
+        Err(_) => return,
+    };
+    let Some(pending) = count_still_loading_resources(&probe_result) else {
+        return;
+    };
+    if pending == 0 {
+        return;
+    }
+    if json_active() {
+        // Structured consumers get a field instead of human prose.
+        json_field("resources_in_flight", json!(pending));
+        return;
+    }
+    eprintln!(
+        "⚠  Network went idle but {pending} resource(s) are still in flight — results may not be rendered yet. Prefer: wait <result-selector>"
+    );
+}
+
+/// URL fragments that mark a challenge / "sorry" interstitial page.
+///
+/// Each entry is `(marker, companion)`: a marker matches on its own, while a
+/// marker with a companion only fires when the companion is present too —
+/// `continue=` is an ordinary redirect parameter (OAuth, search hand-offs), so
+/// it counts only alongside a "sorry" path.
+///
+/// The sorry marker has no trailing slash on purpose: Google serves
+/// `google.com/sorry/index?continue=...`, but an interstitial can equally land on
+/// `/sorry?continue=...`, and the marker is what the warning names.
+const BLOCKED_URL_SIGNATURES: &[(&str, Option<&str>)] = &[
+    ("/sorry", None),
+    ("/cdn-cgi/challenge", None),
+    ("/challenge", None),
+    ("/captcha", None),
+    ("__cf_chl", None),
+    ("/verify", None),
+    // Normally unreachable once `/sorry` precedes it; kept as a fallback for a
+    // host that mentions the sorry state only in a query parameter.
+    ("continue=", Some("sorry")),
+];
+
+/// Body-text markers of a blocked / challenged page, matched case-insensitively.
+/// The long "unusual traffic" phrase is listed before the short one so the
+/// warning names the most specific signature that fired.
+const BLOCKED_BODY_SIGNATURES: &[&str] = &[
+    "unusual traffic from your computer network",
+    "unusual traffic",
+    "access denied",
+    "verify you are human",
+    "are you a robot",
+    "enable javascript and cookies to continue",
+    "attention required!",
+    "just a moment...",
+    "checking your browser before accessing",
+    "請稍候",
+];
+
+/// Visible text shorter than this after a successful http(s) navigation is
+/// implausible for a real page — challenge interstitials and error shells are
+/// near-empty, and "empty page with exit code 0" is otherwise indistinguishable
+/// from "nothing to report".
+///
+/// Kept deliberately small: this advisory is printed on every navigation, and a
+/// terse but genuine page (a link list, a form, an API-rendered shell) must not
+/// trip it.  The markers above catch real challenges; this only catches a page
+/// that rendered essentially nothing.
+const IMPLAUSIBLY_EMPTY_BODY_CHARS: usize = 80;
+
+/// Signature that flagged a page as blocked / challenged.  Advisory only: the
+/// markers are plain substrings, so a legitimate page can match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BlockSignature {
+    /// URL matched a challenge/block marker.
+    Url(&'static str),
+    /// Page text matched a challenge/block marker.
+    Body(&'static str),
+    /// Neither matched, but the page had implausibly little visible text
+    /// (the weaker, separate signal).
+    EmptyBody(usize),
+}
+
+/// Match `url` against [BLOCKED_URL_SIGNATURES], returning the marker that fired.
+fn match_blocked_url(url: &str) -> Option<&'static str> {
+    let lower = url.to_ascii_lowercase();
+    BLOCKED_URL_SIGNATURES
+        .iter()
+        .find_map(|(marker, companion)| {
+            let hit = lower.contains(marker)
+                && companion.is_none_or(|companion| lower.contains(companion));
+            if hit {
+                Some(*marker)
+            } else {
+                None
+            }
+        })
+}
+
+/// True for real web pages — `about:blank`, `chrome-error://` and other
+/// non-http(s) documents are legitimately empty.
+fn is_http_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+/// Score a landed page against the block/challenge signatures documented in
+/// `skills/browser4-cli/SKILL.md` §2.  Returns `None` for an ordinary page.
+fn detect_block_signature(url: &str, page_text: &str) -> Option<BlockSignature> {
+    if let Some(marker) = match_blocked_url(url) {
+        return Some(BlockSignature::Url(marker));
+    }
+    let lower = page_text.to_lowercase();
+    if let Some(marker) = BLOCKED_BODY_SIGNATURES
+        .iter()
+        .find(|marker| lower.contains(*marker))
+    {
+        return Some(BlockSignature::Body(marker));
+    }
+    let visible_chars = page_text.trim().chars().count();
+    if is_http_url(url) && visible_chars < IMPLAUSIBLY_EMPTY_BODY_CHARS {
+        return Some(BlockSignature::EmptyBody(visible_chars));
+    }
+    None
+}
+
+/// Short description of the signature that fired, used by both the human
+/// warning and the `--json` field.
+fn describe_block_signature(signature: &BlockSignature) -> String {
+    match signature {
+        BlockSignature::Url(marker) => format!("URL matches the block/challenge marker `{marker}`"),
+        BlockSignature::Body(marker) => {
+            format!("page text matches the block/challenge marker \"{marker}\"")
+        }
+        BlockSignature::EmptyBody(chars) => format!(
+            "page text is implausibly empty ({chars} chars) after a successful navigation"
+        ),
+    }
+}
+
+/// Advisory warning for a detected block/challenge page.  The escalation is the
+/// one documented in `skills/browser4-cli/SKILL.md` §2: close, re-open once with
+/// `--headed` on the same session, retry once, then stop instead of looping.
+fn format_block_warning(signature: &BlockSignature) -> String {
+    format!(
+        "⚠  Possible blocked/challenge page — detected {}.\n\
+         Next step: `close` and re-open once with `--headed` on the same `-s <session>` so profile and cookies survive, then retry the step once.\n\
+         If the headed retry is blocked too, stop — the block is fingerprint/IP-level; prefer `attach`, do not loop.",
+        describe_block_signature(signature)
+    )
+}
+
+/// JavaScript that reports the landed URL and its visible text in one round
+/// trip — enough to score the page against the block signatures without paying
+/// for a snapshot.  The text is capped so a huge page cannot flood the CLI.
+const BLOCK_PROBE_JS: &str = r#"(function(){
+var body=document.body;
+var text=body&&typeof body.innerText==='string'?body.innerText:'';
+var title=document.title?String(document.title)+'\n':'';
+return JSON.stringify({url:String(location.href),text:(title+text).slice(0,4000)});
+})()"#;
+
+/// URL + visible text captured by [BLOCK_PROBE_JS].
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlockProbe {
+    url: String,
+    text: String,
+}
+
+/// Parse a [BLOCK_PROBE_JS] payload; `None` when the result has another shape,
+/// so an unexpected payload degrades to "no check" instead of a false warning.
+fn parse_block_probe(probe_result: &str) -> Option<BlockProbe> {
+    let payload = parse_probe_json(probe_result)?;
+    let url = payload.get("url")?.as_str()?.to_string();
+    let text = payload
+        .get("text")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    Some(BlockProbe { url, text })
+}
+
+/// Run the block probe after a successful navigation and flag a page that looks
+/// like a bot challenge or a blocked shell.
+///
+/// Advisory only: it never fails the command, never changes the exit code, never
+/// retries, and silently skips the check when the probe call fails.  Costs one
+/// `browser_evaluate` round trip on the navigation path.
+async fn warn_if_page_looks_blocked(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+    requested_url: &str,
+) {
+    // Score the landed page first, then report once: a machine consumer needs a
+    // single, stable `challenge_detected` field per navigation, and emitting a
+    // provisional `false` before the probe would duplicate the key in --json mode.
+    let signature = match call_tool(
+        client,
+        base_url,
+        "browser_evaluate",
+        json!({ "sessionId": session_id, "expression": BLOCK_PROBE_JS }),
+    )
+    .await
+    {
+        Ok(result) => interpret_block_probe(&result, requested_url),
+        // Detection must never turn into a command failure: an unreachable probe
+        // is reported as "no challenge detected".
+        Err(_) => None,
+    };
+
+    if json_active() {
+        json_field("challenge_detected", json!(signature.is_some()));
+        if let Some(signature) = &signature {
+            json_field(
+                "challenge_signature",
+                json!(describe_block_signature(signature)),
+            );
+        }
+        return;
+    }
+    if let Some(signature) = &signature {
+        eprintln!("{}", format_block_warning(signature));
+    }
+}
+
+/// Score the *current* page of a session — the same check `goto` / `open` run
+/// after a navigation, exposed so a caller that attached to a live page (or wants
+/// to re-check one) can ask directly.  One `browser_evaluate` round trip.
+async fn session_challenge_signature(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+    fallback_url: &str,
+) -> Option<BlockSignature> {
+    let probe_result = call_session_tool(
+        client,
+        base_url,
+        session_name,
+        "browser_evaluate",
+        json!({ "expression": BLOCK_PROBE_JS }),
+    )
+    .await
+    .ok()?;
+    interpret_block_probe(&probe_result, fallback_url)
+}
+
+/// Interpret a [BLOCK_PROBE_JS] payload against the URL the page reports (falling
+/// back to the URL the caller knew about when the page reports none).
+fn interpret_block_probe(probe_result: &str, fallback_url: &str) -> Option<BlockSignature> {
+    let probe = parse_block_probe(probe_result)?;
+    let landed_url = if probe.url.trim().is_empty() {
+        fallback_url
+    } else {
+        probe.url.as_str()
+    };
+    detect_block_signature(landed_url, &probe.text)
 }
 
 #[cfg(test)]
@@ -25677,6 +26185,15 @@ mod tests {
             std::env::remove_var(key);
         }
         EnvGuard { key, prev }
+    }
+
+    /// Ordinary, long-enough page text: keeps the block signatures and the
+    /// "implausibly empty body" signal both out of the way.
+    fn ordinary_page_text() -> String {
+        "Example Domain. This domain is for use in illustrative examples in documents. \
+         You may use this domain in literature without prior coordination or asking for \
+         permission. More information is available on the IANA-managed reserved domains page."
+            .to_string()
     }
 
     // -----------------------------------------------------------------------
@@ -27100,6 +27617,42 @@ mod tests {
             format_cli_error_output("Unknown command"),
             "Error: Unknown command"
         );
+    }
+
+    #[test]
+    fn misplaced_option_names_the_commands_that_define_it() {
+        // `browser4-cli -s hd --headed open <url>` — an option of `open` where the
+        // command belongs.
+        let message = misplaced_option_message("--headed").expect("--headed is a known option");
+
+        assert!(message.starts_with("Unknown option: '--headed'"), "{message}");
+        assert!(message.contains("`open`"), "must name the owning command: {message}");
+        assert!(message.contains("--headed"), "{message}");
+        // A script needs to tell "unknown option" apart from "unknown command".
+        assert!(!message.contains("Unknown command"), "{message}");
+    }
+
+    #[test]
+    fn misplaced_option_resolves_a_short_alias_to_its_long_form() {
+        let message = misplaced_option_message("-o").expect("-o is a short alias");
+
+        assert!(message.contains("--filename"), "expected the long form: {message}");
+        assert!(!message.contains("Unknown command"), "{message}");
+    }
+
+    #[test]
+    fn misplaced_option_rejects_an_unknown_flag_without_claiming_a_command() {
+        let message = misplaced_option_message("--zzz-not-an-option").expect("option-shaped");
+
+        assert!(message.contains("Unknown option: '--zzz-not-an-option'"), "{message}");
+        assert!(!message.contains("Unknown command"), "{message}");
+    }
+
+    #[test]
+    fn misplaced_option_ignores_a_plain_command_token() {
+        // `opne` is a mistyped command, not an option — the caller keeps the
+        // "Unknown command ... Did you mean" wording for it.
+        assert_eq!(misplaced_option_message("opne"), None);
     }
 
     #[test]
@@ -30661,6 +31214,217 @@ mod tests {
     fn format_wait_result_empty_result_for_non_wait() {
         let msg = format_wait_result("browser_snapshot", &json!({}), "");
         assert_eq!(msg, "");
+    }
+
+    #[test]
+    fn format_wait_result_network_idle_states_what_was_proven() {
+        let params = json!({ "pageFunction": commands::load_strategy_js("networkidle").unwrap() });
+        let msg = format_wait_result("wait_for_function", &params, "{}");
+        assert_eq!(
+            msg,
+            "✓ Wait complete (network idle for 500ms; page JS may still be rendering results)"
+        );
+        // The message must not promise that results are rendered.
+        assert!(!msg.contains("results rendered"));
+    }
+
+    #[test]
+    fn format_wait_result_non_network_idle_keeps_plain_message() {
+        let params = json!({ "pageFunction": "window.appReady === true" });
+        assert_eq!(format_wait_result("wait_for_function", &params, "{}"), "✓ Wait complete");
+        let load_params = json!({ "pageFunction": commands::load_strategy_js("load").unwrap() });
+        assert_eq!(
+            format_wait_result("wait_for_function", &load_params, "{}"),
+            "✓ Wait complete"
+        );
+    }
+
+    #[test]
+    fn is_network_idle_wait_detects_only_the_tracker_expression() {
+        assert!(is_network_idle_wait(&json!({
+            "pageFunction": commands::load_strategy_js("networkidle").unwrap()
+        })));
+        assert!(!is_network_idle_wait(&json!({
+            "pageFunction": commands::load_strategy_js("domcontentloaded").unwrap()
+        })));
+        assert!(!is_network_idle_wait(&json!({ "pageFunction": "true" })));
+        assert!(!is_network_idle_wait(&json!({})));
+    }
+
+    #[test]
+    fn page_loaded_hint_prefers_the_result_element_and_is_one_line() {
+        let hint = page_loaded_hint();
+        assert!(hint.starts_with("Page loaded."));
+        assert!(hint.contains("wait for the result element (wait <selector>)"));
+        assert!(hint.contains("`wait --load networkidle` only proves the network went quiet"));
+        // The old wording recommended the weaker primitive as the remedy.
+        assert!(!hint.contains("if content appears incomplete"));
+        assert_eq!(hint.lines().count(), 1);
+    }
+
+    #[test]
+    fn count_still_loading_resources_sums_every_in_flight_signal() {
+        assert_eq!(
+            count_still_loading_resources(r#"{"images":2,"fonts":1,"network":3}"#),
+            Some(6)
+        );
+        assert_eq!(
+            count_still_loading_resources(r#"{"images":0,"fonts":0,"network":0}"#),
+            Some(0)
+        );
+        // Partial payloads still count what they carry.
+        assert_eq!(count_still_loading_resources(r#"{"network":1}"#), Some(1));
+    }
+
+    #[test]
+    fn count_still_loading_resources_ignores_unrelated_payloads() {
+        // A failed or unexpected eval result must degrade to "no hint" instead
+        // of a bogus warning.
+        assert_eq!(count_still_loading_resources(""), None);
+        assert_eq!(count_still_loading_resources("null"), None);
+        assert_eq!(count_still_loading_resources("undefined"), None);
+        assert_eq!(count_still_loading_resources(r#"{"readyState":"complete"}"#), None);
+    }
+
+    #[test]
+    fn probe_payloads_are_read_through_a_json_encoded_string() {
+        // A transport may hand an evaluated string back JSON-encoded.  Both probes
+        // must read that shape too — otherwise detection silently never fires and
+        // the feature looks like "nothing was ever blocked".
+        let encoded = serde_json::to_string(r#"{"images":1,"fonts":0,"network":2}"#).unwrap();
+        assert_eq!(count_still_loading_resources(&encoded), Some(3));
+
+        let encoded = serde_json::to_string(
+            r#"{"url":"https://example.com/sorry?x=1","text":"unusual traffic"}"#,
+        )
+        .unwrap();
+        let probe = parse_block_probe(&encoded).expect("the encoded payload must be readable");
+        assert_eq!(probe.url, "https://example.com/sorry?x=1");
+        assert_eq!(
+            detect_block_signature(&probe.url, &probe.text),
+            Some(BlockSignature::Url("/sorry"))
+        );
+    }
+
+    #[test]
+    fn detect_block_signature_matches_url_markers() {
+        assert_eq!(
+            detect_block_signature("https://www.google.com/sorry/index?continue=https%3A%2F%2Fwww.google.com%2Fsearch&q=hi", ""),
+            Some(BlockSignature::Url("/sorry"))
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1", "ok"),
+            Some(BlockSignature::Url("/cdn-cgi/challenge"))
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/verify?__cf_chl_tk=abc", "ok"),
+            Some(BlockSignature::Url("__cf_chl"))
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/CHALLENGE", "ok"),
+            Some(BlockSignature::Url("/challenge"))
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/login/captcha", "ok"),
+            Some(BlockSignature::Url("/captcha"))
+        );
+    }
+
+    #[test]
+    fn detect_block_signature_requires_a_sorry_page_for_continue_param() {
+        let text = ordinary_page_text();
+        // `continue=` alone is an ordinary redirect parameter.
+        assert_eq!(
+            detect_block_signature("https://example.com/oauth?continue=/home", &text),
+            None
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/sorry?continue=%2Fhome", &text),
+            Some(BlockSignature::Url("/sorry"))
+        );
+    }
+
+    #[test]
+    fn detect_block_signature_matches_body_markers_case_insensitively() {
+        assert_eq!(
+            detect_block_signature("https://example.com/", "Just a moment..."),
+            Some(BlockSignature::Body("just a moment..."))
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/", "ATTENTION REQUIRED! Cloudflare"),
+            Some(BlockSignature::Body("attention required!"))
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/", "Please verify you are human to continue"),
+            Some(BlockSignature::Body("verify you are human"))
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/", "Enable JavaScript and cookies to continue"),
+            Some(BlockSignature::Body("enable javascript and cookies to continue"))
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/", "Checking your browser before accessing example.com"),
+            Some(BlockSignature::Body("checking your browser before accessing"))
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/", "Access Denied — you don't have permission"),
+            Some(BlockSignature::Body("access denied"))
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/", "We have detected unusual traffic from your computer network."),
+            Some(BlockSignature::Body("unusual traffic from your computer network"))
+        );
+        assert_eq!(
+            detect_block_signature("https://example.com/", "請稍候…"),
+            Some(BlockSignature::Body("請稍候"))
+        );
+    }
+
+    #[test]
+    fn detect_block_signature_flags_implausibly_empty_body_separately() {
+        let signature = detect_block_signature("https://www.amazon.com/", "");
+        assert_eq!(signature, Some(BlockSignature::EmptyBody(0)));
+        // Non-http(s) shells are legitimately empty.
+        assert_eq!(detect_block_signature("about:blank", ""), None);
+        assert_eq!(detect_block_signature("chrome-error://chromewebdata/", ""), None);
+    }
+
+    #[test]
+    fn detect_block_signature_ignores_an_ordinary_page() {
+        let text = ordinary_page_text();
+        assert!(text.len() > IMPLAUSIBLY_EMPTY_BODY_CHARS);
+        assert_eq!(detect_block_signature("https://example.com/", &text), None);
+        assert_eq!(
+            detect_block_signature("https://en.wikipedia.org/wiki/Rust_(programming_language)", &text),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_block_probe_reads_url_and_text() {
+        let probe = parse_block_probe(r#"{"url":"https://example.com/","text":"hello"}"#).unwrap();
+        assert_eq!(probe.url, "https://example.com/");
+        assert_eq!(probe.text, "hello");
+        // Missing text is tolerated (the URL alone can still match).
+        let probe = parse_block_probe(r#"{"url":"https://example.com/"}"#).unwrap();
+        assert_eq!(probe.text, "");
+        assert_eq!(parse_block_probe(""), None);
+        assert_eq!(parse_block_probe("some driver noise"), None);
+        assert_eq!(parse_block_probe(r#"{"text":"no url"}"#), None);
+    }
+
+    #[test]
+    fn format_block_warning_names_the_signature_and_the_escalation() {
+        let warning = format_block_warning(&BlockSignature::Url("/sorry"));
+        assert!(warning.contains("/sorry"));
+        assert!(warning.contains("close"));
+        assert!(warning.contains("--headed"));
+        assert!(warning.contains("retry the step once"));
+        assert!(warning.contains("stop"));
+
+        let empty = format_block_warning(&BlockSignature::EmptyBody(0));
+        assert!(empty.contains("implausibly empty"));
+        assert!(empty.contains("--headed"));
     }
 
     // -----------------------------------------------------------------------

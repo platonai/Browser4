@@ -366,7 +366,7 @@ SWARM 会话的所有页面仅显示占位图。截图采用**异步加载**—�
 | `wait [target]` | 等待 selector/ref、时长、文本、URL 模式、页面加载状态或 JavaScript 表达式。支持 `--timeout`、`--text`、`--url`、`--load`、`--fn`。 |
 | `upload <ref> <file> [file...]` | 把本地文件上传到页面的文件输入框。目标必须是 `<input type="file">`（其他元素会报错）；文件路径须能被浏览器进程读取——本地模式下即本机，且空文件/不存在的文件会被拒绝并提示；远程后端时路径在后端主机上解析。支持 `--no-snapshot`。 |
 
-`wait --load` 接受 `domcontentloaded`、`load` 和 `networkidle`。
+`wait --load` 接受 `domcontentloaded`、`load` 和 `networkidle`。`networkidle` 只证明网络已安静，**不**代表延迟渲染的结果已经出现；结果类页面请改为轮询结果元素：`wait "<result-selector>"`。
 
 ```bash
 browser4-cli click e8 --follow
@@ -717,7 +717,7 @@ export BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS=300
    > Windows 上可在命令前加 `chcp 65001 >nul &&`，以获得正确的 UTF-8 输出。
    > 完整平台说明请见 [Build from Source](docs/build-from-source.md)。
 
-   **开发模式包装脚本（无需安装）：** 仓库根目录提供自动按需构建的包装脚本。可使用 `./b4w.ps1 <command>`（PowerShell）、`./b4w.sh <command>`（Git Bash / Linux / macOS）或 `./b4w.bat <command>`（CMD），参数与已安装的 `browser4-cli` 完全一致。
+   **开发模式包装脚本（无需安装）：** 仓库根目录提供自动按需构建的包装脚本。可使用 `./b4w.ps1 <command>`（PowerShell）、`./b4w.sh <command>`（Git Bash / Linux / macOS）或 `./b4w.bat <command>`（CMD），参数与已安装的 `browser4-cli` 完全一致。开发模式只运行当前检出的代码：若本地 runtime bundle 是用**不同的项目版本**构建的，命令会直接拒绝启动（并给出原因、bundle 的版本与构建时间以及重建命令），而不是悄悄测试过期的后端；若只是检出目录里的源码看起来比 bundle 的 jar 更新，命令会先重新构建再启动——参见 [CLI 安装与升级](docs/cli-install-upgrade.md#dev-mode-the-backend-must-match-the-checkout)。
 
 ---
 

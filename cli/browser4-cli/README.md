@@ -50,6 +50,20 @@ entirely (production ports and the flat `~/.browser4` state), and
 status` prints the workspace app data root in use; the backend keeps using the
 shared `~/.browser4` if that root cannot be prepared (the CLI warns and says so).
 
+### Dev mode only serves the checked-out code
+
+Dev mode only ever serves the checked-out code: an already assembled runtime bundle
+is reused as-is while it matches the checkout. A bundle built from a different
+project version makes the command **refuse to start** with a non-zero exit —
+printing the detected reason, the bundled/checked-out versions, the bundle's build
+time and the exact rebuild command; a checkout whose sources merely look newer than
+the bundle jars is rebuilt before the server starts. Rebuild it with
+`powershell -ExecutionPolicy Bypass -File browser4-apps/browser4-bundle/build-runtime-bundle.ps1`
+(`pwsh -File …` on Linux/macOS) or re-run with `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1`.
+The single opt-out for deliberately testing an older backend is
+`BROWSER4_CLI_ALLOW_STALE_BUNDLE=1` (the warning stays, and `status` / `doctor`
+report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#dev-mode-the-backend-must-match-the-checkout).
+
 ## Commands
 
 ### Browser sessions

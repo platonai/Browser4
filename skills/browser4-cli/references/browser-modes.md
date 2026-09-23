@@ -136,6 +136,40 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
 - Browser4 passes plain `--headless` (never `--headless=new`), forces
   `--disable-blink-features=AutomationControlled`, and leaves user-agent rotation off by default because
   rotation itself is detectable.
+- **The `HeadlessChrome` token is replaced at launch, in every display mode.** A
+  CDP-driven headless Chrome advertises `HeadlessChrome/<version>` by default; that
+  single token fails SannySoft `HEADCHR_UA`, Incolumitas `intoli.userAgent`, BrowserScan's
+  aggregate "Robot" badge and deviceandbrowserinfo's `hasBotUserAgent`, and it contradicts
+  the `Sec-CH-UA*` client hints the same browser sends. Browser4 therefore resolves the
+  installed Chrome's major version and passes an explicit `--user-agent`:
+
+  | Display mode | `navigator.userAgent` |
+  |---|---|
+  | `--headless` (default) | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36` |
+  | `--headed` | identical — a current desktop Chrome reports the same reduced form natively |
+  | `--supervised` | the same as whichever of the two the supervisor actually starts |
+
+  The platform prefix follows the host (`Macintosh; Intel Mac OS X 10_15_7` on macOS,
+  `X11; Linux x86_64` elsewhere) and the version is Chrome's reduced form
+  (`<major>.0.0.0`). A launch-time `--user-agent` is used deliberately: it is the only
+  mechanism that reaches every JavaScript scope of a session — page, iframes,
+  dedicated/shared/service workers — while leaving the client hints intact.
+
+  Tune it with `browser.launch.user.agent` (an explicit string; a `Headless` token in it is
+  repaired rather than trusted) or disable the replacement entirely with
+  `browser.launch.user.agent.stealth=false`. When the Chrome major version cannot be
+  determined the driver logs a warning and leaves Chrome's default user agent in place —
+  expect the `HeadlessChrome` token in that case, and set `browser.launch.user.agent` to
+  fix it.
+- `navigator.deviceMemory` and `navigator.maxTouchPoints` are **Chrome's own readings of the
+  host**, not Browser4 overrides — verify before reporting them as defects. Chrome derives
+  `deviceMemory` from the host RAM by rounding down to a power of two, and recent Chrome
+  builds no longer clamp it at 8, so a 32 GB host legitimately reports `32` (SannySoft's
+  `CHR_MEMORY` check predates that change). `maxTouchPoints` reflects the host's touch
+  digitizer and can be non-zero while `'ontouchstart' in window` stays false and
+  `(pointer: fine)` matches — that is what a desktop Chrome with a touch-capable display
+  reports, and `(any-pointer: coarse)` is true in that case. Compare against a plain
+  `chrome --headless` reading on the same host before filing either as a driver bug.
 - `console` (list console messages) reads them from the DevTools protocol, so it does **not**
   patch the page: `console.log` stays the native function and no driver-owned global appears on
   `window`. Capture starts with the first `console` call of a session, so messages logged before it

@@ -326,7 +326,7 @@ All interaction commands accept a snapshot ref such as `e15` or a CSS selector u
 | `wait [target]` | Wait for a selector/ref, duration, text, URL pattern, page-load state, or JavaScript expression. Supports `--timeout`, `--text`, `--url`, `--load`, `--fn`. |
 | `upload <ref> <file> [file...]` | Upload one or more local files to a page file input. The target must be an `<input type="file">` (anything else errors); the paths must be readable by the browser process — local mode: the same machine, and empty/missing files are rejected with a hint; remote backend: paths resolve on the backend host. Supports `--no-snapshot`. |
 
-`wait --load` accepts `domcontentloaded`, `load`, and `networkidle`.
+`wait --load` accepts `domcontentloaded`, `load`, and `networkidle`. `networkidle` only proves the network went quiet — it does **not** mean late-rendered results exist; for result pages poll the element instead: `wait "<result-selector>"`.
 
 ```bash
 browser4-cli click e8 --follow
@@ -691,6 +691,13 @@ The runtime bundle is stored separately in a platform-conventional application-d
    that auto-build from source. Use `./b4w.ps1 <command>` (PowerShell),
    `./b4w.sh <command>` (Git Bash / Linux / macOS), or `./b4w.bat <command>`
    (CMD) — all accept the same arguments as the installed `browser4-cli` binary.
+   Dev mode only ever serves the checked-out code: a local runtime bundle built
+   from a **different project version** makes the command refuse to start (naming
+   the reason, the bundle's versions and build time, and the rebuild command)
+   rather than silently testing an outdated backend; a checkout whose sources
+   merely look newer than the bundle jars is rebuilt before the server starts —
+   see
+   [CLI install & upgrade](../docs/cli-install-upgrade.md#dev-mode-the-backend-must-match-the-checkout).
 
 ---
 

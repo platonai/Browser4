@@ -279,6 +279,10 @@ fn resolve_text_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>
 /// - `networkidle` — static resources loaded AND no XHR/fetch activity for
 ///   at least 500 ms
 ///
+/// `networkidle` is a network heuristic only: page JS can still be computing
+/// results after the quiet window (or start a new request), so callers that
+/// need rendered content should poll for the result element instead.
+///
 /// Returns an error for unknown strategy names so the CLI can fail early.
 pub fn load_strategy_js(load: &str) -> Result<String, String> {
     match load.to_ascii_lowercase().as_str() {
@@ -299,6 +303,12 @@ pub fn load_strategy_js(load: &str) -> Result<String, String> {
         )),
     }
 }
+
+/// Marker that [NETWORK_IDLE_JS] installs on the page to hold the tracker
+/// state.  The CLI also uses it to recognise a `networkidle` wait when it
+/// formats the result (the strategy name is not part of the tool call), so the
+/// marker and the JavaScript below must stay in sync — a unit test asserts it.
+pub const NETWORK_IDLE_MARKER: &str = "__b4_ni";
 
 /// JavaScript expression that monkey-patches `fetch` and `XMLHttpRequest`
 /// to track in-flight requests, then waits until all of the following are true:
@@ -1543,7 +1553,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "text", description: "Wait until this text appears on the page", is_bool: false, short: None },
                 OptionDef { name: "url", description: "Wait until the URL matches this glob pattern", is_bool: false, short: None },
-                OptionDef { name: "load", description: "Wait for page load state: networkidle, domcontentloaded, or load", is_bool: false, short: None },
+                OptionDef { name: "load", description: "Wait for page load state: networkidle, domcontentloaded, or load (networkidle only settles the network — poll `wait <result-selector>` for late-rendered results)", is_bool: false, short: None },
                 OptionDef { name: "fn", description: "Wait until this JavaScript expression returns true", is_bool: false, short: None },
                 OptionDef { name: "download", description: "Wait until a download in the given directory completes (polls for .crdownload files)", is_bool: true, short: None },
                 OptionDef { name: "dir", description: "Download directory to watch (with --download; default: ./downloads)", is_bool: false, short: None },
@@ -2834,8 +2844,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: true }],
             options: &[
-                OptionDef { name: "filename", description: "File name or path to save the screenshot to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: Some("o") },
-                OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },
+                OptionDef { name: "filename", description: "File name or path to save the screenshot to. The extension selects the image format (.png default, .jpg/.jpeg for JPEG). Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: Some("o") },
+                OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page (PNG by default, matching the viewport capture)", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = current visible screen). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -5168,6 +5178,40 @@ pub fn commands_map() -> HashMap<String, CommandDef> {
     all_commands()
         .into_iter()
         .map(|cmd| (cmd.name.to_string(), cmd))
+        .collect()
+}
+
+/// The commands that define an option, as `(command, long option key)` pairs in
+/// registry order.
+///
+/// Used to tell a misplaced subcommand option apart from a mistyped command:
+/// `browser4-cli --headed open <url>` puts an option of `open` where the command
+/// belongs, and the useful answer is "`--headed` is an option of `open`", not
+/// "there is no command called `--headed`".  `option` may be written with or
+/// without leading dashes, and may be a short alias (`-o` resolves to the long
+/// key it belongs to).
+///
+/// The result is deterministic (registry order, not map order) so the message it
+/// feeds is stable and testable.
+pub fn commands_defining_option(option: &str) -> Vec<(&'static str, &'static str)> {
+    let key = option.trim().trim_start_matches('-');
+    if key.is_empty() {
+        return Vec::new();
+    }
+
+    all_commands()
+        .into_iter()
+        .filter_map(|cmd| {
+            cmd.options
+                .iter()
+                .find_map(|def| {
+                    if def.key() == key || def.short == Some(key) {
+                        Some((cmd.name, def.key()))
+                    } else {
+                        None
+                    }
+                })
+        })
         .collect()
 }
 
@@ -8461,6 +8505,15 @@ mod tests {
         assert!(load_strategy_js("DOMContentLoaded").is_ok());
         assert!(load_strategy_js("Load").is_ok());
         assert!(load_strategy_js("NetworkIdle").is_ok());
+    }
+
+    #[test]
+    fn test_network_idle_marker_matches_tracking_expression() {
+        // main.rs recognises a `wait --load networkidle` by this marker; if the
+        // JavaScript sentinel is renamed, the marker must follow.
+        let expr = load_strategy_js("networkidle").unwrap();
+        assert!(expr.contains(NETWORK_IDLE_MARKER));
+        assert_eq!(NETWORK_IDLE_MARKER, "__b4_ni");
     }
 
     #[test]

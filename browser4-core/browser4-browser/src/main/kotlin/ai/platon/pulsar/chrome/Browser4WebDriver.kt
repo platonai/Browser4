@@ -2,7 +2,9 @@ package ai.platon.pulsar.chrome
 
 import ai.platon.cdt.kt.protocol.support.types.EventListener
 import ai.platon.cdt.kt.protocol.types.console.ConsoleMessageSource
+import ai.platon.cdt.kt.protocol.types.page.CaptureScreenshotFormat
 import ai.platon.pulsar.api.BrowserProtocol
+import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.BrowserUseState
 import ai.platon.pulsar.api.model.JsEvaluation
@@ -268,13 +270,15 @@ open class Browser4WebDriver(
         }
 
         /**
-         * Probe used by [Browser4WebDriver.typeAuto] before choosing an insertion
-         * strategy.  Evaluated with `this` bound to the target element; returns
-         * `{found:false}` when the locator resolves to nothing, otherwise the
-         * element kind, disabled/readOnly flags, and its CURRENT text (for the
-         * verify read-back).
+         * Probe used by [Browser4WebDriver.typeAuto] (to choose an insertion
+         * strategy) and by [Browser4WebDriver.fillSafe] (to refuse a target that
+         * cannot be written) before either touches the element.  Evaluated with
+         * `this` bound to the target element; returns `{found:false}` when the
+         * locator resolves to nothing, otherwise the element kind,
+         * disabled/readOnly flags, and its CURRENT text (for the verify
+         * read-back).
          */
-        fun typeTargetProbeJs(): String =
+        fun inputTargetProbeJs(): String =
             """
             function() {
                 var el = this;
@@ -288,6 +292,36 @@ open class Browser4WebDriver(
                 return { found: true, kind: kind, disabled: !!el.disabled, readOnly: !!el.readOnly, text: text };
             }
             """.trimIndent()
+
+        /**
+         * Interpret the [inputTargetProbeJs] result for an input command.
+         *
+         * The JS body of a fill/type is a no-op when `this` resolves to nothing
+         * (or the element refuses input), and `evaluateValue` then yields `null`,
+         * which is indistinguishable from a successful write for every caller up
+         * the stack — including the CLI, which would print "✓ Filled ..." and exit
+         * 0 for a selector that matched nothing.  Interpreting the probe here keeps
+         * that contract in one place instead of once per caller.
+         *
+         * @param action the user-facing command name used as the message prefix
+         * @param selector the selector as the caller typed it
+         * @param probe the raw [inputTargetProbeJs] result
+         * @return null when the target can receive input, otherwise the message to throw
+         */
+        fun inputTargetError(action: String, selector: String, probe: Any?): String? {
+            val map = probe as? Map<*, *>
+            if (map == null || map["found"] != true) {
+                return "$action: no element found for selector [$selector]. " +
+                    "The selector may be stale — re-run `snapshot` to refresh refs."
+            }
+            val disabled = map["disabled"] == true
+            val readOnly = map["readOnly"] == true
+            if (disabled || readOnly) {
+                return "$action: target [$selector] is ${if (disabled) "disabled" else "read-only"} " +
+                    "— user input is blocked."
+            }
+            return null
+        }
 
         /**
          * Bulk-insert [text] via `document.execCommand('insertText')` on the
@@ -1917,22 +1951,10 @@ internal enum class DragDropPosition(val key: String) {
         require(mode in TYPE_METHODS) { "type method must be one of ${TYPE_METHODS.joinToString("|")} (got '$method')" }
 
         // Probe the target once: kind / disabled / readOnly / current text.
-        val probeResult = evaluateValue(selector, typeTargetProbeJs())
-        val probe = probeResult as? Map<*, *>
-        if (probe == null || probe["found"] != true) {
-            throw IllegalArgumentException(
-                "type: no element found for selector [$selector]. " +
-                    "The selector may be stale — re-run `snapshot` to refresh refs."
-            )
-        }
+        val probeResult = evaluateValue(selector, inputTargetProbeJs())
+        inputTargetError("type", selector, probeResult)?.let { throw IllegalArgumentException(it) }
+        val probe = probeResult as Map<*, *>
         val kind = (probe["kind"] as? String) ?: "other"
-        val disabled = probe["disabled"] == true
-        val readOnly = probe["readOnly"] == true
-        if (disabled || readOnly) {
-            throw IllegalArgumentException(
-                "type: target [$selector] is ${if (disabled) "disabled" else "read-only"} — user input is blocked."
-            )
-        }
         val oldText = (probe["text"] as? String) ?: ""
 
         val hasNewline = text.contains('\n') || text.contains('\r')
@@ -2018,9 +2040,20 @@ internal enum class DragDropPosition(val key: String) {
      * supports CSS selectors, XPath, and `backend:nodeId` / `e123` locators
      * (unlike a raw `document.querySelector`), and evaluates with `this`
      * bound to the target element.
+     *
+     * The target is probed **before** the write, so a selector that matches
+     * nothing (a typo, or a stale snapshot ref) or an element that refuses
+     * input fails loudly instead of reporting success for a no-op — the fill
+     * JS cannot tell the difference from inside the page, and the CLI prints
+     * "✓ Filled ..." for any successful call.
+     *
+     * @throws IllegalArgumentException when the locator resolves to nothing, or
+     *   to an element whose user input is blocked (disabled / read-only).
      */
     @Throws(WebDriverException::class)
     suspend fun fillSafe(selector: String, text: String) {
+        inputTargetError("fill", selector, evaluateValue(selector, inputTargetProbeJs()))
+            ?.let { throw IllegalArgumentException(it) }
         evaluateValue(selector, fillValueJs(text))
     }
 
@@ -2582,6 +2615,93 @@ internal enum class DragDropPosition(val key: String) {
         val actualScrollY = scrollToViewport(viewportIndex)
         val rect = RectD(0.0, actualScrollY, w, h)
         return screenshot(rect)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Full-page screenshot — the base handler forces JPEG, so a caller that asked
+    // for `out.png` got JPEG bytes under a PNG name, and the fine text these
+    // captures are read for was recompressed on the way out.  The format is
+    // caller-selectable here and defaults to PNG, matching the plain viewport
+    // capture.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Capture the whole scrollable page.
+     *
+     * Overrides the base implementation (`PulsarWebDriver.screenshot(true)` →
+     * `ScreenshotHandler`), which hard-codes `CaptureScreenshotFormat.JPEG` for the
+     * full-page branch.  The CLI names the output file from the user's request, so a
+     * JPEG-only full-page path silently produced `*.png` files holding JFIF data, and
+     * every consumer that trusts the extension failed to decode them.
+     *
+     * The capture follows the base algorithm — temporarily resizing the device metrics
+     * to the full content size, capturing beyond the viewport, then restoring the
+     * original metrics so later snapshots and interactions still see the intended
+     * viewport — but the restore now runs in a `finally` block, so a failed capture
+     * cannot leave the page resized.
+     *
+     * @param format `"png"` (the default) or `"jpeg"` / `"jpg"`; any other value is
+     *   rejected so a typo cannot silently pick a format
+     * @return the base64-encoded image, or `null` when the capture failed (the same
+     *   contract as the method this overrides)
+     */
+    @Throws(WebDriverException::class)
+    suspend fun screenshotFullPage(format: String? = null): String? {
+        val cdpFormat = when (format?.trim()?.lowercase()) {
+            null, "", "png" -> CaptureScreenshotFormat.PNG
+            "jpeg", "jpg" -> CaptureScreenshotFormat.JPEG
+            else -> throw IllegalArgumentException(
+                "Unsupported screenshot format '$format' — expected 'png' (default) or 'jpeg'."
+            )
+        }
+
+        val protocol = browserProtocol
+        val metrics = protocol.getLayoutMetrics()
+        val contentSize = metrics.contentSize
+        val width = contentSize.width.toInt()
+        val height = contentSize.height.toInt()
+        val originalViewport = metrics.cssVisualViewport
+
+        return try {
+            protocol.setDeviceMetricsOverride(
+                mobile = false,
+                width = width,
+                height = height,
+                deviceScaleFactor = 1.0,
+                screenWidth = width,
+                screenHeight = height,
+            )
+            protocol.captureScreenshot(
+                format = cdpFormat,
+                // Quality applies to the lossy formats only; sending it for PNG is
+                // meaningless at best and rejected by some Chrome builds at worst.
+                quality = if (cdpFormat == CaptureScreenshotFormat.JPEG) {
+                    BrowserSettings.SCREENSHOT_QUALITY
+                } else {
+                    null
+                },
+                captureBeyondViewport = true,
+            )
+        } catch (e: ChromeDriverException) {
+            logger.warn("Failed to take a full-page screenshot (format={}) | {}", cdpFormat, e.message)
+            null
+        } finally {
+            runCatching {
+                protocol.setDeviceMetricsOverride(
+                    mobile = false,
+                    width = originalViewport.clientWidth.toInt(),
+                    height = originalViewport.clientHeight.toInt(),
+                    deviceScaleFactor = originalViewport.scale,
+                    screenWidth = originalViewport.clientWidth.toInt(),
+                    screenHeight = originalViewport.clientHeight.toInt(),
+                )
+            }.onFailure {
+                logger.warn(
+                    "Failed to restore the viewport after a full-page screenshot on tab {}: {}",
+                    guid, it.message
+                )
+            }
+        }
     }
 
     // ---------------------------------------------------------------------------

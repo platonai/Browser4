@@ -117,6 +117,7 @@ jobs:
           bash cli/scripts/tests/install-browser4-cli.tests.sh
           bash cli/scripts/tests/wait-for-npm-version.tests.sh
           bash cli/scripts/tests/reconcile-release-assets.tests.sh
+          bash cli/scripts/tests/wait-for-oss-sync.tests.sh
 
       - name: Run Tests
         id: run-tests

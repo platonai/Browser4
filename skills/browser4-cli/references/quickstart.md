@@ -34,10 +34,13 @@ browser4-cli open --headless "https://example.com"
 browser4-cli snapshot -v 0 --stdout        # read the page; note refs
 browser4-cli fill <ref> "<value>"
 browser4-cli press Enter
-browser4-cli wait --load networkidle
+browser4-cli wait --load networkidle       # proves the network settled — nothing more
+browser4-cli wait "<result-selector>"      # poll the element carrying the result
 browser4-cli snapshot -v 0 --auto-diff --stdout   # verify changes
 browser4-cli htmlsnapshot get all text "<css-selector>"   # all matches
 ```
+
+`wait --load networkidle` is a network-idle heuristic, not a readiness guarantee: a page whose results are computed by its own JS after load (or fetched by a long-running XHR) can still be empty when it reports success. For result-style pages, poll the result element (`wait "<result-selector>"`, or `eval --wait-selector <css>`) before reading or screenshotting.
 
 `get` returns only the first match; `get all` returns every match (querySelectorAll). `--stdout` prints directly; the default writes to a file. The CLI snapshots automatically after interactions; `--no-snapshot` skips that round-trip.
 

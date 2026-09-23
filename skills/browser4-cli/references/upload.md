@@ -62,7 +62,8 @@ browser4-cli upload e5 /tmp/export.csv --no-snapshot
 browser4-cli snapshot -i -v 0          # refs for the form (e.g. e5 = file input)
 browser4-cli upload e5 /tmp/cv.pdf     # attach the file
 browser4-cli click e9                  # submit the form
-browser4-cli wait --load networkidle
+browser4-cli wait --load networkidle   # network settled — nothing more
+browser4-cli wait "<result-selector>"  # poll the upload result when it renders late
 browser4-cli snapshot -v 0 --auto-diff # verify upload result
 ```
 
