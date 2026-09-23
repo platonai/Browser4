@@ -271,8 +271,17 @@
              unit-test subset. Activate with -Pquality-gate (used by pr.yml).
              The instruction floor is a conservative STARTING point; raise it
              toward 0.50 and then 0.70 as coverage improves (see docs/TESTING.md).
-             Modules with no tests produce no exec file and will fail the gate,
-             which is the intended pressure to add coverage. -->
+             Scope of the rule: one BUNDLE (module) each.  A module whose tests
+             produced no execution data at all is SKIPPED by jacoco:check — it
+             does not fail — so the floor only bites where tests ran and still
+             covered less than the minimum.  A shared test-support module cannot
+             satisfy a bundle-level floor (its own code is measured in other
+             modules' JVMs); such a module opts out in its own pom, with an
+             explanation, rather than dragging the global minimum down.
+
+             Pass -Djacoco.check.skip=true to keep the agent + report but drop
+             the floor (nightly.yml does this to make coverage visible without
+             gating on a subset it does not control). -->
         <profile>
             <id>quality-gate</id>
             <build>
@@ -306,6 +315,9 @@
                                 </goals>
                                 <configuration>
                                     <haltOnFailure>true</haltOnFailure>
+                                    <!-- Observe-only mode for nightly: keep the
+                                         agent + report, drop the floor. -->
+                                    <skip>${jacoco.check.skip}</skip>
                                     <rules>
                                         <rule>
                                             <element>BUNDLE</element>
@@ -535,9 +547,19 @@
                     <!-- All tests are in the same JVM process -->
                     <forkCount>1</forkCount>
                     <reuseForks>true</reuseForks>
-                    <!-- Enable byte-buddy-agent. ${jacocoArgLine} is injected by the
-                         quality-gate profile's prepare-agent; empty otherwise. -->
-                    <argLine>${jacocoArgLine} -XX:+EnableDynamicAgentLoading -Djdk.net.URLClassPath.disableClassPathURLCheck=true -Dcritical.cpu.threshold=${critical.cpu.threshold}</argLine>
+                    <!-- `@{jacocoArgLine}` — late (execution-time) expansion, NOT
+                         `${jacocoArgLine}`.  The property is declared empty below,
+                         so `${...}` is substituted with "" while the effective
+                         model is built, i.e. BEFORE the quality-gate profile's
+                         prepare-agent sets it at runtime: the agent was never on
+                         the fork command line, no jacoco.exec was ever written,
+                         and both jacoco:report and jacoco:check logged
+                         "Skipping JaCoCo execution due to missing execution data
+                         file" — the coverage floor silently did nothing.  With
+                         `@{...}` Maven resolves the property when the plugin
+                         executes, so the agent is injected when the profile is
+                         active and stays out (empty value) when it is not. -->
+                    <argLine>@{jacocoArgLine} -XX:+EnableDynamicAgentLoading -Djdk.net.URLClassPath.disableClassPathURLCheck=true -Dcritical.cpu.threshold=${critical.cpu.threshold}</argLine>
                     <systemPropertyVariables>
                         <jdk.net.URLClassPath.disableClassPathURLCheck>true</jdk.net.URLClassPath.disableClassPathURLCheck>
                     </systemPropertyVariables>
@@ -734,9 +756,20 @@
             IntegrationTest,E2ETest,HeavyTest
         </surefire.excludedGroups>
 
-        <!-- Populated by the quality-gate profile's JaCoCo prepare-agent; empty
-             by default so Surefire's argLine is unaffected when coverage is off. -->
+        <!-- Declared empty so the surefire argLine's `@{jacocoArgLine}` always
+             resolves (a literal `@{...}` would be handed to the JVM when the
+             quality-gate profile is inactive).  The quality-gate profile's
+             prepare-agent overwrites it at runtime.  Use the `@{...}` form in
+             plugin configuration — `${...}` is expanded too early to see this
+             value (see the surefire argLine comment for the full story). -->
         <jacocoArgLine></jacocoArgLine>
+
+        <!-- Set to true to keep the quality-gate profile's JaCoCo agent + report
+             (so coverage is measured and written to target/site/jacoco) while
+             suppressing the coverage floor check.  nightly.yml uses this for an
+             observe-only coverage run: a coverage floor belongs to the PR gate,
+             where the tested subset is fixed, not to the nightly breadth run. -->
+        <jacoco.check.skip>false</jacoco.check.skip>
 
         <!-- The driver pool refuses to create a driver while the system CPU load is
              over AppSystemInfo.CRITICAL_CPU_THRESHOLD (0.85 by default), and a task

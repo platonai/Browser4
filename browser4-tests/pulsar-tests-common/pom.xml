@@ -25,6 +25,30 @@
         <defaultGoal>install</defaultGoal>
 
         <plugins>
+            <!-- Exempt this module from the quality-gate profile's JaCoCo coverage
+                 floor.  pulsar-tests-common is a *shared test-support* library:
+                 its main classes are exercised from other modules' test JVMs, so
+                 the coverage recorded in this module's own jacoco.exec is ~0 by
+                 construction (measured: 0.00 instruction ratio, while the
+                 project-wide goal for real code modules is >=0.20).  A bundle-level
+                 floor is the wrong instrument here, and failing it is expensive:
+                 every module that depends on this one is SKIPPED for the rest of
+                 the reactor (measured: 17 of 31 modules skipped), so a single
+                 unmeasurable bundle would silently shrink every gate's coverage.
+                 The agent + report stay on, so the numbers are still produced and
+                 uploaded; only the `check` execution is skipped. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>check</id>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-maven-plugin</artifactId>
