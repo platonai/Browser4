@@ -1,5 +1,6 @@
 package ai.platon.pulsar.protocol.browser.impl
 
+import ai.platon.pulsar.chrome.Browser4UserAgent
 import ai.platon.pulsar.chrome.manage.PulsarBrowserLauncher
 import ai.platon.pulsar.api.ChromeOptions
 import ai.platon.pulsar.api.LauncherOptions
@@ -24,7 +25,17 @@ class DefaultBrowserFactory(
     @Synchronized
     override fun launch(
         browserId: BrowserId, launcherOptions: LauncherOptions, launchOptions: ChromeOptions
-    ): Browser = getLauncher(browserId.browserType).launch(browserId, launcherOptions, launchOptions)
+    ): Browser {
+        // Every browser launch in the application funnels through this method, which makes it
+        // the one place able to guarantee that no session ever puts the headless
+        // `HeadlessChrome` product token on the wire. It has to be done here because the
+        // library's own `BrowserSettings.resolveUserAgent()` returns null on its default path
+        // (see [Browser4UserAgent] for the exact reason), so no `--user-agent` switch is added
+        // by `createStandardLaunchOptions()`. A user agent already decided by the caller or by
+        // `browser.launch.user.agent` is left untouched.
+        Browser4UserAgent.applyTo(launchOptions, launcherOptions.settings)
+        return getLauncher(browserId.browserType).launch(browserId, launcherOptions, launchOptions)
+    }
 
     @Synchronized
     override fun connect(browserType: BrowserType, port: Int, settings: BrowserSettings): Browser =
