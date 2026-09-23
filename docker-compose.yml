@@ -39,10 +39,10 @@ services:
       BROWSER_DISPLAY_MODE: HEADLESS
       GORA_MONGODB_SERVERS: mongodb:27017
       SPRING_DATA_MONGODB_URI: mongodb://mongodb:27017/browser4
-      SERVER_PORT: 8182
+      SERVER_PORT: 18182
       SERVER_ADDRESS: 0.0.0.0
     ports:
-      - '8182:8182'
+      - '18182:18182'
     command: ["--bind_ip_all"]
     networks:
       - backend
@@ -55,7 +55,7 @@ services:
     # renderer processes crash or wedge (Runtime.evaluate hangs).
     shm_size: 1g
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8182/actuator/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:18182/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 3

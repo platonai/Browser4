@@ -71,7 +71,7 @@ inputs:
   service_port:
     description: 'Application service port'
     required: false
-    default: '8182'
+    default: '18182'
   health_endpoint:
     description: 'Health check endpoint'
     required: false

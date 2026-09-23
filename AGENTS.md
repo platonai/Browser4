@@ -190,7 +190,7 @@ See [CI stabilization notes](docs-dev/copilot/ci-stabilization-4.13.x.md) before
 
 ## Configuration
 
-- Default port: **8182**
+- Default port: **18182**
 - Config files: `application.properties` → `application-*.properties` → `application-private.properties` (git-ignored, secrets here or env vars)
 - Key properties: `openrouter.api.key`, `browser.profile.mode` (DEFAULT|SYSTEM_DEFAULT|SEQUENTIAL|TEMPORARY), `browser.display.mode` (GUI|HEADLESS|SUPERVISED)
 - Display mode precedence: session capabilities (`headed` / `displayMode`, e.g. from `open --headed`/`--headless`) override the server-wide `browser.display.mode` default at browser launch (`AbstractPulsarSession.createBoundDriver`); server default applies only when the session has no display preference

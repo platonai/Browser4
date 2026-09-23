@@ -151,9 +151,9 @@ docker rm -f $ContainerName 2>$null
 Write-Host "Starting container ..."
 docker run -d `
     --name $ContainerName `
-    -p 8182:8182 `
+    -p 18182:18182 `
     -e JAVA_OPTS="-Xms256M -Xmx2G -XX:+UseG1GC" `
-    --health-cmd="curl -f http://localhost:8182/actuator/health || exit 1" `
+    --health-cmd="curl -f http://localhost:18182/actuator/health || exit 1" `
     --health-interval=5s `
     --health-timeout=5s `
     --health-retries=10 `
@@ -212,7 +212,7 @@ Write-Host "`n✅ Container is healthy!" -ForegroundColor Green
 # Quick smoke test
 Write-Host "`nSmoke test: checking /actuator/health ..."
 try {
-    $healthResponse = Invoke-RestMethod -Uri "http://localhost:8182/actuator/health" -TimeoutSec 5
+    $healthResponse = Invoke-RestMethod -Uri "http://localhost:18182/actuator/health" -TimeoutSec 5
     Write-Host "Health response: $($healthResponse | ConvertTo-Json)" -ForegroundColor Green
 } catch {
     Write-Host "⚠ Health endpoint not reachable: $_" -ForegroundColor Yellow

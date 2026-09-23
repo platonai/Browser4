@@ -197,7 +197,7 @@ $script:AppData = if ($env:APPDATA) {
 # ─────────────────────────────────────────────────────
 $InstallPs1Url = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1'
 $InstallShUrl  = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh'
-$ServerBaseUrl = 'http://localhost:8182'
+$ServerBaseUrl = 'http://localhost:18182'
 $ServerHealthUrl = "$ServerBaseUrl/actuator/health"
 
 # The user's real ~/.browser4 (read-only — never modified by this test).

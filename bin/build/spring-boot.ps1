@@ -17,7 +17,7 @@ param(
     [switch]$Background,
 
     [ValidateRange(1, 65535)]
-    [int]$Port = 8182
+    [int]$Port = 18182
 )
 
 $repoRoot = (git rev-parse --show-toplevel 2>$null)

@@ -75,7 +75,7 @@ ENV JAVA_OPTS="-Xms2G -Xmx10G -XX:+UseG1GC" \
 COPY --from=builder /build/app.jar app.jar
 
 # Expose port (documentation only)
-EXPOSE 8182
+EXPOSE 18182
 
 # Create app data directory
 RUN mkdir -p ~/.browser4/

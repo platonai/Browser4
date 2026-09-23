@@ -387,7 +387,7 @@ install/upgrade operations.
 ```json
 {
   "sessionId": "abc123",
-  "baseUrl": "http://localhost:8182",
+  "baseUrl": "http://localhost:18182",
   "activeSelector": null,
   "sessionName": null,
   "lastMousePosition": {
@@ -400,7 +400,7 @@ install/upgrade operations.
 | Field | Type | Description |
 |---|---|---|
 | `sessionId` | string\|null | Active session ID returned by the Browser4 server on `open`. |
-| `baseUrl` | string | Base URL of the Browser4 REST server. Default: `"http://localhost:8182"`. |
+| `baseUrl` | string | Base URL of the Browser4 REST server. Default: `"http://localhost:18182"`. |
 | `activeSelector` | string\|null | Reserved selector slot for future CLI workflows. |
 | `sessionName` | string\|null | Named session label from the `-s <name>` flag. |
 | `lastMousePosition` | object\|null | Last known pointer coordinates, used to restore state across invocations. |

@@ -131,7 +131,7 @@ Persistent CLI defaults live in `~/.browser4/config.json` (honours `BROWSER4_CLI
 
 ```bash
 browser4-cli config                       # list values + config file path
-browser4-cli config set server http://localhost:8182
+browser4-cli config set server http://localhost:18182
 browser4-cli config set timeout 45        # positive integer; 0 and unknown keys are rejected
 browser4-cli config delete session        # reset a key to its default
 ```

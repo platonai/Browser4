@@ -89,9 +89,9 @@ cp target/browser4-myfeature-1.0.0-SNAPSHOT.jar /path/to/browser4/plugins/
 ### Example 3: Install via REST API
 
 ```bash
-curl -X POST http://localhost:8182/api/plugins/install \
+curl -X POST http://localhost:18182/api/plugins/install \
   -F "file=@target/browser4-myfeature-1.0.0-SNAPSHOT.jar"
-curl http://localhost:8182/api/plugins
+curl http://localhost:18182/api/plugins
 ```
 
 ### Example 4: Complete Auto-Configuration with BrowseEventMount + Config + Service
@@ -470,7 +470,7 @@ mvn package -DskipTests
 # Deploy — copy to Browser4's plugins/ directory and restart
 cp target/browser4-myfeature-1.0.0-SNAPSHOT.jar /path/to/browser4/plugins/
 # Or install via REST API
-curl -X POST http://localhost:8182/api/plugins/install \
+curl -X POST http://localhost:18182/api/plugins/install \
   -F "file=@target/browser4-myfeature-1.0.0-SNAPSHOT.jar"
 ```
 
