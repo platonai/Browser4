@@ -4920,6 +4920,9 @@ struct RunOptions {
     batch_only: bool,
     enable_batch_scenario: bool,
     enable_install_scenario: bool,
+    /// Include the stealth scenarios, which drive real bot-detection services over the
+    /// public internet (`--enable-stealth-scenario`).
+    enable_stealth_scenario: bool,
     force_remote_bundle: bool,
     /// Rebuild the local runtime bundle before running scenarios instead of reusing the one on
     /// disk (`--force-rebuild-bundle`).  Without it a scenario can silently exercise stale backend
@@ -5048,6 +5051,7 @@ fn parse_run_options() -> RunOptions {
     let mut batch_only = false;
     let mut enable_batch_scenario = false;
     let mut enable_install_scenario = false;
+    let mut enable_stealth_scenario = false;
     let mut force_remote_bundle = false;
     let mut force_rebuild_bundle = false;
     let mut quiet = false;
@@ -5101,6 +5105,12 @@ fn parse_run_options() -> RunOptions {
         // --enable-install-scenario / -i
         if match_bool_flag(&arg, "enable-install-scenario", "-i") {
             enable_install_scenario = true;
+            continue;
+        }
+
+        // --enable-stealth-scenario / -t
+        if match_bool_flag(&arg, "enable-stealth-scenario", "-t") {
+            enable_stealth_scenario = true;
             continue;
         }
 
@@ -5228,6 +5238,7 @@ fn parse_run_options() -> RunOptions {
         batch_only,
         enable_batch_scenario,
         enable_install_scenario,
+        enable_stealth_scenario,
         force_remote_bundle,
         force_rebuild_bundle,
         groups,
@@ -5261,6 +5272,15 @@ fn exclude_install_scenarios(
     selected_scenarios
         .into_iter()
         .filter(|scenario| !scenario.is_install_scenario())
+        .collect()
+}
+
+fn exclude_stealth_scenarios(
+    selected_scenarios: Vec<scenarios::ScenarioDef>,
+) -> Vec<scenarios::ScenarioDef> {
+    selected_scenarios
+        .into_iter()
+        .filter(|scenario| !scenario.is_stealth_scenario())
         .collect()
 }
 
@@ -5488,6 +5508,27 @@ fn main() {
             println!(
                 "default e2e run skips {} install/upgrade scenario(s); pass --enable-install-scenario to include them",
                 install_scenarios.len()
+            );
+        }
+    }
+
+    // Stealth scenarios drive real bot-detection services over the public internet
+    // (and take minutes).  Use --enable-stealth-scenario to include them.
+    if !has_explicit_scenario_filter
+        && run_options.groups.is_empty()
+        && !run_options.enable_stealth_scenario
+    {
+        let stealth_scenarios = selected_scenarios
+            .iter()
+            .copied()
+            .filter(|scenario| scenario.is_stealth_scenario())
+            .collect::<Vec<_>>();
+        selected_scenarios = exclude_stealth_scenarios(selected_scenarios);
+
+        if !stealth_scenarios.is_empty() {
+            println!(
+                "default e2e run skips {} stealth scenario(s); pass --enable-stealth-scenario or --group=stealth to include them",
+                stealth_scenarios.len()
             );
         }
     }

@@ -2,6 +2,7 @@ pub(crate) mod agent;
 pub(crate) mod batch;
 pub(crate) mod browser;
 pub(crate) mod mock_server;
+pub(crate) mod stealth;
 pub(crate) mod swarm;
 
 use super::*;
@@ -70,6 +71,13 @@ impl ScenarioDef {
     /// archives — they are disabled by default to keep the default suite fast.
     pub(super) fn is_install_scenario(self) -> bool {
         self.name.contains("_install_") || self.name.contains("_upgrade_")
+    }
+
+    /// Stealth scenarios talk to the public internet (one of them for minutes, against
+    /// third-party bot-detection services), so they are disabled by default and need
+    /// `--enable-stealth-scenario`.
+    pub(super) fn is_stealth_scenario(self) -> bool {
+        self.name.contains("_stealth_")
     }
 
     /// Returns true when this scenario belongs to `group_name`.
@@ -1805,6 +1813,27 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_htmlsnapshot_error_propagation,
         group: Some("htmlsnapshot"),
+        level: ScenarioLevel::Basic,
+    },
+    // ---- Stealth (opt-in: --enable-stealth-scenario, needs the public internet) ----
+    ScenarioDef {
+        name: "test_e2e_stealth_navigator_invariants",
+        short_name: "test_stealth_navigator_invariants",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: stealth::test_e2e_stealth_navigator_invariants,
+        group: Some("stealth"),
+        level: ScenarioLevel::Basic,
+    },
+    ScenarioDef {
+        name: "test_e2e_stealth_detector_sweep",
+        short_name: "test_stealth_detector_sweep",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: stealth::test_e2e_stealth_detector_sweep,
+        group: Some("stealth"),
         level: ScenarioLevel::Basic,
     },
 ];
