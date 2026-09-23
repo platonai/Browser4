@@ -22931,16 +22931,26 @@ mod tests {
     #[test]
     fn resolve_storage_state_path_defaults_to_timestamped_json_in_snapshot_dir() {
         let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // Resolve from an empty temporary directory, like the sibling test above.  The resolver
+        // joins the snapshot directory onto the CWD, and this test used to compare the result
+        // against `snapshot_dir().canonicalize()` — which only succeeds when
+        // `.browser4-cli/snapshot` happens to exist relative to the *crate* directory, i.e. when a
+        // previous CLI run left one behind.  On a clean checkout `canonicalize()` failed and the
+        // relative fallback never matched the absolute resolved path, so the test could only pass
+        // on a dirty tree.
+        let tmp = test_temp_dir();
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
         let resolved = resolve_storage_state_path(None).unwrap();
+        std::env::set_current_dir(previous_dir).unwrap();
 
-        let expected_dir = crate::snapshot::snapshot_dir().canonicalize().unwrap_or_else(|_| {
-            // snapshot_dir may not exist yet; the resolver does not create it
-            // (save_snapshot does).  Compare against the raw relative form in
-            // that case.
-            crate::snapshot::snapshot_dir()
-        });
+        let expected_dir = tmp
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| tmp.path().to_path_buf())
+            .join(crate::snapshot::snapshot_dir());
         assert_eq!(
-            resolved.parent().map(|p| display_without_verbatim_prefix(p)),
+            resolved.parent().map(display_without_verbatim_prefix),
             Some(display_without_verbatim_prefix(&expected_dir))
         );
         assert!(resolved
