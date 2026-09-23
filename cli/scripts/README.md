@@ -85,6 +85,7 @@ Runs a full CLI smoke test suitable for CI and local development:
 | `tests/install-browser4-cli.tests.sh` | Unit tests for the Unix install script |
 | `tests/install-browser4-cli.tests.ps1` | Unit tests for the Windows install script (Pester) |
 | `tests/wait-for-npm-version.tests.sh` | Unit tests for `wait-for-npm-version.sh` (stubbed `npm`, no network) |
+| `tests/wait-for-oss-sync.tests.sh` | Unit tests for `wait-for-oss-sync.sh` (stubbed `gh`, no network) |
 
 ## Publish (npm)
 
@@ -152,6 +153,39 @@ This makes the npm package README match the repository root README without leavi
 ### Postinstall
 
 `postinstall.js` runs automatically after `npm install browser4-cli`. It detects the platform and downloads the matching native binary to `bin/`. On global installs, it also patches npm's bin shims to invoke the native binary directly.
+
+## Publish (release workflows)
+
+| Script | Platform | Purpose |
+|--------|----------|---------|
+| `wait-for-oss-sync.sh` | Linux/macOS | Triggers the `sync-to-oss.yml` workflow for a release tag and waits for **that** run; called by `release.yml` and `release-cli.yml` |
+
+### Verifying the OSS CDN sync
+
+GitHub Releases and the Alibaba Cloud OSS mirror are separate distribution channels: the OSS
+mirror is what `install-browser4-cli.sh` prefers in the China mainland, and its `latest`
+symlinks are what a plain "install the latest" resolves to. So the release should not report
+success while the mirror is still on the previous version — and it should not report failure
+just because the mirror is slow.
+
+`wait-for-oss-sync.sh` dispatches `sync-to-oss.yml` for the tag and waits for the run it
+**caused**, under a budget of its own:
+
+```shell
+bash scripts/wait-for-oss-sync.sh --tag v4.13.21              # 45 min budget, 15 s interval
+bash scripts/wait-for-oss-sync.sh --tag v4.13.21 --timeout 600 --interval 5
+bash scripts/wait-for-oss-sync.sh --tag v4.13.21 --repo platonai/Browser4
+```
+
+Exit code 0 = the run it triggered concluded `success`; 1 = that run failed, was cancelled,
+never appeared, or was still running when the budget expired. On failure and on timeout the
+message names the run, its URL, the step it is stuck on, and the commands to re-check
+(`gh run view <id>`) and re-trigger (`gh workflow run sync-to-oss.yml -f tag_name=<tag>`)
+it. It does **not** retry the sync itself: a re-triggered sync re-uploads every asset.
+
+Runs that already existed before the dispatch are excluded by id, so a previous release's
+successful sync can never be mistaken for the current one — the failure mode the old inline
+`gh run list --limit 1` loop had (see `docs-dev/copilot/ci-stabilization-4.13.x.md` §29).
 
 ## Documentation
 

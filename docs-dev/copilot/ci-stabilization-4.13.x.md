@@ -1936,3 +1936,120 @@ stderr 提示、`--json` 里报 `challenge_detected`。它不改退出码、不�
   失败（本轮第一次改就踩了：偏移记在被测命令之后，`eval_calls` 变成 0），不会静默放过。
 * **5 个失败的容忍额度仍然偏松**：7 个失败里有 4 个是"每次都红"的确定性失败，却因为额度只报了 exit 101 而
   没有更早暴露。额度本身是 §12 定的，本轮没动。
+
+## 29. `release.yml` `v4.13.21`：OSS CDN 同步挂住，发布任务被自己的 15 分钟上限判红（4.13.x，2026-09-23）
+
+`release.yml` run 35860129386（tag `v4.13.21`）的 `Publish GitHub release` 只有一个失败步骤：
+
+```
+2026-09-23T13:20:13.9383720Z ##[error]The action 'Sync to Aliyun OSS CDN' has timed out after 15 minutes.
+```
+
+其余 13 个步骤全绿——`Create or update GitHub Release`、`Generate Artifact Attestation`、`Verify Release`、
+`Release Summary` 都成功，11 个资产（551 MB）已经带在这个 release 上，npm 与容器镜像也都已经发布。**红的是
+CDN 镜像那一步，不是发布本身**；而这一步之所以红，是因为它**等的东西自己挂住了**。
+
+### 29.1 根因：被等的 run 卡在 `Upload to OSS`，越过了等待方的 15 分钟上限
+
+该步骤只做三件事：`gh workflow run sync-to-oss.yml` → 找到刚触发的 run → `gh run watch` 等它结束。
+它触发的 run 35864655616 的步骤时序：
+
+| 步骤 | v4.13.20（run 35519287410，09-20） | v4.13.21（run 35864655616，09-23） |
+|---|---|---|
+| `Download Release Assets` | 6 s | 4 s |
+| `Install ossutil` | 2 s | 4 s |
+| **`Upload to OSS`** | **2 分 04 秒（成功）** | **13:05:21 起 `in_progress`，超过 1 小时仍未结束** |
+| 之后 7 个步骤 | 合计约 2 分钟，全部成功 | 全部 `pending` |
+| 整个 job | 4 分 16 秒 | 无结论 |
+
+两次上传的是同一批 11 个资产（551 MB，最大单个 121 MB）；09-20 那次逐个资产的耗时是
+`7.5 / 5.2 / 20.9 / 43.0 / 3.7 / 3.5 / 26.0 / 3.3 / 3.4 / 3.4 / 3.7` 秒（最慢 42.98 秒，合计约 127 秒），
+而 `Create latest symlinks`（1 分 36 秒）已经是整个 job 里最慢的一步。所以 09-23 不是"慢"，是**挂**：
+`ossutil cp` 停在第一个资产上不再推进，run 记录自 13:05:14 之后再没有更新过。
+
+**一个资产都没落地**这一点可以直接查证：镜像上 v4.13.20 的 `Browser4.jar` 返回 `HTTP 200`，而 v4.13.21 的
+同名对象返回 `HTTP 404`——正常一次上传只需要 7.5 秒。上游没有结论，下游的 `gh run watch` 只能一直等，
+直到步骤级 `timeout-minutes: 15` 把步骤杀掉——顺带把「同步失败」和「我们放弃了等待」这两件事混成了同一条消息。
+
+顺带记下一个观测约束：**在途 run 的日志取不回来**。`gh api repos/.../actions/jobs/<id>/logs` 对 `in_progress`
+的 job 返回 `HTTP 404`，所以事故当下既看不到 `ossutil` 的进度，也说不清它卡在哪个资产上。这决定了本轮的做法
+是"把边界和诊断放在能被看到的地方"，而不是"等它自己好"。
+
+### 29.2 三处修法
+
+**1. `sync-to-oss.yml` 的每条执行路径都必须有结论**（这是等待方唯一能拿到的东西）：
+
+* `sync` job 加 `timeout-minutes: 30`：任何步骤挂住，run 也会以 failure 收尾，而不是永远 `in_progress`；
+* `Upload to OSS` 加 `timeout-minutes: 20`：正常 2 分钟、最慢单文件 43 秒，只有真正的停滞才可能触发，
+  而步骤级上限能**指名**是哪个步骤挂了；
+* `Install ossutil` 的 `curl` 加 `--connect-timeout 15 --max-time 300`：同样是"无界网络调用"的形状。
+
+**2. `cli/scripts/wait-for-oss-sync.sh`（新增）**：把触发、选 run、等待三段合成一处，供 `release.yml` 与
+`release-cli.yml` 共用——两者此前是**逐字相同**的副本（只有 tag 的来源和一句注释不同），改一处漏一处是迟早的事。
+脚本自身带预算（默认 2700 s > 上游 job 上限 30 分钟），**不睡过截止时间**，并在成功、失败、**超时**三种结局下
+都打印 run id、run URL、已用时间与**当前卡住的步骤名**。超时的消息形如：
+
+```
+::error::sync-to-oss.yml run 35864655616 was still in_progress (step: Upload to OSS) after 2700s -- the OSS CDN was not confirmed updated for v4.13.21.
+::error::Run URL: https://github.com/platonai/Browser4/actions/runs/35864655616
+::error::Re-check it with: gh run view 35864655616
+::error::Then re-trigger with: gh workflow run sync-to-oss.yml -f tag_name=v4.13.21
+```
+
+**3. 两个调用方的步骤体缩成一次脚本调用**，`timeout-minutes: 15 → 50`：必须大于上游 job 的 30 分钟上限
+**加上排队时间**，否则等待方还是会先于上游超时（这正是 v4.13.21 发生的事）。另外 `publish-github-release`
+此前**没有 checkout**，脚本不会出现在 runner 上；按 4.14.x `41c012aaf5` 的做法把 checkout 加为该 job 的
+**第一个**步骤（checkout 会清理工作区，必须排在下载产物之前）。
+
+### 29.3 顺带修掉的一个假绿：等待方可能等在"上一次发布"的 run 上
+
+旧写法是"`gh run list` 的第一个非空答案就是它"：
+
+```bash
+gh workflow run sync-to-oss.yml -f tag_name="$TAG"
+sleep 3
+for i in $(seq 1 20); do
+  RUN_ID=$(gh run list --workflow=sync-to-oss.yml --limit 1 --json databaseId -q '.[0].databaseId' ...)
+  [ -n "$RUN_ID" ] && break
+  sleep 3
+done
+gh run watch "$RUN_ID" --exit-status
+```
+
+`gh run list` 是**新的在前**，而派发刚发出、GitHub 还没把新 run 索引出来时，这个查询返回的是**上一次发布**的
+sync run——早已 `completed` / `success`。于是步骤会打出 "Aliyun OSS CDN updated" 直接放行，而当前这次同步
+**从未被等待过**：CDN 会不会落后，发布会给出一个无法区分的"绿"。这与 `bd18d2b7d8`（`monitor-release.ps1`
+认错 run、把旧 run 的结论当成新 run 的结论）是同一类缺陷，本轮按同样的办法修：**派发之前**先记下已存在的
+run id，之后只接受不在该集合里的 run；id 基线列不出来时，退化为派发前取的**本地时间水印**（`createdAt`
+在派发时刻之前的 run 一律不接受，并且**继续轮询**而不是把旧 run 当答案返回）。id 集合的比较不涉及时钟，
+所以正常路径连时钟偏差都不可能影响判定。
+
+### 29.4 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 新套件（本地，无网络，`gh` 全部打桩） | `bash cli/scripts/tests/wait-for-oss-sync.tests.sh` | **19 / 19** |
+| 变异 1：删掉"排除旧 run"的闸（回到旧行为） | 同一套件 | **3 条红**（含 `never adopts the previous run's success`） |
+| 变异 2：超时消息里丢掉"卡在哪一步" | 同一套件 | **1 条红**（`reports the stuck run when the budget expires`） |
+| 变异 3：等待超时反而报成功 | 同一套件 | **3 条红** |
+| 真 `gh`（只读，对着仍在跑的 run） | `gh run view 35864655616 --json status,conclusion,jobs -q '[.status, (.conclusion // "--"), ...] \| @tsv'` | 当场返回 `in_progress\t--\tUpload to OSS`——脚本的两个过滤器逐字验证，卡的正是本次事故的步骤 |
+| 既有套件（未改动，应保持全绿） | `install-browser4-cli.tests.sh` / `wait-for-npm-version.tests.sh` | **66 / 66**、**11 / 11** |
+| 四个 workflow 文件的语法 | `python -c "import yaml,sys; yaml.safe_load(open(...))"` | 全部可解析；`publish-github-release` 新 checkout 与 `release-assets/`、`release-notes/` 无路径冲突 |
+| 调用方清点 | `grep -rn "sync-to-oss.yml" .github/` | 只有 `release.yml` 与 `release-cli.yml` 调用，两者都已换成脚本调用；没有第三处内联副本 |
+| 事故的线上证据（只读 HTTP） | `curl -sI .../releases/download/{v4.13.20,v4.13.21}/Browser4.jar` | v4.13.20 **200**、v4.13.21 **404**——本轮同步一个资产都没落地，与"卡在第一个资产"一致 |
+
+### 29.5 留下的判断
+
+* **没有把 OSS 同步降级为"建议性"**：`00aafa902c` 是**有意**让同步不成功就红（否则 CDN 会静默落后，而
+  `latest` 符号链接是安装脚本的入口）。本轮保留这条闸门，只把"它失败了"和"我们放弃了"分开——超时会明确
+  说明 run 还在跑、卡在哪一步、怎么复查与重跑。
+* **脚本不自动重试同步**：重新触发一次同步会把每个资产**再传一遍**（551 MB），代价不小，而且第一次挂住的
+  原因未知；自动重试只是把同一个问题再花一遍钱。判决权留给调用方。
+* **没有在 `sync-to-oss.yml` 里给单个资产加 `timeout` 包裹**：`ossutil cp` 自带 `--retry-times 3`，用
+  `timeout` 掐掉整个 cp 反而会**绕过**它自己的重试。步骤级 20 分钟 + job 级 30 分钟的边界已经足够，而且能
+  指名步骤。
+* **旧代码里的 `WATCH_OK` 死变量随这段代码一起消失了**：它从来没被用于判定，真正决定成败的一直是后面的
+  `gh run watch --exit-status` 退出码。
+* **套件覆盖的是脚本的判断逻辑，不是 `gh` 的行为**：打桩意味着"`gh run list` 新的在前"这一前提是**断言**
+  而非**被测**（本轮用真实 `gh` 只读核对了过滤器，见 29.4）。`gh` 若改变排序或字段语义，套件不会红——
+  这是刻意取舍，让套件能在没有网络、没有 token 的 CI 里跑。

@@ -20,6 +20,12 @@ env:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    # Last-resort bound: every path through this job must end in a conclusion,
+    # because release.yml and release-cli.yml block on that conclusion.  On
+    # v4.13.21 this job was still "in_progress" an hour in -- its "Upload to
+    # OSS" step had stalled -- and the release job, whose own budget ran out
+    # first, could only report that it had given up.
+    timeout-minutes: 30
     steps:
       - name: Resolve Tag
         id: resolve
@@ -75,7 +81,11 @@ jobs:
         run: |
           set -euo pipefail
           OSSUTIL_VERSION="2.2.1"
-          curl -sL "https://gosspublic.alicdn.com/ossutil/v2/${OSSUTIL_VERSION}/ossutil-${OSSUTIL_VERSION}-linux-amd64.zip" \
+          # Bounded: an unbounded curl against a China-hosted CDN is the same
+          # "step that never returns, run with no conclusion" shape the job
+          # timeout above exists to catch.
+          curl -sL --connect-timeout 15 --max-time 300 \
+            "https://gosspublic.alicdn.com/ossutil/v2/${OSSUTIL_VERSION}/ossutil-${OSSUTIL_VERSION}-linux-amd64.zip" \
             -o ossutil.zip
           unzip -q ossutil.zip
           mv "ossutil-${OSSUTIL_VERSION}-linux-amd64/ossutil" ./ossutil
@@ -83,6 +93,13 @@ jobs:
           ./ossutil version
 
       - name: Upload to OSS
+        # ~2 minutes for the 11 release assets in every earlier release (the
+        # largest single file: 43 s), so a 20-minute budget cannot fire on a
+        # slow day -- only on a stalled transfer.  v4.13.21 stalled on the
+        # first asset: this step never returned, and Browser4.jar for v4.13.21
+        # is still absent from the mirror (HTTP 404) while v4.13.20's is there.
+        # That is what left release.yml with nothing to report.
+        timeout-minutes: 20
         env:
           OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
           OSS_REGION: cn-beijing
