@@ -25,6 +25,8 @@ source: ../SKILL.md
 
 **Headless default:** unless the user explicitly asks for a visible window ("show me the browser" / "open visibly"), always use `--headless`. `goto` inherits the display mode set by `open`.
 
+**Bot-detection escalation:** if the site blocks the headless browser (CAPTCHA, challenge/interstitial, "unusual traffic", or an empty body where content was expected), `close` then `open --headed` with the same `-s <name>` and retry **once** — and tell the user that anti-bot protection forced the switch. If the headed retry is blocked too, stop: prefer `attach` over more retries. See [browser-modes.md](browser-modes.md#2-axis-2--display-mode).
+
 ## Copy-Paste Template
 
 ```bash
@@ -60,7 +62,7 @@ browser4-cli htmlsnapshot get all text "<css-selector>"   # all matches
 | Use for | **Interaction** — get refs to click/fill | **Extraction** — read text / data / attributes |
 | Decider | "I need to click a button / find an input" | "I need to read an article / extract a price" |
 
-`htmlsnapshot` (capture) must run once **before** `get` / `get all` / `inspect` / `grep` / `export` become available; `query` is the exception — it needs no prior capture (current page → live DOM; other URLs → independent fetch). For JS-updated content, capture before extracting; `eval --json` reads the live DOM. **Re-capture after every navigation/interaction** or the snapshot goes stale.
+Every `htmlsnapshot` read — `get` / `get all` / `inspect` / `summary` / `grep` / `export` / `query` — serves the **live DOM** of the active tab, so **no prior capture is needed**. `htmlsnapshot` (capture) is optional: it returns page metadata and stores an archived copy. The only real precondition is a loaded, navigable page (http(s)/file). JS-updated content is therefore visible to reads without extra steps; use `eval --json` for arbitrary JavaScript.
 
 ## Refs: Single-Use Handles
 
@@ -80,7 +82,7 @@ refs are temporary handles: any interaction (click/fill/type/press/select/check/
 
 ```
 Extracting data?
-├─ Needs interaction first? → snapshot + refs → interact → re-capture → extract
+├─ Needs interaction first? → snapshot + refs → interact → extract (reads use the live DOM)
 ├─ Static page, single field → htmlsnapshot get text "<sel>"
 ├─ Static page, correlated fields (title+price+URL) → query with DOM_LOAD_AND_SELECT(@url,'.card')
 ├─ Dynamic / complex JS → eval --json

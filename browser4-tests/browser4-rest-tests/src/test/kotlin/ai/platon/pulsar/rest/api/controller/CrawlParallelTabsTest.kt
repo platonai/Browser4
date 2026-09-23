@@ -3,6 +3,7 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlService
+import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
 import ai.platon.pulsar.test.TestUrls
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -296,9 +297,7 @@ class CrawlParallelTabsTest : RestAPITestBase() {
                         .readValue(it, CrawlResponse::class.java)
                 }
             last = result
-            if (result.status == "OK" || result.status == "SC_OK" ||
-                result.status == "SC_REQUEST_TIMEOUT" || result.status == "SC_INTERNAL_SERVER_ERROR"
-            ) {
+            if (result.isTerminal()) {
                 return result
             }
 
@@ -310,10 +309,42 @@ class CrawlParallelTabsTest : RestAPITestBase() {
                 error("Crawl $taskId stopped making progress for $stallLimit ($progress, status ${result.status})")
             }
         }
+        // The old failure said only "last: PROCESSING", which said nothing about how
+        // far the crawl got.  Report the task's own accounting instead (§19.5).
         error(
-            "Crawl $taskId did not reach a terminal state within $ceiling, " +
-                    "last: ${last?.status}, progress: ${last?.let { progressOf(it) }}"
+            "Crawl $taskId did not reach a terminal state within $ceiling: " +
+                (last?.describe() ?: "no result was ever returned")
         )
+    }
+
+    /**
+     * Terminal detection defers to [CrawlStatus] — the one vocabulary definition —
+     * so this test cannot drift from the service again.  The previous check
+     * compared against `"SC_REQUEST_TIMEOUT"` / `"SC_INTERNAL_SERVER_ERROR"`
+     * spellings the service never emitted, so a crawl that had already timed out
+     * could never be recognised and the wait ran out its whole cap before blaming a
+     * stall.  [CrawlResponse.finishTime] is the model's own terminal marker.
+     */
+    private fun CrawlResponse.isTerminal(): Boolean =
+        finishTime != null || CrawlStatus.isTerminal(status)
+
+    /** One line of the task's own accounting, for a timeout that has to be actionable. */
+    private fun CrawlResponse.describe(): String = buildString {
+        append("status=").append(status)
+        append(", pages=").append(pagesFound).append('/').append(pagesExpected)
+        append(", links=").append(linksDiscovered)
+        append(", parallelTabs=").append(parallelTabs)
+        append(", waiting=").append(
+            Duration.between(startedTime ?: Instant.ofEpochMilli(createdAt), Instant.now()).seconds
+        ).append('s')
+        error?.let { append(", error=").append(it) }
+        diagnostic?.let { append(", diagnostic=").append(it) }
+        failedPages?.takeIf { it.isNotEmpty() }?.let { append(", failedPages=").append(it.size) }
+        seedStatuses?.takeIf { it.isNotEmpty() }?.let { seeds ->
+            append(", seeds=[").append(
+                seeds.joinToString("; ") { "${it.url.substringAfterLast('/')}:${it.status}" }
+            ).append(']')
+        }
     }
 
     /** What the record reports about the work it has actually done so far. */

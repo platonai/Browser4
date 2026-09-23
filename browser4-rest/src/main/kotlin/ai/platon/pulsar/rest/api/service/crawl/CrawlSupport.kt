@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.service.crawl
 
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContext
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import kotlinx.coroutines.async
@@ -9,6 +10,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Instant
 
@@ -24,6 +26,37 @@ import java.time.Instant
 
 /** Earliest plausible fetch time; earlier values are unset sentinels. */
 private val MIN_FETCH_TIME: Instant = Instant.parse("2000-01-01T00:00:00Z")
+
+/**
+ * Floor for a task budget a request may ask for (ms).
+ *
+ * It only has to be positive: a budget below the round floor (report margin + minimum round
+ * budget) cannot start a single round, and that is a *reported* outcome — every seed is
+ * refused by name with its reason — not a silent one.  Unit tests drive that path with 10s.
+ */
+internal const val MIN_REQUEST_TASK_TIMEOUT_MS = 1_000L
+
+/**
+ * Ceiling for a task budget a request may ask for (ms): one hour.
+ *
+ * A caller may raise its own budget above the server default (the default is a policy, not a
+ * grant), but not without bound: one crawl holding browser tabs for a day is the failure this
+ * ceiling prevents.  An operator who needs longer raises `CrawlService.taskTimeoutMillis`.
+ */
+internal const val MAX_REQUEST_TASK_TIMEOUT_MS = 3_600_000L
+
+/**
+ * The task budget a request runs under, from what it asked for and what the server defaults to.
+ *
+ * `null` and non-positive values mean "no preference" (a budget is a limit, not a switch, so
+ * `0` must not mean "cancel now"), and anything positive is clamped into the per-request range.
+ * The caller sees the result in `CrawlResponse.taskTimeoutMillis`, so a clamp is visible rather
+ * than silently different — the same contract `resolveParallelTabs` has for tabs.
+ */
+internal fun resolveRequestTaskTimeout(requested: Long?, serverDefault: Long): Long {
+    if (requested == null || requested <= 0L) return serverDefault
+    return requested.coerceIn(MIN_REQUEST_TASK_TIMEOUT_MS, MAX_REQUEST_TASK_TIMEOUT_MS)
+}
 
 /**
  * How many lost URLs the diagnostic spells out.  The full list is in
@@ -289,9 +322,197 @@ internal suspend fun <T> mapCrawlSeedsConcurrently(
  * per-URL metadata guarantee exists to prevent.  The document is what the caller
  * asked for, so its presence answers the question; the protocol status does not,
  * because it stays 200 in both cases.
+ *
+ * A read-only load is the one case where "not fetched" does not mean "not received": the caller
+ * asked for the stored copy — that is what `--readonly` means, and what makes the X-SQL engine's
+ * second read of a page a cache hit ([resolveRoundArgs]) — so a page that came back from the store
+ * with content counts as delivered when the round was read-only.  The substitution case above is
+ * not that: it happens under `-ignoreFailure`, which `-refresh` implies and which a read-only round
+ * never carries, so a failed fetch still comes back as a loss.
  */
-internal fun isDocumentDelivered(fetched: Boolean, html: String?): Boolean =
-    fetched && !html.isNullOrBlank()
+internal fun isDocumentDelivered(fetched: Boolean, html: String?, storeServed: Boolean = false): Boolean =
+    !html.isNullOrBlank() && (fetched || storeServed)
+
+/**
+ * Whether a load answered from the page store because the round is read-only.
+ *
+ * [WebPage.isCached] is set when the load served the stored page core, and a read-only round is the
+ * only one allowed to treat that as a delivered page (see [isDocumentDelivered]).
+ */
+internal fun isReadOnlyStoreServe(page: WebPage, readonly: Boolean): Boolean = readonly && page.isCached
+
+/**
+ * The facts about a finished load that decide what the crawl does with the page it asked
+ * for, and eventually lose it.
+ *
+ * Captured into a value on purpose: the delivery rules below are then plain functions of a
+ * ledger and these fields, which is what makes them testable without a browser, a session or
+ * a mocked engine type.  The engine's own status vocabulary is read exactly once, in
+ * [loadedPageFacts].
+ */
+internal data class LoadedPageFacts(
+    val url: String,
+    val isFetched: Boolean,
+    val isCanceled: Boolean,
+    val isNil: Boolean,
+    val isRetry: Boolean,
+    val isFailed: Boolean,
+    val isSuccess: Boolean,
+    val statusCode: Int,
+    val statusReason: String?,
+    val contentLength: Long,
+)
+
+/** Read the delivery-relevant facts of a load; null when the load produced no page at all. */
+internal fun loadedPageFacts(page: WebPage?): LoadedPageFacts? {
+    if (page == null) return null
+    val status = page.protocolStatus
+    return LoadedPageFacts(
+        url = page.url,
+        isFetched = page.isFetched,
+        isCanceled = page.isCanceled,
+        isNil = page.isNil,
+        isRetry = status.isRetry,
+        isFailed = status.isFailed,
+        isSuccess = status.isSuccess,
+        statusCode = status.minorCode,
+        statusReason = status.reason?.toString(),
+        contentLength = page.contentLength
+    )
+}
+
+/**
+ * Why a completed load left the crawl without a row for [submittedUrl].
+ *
+ * Without this, a fetch that fails is invisible to the crawl: the parse event never fires, so
+ * the completion wait can never learn that the page is not coming, and the URL simply
+ * disappears from the result (issue #592).  The classification mirrors
+ * `XSQLHyperlink.CrawlEventHandlers`, the established reading of these states here:
+ *
+ *  * a retry/canceled status means the page is still in flight — report nothing, so the
+ *    round keeps waiting for the attempt that finally lands;
+ *  * `!isFetched` alone is NOT a failure: a page served from the page store (`-readonly`
+ *    without `-refresh`) legitimately completes with content while `isFetched` stays false;
+ *  * a successful load is settled by the parse event that records its row, and the load event
+ *    fires *after* it — so a success no row was recorded for will never produce one and is
+ *    reported here instead of letting the round wait out its whole timeout.
+ *
+ * @return the reason to report, or null when there is nothing to report.
+ */
+internal fun lossReasonForLoaded(ledger: CrawlLedger, submittedUrl: String, page: LoadedPageFacts?): String? {
+    if (page == null) return CrawlLedger.REASON_NEVER_FETCHED
+    return when {
+        page.isCanceled || page.isRetry -> null
+
+        page.isNil -> CrawlLedger.REASON_NEVER_FETCHED
+
+        page.isFailed -> page.statusReason ?: CrawlLedger.REASON_FETCH_FAILED
+
+        !page.isFetched && !page.isSuccess -> CrawlLedger.REASON_NEVER_FETCHED
+
+        !ledger.isRecordedSuccess(submittedUrl) && !ledger.isRecordedSuccess(page.url) ->
+            CrawlLedger.REASON_NOT_PARSED
+
+        else -> null
+    }
+}
+
+/**
+ * Decide what happens to the delivery attempt [token] of [url] once its load is over: settle
+ * the URL, or claim one more load of it.
+ *
+ * The loss of a page is decided here and not in the parse event, because this is the only
+ * place that knows *which* attempt it is looking at — the token — and that a load which
+ * delivered no document (the parse event fired, the document was empty: a zero-byte response,
+ * or a stored copy substituted for a failed fetch) may still be worth one more load.
+ * Everything a superseded attempt reports is ignored: its URL is already being loaded again,
+ * and settling it here would report the loss that retry is about to disprove.
+ *
+ * The order matters: the retry is claimed *before* the failure is recorded, because a
+ * recorded loss can complete the round (when this was its last outstanding URL, which is the
+ * single-page case), and a completed round refuses the retry this very call was about to
+ * submit.
+ *
+ * @param emptyDeliveries URLs whose parse event carried no document; this attempt's entry is
+ *   consumed here.
+ * @return the attempt token to load [url] again under, or null when this attempt is settled
+ *   (or still in flight and about to decide for itself).
+ */
+internal fun resolveDeliveryAttempt(
+    ledger: CrawlLedger,
+    url: String,
+    depth: Int,
+    token: Long,
+    page: LoadedPageFacts?,
+    emptyDeliveries: MutableSet<String>
+): Long? {
+    if (ledger.isTerminal || !ledger.isCurrentAttempt(url, token)) return null
+    // The row this URL was waiting for exists: a duplicate event of an earlier attempt must
+    // not settle it a second time.
+    if (ledger.isRecordedSuccess(url)) return null
+
+    // The engine is still working on this URL (a retry/canceled status): settle nothing.  Its
+    // own scheduled retry is the second load, and the round waits for it.
+    if (page != null && (page.isCanceled || page.isRetry)) return null
+
+    val empty = emptyDeliveries.remove(normalizeForVisit(url))
+    // A load that produced a parse event carries the loss the parse event saw; one that
+    // produced none is classified from its own status.
+    val reason = if (empty) CrawlLedger.REASON_NOT_DELIVERED else lossReasonForLoaded(ledger, url, page)
+    // A page that arrived but never reached the parser is not a *delivery* failure: the content
+    // is there, and loading it again would fetch the same bytes twice.  A page with no content
+    // at all is the exception — a zero-byte response that no parse event followed either, which
+    // is a delivery failure the retry can clear.
+    if (reason == CrawlLedger.REASON_NOT_PARSED && (page?.contentLength ?: 0) > 0) {
+        ledger.recordFailure(url, depth, page?.statusCode ?: 0, reason)
+        return null
+    }
+    if (reason == null) return null
+
+    claimDeliveryRetry(ledger, url, token, page)?.let { return it }
+
+    if (empty) {
+        logger.warn(
+            "Crawl {}: the load of '{}' returned no document (fetched={}, status={}, contentLength={}) " +
+                "on attempt {}; reporting it as lost",
+            ledger.taskId, url, page?.isFetched, page?.statusCode, page?.contentLength, token
+        )
+    }
+    ledger.recordFailure(url, depth, page?.statusCode ?: 0, reason)
+    return null
+}
+
+/**
+ * Claim one more load of [url], when a second load can still change the outcome and the URL
+ * has an attempt to spend ([CrawlLedger.startRetry]).
+ *
+ * Every failure that reaches this point is retried once, whatever its protocol status, because
+ * the engine's *own* retry has already been accounted for: a status the engine considers
+ * retryable (`isRetry`) never gets here — it keeps the URL in flight and the round waits for
+ * the attempt the engine scheduled.  What is left is a load the engine considers finished and
+ * the crawl did not receive: a dropped task, a fetch that failed for good, or a stored copy
+ * substituted for a failed fetch.  One more load of a page the caller asked for is cheap next
+ * to reporting it lost, and if it fails too, its status is what the loss report carries.
+ *
+ * @return the token of the new attempt, or null when the URL is out of attempts.
+ */
+internal fun claimDeliveryRetry(
+    ledger: CrawlLedger,
+    url: String,
+    token: Long,
+    page: LoadedPageFacts?
+): Long? {
+    val next = ledger.startRetry(url) ?: return null
+    logger.warn(
+        "Crawl {}: '{}' delivered nothing on attempt {} (fetched={}, status={}, contentLength={}); " +
+            "loading it once more (attempt {})",
+        ledger.taskId, url, token, page?.isFetched, page?.statusCode ?: 0, page?.contentLength, next
+    )
+    return next
+}
+
+/** Logger for the delivery rules above; they run outside the round runner. */
+private val logger = LoggerFactory.getLogger("ai.platon.pulsar.rest.api.service.crawl.CrawlDelivery")
 
 /**
  * Why a page that loaded carried no bytes, in the words of its own protocol
@@ -348,12 +569,206 @@ internal fun matchesPattern(url: String, pattern: String?): Boolean {
 }
 
 /**
+ * The out-links one discovery pass may queue, and the anchors it refused.
+ *
+ * A storefront routinely offers one destination through several anchors — the
+ * product image and the product title are two `href`s to the same page, and a
+ * grid/list toggle spells another page twice with different query strings.  The
+ * budget (`-top-links`) is a budget for *pages*, so it can only be spent after
+ * the repeats are gone: feeding the anchors straight into `take(n)` lets two
+ * copies of one link take two slots, and the crawl then queues fewer distinct
+ * pages than it was asked for.  (The ledger refuses the second submission of one
+ * identity, so nothing is fetched twice — the promise is lost silently instead.)
+ *
+ * Identity is [normalizeForVisit], the crawl's one dedup key, and the spelling
+ * that survives is the first one seen.  The fragment is always dropped: a jump
+ * target inside a document never identifies a page, so it must not reach the
+ * URL a row reports.  The query is dropped when [ignoreUrlQuery] is set — the
+ * flag is documented as stripping the query from a *discovered* href, so it has
+ * to be applied where discovered hrefs become queued URLs; the load path never
+ * sees it for these links.
+ *
+ * [visited] is the crawl's cross-page memory (identities this crawl already
+ * queued).  A single-level crawl passes an empty set: it has no memory to keep,
+ * and the ledger refuses a second submission of one identity anyway.
+ *
+ * @param hrefs the anchors one page offers, in document order, already absolute.
+ * @param visited identities this crawl has already queued.
+ * @param outLinkPattern `-out-link-pattern`, matched against the prepared spelling.
+ * @param topLinks `-top-links`, the number of *distinct* links one page may add.
+ * @param ignoreUrlQuery `-ignoreUrlQuery`: drop the query from each candidate.
+ * @return the links to queue and the count of anchors each rule refused; see
+ *   [DiscoverySelection] for why the counters are part of the result.
+ */
+internal fun selectDiscoveredLinks(
+    hrefs: List<String>,
+    visited: Set<String>,
+    outLinkPattern: String?,
+    topLinks: Int,
+    ignoreUrlQuery: Boolean,
+): DiscoverySelection {
+    // Blank hrefs are not candidates at all, so they are not counted as skipped:
+    // an anchor with nothing to resolve was never a link.
+    val prepared = hrefs.asSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .map { href -> href.substringBefore('#').let { if (ignoreUrlQuery) it.substringBefore('?') else it } }
+        .toList()
+
+    val matched = prepared.filter { matchesPattern(it, outLinkPattern) }
+
+    // First spelling of each identity wins, in document order.
+    val distinct = LinkedHashMap<String, String>(matched.size)
+    matched.forEach { distinct.putIfAbsent(normalizeForVisit(it), it) }
+
+    val fresh = distinct.filterKeys { it !in visited }.values.toList()
+    val chosen = fresh.take(topLinks.coerceAtLeast(0))
+
+    return DiscoverySelection(
+        links = chosen,
+        filtered = prepared.size - matched.size,
+        alreadyVisited = distinct.size - fresh.size,
+        repeated = matched.size - distinct.size,
+        overBudget = fresh.size - chosen.size,
+    )
+}
+
+/**
+ * The outcome of [selectDiscoveredLinks]: the links to queue, and why the rest
+ * of the page's anchors were not queued.
+ *
+ * The counters exist so the crawl's log can name the reason ("3 repeated on the
+ * page, 2 already visited, 5 beyond -top-links 3") instead of one opaque
+ * "skipped" number that hides a budget mistake behind a normal-looking run.
+ * They add up: `links.size + skipped` is the number of non-blank anchors the
+ * page offered, so a crawl that queued nothing always says which rule did it.
+ */
+internal data class DiscoverySelection(
+    val links: List<String>,
+    /** Anchors the out-link pattern rejected. */
+    val filtered: Int,
+    /** Anchors whose page another anchor on the same page already offered. */
+    val repeated: Int,
+    /** Anchors whose page this crawl has already queued. */
+    val alreadyVisited: Int,
+    /** Distinct, unvisited links that did not fit in `-top-links`. */
+    val overBudget: Int,
+) {
+    val skipped: Int get() = filtered + repeated + alreadyVisited + overBudget
+}
+
+/**
+ * The option tokens of an args string: the whitespace-separated words that start with `-`, with any
+ * `=value` suffix removed so `-refresh=true` and `-refresh` are the same option.
+ *
+ * Option *values* are left alone: a quoted CSS selector arrives as its own token and is not an
+ * option, so it survives a strip untouched.
+ */
+private fun optionTokensIn(args: String): Set<String> =
+    args.split(Regex("\\s+"))
+        .filter { it.startsWith("-") }
+        .map { it.substringBefore('=') }
+        .toSet()
+
+/** True when [args] requests the option named [fieldName], under any of its spellings. */
+internal fun hasOption(args: String, fieldName: String): Boolean {
+    val tokens = optionTokensIn(args)
+    return LoadOptions.getOptionNames(fieldName).any { it in tokens }
+}
+
+/** [args] without the option named [fieldName] (all spellings), blanks collapsed. */
+internal fun stripOption(args: String, fieldName: String): String {
+    val names = LoadOptions.getOptionNames(fieldName)
+    return args.split(Regex("\\s+"))
+        .filterNot { token -> names.any { name -> token == name || token.startsWith("$name=") } }
+        .joinToString(" ")
+        .trim()
+}
+
+/**
+ * The args a crawl round loads its pages with.
+ *
+ * A crawl forces `-refresh` by default, because a stale or half-written stored copy is what makes a
+ * portal page return 0 out-links — `buildEffectiveArgs` existed for that (see
+ * `docs-dev/copilot/ci-stabilization-4.13.x.md` §18), and this keeps it.
+ *
+ * **`-readonly` wins over `-refresh`** when the request asks for both, which is the one thing that
+ * changed. The two options mean opposite things, and the engine has no notion of precedence between
+ * them: `-refresh` expands to `-ignoreFailure -i 0s` and resets the fetch retry counters, so
+ * `LoadOptions.isExpired()` answers true for *every* local copy. `PulsarSession.load()` then misses
+ * its read-only shortcut (`AbstractPulsarSession.createPageWithCachedCoreOrNull`, which needs both
+ * `readonly` and a page that has not expired) and goes to the web — taking the store writes with it.
+ * So "read-only" can only mean anything if the refresh is *gone*, not merely present alongside it:
+ * the round erases `-refresh` and adds none.
+ *
+ * That is also what makes the X-SQL execution engine's *second* read of a page a guaranteed cache
+ * hit (`CrawlXSql`/`ScrapeAPIUtils.normalizeForReadOnlyQuery` seal the statement's own url the same
+ * way, for the same reason). A call that also passes `-expires 0s` explicitly still fetches: this
+ * stops the crawl from *adding* a fetch, it does not overrule a caller who asks for one in so many
+ * words.
+ */
+internal fun resolveRoundArgs(rawArgs: String): String {
+    val args = rawArgs.trim()
+    if (hasOption(args, "readonly")) {
+        return stripOption(args, "refresh")
+    }
+    return when {
+        args.isBlank() -> "-refresh"
+        hasOption(args, "refresh") -> args
+        else -> "$args -refresh"
+    }
+}
+
+/**
+ * The args a crawl puts on each URL it discovered.
+ *
+ * Discovered pages are loaded through the session, so an option that is not in
+ * these args simply does not apply to them: `-readonly` used to stop applying at
+ * depth >= 2 (the crawl wrote pages to the store while claiming it did not), and
+ * `-ignoreUrlQuery` / `-noNorm` are documented as options for *discovered*
+ * out-link hrefs — the very links this string carries.  They are forwarded here
+ * for the same reason `-refresh` is: the load, not the crawl, is what normalizes
+ * a URL, and the load only knows what these args tell it.
+ *
+ * A child's discovery depth is deliberately NOT embedded here.  It used to be
+ * (`-depth N`) so that it could be re-read out of `page.configuredUrl`, but
+ * [LoadOptions] has no such option: `LoadOptions.toString()` — which is what
+ * builds `configuredUrl` — only serializes options it knows, so the marker was
+ * dropped on submission and every read of it failed.  Depth is queue-time
+ * bookkeeping owned by `CrawlRoundRunner`'s `depths` map and is never re-derived
+ * from a URL.
+ *
+ * @param expandable whether the loaded page may discover further links
+ *   (depth >= 2 rounds submit children; a depth-1 round does not, so it does not
+ *   carry an out-link selector that nothing would read).
+ */
+internal fun buildLinkArgs(options: LoadOptions, expandable: Boolean): String {
+    val parts = mutableListOf("-parse")
+    if (expandable) {
+        if (options.outLinkSelector.isNotBlank()) {
+            parts.add("-outLink \"${options.outLinkSelector}\"")
+        }
+        if (options.outLinkPattern.isNotBlank() && options.outLinkPattern != ".+") {
+            parts.add("-outLinkPattern \"${options.outLinkPattern}\"")
+        }
+    }
+    if (options.refresh) parts.add("-refresh")
+    if (options.readonly) parts.add("-readonly")
+    if (options.ignoreUrlQuery) parts.add("-ignoreUrlQuery")
+    if (options.noNorm) parts.add("-noNorm")
+    return parts.joinToString(" ")
+}
+
+/**
  * Compute the readonly store-serving markers for a recorded page.
  *
- * When a load serves the stored page core (options.readonly without a
- * forced -refresh), [WebPage.isCached] is true and [WebPage.fetchTime]
- * preserves the time the content was originally fetched, so the age of the
- * served content is computable.  Fresh fetches keep served=false.
+ * When a load serves the stored page core, [WebPage.isCached] is true and [WebPage.fetchTime]
+ * preserves the time the content was originally fetched, so the age of the served content is
+ * computable.  Fresh fetches keep served=false.
+ *
+ * A read-only crawl is the case this reports on: it loads without `-refresh`
+ * ([resolveRoundArgs]), which is what lets the engine answer from local storage — and that copy can
+ * be older than the crawl, so the age has to reach the caller.
  */
 internal fun storeServeMarkers(page: WebPage): Pair<Boolean, Long?> {
     if (!page.isCached) return false to null
@@ -428,6 +843,23 @@ internal fun buildLossNote(
 }
 
 /**
+ * The pages a crawl has published so far, aggregated over its seed rounds.
+ *
+ * One round publishes only what *it* collected, and several rounds publish at the
+ * same time, so the in-flight record has to add them up.  Keyed by seed index,
+ * each round's latest publish replaces its own earlier one (a round only ever
+ * grows), and the result is every round's pages in seed order.
+ *
+ * A URL-keyed union would be wrong here.  The terminal record keeps one row per
+ * *fetch*: [CrawlService] concatenates the rounds' page lists, so a URL two seeds
+ * both fetched is two rows.  Merging by URL would make the in-flight count
+ * smaller than the terminal one — the same "the count went down" symptom this
+ * aggregation exists to remove, only deferred to the end of the crawl.
+ */
+internal fun aggregateInFlightPages(published: Map<Int, List<CrawlPageResult>>): List<CrawlPageResult> =
+    published.entries.sortedBy { it.key }.flatMap { it.value }
+
+/**
  * Merge an in-flight progress publish into the record of a running crawl.
  *
  * A round publishes every page it records so a poller can watch a crawl fill up.
@@ -456,7 +888,7 @@ internal fun mergeIncrementalProgress(
     if (previous != null && previous.status in terminalStatuses) return null
     return CrawlResponse(
         taskId = taskId,
-        status = "PROCESSING",
+        status = CrawlStatus.PROCESSING,
         pagesFound = pages.size,
         linksDiscovered = linksDiscovered,
         pages = pages,

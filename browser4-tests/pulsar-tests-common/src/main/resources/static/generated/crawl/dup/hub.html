@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Duplicate Link Hub</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f6f7fb; color: #1f2937; }
+    main { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+    .picks { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .8rem; }
+    .pick { display: block; padding: .6rem; border: 1px solid #dce3ee; border-radius: 12px; background: #fff; color: inherit; text-decoration: none; }
+    .pick-title { display: block; font-weight: 700; }
+    .pick-copy { display: block; color: #667085; font-size: .9rem; margin-top: .3rem; }
+    .noise { color: #0b4bb3; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="pageTitle">Duplicate Link Hub</h1>
+  </header>
+  <main>
+    <p>
+      A realistic storefront links the same detail page more than once: the product image and the
+      product title are two anchors with the same destination, and a grid/list toggle spells the
+      same page with two different query strings. A crawl that limits itself to
+      <code>--top-links N</code> before it deduplicates spends that budget on repeats and fetches
+      fewer distinct pages than it promised.
+    </p>
+
+    <section class="picks" id="picks">
+      <a class="pick" id="pick-1-image" href="../product/1.html" aria-label="Widget Alpha image">
+        <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Crect width='80' height='80' fill='%23dce3ee'/%3E%3C/svg%3E" alt="Widget Alpha" width="80" height="80" />
+      </a>
+      <a class="pick" id="pick-1-title" href="../product/1.html">
+        <span class="pick-title">Widget Alpha</span>
+      </a>
+      <a class="pick" id="pick-2-title" href="../product/2.html">
+        <span class="pick-title">Widget Beta</span>
+      </a>
+      <a class="pick" id="pick-2-image" href="../product/2.html" aria-label="Widget Beta image">
+        <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Crect width='80' height='80' fill='%23e6ecf7'/%3E%3C/svg%3E" alt="Widget Beta" width="80" height="80" />
+      </a>
+      <a class="pick" id="pick-3-title" href="../product/3.html">
+        <span class="pick-title">Widget Gamma</span>
+      </a>
+      <a class="pick" id="pick-4-grid" href="../product/4.html?src=grid">
+        <span class="pick-title">Widget Delta</span>
+        <span class="pick-copy">grid view</span>
+      </a>
+      <a class="pick" id="pick-4-list" href="../product/4.html?src=list">
+        <span class="pick-title">Widget Delta</span>
+        <span class="pick-copy">list view</span>
+      </a>
+      <a class="pick" id="pick-5-specs" href="../product/5.html#specs">
+        <span class="pick-title">Widget Epsilon</span>
+        <span class="pick-copy">jump to specifications</span>
+      </a>
+    </section>
+
+    <nav>
+      <a class="noise" href="../index.html">Back to the crawl hub</a>
+    </nav>
+  </main>
+  <footer>Duplicate Link Hub — Mock Site</footer>
+</body>
+</html>

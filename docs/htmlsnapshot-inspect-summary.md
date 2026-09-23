@@ -16,7 +16,7 @@ The base `htmlsnapshot` command stores the page in Browser4's page storage and r
 - `interactiveElements` — top weighted interactive elements in Section 8 format (`#closestId tag#id.class`)
 - `linkGroups` — visually detected repeating card/link groups
 
-> Use `htmlsnapshot` first; `inspect` and `summary` read from the stored snapshot.
+> `inspect` and `summary` read the **live page** of the active tab, so no prior `htmlsnapshot` capture is required — capturing is useful for the metadata above or for an archived copy.
 
 ---
 

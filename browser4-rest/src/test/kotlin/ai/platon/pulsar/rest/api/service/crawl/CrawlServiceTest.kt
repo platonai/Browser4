@@ -314,11 +314,68 @@ class CrawlServiceTest {
         verifyNoInteractions(sessionManager)
     }
 
+    /**
+     * A request may carry its own task budget, and the record it leaves behind reports the
+     * budget it actually ran under — the same contract `parallelTabs` has, so a clamped
+     * request is visible to the caller instead of silently different.
+     */
+    @Test
+    fun `a request's own task budget drives the crawl and is reported back`() = runBlocking {
+        // Below the round floor (report margin + minimum round budget = 45s), so no seed can
+        // be started — and the crawl says so by name rather than looking merely small.
+        val seeds = listOf("https://example.com/a", "https://example.com/b")
+
+        val taskId = crawlService.submit(
+            CrawlRequest(urls = seeds, depth = 1, taskTimeoutMillis = 10_000)
+        )
+        val result = awaitTerminal(taskId)
+
+        assertEquals(
+            ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+            result.status,
+            "a crawl that could not fetch its seeds is a timeout, never OK"
+        )
+        assertEquals(
+            10_000L, result.taskTimeoutMillis,
+            "the record must report the budget the task ran under, not the server default"
+        )
+        assertEquals(seeds.size, result.pagesExpected)
+        assertEquals(seeds, result.failedPages?.map { it.url }, "every refused seed is named")
+        assertEquals(
+            result.pagesExpected, result.pagesFound + (result.failedPages?.size ?: 0),
+            "the accounting law still holds for a request-scoped budget"
+        )
+        verifyNoInteractions(sessionManager)
+    }
+
+    @Test
+    fun `a request's task budget is clamped, and an absent one uses the server default`() {
+        val serverDefault = crawlService.taskTimeoutMillis
+        assertEquals(
+            serverDefault, crawlService.resolveTaskTimeoutMillis(CrawlRequest()),
+            "no preference runs under the server's default"
+        )
+        assertEquals(
+            serverDefault, crawlService.resolveTaskTimeoutMillis(CrawlRequest(taskTimeoutMillis = 0)),
+            "0 is not a switch: a budget of nothing is not a crawl"
+        )
+        assertEquals(
+            MAX_REQUEST_TASK_TIMEOUT_MS,
+            crawlService.resolveTaskTimeoutMillis(CrawlRequest(taskTimeoutMillis = 24 * 3_600_000L)),
+            "a caller may exceed the server default, but not without bound"
+        )
+        assertEquals(
+            MIN_REQUEST_TASK_TIMEOUT_MS,
+            crawlService.resolveTaskTimeoutMillis(CrawlRequest(taskTimeoutMillis = 1)),
+            "a sub-second budget is raised to the floor rather than armed as a zero-length clock"
+        )
+    }
+
     /** Poll a task until it reaches a terminal state, or fail with what it was doing. */
-    private suspend fun awaitTerminal(taskId: String, timeoutMs: Long = 10_000): CrawlResponse {
+    private suspend fun awaitTerminal(taskId: String, timeoutMs: Long = 30_000): CrawlResponse {
         val deadline = System.currentTimeMillis() + timeoutMs
         var result = crawlService.getResult(taskId)
-        while (!isTerminal(result.status)) {
+        while (result.isStillRunning()) {
             if (System.currentTimeMillis() > deadline) {
                 fail<Unit>("task $taskId never reached a terminal state (still ${result.status})")
             }
@@ -329,22 +386,15 @@ class CrawlServiceTest {
     }
 
     /**
-     * Whether a record has finished.
+     * Wait while the task is unfinished *and* still reports a running state.
      *
-     * The poll has to recognise the *pending* states, not the terminal ones:
-     * [CrawlService.submit] seeds the record with the HTTP phrase for 201
-     * (`Created`) and the worker replaces it with `PROCESSING` before the
-     * terminal phrases.  Polling on those two spellings instead returned the
-     * placeholder whenever the worker had not been scheduled yet — the poll then
-     * compared `Created` against a terminal status and failed under load.
+     * [CrawlStatus] is the single source of truth for the vocabulary, so this no
+     * longer has to guess spellings: the old comparison against the upper-case
+     * tokens alone matched only the `"CREATED"` default and exited on the *first*
+     * poll, which made the caller assert on `"Created"` within milliseconds
+     * instead of waiting for the terminal record.  [CrawlResponse.finishTime] is
+     * the model's own "reached a terminal state" marker, so it is checked too.
      */
-    private fun isTerminal(status: String) = status in TERMINAL_STATUSES
-
-    private companion object {
-        val TERMINAL_STATUSES = setOf(
-            ResourceStatus.getStatusText(ResourceStatus.SC_OK),
-            ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-            ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
-        )
-    }
+    private fun CrawlResponse.isStillRunning(): Boolean =
+        finishTime == null && CrawlStatus.isRunning(status)
 }

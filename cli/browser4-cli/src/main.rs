@@ -8300,7 +8300,7 @@ async fn handle_html_snapshot_get(
         cli_println!("{}", text);
         cli_println!("No elements matched \"{}\".", display_selector);
         cli_println!(
-            "  The snapshot may be stale — it reflects the DOM at capture time. If the page has changed since the last `htmlsnapshot`, re-capture with `htmlsnapshot` first."
+            "  The read used the LIVE page, so the element is simply not there — check the selector, the current URL, and that the page has finished loading."
         );
         cli_println!(
             "  Verify the selector with `htmlsnapshot grep \"{}\"`, or discover valid selectors with `htmlsnapshot inspect`.",
@@ -9656,15 +9656,14 @@ async fn handle_html_snapshot_inspect(
             render_speculative(sel, count);
         }
         // If the selector is :root (the default, meaning "everything") and there
-        // are 0 matches, the most likely cause is that no HTML snapshot has been
-        // captured yet. Make this very explicit.
+        // are 0 matches, the page is most likely not loaded yet.  inspect reads
+        // the LIVE page, so there is nothing to capture first.
         if selector == ":root" {
             cli_println!("");
-            cli_println!(
-                "  ⚠️  No HTML snapshot found. htmlsnapshot inspect requires a prior capture."
-            );
-            cli_println!("  Run this first:  browser4-cli htmlsnapshot");
-            cli_println!("  Then re-run:     browser4-cli htmlsnapshot inspect");
+            cli_println!("  ⚠️  No elements matched the default :root selector.");
+            cli_println!("  inspect analyzes the LIVE page, so no capture is needed — make sure the page is");
+            cli_println!("  loaded, then retry with a narrower selector:");
+            cli_println!("       browser4-cli htmlsnapshot inspect \".your-selector\"");
         } else {
             cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
         }
@@ -10593,7 +10592,7 @@ fn run_grep_on_source(
             if final_pattern.contains('\\') {
                 msg.push_str("\n💡 Tip: The pattern contains backslash escapes. If you meant to match literal text, try -F (--fixed-strings) to disable regex matching.");
                 if final_pattern.contains("\\$") {
-                    msg.push_str("\n   If you meant a literal $ sign: Rust regex has no \\$ escape — write [$] instead (e.g. '[$][0-9]+' matches \"$12\"). Bare ^ and $ anchor the start/end of a line.");
+                    msg.push_str("\n   If you meant a literal $ sign: write [$] instead (e.g. '[$][0-9]+' matches \"$12\") — it survives every shell layer. Bare ^ and $ anchor the start/end of a line.");
                 }
             } else if final_pattern.contains('|') {
                 msg.push_str("\n💡 Tip: Alternation (|) is supported. If you meant a literal pipe character, try -F (--fixed-strings).");
@@ -13001,13 +13000,24 @@ fn refreshed_agent_status(cached: &str, status_json: &str) -> Option<String> {
 }
 
 /// Map crawl status strings to the same lifecycle labels.
+///
+/// The backend emits `ResourceStatus` display text ("Created", "Processing",
+/// "Request Timeout", "Internal Server Error", "Not Found"); token spellings from
+/// older payloads are still accepted so a mixed-version pair keeps labelling
+/// correctly.  Matching only the tokens — the previous behaviour — mislabelled
+/// everything except `"OK"`: `"Request Timeout"` fell through to
+/// `"request timeout"` instead of `"failed (timeout)"`, and `"Not Found"` never
+/// matched `contains("NOT_FOUND")` at all.
 fn friendly_crawl_status(status: &str) -> String {
     match status {
-        "CREATED" => "queued".to_string(),
-        "OK" => "completed".to_string(),
-        "REQUEST_TIMEOUT" => "failed (timeout)".to_string(),
-        "INTERNAL_SERVER_ERROR" => "failed (error)".to_string(),
-        s if s.contains("NOT_FOUND") => "failed (not found)".to_string(),
+        "Created" | "CREATED" => "queued".to_string(),
+        "Processing" | "PROCESSING" | "Accepted" | "SC_ACCEPTED" => "processing".to_string(),
+        "OK" | "SC_OK" => "completed".to_string(),
+        "Request Timeout" | "REQUEST_TIMEOUT" | "SC_REQUEST_TIMEOUT" => "failed (timeout)".to_string(),
+        "Internal Server Error" | "INTERNAL_SERVER_ERROR" | "SC_INTERNAL_SERVER_ERROR" => {
+            "failed (error)".to_string()
+        }
+        s if s.contains("Not Found") || s.contains("NOT_FOUND") => "failed (not found)".to_string(),
         other => other.to_lowercase(),
     }
 }
@@ -14630,6 +14640,13 @@ fn build_crawl_server_params(
                 m.insert("parallelTabs".to_string(), json!(n));
             }
         }
+        // --timeout is a CLI spelling too: the backend field is `taskTimeoutMillis`, and the
+        // value is a user-facing duration there (`10m`), so it is converted here.
+        if let Some(value) = m.remove("timeout") {
+            if let Some(millis) = value.as_str().and_then(crawl_timeout_to_millis) {
+                m.insert("taskTimeoutMillis".to_string(), json!(millis));
+            }
+        }
         // Insert resolved urls array
         let url_array: Vec<Value> = urls.iter().map(|u| json!(u)).collect();
         m.insert("urls".to_string(), json!(url_array));
@@ -14699,6 +14716,74 @@ fn validate_crawl_parallel(value: &str) -> Result<(), String> {
             value
         )),
     }
+}
+
+/// Task-budget range the server accepts for one crawl, in milliseconds.
+///
+/// Must match `CrawlSupport.MIN_REQUEST_TASK_TIMEOUT_MS` / `MAX_REQUEST_TASK_TIMEOUT_MS`:
+/// the server clamps into this range, and clamping silently is exactly what a caller cannot
+/// see — so the CLI refuses the value up front, while the response still reports the budget
+/// that was used (mirroring `--parallel`).
+const CRAWL_MIN_TASK_TIMEOUT_MS: i64 = 1_000;
+const CRAWL_MAX_TASK_TIMEOUT_MS: i64 = 3_600_000;
+
+/// A task budget in milliseconds: a plain integer means seconds (the same reading the load
+/// options use), and `ms`/`s`/`m`/`h`/`d` suffixes are honoured. `None` when the value is not
+/// a duration at all.
+fn crawl_timeout_to_millis(value: &str) -> Option<i64> {
+    let value = value.trim();
+    if !is_duration_value(value) {
+        return None;
+    }
+    let (number, factor) = if let Some(number) = value.strip_suffix("ms") {
+        (number, 1_i64)
+    } else if let Some(number) = value.strip_suffix('s') {
+        (number, 1_000)
+    } else if let Some(number) = value.strip_suffix('m') {
+        (number, 60_000)
+    } else if let Some(number) = value.strip_suffix('h') {
+        (number, 3_600_000)
+    } else if let Some(number) = value.strip_suffix('d') {
+        (number, 86_400_000)
+    } else {
+        (value, 1_000)
+    };
+    number.parse::<i64>().ok().map(|n| n * factor)
+}
+
+/// Validate the --timeout value: a duration inside the range one request may ask for.
+///
+/// An absent/empty value is fine (the server's 10-minute default applies). The budget is
+/// what makes a large crawl end with an accounted-for TIMEOUT instead of being killed
+/// mid-flight, so a value the user cannot have meant must fail here rather than quietly
+/// become the default.
+fn validate_crawl_timeout(value: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    let millis = crawl_timeout_to_millis(value).ok_or_else(|| {
+        format!(
+            "Invalid --timeout value '{}'. Expected seconds (900) or a duration such as 30s, \
+             10m, 1h",
+            value
+        )
+    })?;
+    if millis < CRAWL_MIN_TASK_TIMEOUT_MS {
+        return Err(format!(
+            "Invalid --timeout value '{}'. The minimum is 1s: a crawl with no time at all \
+             cannot start a single round",
+            value
+        ));
+    }
+    if millis > CRAWL_MAX_TASK_TIMEOUT_MS {
+        return Err(format!(
+            "Invalid --timeout value '{}'. The maximum is 1h, because the budget buys browser \
+             time; split the work across several crawls",
+            value
+        ));
+    }
+    Ok(())
 }
 
 /// The parallelism report for a finished crawl: the budget it ran under and the
@@ -15052,6 +15137,17 @@ async fn handle_crawl(
     validate_crawl_parallel(
         tool_params
             .get("parallel")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    )?;
+
+    // ---- Validate the task budget ----
+    // The budget is the crawl's own clock: a round derives its timeout from what is left of
+    // it, and a seed that cannot fit is reported as an unstarted loss.  A value outside the
+    // server's per-request range is refused here rather than clamped silently.
+    validate_crawl_timeout(
+        tool_params
+            .get("timeout")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     )?;
@@ -26527,20 +26623,30 @@ mod tests {
     #[test]
     fn resolve_storage_state_path_defaults_to_timestamped_json_in_snapshot_dir() {
         let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // Resolve from an empty temporary directory, like the sibling test above.  The resolver
+        // joins the snapshot directory onto the CWD, and this test used to compare the result
+        // against `snapshot_dir().canonicalize()` — which only succeeds when
+        // `.browser4-cli/snapshot` happens to exist relative to the *crate* directory, i.e. when a
+        // previous CLI run left one behind.  On a clean checkout `canonicalize()` failed and the
+        // relative fallback never matched the absolute resolved path, so the test could only pass
+        // on a dirty tree.
+        let tmp = test_temp_dir();
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
         let resolved = resolve_storage_state_path(None).unwrap();
+        std::env::set_current_dir(previous_dir).unwrap();
 
-        let expected_dir = crate::snapshot::snapshot_dir().canonicalize().unwrap_or_else(|_| {
-            // snapshot_dir may not exist yet; the resolver does not create it
-            // (save_snapshot does).  The resolver joins that relative dir onto
-            // the current directory, so compare in the same absolute form —
-            // returning the raw relative path here made the test pass or fail
-            // depending on whether an earlier run had already created the dir.
-            std::env::current_dir()
-                .map(|cwd| cwd.join(crate::snapshot::snapshot_dir()))
-                .unwrap_or_else(|_| crate::snapshot::snapshot_dir())
-        });
+        // The resolver joins the (relative) snapshot dir onto the CWD it ran
+        // under, so the expectation has to be built from that same temp dir —
+        // not from the crate directory, whose own `.browser4-cli/snapshot` may
+        // or may not exist depending on what an earlier run left behind.
+        let expected_dir = tmp
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| tmp.path().to_path_buf())
+            .join(crate::snapshot::snapshot_dir());
         assert_eq!(
-            resolved.parent().map(|p| display_without_verbatim_prefix(p)),
+            resolved.parent().map(display_without_verbatim_prefix),
             Some(display_without_verbatim_prefix(&expected_dir))
         );
         assert!(resolved
@@ -31485,6 +31591,61 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
+    fn crawl_timeout_parses_seconds_and_durations_to_millis() {
+        // A plain integer is seconds, the same reading the load options use.
+        assert_eq!(crawl_timeout_to_millis("900"), Some(900_000));
+        assert_eq!(crawl_timeout_to_millis("30s"), Some(30_000));
+        assert_eq!(crawl_timeout_to_millis("1500ms"), Some(1_500));
+        assert_eq!(crawl_timeout_to_millis("10m"), Some(600_000));
+        assert_eq!(crawl_timeout_to_millis("1h"), Some(3_600_000));
+        assert_eq!(crawl_timeout_to_millis("2d"), Some(172_800_000));
+        assert_eq!(crawl_timeout_to_millis("soon"), None);
+        assert_eq!(crawl_timeout_to_millis(""), None);
+    }
+
+    #[test]
+    fn validate_crawl_timeout_accepts_an_absent_or_in_range_budget() {
+        assert!(validate_crawl_timeout("").is_ok(), "absent means the server default");
+        assert!(validate_crawl_timeout("1s").is_ok());
+        assert!(validate_crawl_timeout("30m").is_ok());
+        assert!(validate_crawl_timeout("1h").is_ok());
+    }
+
+    #[test]
+    fn validate_crawl_timeout_rejects_a_budget_no_crawl_can_use() {
+        let err = validate_crawl_timeout("500ms").unwrap_err();
+        assert!(err.contains("minimum is 1s"), "got: {err}");
+        let err = validate_crawl_timeout("2h").unwrap_err();
+        assert!(err.contains("maximum is 1h"), "got: {err}");
+        let err = validate_crawl_timeout("ten minutes").unwrap_err();
+        assert!(err.contains("10m"), "the error must show a usable spelling, got: {err}");
+    }
+
+    #[test]
+    fn build_crawl_server_params_translates_timeout_to_task_timeout_millis() {
+        let tool_params = json!({"url": "https://example.com", "timeout": "45s"});
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert_eq!(result["taskTimeoutMillis"], json!(45_000));
+        // The CLI spelling must not leak: the server reads `taskTimeoutMillis` only.
+        assert!(
+            result.get("timeout").is_none(),
+            "the CLI duration spelling must not be sent as-is: {result}"
+        );
+    }
+
+    #[test]
+    fn build_crawl_server_params_omits_the_task_budget_when_not_requested() {
+        let tool_params = json!({"url": "https://example.com"});
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert!(
+            result.get("taskTimeoutMillis").is_none(),
+            "an absent budget must let the server's default apply: {result}"
+        );
+    }
+
+    #[test]
     fn build_crawl_server_params_strips_cli_only_keys() {
         let tool_params = json!({
             "url": "https://example.com",
@@ -32343,6 +32504,21 @@ mod tests {
     #[test]
     fn friendly_crawl_status_unknown_is_lowered() {
         assert_eq!(friendly_crawl_status("PROCESSING"), "processing");
+    }
+
+    /// The backend sends ResourceStatus display text, so the labels must not
+    /// depend on the token spellings (they used to: only "OK" agreed).
+    #[test]
+    fn friendly_crawl_status_accepts_display_text() {
+        assert_eq!(friendly_crawl_status("Created"), "queued");
+        assert_eq!(friendly_crawl_status("Processing"), "processing");
+        assert_eq!(friendly_crawl_status("Accepted"), "processing");
+        assert_eq!(friendly_crawl_status("Request Timeout"), "failed (timeout)");
+        assert_eq!(
+            friendly_crawl_status("Internal Server Error"),
+            "failed (error)"
+        );
+        assert_eq!(friendly_crawl_status("Not Found"), "failed (not found)");
     }
 
     #[test]

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser4 CLI Console Probe Fixture</title>
+  <style>
+    body { margin: 0; font-family: monospace; padding: 24px; }
+    #probe-results { margin-top: 16px; padding: 12px; border: 1px solid #ccc; white-space: pre; }
+  </style>
+</head>
+<body>
+  <h1>Console serialization probe</h1>
+  <p>Call <code>b4Probe.run()</code> and read the JSON. Nothing on this page logs to the console.</p>
+  <div id="probe-results">not-run</div>
+
+  <script>
+    // Enabling a CDP domain that carries console messages (Runtime or Console) makes Chrome
+    // serialize the arguments of console.* calls for the DevTools client. That serialization is
+    // observable in JavaScript, which is how a page can tell an automation client is attached:
+    //  - A: a getter defined as an own property of a logged object (closed by the V8 May-2025 patch)
+    //  - B: the same getter inherited instead of own (the patch's "Path B", still live)
+    //  - C: a Proxy as the prototype of a logged object (preview key enumeration calls ownKeys)
+    // A plain browser never reads those properties, so any `true` below means something serialized.
+    (function () {
+      function probeOwnGetter() {
+        var fired = false;
+        var o = {};
+        Object.defineProperty(o, 'x', { get: function () { fired = true; return 1; }, enumerable: true });
+        console.log(o);
+        return fired;
+      }
+
+      function probeInheritedGetter() {
+        var fired = false;
+        var parent = {};
+        Object.defineProperty(parent, 'stack', { get: function () { fired = true; return ''; } });
+        var e = Object.create(parent);
+        console.debug(e);
+        return fired;
+      }
+
+      function probePrototypeProxy() {
+        var fired = false;
+        var trap = new Proxy({}, { ownKeys: function () { fired = true; return []; } });
+        var o = Object.create(trap);
+        console.groupEnd(o);
+        return fired;
+      }
+
+      window.b4Probe = {
+        run: function () {
+          var result = {
+            ownGetter: probeOwnGetter(),
+            inheritedGetter: probeInheritedGetter(),
+            prototypeProxy: probePrototypeProxy()
+          };
+          var json = JSON.stringify(result);
+          document.getElementById('probe-results').textContent = json;
+          return json;
+        },
+        read: function () {
+          return document.getElementById('probe-results').textContent;
+        }
+      };
+    })();
+  </script>
+</body>
+</html>

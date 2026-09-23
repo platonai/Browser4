@@ -30,7 +30,7 @@ const TIPS_SNAPSHOT: &[Tip] = &[
         text: "Use `snapshot -v 0` for the current visible screen — avoids large snapshots exceeding context limits",
     },
     Tip {
-        text: "Use `snapshot grep <pattern>` to search a saved snapshot without re-reading the entire file",
+        text: "Use `snapshot grep <pattern>` to search the page's accessibility tree without reading a snapshot file",
     },
     Tip {
         text: "Use `snapshot -i` to merge inner text into element names so ref lines read as self-contained targets (not a strict filter — pair with `-v 0` to bound the output size)",

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service.crawl
 
+import ai.platon.pulsar.common.ResourceStatus
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonProperty
 import java.time.Instant
@@ -33,8 +34,60 @@ data class CrawlRequest @JsonCreator constructor(
      * `null` (the default) uses [CrawlService.DEFAULT_PARALLEL_TABS], and `1`
      * means the historical strictly sequential crawl.
      */
-    @param:JsonProperty("parallelTabs") val parallelTabs: Int? = null
+    @param:JsonProperty("parallelTabs") val parallelTabs: Int? = null,
+    /**
+     * How long this crawl may run before the server cancels it (ms).
+     *
+     * The budget is the crawl's own clock, not a per-request timeout: a round derives its
+     * timeout from what is left of it (see `CrawlService.resolveRoundTimeoutMs`), and a seed
+     * that cannot fit is reported as an unstarted loss instead of being dropped.  It is
+     * therefore also what a caller tunes to make a big crawl finish *and report* rather than
+     * be killed mid-flight.
+     *
+     * `null` (the default) uses the server's `CrawlService.taskTimeoutMillis` (10 minutes).
+     * A value above zero is clamped to the per-request range
+     * (`MIN_REQUEST_TASK_TIMEOUT_MS`..`MAX_REQUEST_TASK_TIMEOUT_MS`), which
+     * `CrawlResponse.taskTimeoutMillis` always reports — so a clamped request is visible
+     * rather than silently different.  A non-positive value means "no preference" and falls
+     * back to the server default: the budget is a limit, not a switch, and `0` must not mean
+     * "cancel immediately".
+     */
+    @param:JsonProperty("taskTimeoutMillis") val taskTimeoutMillis: Long? = null
 )
+
+/**
+ * The one spelling per crawl task state, defined once.
+ *
+ * The service used to mix two vocabularies: bare tokens ([CrawlResponse.status]
+ * defaulted to `"CREATED"`, and the worker wrote `"PROCESSING"`) next to
+ * [ResourceStatus] display text (`"OK"`, `"Request Timeout"`).  Every consumer
+ * had to guess which one it would see, and the CLI guessed wrong: it matched the
+ * token spellings, so `"Created"` came out as `"created"`, `"Request Timeout"` as
+ * `"request timeout"` and `"Not Found"` fell through entirely -- only `"OK"`
+ * happened to agree between the two vocabularies.
+ *
+ * Display text is canonical here because that is what the REST payload has always
+ * carried for settled tasks; test-side waits that need to survive either spelling
+ * should compare through [isTerminal] / [isRunning] instead of literals.
+ */
+object CrawlStatus {
+    val CREATED: String = ResourceStatus.getStatusText(ResourceStatus.SC_CREATED)
+    val PROCESSING: String = ResourceStatus.getStatusText(ResourceStatus.SC_PROCESSING)
+    val OK: String = ResourceStatus.getStatusText(ResourceStatus.SC_OK)
+    val REQUEST_TIMEOUT: String = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT)
+    val INTERNAL_SERVER_ERROR: String = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR)
+    val NOT_FOUND: String = ResourceStatus.getStatusText(ResourceStatus.SC_NOT_FOUND)
+
+    /** States a task never leaves. */
+    val TERMINAL: Set<String> = setOf(OK, REQUEST_TIMEOUT, INTERNAL_SERVER_ERROR, NOT_FOUND)
+
+    /** States a task is still making progress in. */
+    val RUNNING: Set<String> = setOf(CREATED, PROCESSING)
+
+    fun isTerminal(status: String): Boolean = status in TERMINAL
+
+    fun isRunning(status: String): Boolean = status in RUNNING
+}
 
 data class CrawlSeedStatus(
     val url: String,
@@ -45,7 +98,7 @@ data class CrawlSeedStatus(
 
 data class CrawlResponse(
     val taskId: String = "",
-    val status: String = "CREATED",
+    val status: String = CrawlStatus.CREATED,
     val pagesFound: Int = 0,
     /**
      * Number of out-links discovered and submitted beyond the seed URLs
@@ -98,6 +151,16 @@ data class CrawlResponse(
      * never the raw request.
      */
     val parallelTabs: Int = 0,
+    /**
+     * The task budget this crawl ran under (ms): how long it was allowed to run before the
+     * server's task limit cancels it.
+     *
+     * Reported for the same reason [parallelTabs] is: the value is always the *effective*
+     * one — the request's own budget after clamping, or the server default when the request
+     * asked for none (see `CrawlService.resolveTaskTimeoutMillis`) — never the raw request.
+     * It is `0` for a task that never started.
+     */
+    val taskTimeoutMillis: Long = 0,
     /**
      * The peak number of fetch units this crawl actually had in flight at the
      * same time — the observed counterpart of [parallelTabs].

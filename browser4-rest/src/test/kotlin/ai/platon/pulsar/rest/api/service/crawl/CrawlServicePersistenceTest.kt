@@ -20,8 +20,8 @@ class CrawlServicePersistenceTest {
     @Test
     fun `restoreFromDisk loads tasks from JSONL file`(@TempDir tempDir: Path) {
         val jsonlPath = tempDir.resolve("crawl-tasks.jsonl")
-        val task1 = CrawlResponse(taskId = "c1", status = "CREATED")
-        val task2 = CrawlResponse(taskId = "c2", status = "OK", pagesFound = 5)
+        val task1 = CrawlResponse(taskId = "c1", status = CrawlStatus.CREATED)
+        val task2 = CrawlResponse(taskId = "c2", status = CrawlStatus.OK, pagesFound = 5)
         Files.createDirectories(tempDir)
         Files.writeString(
             jsonlPath,
@@ -33,9 +33,9 @@ class CrawlServicePersistenceTest {
         service.restoreFromDisk()
 
         assertEquals("c1", service.getResult("c1").taskId)
-        assertEquals("CREATED", service.getResult("c1").status)
+        assertEquals(CrawlStatus.CREATED, service.getResult("c1").status)
         assertEquals("c2", service.getResult("c2").taskId)
-        assertEquals("OK", service.getResult("c2").status)
+        assertEquals(CrawlStatus.OK, service.getResult("c2").status)
         assertEquals(5, service.getResult("c2").pagesFound)
     }
 
@@ -62,7 +62,7 @@ class CrawlServicePersistenceTest {
         service.restoreFromDisk()
 
         assertEquals("good", service.getResult("good").taskId)
-        assertEquals("OK", service.getResult("good").status)
+        assertEquals(CrawlStatus.OK, service.getResult("good").status)
     }
 
     @Test
@@ -80,8 +80,8 @@ class CrawlServicePersistenceTest {
     @Test
     fun `restoreFromDisk ignores blank taskId`(@TempDir tempDir: Path) {
         val jsonlPath = tempDir.resolve("crawl-tasks.jsonl")
-        val blank = CrawlResponse(taskId = "", status = "CREATED")
-        val valid = CrawlResponse(taskId = "valid", status = "OK")
+        val blank = CrawlResponse(taskId = "", status = CrawlStatus.CREATED)
+        val valid = CrawlResponse(taskId = "valid", status = CrawlStatus.OK)
         Files.createDirectories(tempDir)
         Files.writeString(
             jsonlPath,

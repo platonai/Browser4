@@ -1,6 +1,6 @@
 ---
 title: "Browser Modes — Session, Display, and Browser Source"
-description: "Decision guide for the three orthogonal choices when driving a browser with browser4-cli: which session to use (default / named / SWARM), which display mode (headless / headed / SUPERVISED), and where the browser comes from (backend-launched / attach --cdp / attach --extension) — plus the secondary knobs (profile mode, interact level, browser contexts, proxy) and the failure modes of each combination."
+description: "Decision guide for the three orthogonal choices when driving a browser with browser4-cli: which session to use (default / named / SWARM), which display mode (headless / headed / SUPERVISED), and where the browser comes from (backend-launched / attach --cdp / attach --extension) — plus the headless→headed escalation when a site blocks the bot, the secondary knobs (profile mode, interact level, browser contexts, proxy) and the failure modes of each combination."
 tier: decision
 ---
 
@@ -72,7 +72,7 @@ session (whose state container) × display (how it renders) × source (whose bro
 | Mode | Flag | When it is the right choice | Cost / risk |
 |---|---|---|---|
 | **HEADLESS** (default) | `--headless` (implicit) | AI agents, CI, Docker, batch extraction | more likely to be fingerprinted as automation; nobody can intervene |
-| **GUI** | `--headed` | a human must act (login, CAPTCHA, scan a QR code); demonstrations; visual debugging; keeping a browser open for inspection | uses the desktop; impossible in CI/no-display environments |
+| **GUI** | `--headed` | a human must act (login, CAPTCHA, scan a QR code); demonstrations; visual debugging; keeping a browser open for inspection; the **one-shot retry** after a site blocks the headless browser as a bot (see *Bot-detection escalation*) | uses the desktop; impossible in CI/no-display environments |
 | **SUPERVISED** | `swarm create --display-mode SUPERVISED` / `displayMode` capability | wrapping Chrome in an external supervisor process — in practice an Xvfb-based wrapper on Linux | inert unless the supervisor is configured (see below) |
 
 **Resolution order:** (1) `browser.display.mode` in the server config (shipped default `HEADLESS`); (2) the
@@ -87,6 +87,38 @@ by other clients.
   `--headed` — the flag degrades instead of failing.
 - The standalone MCP server (`java -jar Browser4.jar --app mcp`) has no Spring config, so `--headless` is the
   only thing that keeps it from opening a visible window; the last of `--headless`/`--headed` wins.
+
+**Bot-detection escalation — headless → headed, once**
+
+Headless stays the default, but a blocked page is a legitimate reason to go
+visible **for exactly one retry**:
+
+1. **Recognise the block:** CAPTCHA or "verify you are human" widget, an
+   interstitial/challenge page (Cloudflare, DataDome, Akamai, PerimeterX,
+   hCaptcha), Google's `/sorry/` page, "unusual traffic" / "access denied" /
+   "请求过于频繁" wording, or a page that loads with an implausibly empty body.
+   Do not escalate on ordinary failures — a wrong selector, a slow SPA or a 404 is
+   not bot detection.
+2. **Switch once**, keeping the session name so profile and cookies survive:
+
+   ```bash
+   browser4-cli -s <name> close                        # drop -s when the default session is in use
+   browser4-cli -s <name> open --headed "<url>"        # retry the same step
+   ```
+
+   `--headed` cannot be applied to a live session (the flag is ignored with a
+   warning) and `goto` never changes the mode — `close` or `open --fresh` is
+   mandatory.
+3. **Notify the user** that the mode changed and why — a visible window must never
+   appear silently: *"The site blocked the headless browser (bot detection), so I
+   switched to headed mode and retried."*
+4. **Stop after one retry.** If headed is blocked too, the block is
+   fingerprint/IP-level rather than mode-level: move to the attach paths (§3), raise
+   `--interact-level`, or report the site as unreachable. Never oscillate between
+   modes.
+5. **GUI-less environments degrade** `--headed` to headless (see *Environment
+   overrides* above) — report that the retry actually ran headless instead of
+   claiming a visible window.
 
 **`SUPERVISED` — read this before using it.** It does not mean "headless with a virtual display" by itself:
 it makes Browser4 launch `supervisorProcess supervisorArgs chromeBinary chromeArgs` instead of Chrome
@@ -104,6 +136,38 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
 - Browser4 passes plain `--headless` (never `--headless=new`), forces
   `--disable-blink-features=AutomationControlled`, and leaves user-agent rotation off by default because
   rotation itself is detectable.
+- `console` (list console messages) reads them from the DevTools protocol, so it does **not**
+  patch the page: `console.log` stays the native function and no driver-owned global appears on
+  `window`. Capture starts with the first `console` call of a session, so messages logged before it
+  are not listed — the same boundary the page-side buffer had. Enabling the CDP console domain is
+  the same family of side effect that made the base library stop sending `Runtime.enable` by
+  default, so it was measured rather than assumed: on Chrome 153.0.8010.52 the getter,
+  inherited-getter and prototype-Proxy probes on a logged object stay silent with the domain off
+  and on, while the page-side patch fails the same page's `String(console.log)` check.
+  `browser.console.capture=false` still opts out of the protocol entirely and takes that
+  page-visible patch instead.
+- Where the transport cannot enable the CDP console domain (an extension relay), the driver falls
+  back to the historical page-side buffer, which does replace `console.*` while it is active. The
+  fallback is decided once per driver and the warning names the underlying error, so it is neither
+  retried nor reported twice. A relay that accepts the command but never delivers console events
+  cannot be told apart from a page that logs nothing: `console` then prints an empty list with no
+  error, so treat an unexpectedly empty console on a relayed session as "capture unavailable",
+  not as "the page is quiet".
+- Pointer coordinates are humanised the same way the interaction delays are: the pointer move
+  that precedes a click lands within ±2 px of the element's center (clamped to the element box),
+  so repeated clicks on the same element do not hit the identical pixel. Explicit coordinates
+  passed to `mousemove` are **not** jittered — that command means "put the pointer exactly here".
+  A trusted click presses at that same hovered point instead of the element's center: Chrome moves
+  the pointer to the pressed coordinates before `mousedown`, so a press at the center would emit a
+  second `mousemove` back to the exact center and repeat the same pixel on every click. The hit
+  test is repeated at the pressed point, so the click still never lands on an overlay that covers
+  the element's edge.
+- Clicks are dispatched as **trusted** input (`Input.dispatchMouseEvent`, i.e. `event.isTrusted` is
+  true and the events carry their real coordinates) instead of synthetic DOM events. The driver
+  first verifies with a one-shot check that trusted input actually reaches the page on this
+  platform/session, and falls back to DOM dispatch when the element cannot be clicked at its own
+  coordinates (occluded by an overlay, `pointer-events: none`, inside a frame) — so the click always
+  lands on the requested element, never on whatever happens to be on top.
 - Sites with strong bot protection may still block automated sessions. When the goal is "act as the logged-in
   user", prefer the attach paths (axis 3) over launching another browser, and consider raising
   `--interact-level` (§4).
@@ -187,9 +251,12 @@ Need to drive a browser
 └─ Otherwise → default session, `open --headless <url>`
    ├─ Human must act (login/CAPTCHA/demo)? → `open --headed`
    │    (display mode is fixed at creation: `close` or `--fresh` to change it)
+   ├─ Blocked as a bot (CAPTCHA / challenge / empty body)?
+   │    → `close` → `open --headed` with the same `-s`, retry ONCE, tell the user;
+   │      if headed fails too → attach (§3), raise `--interact-level`, or report it
    ├─ Want a throwaway environment? → `--profile-mode TEMPORARY`
    └─ Page withholds data from "robots"? → raise `--interact-level`
-        (FAST → GOOD_DATA/BEST_DATA), consider headed, or switch to attach
+        (FAST → GOOD_DATA/BEST_DATA), or switch to attach
 ```
 
 ## When to Use Each
@@ -198,6 +265,7 @@ Need to drive a browser
 |---|---|---|---|
 | Routine AI-agent automation | default, or one `-s` per task when parallel | headless | managed |
 | Authenticated site with bot protection | `-s <name>` (keep the profile) | headed for the first login, else headless | `attach --extension` |
+| Headless session blocked as a bot (CAPTCHA / challenge / empty body) | same `-s <name>` so the profile survives | **headed retry once**, then stop and report | managed; attach if the retry is blocked too |
 | Human-in-the-loop (CAPTCHA, 2FA, demo) | default/named | **headed** | managed or attach |
 | Bulk extraction (hundreds–thousands of URLs) | SWARM | `HEADLESS` | managed (swarm's own contexts) |
 | Debugging a live issue / user's session | `-s debug` | n/a | `attach --cdp` |

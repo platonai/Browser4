@@ -20,6 +20,7 @@ Use this skill when you need to:
 - **Headed mode only when:**
   - The user says "show me the browser", "I want to watch", "open visibly", "headed", or "debug visually"
   - The user needs to perform a manual interaction they haven't automated
+  - The site **blocked the headless browser as a bot** (CAPTCHA, challenge/interstitial page, "unusual traffic", or an empty body where content was expected): `close`, then `open --headed <url>` with the same session, retry **once**, and tell the user that anti-bot protection forced the switch. If the headed retry is blocked too, stop and report — do not loop between modes.
 - **Do NOT default to headed mode** — it wastes resources and opens unnecessary windows
 
 ### Step 1: Navigate to the Target Page
@@ -207,6 +208,15 @@ Product: "Wireless Mouse", Price: "$29.99", Link: "/products/mouse-456"
 - Re-select the element after page updates
 - Extract data immediately after selection
 - Handle page changes by re-navigating or refreshing
+
+### Issue 6: Blocked by Bot Detection
+**Problem**: The page loads but shows a CAPTCHA, a challenge/interstitial page, "unusual traffic" text, or an empty body where content was expected
+
+**Solutions**:
+- Escalate **once**: `browser4-cli close`, then `browser4-cli open --headed <url>` with the same session and retry the step
+- Tell the user that anti-bot protection forced the switch to headed mode — never open a visible window silently
+- If the headed retry is blocked too, stop and report instead of looping; the block is usually IP/fingerprint-level
+- Prefer attaching to a real, already-authenticated browser (`attach --cdp` / `attach --extension`) or raising `--interact-level`
 
 ## Troubleshooting Guide
 

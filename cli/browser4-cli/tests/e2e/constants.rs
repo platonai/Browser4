@@ -58,6 +58,12 @@ pub const NETWORK_OK_ENDPOINT: &str = "/api/network-endpoint-ok.json";
 /// Not served by the fixture server — resolves to a 404 (fetched by the network fixture).
 pub const NETWORK_MISSING_ENDPOINT: &str = "/api/network-endpoint-missing.json";
 
+/// The console serialization probe page: it logs objects carrying getters and a Proxy prototype, so
+/// a remote client that serializes console arguments becomes observable to the page.
+pub const CONSOLE_PROBE_PATH: &str = "/console-probe";
+
+pub const CONSOLE_PROBE_TITLE: &str = "Browser4 CLI Console Probe Fixture";
+
 pub const INTERACTIVE_TITLE: &str = "Browser4 CLI Interactive Fixture";
 
 pub const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
@@ -75,6 +81,12 @@ pub const USE_MAVEN_STARTUP_ENV: &str = "BROWSER4_E2E_USE_MAVEN_STARTUP";
 pub const FORCE_REMOTE_BUNDLE_ENV: &str = "BROWSER4_E2E_FORCE_REMOTE_BUNDLE";
 
 pub const FORCE_REMOTE_BUNDLE_CLI_ENV: &str = "BROWSER4_CLI_FORCE_REMOTE_BUNDLE";
+
+/// Set in the CLI process by `--force-rebuild-bundle`; `daemon.rs` rebuilds the local runtime
+/// bundle (Maven + jlink) instead of reusing the one on disk.  The harness itself cannot rebuild
+/// the backend an already-running daemon serves, so this is the only lever that guarantees the
+/// scenarios exercise the checked-out sources.
+pub const FORCE_REBUILD_BUNDLE_CLI_ENV: &str = "BROWSER4_CLI_FORCE_REBUILD_BUNDLE";
 
 pub const LAST_FAILED_SCENARIOS_FILE: &str = "last-failed-scenarios.json";
 
@@ -103,6 +115,8 @@ pub const FRAME_OTHER_FIXTURE_FILE: &str = "frame-other.html";
 pub const FRAME_NESTED_FIXTURE_FILE: &str = "frame-nested.html";
 
 pub const FRAME_INNER_FIXTURE_FILE: &str = "frame-inner.html";
+
+pub const CONSOLE_PROBE_FIXTURE_FILE: &str = "console-probe-fixture.html";
 
 pub const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attempt
 
@@ -142,6 +156,13 @@ Execution:
   --fail-fast, -F                   Stop after the first failure
   --force-remote-bundle, -R         Download runtime bundle from remote release
                                     (sets BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1)
+  --force-rebuild-bundle            Rebuild the local runtime bundle (Maven package
+                                    + jlink) before running scenarios instead of
+                                    reusing the bundle on disk, so scenarios cannot
+                                    silently test stale backend code; a failed
+                                    rebuild aborts the run
+                                    (BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1 makes the
+                                    CLI daemon rebuild instead)
 
   --help, -h                        Print this help message
 
@@ -158,4 +179,7 @@ Environment variables:
                                bundle from GitHub (equiv. --force-remote-bundle)
   BROWSER4_CLI_FORCE_REMOTE_BUNDLE Set to 1/true/yes/on in the CLI process
                                to skip local Maven/jlink build
+  BROWSER4_CLI_FORCE_REBUILD_BUNDLE Set to 1/true/yes/on in the CLI process to
+                               rebuild the local runtime bundle (equiv.
+                               --force-rebuild-bundle; the CLI daemon reads it)
 "#;

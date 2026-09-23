@@ -154,6 +154,40 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql "
 | `--seed-file` | | string | — | File with URLs to crawl, one per line. Lines starting with `#` are comments |
 | `--depth` | `-d` | int | `1` | 0 = fetch only (no links); 1+ = follow links to that depth |
 | `--parallel` | | int | `4` | How many units (pages/tabs) to collect at the same time. `1` = strictly sequential |
+| `--timeout` | | duration | `10m` | How long the crawl may run before the server cancels it: seconds (`900`) or `30s`, `10m`, `1h`. Max `1h` |
+
+### Task budget (`--timeout`)
+
+A crawl runs under a **task budget**: one clock for the whole task, from which every
+round derives its own timeout. `--timeout` sets that budget for this crawl only; the
+server default is 10 minutes, and a request may ask for anything from 1 second to 1 hour.
+
+The budget is what makes a large crawl *end* rather than be *killed*: a seed whose round
+cannot fit in what is left is refused **before** it is submitted and reported as a lost
+page (`reason = the crawl ran out of its time budget before this URL was submitted`,
+seed status `skipped`). The accounting law therefore still holds on a truncated crawl —
+`pagesFound + failedPages.size == pagesExpected` — and the record reports the budget it
+ran under (`taskTimeoutMillis`), never the raw request.
+
+```bash
+# A bulk fetch of 200 URLs that needs longer than the 10-minute default
+browser4-cli crawl --seed-file urls.txt -d 0 --timeout 30m --refresh
+
+# Keep a pre-release check short: stop at 2 minutes and report what was left
+browser4-cli crawl --seed-file smoke.txt -d 1 --timeout 2m
+```
+
+Notes:
+
+* **A budget is a limit, not a switch.** Omit `--timeout` to use the server default; a
+  value below 1s exits non-zero (a crawl with no time at all cannot start a single
+  round), and anything above 1h is refused because the budget buys browser time.
+* **Ask for less than you need per seed.** The budget is a whole-task limit, so a very
+  large seed list needs either a larger `--timeout` or several crawls; the losses tell
+  you exactly which URLs never started.
+* **The CLI reports it either way.** `crawl result <taskId>` carries
+  `taskTimeoutMillis`, so you can see the budget a task actually ran under (including a
+  server-side clamp) without guessing.
 
 ### Parallelism (`--parallel`)
 
@@ -214,7 +248,7 @@ Notes:
 |---|---|---|---|---|
 | `--out-link-selector` | `-ol` | string | — | CSS selector to extract links from each page |
 | `--out-link-pattern` | `-olp` | regex | `.+` | Regex to filter extracted links |
-| `--top-links` | `-tl` | int | `20` | Max links extracted per page |
+| `--top-links` | `-tl` | int | `20` | Max **distinct** pages one page may contribute (repeats are removed first) |
 
 > **Git Bash / MSYS2 caveat — leading-`/` pattern values:** when you run the CLI
 > from Git Bash, argument values that start with `/` (e.g.
@@ -237,7 +271,7 @@ Notes:
 | `--page-load-timeout` | | string | Max wait per page load: seconds number (`30`) or duration (`30s`, `1m`) |
 | `--ignore-url-query` | | bool | Strip query params from **discovered out-link** hrefs (no effect on seed URLs in depth-0 bulk fetch) |
 | `--no-norm` | | bool | Disable URL normalization of **discovered out-link** hrefs (no effect on seed URLs in depth-0 bulk fetch) |
-| `--readonly` | | bool | Non-destructive mode |
+| `--readonly` | | bool | Non-destructive mode: loads may be served from the page store and are never written back. Wins over `--refresh` (see below) |
 
 ### Async flag
 
@@ -400,11 +434,19 @@ browser4-cli crawl "https://example.com" -ol "a[href]" -a "-nMaxRetry 5 -lazyFlu
 - Visited URLs are normalized: lowercase, trailing slash removed, query string
   and URL fragment always stripped for dedup purposes.
 - The same URL is never visited twice within a crawl session.
+- `--top-links` is a budget for **pages**, not anchors: the links a page offers
+  are deduplicated *before* the budget is applied, so a product linked twice
+  (image and title) or a page offered under two query strings costs one slot.
+- A fragment is never part of a queued or reported URL:
+  `product/1.html#specs` is queued — and reported — as `product/1.html`.
+- When one page is offered under several spellings, the crawl queues the first
+  one it saw (document order) and reports that spelling.
 - Fragment-only anchors (`href="#"`, `href="#section"`) can never navigate to
   a new document and are skipped during link extraction — they are not counted
   as discovered out-links.
-- Use `--ignore-url-query` to additionally strip query parameters from extracted
-  link hrefs before resolution.
+- Use `--ignore-url-query` to strip query parameters from discovered link hrefs
+  before they are queued, so the URL a result row reports is the URL that was
+  fetched.
 - Use `--no-norm` to disable LoadOptions-level normalization (does not affect
   internal dedup normalization).
 
@@ -412,6 +454,47 @@ browser4-cli crawl "https://example.com" -ol "a[href]" -a "-nMaxRetry 5 -lazyFlu
 > *discovered* during depth ≥ 1 link discovery.  Seed URLs in a depth-0 bulk
 > fetch are always fetched and reported verbatim, so these flags produce no
 > observable change there.
+
+## `--readonly` and the X-SQL second read
+
+A crawl normally forces a fresh fetch (`-refresh`) on every page it loads.  With
+`--readonly` it does not: **`--readonly` wins over `--refresh`**, and the refresh
+is dropped rather than added.
+
+The reason is the X-SQL execution engine, which reads a page **twice**:
+
+1. **before the query** — the crawl's own load of the page.  That page is frozen
+   into the local page cache under the URL the statement will resolve;
+2. **during the query** — the `load_and_select()` / `load()` UDF inside X-SQL
+   resolves the URL in the statement's FROM clause.  The statement is *sealed*
+   with `-readonly` and with every fetch-forcing option erased, so this read
+   serves the frozen copy: no network round trip, no page-store write, no cache
+   write while the query runs.
+
+The two flags cannot be combined, because `-refresh` expands to
+`-ignoreFailure -i 0s`: it makes *every* local copy look expired, so the
+read-only shortcut is missed and the UDF re-fetches the page while the query is
+still executing.  Hence the precedence: a read-only crawl loads `-readonly` and
+nothing that forces a fetch.
+
+```bash
+# Read the pages the store already holds; never write them back.
+browser4-cli crawl --seed-file urls.txt --depth 0 --readonly
+```
+
+What to expect:
+
+- A page that is **in the page store** is served from there.  The result rows
+  carry the store markers and the completion note reports how old the served
+  content is (`readonly: N/M page(s) served from the page store (stored content
+  up to … old)`).
+- A page that is **not** local is fetched (read-only is a cache-hit *preference*,
+  not a fetch prohibition) — the crawl simply does not write it back, and the
+  note says `readonly: verified fresh — all N page(s) fetched from the live
+  site`.
+- Link discovery over a stale stored page can legitimately find no out-links;
+  the empty-out-links diagnostic then explains it.  Add `--refresh` **instead
+  of** `--readonly` for a crawl that must see the live site.
 
 ## Seed files
 
@@ -433,9 +516,10 @@ prepended to the seed file list.
 - CLI-side default: 600s. Override with `BROWSER4_CLI_CRAWL_TIMEOUT_SECS` env var.
   When the CLI wait expires the crawl keeps running server-side — poll it with
   `crawl status` / `crawl result`.
-- Backend task limit: **10 minutes per crawl task**, however many seeds or levels
-  it has. A task that reaches it ends `TIMEOUT` and still reports the pages it
-  collected plus every seed it never settled (see below).
+- Backend task limit: **10 minutes per crawl task** by default (raise it per crawl with
+  `--timeout`, up to 1h), however many seeds or levels it has. A task that reaches it
+  ends `TIMEOUT` and still reports the pages it collected plus every seed it never
+  settled (see below).
 - A round (one seed URL at depth >= 1) gets the **smaller** of `5 min × depth`
   (capped at 30 min) and what the task has left minus a 30s reporting margin. It
   therefore always times out on its own terms — with its outstanding URLs
@@ -455,10 +539,11 @@ prepended to the seed file list.
 | Server error | Exits with "Crawl failed: ..." and server error details |
 | No links found (depth >= 1) | Exit 0 with a `⚠ Link discovery found no out-links` warning plus the backend diagnostic (it distinguishes "selector matched nothing" from "pattern filtered them all") and the effective `--out-link-pattern`. The seed page is always counted in depth ≥ 2 crawls, so an all-filtered crawl reports `Crawl completed. 1 pages found.` (depth-1 crawls list only discovered pages and report `0 pages found`). Inspect the warning text and verify `--out-link-selector` / `--out-link-pattern` — a shell-mangled pattern (Git Bash `/`-prefix conversion) is the usual cause |
 | Pages lost (any depth) | Exits **6** after printing a `Summary: ok: <n>, failed: <m>` line and a `⚠ N of M submitted page(s) were never delivered` warning naming each lost URL, its depth, its protocol status and the reason. The crawl is **incomplete**, not merely small: `pagesFound + failedPages.size == pagesExpected` always holds. Check `failedPages` in the JSON output. A page is lost when its fetch failed after the retry budget was exhausted, when the task was dropped/evicted, when the crawl ran out of its time budget before the URL was submitted, or when the load returned no document of its own — a zero-byte fetch, or the page store substituted for a failed fetch (`reason = the load returned no document …`; such a URL is **withheld from the listing** rather than shown as a row with an empty title). Re-run, or lower `--depth` / reduce concurrency if it repeats — a repeated loss on a many-core host usually means the target site is refusing the parallel load, so try `--parallel 2` (or `--parallel 1` to rule parallelism out entirely) |
-| Crawl hit the 10-minute task limit | The task ends `TIMEOUT` and the CLI exits non-zero ("Crawl failed: Crawl timed out while processing seeds …"). `crawl result <taskId>` still carries the accounting: the losses of the seeds that settled, plus **one lost-page row per seed whose round never returned**, reason `the server-side task limit fired while this URL was still being fetched`. The pages such a round had already published are deliberately *not* claimed — its submitted count is unknown, and claiming them would break the `pagesFound + failedPages.size == pagesExpected` invariant — so re-run those URLs. Lower `--depth`, or split the seeds across several crawls, to stay inside the limit. A seed that is refused *before* it starts reports `reason = the crawl ran out of its time budget before this URL was submitted` and a `skipped` seed status |
+| Crawl hit the task limit | The task ends `TIMEOUT` and the CLI exits non-zero ("Crawl failed: Crawl timed out while processing seeds …"). `crawl result <taskId>` still carries the accounting: the losses of the seeds that settled, plus **one lost-page row per seed whose round never returned**, reason `the server-side task limit fired while this URL was still being fetched`. The pages such a round had already published are deliberately *not* claimed — its submitted count is unknown, and claiming them would break the `pagesFound + failedPages.size == pagesExpected` invariant — so re-run those URLs. Lower `--depth`, raise `--timeout` (up to `1h`), or split the seeds across several crawls, to stay inside the limit. A seed that is refused *before* it starts reports `reason = the crawl ran out of its time budget before this URL was submitted` and a `skipped` seed status |
 | Page listed with `depth=-1` (depth >= 2) | The page was fetched and recorded, but neither the URL it was queued under nor the URL it was served from is a URL this crawl submitted (a redirect combined with a `<base href>`). It is listed with `depth=-1`, counted in `pagesFound`, **not** reported as lost, and **not** expanded (`-1` is never read as depth 0). A single such row is a labelling gap; if every row has it, the site rewrites its document base URI and the listing depths are not meaningful — use `--depth 1`, or report it |
 | Invalid --format | Exits with "Invalid --format '...'. Expected: json, csv, or table" |
 | Invalid --parallel | Exits with "Invalid --parallel value '...'" — accepts a positive integer up to 32; `0` is rejected with the `--parallel 1` hint, and anything above 32 is refused by the server (HTTP 400) |
+| Invalid --timeout | Exits with "Invalid --timeout value '...'" — accepts seconds (`900`) or a duration (`30s`, `10m`, `1h`); below `1s` and above `1h` are both refused before the crawl is submitted |
 | X-SQL failure on one page | Page logged with error; other pages continue normally — the crawl still completes, but the run exits 6 (see below) |
 
 **Partial failures exit 6.** When the CLI polls a crawl to a terminal state, a run
@@ -490,8 +575,8 @@ subcommands manage and monitor the task afterwards.
 
 | Subcommand | What it does |
 |---|---|
-| `crawl status <task-id>` | One-line summary plus the raw record: CREATED, PROCESSING or completed (OK), pages found so far, and any error information |
-| `crawl result <task-id>` | The task's current record — page listing (without `--sql`) or extracted data (with `--sql`).  A task still PROCESSING returns its partial record with `status: PROCESSING` and the CLI hints that it is not yet terminal, so `result` and `status` both work as a poll |
+| `crawl status <task-id>` | One-line summary plus the raw record: `Created` / `Processing` / `OK`, pages found so far, and any error information |
+| `crawl result <task-id>` | The task's current record — page listing (without `--sql`) or extracted data (with `--sql`).  A task still `Processing` returns its partial record with `status: Processing` and the CLI hints that it is not yet terminal, so `result` and `status` both work as a poll |
 | `crawl cancel <task-id>` | Cancel a running or queued task; it transitions to TIMEOUT and stays visible in `crawl list` until cleared or expired by TTL.  `{"cancelled": false}` means no running worker was found — the record is still queryable |
 | `crawl clear` | Remove completed, cancelled and failed tasks from the store; running tasks are not affected |
 | `crawl list` | List all tracked crawl tasks across all sessions |
@@ -503,6 +588,19 @@ browser4-cli crawl cancel <task-id>
 browser4-cli crawl clear
 browser4-cli crawl list --limit 20
 ```
+
+The wire values are `ResourceStatus` display text — `Created`, `Processing`, `OK`,
+`Request Timeout`, `Internal Server Error`, `Not Found` (one vocabulary, defined
+by `CrawlStatus` on the backend).  The CLI maps them to lifecycle labels:
+`queued`, `processing`, `completed`, `failed (timeout)`, `failed (error)`,
+`failed (not found)`.
+
+> **While a task runs, the progress counts only grow.**  `pagesFound` counts
+> every page collected so far across *all* seeds (not just the seed that reported
+> last), and `pagesExpected` / `failedPages` never fall back once reported — a
+> poller can treat a decrease as a bug.  Note that `pagesExpected` covers the
+> seeds that have already finished, so on a multi-seed crawl it climbs as seeds
+> settle rather than being the final total from the start.
 
 `crawl list` flags:
 

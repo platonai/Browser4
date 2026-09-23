@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.fail
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.mock
@@ -201,11 +202,14 @@ class Browser4WebDriverTest {
     }
 
     // -------------------------------------------------------------------------
-    // consoleMessagesJs / consoleClearJs
+    // The page-side console builders — FALLBACK ONLY.
+    // The console path is the CDP capture (Browser4WebDriverConsoleCaptureTest and the
+    // test_e2e_console_capture_* scenarios); these builders are evaluated only when the transport
+    // cannot enable the Console domain, or when browser.console.capture=false.
     // -------------------------------------------------------------------------
 
     @Test
-    @DisplayName("consoleMessagesJs embeds the level filter and the buffer")
+    @DisplayName("the page-side fallback embeds the level filter and its own buffer")
     fun consoleMessagesJsEmbedsLevelAndBuffer() {
         val js = Browser4WebDriver.consoleMessagesJs("error")
         assertTrue(js.contains("minPriority['error']"), "expected level embedding: $js")
@@ -213,7 +217,7 @@ class Browser4WebDriverTest {
     }
 
     @Test
-    @DisplayName("consoleClearJs clears the buffer")
+    @DisplayName("the page-side fallback clears its own buffer")
     fun consoleClearJsClearsBuffer() {
         assertTrue(Browser4WebDriver.consoleClearJs().contains("window.__b4_console = []"))
     }
@@ -496,6 +500,106 @@ class Browser4WebDriverTest {
     }
 
     @Test
+    @DisplayName("parseDragCenter reads the element box and defaults it to zero")
+    fun parseDragCenterReadsElementBox() {
+        val boxed = Browser4WebDriver.parseDragCenter(
+            """{"x":10,"y":20,"cssPath":"button#go","inFrame":false,"vw":1280,"vh":900,"w":96.5,"h":32}"""
+        )
+        assertEquals(96.5, boxed?.width)
+        assertEquals(32.0, boxed?.height)
+
+        val unboxed = Browser4WebDriver.parseDragCenter("""{"x":10,"y":20,"cssPath":"button#go"}""")
+        assertEquals(0.0, unboxed?.width)
+        assertEquals(0.0, unboxed?.height)
+    }
+
+    @Test
+    @DisplayName("dragCenterJs reports the element box for jitter clamping")
+    fun dragCenterJsReportsElementBox() {
+        val js = Browser4WebDriver.dragCenterJs()
+        assertTrue(js.contains("w: r.width"), "expected the element width: $js")
+        assertTrue(js.contains("h: r.height"), "expected the element height: $js")
+    }
+
+    // -------------------------------------------------------------------------
+    // Pointer jitter (click-family pointer moves)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("jitteredPointerPosition stays inside a large element")
+    fun jitteredPointerPositionStaysInsideLargeElement() {
+        // 200x40 element: the full ±2 px jitter is allowed (half of 40 px minus the 1 px inset).
+        val (x, y) = Browser4WebDriver.jitteredPointerPosition(100.0, 50.0, 200.0, 40.0) { range ->
+            assertEquals(Browser4WebDriver.POINTER_JITTER_PX, range)
+            -range
+        }
+        assertEquals(98.0, x)
+        assertEquals(48.0, y)
+    }
+
+    @Test
+    @DisplayName("jitteredPointerPosition shrinks the offset for a small element")
+    fun jitteredPointerPositionShrinksOffsetForSmallElement() {
+        // 4x4 element: half of the box minus the 1 px inset leaves 1 px instead of 2 px.
+        val (x, y) = Browser4WebDriver.jitteredPointerPosition(10.0, 10.0, 4.0, 4.0) { range ->
+            assertEquals(1.0, range)
+            range
+        }
+        assertEquals(11.0, x)
+        assertEquals(11.0, y)
+    }
+
+    @Test
+    @DisplayName("jitteredPointerPosition keeps the exact center when the box is unknown")
+    fun jitteredPointerPositionKeepsCenterWithoutBox() {
+        val (x, y) = Browser4WebDriver.jitteredPointerPosition(7.0, 9.0, 0.0, 0.0) { range ->
+            fail("no offset may be drawn without an element box, got range=$range")
+        }
+        assertEquals(7.0, x)
+        assertEquals(9.0, y)
+    }
+
+    @Test
+    @DisplayName("jitteredPointerPosition never leaves the element box")
+    fun jitteredPointerPositionNeverLeavesTheBox() {
+        val boxes = listOf(
+            200.0 to 40.0,
+            13.0 to 13.0,
+            6.0 to 6.0,
+            5.0 to 40.0,
+            1000.0 to 8.0,
+        )
+
+        boxes.forEach { (width, height) ->
+            repeat(200) {
+                val (x, y) = Browser4WebDriver.jitteredPointerPosition(500.0, 500.0, width, height)
+                assertTrue(
+                    x >= 500.0 - width / 2 && x <= 500.0 + width / 2,
+                    "x=$x escaped a ${width}x$height box",
+                )
+                assertTrue(
+                    y >= 500.0 - height / 2 && y <= 500.0 + height / 2,
+                    "y=$y escaped a ${width}x$height box",
+                )
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("jitteredPointerPosition varies between calls")
+    fun jitteredPointerPositionVariesBetweenCalls() {
+        val positions = (1..20).map { Browser4WebDriver.jitteredPointerPosition(100.0, 100.0, 200.0, 40.0) }
+        assertTrue(positions.any { it != positions.first() }, "the pointer position must not be constant")
+        positions.forEach {
+            assertTrue(
+                kotlin.math.abs(it.first - 100.0) <= Browser4WebDriver.POINTER_JITTER_PX &&
+                    kotlin.math.abs(it.second - 100.0) <= Browser4WebDriver.POINTER_JITTER_PX,
+                "offset out of range: $it",
+            )
+        }
+    }
+
+    @Test
     @DisplayName("dragCenterJs resolves center, css path, frame residency and viewport")
     fun dragCenterJsContainsResolutionLogic() {
         val js = Browser4WebDriver.dragCenterJs()
@@ -506,6 +610,80 @@ class Browser4WebDriverTest {
         assertTrue(js.contains("cssPath: path.join(' > ')"), "expected css path output: $js")
         assertTrue(js.contains("vw: window.innerWidth"), "expected viewport width output: $js")
         assertTrue(js.contains("vh: window.innerHeight"), "expected viewport height output: $js")
+        assertTrue(js.contains("document.elementFromPoint"), "expected the hit test: $js")
+    }
+
+    @Test
+    @DisplayName("hitTestJs repeats the hit test at the pressed point")
+    fun hitTestJsRepeatsTheHitTestAtThePressedPoint() {
+        val js = Browser4WebDriver.hitTestJs(center(270.0, 321.0))
+        assertTrue(js.contains("querySelector('button#go')"), "expected the element lookup: $js")
+        assertTrue(js.contains("document.elementFromPoint(270.0, 321.0)"), "expected the pressed point: $js")
+        assertTrue(js.contains("el.contains(at)"), "expected the containment fallback: $js")
+
+        val quoted = Browser4WebDriver.hitTestJs(
+            Browser4WebDriver.DragCenter(1.0, 2.0, "div[data-x='a']", false, 0, 0)
+        )
+        assertTrue(
+            quoted.contains("""querySelector('div[data-x=\'a\']')"""),
+            "expected the CSS path to be escaped for the JS literal: $quoted"
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // Trusted clicks (CDP input instead of synthetic DOM events)
+    // -------------------------------------------------------------------------
+
+    private fun center(x: Double, y: Double, inFrame: Boolean = false, hit: Boolean = true) =
+        Browser4WebDriver.DragCenter(x, y, "button#go", inFrame, 1280, 900, hit = hit)
+
+    @Test
+    @DisplayName("canClickWithTrustedInput accepts an unobstructed main-frame element")
+    fun canClickWithTrustedInputAcceptsUnobstructedElement() {
+        assertTrue(Browser4WebDriver.canClickWithTrustedInput(center(10.0, 20.0)))
+    }
+
+    @Test
+    @DisplayName("canClickWithTrustedInput rejects unresolvable, frame-resident and occluded targets")
+    fun canClickWithTrustedInputRejectsUnusableTargets() {
+        assertFalse(Browser4WebDriver.canClickWithTrustedInput(null), "an unresolved element cannot be clicked")
+        assertFalse(
+            Browser4WebDriver.canClickWithTrustedInput(center(10.0, 20.0, inFrame = true)),
+            "frame coordinates are not main-frame viewport coordinates",
+        )
+        assertFalse(
+            Browser4WebDriver.canClickWithTrustedInput(center(10.0, 20.0, hit = false)),
+            "a trusted click on an occluded point would hit whatever is on top",
+        )
+    }
+
+    @Test
+    @DisplayName("parseDragCenter reports whether the element is hit at its center")
+    fun parseDragCenterReadsHitTest() {
+        val hit = Browser4WebDriver.parseDragCenter("""{"x":1,"y":2,"cssPath":"button#go","hit":true}""")
+        assertTrue(hit?.hit == true, "expected hit=true, got $hit")
+
+        val missed = Browser4WebDriver.parseDragCenter("""{"x":1,"y":2,"cssPath":"button#go","hit":false}""")
+        assertTrue(missed?.hit == false, "expected hit=false, got $missed")
+
+        val unreported = Browser4WebDriver.parseDragCenter("""{"x":1,"y":2,"cssPath":"button#go"}""")
+        assertTrue(unreported?.hit == false, "an old payload without a hit test must not be clickable: $unreported")
+    }
+
+    @Test
+    @DisplayName("the trusted-click probe is installed hidden and removed again")
+    fun trustedClickProbeIsHiddenAndRemoved() {
+        val install = Browser4WebDriver.trustedClickProbeInstallJs()
+        assertTrue(install.contains("Object.defineProperty"), "expected defineProperty: $install")
+        assertTrue(install.contains("enumerable: false"), "the probe must be hidden from window enumeration: $install")
+        assertTrue(install.contains("addEventListener"), "expected capture-phase listeners: $install")
+        assertTrue(install.contains("event.isTrusted"), "expected the trust flag: $install")
+
+        val read = Browser4WebDriver.trustedClickProbeReadJs()
+        assertTrue(read.contains("removeEventListener"), "the probe must remove its listeners: $read")
+        assertTrue(read.contains("'trusted'"), "expected the trusted outcome: $read")
+        assertTrue(read.contains("'none'"), "expected the not-delivered outcome: $read")
+        assertTrue(read.contains("'missing'"), "expected the tampered outcome: $read")
     }
 
     @Test

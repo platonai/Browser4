@@ -1,7 +1,6 @@
 package ai.platon.pulsar.rest.api.service.crawl
 
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
-import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.PulsarSettings
@@ -54,11 +53,7 @@ class CrawlService(
 
     /** Terminal task states: OK, TIMEOUT, ERROR.  Tasks in these states are
      *  purgeable, clearable, and never re-finalized by a late cancellation. */
-    private val terminalStatuses = setOf(
-        ResourceStatus.getStatusText(ResourceStatus.SC_OK),
-        ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-        ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
-    )
+    private val terminalStatuses = CrawlStatus.TERMINAL
 
     internal val persistence = JsonlPersistence(
         file = crawlPersistencePath(),
@@ -66,34 +61,28 @@ class CrawlService(
         objectMapper = pulsarObjectMapper()
     )
 
-    /**
-     * Where a running round publishes what it collected.  Declared before the
-     * [roundRunner] that reports through it: the runner is handed a sink, not a
-     * reference to the service, so a round never reaches into the task store.
-     */
-    private val progressSink: CrawlProgressSink = object : CrawlProgressSink {
-        override fun publishPages(
-            taskId: String,
-            pages: List<CrawlPageResult>,
-            linksDiscovered: Int,
-            diagnostic: String?
-        ) = publishIncremental(taskId, pages, linksDiscovered, diagnostic)
-
-        override fun publishDiagnostic(taskId: String, diagnostic: String) {
-            // A round that produced no page at all: the diagnostic *is* the
-            // result.  In-memory only — there is no terminal state to persist
-            // yet, and the terminal write of the crawl replaces this record.
-            taskStore.put(taskId, CrawlResponse(
-                taskId = taskId,
-                status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
-                pagesFound = 0,
-                diagnostic = diagnostic
-            ))
-        }
-    }
-
     /** Executes one round of a crawl; stateless, so it is shared by all tasks. */
-    private val roundRunner = CrawlRoundRunner(sessionManager, progressSink)
+    private val roundRunner = CrawlRoundRunner(sessionManager)
+
+    /**
+     * Where one seed round publishes what it collected.
+     *
+     * Bound to its task and its seed index, because a publish is a
+     * read-modify-write of the task record *and* of that round's slice of the
+     * in-flight page view — both under the task's [CrawlTaskContext.publishLock],
+     * which a shared, id-keyed sink could not take.
+     */
+    private inner class SeedProgressSink(
+        private val task: CrawlTaskContext,
+        private val seedIndex: Int,
+    ) : CrawlProgressSink {
+
+        override fun publishPages(pages: List<CrawlPageResult>, linksDiscovered: Int, diagnostic: String?) =
+            publishInFlight(task, seedIndex, pages, linksDiscovered, diagnostic)
+
+        override fun publishDiagnostic(diagnostic: String) =
+            publishInFlight(task, seedIndex, emptyList(), task.linksDiscovered.get(), diagnostic)
+    }
 
     @EventListener(ApplicationReadyEvent::class)
     fun restoreFromDisk() {
@@ -175,6 +164,19 @@ class CrawlService(
         return budget.coerceIn(1, MAX_PARALLEL_TABS)
     }
 
+    /**
+     * Resolve the task budget for one crawl from its request.
+     *
+     * [taskTimeoutMillis] is the server's default — what a request that asks for nothing runs
+     * under.  A request may ask for its own, clamped to the per-request range
+     * ([resolveRequestTaskTimeout]); the effective value is what the task arms its clock with,
+     * what every round derives its own timeout from, and what
+     * [CrawlResponse.taskTimeoutMillis] reports, so a clamp is visible to the caller instead of
+     * being a silent difference between what it asked for and what it got.
+     */
+    fun resolveTaskTimeoutMillis(request: CrawlRequest): Long =
+        resolveRequestTaskTimeout(request.taskTimeoutMillis, taskTimeoutMillis)
+
     init {
         // Periodically purge expired tasks so stale entries don't accumulate
         crawlScope.launch {
@@ -198,7 +200,7 @@ class CrawlService(
         val taskId = UUID.randomUUID().toString()
         val response = CrawlResponse(
             taskId = taskId,
-            status = ResourceStatus.getStatusText(ResourceStatus.SC_CREATED)
+            status = CrawlStatus.CREATED
         )
         taskStore.put(taskId, response)
         onStatusChanged(response)
@@ -209,14 +211,15 @@ class CrawlService(
             return taskId
         }
 
-        // The parallelism budget is resolved once, before the worker starts, so
-        // every branch of the worker — including its terminal timeout/error
-        // records — reports the same budget the crawl actually ran under.
+        // The parallelism budget and the task budget are resolved once, before the worker
+        // starts, so every branch of the worker — including its terminal timeout/error
+        // records — reports the same values the crawl actually ran under.
         val task = CrawlTaskContext(
             taskId = taskId,
             request = request,
             seedUrls = seedUrls,
-            parallelTabs = resolveParallelTabs(request)
+            parallelTabs = resolveParallelTabs(request),
+            taskTimeoutMillis = resolveTaskTimeoutMillis(request)
         )
 
         val job = crawlScope.launch { runCrawlTask(task) }
@@ -224,8 +227,8 @@ class CrawlService(
         jobStore[taskId] = job
 
         logger.info(
-            "Crawl task submitted: {} seeds={} depth={} parallelTabs={}",
-            taskId, seedUrls.size, request.depth, task.parallelTabs
+            "Crawl task submitted: {} seeds={} depth={} parallelTabs={} budget={}ms",
+            taskId, seedUrls.size, request.depth, task.parallelTabs, task.taskTimeoutMillis
         )
         return taskId
     }
@@ -251,7 +254,7 @@ class CrawlService(
         val now = Instant.now()
         val errorResponse = CrawlResponse(
             taskId = taskId,
-            status = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+            status = CrawlStatus.INTERNAL_SERVER_ERROR,
             error = "No URLs provided",
             startedTime = now,
             finishTime = now
@@ -275,7 +278,7 @@ class CrawlService(
             markProcessing(task)
             // Arm the task clock together with the task-level limit, so a round's
             // derived budget and the limit itself measure exactly the same span.
-            val taskLimitMs = taskTimeoutMillis
+            val taskLimitMs = task.taskTimeoutMillis
             task.armBudget(taskLimitMs)
             val collected = withTimeout(taskLimitMs.milliseconds) { collectSeeds(task) }
             writeCompleted(task, collected)
@@ -289,15 +292,15 @@ class CrawlService(
     }
 
     /**
-     * Mark the task as "PROCESSING" as soon as the worker picks it up.
-     * Without this, the CLI sees "CREATED" for the entire duration of the crawl
-     * (which can be 80-100s for many URLs), making it appear as if nothing is
-     * happening.
+     * Mark the task as [CrawlStatus.PROCESSING] as soon as the worker picks it up.
+     * Without this, the CLI sees [CrawlStatus.CREATED] for the entire duration of
+     * the crawl (which can be 80-100s for many URLs), making it appear as if
+     * nothing is happening.
      */
     private fun markProcessing(task: CrawlTaskContext) {
         val processing = CrawlResponse(
             taskId = task.taskId,
-            status = "PROCESSING",
+            status = CrawlStatus.PROCESSING,
             pagesFound = 0,
             startedTime = Instant.now()
         )
@@ -418,7 +421,7 @@ class CrawlService(
             val remainingBudgetMs = task.remainingBudgetMs()
             if (!hasBudgetForRound(remainingBudgetMs)) {
                 val reason = "$REASON_BUDGET_EXHAUSTED " +
-                    "(${remainingBudgetMs}ms of the ${taskTimeoutMillis}ms task budget left)"
+                    "(${remainingBudgetMs}ms of the ${task.taskTimeoutMillis}ms task budget left)"
                 logger.warn(
                     "Crawl {}: seed URL {}/{} '{}' was not started — {}",
                     task.taskId, index + 1, task.seedUrls.size, seedUrl, reason
@@ -434,6 +437,10 @@ class CrawlService(
             // they can actually meet.  Depth=0 is a single blocking load, which no
             // suspend timeout can interrupt — the task limit is its bound.
             val roundTimeoutMs = resolveRoundTimeoutMs(seedRequest.depth, remainingBudgetMs)
+            // One sink per seed round: it carries the task (and its publish lock),
+            // so this round's progress is merged into the crawl's record under
+            // that lock instead of racing the seed bookkeeping.
+            val seedProgress = SeedProgressSink(task, index)
             val fetched = when {
                 // Depth=0 is bulk fetch: one URL, no link
                 // discovery, so its pages are its whole round.
@@ -441,10 +448,10 @@ class CrawlService(
                     pages = roundRunner.crawlDepth0(task.taskId, seedRequest, sharedDepth0Session)
                 )
                 seedRequest.depth <= 1 -> roundRunner.crawlDepth1(
-                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs
+                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs, seedProgress
                 )
                 else -> roundRunner.crawlDepthN(
-                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs
+                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs, seedProgress
                 )
             }
             logger.info(
@@ -505,17 +512,25 @@ class CrawlService(
      * is deferred until the crawl completes to avoid writing
      * intermediate states.  Concurrent seeds publish under a lock so
      * a reader never sees a half-written record.
+     *
+     * The pages it reports are the crawl's aggregate view, not only this seed's:
+     * the rounds that are still running have published their own pages, and the
+     * count a poller sees must never fall back when the next seed starts.
      */
     private fun recordSeedProgress(task: CrawlTaskContext, index: Int, round: CrawlRound, status: CrawlSeedStatus) {
         synchronized(task.publishLock) {
             task.seedRounds[index] = round
             task.seedStatuses[index] = status
+            // The settled round confirms what its publishes reported; recording it
+            // here keeps the aggregate complete even for a round that never
+            // published (a depth-0 seed collects without reporting page by page).
+            task.publishedPages[index] = round.pages
             val settled = task.seedRounds.filterNotNull()
-            val pages = settled.flatMap { it.pages }
+            val pages = aggregateInFlightPages(task.publishedPages)
             val currentResult = taskStore.getIfPresent(task.taskId)
             val incrementalResponse = CrawlResponse(
                 taskId = task.taskId,
-                status = "PROCESSING",
+                status = CrawlStatus.PROCESSING,
                 pagesFound = pages.size,
                 linksDiscovered = task.linksDiscovered.get(),
                 pages = pages,
@@ -530,6 +545,7 @@ class CrawlService(
                 // so a poller can tell a slow serial crawl from a
                 // fast parallel one.
                 parallelTabs = task.parallelTabs,
+                taskTimeoutMillis = task.taskTimeoutMillis,
                 maxConcurrentFetches = task.peakInFlight.get()
             )
             taskStore.put(task.taskId, incrementalResponse)
@@ -563,9 +579,9 @@ class CrawlService(
         val completed = CrawlResponse(
             taskId = task.taskId,
             status = if (timedOut != null) {
-                ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT)
+                CrawlStatus.REQUEST_TIMEOUT
             } else {
-                ResourceStatus.getStatusText(ResourceStatus.SC_OK)
+                CrawlStatus.OK
             },
             pagesFound = allPages.size,
             linksDiscovered = task.linksDiscovered.get(),
@@ -582,6 +598,7 @@ class CrawlService(
             failedPages = failedPages.takeIf { it.isNotEmpty() },
             pagesExpected = pagesExpected,
             parallelTabs = task.parallelTabs,
+            taskTimeoutMillis = task.taskTimeoutMillis,
             maxConcurrentFetches = task.peakInFlight.get()
         )
         taskStore.put(task.taskId, completed)
@@ -651,10 +668,10 @@ class CrawlService(
             val lossNote = buildLossNote(snapshot.pages.size, snapshot.pagesExpected, failedPages)
             val timedOut = CrawlResponse(
                 taskId = task.taskId,
-                status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+                status = CrawlStatus.REQUEST_TIMEOUT,
                 error = if (timedOutByTaskLimit) {
                     "Crawl timed out while processing seeds (server-side limit of " +
-                        "${taskTimeoutMillis / 1000}s exceeded). Partial results below."
+                        "${task.taskTimeoutMillis / 1000}s exceeded). Partial results below."
                 } else {
                     "Crawl cancelled or timed out"
                 },
@@ -673,6 +690,7 @@ class CrawlService(
                 // running under and the overlap it achieved, so the
                 // partial result says "how" as well as "how much".
                 parallelTabs = existing?.parallelTabs ?: task.parallelTabs,
+                taskTimeoutMillis = existing?.taskTimeoutMillis ?: task.taskTimeoutMillis,
                 maxConcurrentFetches = maxOf(existing?.maxConcurrentFetches ?: 0, task.peakInFlight.get()),
                 startedTime = existing?.startedTime ?: now,
                 finishTime = now
@@ -694,9 +712,10 @@ class CrawlService(
         val now = Instant.now()
         val failed = CrawlResponse(
             taskId = task.taskId,
-            status = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+            status = CrawlStatus.INTERNAL_SERVER_ERROR,
             error = e.message ?: "Unknown error",
             parallelTabs = task.parallelTabs,
+            taskTimeoutMillis = task.taskTimeoutMillis,
             maxConcurrentFetches = task.peakInFlight.get(),
             startedTime = existing?.startedTime ?: now,
             finishTime = now
@@ -707,37 +726,45 @@ class CrawlService(
     }
 
     /**
-     * Publish an in-memory progress snapshot to the task store so the CLI poll
-     * loop sees real page counts while the crawl is still running.  In-memory
-     * only — persistence is deferred until the crawl reaches a terminal state.
+     * Add one round's publish to the in-flight record of a running crawl.
      *
-     * The publish *adds to* the current record rather than replacing it (see
-     * [mergeIncrementalProgress]): the losses and expected totals of the seeds
-     * that already settled stay visible, and a task that has already been
-     * finalized is never moved back to PROCESSING by a parse handler that
-     * outlived it.
+     * The record is the crawl's *aggregate* view: the pages of every round that
+     * has published so far ([aggregateInFlightPages]), merged into what the
+     * settled seeds have already reported.  Publishing only the round's own pages
+     * made the count fall back — a poller watched 3 pages become 1 when the next
+     * seed's round published its first page.
+     *
+     * Both publishers ([SeedProgressSink] and [recordSeedProgress]) take
+     * [CrawlTaskContext.publishLock], so the read-modify-write cannot lose a
+     * contribution from the other one.  In-memory only: persistence is deferred
+     * until the crawl reaches a terminal state.
      */
-    private fun publishIncremental(
-        taskId: String,
+    private fun publishInFlight(
+        task: CrawlTaskContext,
+        seedIndex: Int,
         pages: List<CrawlPageResult>,
         linksDiscovered: Int,
         diagnostic: String? = null
     ) {
-        val previous = taskStore.getIfPresent(taskId)
-        val merged = mergeIncrementalProgress(
-            taskId, previous, pages, linksDiscovered, diagnostic, terminalStatuses
-        )
-        if (merged == null) {
-            // The task is finished (round timeout, cancellation, completion) while
-            // a parse handler is still running.  Reviving it would leave the poller
-            // waiting for a record nobody will ever finalize again.
-            logger.debug(
-                "Crawl {}: dropping an incremental publish — the task is already terminal ({})",
-                taskId, previous?.status
+        synchronized(task.publishLock) {
+            task.publishedPages[seedIndex] = pages
+            val aggregated = aggregateInFlightPages(task.publishedPages)
+            val previous = taskStore.getIfPresent(task.taskId)
+            val merged = mergeIncrementalProgress(
+                task.taskId, previous, aggregated, linksDiscovered, diagnostic, terminalStatuses
             )
-            return
+            if (merged == null) {
+                // The task is finished (round timeout, cancellation, completion)
+                // while a parse handler is still running.  Reviving it would leave
+                // the poller waiting for a record nobody will ever finalize again.
+                logger.debug(
+                    "Crawl {}: dropping an incremental publish — the task is already terminal ({})",
+                    task.taskId, previous?.status
+                )
+                return
+            }
+            taskStore.put(task.taskId, merged)
         }
-        taskStore.put(taskId, merged)
     }
 
     /**
@@ -761,9 +788,10 @@ class CrawlService(
         val previous = taskStore.getIfPresent(taskId)
         val cancelled = CrawlResponse(
             taskId = taskId,
-            status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+            status = CrawlStatus.REQUEST_TIMEOUT,
             error = "Cancelled by user",
             parallelTabs = previous?.parallelTabs ?: 0,
+            taskTimeoutMillis = previous?.taskTimeoutMillis ?: 0,
             maxConcurrentFetches = previous?.maxConcurrentFetches ?: 0,
             startedTime = previous?.startedTime ?: now,
             finishTime = now
@@ -849,7 +877,7 @@ class CrawlService(
     fun getResult(taskId: String): CrawlResponse {
         return taskStore.getIfPresent(taskId) ?: CrawlResponse(
             taskId = taskId,
-            status = ResourceStatus.getStatusText(ResourceStatus.SC_NOT_FOUND),
+            status = CrawlStatus.NOT_FOUND,
             error = "Task not found: $taskId"
         )
     }
@@ -865,6 +893,12 @@ class CrawlService(
         val request: CrawlRequest,
         val seedUrls: List<String>,
         val parallelTabs: Int,
+        /**
+         * The task budget this crawl runs under (ms), resolved from its request once — the
+         * clock it arms, the limit every round derives its own timeout from, and the value
+         * the terminal record reports (see [resolveTaskTimeoutMillis]).
+         */
+        val taskTimeoutMillis: Long,
     ) {
         // Out-links discovered beyond the seed URLs (depth>=1 crawls),
         // aggregated across seeds.  Kept separate from the result size so a
@@ -884,6 +918,20 @@ class CrawlService(
         // concurrently (see [mapCrawlSeedsConcurrently]).
         val seedRounds: Array<CrawlRound?> = arrayOfNulls(seedUrls.size)
         val seedStatuses: Array<CrawlSeedStatus?> = arrayOfNulls(seedUrls.size)
+
+        /**
+         * The pages each seed round has published so far, by seed index.
+         *
+         * The in-flight record is derived from this map, so it is the crawl's
+         * aggregate view of what it has collected: every round's latest publish
+         * replaces its own earlier one (a round only ever grows), and the record
+         * reports all of them (see [aggregateInFlightPages]).
+         *
+         * Guarded by [publishLock] — the publishers are the rounds' parse handlers
+         * (one per seed) and [CrawlService.recordSeedProgress], and all of them
+         * read-modify-write the same task record.
+         */
+        val publishedPages = mutableMapOf<Int, List<CrawlPageResult>>()
 
         /** Serializes the progress publishers so a poller never reads a half-written record. */
         val publishLock = Any()

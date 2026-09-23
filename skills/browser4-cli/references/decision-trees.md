@@ -20,30 +20,34 @@ tier: decision
 
 **Rule of thumb:** If you want to **interact** with elements → `snapshot`. If you want to **read content** → `htmlsnapshot`.
 
-> **⚠️ htmlsnapshot capture requirements — which commands need a prior capture:**
+> **⚠️ htmlsnapshot reads the LIVE page — no prior capture required:**
 
-| Command | Needs prior `htmlsnapshot` capture? | Notes |
-|---------|-------------------------------------|-------|
-| `htmlsnapshot` (capture) | — (this IS the capture) | Stores the page's initial HTML for later extraction |
-| `htmlsnapshot get` / `get all` | **Yes** — requires stored snapshot | Extracts text/html/attr via CSS selectors from the stored HTML |
-| `htmlsnapshot inspect` | **Yes** — requires stored snapshot | Iterates CSS selectors from the stored HTML; returns "No HTML snapshot found" if missing |
-| `htmlsnapshot summary` | **Yes** — requires stored snapshot | Statistical summary of selectors on the stored page |
-| `htmlsnapshot grep` | **Yes** — requires stored snapshot | Regex search over the stored HTML |
-| `htmlsnapshot export` | **Yes** — requires stored snapshot | Exports the stored HTML to a file |
+| Command | Needs prior capture? | Notes |
+|---------|----------------------|-------|
+| `htmlsnapshot` (capture) | — (this IS the capture) | Stores the page HTML + returns page metadata; optional |
+| `htmlsnapshot get` / `get all` | **No** — live DOM | `text` / `textcontent` / `html` / `attr` via CSS selectors, from the live page |
+| `htmlsnapshot inspect` | **No** — live DOM | Recurring-pattern / selector discovery over the live page |
+| `htmlsnapshot summary` | **No** — live DOM | Visual-clustering page summary of the live page |
+| `htmlsnapshot grep` | **No** — live DOM | Regex search over the live page's HTML |
+| `htmlsnapshot export` | **No** — live DOM | Exports the live page's HTML to a file |
 | `htmlsnapshot query` | **No** — no capture needed | Current page → queries the session's **live DOM** (seeded before the SQL runs; login/SPA state visible). Other URLs → independent webdb load, no session state |
 
-> **If you get "No HTML snapshot found" or a timeout:** either run `htmlsnapshot` first to capture, or use `htmlsnapshot query` — it needs no prior capture (current page reads the live DOM; an explicit URL is fetched independently).
+> The real precondition is a **loaded page** (navigable http(s)/file document in the active tab).
+> If a read comes back empty, check the selector and the current URL — capturing first changes nothing.
+>
+> **"No HTML snapshot found"** is not an error: it is a CLI hint printed when `inspect` finds 0 matches
+> with the default `:root` selector (exit code stays 0).
 
-> **⚠️ Important:** `htmlsnapshot` captures the **current live DOM** at capture time. Content added or modified by JavaScript before the capture (form submission results, dynamic updates, SPA route changes) **is reflected** — but only if you run `htmlsnapshot` (capture) *after* the interaction. The stored snapshot becomes stale only if you do not re-capture after a navigation or interaction. For one-off live reads without a capture step, use `eval`.
+> **⚠️ Important:** a `htmlsnapshot` capture reflects the live DOM **at capture time** — content added or modified by JavaScript before the capture (form submission results, dynamic updates, SPA route changes) is included. The read commands do not depend on that copy: the stored capture is the thing that goes stale after a navigation or interaction. For one-off live reads without a capture step, use `get text "<selector>"` or `eval`.
 
 ## Decision Tree
 
 ```
 Need to extract data from a page?
 ├─ Need to interact first (click, fill, scroll)?
-│  → snapshot + refs, then re-capture htmlsnapshot after interacting, then extract
+│  → snapshot + refs, then extract from the live DOM (reads need no capture)
 ├─ Page has JS-updated content (after interaction, form submit, SPA)?
-│  → eval --json for live DOM (use --stdin or --file on Windows)
+│  → the read commands already see the live DOM; `eval --json` for arbitrary JS (use --stdin or --file on Windows, --await for Promises)
 ├─ Static page, one field? → htmlsnapshot get text "<selector>"
 ├─ Static page, one field, ALL matches? → htmlsnapshot get all text "<selector>"
 ├─ Don't know the right CSS selector?
@@ -54,7 +58,7 @@ Need to extract data from a page?
 │   discovery tools, not `get`)
 ├─ Static page, multiple correlated fields (title+price+url per item)?
 │  → htmlsnapshot query with X-SQL DOM_LOAD_AND_SELECT
-├─ Dynamic/complex JS logic needed? → eval --json
+├─ Dynamic/complex JS logic needed? → eval --json (--await for Promises/fetch, --wait-selector for late-rendered content)
 ├─ Natural language ("find the product price")? → extract (needs LLM key)
 └─ High volume, many pages? → crawl or swarm with --sql
 ```

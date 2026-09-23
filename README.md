@@ -257,7 +257,7 @@ These flags can appear before any command.
 | Tool | Best for | Input model | Output model |
 |---|---|---|---|
 | `snapshot` | clicking, typing, finding interactive elements | live accessibility tree | refs like `e15` |
-| `htmlsnapshot` | DOM inspection, CSS extraction, X-SQL | stored HTML snapshot | CSS selectors and query results |
+| `htmlsnapshot` | DOM inspection, CSS extraction, X-SQL | live page DOM (capture is optional) | CSS selectors and query results |
 
 #### LLM configuration
 
@@ -425,8 +425,8 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 |---|---|
 | `htmlsnapshot` | Short form of `htmlsnapshot capture`. |
 | `htmlsnapshot capture` | Capture and store a static HTML snapshot with metadata about the page and interactive elements. |
-| `htmlsnapshot get <field> [selector] [name]` | Extract the first matching `text`, `html`, or `attr` from the stored snapshot. |
-| `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from the stored snapshot. Supports `--offset` and `--limit`. |
+| `htmlsnapshot get <field> [selector] [name]` | Extract the first matching `text`, `textcontent`, `html`, or `attr` from the live page DOM. |
+| `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from the live page DOM. Supports `--offset` and `--limit`. |
 | `htmlsnapshot query [url]` | Run X-SQL. Supports `--sql <query\|@file>`, `--sql-stdin`, `--sql-base64`, result pagination, and extraction-focused output flags. |
 | `htmlsnapshot export` | Export stored HTML to a file. Supports positional file path or `--file <path>` plus `--clean`. |
 | `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI). |

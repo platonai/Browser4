@@ -1,5 +1,7 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.cdt.kt.protocol.support.types.EventListener
+import ai.platon.cdt.kt.protocol.types.console.ConsoleMessageSource
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.BrowserUseState
@@ -15,6 +17,7 @@ import ai.platon.pulsar.chrome.network.TrackedNetworkRequest
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
+import ai.platon.pulsar.common.B4Constants
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -32,6 +35,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.random.Random
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Browser4-specific extension of [PulsarWebDriver].
@@ -92,9 +96,13 @@ open class Browser4WebDriver(
     /**
      * Viewport center of a drag element, plus the stable CSS path used to
      * re-locate it inside the drag script (where CDP node object ids are
-     * not available for the target), a frame-residency flag, and the viewport
+     * not available for the target), a frame-residency flag, the viewport
      * size at resolution time (used to confirm the target is actually
-     * visible after an asynchronous scroll commit).
+     * visible after an asynchronous scroll commit), the element's box size
+     * (used to clamp pointer jitter so a jittered point stays inside the
+     * element), and whether the element itself is hit at that point (used to
+     * decide whether a trusted click can be dispatched there without clicking
+     * an overlay).
      */
     internal data class DragCenter(
         val x: Double,
@@ -103,6 +111,9 @@ open class Browser4WebDriver(
         val inFrame: Boolean,
         val viewportWidth: Int = 0,
         val viewportHeight: Int = 0,
+        val width: Double = 0.0,
+        val height: Double = 0.0,
+        val hit: Boolean = false,
     )
 
     companion object {
@@ -126,6 +137,9 @@ open class Browser4WebDriver(
 
         /** The dual-world runtime global probed by [ensurePulsarUtilsInjected]. */
         private const val PULSAR_UTILS_FUNCTION = "__pulsar_utils__"
+
+        /** Confirmation text of [consoleClear]; unchanged from the page-side implementation. */
+        internal const val CONSOLE_CLEARED_MESSAGE = "Console cleared"
 
         private val storageStateMapper: ObjectMapper = jacksonObjectMapper()
             .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
@@ -370,11 +384,14 @@ open class Browser4WebDriver(
             """.trimIndent()
 
         /**
-         * The IIFE used by [consoleMessages] (and the executor's fallback) to read
-         * the buffered console messages, filtering to [level] and above
-         * (error=0, warn=1, info=2, log=2, debug=3).  Intercepts
-         * console.log/warn/error/info/debug on first call and buffers subsequent
-         * messages on `window.__b4_console`.
+         * The IIFE the executor uses for drivers that are not a [Browser4WebDriver], and the
+         * fallback when the Console domain cannot be enabled ([consoleMessages]).
+         *
+         * It patches the page's `console.*` and buffers on `window.__b4_console`, which a page can
+         * detect (the wrapper's source via `console.log.toString()` /
+         * `Function.prototype.toString.call`, its `name`, and the `prototype` property a native
+         * console method does not have) — [Browser4WebDriver.consoleMessages] therefore prefers CDP
+         * capture and leaves this builder for the cases where CDP is unavailable.
          */
         fun consoleMessagesJs(level: String): String =
             """
@@ -552,8 +569,122 @@ open class Browser4WebDriver(
                 inFrame = node.get("inFrame")?.asBoolean() ?: false,
                 viewportWidth = node.get("vw")?.takeIf { it.isNumber }?.asInt() ?: 0,
                 viewportHeight = node.get("vh")?.takeIf { it.isNumber }?.asInt() ?: 0,
+                width = node.get("w")?.takeIf { it.isNumber }?.asDouble() ?: 0.0,
+                height = node.get("h")?.takeIf { it.isNumber }?.asDouble() ?: 0.0,
+                hit = node.get("hit")?.asBoolean() ?: false,
             )
         }
+
+        /**
+         * Maximum pointer jitter (CSS pixels) applied before a click-family pointer move.
+         *
+         * Landing on the element's exact center every single time is itself a fingerprint, so the
+         * pointer is nudged the same way the drag sequence already nudges its press/release points
+         * (±2 px). Explicit coordinates from `mouse-move` are never jittered — the caller asked for
+         * a specific point.
+         */
+        internal const val POINTER_JITTER_PX = 2.0
+
+        /** Keep a jittered pointer this far inside the element box. */
+        internal const val POINTER_JITTER_EDGE_INSET_PX = 1.0
+
+        /**
+         * Nudge the element center ([x], [y]) by a random offset of at most
+         * `min(jitter, box/2 - inset)` per axis, so the result stays inside the element of the given
+         * [width]/[height] box.
+         *
+         * An element whose box is unknown (0) or too small to hold any offset keeps the exact
+         * center: moving the pointer outside the element would break the CSS `:hover` state this
+         * move exists to establish (see `movePointerToClickTarget`), which is worse than a
+         * repeatable coordinate.
+         *
+         * @param nextOffset produces a uniform offset in `[-range, range]`; injected in tests
+         */
+        internal fun jitteredPointerPosition(
+            x: Double,
+            y: Double,
+            width: Double,
+            height: Double,
+            jitter: Double = POINTER_JITTER_PX,
+            nextOffset: (Double) -> Double = { range -> Random.nextDouble(-range, range) },
+        ): Pair<Double, Double> {
+            val maxOffset = if (width > 0.0 && height > 0.0) {
+                minOf(jitter, minOf(width, height) / 2.0 - POINTER_JITTER_EDGE_INSET_PX).coerceAtLeast(0.0)
+            } else {
+                0.0
+            }
+
+            if (maxOffset <= 0.0) {
+                return x to y
+            }
+
+            return (x + nextOffset(maxOffset)) to (y + nextOffset(maxOffset))
+        }
+
+        /**
+         * The page global installed for the duration of one trusted click, see
+         * [trustedClickProbeInstallJs].
+         */
+        internal const val TRUSTED_CLICK_PROBE = "__b4_trusted_click_probe__"
+
+        /**
+         * Whether a click at [point] may be dispatched as trusted CDP input.
+         *
+         * [point] must carry the hit result for the exact coordinates it is to be pressed at —
+         * [dragCenterJs] supplies it for the resolved centre, [hitTestJs] for the jittered hover
+         * point a click actually uses.
+         *
+         * Two conditions rule it out, both because the coordinates would then be wrong:
+         *
+         * - frame-resident elements: `getBoundingClientRect` is frame-relative while
+         *   `Input.dispatchMouseEvent` takes main-frame viewport coordinates;
+         * - an element that is not hit at that point (occluded by an overlay, `pointer-events:
+         *   none`, moved by an async layout shift): the trusted click would land on whatever is on
+         *   top and silently click an unrelated element. The DOM fallback dispatches on the element
+         *   itself and has no such failure mode.
+         */
+        internal fun canClickWithTrustedInput(point: DragCenter?): Boolean =
+            point != null && !point.inFrame && point.hit
+
+        /**
+         * Install a one-shot page probe that counts **trusted** mouse events.
+         *
+         * A CDP press/release pair either reaches the page — then the document observes trusted
+         * `mousedown`/`mouseup`/`click` events — or it does not, and the driver must not report
+         * success for a click that never happened. The probe is the authority for that decision. It
+         * is installed as a non-enumerable global so a page enumerating `window` cannot see it, and
+         * removed again by [trustedClickProbeReadJs].
+         */
+        internal fun trustedClickProbeInstallJs(): String = """
+            (function() {
+                var state = { trusted: 0, listeners: [] };
+                Object.defineProperty(window, '$TRUSTED_CLICK_PROBE', {
+                    value: state, writable: true, configurable: true, enumerable: false
+                });
+                ['mousedown', 'mouseup', 'click'].forEach(function(name) {
+                    var listener = function(event) { if (event.isTrusted) { state.trusted += 1; } };
+                    document.addEventListener(name, listener, true);
+                    state.listeners.push([name, listener]);
+                });
+                return 'installed';
+            })()
+        """.trimIndent()
+
+        /**
+         * Remove the probe installed by [trustedClickProbeInstallJs] and report what it saw:
+         * `"trusted"`, `"none"`, or `"missing"` when the global was gone (a page replaced it).
+         */
+        internal fun trustedClickProbeReadJs(): String = """
+            (function() {
+                var state = window['$TRUSTED_CLICK_PROBE'];
+                if (!state) { return 'missing'; }
+                (state.listeners || []).forEach(function(entry) {
+                    document.removeEventListener(entry[0], entry[1], true);
+                });
+                try { delete window['$TRUSTED_CLICK_PROBE']; } catch (e) { }
+                return state.trusted > 0 ? 'trusted' : 'none';
+            })()
+        """.trimIndent()
 
         /**
          * The `function()` body evaluated with `this` bound to a drag element.
@@ -597,10 +728,36 @@ open class Browser4WebDriver(
                     cssPath: path.join(' > '),
                     inFrame: this.ownerDocument !== document,
                     vw: window.innerWidth,
-                    vh: window.innerHeight
+                    vh: window.innerHeight,
+                    w: r.width,
+                    h: r.height,
+                    hit: (function() {
+                        var at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                        return !!(at && (at === this || this.contains(at)));
+                    }).call(this)
                 });
             }
             """.trimIndent()
+
+        /**
+         * Whether the element described by [point]'s CSS path is the topmost element at
+         * [point]'s coordinates.
+         *
+         * [dragCenterJs] answers the same question for the element's *centre*, which is where the
+         * element is resolved; a trusted click presses at the jittered hover point instead, so the
+         * test has to be repeated there (see `trustedClickPoint`). Only main-frame elements reach
+         * this probe ([DragCenter.inFrame] is rejected first), so the top document's
+         * `querySelector` resolves the path.
+         */
+        internal fun hitTestJs(point: DragCenter): String = """
+            (function() {
+                var el = null;
+                try { el = document.querySelector('${escapeJsString(point.cssPath)}'); } catch (e) { return 'no-element'; }
+                if (!el) { return 'no-element'; }
+                var at = document.elementFromPoint(${point.x}, ${point.y});
+                return (at && (at === el || el.contains(at))) ? 'hit' : 'miss';
+            })()
+        """.trimIndent()
 
         /**
          * Build the drag sequence script executed with `this` bound to the
@@ -1183,8 +1340,13 @@ internal enum class DragDropPosition(val key: String) {
     @Throws(WebDriverException::class)
     suspend fun click(selector: String, count: Int = 1, button: String? = null) {
         if (button == null || button == "left") {
+            // Route through the two-argument override (see `click(selector, count)` below) rather
+            // than straight to `super`: that override is where a left click is dispatched as
+            // trusted CDP input, falling back to the parent's synthetic DOM click.  Calling
+            // `super.click` here would bypass the trusted path for every `--count`/`--button left`
+            // request, so those clicks would be detectable even though a plain click is not.
             focusElementBeforeClick(selector)
-            super.click(selector, count)
+            click(selector, count)
             return
         }
 
@@ -1263,7 +1425,7 @@ internal enum class DragDropPosition(val key: String) {
     }
 
     /**
-     * Move the pointer to the click target's center before dispatching the
+     * Move the pointer onto the click target before dispatching the
      * click, so the pointer physically rests on the element when its click
      * events fire.  The upstream Windows click path never moves the mouse
      * (pure DOM JS), so without this step CSS `:hover` keeps reflecting the
@@ -1271,12 +1433,18 @@ internal enum class DragDropPosition(val key: String) {
      * persist across clicks and snapshots taken right after a click miss the
      * tooltip that a real user would see.
      *
+     * The point is jittered inside the element (see [jitteredPointerPosition]) rather than always
+     * being the exact center, which would repeat the same pixel on every request.
+     *
      * Uses the drag-style instant scroll + visibility poll, so the resolved
      * center is stable before the pointer moves.  Best-effort: when the
      * element cannot be resolved or never becomes visible, the pointer is
      * left alone and the upstream click proceeds as before.
+     *
+     * @return the point the pointer was actually moved to, which is also the point a trusted click
+     *   must press at (see [trustedClickPoint]), or null when the pointer was left alone
      */
-    private suspend fun movePointerToClickTarget(selector: String) {
+    private suspend fun movePointerToClickTarget(selector: String): DragCenter? {
         runCatching {
             evaluateValue(
                 selector,
@@ -1290,9 +1458,9 @@ internal enum class DragDropPosition(val key: String) {
         for (attempt in 0 until 15) {
             center = resolveDragCenter(selector)
             if (center == null) {
-                return
+                return null
             }
-            val c = center ?: return
+            val c = center ?: return null
             val visible = c.viewportWidth <= 0 || (
                 c.x >= 0 && c.y >= 0 && c.x <= c.viewportWidth && c.y <= c.viewportHeight
                 )
@@ -1301,13 +1469,24 @@ internal enum class DragDropPosition(val key: String) {
             }
             delay(150)
         }
-        val point = center ?: return
+        val point = center ?: return null
         val visible = point.viewportWidth <= 0 || (
             point.x >= 0 && point.y >= 0 && point.x <= point.viewportWidth && point.y <= point.viewportHeight
             )
-        if (visible) {
-            mouseMove(point.x, point.y)
+        if (!visible) {
+            return null
         }
+
+        // Nudge the pointer inside the element instead of always hitting its exact center: identical
+        // coordinates on every request for the same element are a fingerprint. The offset is clamped
+        // to the element box so `:hover` still applies (see [jitteredPointerPosition]).
+        val (pointerX, pointerY) = jitteredPointerPosition(point.x, point.y, point.width, point.height)
+        mouseMove(pointerX, pointerY)
+
+        // `hit` describes the element's centre, which is not the point just hovered any more: the
+        // caller re-tests the hit where the pointer actually is before pressing (see
+        // [trustedClickPoint]).
+        return point.copy(x = pointerX, y = pointerY, hit = false)
     }
 
     /**
@@ -1382,16 +1561,25 @@ internal enum class DragDropPosition(val key: String) {
      * Left-click [count] times on [selector], with the pointer moved onto the
      * element first and native dialogs reported as they open (see
      * [movePointerToClickTarget] and [withDialogWatch]).
+     *
+     * The click itself is dispatched as trusted CDP input when the element can be clicked at its
+     * own coordinates, and falls back to the upstream DOM path otherwise (see [clickTrusted]).
      */
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, count: Int) {
-        movePointerToClickTarget(selector)
-        withDialogWatch("click") { super.click(selector, count) }
+        val hovered = movePointerToClickTarget(selector)
+        withDialogWatch("click") {
+            if (!clickTrusted(selector, count, trustedClickPoint(hovered))) {
+                super.click(selector, count)
+            }
+        }
     }
 
     /**
-     * Click [selector] with a [modifier] key held; see [click] for the
-     * pointer-move and dialog-watch behaviour.
+     * Left-click [count] times on [selector] with a modifier key held.
+     *
+     * Modifier clicks stay on the upstream path: the CDP modifier bitmask has no DOM equivalent, so
+     * upstream already dispatches those through CDP for every platform.
      */
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, modifier: String) {
@@ -1399,14 +1587,163 @@ internal enum class DragDropPosition(val key: String) {
         withDialogWatch("click") { super.click(selector, modifier) }
     }
 
+    /** The cached trusted-click capability of this driver; null until an attempt was verified. */
+    @Volatile
+    private var trustedClickSupported: Boolean? = null
+
     /**
-     * Double-click [selector] (with an optional [modifier]); see [click] for
-     * the pointer-move and dialog-watch behaviour.
+     * The point a trusted click must press at — the point the pointer was moved to — or null when
+     * the trusted path must not be used for it (capability already refuted, no hover point, a
+     * frame-resident element, or the element is not hit at that point: see
+     * [canClickWithTrustedInput]).
+     *
+     * Pressing at the hover point instead of the element's centre is what keeps the jitter in the
+     * event trail: Chrome moves the pointer to the pressed coordinates before `mousedown`, so a
+     * press at the centre emits a second `mousemove` back to the exact centre and repeats the same
+     * pixel on every click.
+     *
+     * The jittered point is no longer the centre the element was resolved at, so the hit test is
+     * repeated there ([hitAt]) and a miss — an overlay covering the element's edge,
+     * `pointer-events: none`, an async layout shift — falls back to the DOM path instead of
+     * clicking whatever is on top.
+     */
+    private suspend fun trustedClickPoint(hovered: DragCenter?): DragCenter? {
+        if (trustedClickSupported == false || hovered == null) {
+            return null
+        }
+
+        return hovered.copy(hit = hitAt(hovered)).takeIf { canClickWithTrustedInput(it) }
+    }
+
+    /**
+     * Whether the element [point] was resolved from is still the topmost element at [point]'s
+     * coordinates. A probe that cannot run or cannot resolve the element is reported as a miss,
+     * which falls back to the DOM path (the click then lands on the element itself).
+     */
+    private suspend fun hitAt(point: DragCenter): Boolean =
+        runCatching { evaluate(hitTestJs(point))?.toString() }.getOrNull() == "hit"
+
+    /**
+     * Dispatch [count] clicks (a double-click for `count == 2`) on [selector] as trusted CDP input
+     * and report whether the page received them.
+     *
+     * ## Why
+     *
+     * Upstream clicks through synthetic DOM events on Windows
+     * (`emulator.click(..., dispatchCdpMouseEvents = false)` + `dispatchDomClick`) because CDP
+     * press/release were believed not to trigger DOM clicks in headless Chrome there. Measured on
+     * Chrome 153 / Windows headless, `Input.dispatchMouseEvent` `mousePressed` + `mouseReleased`
+     * produces `mousedown`, `mouseup` **and** `click` with `isTrusted: true`, so the workaround is
+     * obsolete: a page that records `event.isTrusted` (a honeypot button, a bot-detection beacon)
+     * sees synthetic events immediately. The same applies to `dblclick`.
+     *
+     * ## Verification and fallback
+     *
+     * `Input.dispatchMouseEvent` says nothing about delivery, so the first dispatch on a driver is
+     * verified with a one-shot page probe ([trustedClickProbeInstallJs]): when no trusted mouse
+     * event reached the page, the capability is cached as unsupported and the caller falls back to
+     * the DOM path — a click that never happened cannot double-fire. A dispatch that cannot be
+     * verified at all (a page that removed the probe) is reported as delivered and re-probed next
+     * time, because dispatching a second click is the worse failure mode.
+     *
+     * @return true when the click was dispatched and received (or sent but not verifiable)
+     */
+    private suspend fun clickTrusted(selector: String, count: Int, point: DragCenter?): Boolean {
+        if (trustedClickSupported == false || point == null) {
+            return false
+        }
+
+        val verify = trustedClickSupported == null
+        if (verify && runCatching { evaluate(trustedClickProbeInstallJs()) }.isFailure) {
+            logger.debug("Cannot install the trusted-click probe on [{}], using the DOM click path", selector)
+            return false
+        }
+
+        var sent = 0
+        try {
+            repeat(count) { index ->
+                val clickCount = index + 1
+                browserProtocol.executeCdpCommand(
+                    "Input.dispatchMouseEvent", mouseEvent("mousePressed", point, clickCount, buttons = 1)
+                )
+                sent += 1
+                browserProtocol.executeCdpCommand(
+                    "Input.dispatchMouseEvent", mouseEvent("mouseReleased", point, clickCount, buttons = 0)
+                )
+                sent += 1
+            }
+        } catch (e: Exception) {
+            if (sent == 0) {
+                logger.warn(
+                    "Trusted click on [{}] could not be dispatched ({}), using the DOM click path",
+                    selector, e.message
+                )
+                return false
+            }
+
+            throw WebDriverException(
+                "Trusted click on [$selector] failed after $sent input event(s): the page may be in a " +
+                    "partially pressed state. Original error: ${e.message}",
+                e, driver = this,
+            )
+        }
+
+        if (!verify) {
+            return true
+        }
+
+        return when (runCatching { evaluate(trustedClickProbeReadJs())?.toString() }.getOrNull()) {
+            "trusted" -> {
+                trustedClickSupported = true
+                true
+            }
+
+            "none" -> {
+                trustedClickSupported = false
+                logger.info(
+                    "Trusted CDP clicks are not delivered to this page's browser; [{}] uses the DOM " +
+                        "click path for the rest of the session", selector
+                )
+                false
+            }
+
+            else -> {
+                logger.warn(
+                    "Trusted click on [{}] could not be verified (the page removed the probe); assuming " +
+                        "it was delivered to avoid a second click", selector
+                )
+                true
+            }
+        }
+    }
+
+    /** One `Input.dispatchMouseEvent` parameter map for a left-button event at [point]. */
+    private fun mouseEvent(type: String, point: DragCenter, clickCount: Int, buttons: Int): Map<String, Any?> =
+        mapOf(
+            "type" to type,
+            "x" to point.x,
+            "y" to point.y,
+            "button" to "left",
+            "buttons" to buttons,
+            "clickCount" to clickCount,
+        )
+
+    /**
+     * Double-click [selector] (with an optional [modifier]); see [click] for the pointer-move and
+     * dialog-watch behaviour.
+     *
+     * The double-click is dispatched as trusted CDP input when the element can be clicked at its
+     * own coordinates (see [clickTrusted]); a modifier click keeps the upstream path, which already
+     * uses CDP on every platform because the modifier bitmask has no DOM equivalent.
      */
     @Throws(WebDriverException::class)
     override suspend fun dblclick(selector: String, modifier: String) {
-        movePointerToClickTarget(selector)
-        withDialogWatch("dblclick") { super.dblclick(selector, modifier) }
+        val hovered = movePointerToClickTarget(selector)
+        withDialogWatch("dblclick") {
+            if (modifier.isNotBlank() || !clickTrusted(selector, 2, trustedClickPoint(hovered))) {
+                super.dblclick(selector, modifier)
+            }
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -1823,27 +2160,142 @@ internal enum class DragDropPosition(val key: String) {
     }
 
     // ---------------------------------------------------------------------------
-    // Console message buffer — intercepts console.log/warn/error/info/debug on
-    // first call and buffers subsequent messages on window.__b4_console.
-    // Moved from BrowserTabToolExecutor so the buffer behavior is driver-owned
-    // and reusable outside the tool layer.
+    // Console message buffer — captured over CDP, the page is left untouched.
     // ---------------------------------------------------------------------------
+
+    /** Buffered console messages, fed by the `Console.messageAdded` listener below. */
+    private val consoleBuffer = ConsoleMessageBuffer()
+
+    /** The `Console.messageAdded` listener, registered at most once per driver. */
+    @Volatile
+    private var consoleListener: EventListener? = null
+
+    /** Guards the one-time capture setup; see [ensureConsoleCapture]. */
+    private val consoleCaptureStarted = AtomicBoolean(false)
+
+    /** Set when the transport cannot enable the Console domain, so the fallback is not retried. */
+    @Volatile
+    private var consoleCaptureUnavailable = false
+
+    /** Set once the first `Console.messageAdded` arrives, so a live capture shows up in the log. */
+    @Volatile
+    private var consoleCaptureConfirmed = false
+
+    /**
+     * Whether the CDP capture is enabled by configuration; see [B4Constants.CONSOLE_CAPTURE_CDP].
+     *
+     * Read per call: the settings of a browser are immutable, and a `false` value must not enable
+     * anything at all — no domain, no listener, no latch.
+     */
+    private val consoleCaptureOverCdp: Boolean
+        get() = settings.config.getBoolean(B4Constants.CONSOLE_CAPTURE_CDP, B4Constants.CONSOLE_CAPTURE_CDP_DEFAULT)
 
     /**
      * Read the buffered browser console messages filtered to [level] and above
-     * (error=0, warn=1, info=2, log=2, debug=3).  Intercepts the console on
-     * first call and buffers subsequent messages.
+     * (error=0, warn=1, info=2, log=2, debug=3).
+     *
+     * Messages are collected from CDP `Console.messageAdded` events, so reading the console never
+     * modifies the page (see [ConsoleMessageBuffer] for why that matters). Capture starts with the
+     * first call — like the page-side buffer it replaces — and falls back to [consoleMessagesJs] when
+     * the transport cannot enable the Console domain; `browser.console.capture=false` skips CDP
+     * entirely, see [B4Constants.CONSOLE_CAPTURE_CDP].
      */
     @Throws(WebDriverException::class)
-    suspend fun consoleMessages(level: String = "info"): JsEvaluation? =
-        evaluateValueDetail(consoleMessagesJs(level))
+    suspend fun consoleMessages(level: String = "info"): JsEvaluation? {
+        if (!consoleCaptureOverCdp || !ensureConsoleCapture()) {
+            return evaluateValueDetail(consoleMessagesJs(level))
+        }
+
+        return JsEvaluation(value = consoleBuffer.toJson(level), cdpType = "string")
+    }
 
     /**
      * Clear the buffered browser console messages.
+     *
+     * @see consoleMessages
      */
     @Throws(WebDriverException::class)
-    suspend fun consoleClear(): JsEvaluation? =
-        evaluateValueDetail(consoleClearJs())
+    suspend fun consoleClear(): JsEvaluation? {
+        if (!consoleCaptureOverCdp || !ensureConsoleCapture()) {
+            return evaluateValueDetail(consoleClearJs())
+        }
+
+        consoleBuffer.clear()
+        return JsEvaluation(value = CONSOLE_CLEARED_MESSAGE, cdpType = "string")
+    }
+
+    /**
+     * Start capturing console messages for this driver, once.
+     *
+     * `Console.messageAdded` is the only console event the protocol layer exposes
+     * ([BrowserProtocol.onConsoleMessageAdded]); it is deprecated in the CDP definition in favour of
+     * `Runtime.consoleAPICalled`, which would need both an upstream addition to the protocol layer
+     * and `browser.launch.runtime.enable=true` — the domain the base library now keeps off by default
+     * because of the console-argument serialization it carries. Measured on Chrome 153,
+     * `Console.messageAdded` still delivers every page `console.*` call, so the deprecated event is
+     * the cheaper of the two, and the driver favours it over patching the page.
+     *
+     * @return false when the Console domain could not be enabled, i.e. the caller must fall back to
+     * the page-side buffer (an extension/relay transport that does not implement the command)
+     *
+     * The decision is taken once per driver: a transport that rejects the command is remembered, so
+     * the page-side fallback is neither retried on every read nor warned about twice. Note the
+     * converse case, which no code can detect: a transport that accepts `Console.enable` but never
+     * delivers `Console.messageAdded` leaves the console legitimately empty — indistinguishable from
+     * a page that logs nothing, hence the one-shot debug line on the first captured message.
+     *
+     * Enabling the domain was measured against the signal that made the base library default
+     * `Runtime.enable` to off: on Chrome 153.0.8010.52 the getter, inherited-getter and
+     * prototype-Proxy probes of `console-probe-fixture.html` report false with the capture off and
+     * on (`test_e2e_console_serialization_probe`), so this domain does not reproduce that signal.
+     */
+    private suspend fun ensureConsoleCapture(): Boolean {
+        if (consoleListener != null) {
+            return true
+        }
+        if (consoleCaptureUnavailable) {
+            return false
+        }
+
+        if (!consoleCaptureStarted.compareAndSet(false, true)) {
+            // Another call is enabling the capture; give it a moment instead of enabling twice.
+            repeat(50) {
+                if (consoleListener != null) {
+                    return true
+                }
+                delay(10)
+            }
+            return consoleListener != null
+        }
+
+        val enabled = runCatching { browserProtocol.executeCdpCommand("Console.enable") }
+        if (enabled.isFailure) {
+            consoleCaptureUnavailable = true
+            logger.warn(
+                "Console.enable is not available on this transport ({}); console messages keep using " +
+                    "the page-side buffer (which patches console.* and is visible to the page)",
+                enabled.exceptionOrNull()?.message
+            )
+            return false
+        }
+
+        consoleListener = browserProtocol.onConsoleMessageAdded { event ->
+            val message = event.message
+            if (message.source != ConsoleMessageSource.CONSOLE_API) {
+                // Only page `console.*` calls, matching the buffer this replaces (network/security
+                // entries would otherwise show up as console messages).
+                return@onConsoleMessageAdded
+            }
+            if (consoleBuffer.add(message.level.name, message.text) && !consoleCaptureConfirmed) {
+                consoleCaptureConfirmed = true
+                // A relay can accept Console.enable and never deliver events; this line is the only
+                // evidence in the log that the capture is actually working on this transport.
+                logger.debug("Console message capture is live on this driver")
+            }
+        }
+
+        return true
+    }
 
     // ---------------------------------------------------------------------------
     // Dual-world runtime recovery — PulsarWebDriver registers the Browser4

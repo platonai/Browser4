@@ -846,14 +846,14 @@ crawl 想并行需要**不绑定会话驱动**、改为按 tab 从驱动池租�
    超时实际由 `CrawlService.writeCancelled` 收尾，而它**不带** `failedPages`/`pagesExpected` ⇒
    超时的深爬仍会少页且不报账。`crawl.md` 的"5 min/level，上限 30 min"也与实际不符（depth ≥ 2 实为 10 min）。
    这一条需要先定预算策略（轮次预算应由"任务剩余预算"派生，而不是每轮各算一份），所以留到下一轮。
-3. **在途视图仍是"单轮"而非"聚合"**：`publishPages` 只带当前轮的 pages，所以下一轮种子开始发布时
+3. **（§22 已修）在途视图仍是"单轮"而非"聚合"**：`publishPages` 只带当前轮的 pages，所以下一轮种子开始发布时
    `pagesFound` 会从聚合值回落到单轮值（`failedPages`/`pagesExpected` 现在已被保留）。
    要真正单调，需要让 sink 聚合各轮 pages——注意不能简单按 URL 求并集：同一 URL 被两个种子各抓一次
    在终态记录里是两行，并集会把它们并成一行。属于显示口径问题，不是丢页问题。
-4. 多轮并发发布对同一条记录是 read-modify-write，没有 `recordSeedProgress` 那样的 per-task 锁
+4. **（§22 已修）** 多轮并发发布对同一条记录是 read-modify-write，没有 `recordSeedProgress` 那样的 per-task 锁
    （`CrawlTaskContext.publishLock` 只在种子收尾时用）。危害是瞬时视图可能少一轮的字段，
    下一次发布/种子收尾就会修正；要根治需让 sink 拿到 task context 的锁。
-5. 发现链接未去重，且不套用 `--ignore-url-query` / `--no-norm`（depth 1 与引擎路径都套用）；
+5. **（§21 已修）发现链接未去重**，且不套用 `--ignore-url-query` / `--no-norm`（depth 1 与引擎路径都套用）；
    `topLinks` 预算可能被重复链接吃光（重复抓取已在第一轮 #4 的闸门下消失，预算问题仍在）。
 
 ## 17. 轮次预算与"没跑起来/没结算"的报账（4.13.x，§16.4 的第 1、2 条）
@@ -947,8 +947,8 @@ round = clamp( min(depth × 5min, 30min),  剩余任务预算 − 30s 报告余�
 
 §16.4 的第 3、4、5 条不变（在途视图非聚合、发布缺 per-task 锁、发现链接未去重）。本轮新增两条：
 
-* `taskTimeoutMillis` 只有一个默认值 10 min（单测直接改这个 `@Volatile var`）。若要按请求或配置调，
-  需要在 REST/DTO 层定契约（`CrawlRequest` 加字段 + 校验 + 文档），本轮没有做。
+* **（§27 已做）`taskTimeoutMillis` 的按请求契约**：原来只有一个默认值 10 min（单测直接改这个
+  `@Volatile var`），现在 `CrawlRequest` 带字段 + 校验 + 文档。见 §27。
 * **store-serve 行的 `title` 为 null**（真浏览器 `testReadonlyCrawlSurfacesServedOrFresh`，改动前后都红）：
   §17.5 当时把它归到"`-readonly` 不带 `-refresh` 的 store-serve 路径"——**这个判断是错的**，
   下一轮（§18）用探针推翻并修掉了：真正发生的是"一次失败的抓取被 `-ignoreFailure` 兜住，
@@ -1015,19 +1015,21 @@ crawl 强制 `-refresh`，所以这条用例今天只会走 "verified fresh" 分
 
 ### 18.5 仍未做
 
-* **强制 `-refresh` 与"readonly 可从存储读"的契约冲突**（§18.1）：`crawl --readonly` 永远会重新抓取，
+* **（§25 已做）强制 `-refresh` 与"readonly 可从存储读"的契约冲突**（§18.1）：`crawl --readonly` 永远会重新抓取，
   `buildReadonlyNote` 里 "served from the page store (age X)" 的措辞、`CrawlResponse.servedFromStore`
-  与 `CrawlFixtureMetadataTest` 的 store-serve 分支都是死代码。要让契约成立，得让
-  `buildEffectiveArgs`（以及 `crawlDepth0` 里同样的拼接）在用户明确要 `-readonly` 且没要 `-refresh` 时
-  不再补 `-refresh`。这会改变用户可见行为（readonly 会开始吐旧内容），需要单独决策 + e2e。
-* **失败抓取的重试**：本轮只把"没抓到"如实报成丢失，没有加重试。`crawlDepth0` 有 `MAX_FETCH_RETRIES`，
+  与 `CrawlFixtureMetadataTest` 的 store-serve 分支都是死代码。**决策（用户，§25）：`--readonly` 优先于
+  `--refresh`** —— 不是"没要 refresh 才不补"，而是"要了 readonly 就把 refresh 擦掉"，因为 readonly 只服务于
+  X-SQL 引擎的第二次读，那一次读的语义就是"读本地缓存"。实现见 §25.2，日志证据见 §25.5。
+* **（§26 已做）失败抓取的重试**：本轮只把"没抓到"如实报成丢失，没有加重试。`crawlDepth0` 有 `MAX_FETCH_RETRIES`，
   两个链接发现路径没有。"交付失败即重投一次"需要在 ledger 上开一个"尝试中、仍未结算"的口子
   （现有的 `enter/leave` + `settle()` 恰好一次语义会被重复结算破坏），属于独立一轮。
+  §26 就是这么做的：attempt token + `startRetry` 撤单式重投，唯一的重投机会只花在**引擎判为终局、
+  而 crawl 没拿到**的失败上（引擎自己的重投由 `isRetry` 让路，见 §26.4）。
 * 触发这次退化的**根因**（浏览器在持续 crawl 负载下变得不可用：`BrowserUnavailableException`、
   `Timeout to wait for document ready`）在引擎/驱动池一侧，本轮没有动 —— 本轮只是让它不再伪装成一行。
 
 
-## 19. `CrawlParallelTabsTest#testSequentialControlRunDoesNotOverlap` 在 CI 上超时（4.13.x，未修）
+## 19. `CrawlParallelTabsTest#testSequentialControlRunDoesNotOverlap` 在 CI 上超时（4.13.x，已于 v4.13.20 修，见 19.6）
 
 ### 19.1 现象
 
@@ -1093,11 +1095,759 @@ java.lang.IllegalStateException: Crawl eb660148-… did not reach a terminal sta
   最近的 WARN/ERROR 摘要一起抛出来。
 * **上限的合理性**：4 分钟是这条用例写死的；本地 63.9 s、ci.4 整类 72.7 s，健康区间离上限有 3× 余量，
   但 CI 负载下的停顿会把它吃掉。要么按类内累计耗时调大，要么让该类拥有独立上下文/独立超时策略。
-* **驱动池在该类里的分配日志**（谁占着 driver、谁在等、等了多久）没有拉出来对照，这是把"环境停顿"
+* **（§23 已做）驱动池在该类里的分配日志**（谁占着 driver、谁在等、等了多久）没有拉出来对照，这是把"环境停顿"
   坐实成"驱动池饥饿"的最后一步。
 
+### 19.6 修复（v4.13.20，2026-09-20）
 
-## 20. §19 的收尾：根因是"先建新 tab、再取空闲驱动"（4.14.x，已修）
+v4.13.20 的门禁（标签 `v4.13.20-ci.1`，run 35497172762）**两次尝试分别挂在两个用例上**，
+两者是同一个根因的两个面：**`status` 字段混用两套词表**，而测试的等待循环只认其中一套。
+
+`CrawlService` 既写裸 token（`status = "PROCESSING"`，两处），又写 `ResourceStatus` 可读文本
+（`getStatusText(...)` → `"OK"` / `"Request Timeout"` / `"Created"`，多处），而 `CrawlResponse.status`
+的默认值是 token `"CREATED"`。
+
+| 用例 | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| `CrawlServiceTest#an exhausted task budget reports the seeds it never started` | attempt 1 红：`expected: <Request Timeout> but was: <Created>`，`Time elapsed: 0.008 s` | `awaitTerminal` 的守卫只比较大写 token，而服务结算写的是可读文本 `"Created"` → **首次轮询即退出循环**，断言立刻失败（本地靠"结算够快"侥幸通过） | 大小写无关比较，并以 `CrawlResponse.finishTime` 作为权威终态标记；轮询上限 10 s → 30 s（任务自身预算是 10 s） |
+| `CrawlParallelTabsTest#testSequentialControlRunDoesNotOverlap` | attempt 2 红：`240.4 s` 触上限，`last: PROCESSING`（与 §19.1 同用例、同 240.4 s） | 4 分钟写死上限被 CI 负载吃掉（本地 63.9–91.2 s，CI 同比 7.4×）；另外 `isTerminal` 只认 `"SC_REQUEST_TIMEOUT"` / `"SC_INTERNAL_SERVER_ERROR"` 这类**服务从不产出的拼写**，真超时的任务永远不会被识别为终态 | 上限 4 → 10 分钟（对健康值 ~7× 余量，仍有界）；终态判定同时接受 token 与可读文本并接受 `finishTime`；超时消息带上任务自身账目（status / pages / links / parallelTabs / waiting / error / diagnostic / seeds） |
+
+`19.5` 的前两条（超时诊断、上限合理性）随之落地；第三条（驱动池分配日志）仍未做，
+所以"这是驱动池饥饿"仍属假设——若 10 分钟上限再被吃掉，新消息里的
+`waiting=` / `seeds=` 会直接指出卡在哪个 seed。
+
+本地验证（2026-09-20，Windows，JDK 25 / GraalVM）：
+
+| 命令 | 结果 |
+|---|---|
+| `-pl browser4-rest -am -Dtest=CrawlServiceTest` | **11 / 0 / 0，3.869 s**（该用例 0.112 s） |
+| `-pl browser4-tests/browser4-rest-tests -am -DrunRestTests=true -Dtest=CrawlParallelTabsTest` | **5 / 0 / 0，126.2 s**，BUILD SUCCESS |
+
+**未做（留给后续）**：服务侧统一状态词表。测试侧已兼容两套，但同一个字段继续混用
+token 与可读文本仍会持续制造这类陷阱——根治应在 `CrawlService` 出口统一
+（例如一律写 `getStatusText(...)`，或一律写 token），并同步 CLI 的解析。
+
+### 19.7 门禁测试预算：35 → 50 分钟（v4.13.20，2026-09-20）
+
+`v4.13.20-ci.2`（run [35507033919](https://github.com/platonai/Browser4/actions/runs/35507033919)）
+是 19.6 的修复上线后的第一次门禁。结果是**零失败**，但仍然是红的：
+
+```
+Total Tests: 2018   Failed: 0   Passed: 2005   Skipped: 13
+⏱️ Tests timed out after 2100 seconds (limit 2100s) — the reactor was killed, results are incomplete
+```
+
+原因不在测试：`Run Tests` 走 `./.github/actions/run-tests`，它用 `timeout 2100` 包住
+Maven；`exit 124` 被映射成 `status=timeout`，于是 `Check Test Status` 打印
+"Failed Tests: 0" 却仍然 `exit 1`。**这是预算问题，不是结果问题。**
+
+被谁吃掉（同一 run 的时间线）：
+
+| 时间 | 事件 | 耗时 |
+|---|---|---|
+| 11:13:32 | 测试步骤开始 | — |
+| 11:18:14 | 快速单测段结束 | ~5 min |
+| 11:29:23 | `CrawlFixtureMetadataTest` 完成 | **668.8 s** |
+| 11:40:36 | `CrawlParallelTabsTest` 完成（19.6 修复后 5/0/0） | **671.7 s** |
+| 11:40:42 | `ScrapeServiceTests` 开始 | — |
+| 11:48:32 | `timeout` 杀进程 | 该类 **8 分钟无输出** |
+
+即两个 crawl 集成类各 ~11 分钟（合 22 分钟），随后 `ScrapeServiceTests` 长时间无输出，
+35 分钟预算见底。注意 19.6 的修复本身让诚实耗时 **+2 分钟**（`CrawlParallelTabsTest`
+原先在 240 s 报错退出，现在会真正跑完 671.7 s）——预算本来就贴边，这一改把它顶破。
+
+**处置**：`.github/workflows/ci.yml` 的 `timeout_minutes` 由 `'35'` 提到 `'50'`，
+并在该行上方写明依据。取 50 而不是更大，是因为当前整套约 40 分钟；
+若下一轮仍被 kill，说明还有**卡住**的类（而不是"慢"的类），那就该先去查
+`ScrapeServiceTests` 为何 8 分钟不产出，而不是继续加预算。
+
+**仍未做**：`ScrapeServiceTests` 在 CI 上长时间无输出的原因（本轮没有它的失败日志可看，
+因为它从未跑完）；以及 19.5 第三条的驱动池分配日志。
+
+## 20. `ScrapeServiceTests` 慢 13 分钟 + crawl 状态词表混用（v4.13.20 后修）
+
+两项都来自 §19 的收尾清单，一起修。
+
+### 20.1 `ScrapeServiceTests`：13.2 分钟不是"卡住"，是**每次加载都重新注入运行时**
+
+绿的那次门禁（run 35514175379）里，该类是整套最慢：`Tests run: 4 ... Time elapsed: 794.7 s`
+（13.2 分钟，1 个用例因无 LLM key 跳过）。本地同 commit 也慢：**168.0 s**，而两个 scrape
+各自只用了 **1.69 s / 1.60 s**。时间线（本地日志，按时间戳做间隔分析）：
+
+| 现象 | 数据 |
+|---|---|
+| Spring 上下文启动 | 11.968 s（`Started ScrapeServiceTests in 11.968 seconds`） |
+| 页面加载耗时 | **列表页 `/ec/b?node=...`（101 个商品）每次 ~32 s**（32.07 / 31.80 / 33.36），详情页 `/ec/dp/...` 每次 ~3 s（2.71 / 3.16 / 3.57） |
+| 间隔成因 | 每轮之间固定 13–33 s 的停顿，对应 `IsolatedWorldManager - Injecting Browser4 runtime (v1.0.0) into isolated world`（本地全程 **32 次**），`CoreMetrics` 同期为 `Fetched 2 pages in 1m (0.03 pages/s)` |
+
+列表页每次重新抓取（日志里 `last fetched 35s ago, fc:2` / `fc:3`，缓存没帮上忙），所以
+三个用例各自付一次 ~32 s。`IsolatedWorldManager` 不在本仓库（在 `pulsar-browser` 依赖里），
+**注入本身我们改不了**，能改的只有"少加载"。
+
+顺带发现一个**死钩子**：
+
+```kotlin
+@BeforeEach
+@DisplayName("Ensure resources are prepared")
+suspend fun ensureResourcesArePrepared() { ... }   // 编译后签名为 (Continuation) -> JUnit 无法调用
+```
+
+`javap` 证实编译结果是 `ensureResourcesArePrepared(kotlin.coroutines.Continuation)`，且没有无参重载
+——JUnit 永远不会执行它。也就是说它声明的"每个用例前准备好页面"从未发生（真发生了反而会
+每个用例多付两次 ~32 s）。
+
+**修法**（`browser4-tests/browser4-rest-tests/.../ScrapeServiceTests.kt`）：
+
+* 删掉死钩子，并在类 KDoc 写清"为什么这里故意没有 `@BeforeEach`"，防止有人再加挂起钩子；
+  `MockEcServerTestBase.setup()` 仍会在每个用例前校验 mock server。
+* 两个只断言 `dom_base_uri(dom)` 的用例改抓**详情页**（~3 s）而不是 101 商品的列表页（~32 s）
+  —— 断言的契约是"同步/异步抓取返回正确 base URI"，与页面身份无关；列表页的抓取由
+  `CrawlFixtureMetadataTest` / `CrawlParallelTabsTest` 覆盖。
+* 异步用例的轮询由"1 秒 × 最多 120 次（417 时再来一轮最多 120 次）"改为**deadline 驱动 + 250 ms 间隔**
+  （`awaitScrapeJob`），最坏上限仍是 2 分钟，但常见路径不再白等整秒。
+
+本地实测（同一台机器、同一 commit 家族）：
+
+| 运行方式 | 之前 | 之后 |
+|---|---|---|
+| 单独跑 `-Dtest=ScrapeServiceTests` | **168.0 s**（4/4） | **65.65 s**（4/4）——**2.6× 提速** |
+| 与 `CrawlParallelTabsTest` + `CrawlFixtureMetadataTest` 同 JVM 连跑 | — | 247.7 s（三个类同 JVM，前两类各 ~11 分钟） |
+
+### 20.1.1 仍未解决的部分：负载下"抓取本身就慢"
+
+单独跑只有 65.65 s，但**同 JVM 跑完两个重类之后**，同样的详情页抓取要 **90–113 s**
+（`Task 164 ... got 200 14.93 KiB in 1m52.74s`，一次 scrape `used PT3M48.5850761S`）。
+慢 fetch 邻域日志显示原因不是等待，而是**中途整套新建浏览器/隐私上下文**：
+
+```
+BrowserFileSystem - User data dir does not exist, copy from prototype | ...\browser4-pereg\context\tmp\groups
+ChromeLauncher   - DevTools listening on ws://127.0.0.1:20455/devtools/browser/...
+DualWorldScriptLoader - Generated js: ... page-world.gen.js / isolated-world.gen.js
+IsolatedWorldManager  - Injecting Browser4 runtime (v1.0.0) into isolated world context 2 / context 4
+MultiPrivacyContextManager / WebDriverPoolManager - Maintaining service is started  (再一次)
+ScrapeService - X-SQL: pre-load of '.../ec/dp/B0E000001' before first attempt failed: null
+```
+
+即 `browser.context.number=2` 的两个上下文被前序重类占满后，后续 fetch 会**新建上下文乃至新建
+Chrome**（拷贝 prototype profile → 启动 → 重新生成并注入双世界 JS），单次数十秒。这一点
+`CoreMetrics` 也印证：`Fetched 67 pages in 23m (0.05 pages/s)`。
+
+**已排除的假设**：60 秒驱动租约等待。`PrivacyManagedBrowserFetcher.DRIVER_LEASE_TIMEOUT_MILLIS = 60_000`
+确实与 §19.4 的"4 × 60 s"算术吻合，但本地两轮日志里该告警**出现 0 次**
+（`is busy with another fetch for more than ...`），租约的 acquire/release 也是成对的
+（`tryAcquire` + `finally { release }`），因此不是它。
+
+**已查明（2026-09-21 补充）——剩下的成本不在本仓库，且隔离是有意为之**：
+
+* **注入类在外部依赖里**：`IsolatedWorldManager` 与 `DualWorldScriptLoader` 在本仓库中**不存在**
+  （`IsolatedWorldManager.kt` / `DualWorldScriptLoader.kt` 全仓无匹配），所以"每次导航重新注入"的
+  单次成本在这里改不了。
+* **本仓库这一侧的路径已经做了缓存**：`Browser4WebDriver.ensurePulsarUtilsInjected`
+  （`browser4-core/browser4-browser/.../Browser4WebDriver.kt:1634-1685`）会先探测 `__pulsar_utils__`，
+  命中就复用已缓存的 isolated-world context id（源码注释：*"id is returned and reused, and the
+  runtime is injected only when the …"*）。即重复注入是**导航丢弃执行上下文后的必要动作**，不是缺陷。
+* **浏览器启动次数已归因**：3 类那次本地运行共 4 次 `DevTools listening`（12:16:12、12:16:47、
+  12:38:40、12:39:01），后两次落在 `ScrapeServiceTests` 窗口内——即该类因
+  `@DirtiesContext(BEFORE_CLASS)` 每次都要重建上下文与浏览器，约 **40–60 s**。这与"单独跑 65.65 s"
+  互相印证：去掉隔离确实能再省一块，但该注解是为了防前序用例 `kill_all_sessions` 关掉浏览器而存在的
+  （见该类内注释），**不应为提速牺牲**。
+* **已否证**：60 秒驱动租约等待（本地两轮日志 0 次告警）；服务端残留 token 消费者（全仓扫描仅命中
+  整数状态码与其它子系统）。
+
+### 20.3 验证状态（截至 2026-09-21，`v4.13.21-ci.1` 门禁 **success**）
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 本地 · 第 2 项 | `browser4-rest` crawl 单测 6 个类 | **88 / 0 / 0** |
+| 本地 · 第 2 项 | `cargo test --bin browser4-cli`（含新增 display-text 用例） | **1209 / 0** |
+| 本地 · 第 2 项 | 真实持久化 JSONL（29 条记录） | **单一句表、零 token**：Created 10 · Processing 9 · OK 8 · Internal Server Error 1 · Request Timeout 1 |
+| 本地 · 第 2 项 | 全仓消费者扫描（.kt/.rs/.ps1/.js/.ts/.json/.md） | 无遗漏（命中项均为整数状态码或其它子系统） |
+| 本地 · 第 1 项 | `ScrapeServiceTests` 单独跑 | **168.0 s → 65.65 s**（4/4 通过） |
+| CI · 第 2 项 | browser4-rest 模块（run 35568764699） | **404 / 0 / 0**，含改动的 5 个单测类 |
+| CI · 第 2 项 | `CrawlXSqlE2ETest` | **2 / 0 / 0**（7.23 s） |
+| CI · 第 2 项 | Cross-Platform Smoke Test（标签 + 分支各一次，同 SHA） | **success / success** |
+| CI · 第 1 项 | `ScrapeServiceTests`（run 35568764699） | **8.55 s**（4 个用例，1 个因无 LLM key 跳过） |
+| CI · 全部 | 门禁 `CI/CD Pipeline`（tag `v4.13.21-ci.1` = `8ac4d359d`，run [35568764699](https://github.com/platonai/Browser4/actions/runs/35568764699)） | **success**：`Total 2164 / Passed 2108 / Skipped 56 / Failed 0`；`Check Test Status` 通过；CLI E2E 通过 |
+
+#### 20.3.1 第 1 项的收益在 CI 上兑现（−786 s 全落在目标类上）
+
+基线取**上一次绿门禁** `v4.13.20-ci.3`（run [35514175379](https://github.com/platonai/Browser4/actions/runs/35514175379)），
+同一个 `ci-build` job、同一个 `Run Tests` 步骤、同一份排除清单，逐项同口径对比：
+
+| 项 | v4.13.20-ci.3 | v4.13.21-ci.1 | Δ |
+|---|---|---|---|
+| `ScrapeServiceTests` | **794.7 s** | **8.55 s** | **−786.2 s（−98.9%）** |
+| `CrawlFixtureMetadataTest` | 656.8 s | 714.6 s | +57.8 s（+8.8%） |
+| `CrawlParallelTabsTest` | 638.7 s | 672.1 s | +33.4 s（+5.2%） |
+| `Run Tests` 步骤 | **2 585 s（43 分 05 秒）** | **1 807 s（30 分 07 秒）** | **−778 s（−13 分）** |
+| `ci-build` job 全程（含 Docker 构建 + CLI E2E） | 3 595 s（59 分 55 秒） | 3 234 s（53 分 54 秒） | −361 s（−6 分） |
+| 用例账目（Total / Passed / Skipped / Failed） | 2164 / 2108 / 56 / 0 | 2164 / 2108 / 56 / 0 | 完全相同 |
+
+三点结论：
+
+* **收益只在目标类上，且几乎不多不少**：单类省 786.2 s、测试步骤省 778 s，差 8 s 落在步骤内噪声里；
+  两个 crawl 类合计 +91 s 是它们自身的负载波动（最近三次门禁里分别在 656.8–714.6 s 与
+  638.7–672.1 s 之间），本次改动没有碰它们的代码路径，两类本轮也都绿。
+* **§19.7 的 50 分钟预算现在有明显余量**：`Run Tests` 只用 30 分 07 秒，**35 分钟的旧预算也已够用**
+  （`ci.2` 那次正是被 2100 s 杀掉的）。即便如此仍建议保留 50 分钟：两个 crawl 类仍占 23 / 30 分钟，
+  单类波动 ±10%，留 20 分钟余量比贴着上限再赌一次便宜。
+* **门禁覆盖到 `8ac4d359d`**：其后的 `9126e70c0c`（`CrawlResponseTest` / `CrawlServicePersistenceTest`
+  改用 `CrawlStatus` 常量，外加本文档）没有门禁记录——这是机制而非遗漏：`ci.yml` 只在
+  `v*.*.*-ci.N` / `v*.*.*-rc.N-ci.N` 标签上触发，分支推送只跑 Cross-Platform Smoke Test。
+  该提交涉及的两个类本地 **17 / 0 / 0** 与 **5 / 0 / 0**，会随下一个 `-ci.N` 标签（或发布流水线）一并覆盖。
+
+
+**因此本仓库内可安全优化的部分已经做完**：死钩子、列表页→详情页、轮询方式，实测 168.0 s → 65.65 s。
+再往下需要动上游注入实现，或重新评估测试隔离策略——两者都超出本次范围。
+
+
+
+### 20.2 crawl 状态词表：一个状态一个拼写
+
+服务端 `CrawlResponse.status` 同时存在两套词表：裸 token（默认值 `"CREATED"`、
+worker 写的 `"PROCESSING"`）与 `ResourceStatus` 可读文本（`"OK"`、`"Request Timeout"`）。
+代价在 CLI 上最明显 —— `friendly_crawl_status` 只匹配 token：
+
+| 服务端实际发出 | 旧 CLI 映射结果 | 应为 |
+|---|---|---|
+| `Created` | `created` | `queued` |
+| `Request Timeout` | `request timeout` | `failed (timeout)` |
+| `Internal Server Error` | `internal server error` | `failed (error)` |
+| `Not Found` | `not found`（`contains("NOT_FOUND")` 不匹配） | `failed (not found)` |
+| `OK` | `completed` ✅ | `completed` |
+
+**修法**：
+
+* `browser4-rest/.../crawl/CrawlModels.kt` 新增 `object CrawlStatus`——`CREATED` / `PROCESSING` /
+  `OK` / `REQUEST_TIMEOUT` / `INTERNAL_SERVER_ERROR` / `NOT_FOUND`（全部由
+  `ResourceStatus.getStatusText(...)` 生成）、`TERMINAL` / `RUNNING` 集合与 `isTerminal` / `isRunning`。
+  可读文本是权威形式，因为 REST 载荷对已结算任务一直用它。
+* `CrawlResponse.status` 默认值改用 `CrawlStatus.CREATED`；`CrawlService` 的 12 处写点与
+  `terminalStatuses`、`CrawlSupport` 的 1 处写点全部改用常量（`ResourceStatus` 导入随之删除）。
+* 测试改从常量/谓词断言，不再写死拼写：`CrawlResponseTest`、`CrawlServicePersistenceTest`、
+  `CrawlParallelBudgetTest`、`CrawlSupportTest`、`CrawlServiceTest`（`isStillRunning`）、
+  `CrawlParallelTabsTest`（`isTerminal`）、`CrawlFixtureMetadataTest`、`CrawlXSqlE2ETest`。
+* CLI `friendly_crawl_status` 改为接受**两套拼写**（可读文本优先、token 兼容旧载荷），
+  并新增 `friendly_crawl_status_accepts_display_text` 覆盖上述四种曾被误标的状态。
+* 文档：`skills/browser4-cli/references/crawl.md` 的 `crawl status` / `crawl result` 段改为列出
+  真实线上值与该映射。
+
+**仍未做**：`IsolatedWorldManager` 的注入为何每次加载都要重来（依赖内实现，需要上游看）；
+驱动池分配日志（19.5 第三条）。
+
+
+
+## 21. 发现链接的去重与 URL 整形：重复 href 吃掉 `--top-links` 预算、`--ignore-url-query` 不生效（4.13.x，§16.4 第 5 条）
+
+§16.4 第 5 条把两件事写在一起：**发现链接未去重**，以及**不套用 `--ignore-url-query` / `--no-norm`**。
+本轮按"先量、再改"的顺序做。
+
+### 21.1 探针：一个"重复链接"的 fixture，把三件事一次量出来
+
+新增 fixture `pulsar-tests-common/.../static/generated/crawl/dup/hub.html`
+（5 个目标、8 个锚点：图片与标题指向同一个详情页、grid/list 两个 query 拼写指向同一页、
+最后一个带 `#specs`），配 `CrawlLinkDiscoveryTest`（`IntegrationTest`，真实浏览器 + REST API）。
+**改动前**实测（本机，`--depth 2 -ol "a.pick"`）：
+
+| 场景 | 改前实测 | 应有 |
+|---|---|---|
+| `-topLinks 3` | **3 行**：hub + `product/1.html` + `product/2.html` —— 8 个锚点里 `[1,1,2]` 先占满 3 个预算槽，实际只排队了 2 个不同页面 | 4 行：hub + product/1,2,3 |
+| `-topLinks 20 -ignoreUrlQuery` | 行 URL 仍是 `…/product/4.html?src=grid` —— 标志对发现链接无效 | 行 URL 无 query |
+| `-topLinks 20`（两种拼写） | 6 行，`?src=grid`（首个拼写）胜出、`#specs` 已被剥掉 | **同**（这一条改前就是对的） |
+
+第三条是重要的对照组：它说明**身份去重与 fragment 剥离早就是对的**，坏掉的只是"预算前的去重"和
+"`--ignore-url-query` 在哪一层生效"。第二条还不是"少抓页"而是**报错的口径**：`normalizeForVisit`
+早已把 query 折进同一个身份，排队的 URL 却保留 query，于是行里报的 URL 不是真正抓的那个。
+
+### 21.2 修法：一个共用的选择器，两条发现路径不能再分叉
+
+* `CrawlSupport.selectDiscoveredLinks(hrefs, visited, outLinkPattern, topLinks, ignoreUrlQuery)`
+  —— 顺序是**整形 → 模式过滤 → 身份去重 → 已访问过滤 → 预算**，返回 `DiscoverySelection`
+  （`links` + `filtered` / `repeated` / `alreadyVisited` / `overBudget` 四个桶）。四个桶是有意的：
+  日志的 "N of M anchor(s) … were not queued" 必须能把 M - links 拆开说清，否则"预算被重复链接吃掉"
+  看起来和一次正常运行没有区别；`links.size + skipped == M` 也由单测钉住。
+* `crawlDepthN`（depth ≥ 2）与 `extractOutLinks`（depth 1）**都**改用它。这正是 §16.4 #5 的另一半：
+  两条路径此前各写一份——depth 1 做了 `.distinct()`（按拼写）+ query 剥离，depth-N 什么都没做，
+  于是同一页面在不同 depth 下的行为不一致。
+* fragment 在整形阶段**无条件**剥掉（与引擎 `parseNormalizedLink` 一致：无论 `--no-norm`，
+  fragment 都不参与身份），`#specs` 这类拼写不再进入模式/去重/预算的判断。
+* `buildLinkArgs(options, expandable)` 从 `CrawlRoundRunner` 的私有方法移到 `CrawlSupport`，
+  并补上 `-ignoreUrlQuery` / `-noNorm` 的转发：**发现页由 session 加载，没进 args 的选项就等于不存在**
+  （`-readonly` 当初正是因为同样的原因漏在 depth ≥ 2 之外）。depth-1 的链接参数也改用同一函数
+  （`expandable = false`：depth-1 不展开子页，不需要 out-link 选择器）。
+
+### 21.3 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 本地 · 单测 | `browser4-rest` 8 个 crawl 单测类 | **113 / 0 / 0**（`CrawlSupportTest` 29 → 41，新增 11 个选择器 + 3 个参数转发用例） |
+| 本地 · 集成 | `CrawlLinkDiscoveryTest`（真实浏览器，3 条 crawl：预算 / 两种拼写 / `-ignoreUrlQuery`） | **4 / 0 / 0，130.6 s**（含继承的 hello 用例）。改前同一份测试 2 红（`-topLinks 3` 得 3 行、`-ignoreUrlQuery` 行里带 query） |
+| 本地 · 集成 | `CrawlFixtureMetadataTest`（既有 10 页 depth-2 fixture） | **5 / 0 / 0，667.4 s**（CI 基线 714.6 s，本地同量级） |
+| 本地 · 集成 | `SwarmCrawlFixtureTest` | **3 / 0 / 0，4.2 s** |
+| 文档 | `skills/browser4-cli/references/crawl.md` | `--top-links` 一行改为"**distinct** pages one page may contribute"；"URL deduplication" 段补上四条可观察契约（预算先去重、fragment 不进 URL、首个拼写胜出、`--ignore-url-query` 作用于排队前的 href） |
+
+**仍未做（记录边界）**：
+
+* `--no-norm` 只有**代码层**证据：它的转发路径有单测钉住参数字符串（`buildLinkArgs`），
+  但 MockSite 上找不到一个"归一化会改变、改后仍能抓通"的 URL（大小写路径在 Linux 会 404，
+  默认端口/大写主机名在 fixture 里不存在），因此没有浏览器层断言。
+* `--ignore-url-query` 对**种子 URL** 的影响（`CombinedUrlNormalizer` 在加载种子时也会剥 query）
+  不在本轮范围：那是引擎侧行为，且与 coworker 报告里的另一条 issue 重合，需要单独判断
+  "种子是否应当原样抓取"。
+
+
+
+## 22. 在途进度视图：只报"最后一轮"、且无锁 read-modify-write（4.13.x，§16.4 第 3、4 条）
+
+两条同族：都不是丢页，而是**派生出来的在途视图**既不聚合（第 3 条）也不互斥（第 4 条），
+共同破坏同一个承诺——*运行中的计数只增不减、且不超过终态值*。
+
+### 22.1 探针：多种子 crawl + 150 ms 轮询，把回落量出来
+
+新增 `ConcurrencyProbeController` 的 `/__probe/hub/{id}?links=N&delayMs=M`（hub 自身立即返回、
+它的链接指向慢页面，于是每一轮都持续几秒并多次发布）与 `CrawlInFlightProgressTest`
+（真实浏览器，150 ms 轮询 `/api/crawl/{id}/result`）。
+
+**改动前**（3 个种子、每 hub 3 条 600 ms 链接、`parallelTabs=1`，共 9 页）的轨迹只列变化点：
+
+```
+pages=0/0 links=0 → 1/0 → 2/0 → 3/3 links=3          ← 种子 A 结算（聚合值 3）
+→ 1/3 links=6 → 2/3 → 6/6 links=6                    ← 回落 3 → 1；随后 B 结算
+→ 1/6 links=9 → 2/6 → 9/9 OK                         ← 又回落 6 → 1
+```
+
+断言直接给出证据：`pagesFound fell back from 3 to 1 while the crawl was running`。
+`pagesExpected` 同期从 0 跳到该轮的值（它只统计**已结算**种子，属预期口径，见 22.4）。
+
+第 4 条（并发发布的 read-modify-write）在探针里**没有**稳定复现——窗口只有一次 get/put 的宽度，
+靠轮询撞上它属于撞运气。所以它是**按结构修**的，并由第 3 条的不变量在真实 crawl 上兜底。
+
+### 22.2 修法：一个聚合视图 + 一条加锁写入路径
+
+* **聚合**：`CrawlTaskContext.publishedPages: MutableMap<Int, List<CrawlPageResult>>`（按 seed index），
+  记录里的 pages = `CrawlSupport.aggregateInFlightPages(...)` = 各轮**最新一次**发布按 seed 顺序拼接。
+  *为什么不是按 URL 求并集*：终态记录一行 = 一次抓取，同一 URL 被两个种子各抓一次就是两行
+  （`SeedCollection.pages` 直接拼接各轮 pages），并集会让在途值**小于**终态值——把"计数回落"换成了
+  "最后一步长大"。这条规则由单测钉住（`testAggregateIsNotAUrlUnion`）。
+* **单写入路径**：`CrawlProgressSink` 由"每个 crawl 一个、按 taskId 发布"改为**每轮一个**
+  （`SeedProgressSink(task, seedIndex)`，作为参数传给 `crawlDepth1` / `crawlDepthN`）；
+  服务侧只剩一个 `publishInFlight(task, seedIndex, pages, linksDiscovered, diagnostic)`，
+  在 `synchronized(task.publishLock)` 内完成"记下本轮 pages → 聚合 → 合并旧记录 → 写回"。
+  `recordSeedProgress`（种子结算）也把该轮的 pages 写进同一张表、并改用同一个聚合视图，
+  于是两个发布者报的是**同一个数**（此前一个是"已结算轮之和"、另一个是"当前轮"，这正是回落来源）。
+* **顺带修掉一个更小的同类问题**：`publishDiagnostic`（某轮没发现可跟进链接时）原先**整条重建**记录
+  并把 `status` 写成 `OK`——多种子 crawl 里只要有一个种子没有 out-link，轮询方就会看到整个任务"已完成"。
+  现在它走同一条合并路径（`PROCESSING` + diagnostic），终态仍由 `writeCompleted` 写。
+* §16.3 的语义保持不变：终态记录**丢弃**晚到的发布（`mergeIncrementalProgress` 返回 null 的那条路径）。
+
+### 22.3 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 本地 · 单测 | `CrawlSupportTest` 新增 3 条（求和 / 非 URL 并集 / seed 顺序） | **44 / 0 / 0**（原 41） |
+| 本地 · 单测 | `browser4-rest` 全部 crawl 单测类（8 个类） | **116 / 0 / 0** |
+| 本地 · 集成 | `CrawlInFlightProgressTest`：顺序 3 种子（9 页）与 2 路并行（6 页）各全程 150 ms 轮询 | **3 / 0 / 0，145.9 s**（改前同用例在 `pagesFound fell back from 3 to 1` 处红） |
+| 本地 · 集成 | `CrawlParallelTabsTest`（多种子并行 + depth-1 两轮共享 out-link 的既有用例） | **5 / 0 / 0，105.0 s** |
+| 本地 · 集成 | `CrawlFixtureMetadataTest`（depth ≥ 2 的 parse handler 发布路径） | **5 / 0 / 0，625.0 s** |
+
+改后同一探针的轨迹（顺序用例）变成单调：
+
+```
+pages=0/0 → 1/0 → 2/0 → 3/3 → 4/3 → 5/3 → 6/6 → 7/6 → 8/6 → 9/9 OK
+```
+
+`CrawlInFlightProgressTest` 现在的断言就是这两条的验收条件：运行中 `pagesFound` / `pagesExpected` /
+`failedPages` 各自单调不减、在途值不超过终态值、且确实观测到视图在增长（至少 3 个不同计数——
+只采到最后一个样本的 run 什么也证明不了）。
+
+### 22.4 边界与仍未做
+
+* **`pagesExpected` 是"已结算种子"的口径**（不是一开始就报总数）：深爬在跑的时候它会随种子结算
+  阶梯式上升。要让它在起跑时就是总数，得先在 REST 契约里定义"还没提交的页算不算已承诺"，
+  所以本轮刻意保留现状，只保证**不回落**。
+* **取消/超时任务不满足"在途 ≤ 终态"**：终态是"已返回轮次的 pages + 每个未结算种子 1 条丢失"，
+  而在途视图含正在跑的轮次已收集的部分。这是 §17.3 / §19.5 的报账口径，不在本轮范围
+  （测试只对正常完成的 crawl 断言该性质）。
+* 第 4 条的竞态没有**直接**复现用例（见 22.1）：它由"两条发布路径共用同一把锁与同一个写入函数"
+  在结构上消除，并由上述不变量覆盖。
+
+
+
+## 23. 驱动池的分配日志：谁在等、等了多久、谁占着（4.13.x，§19.5 第 3 条）
+
+§19.5 第 3 条是"把'环境停顿'坐实成'驱动池饥饿'的最后一步"。此前判断"不是驱动池饥饿"只能靠
+**告警缺席**（60 s 租约告警 0 次），而池子自己什么都不说：一个卡在 `poll()` 里的任务，从上面看
+和"页面慢"完全一样。
+
+### 23.1 加了什么
+
+都在 `LoadingWebDriverPool`（所有取 driver 的路径都经过它）：
+
+* **计量**：`pollWebDriver` 记录进入/离开时间，等待时长随结果一起上报（在 `finally` 里，成功与
+  失败都报）。
+* **谁在等**：`poll(priority, conf, event, page)` 把 `page.url` 一路带到上报里——这是爬取路径唯一
+  知道"这是哪个任务"的地方；不经过该路径的调用记为 `unknown`。
+* **谁占着**：上报当下把 `workingDrivers` 的前 3 个连同它们的当前页面列出来（`#id state url`），
+  其余按数量省略（`(+N more)`）——一行日志必须还是一行。
+* **为什么**：`driverWaitReason(...)` 把原因分类。`every driver slot is taken`（该加容量）与
+  `driver creation is refused: ...`（该等负载回落）是两种不同的处置，混淆就会把真正的饱和读成
+  一次瞬时抖动；这个函数与 `shouldCreateWebDriver` 的判定顺序一致。
+* **两级，两种用途**：
+  * `WAIT_DEBUG_THRESHOLD`（默认 1 s）以上的等待，DEBUG 一行给出精确数字（等待时长 / 拿到的
+    driver / 池快照 / 原因 / 等待者 / 占用者）——排查时看的就是这一行；
+  * `WAIT_WARN_THRESHOLD`（默认 10 s）以上的等待，额外一条 WARN，**消息只由小集合的值构成**
+    （池号、等待倍数桶 `1x/3x/10x/30x`、原因、browserId）。原因是 `ThrottlingLogger` 按
+    **渲染后的消息**去重：消息里带 URL 或毫秒数，就等于每次都是新消息，等于没有节流。
+* 池耗尽时的异常消息与 INFO 也带上原因与占用者——调用方此前只能看到一句 "exhausted"，无法区分
+  "池被占满"和"浏览器根本没起来"。
+
+### 23.2 顺带修掉一个真 bug：亚秒超时被静默吞掉
+
+`poll(priority, conf, timeout: Duration)` 原先用 `timeout.seconds` 转秒，而
+`Duration.ofMillis(700).seconds == 0` ⇒ "等 700 ms"变成"不等待、立刻报池耗尽"。爬取路径
+（`settings.pollingDriverTimeout`）现在按毫秒传递。这是写诊断测试时被测试逼出来的：探针把超时设成
+700 ms，实际只等了 0.15 s。
+
+### 23.3 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 本地 · 单测 | `LoadingWebDriverPoolTest`（新增 4 条：端到端诊断 1 条 + 纯函数 3 条） | **6 / 0 / 0**（原 2 条） |
+| 本地 · 单测 | 同包 `ConcurrentStatefulDriverPoolPoolTest` + `ExceptionsTest` | **20 / 0 / 0**、**13 / 0 / 0** |
+| 本地 · 集成 | `CrawlParallelTabsTest`（4 种子并行 + depth-1 双轮，真实浏览器） | **5 / 0 / 0，135.1 s** |
+
+端到端那条用例断言的是**可读性本身**（不是"有没有日志"）：强制让资源守卫拒绝创建（与负载尖峰同一
+路径），一个等待的调用必须（a）异常消息里带原因与占用者，（b）DEBUG 行里点名等待的页面，
+（c）WARN 行里点名池与原因、但**不含**等待者 URL（否则节流失效）。
+
+### 23.4 真实 crawl 的观察：**没有**池饥饿（否证，不是坐实）
+
+同一台机器上跑 `CrawlParallelTabsTest`（4 种子并行、`parallelTabs=4`，另有 depth-1 双轮用例），
+按新诊断在应用日志里检索：
+
+| 检索项 | 命中 |
+|---|---|
+| `A task waited more than …`（≥10 s 等待的 WARN） | **0** |
+| `Driver pool is exhausted, rethrow …`（池耗尽） | **0** |
+| `Maintaining service is started/closed`（池管理器） | 各 8 次（正常启停） |
+
+即：这些场景里池**从未**让任务等待到 10 s，也从未耗尽——"CI 上 crawl 停顿"在这类负载下**不是**
+驱动池饥饿。这与 §20 的结论互相印证：成本在"新建浏览器/隐私上下文 + 重新注入双世界 JS"一侧。
+
+**边界**：1–10 s 之间的等待只在 DEBUG 级别可见，而测试配置里
+`ai.platon.pulsar.protocol.browser.driver` 固定为 INFO，所以本轮**只否证了 ≥10 s 的池等待**。
+要拿到更细的分布，把该 logger 调到 DEBUG，或临时下调 `WAIT_DEBUG_THRESHOLD`
+（两者都是 `var`，不需要改代码）。
+
+
+
+## 24. 门禁 `v4.13.21-ci.2`：三笔产品改动转绿，但测试预算只剩 74 秒（4.13.x，2026-09-22）
+
+`v4.13.21-ci.1` 之后有三笔**产品**改动（§21 链接发现、§22 在途视图、§23 驱动池诊断）此前没有被任何
+tag 门禁跑过，本轮补跑：
+
+| 项 | 值 |
+|---|---|
+| tag / SHA | `v4.13.21-ci.2` = `5fce62557f` |
+| run | [35646179429](https://github.com/platonai/Browser4/actions/runs/35646179429) |
+| 结果 | **success**（19:39:23 → 20:43:21 UTC，63 分 58 秒） |
+| 用例账目 | **Total 2190 / Passed 2134 / Skipped 56 / Failed 0**（ci.1：2164 / 2108 / 56 / 0，+26 条） |
+| Cross-Platform Smoke Test | success（同 SHA） |
+
+### 24.1 三个慢类的耗时对比（同一 job、同一 `Run Tests` 步骤）
+
+| 类 | ci.1 | ci.2 | Δ |
+|---|---|---|---|
+| `CrawlLinkDiscoveryTest`（§21 新增） | — | **685.3 s** | +685.3 |
+| `CrawlInFlightProgressTest`（§22 新增） | — | **123.3 s** | +123.3 |
+| `CrawlFixtureMetadataTest`（**未改动**） | 714.6 s | **956.1 s** | +241.5 |
+| `CrawlParallelTabsTest`（**未改动**） | 672.1 s | **708.8 s** | +36.7 |
+| `ScrapeServiceTests` | 8.55 s | 8.27 s | −0.3 |
+| `CrawlXSqlE2ETest` | 7.23 s | 6.07 s | −1.2 |
+| `SwarmCrawlFixtureTest` | 3.12 s | 2.08 s | −1.0 |
+
+### 24.2 预算：`Run Tests` 2926 s（48 分 46 秒），上限 3000 s
+
+| 步骤 | ci.1 | ci.2 |
+|---|---|---|
+| Maven Build | 163 s | 163 s |
+| **Run Tests** | **1807 s（30 分 07 秒）** | **2926 s（48 分 46 秒）** |
+| Build Docker Image | 227 s | 239 s |
+| Run browser4-cli E2E | 322 s | 323 s |
+| `ci-build` job 全程 | 3234 s（53 分 54 秒） | 3834 s（63 分 54 秒） |
+
++1119 s 里，~809 s 是**新增两个集成测试类**的成本，~278 s 是**未被改动**的两个重类的波动。
+余量只剩 **74 秒**——下一次同量级波动就会把门禁打成 `timeout`（正是 §19.7 的失败模式）。
+
+处置：
+
+* **本轮已做（缩小成本）**：`CrawlLinkDiscoveryTest` 由 3 条 crawl 减到 2 条。被删的那条
+  （"两种拼写只抓一次"）的契约在单元接缝上已钉住
+  （`CrawlSupportTest.testOnePageIsQueuedUnderItsFirstSpelling`），而它的两条断言里
+  "fragment 不进 URL"仍由保留的 `-ignoreUrlQuery` 用例逐行断言精确 URL 覆盖。
+  该用例在 CI 上约 228 s，预计把门禁压回 ~45 分钟。
+* **需要决策**：把 tag 门禁的 `timeout_minutes` 由 50 提到 60（`.github/workflows/ci.yml`）。
+  这与 §19.7"不要盲目加预算"不冲突：那次是"没跑起来/卡住"（该先查为什么），这次是**可归因的测试成本**
+  加上**可观测的波动**（同一份代码 ±4 分钟）。50 分钟是 v4.13.20 时为 ~30 分钟的负载定的，
+  现在这个负载已经涨到 ~45–49 分钟；只有同时收成本 + 留余量，门禁才重新"可预期地全绿"。
+
+
+
+## 25. `--readonly` 与 X-SQL 的第二次读：readonly 优先于 refresh（4.13.x，§18.5 第 1 条）
+
+§18.5 第 1 条记的是"强制 `-refresh` 让 `readonlyNote` 的存取分支变成死代码"。本轮的结论是：
+`--readonly` **只服务于 X-SQL 执行引擎的第二次读**，所以那些"死代码"不是该删掉的冗余，而是**没接通的接口**。
+
+### 25.1 从日志学到的用法：X-SQL 会读同一页两次
+
+`CrawlXSqlE2ETest` 的真实日志（本轮）：
+
+```
+DEBUG CrawlXSql - Crawl X-SQL: froze the round's page for 'http://.../__probe/slow/crawl-sql-seed-<run>'
+                 (2248 bytes, document=true)
+INFO  CrawlXSql - Crawl X-SQL: executing query on 'http://.../crawl-sql-seed-<run>':
+                 select dom_first_text(dom, '#probe-id') as id
+                 from load_and_select('http://.../crawl-sql-seed-<run> -readonly', ':root')
+INFO  CrawlXSql - Crawl X-SQL: extracted 1 row(s)
+```
+
+**第一次读**是 crawl 自己加载页面（随后 freeze 进本地缓存）；**第二次读**是语句里的
+`load_and_select()` UDF —— 它只带 `-readonly`，因为封印
+（`ScrapeAPIUtils.normalizeForReadOnlyQuery`）把 `refresh/expires/expireAt/itemExpires/itemExpireAt`
+按名字擦掉并校验（`checkReadOnlyQuery`）。§20 之前的日志里也见过它的另一半：
+`X-SQL: pre-load of '...' before first attempt failed`（`ScrapeService` 的预加载）。
+
+### 25.2 规则：readonly 优先于 refresh（改在哪、为什么）
+
+`-refresh` 不是一个普通选项，它是 `-ignoreFailure -i 0s` 的简写：**任何**本地副本都会被判定为过期，
+于是 `AbstractPulsarSession.createPageWithCachedCoreOrNull`（要求 readonly 且未过期）这条捷径被绕过，
+UDF 在查询执行期间回到网络并回写存储。两个选项因此不能并存：
+
+* **本轮改动**：新增 `CrawlSupport.resolveRoundArgs`——args 里含 `-readonly` 时**擦掉 `-refresh` 且不再补**；
+  `crawlDepth0` 与 depth-1/depth-N 三处统一走它，旧的私有 `buildEffectiveArgs` 删除。
+  不带 `--readonly` 时行为不变（仍强制 `-refresh`，因为陈旧/半写的存储副本正是"门户页 0 个外链"
+  的成因）。
+* 语句内部的封印不变（既有实现 + 既有断言）。
+
+### 25.3 接通接口：readonly 命中存储不再被当成"丢页"
+
+改完规则后 `CrawlFixtureMetadataTest` 的两条 readonly 用例立刻红了，失败信息本身给出了原因：
+
+```
+WARN CrawlRoundRunner - the load of '.../index.html' returned no document
+     (fetched=false, status=200, contentLength=7706); reporting it as lost
+```
+
+内容在（7706 字节，就是存储里那份），只是"这一轮没抓"，而 §18 引入的
+`isDocumentDelivered(fetched, html)` 把"没抓"等同于"没收到"。修法是把 readonly 这一种情况显式接上：
+
+* `isDocumentDelivered(fetched, html, storeServed)`：`storeServed` 时文档非空即算送达；
+* `isReadOnlyStoreServe(page, readonly) = readonly && page.isCached`：只有 **readonly 轮次**能把存储
+  命中当作送达——`-ignoreFailure` 下"抓取失败被存储副本顶替"的老问题（§18）依旧报丢失，
+  因为那种轮次必然带 `-refresh`（因而非 readonly）。
+
+于是 §18 留下的两半（`servedFromStore` 标记、`buildReadonlyNote` 的存取分支与 age 文案）第一次真正被走到，
+测试也从"两个分支随便哪个"收紧为"必须走存取分支"。
+
+### 25.4 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 本地 · 单测 | `CrawlSupportTest`（新增 3 条 `resolveRoundArgs` + 2 条送达判定） | **49 / 0 / 0** |
+| 本地 · 集成 | `CrawlFixtureMetadataTest`（两条 readonly 用例改为断言存取分支） | **5 / 0 / 0，179.4 s** |
+| 本地 · 集成 | `CrawlLinkDiscoveryTest`（同一 JVM 连跑，确认 link 参数改动未回归） | **3 / 0 / 0，181.0 s** |
+| 本地 · 集成 | `CrawlXSqlE2ETest`（服务器侧计数断言"查询不额外抓一次"） | **2 / 0 / 0，150.4 s**（单独跑 24.4 s） |
+| 汇总 | 三类同批 `-Dtest=CrawlFixtureMetadataTest,CrawlLinkDiscoveryTest,CrawlXSqlE2ETest` | **BUILD SUCCESS，10 / 0 / 0** |
+| 文档 | `skills/browser4-cli/references/crawl.md` 新增"`--readonly` and the X-SQL second read"；CLI `--readonly` 描述同步 | — |
+
+### 25.5 日志证据（`browser4-tests/browser4-rest-tests/logs/pulsar.log`，末次运行段）
+
+请求侧与生效侧的 args 成对出现，正好把"擦除"钉住（`CrawlController` 打请求原样 args，
+`LoadComponent.Task` 打真正下发的 args）：
+
+```
+INFO CrawlController - Crawl request: url='.../__probe/slow/crawl-sql-seed-muc40dkb' ... args='-refresh -readonly' sql=true
+INFO LoadComponent.Task - 134. 💯 ⚡ U for N got 200 2.1953125 KiB [💿2.1953125 KiB] in 1m22.097s, fc:1 | ... |
+                         http://localhost:13196/__probe/slow/crawl-sql-seed-muc40dkb -readonly
+```
+
+即 `-refresh -readonly` → `-readonly`：`-refresh` 被擦掉，**页面仍然照抓**（`⚡`、`fc:1`、耗时 1m22s 是
+探针的 `delayMs`）。这正是"readonly 不是禁止联网，而是允许命中本地副本"的语义。
+
+其余三条观察：
+
+* **不带 readonly 的轮次照旧带 `-refresh`**：同段内 `/generated/crawl/` 的加载行全部形如
+  `... -outLinkPattern product/ -outLinkSelector a.product -parse -refresh`（`dup/hub.html` 的
+  `-outLinkSelector a.pick` 同名），默认行为没被改动。
+* **readonly 轮次不再产生加载任务行**：该运行段内带 `-readonly` 的 `LoadComponent` 行只有上面这两条
+  X-SQL 探针页；两个 readonly fixture crawl 的请求（`11:20:21` 的 `-readonly`、`11:20:25` 的
+  `-readonly -refresh`）各自对应 `Crawl task ... completed: 10 pages, 0 lost, status OK`，中间没有
+  任何 `-readonly` 加载任务 —— 也就是说两次读里的第二次读直接命中了本地页存储。
+  修复前的运行段恰是反例：同一批 URL 每页都留下 `-readonly … -refresh` 的加载任务行
+  （本文件 line 2678 / 2680、3245 / 3259 属旧段，可作对照）。
+* **"存储命中=送达"真的被走到**：readonly 轮的终态是 `0 lost`，而修复前这里是
+  `returned no document (fetched=false, …); reporting it as lost`。
+
+### 25.6 仍未做（本条边界）
+
+* 上面那两条 X-SQL 探针页是 `fc:1`（**第一次读就联网**），所以日志没有覆盖"第一次读也命中旧副本"的
+  情形——按语义那是允许的（readonly 只承诺"可以读本地"，不承诺"必须新鲜"），但如果将来要保证
+  X-SQL 的第一次读一定新鲜，得由 crawl 侧（而非引擎侧）显式要求，这里留个明确边界。
+* §18.5 第 2 条（送达失败后重试）仍未做：需要 ledger 暴露"在途尝试"这一层，属于独立改动。
+
+
+## 26. 送达失败即重投一次：给 ledger 开一个"在途尝试"的口子（4.13.x，§18.5 第 2 条）
+
+§18.5 第 2 条记的是"本轮只把'没抓到'如实报成丢失，没有加重试"。这一轮补上：一次投递失败之后**再加载
+一次同一个 URL**，而且这一轮的 row 由重投那一次产生。
+
+### 26.1 为什么不能简单"再 submit 一遍"
+
+原来丢页是在 **parse 事件**里结算的（`recordFailure(... REASON_NOT_DELIVERED)`），而重投必须发生在
+**load 事件**里：只有那里同时握着这次尝试的 token 与协议状态。三层原因，每一层单独都会让"朴素重投"出错：
+
+* `onLoaded` 在 parse **之后**触发（代码里写明的顺序）。parse 已经把 URL 结算成失败，轮次就可能在
+  load 事件跑到之前 `complete()`；一旦 terminal，重投只能被拒 —— 结果是"刚决定要重投、又立刻报告丢失"。
+  单页 crawl 必然踩中这一条，所以现在的顺序是**先认领重投、再记录失败**，并且 load 事件用
+  `enter()/leave()` 持有轮次（它可能提交重投，和 parse 处理器一样必须让轮次保持未完成）。
+* ledger 的结算语义是"每个提交 URL 恰好一次"，`recordFailure` 靠 `failedKeys` 幂等。重投意味着同一个
+  URL 要有第二次结算机会，于是需要显式**撤单**：撤回失败记录、把结算数还回去。
+* 旧尝试的事件在重投期间还会继续到达（重复的 parse 事件、跟在 parse 后面的 load 事件）。它们必须
+  **什么都结算不了**，否则重投的 row 会变成第二次结算，撞上 ledger 的 over-count 守卫（"响亮地"提前
+  结束轮次）。
+
+### 26.2 ledger：attempt token + 撤单式重投
+
+`CrawlLedger(taskId, maxDeliveryAttempts = 2)`（首次 + 一次重投）新增三个方法：
+
+| 方法 | 作用 |
+|---|---|
+| `beginAttempt(url): Long` | 每次**提交**（首次或重投）开一个尝试，返回 token |
+| `isCurrentAttempt(url, token)` | token 是否仍是该 URL 最新的尝试——被取代的尝试据此自我否决 |
+| `startRetry(url): Long?` | 原子地花掉一次重投预算；**并把已结算的失败撤单**（撤回记录 + 归还 settled 计数），返回新 token；预算用完或轮次已终止则返回 null |
+
+`pagesExpected` 不变：一个 URL 提交过一次，就仍然只值一页。
+
+### 26.3 回合内：parse 只负责"看见"，load 负责"决定"
+
+两条丢页路径（`crawlDepth1` 的外链、`crawlDepthN` 的发现子页）现在共用同一套流程：
+
+1. 提交时 `ledger.beginAttempt(url)` 取 token，该次提交的 parse / load 事件都闭包持有它；
+2. parse 事件发现"这次没有拿到文档"时**只打标记**（`emptyDeliveries`），不做任何结算；
+3. 该次尝试的 load 事件（`resolveDeliveryAttempt`，与 `lossReasonForLoaded` / `claimDeliveryRetry`
+   一起放在 `CrawlSupport`，输入是从 `WebPage` 抽出来的 `LoadedPageFacts`，所以可以脱离浏览器单测）
+   在做任何结算**之前**先决定要不要重投：
+   * **引擎自己还在重试的**（`isRetry` / canceled 状态）什么都不做：第二次加载是引擎排的，轮次只要等它；
+   * 其余的失败一律重投一次（预算在 ledger 里），不按协议状态挑 —— 见 §26.4 的探针证据；
+   * "内容到了但 parse 没触发"（`REASON_NOT_PARSED` 且 `contentLength > 0`）不算投递失败，不重投；
+     而 `contentLength == 0` 的那种（0 字节响应、连 parse 都没跟上）仍然算 —— 重投正是冲它去的；
+4. 重投也失败时照旧报丢失，措辞保持原样：`... reporting it as lost`（多带上 `on attempt N`）。
+
+### 26.4 探针：失败答案该长什么样（两次否证）
+
+`ConcurrencyProbeController` 新增两个端点 + 一处计数：
+
+* `GET /__probe/flaky/{id}?failures=N&status=500`：前 N 次用 `status` 应答，之后回真页面；每个 id 的命中
+  次数进 `/stats` 的 `flakyHits`（`/reset` 一并清零）。
+* `GET /__probe/flaky-hub/{id}?links=N&failures=N`：门户本身永远有内容，只有它链出去的子页会失败
+  （门户失败会走"0 外链诊断"那条路，测不到投递）。`failures` 只作用于子页——第一版把它同时用在自己身上，
+  深度-2 用例传 `failures=0` 时子页也就从不失败了。
+
+站点侧计数是这里唯一的见证人：对 crawl 而言两次加载是同一个 URL，只有服务器能区分"加载了两次、
+第二次成功"与"只加载了一次"。但**失败答案本身**试了两版才站住：
+
+1. **`200` + 空 body 不行**（第一版：两条用例都红，`expected: <2> but was: <1>`）。浏览器导航到一个空响应
+   会合成为 `<html><head></head><body></body></html>` —— 日志里量到的那个 **39 B** —— `isDocumentDelivered`
+   看到 html 非空，于是"没抓到"变成了"抓到一个空壳页"（row 有了、标题为空），重投压根不存在。
+2. **`500` 和 `404` 也不行**：浏览器驱动的加载失败会落在浏览器错误页上，引擎据此判为**可重试**
+   （`1601 Retry(1601) rs: BrowserErrorPageException`），并自己排下一次加载：
+   `StreamingTaskRunner.Task - 4. 🤺 Trying 1th 37s later | ... fc:1/1 Retry(1601)`，约 37~55 s 后那次
+   `💯 🖴 ... last fetched 45s ago, fc:2` 就是它。也就是说：**这类失败根本轮不到 crawl 的重投**，
+   用它们做的用例会"不劳而获"地通过。
+
+**结论（决定实现与测试怎么分工）**：引擎自带重投，覆盖"引擎认为可重试"的失败；crawl 的重投只覆盖
+**引擎认为已经结束、而 crawl 没拿到**的失败 —— §18 记录的"存储副本顶替了一次失败的抓取"
+（`fetched=false, status=200, contentLength=7706`）正是这一类，也是 §18.5 第 2 条真正要修的那一种。
+所以：这条规则用 `CrawlSupportTest` 的确定性单测钉住（含"引擎在重试时什么都不做"这一条），端到端那条
+用例改为钉**契约**——"第一次加载失败的页面最终仍被交付、且绝不报成丢失"，无论第二次加载是引擎排的还是
+crawl 排的。
+
+### 26.5 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 单测 · ledger | `CrawlLedgerTest` 14 → **18**：重投预算、撤单（失败撤回 + settled 归还）、被取代的尝试、轮次已终止时拒绝重投 | **18 / 0 / 0** |
+| 单测 · 规则 | `CrawlSupportTest` 49 → **57**：空交付重投、二次失败报丢失、**引擎在重试时什么都不做**、被取代的尝试不结算、终局失败重投并把原因报回来、`NOT_PARSED`（有内容）不重投、0 字节要重投、已记录成功的页面不结算 | **57 / 0 / 0** |
+| 集成 · 端到端 | `CrawlDeliveryRetryTest`（新增 2 条：depth-1 外链 / depth-2 发现子页），断言站点侧"每个子页被问了两次"、row 带上交付页的标题、`0 lost` | **3 / 0 / 0，189.4 s** |
+| 日志 | `1601 Retry(1601) rs: BrowserErrorPageException` → `Trying 1th 37s later` → 45 s 后 `fc:2` 拿到 200 | 见 §26.4 |
+
+### 26.6 仍未做（本条边界）
+
+* **引擎的重投延迟是轮次预算的隐性开销**：一次失败的加载要先等 37~55 s 才等到引擎排的下一次，而这段时间
+  轮次一直在等（`isRetry` 不结算）。页数多的时候这会显著吃掉任务预算，本轮没有动 —— 那是引擎侧的调度，
+  不是 crawl 能决定的。
+* **crawl 的重投只有一次，且只覆盖引擎判为终局的失败**。要让它也接管"引擎还在重投"的情形，得先决定谁的
+  判断更可信（引擎的重试间隔可调吗？值得等吗？），属于独立一轮的决策。
+* **端到端用例钉的是契约而不是机制**：它无法区分"第二次加载是谁排的"。要区分就需要一个能产生**终局**投递
+  失败的 fixture；本轮试了 `200` 空 body、`500`、`404` 三种，前两种直接不成立、第三种被引擎接管（§26.4）。
+
+
+## 27. 任务预算的按请求契约：`--timeout`（4.13.x，§17.5 第 1 条）
+
+§17.5 记的是"`taskTimeoutMillis` 只有一个默认值 10 min；要按请求调，需要在 REST/DTO 层定契约"。这一轮补上，
+并且顺着 §17.2/§17.3 已有的那条线走：**任务预算是一个时钟**，轮次预算从它派生、种子闸门按它算，所以"按请求
+调预算"改的是整个任务的时间面，不是另加一个定时器。
+
+### 27.1 契约
+
+| 层 | 形状 |
+|---|---|
+| 请求 | `CrawlRequest.taskTimeoutMillis: Long? = null`（JSON 同名）。`null` / `≤ 0` = "没有偏好"，用服务端默认值；`> 0` 被夹到 `[1s, 1h]` |
+| 纯规则 | `CrawlSupport.resolveRequestTaskTimeout(requested, serverDefault)`；常量 `MIN_REQUEST_TASK_TIMEOUT_MS = 1_000` / `MAX_REQUEST_TASK_TIMEOUT_MS = 3_600_000` |
+| 服务 | `CrawlService.resolveTaskTimeoutMillis(request)`：与 `resolveParallelTabs` 同一形状、同一约定 |
+| 任务 | `CrawlTaskContext.taskTimeoutMillis` 在提交时解析一次；worker 用它 arm 时钟、用它做 `withTimeout`、用它写"预算用尽"和"任务上限"文案 |
+| 记录 | `CrawlResponse.taskTimeoutMillis` 报**实际生效**的值（含服务端夹取），不是原始请求 |
+| CLI | `crawl --timeout <dur>`（`900`/`30s`/`10m`/`1h`），在本地校验后翻译成 `taskTimeoutMillis` |
+
+三条设计取舍，都是照已有的约定抄的：
+
+* **夹取而不是拒绝**（服务端）：与 `--parallel` 一样，"问了超过服务端愿意给的"仍然得到一次能跑的 crawl，
+  而记录里报的是实际值，调用方看得见差别。`0` 和负数当"没有偏好"：预算是上限，不是开关，`0` 不能解释成
+  "立刻取消"。
+* **CLI 提前拒绝**：`--parallel` 的先例是"把一次往返变成一条立刻的消息"。所以 `--timeout 500ms` / `2h` /
+  `ten minutes` 在本地就以非零退出，错误信息里给出可用的写法（`10m`）。
+* **默认值不动**：`CrawlService.taskTimeoutMillis`（10 min）仍是"没要求就用它"，运维侧的唯一旋钮也还在那里；
+  按请求调只是让一次 crawl 能自己说"我需要 30 分钟"。
+
+### 27.2 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 单测 · 纯规则 | `CrawlSupportTest` 57 → **59**：缺省/非正数回落默认、请求值被夹到 `[1s, 1h]` | **59 / 0 / 0** |
+| 单测 · 服务 | `CrawlServiceTest` 11 → **13**：请求自带 `taskTimeoutMillis = 10_000` 时闸门在碰浏览器前短路、终态 TIMEOUT、每个种子按名报丢失、记录里报的就是 10_000（不是服务端默认）；夹取与缺省回落 | **13 / 0 / 0** |
+| 单测 · 序列化 | `CrawlResponseTest` 17 → **18**：`taskTimeoutMillis` 持久化往返；没有该字段的历史 JSONL 行仍能还原（任务文件是跨版本追加的） | **18 / 0 / 0** |
+| 单测 · CLI | `cargo test --bin browser4-cli`：时长解析（`900`→900000、`1500ms`、`10m`、`1h`、`2d`、垃圾值→None）、上下界校验、`--timeout 45s` → `taskTimeoutMillis: 45000` 且 CLI 拼写不外泄、未指定时不发这个字段 | **1214 passed / 0 failed** |
+| 汇总（同批） | `CrawlLedgerTest` + `CrawlResponseTest` + `CrawlServiceTest` + `CrawlSupportTest` | **108 / 0 / 0，BUILD SUCCESS** |
+
+文档：`skills/browser4-cli/references/crawl.md` 新增 `--timeout` 选项行 + "Task budget (`--timeout`)" 小节，
+把"后端任务上限 10 分钟"改成"默认 10 分钟，可按 crawl 用 `--timeout` 提到最多 1h"，排障表新增
+`Invalid --timeout` 行；`skills/browser4-cli/SKILL.md` 的 crawl 指南补一句；CLI 帮助文本由
+`commands.rs` 的 `OptionDef` 生成，所以 `--timeout` 的说明只写在一处。
+
+### 27.3 仍未做（本条边界）
+
+* **请求侧预算不做"下限保护"**：允许 `--timeout 1s`（服务端下限）意味着这次 crawl 的每个种子都会在
+  闸门处被拒。这是**如实报账**的行为（每个种子一行丢失 + `skipped` 状态），不是静默失败，所以没有再加
+  "至少 45s"的限制——那会让"我就是想测一下预算闸门"变成做不到。CLI 只挡 `1s` 以下。
+* **`--timeout` 不覆盖排队时间**：预算从 worker 真正开工时 arm（`armBudget`），与 `withTimeout` 同一个
+  时刻，排队不算——这条语义没变，文档里也写了。
+* **没有任何配置项把默认值调大**：运维侧仍然只能改 `CrawlService.taskTimeoutMillis`（或按请求传）。若将来要
+  做成 `application.properties` 配置项，那是配置层的独立改动（本轮只动 REST/DTO 契约，符合 §17.5 的原话）。
+* **CLI 端到端（真后端）没有单独跑 `--timeout`**：本地校验与参数翻译有 Rust 单测，服务端契约有 Kotlin 单测，
+  而请求字段的绑定形状与 `parallelTabs` 完全相同（后者在 CLI e2e 里已经跑通）。要把它变成"真浏览器 +
+  真后端"的证据，得往 `crawl` 的 e2e 场景里加一条，留给下一次 CLI e2e 批次。
+
+## 28. §19 的收尾：根因是"先建新 tab、再取空闲驱动"（4.14.x，已修）
 
 4.13.x 合并进 4.14.x 后，主 CI 在 commit `5435a7d10e` 上仍红，红点从 1 个变成 3 个，全部是
 `Crawl … did not reach a terminal state within N minutes, last: PROCESSING`
@@ -1112,7 +1862,7 @@ java.lang.IllegalStateException: Crawl eb660148-… did not reach a terminal sta
 
 两次"失败"的 crawl 都是正常终态 —— 所以问题不在 crawl 语义，而在**单次抓取越来越慢**。
 
-### 20.1 现象：单次抓取从 2.6 s 涨到 80–103 s，然后稳定在平台
+### 28.1 现象：单次抓取从 2.6 s 涨到 80–103 s，然后稳定在平台
 
 把 run 里 74 次 `L.Task … got 200 … in Xs` 拉成曲线：
 
@@ -1127,7 +1877,7 @@ java.lang.IllegalStateException: Crawl eb660148-… did not reach a terminal sta
 停顿期间**应用一行日志都没有**：`processing seed URL 1/4` 与 `fetched seed URL` 之间是纯空白，
 INFO 级别完全看不到"卡在哪"。
 
-### 20.2 根因：等待方**先建一个新 tab，再去取空闲驱动**
+### 28.2 根因：等待方**先建一个新 tab，再去取空闲驱动**
 
 `LoadingWebDriverPool.pollDriverInSlices` 的循环原本是：
 
@@ -1155,9 +1905,9 @@ WARN Waited 18882ms for a driver | active: 50, standby: 44, waiting: 0, working:
 `standby` 一直有 **41–44 个空闲驱动**，`working` 只有 2–6，可是每次取驱动仍然新建一个 tab，
 把 `active` 从 43 推到容量上限 50（`slots` 7→0），等待时间 9–19 s 就是**新建 tab 的耗时**。
 浏览器 tab 越多，建 tab 与页面加载越慢 —— 这正是曲线爬升并最终平台化（80–103 s）的原因，
-CI 与本地是同一个签名（本地复现见 §20.4）。
+CI 与本地是同一个签名（本地复现见 §28.4）。
 
-### 20.3 附带机制：CPU 负载守卫会把一次等待放大到 60 s
+### 28.3 附带机制：CPU 负载守卫会把一次等待放大到 60 s
 
 驱动创建还受 `AppSystemInfo.isSystemOverCriticalLoad`（`systemCpuLoad > CRITICAL_CPU_THRESHOLD`，
 默认 **0.85**）约束；被拒绝时等待方按 500 ms 切片轮询，最多烧掉 `POLLING_TIMEOUT = 60 s`，
@@ -1172,7 +1922,7 @@ CI 与本地是同一个签名（本地复现见 §20.4）。
 CI runner 上"3000 条测试 + Chrome"的 CPU 负载长期高于 0.85，这条路径随时会把单次抓取再叠加 ~60 s，
 所以它虽然**不是**主因，也必须一起处理。
 
-### 20.4 修复与验证
+### 28.4 修复与验证
 
 | 改动 | 位置 | 说明 |
 |---|---|---|
@@ -1195,7 +1945,7 @@ CI runner 上"3000 条测试 + Chrome"的 CPU 负载长期高于 0.85，这条�
 CI 修复后的数字应与 §19.3 的"健康 run"（`CrawlFixtureMetadataTest` 321 s、`CrawlParallelTabsTest` 72.7 s）
 同一量级。
 
-### 20.5 附带发现：合并后在本地 `mvn install` 会留下孤儿 class
+### 28.5 附带发现：合并后在本地 `mvn install` 会留下孤儿 class
 
 `browser4-rest/.../service/CrawlService.kt` 被 4.13.x 拆到 `service/crawl/` 之后，增量构建**不会删除**
 被删源文件产生的 class：`target/classes/ai/platon/pulsar/rest/api/service/CrawlService.class`（连同
@@ -1212,7 +1962,7 @@ CI 不受影响（每次从干净检出构建，没有 `target/`）；**本地**
 排查时注意签名：这类失败发生在 Spring 上下文启动阶段（约 1.5 s 内整类 error），与本文的抓取停顿
 （`PROCESSING` 直到上限）完全不同。
 
-### 20.6 还没做
+### 28.6 还没做
 
 * **守卫的产品语义**：池已达容量且有人排队时，"按 500 ms 切片轮询 + 60 s 超时 + 上层重试"在负载下会把
   延迟放大到分钟级；是否在"已经有等待者"时允许再建一个 driver（受 capacity 约束）需要单独评估。
@@ -1221,7 +1971,7 @@ CI 不受影响（每次从干净检出构建，没有 `target/`）；**本地**
 * **CI 上的复测**：`Waited {}ms for a driver` 这条 WARN 是新的观测点，若 CI 仍出现平台化，
   先看这条（等 driver）与 `L.Task` 的耗时对比，再决定是池侧还是浏览器侧。
 
-## 21. v4.14.0-rc.6 的唯一红点：GitHub 发布接口的一次瞬时 5xx 毁掉了整个 release（4.14.x，已修）
+## 29. v4.14.0-rc.6 的唯一红点：GitHub 发布接口的一次瞬时 5xx 毁掉了整个 release（4.14.x，已修）
 
 release.yml 在 tag `v4.14.0-rc.6`（run [35265014949](https://github.com/platonai/Browser4/actions/runs/35265014949)）上唯一红的是
 `Publish GitHub release` 的 `Create or update GitHub Release` 步骤：
@@ -1235,7 +1985,7 @@ release.yml 在 tag `v4.14.0-rc.6`（run [35265014949](https://github.com/platon
 下游 4 步全部 skipped：`Generate Artifact Attestation`、`Verify Release`、`Release Summary`、
 `Sync to Aliyun OSS CDN` —— 一次服务端抖动，换来一个只挂了 6/11 个资产的 release，加上没触发的 CDN 同步。
 
-### 21.1 这不是我们的代码，也不是 action 的 bug
+### 29.1 这不是我们的代码，也不是 action 的 bug
 
 * 报错文本**不在**所 pin 的 `softprops/action-gh-release@3d0d9888…`（v3.0.2）里：该 commit 树里
   `dist/index.js` 的 blob 与本地取到的文件哈希一致（`git hash-object` = 树里的 sha），全文没有
@@ -1247,7 +1997,7 @@ release.yml 在 tag `v4.14.0-rc.6`（run [35265014949](https://github.com/platon
 * 推论有两条：重试是唯一有效的对策；**失败不是原子的** —— 失败的资产可能在 release 上留下一个比本地小的
   截断版本，所以"按名字 + 字节数核对"才算验证，光看资产名在不在会漏。
 
-### 21.2 改动
+### 29.2 改动
 
 1. `cli/scripts/reconcile-release-assets.sh`（新）：以 release 为真值收敛 —— 列出资产 → 只上传
    "缺失或大小不符"的文件（`gh release upload --clobber`，顺带覆盖截断资产）→ 复查，直到一致或
@@ -1264,7 +2014,7 @@ release.yml 在 tag `v4.14.0-rc.6`（run [35265014949](https://github.com/platon
 4. 两个 workflow 都跑新套件：`release.yml` 的 `test-install-scripts`、`ci.yml` 的
    `Validate install script tests`（后者每轮都跑，避免"只在 release 时跑、坏了几个月没人发现"）。
 
-### 21.3 还没做
+### 29.3 还没做
 
 * **发布创建路径**：release 不存在时脚本直接报错退出 —— 用 title / notes / prerelease 创建 release 是
   action 的职责（它自己有 3 次重试）。若创建本身持续 5xx，job 仍会红，只是错误信息点明"release 不存在"。

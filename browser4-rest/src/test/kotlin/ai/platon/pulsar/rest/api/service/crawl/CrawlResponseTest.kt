@@ -44,7 +44,7 @@ class CrawlResponseTest {
         )
         assertEquals(now, response.startedTime)
         assertEquals(now.plusSeconds(30), response.finishTime)
-        assertEquals("OK", response.status)
+        assertEquals(CrawlStatus.OK, response.status)
         assertEquals(0, response.pagesFound)
     }
 
@@ -79,7 +79,7 @@ class CrawlResponseTest {
     @Test
     fun `default status is CREATED`() {
         val response = CrawlResponse()
-        assertEquals("CREATED", response.status)
+        assertEquals(CrawlStatus.CREATED, response.status)
     }
 
     // -----------------------------------------------------------------
@@ -180,6 +180,23 @@ class CrawlResponseTest {
         assertEquals(2, failed.first().depth)
         assertEquals(1601, failed.first().protocolStatus)
         assertEquals("refused", failed.first().reason)
+    }
+
+    @Test
+    @DisplayName("the task budget travels on the record, and an old row without it still restores")
+    fun taskBudgetTravelsOnTheWire() {
+        val mapper = pulsarObjectMapper()
+        // The record reports the budget the task ran under, so a clamp is visible to the
+        // caller instead of being a silent difference from what it asked for.
+        val response = CrawlResponse(taskId = "budget-1", status = "OK", taskTimeoutMillis = 1_800_000L)
+
+        val restored = mapper.readValue(mapper.writeValueAsString(response), CrawlResponse::class.java)
+
+        assertEquals(1_800_000L, restored.taskTimeoutMillis)
+        // A row persisted before the field existed must still restore (the task file is
+        // appended to across upgrades).
+        val legacy = mapper.readValue("""{"taskId":"legacy-2","status":"OK"}""", CrawlResponse::class.java)
+        assertEquals(0L, legacy.taskTimeoutMillis)
     }
 
     @Test

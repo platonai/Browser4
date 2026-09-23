@@ -215,6 +215,7 @@ struct FixturePages {
     frame_other_html: String,
     frame_nested_html: String,
     frame_inner_html: String,
+    console_probe_html: String,
 }
 
 impl FixtureServer {
@@ -244,6 +245,7 @@ impl FixtureServer {
             frame_other_html: load_html_fixture(FRAME_OTHER_FIXTURE_FILE),
             frame_nested_html: load_html_fixture(FRAME_NESTED_FIXTURE_FILE),
             frame_inner_html: load_html_fixture(FRAME_INNER_FIXTURE_FILE),
+            console_probe_html: load_html_fixture(CONSOLE_PROBE_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -436,6 +438,12 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "application/json; charset=utf-8",
             r#"{"status":"ok","source":"fixture"}"#.to_string(),
+        )
+    } else if path == CONSOLE_PROBE_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.console_probe_html.clone(),
         )
     } else {
         (
@@ -2431,6 +2439,11 @@ impl E2ECtx {
         format!("{}{}", self.fixture_base_url, FRAME_CROSS_PATH)
     }
 
+    /// The console serialization probe page (see `console-probe-fixture.html`).
+    fn console_probe_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, CONSOLE_PROBE_PATH)
+    }
+
     /// A slow fixture URL (served after a fixed delay) used to hold browser
     /// slots in the swarm concurrency scenario.
     fn slow_url(&self, i: usize) -> String {
@@ -4252,10 +4265,11 @@ fn resolve_maven_program_for_root(root: &Path) -> PathBuf {
 /// per-command timeout (default 120 s).
 ///
 /// The function checks two artifacts independently, skipping each when its
-/// output already exists:
+/// output already exists — unless [force_rebuild] is set (`--force-rebuild-bundle`), which
+/// rebuilds both so the scenarios cannot run against backend code that predates the checkout:
 /// 1. `Browser4Bundle.jar` (Maven `package`).
 /// 2. The full runtime bundle (PowerShell `build-runtime-bundle.ps1`).
-fn ensure_browser4_runtime_bundle_prebuilt() {
+fn ensure_browser4_runtime_bundle_prebuilt(force_rebuild: bool) {
     // When the user opted into a remote bundle or an external service, no
     // local build is needed — the CLI daemon will skip it as well.
     if force_remote_bundle_for_local_server() {
@@ -4296,15 +4310,16 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
             .map(|m| m.len() > 4_096)
             .unwrap_or(false);
 
-    if jar_valid {
+    if jar_valid && !force_rebuild {
         eprintln!(
             "[e2e pre-build] Browser4Bundle.jar found at {}; skipping Maven.",
             jar_path.display()
         );
     } else {
         eprintln!(
-            "[e2e pre-build] Browser4Bundle.jar not found. Running Maven package \
-             (this may take a while on the first run)..."
+            "[e2e pre-build] Browser4Bundle.jar {} Running Maven package \
+             (this may take a while on the first run)...",
+            if force_rebuild { "rebuild forced." } else { "not found." }
         );
         let mvn = resolve_maven_program_for_root(&root);
         let started = Instant::now();
@@ -4329,6 +4344,14 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
                 );
             }
             Ok(s) => {
+                if force_rebuild {
+                    panic!(
+                        "[e2e pre-build] --force-rebuild-bundle: Maven package exited with {}; \
+                         refusing to run scenarios against the bundle on disk.",
+                        s.code()
+                            .map_or_else(|| "signal".to_string(), |c| c.to_string())
+                    );
+                }
                 eprintln!(
                     "[e2e pre-build] Maven package exited with {}; \
                      falling back to daemon-side build.",
@@ -4338,6 +4361,12 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
                 return;
             }
             Err(error) => {
+                if force_rebuild {
+                    panic!(
+                        "[e2e pre-build] --force-rebuild-bundle: failed to run Maven: {error}; \
+                         refusing to run scenarios against the bundle on disk."
+                    );
+                }
                 eprintln!(
                     "[e2e pre-build] Failed to run Maven: {error}; \
                      falling back to daemon-side build."
@@ -4385,7 +4414,7 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
             .unwrap_or(false)
         && java_path.is_file();
 
-    if has_bundle {
+    if has_bundle && !force_rebuild {
         eprintln!(
             "[e2e pre-build] Runtime bundle already assembled at {}.",
             work_dir.display()
@@ -4447,6 +4476,14 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
             );
         }
         Ok(s) => {
+            if force_rebuild {
+                panic!(
+                    "[e2e pre-build] --force-rebuild-bundle: build script exited with {}; \
+                     refusing to run scenarios against the bundle on disk.",
+                    s.code()
+                        .map_or_else(|| "signal".to_string(), |c| c.to_string())
+                );
+            }
             eprintln!(
                 "[e2e pre-build] Build script exited with {}; \
                  falling back to daemon-side build.",
@@ -4455,6 +4492,12 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
             );
         }
         Err(error) => {
+            if force_rebuild {
+                panic!(
+                    "[e2e pre-build] --force-rebuild-bundle: failed to run build script: {error}; \
+                     refusing to run scenarios against the bundle on disk."
+                );
+            }
             eprintln!(
                 "[e2e pre-build] Failed to run build script: {error}; \
                  falling back to daemon-side build."
@@ -5460,6 +5503,11 @@ struct RunOptions {
     /// Replaces the old --enable-batch-scenario / --enable-install-scenario flags.
     enable_all: bool,
     force_remote_bundle: bool,
+    /// Rebuild the local runtime bundle before running scenarios instead of reusing the one on
+    /// disk (`--force-rebuild-bundle`).  Without it a scenario can silently exercise stale backend
+    /// code: the CLI daemon reuses an assembled bundle, and neither the harness nor the daemon
+    /// compares the bundle against the checked-out sources.
+    force_rebuild_bundle: bool,
     /// When non-empty, only scenarios matching at least one of these group
     /// names are selected.  An empty Vec means no group filter is applied.
     groups: Vec<String>,
@@ -5528,6 +5576,26 @@ fn parse_value_flag<T>(
     None
 }
 
+/// Check if `arg` is one of libtest's own flags, which `cargo test` forwards to this harness
+/// (`--nocapture`, `--test-threads=4`, `--show-output`, …).  They are not the harness's to
+/// validate, and reporting them as unrecognized drowns out the flags that really are.
+fn is_libtest_flag(arg: &str) -> bool {
+    const LIBTEST_FLAGS: &[&str] = &[
+        "--nocapture",
+        "--test-threads",
+        "--exact",
+        "--ignored",
+        "--include-ignored",
+        "--show-output",
+        "--format",
+        "--logfile",
+        "--skip",
+        "--bench",
+    ];
+    let name = arg.split('=').next().unwrap_or(arg);
+    LIBTEST_FLAGS.contains(&name)
+}
+
 /// Check if `arg` matches a boolean flag `--name` or its short alias `-X`.
 fn match_bool_flag(arg: &str, long: &str, short: &str) -> bool {
     arg == format!("--{long}") || arg == short
@@ -5563,6 +5631,7 @@ fn parse_run_options() -> RunOptions {
     let mut batch_only = false;
     let mut enable_all = false;
     let mut force_remote_bundle = false;
+    let mut force_rebuild_bundle = false;
     let mut quiet = false;
     let mut verbose = false;
     let mut groups: Vec<String> = Vec::new();
@@ -5614,6 +5683,12 @@ fn parse_run_options() -> RunOptions {
         // --force-remote-bundle / -R
         if match_bool_flag(&arg, "force-remote-bundle", "-R") {
             force_remote_bundle = true;
+            continue;
+        }
+
+        // --force-rebuild-bundle
+        if arg == "--force-rebuild-bundle" {
+            force_rebuild_bundle = true;
             continue;
         }
 
@@ -5705,9 +5780,13 @@ fn parse_run_options() -> RunOptions {
             std::process::exit(1);
         }
 
-        // Warn about unrecognized --flags
+        // Warn about unrecognized --flags, but stay quiet about libtest's own flags (`cargo test`
+        // passes `--nocapture`, `--test-threads=N`, … straight through): warning about those buries
+        // the one line that matters when a mistyped harness flag is ignored.
         if arg.starts_with("--") {
-            eprintln!("[e2e] warning: unrecognized flag '{}', ignoring", arg);
+            if !is_libtest_flag(&arg) {
+                eprintln!("[e2e] warning: unrecognized flag '{}', ignoring", arg);
+            }
             continue;
         }
 
@@ -5745,6 +5824,7 @@ fn parse_run_options() -> RunOptions {
         batch_only,
         enable_all,
         force_remote_bundle,
+        force_rebuild_bundle,
         groups,
         max_level,
         quiet,
@@ -6090,9 +6170,30 @@ fn main() {
         std::env::set_var(FORCE_REMOTE_BUNDLE_ENV, "1");
     }
 
+    // --force-rebuild-bundle: the CLI daemon reads this env var and rebuilds the local runtime
+    // bundle (Maven install + jlink) before serving any scenario; the harness pre-build below runs
+    // the same two steps up front so the rebuild is visible in the test output instead of hiding
+    // inside the first CLI command's timeout.
+    // --force-rebuild-bundle: rebuild the local runtime bundle up front, through the same steps the
+    // CLI daemon would run (Maven package + build-runtime-bundle.ps1).  The daemon's
+    // BROWSER4_CLI_FORCE_REBUILD_BUNDLE is deliberately NOT exported to the CLI: the harness has
+    // just rebuilt both artifacts, and a daemon-side rebuild would run a second time inside the
+    // first command's timeout — which makes the startup probe fail instead of rebuilding anything.
+    if run_options.force_rebuild_bundle {
+        // Guard against drift: the help text and the daemon name the same variable, and a rename on
+        // either side would turn the documented lever into a silent no-op (which is how a stale
+        // bundle cost a full misdiagnosis once).
+        assert_eq!(
+            FORCE_REBUILD_BUNDLE_CLI_ENV,
+            browser4_cli::daemon::FORCE_REBUILD_BUNDLE_ENV,
+            "the harness and the CLI daemon must agree on the force-rebuild env var"
+        );
+        eprintln!("[e2e] --force-rebuild-bundle: rebuilding the local runtime bundle.");
+    }
+
     // Pre-build the Browser4 runtime bundle if it is missing so the first
     // CLI command doesn't time out while the daemon runs Maven + jlink.
-    ensure_browser4_runtime_bundle_prebuilt();
+    ensure_browser4_runtime_bundle_prebuilt(run_options.force_rebuild_bundle);
 
     let mut resources = create_e2e_test_resources();
 

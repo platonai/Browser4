@@ -224,7 +224,7 @@ class CrawlParallelBudgetTest {
         val mapper = pulsarObjectMapper()
         val response = CrawlResponse(
             taskId = "t-timeout",
-            status = "SC_REQUEST_TIMEOUT",
+            status = CrawlStatus.REQUEST_TIMEOUT,
             error = "Crawl timed out while processing seeds",
             pagesFound = 3,
             parallelTabs = 4,
@@ -233,7 +233,7 @@ class CrawlParallelBudgetTest {
 
         val restored = mapper.readValue(mapper.writeValueAsString(response), CrawlResponse::class.java)
 
-        assertEquals("SC_REQUEST_TIMEOUT", restored.status)
+        assertEquals(CrawlStatus.REQUEST_TIMEOUT, restored.status)
         assertEquals(4, restored.parallelTabs)
         assertEquals(3, restored.maxConcurrentFetches)
         assertNotNull(restored.error)

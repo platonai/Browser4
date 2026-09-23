@@ -21,6 +21,7 @@ Use this skill when you need to:
 - **Headed mode only when:**
   - The user says "show me the browser", "I want to watch", "open visibly", "headed", or "debug visually"
   - The user needs to perform a manual interaction they haven't automated
+  - The site **blocked the headless browser as a bot** (CAPTCHA, challenge/interstitial page, "unusual traffic", or an empty body where content was expected): `close`, then `open --headed <url>` with the same session, retry **once**, and tell the user that anti-bot protection forced the switch. If the headed retry is blocked too, stop and report — do not loop between modes.
 - **Do NOT default to headed mode** — it wastes resources and opens unnecessary windows
 
 ### Step 1: Navigate and Identify the Form
@@ -348,6 +349,8 @@ browser.wait_for_element(".search-results")
 **Problem**: Form has bot protection
 
 **Solutions**:
+- Escalate **once**: `browser4-cli close`, then `browser4-cli open --headed <url>` with the same session and retry the step — and tell the user that anti-bot protection forced the switch to headed mode
+- If the headed retry is blocked too, stop and report instead of looping
 - This skill cannot solve CAPTCHAs automatically
 - Consider manual intervention or CAPTCHA solving services
 - Check if site offers testing environment without CAPTCHA

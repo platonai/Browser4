@@ -55,7 +55,7 @@ These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` attribut
 > **Where `:expr(...)` is evaluated — and where it is not.** Visual filters are
 > evaluated by the page-load/scoping path: in the `DOM_LOAD_AND_SELECT`
 > selector (the X-SQL `FROM` clause) and in `htmlsnapshot get` / `get all` /
-> `inspect` selectors over the stored snapshot. Inside **`DOM_FIRST_*` /
+> `inspect` selectors over the live page. Inside **`DOM_FIRST_*` /
 > `DOM_ALL_*` X-SQL UDF selector arguments** `:expr` support is uneven: the
 > image helpers `DOM_FIRST_IMG` / `DOM_NTH_IMG` / `DOM_ALL_IMGS` **ignore
 > `:expr(...)` and silently match nothing** (no error). Keep `DOM_*_IMG`

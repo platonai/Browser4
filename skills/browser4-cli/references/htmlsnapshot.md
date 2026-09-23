@@ -35,7 +35,7 @@ browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]  # analyze DO
 browser4-cli htmlsnapshot readability [url] [--text-only] [--page N] [--page-size N] [--all]  # one-step article extraction (no LLM, no selectors)
 ```
 
-`htmlsnapshot` (capture) always fetches a fresh snapshot, caches it, and returns enriched metadata including image/link counts and a list of interactive elements (with tag, class, id, aria attributes, and bounding box). Subsequent `get`/`get all`/`export`/`inspect`/`summary`/`grep` reuse the cache until the next capture or page navigation. **`htmlsnapshot query` does not use this cache** — it queries the current page's live DOM, or independently loads an explicit URL (see [Query](#query--x-sql-live-current-page-or-independent-fetch)).
+`htmlsnapshot` (capture) takes a static HTML snapshot of the current page, stores it, and returns enriched metadata including image/link counts and a list of interactive elements (with tag, class, id, aria attributes, and bounding box). **Capturing is optional:** `get` / `get all` / `inspect` / `summary` / `grep` / `export` and `query` all serve the **live DOM of the active tab**, so they always see the page as it is right now — the stored capture is metadata plus an archived copy, never the read source. The only precondition is a loaded, navigable page (http(s)/file).
 
 > **Note:** `htmlsnapshot get` looks up the page using the browser's current URL (after any redirects/navigations), so it works correctly on search-results pages and post-form-submission pages.
 
@@ -83,8 +83,8 @@ browser4-cli htmlsnapshot get all text ".result" --offset 10   # skip first 10
 
 If `htmlsnapshot get` returns an empty string when the page clearly has matching elements:
 
-1. **Run `htmlsnapshot` first to capture a fresh snapshot:** `browser4-cli htmlsnapshot` then retry `get`
-2. **Verify the CSS selector** with `htmlsnapshot grep <pattern>` to search the raw HTML
+1. **Check the page and selector first** — reads use the live DOM, so an empty result means the selector did not match the current document (re-running `htmlsnapshot` does not change that)
+2. **Verify the CSS selector** with `htmlsnapshot grep <pattern>` to search the HTML
 3. **Use `htmlsnapshot query` or `htmlsnapshot get all`** for multiple results or complex queries
 4. **Check page load:** ensure the page finished loading (AJAX content may take time)
 
@@ -94,24 +94,23 @@ The `--sql` flag is **required**. Use `@url` as a placeholder for the target URL
 
 X-SQL uses the **H2 database** SQL dialect with DOM UDFs. Only simple `SELECT ... FROM DOM_LOAD_AND_SELECT(url, cssQuery)` queries are supported — no CTEs, subqueries, `EXPLODE`, or joins.
 
-> **`query` never reads the stored `htmlsnapshot` cache** — its data source depends on the target:
+> **`query` never reads a stored `htmlsnapshot` capture** — its data source depends on the target:
 > - **No URL argument, or a URL matching the session's current page:** the page
->   store is seeded from the session's **live DOM** first (a capture of the
+>   store is seeded from the session's **live DOM** first (a serialization of the
 >   current tab — no navigation, no network re-fetch), then the SQL runs over
 >   that live document. Login state, SPA updates and `eval` mutations are all
->   visible, exactly like `htmlsnapshot capture`. Use this when the data you
->   want only exists in the browser session you are driving.
+>   visible. Use this when the data you want only exists in the browser session
+>   you are driving.
 > - **An explicit URL that differs from the current page (or a session-less
 >   invocation):** the URL is fetched independently through the scrape API and
->   the SQL runs over that fresh fetch (no session state, no stored snapshot).
+>   the SQL runs over that fresh fetch (no session state).
 >   This is the offline/corpus path — querying pages that are not open in any
 >   session still works without a browser.
 >
 > Repeated runs against the current page therefore always see the page as it
-> is *right now* in the session. If the page is slow or you want many queries
-> against one stable fetch, capture once and use `htmlsnapshot get` / `get all`
-> instead, which do read the cache. A `query` run without an explicit URL
-> argument always targets the current page URL.
+> is *right now* in the session — which is also true of every other read
+> (`get` / `get all` / `inspect` / `summary` / `grep` / `export`). A `query` run
+> without an explicit URL argument always targets the current page URL.
 
 > **Important:** `@url` must appear **unquoted** in SQL. `SQLTemplate.createSQL(url)` handles escaping internally.
 > - ✅ `FROM DOM_LOAD_AND_SELECT(@url, ':root')`
@@ -207,7 +206,7 @@ To control caching or rendering, append load options to the URL (e.g. `https://e
 
 ## Summary — Web Page Summary Index (WPSI)
 
-Generates a deterministic, AI-readable compressed page summary (typically <1% of original HTML) as a YAML file. Includes page metadata, structure landmarks, key content nodes with CSS selector hints, list/table detection, and stats. Requires a previously captured HTML snapshot.
+Generates a deterministic, AI-readable compressed page summary (typically <1% of original HTML) as a YAML file. Includes page metadata, structure landmarks, key content nodes with CSS selector hints, list/table detection, and stats. Reads the live page — no prior capture required.
 
 ```bash
 browser4-cli htmlsnapshot summary
@@ -259,7 +258,7 @@ Patterns are **Rust regex** (`regex` crate) matched **per line** — not POSIX/P
 
 - **Alternation** is `|` — `price|rating` matches "price" or "rating".
 - **Anchors:** `^` and `$` anchor to the **start/end of a line** of the snapshot, not the whole document — a bare `$` matches every line, so it looks like "everything matched".
-- **A literal `$` must be written `[$]`** (e.g. `'[$][0-9]+\.[0-9]{2}'` matches "$19.99"). Rust regex has **no `\$` escape** — `\$[0-9]+` is a hard "incomplete escape" error, not a silent miss.
+- **A literal `$`:** write it as `[$]` (e.g. `'[$][0-9]+\.[0-9]{2}'` matches "$19.99"). The escaped form `\$` is *also* accepted by the Rust regex engine (a `$` is a metacharacter, so escaping it is valid), but `[$]` is the portable habit — it survives any number of shell-quoting layers without ambiguity.
 - `\b` word boundaries and `\s`/`\d`/`\w` classes work as in most engines; other backslash escapes may be invalid.
 - **Literal text:** pass `-F` to match a string exactly with no regex interpretation (no anchors, no alternation, no escaping needed).
 - `-E` (extended regexp) is accepted for `grep -E` compatibility — ERE-like behavior is already the default.
@@ -367,11 +366,11 @@ When `selector` matches only **1 element** (e.g. default `:root`, or `body`), **
 - **List pages vs detail pages:** `inspect` finds **recurring** patterns — it shines on list/grid pages (search results, product cards, tables). A single product/article/detail page has no repeating block, so inspect may surface nothing (or an unrelated side rail). For detail pages use `htmlsnapshot summary` (visual clustering) to discover the main content selectors, then read them with explicit selectors (`htmlsnapshot get text "h1"`). When inspect finds nothing recurring it prints "No recurring pattern found" and points to `summary`.
 - **Start without arguments:** `htmlsnapshot inspect` (no selector) triggers auto-discovery and finds the page's most prominent repeating content pattern. This is the quickest way to discover selectors on an unfamiliar page.
 - **Start broad, then narrow:** First run without a selector to see page landmarks. Then target a repeating container (e.g. `.product_pod`, `.s-result-item`).
-- **Always capture first:** `htmlsnapshot` must be run before `inspect` (it loads the cached document).
+- **No capture required:** `inspect` analyzes the **live page** of the active tab — there is no cached document to load first.
 - **Use with `get`:** Take the suggested selectors and use them with `htmlsnapshot get all` or `htmlsnapshot query` for batch extraction.
 - **Avoid quoting hell:** Use `--sql @file.sql` (file), `--sql-stdin` (piped), or `--sql-base64` (encoded) instead of inline `--sql "..."` on Windows — quoted CSS selectors and `!=` operators break inline SQL.
 - **Base64 for portability:** `--sql "$(base64 -w0 query.sql)" --sql-base64` passes SQL safely through any shell, CI pipeline, or HTTP transport with zero quoting issues.
-- **`@file` paths resolve relative to CWD first**, then fall back to the Browser4 repo root — so `cargo run` from `cli/browser4-cli` still finds `query.sql` at the workspace root.
+- **`@file` paths resolve against the Browser4 repo root first**, then fall back to the current working directory — so `cargo run` from `cli/browser4-cli` still finds `query.sql` at the workspace root, while a file that exists only relative to the CWD is picked up by the fallback.
 
 ## Readability — One-step article extraction
 
@@ -427,16 +426,16 @@ Prints a metadata header (title, byline, site name, URL, character count, confid
 - `htmlsnapshot` capture fails if backend is unreachable or page cannot be loaded.
 - `htmlsnapshot get` / `get all` print a diagnostic ("No elements matched …") and exit `0` when the CSS selector matches nothing — consistent with `query`'s "no rows matched is not an error". A non-zero exit means the backend call failed (e.g. an invalid selector or an element ref like `e5`, which `get` does not accept).
 - `htmlsnapshot query` exits nonzero on invalid X-SQL syntax, a missing `--sql`, or a server error envelope (`417 Expectation Failed` or a `5xx` with an empty resultSet). A `200` envelope with an empty resultSet ("no rows matched") is exit 0.
-- `htmlsnapshot export` / `summary` / `inspect` fail if no snapshot has been captured yet.
+- `htmlsnapshot export` / `summary` / `inspect` read the **live page**, so they do not fail for a missing capture — they fail only when there is no loaded, navigable page (about:blank, a non-http(s) document, or a dead session).
 
 ## Notes
 
 - `htmlsnapshot get` only accepts CSS selectors. For interactive element interaction, use the standard `snapshot` + ref-based commands.
 - X-SQL queries through `htmlsnapshot query` follow the same constraints as `swarm query`. See [X-SQL reference](x-sql.md) for full function documentation.
-- The captured snapshot is cached in the backend and invalidated by the next `htmlsnapshot` capture or a page navigation (`goto`, `reload`, etc.). `htmlsnapshot query` does not use this cache: it queries the session's live DOM when targeting the current page, and independently loads an explicit URL otherwise (see the [Query](#query--x-sql-live-current-page-or-independent-fetch) section).
+- The stored capture from `htmlsnapshot` (capture) is metadata plus an archived copy; it is **not** the source for any read. Every read command — `get`, `get all`, `inspect`, `summary`, `grep`, `export`, `query` — serializes the **live DOM of the active tab** at call time (falling back to the page store / a fresh capture only when there is no usable live document), so the page is always read as it is right now.
 - `htmlsnapshot grep` performs matching **entirely client-side** in the CLI — the full HTML is fetched from the backend once, then all regex matching happens locally. No backend round-trips for the search itself.
 - For CI pass/fail checks with grep, use `-l` (prints "htmlsnapshot" if matches found) or `-c` (prints match count). A `browser4-cli` non-zero exit code means the backend call itself failed, not that matches were absent.
 - `htmlsnapshot` capture now returns enriched metadata: `imageCount`, `linkCount`, and `interactiveElements` (tag, class, id, aria attributes, bounding-box). The bounding box comes from the `vi` (visual-information) data the Browser4 runtime computes from the live layout and injects **while serializing** the HTML — `vi` is deliberately not a DOM attribute (the live page stays untouched), so it only exists in HTML the driver serialized. The capture produces that data on demand, so a session that only navigated (`goto`, tab switch, form submission) still gets boxes, and `htmlsnapshot export` writes `vi` attributes for offline consumers.
 - Exported HTML also carries `<link rel="normalizedURI" href="…">` in `<head>`: the page URL after `PulsarSession.normalize()`, injected during serialization the same way. Together with `vi`, it makes the exported artifact self-describing — an offline consumer can tell both *where* each element sits and *which page* the document is. (A subtree read through the driver, e.g. `outerHTML(selector)`, intentionally has no such link: the URL describes the document, not a fragment.)
 - `htmlsnapshot inspect` computes relative CSS selectors using tag + class + id. It does not use AI — the algorithm is fully deterministic and based on structural recurrence across matching elements. When run without a selector (or any single-match selector like `:root`), **auto-discovery** finds the page's most prominent repeating content pattern automatically — no prior knowledge of the page's markup is needed.
-- **Output pagination:** `get html`, `get all html`, and `grep` paginate output by default at 2000 lines per page. `get text` and `get all text` are not paginated by default (text extraction rarely exceeds practical limits). Use `--page N` for subsequent pages, `--page-size N` to change the page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes. Use `--all` when piping output to external tools.
+- **Output pagination:** `get html` and `grep` paginate output by default at 2000 lines per page. `get all …` (any field) and the `text` / `textcontent` fields print in full, unpaginated. Use `--page N` for subsequent pages, `--page-size N` to change the page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes. Use `--all` when piping output to external tools.

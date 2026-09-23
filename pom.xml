@@ -764,7 +764,7 @@
         <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
 
         <spring-boot.version>4.0.6</spring-boot.version>
-        <browser4-base.version>4.11.16</browser4-base.version>
+        <browser4-base.version>4.11.18</browser4-base.version>
 
         <mcp-sdk.version>0.15.0</mcp-sdk.version>
         <!-- Must match the Ktor the MCP SDK is built against; keep in sync with

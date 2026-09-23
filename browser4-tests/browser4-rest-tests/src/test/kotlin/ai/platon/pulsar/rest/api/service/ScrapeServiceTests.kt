@@ -10,19 +10,18 @@ import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.sleepSeconds
 import ai.platon.pulsar.external.ChatModelFactory
-import ai.platon.pulsar.rest.api.TestHelper
 import ai.platon.pulsar.rest.api.common.MockEcServerTestBase
 import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
 import ai.platon.pulsar.test.server.MockServerPorts
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
 import org.junit.jupiter.api.Assumptions
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.annotation.DirtiesContext
 import org.springframework.test.context.ContextConfiguration
+import java.time.Duration
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,8 +34,7 @@ import kotlin.test.assertTrue
 @DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)
 class ScrapeServiceTests : MockEcServerTestBase() {
 
-    private val productListURL get() = "${MockServerPorts.baseUrl()}/ec/b?node=1292115012"
-
+    /** The cheap page: ~3 s per fetch against the list page's ~32 s (see the class KDoc). */
     private val productDetailURL get() = "${MockServerPorts.baseUrl()}/ec/dp/B0E000001"
 
     @Autowired
@@ -45,13 +43,19 @@ class ScrapeServiceTests : MockEcServerTestBase() {
     @Autowired
     private lateinit var service: ScrapeService
 
-    @BeforeEach
-    @DisplayName("Ensure resources are prepared")
-    suspend fun ensureResourcesArePrepared() {
-        super.setup() // Call parent setup to verify mock server is running
-        TestHelper.ensurePage(productListURL)
-        TestHelper.ensurePage(productDetailURL)
-    }
+    /**
+     * No `@BeforeEach` preparation hook here on purpose.
+     *
+     * The class used to declare one as a `suspend fun`, which JUnit cannot invoke
+     * (the compiled signature takes a `Continuation`), so it silently never ran —
+     * and had it run it would have re-fetched the mock pages before every test.
+     * That matters because the two mock pages differ by an order of magnitude on a
+     * loaded machine: the 101-product `/ec/b?node=...` list page takes ~32 s per
+     * fetch (the browser runtime is re-injected into an isolated world on every
+     * load) while `/ec/dp/B0E000001` takes ~3 s.  The scrapes below therefore target
+     * the detail page and load exactly what they assert on;
+     * [MockEcServerTestBase.setup] still verifies the mock server before each test.
+     */
 
     /**
      * Execute a normal SQL
@@ -80,7 +84,7 @@ class ScrapeServiceTests : MockEcServerTestBase() {
     fun whenScrapingWithLoadAndSelectThenTheResultReturnsSynchronously() {
         val startTime = Instant.now()
 
-        val sql = "select dom_base_uri(dom) as uri from load_and_select('$productListURL -i 10d', ':root')"
+        val sql = "select dom_base_uri(dom) as uri from load_and_select('$productDetailURL -i 10d', ':root')"
         val request = ScrapeRequest(sql)
 
         val response = executeWithRetry(request)
@@ -89,7 +93,7 @@ class ScrapeServiceTests : MockEcServerTestBase() {
 
         assertTrue { records.isNotEmpty() }
         val actualUrl = records[0]["uri"].toString()
-        assertTrue { actualUrl == productListURL }
+        assertTrue { actualUrl == productDetailURL }
 
         printlnPro("Done scraping with load_and_select, used " + DateTimes.elapsedTime(startTime))
     }
@@ -109,7 +113,7 @@ class ScrapeServiceTests : MockEcServerTestBase() {
     @Test
     @DisplayName("When scrape amazon then the base uri returns asynchronously")
     fun whenScrapeAmazonThenTheBaseUriReturnsAsynchronously() {
-        val sql = "select dom_base_uri(dom) as uri from load_and_select('$productListURL', ':root')"
+        val sql = "select dom_base_uri(dom) as uri from load_and_select('$productDetailURL', ':root')"
         val request = ScrapeRequest(sql)
 
         val uuid = service.submitJob(request)
@@ -118,30 +122,38 @@ class ScrapeServiceTests : MockEcServerTestBase() {
         printlnPro(uuid)
 
         val scrapeStatusRequest = ScrapeStatusRequest(uuid)
-        var status = service.getStatus(scrapeStatusRequest)
-        var i = 120
+        var status = awaitScrapeJob(scrapeStatusRequest)
 
-        while (i-- > 0 && !status.isDone) {
-            sleepSeconds(1)
-            status = service.getStatus(scrapeStatusRequest)
-        }
         // Retry once if the WebDB cache was cold (417) — e.g. after
         // kill_all_sessions in a prior test closed the browser.
         if (status.statusCode == 417) {
             sleepSeconds(2)
             val retryUuid = service.submitJob(request)
-            val retryReq = ScrapeStatusRequest(retryUuid)
-            var retryStatus = service.getStatus(retryReq)
-            var j = 120
-            while (j-- > 0 && !retryStatus.isDone) {
-                sleepSeconds(1)
-                retryStatus = service.getStatus(retryReq)
-            }
-            status = retryStatus
+            status = awaitScrapeJob(ScrapeStatusRequest(retryUuid))
         }
         printlnPro(pulsarObjectMapper().writeValueAsString(status).toString())
-        assertTrue { i > 0 || status.statusCode == 200 }
         assertEquals(200, status.statusCode)
+    }
+
+    /**
+     * Poll a submitted job until it reports done.
+     *
+     * The wait is bounded by a deadline rather than a fixed count of one-second
+     * sleeps, so a job that finishes in a few hundred milliseconds does not cost a
+     * full second — the old loop spent a second per poll on a page whose actual
+     * scrape takes ~1.5 s.
+     */
+    private fun awaitScrapeJob(
+        request: ScrapeStatusRequest,
+        timeout: Duration = Duration.ofMinutes(2)
+    ): ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse {
+        val deadline = Instant.now().plus(timeout)
+        var status = service.getStatus(request)
+        while (Instant.now().isBefore(deadline) && !status.isDone) {
+            Thread.sleep(250)
+            status = service.getStatus(request)
+        }
+        return status
     }
 
     @Test

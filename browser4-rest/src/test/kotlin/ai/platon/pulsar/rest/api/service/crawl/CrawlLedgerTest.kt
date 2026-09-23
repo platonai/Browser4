@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -144,6 +145,98 @@ class CrawlLedgerTest {
 
         ledger.recordSuccess("https://example.com/seed")
         assertTrue(ledger.isComplete)
+    }
+
+    @Test
+    @DisplayName("a delivery failure can be retried once, and the loss is withdrawn while the retry runs")
+    fun aDeliveryFailureIsWorthOneRetry() {
+        val ledger = CrawlLedger("t-retry")
+        val url = "https://example.com/flaky"
+        ledger.submit(url, 1)
+        val first = ledger.beginAttempt(url)
+        assertEquals(1, ledger.attemptCount(url))
+        assertTrue(ledger.isCurrentAttempt(url, first))
+
+        // The load event of the failed attempt runs while the round is still open —
+        // CrawlRoundRunner holds it with enter/leave, because that event is what
+        // submits the retry.
+        assertTrue(ledger.enter())
+        ledger.recordFailure(url, 1, 200, CrawlLedger.REASON_NOT_DELIVERED)
+        val retry = requireNotNull(ledger.startRetry(url)) { "the first failure is worth one retry" }
+        ledger.leave()
+
+        assertFalse(ledger.isComplete, "the round waits for the retry instead of reporting the loss")
+        assertEquals(0, ledger.settled, "the withdrawn loss is not settled")
+        assertEquals(1, ledger.pagesExpected, "a retry is not another page")
+        assertTrue(ledger.failedPages().isEmpty(), "a withdrawn failure is not reported")
+        assertEquals(2, ledger.attemptCount(url))
+        assertFalse(ledger.isCurrentAttempt(url, first), "the failed attempt is stale")
+        assertTrue(ledger.isCurrentAttempt(url, retry))
+
+        // The retry delivers: the URL settles once, as a page.
+        ledger.recordSuccess(url)
+        assertTrue(ledger.isComplete)
+        assertEquals(1, ledger.settled)
+    }
+
+    @Test
+    @DisplayName("a URL gets exactly one retry, and its failure is the one reported")
+    fun aUrlGetsExactlyOneRetry() {
+        val ledger = CrawlLedger("t-retry-budget")
+        val url = "https://example.com/flaky"
+        ledger.submit(url, 1)
+        ledger.beginAttempt(url)
+        assertTrue(ledger.enter())
+        ledger.recordFailure(url, 1, 200, CrawlLedger.REASON_NOT_DELIVERED)
+        requireNotNull(ledger.startRetry(url))
+        assertNull(ledger.startRetry(url), "the budget is one retry, not two")
+
+        // The retry fails as well: its outcome is what the crawl reports, because the
+        // withdrawn failure cannot be the reason for a loss that happened later.
+        ledger.recordFailure(url, 1, 404, "the server answered 404")
+        ledger.leave()
+
+        assertTrue(ledger.isComplete)
+        assertEquals(1, ledger.settled)
+        assertEquals("the server answered 404", ledger.failedPages().single().reason)
+    }
+
+    @Test
+    @DisplayName("events of a superseded attempt settle nothing")
+    fun eventsOfASupersededAttemptSettleNothing() {
+        val ledger = CrawlLedger("t-stale")
+        val url = "https://example.com/flaky"
+        ledger.submit(url, 1)
+        val first = ledger.beginAttempt(url)
+        assertTrue(ledger.enter())
+        val retry = requireNotNull(ledger.startRetry(url))
+        ledger.leave()
+
+        // The failed attempt keeps reporting (a duplicate parse event, the load event
+        // that fires after it): none of it may settle a URL the round is reloading.
+        assertFalse(ledger.isCurrentAttempt(url, first))
+        assertTrue(ledger.isCurrentAttempt(url, retry))
+        assertEquals(0, ledger.settled, "the retry's URL is still outstanding")
+        assertTrue(ledger.failedPages().isEmpty())
+
+        ledger.recordSuccess(url)
+        assertTrue(ledger.isComplete)
+        assertEquals(1, ledger.settled, "the URL settled once, under the retry")
+    }
+
+    @Test
+    @DisplayName("a round that already completed is not re-opened for a retry")
+    fun retriesAreRefusedAfterTheRoundCompleted() {
+        val ledger = CrawlLedger("t-retry-terminal")
+        val url = "https://example.com/flaky"
+        ledger.submit(url, 1)
+        ledger.beginAttempt(url)
+        ledger.recordFailure(url, 1, 200, "boom")
+        assertTrue(ledger.isTerminal)
+
+        assertNull(ledger.startRetry(url), "a finished round stays finished")
+        assertEquals(1, ledger.settled, "the settlement is not given back")
+        assertEquals(1, ledger.failedPages().size)
     }
 
     @Test

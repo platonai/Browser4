@@ -54,15 +54,22 @@ class LoadingWebDriverPool constructor(
          * */
         var POLLING_SLICE = Duration.ofMillis(500)
 
-        /**
-         * How long a driver wait has to last before it is reported, see [poll].
-         *
-         * A starved pool and a slow page load look identical to the caller - both are simply a slow
-         * fetch - so the wait itself has to be logged for the two to be told apart.
-         * */
-        var SLOW_POLL_MILLIS = 5_000L
-
         private val ID_SUPPLIER = AtomicInteger()
+
+        /**
+         * A wait at least this long for a driver is reported in the debug log, together with the
+         * pool state and the drivers the pool could not hand out.
+         *
+         * A driver is normally handed out in microseconds, so this is a *long* wait, not a slow one:
+         * the point is to make a stalled fetch explainable from the pool's own log instead of
+         * inferring it from a page that "took 40 seconds".
+         * */
+        var WAIT_DEBUG_THRESHOLD = Duration.ofSeconds(1)
+
+        /**
+         * A wait at least this long is reported at the warn level, throttled, see [reportDriverWait].
+         * */
+        var WAIT_WARN_THRESHOLD = Duration.ofSeconds(10)
     }
 
     private val logger = LoggerFactory.getLogger(LoadingWebDriverPool::class.java)
@@ -231,13 +238,27 @@ class LoadingWebDriverPool constructor(
 
     @Throws(BrowserLaunchException::class, WebDriverPoolExhaustedException::class, InterruptedException::class)
     fun poll(priority: Int, conf: MutableConfig, timeout: Duration): WebDriver {
-        return poll(priority, conf, timeout.seconds, TimeUnit.SECONDS)
+        // Milliseconds, not seconds: `timeout.seconds` truncates, so any sub-second timeout became
+        // "do not wait at all" - a caller asking for 700ms got an immediate pool-exhausted failure.
+        return poll(priority, conf, timeout.toMillis(), TimeUnit.MILLISECONDS, null)
     }
 
     @Throws(BrowserLaunchException::class, WebDriverPoolExhaustedException::class, InterruptedException::class)
     fun poll(priority: Int, conf: MutableConfig, timeout: Long, unit: TimeUnit): WebDriver {
+        return poll(priority, conf, timeout, unit, null)
+    }
+
+    /**
+     * Poll a driver, recording [waiter] as the task that had to wait for it.
+     *
+     * [waiter] is the page the caller wants to fetch when the caller knows it (the browsing path
+     * does); it is what makes a long wait attributable in the log.  The diagnostics themselves are
+     * in [reportDriverWait].
+     * */
+    @Throws(BrowserLaunchException::class, WebDriverPoolExhaustedException::class, InterruptedException::class)
+    private fun poll(priority: Int, conf: MutableConfig, timeout: Long, unit: TimeUnit, waiter: String?): WebDriver {
         val start = System.nanoTime()
-        val driver = pollWebDriver(priority, conf, timeout, unit)
+        val driver = pollWebDriver(priority, conf, timeout, unit, waiter)
         val waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
 
         if (driver == null) {
@@ -246,25 +267,23 @@ class LoadingWebDriverPool constructor(
             if (AppContext.isActive) {
                 // log only when the application is active
                 logger.info(
-                    "Driver pool is exhausted after {}ms, rethrow WebDriverPoolExhaustedException | {}",
-                    waitedMillis, message
+                    "Driver pool is exhausted after {}ms, rethrow WebDriverPoolExhaustedException | {} | {} | {}",
+                    waitedMillis, message, driverWaitReason(), describeDriverHolders()
                 )
             }
-            throw WebDriverPoolExhaustedException(browserId.toString(), "Driver pool is exhausted ($snapshot)")
-        }
-
-        if (waitedMillis >= SLOW_POLL_MILLIS) {
-            // The task got a driver, but only after waiting for one.  The snapshot carries the
-            // reason the pool could not grow - a refused creation under critical load, or a pool
-            // that is already at capacity - which is otherwise invisible at the caller.
-            throttlingLogger.warn(
-                "Waited {}ms for a driver (poll timeout {}ms) | {}",
-                waitedMillis, unit.toMillis(timeout), takeSnapshot().format(true)
-            )
+            throw WebDriverPoolExhaustedException(browserId.toString(), exhaustionMessage(snapshot))
         }
 
         return driver
     }
+
+    /**
+     * What the caller is told when the pool cannot serve it: the pool state, why no driver came out,
+     * and who is holding the drivers that exist.  A caller that only sees "exhausted" cannot tell a
+     * saturated pool from a pool whose browser never launched.
+     * */
+    private fun exhaustionMessage(snapshot: Snapshot): String =
+        "Driver pool is exhausted ($snapshot) | ${driverWaitReason()} | ${describeDriverHolders()}"
 
     /**
      * Poll a [WebDriver]. If it's the browser is not launched yet, launch it and emit launch events
@@ -280,7 +299,7 @@ class LoadingWebDriverPool constructor(
         return if (notEmitted) {
             pollWithEvents(priority, conf, event, page, timeout)
         } else {
-            poll(priority, conf, timeout)
+            poll(priority, conf, timeout.toMillis(), TimeUnit.MILLISECONDS, page.url)
         }
     }
 
@@ -378,7 +397,7 @@ class LoadingWebDriverPool constructor(
             event?.onWillLaunchBrowser?.invoke(page)
         }
 
-        return poll(priority, conf, timeout).also { driver ->
+        return poll(priority, conf, timeout.toMillis(), TimeUnit.MILLISECONDS, page.url).also { driver ->
             dispatchEvent("onBrowserLaunched") {
                 event?.onBrowserLaunched?.invoke(page, driver)
                 PulsarEventBus.emitBrowseEvent("onBrowserLaunched", page)
@@ -387,17 +406,107 @@ class LoadingWebDriverPool constructor(
     }
 
     @Throws(BrowserLaunchException::class, InterruptedException::class)
-    private fun pollWebDriver(priority: Int, conf: MutableConfig, timeout: Long, unit: TimeUnit): WebDriver? {
+    private fun pollWebDriver(
+        priority: Int, conf: MutableConfig, timeout: Long, unit: TimeUnit, waiter: String?
+    ): WebDriver? {
         _numWaitingTasks.incrementAndGet()
 
-        val driver = try {
-            pollDriverInSlices(priority, conf, unit.toMillis(timeout))
+        val started = System.nanoTime()
+        var driver: WebDriver? = null
+        try {
+            driver = pollDriverInSlices(priority, conf, unit.toMillis(timeout))
         } finally {
             _numWaitingTasks.decrementAndGet()
             lastActiveTime = Instant.now()
+            reportDriverWait(waiter, Duration.ofNanos(System.nanoTime() - started), driver)
         }
 
         return driver
+    }
+
+    /**
+     * Report how long a task waited for a driver, and who was holding the drivers it could not get.
+     *
+     * The pool is the last place that can explain a stalled fetch: a task that spends its time here
+     * looks exactly like a slow page everywhere above.  There is deliberately nothing to infer any
+     * more — the three questions "who is waiting", "how long", "who is holding the drivers" are
+     * answered here.
+     *
+     * Two levels, and the difference matters:
+     *
+     *  * a debug line per wait over [WAIT_DEBUG_THRESHOLD] carrying the exact numbers — the wait, the
+     *    driver that came out (if any), the pool state, the reason and the working drivers with the
+     *    pages they are on.  This is the line to read when investigating, usually with the debug level
+     *    turned on for this package only;
+     *  * a warn once a wait passes [WAIT_WARN_THRESHOLD], so a starving pool is visible without debug
+     *    logging.  Its message may only vary by things from a small set (the pool, the wait bucket,
+     *    the reason, the browser) because [ThrottlingLogger] throttles the *rendered* message: a
+     *    message carrying the waiter URL or a duration would be a new message every time and would
+     *    throttle nothing.
+     *
+     * Runs in a `finally` block of the caller, so it must not throw: the diagnostics are wrapped.
+     * */
+    private fun reportDriverWait(waiter: String?, waited: Duration, driver: WebDriver?) {
+        if (waited < WAIT_DEBUG_THRESHOLD) {
+            return
+        }
+
+        val reason = runCatching { driverWaitReason() }.getOrElse { "the pool state is unavailable" }
+        val holders = runCatching { describeDriverHolders() }.getOrElse { "the working drivers are unavailable" }
+
+        if (waited >= WAIT_WARN_THRESHOLD) {
+            throttlingLogger.warn(
+                "A task waited more than {} the driver wait warning threshold ({}) | driver pool #{}: {} | {}",
+                driverWaitBucket(waited, WAIT_WARN_THRESHOLD),
+                WAIT_WARN_THRESHOLD.readable(),
+                id,
+                reason,
+                browserId
+            )
+        }
+
+        if (logger.isDebugEnabled) {
+            logger.debug(
+                "Waited {} for a web driver{} | {} | {} | waiting task: {} | {}",
+                waited.readable(),
+                driver?.let { " #${it.id}" } ?: " and did not get one",
+                takeSnapshot().format(true),
+                reason,
+                waiter ?: "unknown",
+                holders
+            )
+        }
+    }
+
+    /**
+     * Why the pool could not hand out a driver, in the pool's own terms.
+     *
+     * The order mirrors [shouldCreateWebDriver]: a pool out of slots is saturated, and a pool with
+     * slots left is being held back by the resource guard or has not created a driver yet.  The
+     * numbers are the debug line's job; this is the categorical answer a log reader needs.
+     * */
+    private fun driverWaitReason(): String = driverWaitReason(
+        isClosed = isClosed,
+        isRetired = isRetired,
+        numDriverSlots = numDriverSlots,
+        numActive = numActive,
+        isCriticalMemory = AppSystemInfo.isCriticalMemory,
+        isOverCriticalLoad = AppSystemInfo.isSystemOverCriticalLoad,
+    )
+
+    /**
+     * Who is holding the drivers this pool cannot hand out, and what they are fetching.
+     *
+     * Bounded, and never throwing: a diagnostic line has to stay one line, and an exception from a
+     * driver that is being retired would replace the error the caller is about to see.
+     * */
+    private fun describeDriverHolders(limit: Int = 3): String {
+        val working = statefulDriverPool.workingDrivers.toList()
+        val labels = working.take(limit).map { driver ->
+            runCatching { driverHolderLabel(driver.id, driver.readableState, driver.navigateEntry.pageUrl) }
+                .getOrElse { "#${driver.id}" }
+        }
+        return describeDriverHolders(labels, working.size)
     }
 
     /**
@@ -577,4 +686,62 @@ class LoadingWebDriverPool constructor(
             browserSettings.pageLoadStrategy, capacity
         )
     }
+}
+
+/**
+ * Why a task had to wait for a driver, as the pool itself sees it.
+ *
+ * Kept free of the pool so the wording — the part a reader has to interpret — is pinned by a unit
+ * test: "driver creation is refused" and "every driver slot is taken" call for different actions
+ * (wait for the load to settle versus add capacity), and confusing them is how a genuine
+ * saturation gets read as a transient hiccup.
+ */
+internal fun driverWaitReason(
+    isClosed: Boolean,
+    isRetired: Boolean,
+    numDriverSlots: Int,
+    numActive: Int,
+    isCriticalMemory: Boolean,
+    isOverCriticalLoad: Boolean,
+): String = when {
+    isClosed -> "the pool is closed"
+    isRetired -> "the pool is retired"
+    numDriverSlots <= 0 -> "every driver slot is taken"
+    isCriticalMemory -> "driver creation is refused: critical memory"
+    isOverCriticalLoad -> "driver creation is refused: the system is over the critical load"
+    numActive == 0 -> "no driver has been created yet"
+    else -> "no driver became available"
+}
+
+/**
+ * How far past the warning threshold a wait is, as a label from a small set.
+ *
+ * A ratio rather than a duration on purpose: [ThrottlingLogger] throttles the rendered message, so
+ * a message carrying the exact wait would never repeat and would throttle nothing.
+ */
+internal fun driverWaitBucket(waited: Duration, warnThreshold: Duration): String {
+    val thresholdMillis = warnThreshold.toMillis()
+    if (thresholdMillis <= 0) return "1x"
+    return when {
+        waited.toMillis() >= thresholdMillis * 30 -> "30x"
+        waited.toMillis() >= thresholdMillis * 10 -> "10x"
+        waited.toMillis() >= thresholdMillis * 3 -> "3x"
+        else -> "1x"
+    }
+}
+
+/** One working driver, as a diagnostic names it: the tab, its state, and the page it is on. */
+internal fun driverHolderLabel(id: Int, state: String, pageUrl: String?): String =
+    "#$id $state" + (pageUrl?.takeIf { it.isNotBlank() }?.let { " $it" } ?: "")
+
+/**
+ * The drivers a pool could not hand out.
+ *
+ * [labels] is already bounded by the caller; [total] is the real number, so the line can say how
+ * many were left out instead of pretending the pool holds three drivers.
+ */
+internal fun describeDriverHolders(labels: List<String>, total: Int): String = when {
+    total <= 0 -> "no driver is working"
+    else -> "working drivers: " + labels.joinToString(", ") +
+        if (total > labels.size) " (+${total - labels.size} more)" else ""
 }
