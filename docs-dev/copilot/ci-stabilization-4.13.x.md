@@ -1849,3 +1849,90 @@ crawl 排的。
 
 
 
+
+## 28. `release.yml` `v4.13.21`：导航探针与 `fill` 的拒绝让 7 个 CLI e2e 场景变红（4.13.x，2026-09-23）
+
+`release.yml` run 35853681478（tag `v4.13.21`）的 `Build core artifacts and Docker image` 挂在
+`Run browser4-cli E2E Tests`：`153 passed; 7 failed; ... (7 failure entries; allowed <= 5)`——场景本身没有
+"硬失败"机制，只有 5 个的容忍额度，第 6 个失败才让步骤以 101 退出。
+
+7 个失败分成三组，都不是 flake，而是**当天两笔产品改动改了行为、断言还停在旧行为**，外加一条早已修在
+`main` 上、4.13.x 没有的旧帐：
+
+### 28.1 五条：`open`/`goto` 多了一次导航探针
+
+`41a5007982`（bot-stealth 报告）给每次成功导航加了一次**建议性**的 `browser_evaluate`
+（`BLOCK_PROBE_JS`）：把落地页的 URL 与可见正文一次取回，按 SKILL §2 的封禁/挑战签名打分，命中就写一条
+stderr 提示、`--json` 里报 `challenge_detected`。它不改退出码、不重试、探针失败就静默跳过，代价是**每次导航
+多一次往返**。
+
+于是所有"数 `browser_evaluate` 次数"的 mock 场景都开始把**导航路径**当成**被测命令**来量：
+
+| 场景 | 旧断言 | 实际 |
+|---|---|---|
+| `test_e2e_mock_eval_command` | `2` | `3` |
+| `test_e2e_mock_eval_css_selector_passthrough` | `1` | `2` |
+| `test_e2e_mock_eval_await_command` | `1` | `2` |
+| `test_e2e_mock_eval_without_await_omits_flag` | `1` | `2` |
+| `test_e2e_mock_press_command_uses_direct_tool_dispatch` | 断言"press 不合成 `browser_evaluate`" | 探针在前，断言必红 |
+
+这五条断言的**意图**没错（`eval` 一次命令一次调用、CSS 选择器不被改写成 `backend:N`、`--await` 才带
+`awaitPromise`、`press` 走直连工具分发），错的是**取样范围**：它们取的是整台 mock server 的记录，而记录里
+第一次导航自己的调用也在内。
+
+修法是给取样划一条界，而不是按探针的 JS 文本去过滤（那会把主仓 `main.rs` 里的一个字符串常量复制进测试，
+下次改探针就失效）：`mod.rs` 新增 `tool_calls_before_command(&mock_server)`，在 `run_open_command` 之后
+立刻记下偏移，之后用 `&tool_calls[after_open..]` 切片。导航路径以后再加调用，也不会再动这些断言；
+反过来，被测命令自己多出一次 `browser_evaluate` 仍然会被抓到（切片是从导航之后算起的）。
+
+### 28.2 一条：`fill` 对"收不了输入的目标"改成拒绝
+
+`571bd10693` 让 `fillSafe()` 先探目标再写：定位不到、或 `disabled`/`readonly`，直接抛
+`fill: target [#x] is disabled|read-only — user input is blocked.`。此前这条路径是**静默成功**——`fill` 的 JS
+作用在空 `this` 上是 no-op，`evaluateValue` 返回 `null`，CLI 照样打 `✓ Filled ...` 并退出 0。
+
+`test_e2e_keyboard_edge_inputs` 正是按旧契约写的：它对 `#readonly-target` / `#disabled-target` 调
+`run_command`（要求退出 0），随后断言值没变。值没变这条仍然成立，但**退出码变了**。改成
+`run_command_expecting_failure(..., "target [#readonly-target] is read-only")`：既钉住"被拒绝"，也钉住
+**是哪个目标**被拒绝（只写 `"is read-only"` 的话，CLI 认错元素也会过），随后保留原来的"值未被改写"断言。
+
+### 28.3 一条：`--sql` 的载荷独占 stdout（早就有的旧帐）
+
+`test_e2e_crawl_foreground_with_sql` 把 `Crawl task submitted:` / `X-SQL extraction: enabled` 断言在 **stdout**
+上，但带 `--sql` 且没有 `--output` 时，抽取出来的载荷独占 stdout，`crawl_status_println!` 会把这些状态行
+按 `CRAWL_STRUCTURED_STDOUT` **有意**改道到 stderr（`987bf9aba9` 起，2026-09-07）。这条在 4.13.x 上一直红着，
+靠 5 个失败的额度活着；`main` 上 `befd1f1c74`（2026-09-17）已经修过——本轮把那一半**回移**到 4.13.x：状态
+断言读两路合并（`stdout + stderr`），载荷断言仍然只看 stdout。
+
+### 28.4 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| mock 组（本地，`--level=EXTENDED`） | `--scenario='test_e2e_mock_*'` | **8 / 0 / 0** |
+| crawl 组（本地，`--level=EXTENDED`） | `--scenario='test_e2e_crawl*'` | **16 / 0 / 0** |
+| 真后端（本地） | `--scenario='test_e2e_keyboard_edge_inputs'`（自启后端 + 真浏览器）：`cli (expect failure) fill #readonly-target` / `#disabled-target` 各一步，随后两次取值断言 | **1 / 0 / 0** |
+| 全量门禁（本地） | `cargo test --test e2e -- --nocapture --level=EXTENDED --enable-batch-scenario`（与 CI 同一命令行，`running 160 tests` / 159 个场景） | **159 / 1 / 0**，见 §28.6 |
+
+### 28.6 全量门禁的那 1 个失败：与本轮无关的 Windows-only 断言
+
+全量跑下来只剩 `test_e2e_session_lifecycle` 一条红，且**只在 Windows 上红**：`browser.rs:41` 断言引导语里
+写着 ``run `browser4-cli open <url>` to start a new session.``，而 CLI 在 Windows 上打印的是可执行文件的
+**实际文件名** ``run `browser4-cli.exe open <url>` ``（Linux/CI 上没有 `.exe`，所以这条在 CI 上一直是绿的）。
+它与本轮的三个改动没有任何交集（本轮只动了 `browser.rs` 的 `test_keyboard_edge_inputs`），属于与
+`resolve_storage_state_path_*` 同一类的"本地 Windows 环境假红"，本轮按"不扩大范围"处理，没有改动它。
+
+除此之外，CI 那 7 条逐条复跑均为 `ok`：`test_e2e_mock_eval_command` /
+`test_e2e_mock_eval_css_selector_passthrough` / `test_e2e_keyboard_edge_inputs` /
+`test_e2e_mock_eval_await_command` / `test_e2e_mock_eval_without_await_omits_flag` /
+`test_e2e_mock_press_command_uses_direct_tool_dispatch` / `test_e2e_crawl_foreground_with_sql`。
+
+### 28.5 留下的判断
+
+* **没有动产品代码**：三组失败都是"行为改了、断言没改"。探针与 `fill` 的拒绝都是同一天**有意**加的行为，
+  Kotlin 单测（`Browser4WebDriverTest#inputTargetErrorRefusesADisabledTarget` / `...ReadOnlyTarget`）已经把
+  两条消息逐字钉住，回退产品行为不在本轮范围。
+* **没有按探针 JS 文本过滤**：`tool_calls_before_command` 只依赖"导航之后"这个位置，不复制 `BLOCK_PROBE_JS`。
+  代价是它必须**放在 `run_open_command` 之后、被测命令之前**——放错时切片为空或含探针，断言会**响亮地**
+  失败（本轮第一次改就踩了：偏移记在被测命令之后，`eval_calls` 变成 0），不会静默放过。
+* **5 个失败的容忍额度仍然偏松**：7 个失败里有 4 个是"每次都红"的确定性失败，却因为额度只报了 exit 101 而
+  没有更早暴露。额度本身是 §12 定的，本轮没动。

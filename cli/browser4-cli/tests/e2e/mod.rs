@@ -4205,6 +4205,21 @@ fn run_open_command(ctx: &mut E2ECtx) -> CliRunResult {
     return result;
 }
 
+/// Number of tool calls `mock_server` has recorded so far.
+///
+/// Call this immediately after [run_open_command] and slice the later snapshot
+/// with it (`&tool_calls[after_open..]`).  A mock scenario opens with that
+/// `open`, and the CLI records its own post-navigation work alongside it: one
+/// `browser_evaluate` for the advisory block/challenge probe (`BLOCK_PROBE_JS`
+/// in `main.rs`) plus the auto-appended `### Page` block's `page_url`/
+/// `browser_snapshot`/`page_title`.  Counting from this offset keeps a scenario
+/// measuring the command it runs instead of the navigation that precedes it, so
+/// the navigation path can grow a call without every counting scenario silently
+/// measuring the wrong thing.
+fn tool_calls_before_command(mock_server: &MockBrowser4Server) -> usize {
+    mock_server.snapshot().tool_calls.len()
+}
+
 fn batch_navigate_command(url: &str) -> String {
     format!("goto {url}")
 }
