@@ -4,11 +4,19 @@ on:
   schedule:
     # Runs at 00:00 UTC every day
     # This is a comprehensive nightly build including:
-    # - All unit tests (Fast + Slow)
-    # - Integration tests
-    # - Docker image building
-    # - Python SDK tests
-    # Note: E2E tests run separately in cli-e2e-tests.yml (manual only)
+    # - All JVM tests (Fast + Slow + HeavyTest + TestInfraCheck + Integration*)
+    #   minus ManualOnly / RequiresAI / E2E / E2ETest
+    # - JaCoCo coverage measured in observe-only mode (no floor: the floor
+    #   belongs to pr.yml, which controls its own subset)
+    # - Docker image building + the full browser4-cli e2e suite (204 scenarios,
+    #   --level=EXTENDED --enable-all --max-failures=0)
+    # - Rust CLI unit tests (cargo test --bin/--lib) — every other workflow only
+    #   builds the `e2e` test target, so those tests run here
+    # Note: the same CLI e2e suite also runs in nightly-cli.yml (03:00 UTC, 30 min
+    # budget). This workflow keeps its own copy because it builds and starts the
+    # Docker image from the same commit; keep both step budgets at 30 min.
+    # Note: E2E/E2ETest-tagged JVM tests are still excluded everywhere (see
+    # docs/TESTING.md §"CI 门禁实际覆盖" for the current inventory).
     - cron: '0 0 * * *'
   # Allow manual workflow runs
   workflow_dispatch:
@@ -65,10 +73,80 @@ jobs:
         id: run-tests
         uses: ./.github/actions/run-tests
         with:
-          maven_profiles: 'all-main-modules,all-test-modules'
+          # quality-gate adds the JaCoCo agent + per-module report; the
+          # jacoco.check.skip flag keeps the floor OFF (observe-only) because the
+          # nightly breadth run does not control which subset it executes.  The
+          # 0.20 INSTRUCTION floor stays enforced by pr.yml.
+          maven_profiles: 'all-main-modules,all-test-modules,quality-gate'
+          maven_args: '-Djacoco.check.skip=true'
           excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest' # E2E tests might be flaky in CI, so we run them separately in a different workflow
           run_pulsar_tests: 'true'
-          timeout_minutes: '60'
+          # 75, not 60: this run is a strict superset of ci.yml (which needs 50)
+          # plus Slow/TestInfraCheck classes, and the JaCoCo agent adds overhead.
+          # A timeout kills the reactor mid-reactor, so the modules that never ran
+          # produce no surefire XML at all.
+          timeout_minutes: '75'
+
+      - name: Coverage Summary (observe-only)
+        id: coverage
+        if: always()
+        shell: bash
+        run: |
+          echo "::group::📈 JaCoCo coverage (observe-only: no floor enforced here)"
+
+          mapfile -t csv_files < <(find . -path '*/target/site/jacoco/jacoco.csv' -type f | sort)
+          if [ "${#csv_files[@]}" -eq 0 ]; then
+            echo "⚠️ No JaCoCo CSV found — is the quality-gate profile active for this run?"
+            echo "   Expected: -P...,quality-gate -Djacoco.check.skip=true"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          printf '%-58s %10s %10s %10s\n' "module" "instr%" "branch%" "line%"
+          printf '%-58s %10s %10s %10s\n' \
+            "----------------------------------------------------------" "----------" "----------" "----------"
+
+          summary_rows=""
+          for csv in "${csv_files[@]}"; do
+            module="${csv#./}"
+            module="${module%%/target/site/jacoco/jacoco.csv}"
+            read -r instr branch line < <(awk -F, '
+              NR > 1 { im += $4; ic += $5; bm += $6; bc += $7; lm += $8; lc += $9 }
+              END {
+                ti = im + ic; tb = bm + bc; tl = lm + lc;
+                printf "%s %s %s\n",
+                  (ti > 0 ? sprintf("%.1f", 100 * ic / ti) : "n/a"),
+                  (tb > 0 ? sprintf("%.1f", 100 * bc / tb) : "n/a"),
+                  (tl > 0 ? sprintf("%.1f", 100 * lc / tl) : "n/a")
+              }' "$csv")
+            printf '%-58s %10s %10s %10s\n' "$module" "$instr" "$branch" "$line"
+            summary_rows="${summary_rows}| \`${module}\` | ${instr} | ${branch} | ${line} |\n"
+          done
+
+          read -r t_instr t_branch t_line < <(awk -F, '
+            FNR > 1 { im += $4; ic += $5; bm += $6; bc += $7; lm += $8; lc += $9 }
+            END {
+              ti = im + ic; tb = bm + bc; tl = lm + lc;
+              printf "%s %s %s\n",
+                (ti > 0 ? sprintf("%.1f", 100 * ic / ti) : "n/a"),
+                (tb > 0 ? sprintf("%.1f", 100 * bc / tb) : "n/a"),
+                (tl > 0 ? sprintf("%.1f", 100 * lc / tl) : "n/a")
+            }' "${csv_files[@]}")
+          printf '%-58s %10s %10s %10s\n' "TOTAL (${#csv_files[@]} modules)" "$t_instr" "$t_branch" "$t_line"
+          echo ""
+          echo "ℹ️ Observe-only: nightly reports coverage, pr.yml enforces the 0.20 instruction floor."
+          echo "::endgroup::"
+
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### JaCoCo coverage (observe-only — no floor enforced)"
+              echo ""
+              echo "| Module | Instr % | Branch % | Line % |"
+              echo "| --- | --- | --- | --- |"
+              printf '%b' "$summary_rows"
+              echo "| **TOTAL** | **${t_instr}** | **${t_branch}** | **${t_line}** |"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Check Test Status
         id: test-check
@@ -103,6 +181,7 @@ jobs:
             echo ""
             echo "📦 Test Reports: test-reports-${{ github.run_id }} (artifact)"
             echo "::endgroup::"
+            echo "MAVEN_TESTS_FAILED=0" >> "$GITHUB_ENV"
             exit 0
           fi
 
@@ -170,7 +249,16 @@ jobs:
           echo "::endgroup::"
 
           echo "::endgroup::"  # closes Test Status Report group
-          exit 1
+
+          # Do NOT fail the job here.  The JVM suite and the CLI e2e suite are
+          # independent: failing here would skip the Docker build, the app
+          # startup and all 204 CLI scenarios whenever a single JVM test fails,
+          # so a nightly could never report what actually broke.  Record the
+          # state and let the final 'Enforce Nightly Gate' step turn the job red
+          # after both sides have run.
+          echo "MAVEN_TESTS_FAILED=1" >> "$GITHUB_ENV"
+          echo "⚠️  Maven test stage failed — continuing so the CLI e2e stage can run."
+          echo "    The job will be failed by the 'Enforce Nightly Gate' step."
 
       - name: Cleanup Docker system to free space
         run: |
@@ -213,17 +301,40 @@ jobs:
 
       - name: Setup Rust Toolchain
         id: rust-setup
+        # The Rust stages need only the checked-out sources — not Docker, the
+        # image or the running app — so they run even when an earlier stage
+        # failed.  Keeping them behind success() would let one broken stage
+        # hide the CLI test result for the whole night.
+        if: ${{ !cancelled() }}
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust Build Artifacts
+        if: ${{ !cancelled() }}
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: cli/browser4-cli
 
+      - name: Run browser4-cli unit tests
+        id: unit-tests-cli
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          echo "::group::🧪 browser4-cli unit tests (cargo test --bin/--lib)"
+          # Every other workflow only builds the `e2e` test target, so the unit
+          # tests inside src/ (1400+ #[test] / #[tokio::test] functions) never ran
+          # anywhere in CI.  They need no backend, no Docker and no browser.
+          cd cli/browser4-cli
+          cargo test --bin browser4-cli --lib -- --nocapture
+          cd "$(git rev-parse --show-toplevel)"
+          echo "::endgroup::"
+
       - name: Run browser4-cli E2E Tests
         id: e2e-cli
         if: success()
-        timeout-minutes: 15
+        # 30 minutes, not 15: the same suite gets 30 min in nightly-cli.yml, and a
+        # timeout kills cargo mid-suite so the remaining scenarios report nothing.
+        timeout-minutes: 30
         shell: bash
         env:
           BROWSER4_E2E_SERVICE_URL: http://localhost:8182
@@ -231,11 +342,13 @@ jobs:
         run: |
           echo "::group::🧪 browser4-cli E2E Tests"
 
-          # Run the CLI tests against the already-running Docker container
+          # Run the CLI tests against the already-running Docker container.
+          # --max-failures=0: nightly is a report, not a merge gate — a tolerated
+          # failure here hides damage for a whole day.
           echo "Running browser4-cli E2E tests..."
           echo "Working directory: $(pwd)"
           cd cli/browser4-cli
-          cargo test --test e2e -- --nocapture --level=EXTENDED --enable-all
+          cargo test --test e2e -- --nocapture --level=EXTENDED --enable-all --max-failures=0
           cd "$(git rev-parse --show-toplevel)"
 
           echo "::endgroup::"
@@ -270,7 +383,11 @@ jobs:
           printf "║  %s %-40s ║\n" "$(icon '${{ steps.app.outcome }}')" "Start Application"
           printf "║  %s %-40s ║\n" "$(icon '${{ steps.health.outcome }}')" "Health Check"
 
-          # Only show CLI E2E if it ran (it has success() condition)
+          # Only show CLI stages if they ran (both have success() conditions)
+          UNIT_OUTCOME="${{ steps.unit-tests-cli.outcome }}"
+          if [ -n "${UNIT_OUTCOME}" ]; then
+            printf "║  %s %-40s ║\n" "$(icon "${UNIT_OUTCOME}")" "CLI Unit Tests"
+          fi
           E2E_OUTCOME="${{ steps.e2e-cli.outcome }}"
           if [ -n "${E2E_OUTCOME}" ]; then
             printf "║  %s %-40s ║\n" "$(icon "${E2E_OUTCOME}")" "CLI E2E Tests"
@@ -279,6 +396,9 @@ jobs:
           echo "║                                              ║"
           echo "╠══════════════════════════════════════════════╣"
           echo "║  Test Details:                               ║"
+          # Set by 'Check Test Status': 0 = passed, 1 = failed, unset = never ran.
+          # The job outcome is decided by 'Enforce Nightly Gate', not here.
+          printf "║  %-42s ║\n" "Maven test stage: ${MAVEN_TESTS_FAILED:-unset}"
 
           TC="${{ steps.run-tests.outputs.test_count }}"
           FC="${{ steps.run-tests.outputs.failed_count }}"
@@ -316,6 +436,49 @@ jobs:
           echo "🔗 Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           echo "::endgroup::"
+
+      - name: Enforce Nightly Gate
+        # Runs after every stage so one night produces a complete report: the JVM
+        # suite, its coverage table and the CLI e2e suite all execute even when an
+        # earlier stage failed.  This step alone decides the job outcome.
+        if: always()
+        shell: bash
+        run: |
+          echo "::group::🚦 Nightly Gate"
+
+          failed=0
+
+          maven_status="${MAVEN_TESTS_FAILED:-unset}"
+          echo "  - Maven test stage : ${maven_status}"
+          case "$maven_status" in
+            0) echo "      ✅ JVM tests passed" ;;
+            1) echo "      ❌ JVM tests failed (see 'Check Test Status' above)"; failed=1 ;;
+            *) echo "      ❌ JVM tests never reported a status (setup/build/dependencies failed first)"; failed=1 ;;
+          esac
+
+          unit_outcome="${{ steps.unit-tests-cli.outcome }}"
+          echo "  - CLI unit tests   : ${unit_outcome:-<not run>}"
+          if [ "${unit_outcome:-skipped}" != "success" ]; then
+            echo "      ❌ cargo test --bin/--lib did not pass"
+            failed=1
+          fi
+
+          e2e_outcome="${{ steps.e2e-cli.outcome }}"
+          echo "  - CLI e2e tests    : ${e2e_outcome:-<not run>}"
+          if [ "${e2e_outcome:-skipped}" != "success" ]; then
+            echo "      ❌ browser4-cli e2e did not pass (tolerance is 0 in nightly)"
+            failed=1
+          fi
+
+          echo "  - Coverage         : observe-only (see 'Coverage Summary')"
+          echo "::endgroup::"
+
+          if [ "$failed" -ne 0 ]; then
+            echo "❌ Nightly gate failed — see the per-stage summaries above."
+            exit 1
+          fi
+          echo "✅ Nightly gate passed"
+
       - name: Cleanup Resources
         if: always()
         uses: ./.github/actions/cleanup-resources
