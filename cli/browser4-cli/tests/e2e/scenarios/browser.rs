@@ -2751,6 +2751,7 @@ pub(super) fn test_mouse_pointer_jitter(ctx: &mut E2ECtx) {
 
     let clicks = 6_u64;
     let mut positions: Vec<(i64, i64)> = Vec::new();
+    let mut presses: Vec<(i64, i64)> = Vec::new();
 
     for index in 0..clicks {
         run_command(ctx, &["click", "#mouse-track-area"]);
@@ -2771,12 +2772,32 @@ pub(super) fn test_mouse_pointer_jitter(ctx: &mut E2ECtx) {
             state["lastMouse"][0].as_i64().unwrap_or_default(),
             state["lastMouse"][1].as_i64().unwrap_or_default(),
         ));
+        presses.push((
+            state["mouseDownPosition"][0].as_i64().unwrap_or_default(),
+            state["mouseDownPosition"][1].as_i64().unwrap_or_default(),
+        ));
     }
 
     assert!(
         positions.iter().any(|p| *p != positions[0]),
         "Expected the pre-click pointer position to vary between clicks, got {positions:?}"
     );
+
+    // A trusted click must press where the pointer was moved to.  Chrome moves the pointer to the
+    // pressed coordinates before `mousedown`, so a press at the element center emits a second
+    // `mousemove` back to the exact center: the jitter would be erased and every click would press
+    // the same pixel again.
+    assert!(
+        presses.iter().any(|p| *p != presses[0]),
+        "Expected the click to press at the jittered pointer position, got {presses:?}"
+    );
+    for (index, (pressed, hovered)) in presses.iter().zip(positions.iter()).enumerate() {
+        assert!(
+            (pressed.0 - hovered.0).abs() <= 1 && (pressed.1 - hovered.1).abs() <= 1,
+            "Click {index} must press where the pointer was moved to, got press={pressed:?} and \
+             last mousemove={hovered:?}"
+        );
+    }
 
     let min_x = positions.iter().map(|p| p.0).min().unwrap_or_default();
     let max_x = positions.iter().map(|p| p.0).max().unwrap_or_default();

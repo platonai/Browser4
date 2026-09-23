@@ -527,6 +527,23 @@ class Browser4WebDriverTest {
         assertTrue(js.contains("document.elementFromPoint"), "expected the hit test: $js")
     }
 
+    @Test
+    @DisplayName("hitTestJs repeats the hit test at the pressed point")
+    fun hitTestJsRepeatsTheHitTestAtThePressedPoint() {
+        val js = Browser4WebDriver.hitTestJs(center(270.0, 321.0))
+        assertTrue(js.contains("querySelector('button#go')"), "expected the element lookup: $js")
+        assertTrue(js.contains("document.elementFromPoint(270.0, 321.0)"), "expected the pressed point: $js")
+        assertTrue(js.contains("el.contains(at)"), "expected the containment fallback: $js")
+
+        val quoted = Browser4WebDriver.hitTestJs(
+            Browser4WebDriver.DragCenter(1.0, 2.0, "div[data-x='a']", false, 0, 0)
+        )
+        assertTrue(
+            quoted.contains("""querySelector('div[data-x=\'a\']')"""),
+            "expected the CSS path to be escaped for the JS literal: $quoted"
+        )
+    }
+
     // -------------------------------------------------------------------------
     // Trusted clicks (CDP input instead of synthetic DOM events)
     // -------------------------------------------------------------------------
