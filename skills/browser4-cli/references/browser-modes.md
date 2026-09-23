@@ -179,6 +179,11 @@ instead of Chrome directly. Therefore:
   that precedes a click lands within ±2 px of the element's center (clamped to the element box),
   so repeated clicks on the same element do not hit the identical pixel. Explicit coordinates
   passed to `mousemove` are **not** jittered — that command means "put the pointer exactly here".
+  A trusted click presses at that same hovered point instead of the element's center: Chrome moves
+  the pointer to the pressed coordinates before `mousedown`, so a press at the center would emit a
+  second `mousemove` back to the exact center and repeat the same pixel on every click. The hit
+  test is repeated at the pressed point, so the click still never lands on an overlay that covers
+  the element's edge.
 - Clicks are dispatched as **trusted** input (`Input.dispatchMouseEvent`, i.e. `event.isTrusted` is
   true and the events carry their real coordinates) instead of synthetic DOM events. The driver
   first verifies with a one-shot check that trusted input actually reaches the page on this

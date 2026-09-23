@@ -569,6 +569,10 @@ open class Browser4WebDriver(
         /**
          * Whether a click at [point] may be dispatched as trusted CDP input.
          *
+         * [point] must carry the hit result for the exact coordinates it is to be pressed at —
+         * [dragCenterJs] supplies it for the resolved centre, [hitTestJs] for the jittered hover
+         * point a click actually uses.
+         *
          * Two conditions rule it out, both because the coordinates would then be wrong:
          *
          * - frame-resident elements: `getBoundingClientRect` is frame-relative while
@@ -673,6 +677,26 @@ open class Browser4WebDriver(
                 });
             }
             """.trimIndent()
+
+        /**
+         * Whether the element described by [point]'s CSS path is the topmost element at
+         * [point]'s coordinates.
+         *
+         * [dragCenterJs] answers the same question for the element's *centre*, which is where the
+         * element is resolved; a trusted click presses at the jittered hover point instead, so the
+         * test has to be repeated there (see `trustedClickPoint`). Only main-frame elements reach
+         * this probe ([DragCenter.inFrame] is rejected first), so the top document's
+         * `querySelector` resolves the path.
+         */
+        internal fun hitTestJs(point: DragCenter): String = """
+            (function() {
+                var el = null;
+                try { el = document.querySelector('${escapeJsString(point.cssPath)}'); } catch (e) { return 'no-element'; }
+                if (!el) { return 'no-element'; }
+                var at = document.elementFromPoint(${point.x}, ${point.y});
+                return (at && (at === el || el.contains(at))) ? 'hit' : 'miss';
+            })()
+        """.trimIndent()
 
         /**
          * Build the drag sequence script executed with `this` bound to the
@@ -1182,8 +1206,11 @@ internal enum class DragDropPosition(val key: String) {
      * center is stable before the pointer moves.  Best-effort: when the
      * element cannot be resolved or never becomes visible, the pointer is
      * left alone and the upstream click proceeds as before.
+     *
+     * @return the point the pointer was actually moved to, which is also the point a trusted click
+     *   must press at (see [trustedClickPoint]), or null when the pointer was left alone
      */
-    private suspend fun movePointerToClickTarget(selector: String) {
+    private suspend fun movePointerToClickTarget(selector: String): DragCenter? {
         runCatching {
             evaluateValue(
                 selector,
@@ -1197,9 +1224,9 @@ internal enum class DragDropPosition(val key: String) {
         for (attempt in 0 until 15) {
             center = resolveDragCenter(selector)
             if (center == null) {
-                return
+                return null
             }
-            val c = center ?: return
+            val c = center ?: return null
             val visible = c.viewportWidth <= 0 || (
                 c.x >= 0 && c.y >= 0 && c.x <= c.viewportWidth && c.y <= c.viewportHeight
                 )
@@ -1208,18 +1235,24 @@ internal enum class DragDropPosition(val key: String) {
             }
             delay(150)
         }
-        val point = center ?: return
+        val point = center ?: return null
         val visible = point.viewportWidth <= 0 || (
             point.x >= 0 && point.y >= 0 && point.x <= point.viewportWidth && point.y <= point.viewportHeight
             )
-        if (visible) {
-            // Nudge the pointer inside the element instead of always hitting its exact center:
-            // identical coordinates on every request for the same element are a fingerprint. The
-            // offset is clamped to the element box so `:hover` still applies (see
-            // [jitteredPointerPosition]).
-            val (pointerX, pointerY) = jitteredPointerPosition(point.x, point.y, point.width, point.height)
-            mouseMove(pointerX, pointerY)
+        if (!visible) {
+            return null
         }
+
+        // Nudge the pointer inside the element instead of always hitting its exact center: identical
+        // coordinates on every request for the same element are a fingerprint. The offset is clamped
+        // to the element box so `:hover` still applies (see [jitteredPointerPosition]).
+        val (pointerX, pointerY) = jitteredPointerPosition(point.x, point.y, point.width, point.height)
+        mouseMove(pointerX, pointerY)
+
+        // `hit` describes the element's centre, which is not the point just hovered any more: the
+        // caller re-tests the hit where the pointer actually is before pressing (see
+        // [trustedClickPoint]).
+        return point.copy(x = pointerX, y = pointerY, hit = false)
     }
 
     /**
@@ -1300,9 +1333,9 @@ internal enum class DragDropPosition(val key: String) {
      */
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, count: Int) {
-        movePointerToClickTarget(selector)
+        val hovered = movePointerToClickTarget(selector)
         withDialogWatch("click") {
-            if (!clickTrusted(selector, count, resolveClickPoint(selector))) {
+            if (!clickTrusted(selector, count, trustedClickPoint(hovered))) {
                 super.click(selector, count)
             }
         }
@@ -1325,17 +1358,36 @@ internal enum class DragDropPosition(val key: String) {
     private var trustedClickSupported: Boolean? = null
 
     /**
-     * Resolve the point a trusted click would target, or null when the trusted path must not be
-     * used for this element (capability already refuted, element unresolvable, frame-resident or
-     * not hit at that point — see [canClickWithTrustedInput]).
+     * The point a trusted click must press at — the point the pointer was moved to — or null when
+     * the trusted path must not be used for it (capability already refuted, no hover point, a
+     * frame-resident element, or the element is not hit at that point: see
+     * [canClickWithTrustedInput]).
+     *
+     * Pressing at the hover point instead of the element's centre is what keeps the jitter in the
+     * event trail: Chrome moves the pointer to the pressed coordinates before `mousedown`, so a
+     * press at the centre emits a second `mousemove` back to the exact centre and repeats the same
+     * pixel on every click.
+     *
+     * The jittered point is no longer the centre the element was resolved at, so the hit test is
+     * repeated there ([hitAt]) and a miss — an overlay covering the element's edge,
+     * `pointer-events: none`, an async layout shift — falls back to the DOM path instead of
+     * clicking whatever is on top.
      */
-    private suspend fun resolveClickPoint(selector: String): DragCenter? {
-        if (trustedClickSupported == false) {
+    private suspend fun trustedClickPoint(hovered: DragCenter?): DragCenter? {
+        if (trustedClickSupported == false || hovered == null) {
             return null
         }
 
-        return resolveDragCenter(selector)?.takeIf { canClickWithTrustedInput(it) }
+        return hovered.copy(hit = hitAt(hovered)).takeIf { canClickWithTrustedInput(it) }
     }
+
+    /**
+     * Whether the element [point] was resolved from is still the topmost element at [point]'s
+     * coordinates. A probe that cannot run or cannot resolve the element is reported as a miss,
+     * which falls back to the DOM path (the click then lands on the element itself).
+     */
+    private suspend fun hitAt(point: DragCenter): Boolean =
+        runCatching { evaluate(hitTestJs(point))?.toString() }.getOrNull() == "hit"
 
     /**
      * Dispatch [count] clicks (a double-click for `count == 2`) on [selector] as trusted CDP input
@@ -1452,9 +1504,9 @@ internal enum class DragDropPosition(val key: String) {
      */
     @Throws(WebDriverException::class)
     override suspend fun dblclick(selector: String, modifier: String) {
-        movePointerToClickTarget(selector)
+        val hovered = movePointerToClickTarget(selector)
         withDialogWatch("dblclick") {
-            if (modifier.isNotBlank() || !clickTrusted(selector, 2, resolveClickPoint(selector))) {
+            if (modifier.isNotBlank() || !clickTrusted(selector, 2, trustedClickPoint(hovered))) {
                 super.dblclick(selector, modifier)
             }
         }
