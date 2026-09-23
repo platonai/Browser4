@@ -121,8 +121,8 @@ AND NOT ManualOnly
 | 行为     | Property             |
 | ------ | -------------------- |
 | 集成测试   | `-DrunITs=true`      |
-| E2E 测试 | `-DrunE2ETests=true` |
-| SDK 测试 | `-DrunSDKTests=true` |
+| E2E 测试 | `-DrunE2ETests=true`（当前无 workflow 使用，见下节） |
+| SDK 测试 | 无此 property：`SDK` tag 没有任何测试标注。对外契约由 MCP 契约测试（`ToolContractMatrixTest` / `ToolSpecLintTest` / `docs/mcp-tools.{md,json}` 漂移检查）与 CLI e2e 的 `test_e2e_command_coverage` 覆盖 |
 | 全量     | `bin/test.sh all`    |
 
 ---
@@ -193,6 +193,83 @@ AND NOT ManualOnly
   ```
 
   过滤后先看 `Running <类名>` 行确认真的跑起来了。
+
+---
+
+## CI 门禁实际覆盖（实测盘点）
+
+> 数字来自对 `src/test` 的静态清点与 e2e harness 的 `--list`（2026-09 盘点）。
+
+### 门禁矩阵
+
+| Workflow | JVM `excluded_groups` | JVM 增量 | CLI e2e | 预算 |
+| --- | --- | --- | --- | --- |
+| `pr.yml`（PR） | 除 `Unit/Fast` 外全排除 + `-Pquality-gate`（**强制** INSTRUCTION ≥ 0.20） | 快档基线 | 无 | 25 min |
+| `ci.yml`（release tag） | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck` | +Integration/Heavy | `--level=BASIC`（148） | 50 min |
+| `nightly.yml`（00:00 UTC） | `ManualOnly,RequiresAI,E2E,E2ETest` | +Slow/HeavyTest/TestInfraCheck（约 32 个方法）、JaCoCo **仅观测**（`-Djacoco.check.skip=true`） | `--level=EXTENDED --enable-all --max-failures=0`（204） | 75 / 30 min |
+| `nightly-cli.yml`（03:00 UTC） | — | — | `--level=ALL --enable-all`（204） | 30 min |
+| `release.yml` / `release-cli.yml` | 仅构建 | — | `--level=EXTENDED --enable-all` | — |
+
+Rust 单元测试（`cli/browser4-cli/src`，约 1400 个 `#[test]`/`#[tokio::test]`）**只有 `nightly.yml` 会跑**
+（`cargo test --bin browser4-cli --lib`）；其余 workflow 只构建 `e2e` 测试目标。
+
+`nightly.yml` 与 `ci.yml` 的 job 成败都由**最后一个 gate 步骤**判定（`Enforce Nightly Gate` /
+`Enforce CI Gate`）：JVM 阶段失败不再让 Docker 构建、应用启动和 CLI e2e 阶段被跳过，
+一轮就能同时拿到两侧结论（`.github/workflows/nightly.yml`、`ci.yml` 的 `Check Test Status` 只记录状态）。
+
+### 通过/失败语义（重要）
+
+* **Maven 退出码是权威**：`.github/actions/run-tests/action.yml` 的 `reconcile-status` 不再把
+  "非零退出但 0 个测试失败" 记为成功，也会在"退出码 0 但没有任何 surefire XML"时判失败。
+  因此 **JaCoCo 覆盖下限、编译错误、fork 崩溃现在都会真的让门禁变红**。
+* **JaCoCo 现在是真在跑（别再改回 `${...}`）**：surefire 的 `argLine` 必须使用 Maven 的晚绑定
+  语法 `@{jacocoArgLine}`。该属性在 root `pom.xml` 的 `<properties>` 里声明为空，
+  `${jacocoArgLine}` 会在构建 effective model 时就被替换成空串（早于 `prepare-agent` 在运行期赋值），
+  结果是 agent 不注入、`jacoco.exec` 不生成、`report`/`check` 全部
+  `Skipping JaCoCo execution due to missing execution data file`，下限静默空转。
+  下限由 `pr.yml` 强制执行（每模块 INSTRUCTION ≥ 0.20）；`nightly.yml` 用
+  `-P...,quality-gate -Djacoco.check.skip=true` 只测量不设限。
+  例外：`browser4-tests/pulsar-tests-common` 在模块自己的 `pom.xml` 里跳过 `check`（共享测试支撑库，
+  它自己的 main 类只会在别的模块的测试 JVM 里被执行，bundle 覆盖率恒为 0.00；而它一红会让 17 个
+  依赖它的模块被 SKIPPED）。同类模块要豁免就显式写在模块 pom 里并说明理由，不要下调全局下限。
+* CLI e2e 默认容忍 5 个场景失败；`--max-failures=<n>` 可改，CI 门禁应传 `0`。
+  被容忍的失败会打印通过率，并在 GitHub Actions 上产生 `::warning::` 注解。
+* `nightly.yml` 的门禁判定集中在最后的 `Enforce Nightly Gate`：JVM 阶段失败不再跳过 CLI e2e 阶段，
+  一夜之内两边都能拿到结论。
+
+### 已知覆盖缺口（尚未修，需要决策）
+
+* **`E2E`/`E2ETest` 标记的 10 个类 / 82 个方法在任何 workflow 都不执行**
+  （含 `HtmlSnapshotScenariosE2ETest` 32、`MCPToolControllerE2ETest` 18、`Browser4MCPServerE2ETest` 14 …），
+  整个 `browser4-tests/browser4-e2e-tests` 模块（5 个方法）同样为死代码。
+  原因是 nightly/ci/pr 都排除这两个 tag，而没有 workflow 传 `-DrunE2ETests=true`。
+  **已做过稳定性评估并给出按类处置方案**（两轮本地采样 56 例 0 失败）：
+  见 [E2E tag 稳定性评估](../docs-dev/copilot/e2e-tag-stability-assessment.md)。
+  结论摘要：不要在 nightly 里直接放开这两个 tag（放开只多跑 4 个类，其中 3 个是 Spring + 真实 Chrome 的
+  重测试，单类 6.5–8 分钟）；`Browser4MCPServerE2ETest` 是 mockk 驱动、2.8 s 跑完 14 例，
+  建议改标 `Unit`+`Fast` 让它回到 PR 门禁。
+* **Tag 标注仍在补齐中（本轮已按实测数据补了一批）**：357 个含 `@Test` 的类里 62 个带 tag（295 个无 tag）。
+  补齐规则（用 surefire 的 `<testcase time>` 实测 + 被测进程是否真的拉起 Chrome 作为证据）：
+  单方法实测 **≥30 s → `Heavy`**、**5–30 s → `Slow`**、真的启动 Chrome **→ `RequiresBrowser`**；
+  只在少数方法慢的类上做**方法级**标注 —— 类级标注会把同类的快方法一起剔出门禁，
+  例如 `BrowserTabToolExecutorTest`（52 个方法 / 11 s，全是上下文启动开销）类级标 Slow 等于白丢 52 个方法。
+  本轮结果：`Slow` 8 → 18 类 / 81 方法，`Heavy` 0 → 2 类 / 8 方法，`RequiresBrowser` 1 → 6 类 / 23 方法。
+  对门禁的影响（实测）：PR 门禁不再执行这些类，快档实测总时长 691 s 中的约 493 s（71%）被移出 PR；
+  `Slow` 的方法在 `ci.yml` 也不再执行（其清单本就排除 `Slow`）；`nightly.yml` 不受影响，仍全部执行。
+* **仍然零标注的 tag**：`HeavyTest`（`Heavy` 的遗留别名，已无使用者）、`Integration`（新 taxonomy 的
+  scope tag，仓库目前用的是遗留 `IntegrationTest`，9 个类）、`RequiresDocker`（没有测试需要 Docker）、
+  `SDK`（没有对外 SDK 契约测试）。排除清单里保留它们属于防御性配置，当前不产生任何效果。
+* **6 个插件模块不在覆盖率测量范围内**：`browser4-plugins/browser4-{media,images,pptx,markdown,swarm,profile-import}`
+  的父 POM 是独立发布的 `browser4-pdk`（它直接继承 Maven Central 上的 `pulsar-parent`，好让第三方插件
+  项目不必继承本仓库的聚合 POM）。因此根 `pom.xml` 的 `quality-gate` profile（JaCoCo agent + report +
+  0.20 下限）对它们**完全不生效**：它们的测试照跑，但既不产出覆盖率数据、也不受下限约束。
+  查询覆盖率时会看到 nightly 的 Coverage Summary 只列出有数据的模块——这是原因之一。
+  要覆盖它们需要改 PDK 的公开契约（属于设计决策，不是本地修补）。
+* 类名不匹配 surefire 默认 include（`*Test`/`*Tests`/`TestCase`）的类不会被执行；
+  目前只剩 `ToolSpecSnapshotRegenerator`、`RestAPITestBase` 两类，属工具/基类。
+* `surefire.excludes=**integration**` 是**小写路径匹配**，实践中只命中
+  `browser4-media/.../media/integration/`（1 个类）；`*IntegrationTest.kt` 这类
+  类名不会被它排除，只能靠 tag —— 别把它当成集成测试的总开关。
 
 ---
 

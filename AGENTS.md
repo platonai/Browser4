@@ -215,6 +215,7 @@ cargo test --test e2e -- --help           # All options
 --group <name>                            # Group filter (repeatable)
 --level SMOKE|BASIC|EXTENDED|ALL          # Test depth
 --fail-fast / --failed                    # Stop early / rerun failures
+--max-failures <count>                    # Tolerated failing scenarios (default 5, 0 = none)
 --list / --list-groups                    # Discover without running
 --enable-all                              # Opt into excluded-by-default tests
 --force-rebuild-bundle                    # Force local Maven + runtime rebuild
@@ -268,7 +269,12 @@ logger.info("Task {} finished in {} ms", taskId, cost)  // placeholders, never c
 | PR Quality Gate | `.github/workflows/pr.yml` | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,Heavy,HeavyTest,Integration,IntegrationTest,RequiresServer,RequiresBrowser,RequiresDocker,TestInfraCheck` | fast/unit only (`run_pulsar_tests: 'false'`) |
 | CI/CD Pipeline (main + release tags) | `.github/workflows/ci.yml` | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck` | adds integration/infra tests that need Chrome, Docker and the started app |
 
-Both gates pass `-Dsurefire.excludes=**integration**` (class-file pattern, not tags) and both derive success from the surefire XML totals — a test class is skipped by **tag**, never by name. `SDK` is excluded by neither gate (no test carries that tag today); `Heavy` is excluded only by the PR gate, `HeavyTest` by both. `.github/workflows/ci.yml` also builds all-main-modules, starts a Dockerized app on port 8182 and runs `cargo test` in `cli/browser4-cli`.
+Both gates pass `-Dsurefire.excludes=**integration**` (class-file pattern, not tags) and both derive success from **the Maven exit code plus the surefire XML totals** — the exit code is authoritative (`reconcile-status` in `.github/actions/run-tests/action.yml` refuses to turn a non-zero exit into a pass, and refuses a pass when no XML was produced at all), so a breached JaCoCo floor, a compile error or a dead test fork fails the gate even with zero parsed test failures. A test class is skipped by **tag**, never by name. `SDK` is excluded by neither gate (no test carries that tag today); `Heavy` is excluded only by the PR gate, `HeavyTest` by both. `.github/workflows/ci.yml` also builds all-main-modules, starts a Dockerized app on port 8182 and runs `cargo test` in `cli/browser4-cli`.
+
+Neither `ci.yml` nor `nightly.yml` fails early any more: `Check Test Status` only records `MAVEN_TESTS_FAILED` in `$GITHUB_ENV`, the Docker build / app startup / CLI e2e stages still run, and a final `Enforce CI Gate` / `Enforce Nightly Gate` step (after `Pipeline Summary`) decides the job outcome from the JVM stage flag plus the CLI e2e outcome. So one round reports both sides instead of hiding the CLI suite behind a single broken JVM test.
+
+The nightly gate (`.github/workflows/nightly.yml`, 00:00 UTC) is a superset: it adds `Slow`/`HeavyTest`/`TestInfraCheck`, measures JaCoCo in observe-only mode
+(`-P...,quality-gate -Djacoco.check.skip=true`, no floor), runs `cargo test --bin browser4-cli --lib` (the only place the Rust unit tests run), runs the CLI e2e suite with `--level=EXTENDED --enable-all --max-failures=0`, and defers the job outcome to a final `Enforce Nightly Gate` step so a failing JVM test never skips the CLI e2e stage. See [TESTING.md § CI 门禁实际覆盖](docs/TESTING.md) for the current coverage inventory.
 See [CI stabilization notes](docs-dev/copilot/ci-stabilization-4.13.x.md) before changing either list.
 
 ## Configuration
@@ -378,6 +384,7 @@ File-queue system for task-driven AI workflows (`coworker/`). Task files (Markdo
 | JDK version mismatch | JDK 25+ in `JAVA_HOME` |
 | Windows parameter escaping | `-D"key.with.dots=value"` |
 | Port 8182 in use | Override `server.port` in root `application.properties` |
+| JaCoCo reports empty / coverage floor never trips | The surefire `argLine` in the root `pom.xml` must use late binding `@{jacocoArgLine}`, never `${jacocoArgLine}`: the property is declared empty, so `${...}` is substituted to `""` while the effective model is built — before `prepare-agent` sets it — and the agent never attaches (`Skipping JaCoCo execution due to missing execution data file`). Verify with `mvn -X -Pquality-gate -pl :browser4-common test` and look for `-javaagent:` on the surefire fork command line |
 | BrowserProtocol retry log storms | Use existing retry utilities, lower log level |
 
 ## Documentation Update Rule

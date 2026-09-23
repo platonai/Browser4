@@ -2021,3 +2021,183 @@ release.yml 在 tag `v4.14.0-rc.6`（run [35265014949](https://github.com/platon
 * **上传端点整体不可用**：预算用尽后 job 仍然红，只是会点名"哪些资产还不对 + 建议 `Re-run failed jobs`"。
 * **没有真机验证**：本轮只有 stub + 变异验证，真实 5xx 无法本地复现；下一个 release tag 是首个真实检验点。
   若那时仍红，先看 `Reconcile release assets` 步骤里的 WARN（它保留了每次失败的 GitHub 应答）。
+
+---
+
+## 30. nightly 的"绿灯 ≠ 全覆盖"：假绿协调、被跳过的 CLI e2e、没人跑的 1395 个 Rust 单测（4.14.x，已修）
+
+### 30.1 现象：四个机制让门禁看起来比实际覆盖得多
+
+对 `.github/workflows/nightly.yml` 做覆盖盘点（静态清点 `src/test` 356 个类 / 3727 个 `@Test`，
+harness `--list` 实测 e2e 选中 204 例）时，发现 nightly 的**选择面**没问题
+（JVM 约 97%，CLI e2e 100%），但**结论可信度**有四个口子：
+
+1. **假绿协调**：`.github/actions/run-tests/action.yml` 的 `reconcile-status` 在
+   `failed_count == 0` 时把 Maven 的非零退出码改写成 `success`（只对 exit 124/timeout 例外）。
+   配合 `--fail-at-end`，一个测试模块编译失败 → 该模块 0 个 surefire XML → 门禁全绿。
+   同一机制也让 **pr.yml 的 JaCoCo 0.20 覆盖下限形同不存在**：`jacoco:check` 失败 → Maven 退出 1 →
+   0 个测试失败 → 被协调成 success。
+   **但真正去验证时发现更糟**：这个下限其实**从未被评估过** —— JaCoCo agent 根本没挂到测试 JVM 上，
+   `jacoco.exec` 从来不生成，`report` 和 `check` 每次都打印
+   `Skipping JaCoCo execution due to missing execution data file`。也就是说这条下限被两道
+   互不相干的故障同时废掉了（详见 §30.2 第 9 条）。
+2. **CLI e2e 容忍 5 个场景失败**（`MAX_ALLOWED_FAILED_SCENARIOS = 5`），失败 ≤5 时打印
+   `ok (tolerated)` 并 exit 0，日志里只有一行文本，没有通过率。
+3. **nightly 的 e2e 只有 15 分钟预算**，而凌晨 3 点的 `nightly-cli.yml` 给同一套 204 例 30 分钟；
+   超时即 cargo 被杀，后半段场景没有任何结果。
+4. **`Check Test Status` 先 `exit 1` + `if: success()` 串联**：任一 JVM 用例失败 → Docker 构建、
+   启动、健康检查、204 个 CLI 场景全部跳过。一夜只能得到一个结论。
+5. 附带发现：**1395 个 Rust 单元测试（`cli/browser4-cli/src`）在任何 workflow 里都没跑过** ——
+   所有 workflow（含 `bin/test.ps1 cli`）只构建 `e2e` 测试目标。
+
+### 30.2 改动
+
+1. **`run-tests/action.yml`：退出码成为唯一真值。** `reconcile-status` 现在按
+   顺序判定：timeout/124 → 失败；退出码 ≠ 0 → 失败（且当 `failed_count == 0` 时打印
+   "reactor failed outside the tests" 的诊断）；退出码 0 但没有任何 surefire XML → 失败；
+   否则成功。新增 `reports_found` 输出与上述判断配套。**副作用是有意的**：JaCoCo 覆盖下限、
+   编译错误、fork 崩溃从此真的能让门禁变红。
+2. **action 新增 `maven_args` 输入**（追加到测试命令末尾），并用它给 nightly 传
+   `-Djacoco.check.skip=true`；`pom.xml` 的 `quality-gate` profile 的 `check` 执行新增
+   `<skip>${jacoco.check.skip}</skip>`（默认 `false`，pr.yml 行为不变）。nightly 因此
+   **测量覆盖率但不设下限**：下限属于控制了子集的 PR 门禁，不属于范围更宽的夜间跑。
+3. **nightly 新增 `Coverage Summary (observe-only)` 步骤**：解析每个模块的
+   `target/site/jacoco/jacoco.csv`，打印 模块 × instruction/branch/line 覆盖率表 + TOTAL，
+   并写入 `$GITHUB_STEP_SUMMARY`。此前 nightly 没有任何覆盖率数字（上传路径里的
+   `**/target/site/jacoco/**` 恒为空）。
+4. **nightly 的判定收口到最后一个 `Enforce Nightly Gate` 步骤**：`Check Test Status` 不再
+   `exit 1`，改为写 `MAVEN_TESTS_FAILED` 到 `$GITHUB_ENV`；Docker/启动/健康检查/e2e 照常执行；
+   最后由 gate 汇总 JVM 阶段、CLI 单测、CLI e2e 三者决定 job 成败。Rust 相关步骤用
+   `!cancelled()`（只需要检出仓库，不该被 Docker 阶段拖累）。
+5. **nightly 新增 `cargo test --bin browser4-cli --lib`**（10 分钟预算），并新增
+   `Enforce Nightly Gate` 中的对应判定。
+6. **e2e harness 新增 `--max-failures=<count>`**（默认仍是 5）：nightly 传 `0`，被容忍的失败会
+   打印通过率并在 GitHub Actions 上产生 `::warning::` 注解。help 文本、模块文档同步更新。
+7. **nightly 的 e2e 预算 15 → 30 分钟**（与 `nightly-cli.yml` 对齐），Maven 预算 60 → 75 分钟
+   （它现在是 ci.yml 的严格超集 + JaCoCo agent 开销）。
+8. 文档：`docs/TESTING.md` 新增"CI 门禁实际覆盖"（门禁矩阵、通过/失败语义、已知缺口），
+   修掉 `-DrunSDKTests=true` 这个不存在的 property；`nightly.yml` 头注释里的
+   "Python SDK tests" 与不存在的 `cli-e2e-tests.yml` 一并删除；`AGENTS.md`、
+   `cli/browser4-cli/README.md`（顺带修掉已被 `--enable-all` 取代的 `--enable-batch-scenario`
+   等旧示例）同步。
+9. **`pom.xml`：修掉让 JaCoCo 彻底失效的 `${...}` 早绑定。** surefire 的 `argLine` 原本写
+   `${jacocoArgLine}`，而该属性在 `<properties>` 里被**声明为空**（为了让不带 JaCoCo 的构建不至于把
+   字面量塞给 JVM）。Maven 在构建 effective model 时就把 `${jacocoArgLine}` 替换成了声明值 `""`，
+   早于 `prepare-agent` 在运行期写入真实值 —— 于是测试 JVM 的命令行上从来没有 `-javaagent`，
+   从未产生 `jacoco.exec`，`report`/`check` 一路 "Skipping JaCoCo execution"。
+   改成 Maven 的**晚绑定**语法 `@{jacocoArgLine}`（插件执行时才解析）后：
+   带 `-Pquality-gate` 时 agent 正常注入，不带该 profile 时属性解析为空、JVM 命令行干净，
+   与 `-Djacoco.check.skip=true`（只观测不设限）也各自验证通过。原因已写进 pom 注释，避免被"顺手改回"。
+10. **`browser4-tests/pulsar-tests-common` 做模块级覆盖率豁免**（只跳过 `check`，保留 agent + report）：
+    该模块是共享测试支撑库，它自己的 main 类是在**别的模块**的测试 JVM 里被执行的，因此它自己
+    bundle 的 instruction ratio 恒为 0.00（实测；它的自测又全是 `TestInfraCheck`，快档里被排除）。
+    bundle 级下限对它没有意义，而代价极高：它是 17 个模块的依赖，`--fail-at-end` 下一红就有
+    **17/31 模块被 SKIPPED**，等于用一种"静默截断"去换另一种。豁免写在模块自己的 pom 里
+    （按 execution id `check` 合并配置），作用域天然只限该模块。
+11. **给 `browser4-parse` 补上它的第一个真正测试**（`TikaParserTest`，2 例，带 `Unit`/`Fast` tag）：
+    该模块唯一的 main 类 `TikaParser`（Apache Tika 的 `Parser` 适配器）原本是 0.00 instruction
+    覆盖 —— 模块里仅有的那个 `@Test` 测的是 `browser4-skeleton` 的 HTML parser，与它无关。
+    补测后 `jacoco:check` 通过，实测 instruction **90.5%**（86/95）、line 93%（14/15）。
+    分界很清楚：**bundle 级规则本身无意义的共享支撑库 → 显式豁免（第 10 条）；
+    有真实生产代码、只是没人测的模块 → 补测试**，而不是把下限调到"能过"。
+
+### 30.3 验证
+
+* `cargo test --bin browser4-cli --lib`：**1395 passed / 0 failed / 2 ignored，9.1 s** ——
+  加这一步的代价约 10 秒，换回 1395 个此前无人执行的用例。
+* `cargo build --test e2e` 通过；`--help` 显示新 flag；`--list --max-failures=0` 回显
+  `tolerated failing scenarios: 0` 且仍选中 204 例；非法值（`--max-failures=abc`）给出明确 panic。
+* 4 个改动的 YAML（nightly.yml / pr.yml / ci.yml / run-tests action）通过 `yaml.safe_load` 解析，
+  并核对 nightly 的步骤顺序与 `if:` 条件。新增的 `Coverage Summary` 步骤脚本用 Git Bash 对着
+  真实 `jacoco.csv` 跑过：输出模块表 + TOTAL（`browser4-common` 46.3 / 36.5 / 48.1），
+  `GITHUB_STEP_SUMMARY` 的 markdown 表格也正确生成。
+* **JaCoCo 接线的证据链**：修复前 `mvn -X -Pquality-gate -pl :browser4-common test` 的
+  surefire fork 命令行只有 `-XX:+EnableDynamicAgentLoading -Djdk.net...=true -Dcritical.cpu.threshold=1.0`，
+  **没有 `-javaagent`**，`jacoco.exec` 不生成，`report` 与 `check` 都打印
+  `Skipping JaCoCo execution due to missing execution data file`；改成 `@{jacocoArgLine}` 后同一命令出现
+  `-javaagent:.../org.jacoco.agent-0.8.15-runtime.jar=destfile=.../target/jacoco.exec`，
+  并产出 `jacoco.exec`(40 KB) + `target/site/jacoco/{jacoco.csv,jacoco.xml,index.html}`。
+  不带 `-Pquality-gate` 时 fork 命令行干净（无 `@{...}` 字面量残留，BUILD SUCCESS）；
+  `-Djacoco.check.skip=true` 时 report 正常、check 跳过（BUILD SUCCESS）。
+* **覆盖下限在真实快档上的实测（三轮）**：本地以 pr.yml 等价命令跑全 reactor（外加 `--fail-at-end`
+  看全貌），测试全程 0 失败。
+  1. 第一轮：`pulsar-tests-common` instruction ratio **0.00** < 0.20。它是 17 个模块的依赖，该违例让
+     **17/31 模块变成 SKIPPED**（browser/skeleton/protocol/parse/agentic/plugins/agent-tools/boot/
+     rest/standalone/bundle … 全部没跑）——"覆盖被静默截断"的又一个实例。→ §30.2 第 10 条豁免。
+  2. 第二轮：豁免生效，`pulsar-tests-common` 转绿，唯一剩下的违规模块是 `browser4-parse`（0.00），
+     又连带 6 个模块 SKIPPED。→ §30.2 第 11 条补测，`jacoco:check` 通过（instruction 90.5%）。
+  3. 第三轮（最终态）：把"豁免 + 补测"一起放回全 reactor 复跑 —— **31/31 模块 SUCCESS、BUILD SUCCESS、
+     0 违例、0 测试失败**（2977 个用例）。有覆盖率数据的 11 个模块合计：
+     instruction **54.1%**（182,017/336,639）、branch 43.6%、line 57.0% —— 已经高于 0.20 下限，
+     也高于 0.50 的下一档目标，说明"修好接线"之后下限不是摆设，而是真的在守着一条线。
+  附注：6 个 `browser4-plugins/browser4-*` 模块不产出覆盖率数据 —— 它们的父 POM 是独立发布的
+  `browser4-pdk`（直接继承 Central 上的 `pulsar-parent`），因此看不到根 pom 的 `quality-gate` profile。
+  这是 PDK 的公开契约取舍，本轮不动它，只记录在 docs/TESTING.md 的"已知覆盖缺口"里。
+* `cargo build --test e2e` 通过；`--help` 显示新 flag；`--list --max-failures=0` 回显
+  `tolerated failing scenarios: 0` 且仍选中 204 例；非法值（`--max-failures=abc`）给出明确 panic。
+
+### 30.4 还没做（需要决策）
+
+* **`E2E`/`E2ETest` 标记的 10 个类 / 82 个方法仍然无人执行**（含 `HtmlSnapshotScenariosE2ETest` 32、
+  `MCPToolControllerE2ETest` 18、`Browser4MCPServerE2ETest` 14），整个
+  `browser4-tests/browser4-e2e-tests` 模块（5 个方法）同样是死代码。要不要让 nightly 接管
+  （去掉 `E2E,E2ETest` 两个排除项，或新增 `-DrunE2ETests=true` 的独立 job）需要先评估这些用例
+  在 Docker 后端上的稳定性 —— 直接放开很可能让 nightly 长期变红。
+* **tag 标注稀疏**：356 个含 `@Test` 的类只有 52 个带 tag，`Heavy`/`HeavyTest`/`Integration`/
+  `RequiresDocker`/`SDK` 五个 tag 零标注，排除清单里它们目前不产生任何效果。补齐标注是
+  "tag 门禁"名实相符的前提。
+* **`ci.yml` 仍是早退结构**（测试失败 → 跳过 Docker/e2e）：与 nightly 同样的问题，只是它只在
+  release tag 上跑，信息损失没夜间那么频繁。若要统一，照 §30.2 第 4 条同样处理即可。
+* **覆盖率下限仍只有 0.20，且是"每模块 bundle"粒度**：nightly 现在有数据了，下一步是据此把它抬向
+  0.50 → 0.70（docs/TESTING.md 的目标值：Global ≥70%、Core ≥80%、Utilities ≥90%、Controllers ≥85%）。
+  抬之前先处理粒度问题：bundle 级规则对"共享测试支撑库 / 聚合器 / 打包模块"没有意义（本轮已给
+  `pulsar-tests-common` 手工豁免，同类模块若出现应同样显式豁免并写明理由，而不是把下限调低到能过）。
+* **`run_pulsar_tests: false` 的 PR 门禁里，`browser4-tests/*` 层不参与**：`-DrunITs=true` 只在
+  ci/nightly 打开；PR 快档下的 650 个用例是"最小可信集"，不是全量。
+* **6 个插件模块的覆盖率是盲区**（media/images/pptx/markdown/swarm/profile-import）：父 POM 是独立发布的
+  `browser4-pdk`，看不到根 pom 的 `quality-gate` profile，所以既不测覆盖率也不受下限约束。要覆盖需要
+  在 PDK 里引入 JaCoCo（会影响第三方插件项目继承到的父 POM），属于设计决策。
+
+---
+
+## 31. `ci.yml` 不再早退 + tag 按实测补齐（4.14.x，已改）
+
+### 31.1 `ci.yml` 与 nightly 对齐
+
+`ci.yml` 原来和 §30.1 第 4 条一样：`Check Test Status` 直接 `exit 1`，而它后面的
+Docker 构建 / 启动应用 / 健康检查 / CLI e2e 都是默认 `success()` 门控 —— 一个 JVM 用例失败就让
+整个 release 门禁只剩"JVM 挂了"这一条信息。改动与 nightly 完全对称：
+
+1. `Check Test Status` 只把 `MAVEN_TESTS_FAILED` 写进 `$GITHUB_ENV`（并补上 Maven 退出码、
+   `reports_found` 与"无测试失败但 reactor 失败"的解释），不再 `exit 1`。
+2. 新增最后的 `Enforce CI Gate`：JVM 阶段（`skip_tests=true` 时视为"按请求跳过"）与 CLI e2e 阶段
+   一起判定 job 成败。早退结构消失，一轮同时拿到两侧结论。
+3. e2e 步骤加 `--max-failures=0`（门禁不该容忍静默失败），预算 15 → 25 分钟
+   —— 与 nightly 给同一套 harness 的 30 分钟（204 例）成比例（ci 跑 148 例）。
+   两个 flag 都是"更严"，若 CI 上出现已知 flaky 场景，回退只需删掉 `--max-failures=0`。
+
+### 31.2 tag 按实测补齐（数据来源：surefire `<testcase time>` + 被测进程是否真的拉起 Chrome）
+
+规则：单方法实测 **≥30 s → `Heavy`**、**5–30 s → `Slow`**、真的启动 Chrome **→ `RequiresBrowser`**；
+只在少数方法慢的类上做方法级标注（类级标注会把同类的快方法一起剔出门禁 ——
+`BrowserTabToolExecutorTest` 52 个方法 / 11 s 全是上下文启动开销，类级标 Slow 等于白丢 52 个方法）。
+
+结果：`Slow` 8 → 18 类（39 → 81 方法）、`Heavy` 0 → 2 类（8 方法）、`RequiresBrowser` 1 → 6 类（23 方法），
+共 12 个文件。实测影响：PR 门禁不再执行这 10 个类，快档实测总时长 691 s 中的约 493 s（71%）被移出 PR；
+`Slow` 的方法在 ci 也不再执行（其清单本就排除 `Slow`，属既定设计）；nightly 不受影响。
+
+验证：一次带 `-Dsurefire.excludedGroups=Slow,Heavy` 的定向运行逐个核对了过滤结果，全部符合预期
+（`TestAppSystemInfo` 4→3、`CodeRunnerTest` 9→8、`CliProcessManagerTest` 7→4、`StatefulAgentRunnerTest` 4→3、
+`B4CliToolExecutorJobTest` 2→1、`RobustBrowserAgentMemoryWiringTest` 2→1、`PulsarBrowserFactoryTest` 6→5(+1 跳过)、
+`PrivacyContextManagerTests` 6→5(+1 跳过)、`CrawlXSqlE2ETest` 2→1；类级标注的
+`TestAnnotationConfigAgenticContext`/`CrawlFixtureMetadataTest`/`CrawlParallelTabsTest` 被整体过滤掉），
+且 `BUILD SUCCESS`、0 失败。
+
+### 31.3 `E2E`/`E2ETest` 那 10 个类：只做评估，未改 tag
+
+两轮本地采样（`HtmlSnapshotScenariosE2ETest` 33 例 / 481 s、388 s；`StorageStateCookiePathE2ETest`
+4 例 / 41 s；`SwarmControllerE2ETest` 5 例 / 3 s；`Browser4MCPServerE2ETest` 14 例 / 2.8 s，
+合计 **56 例 0 失败**）得出的结论是**不要**在 nightly 里直接放开这两个 tag（放开只多跑 4 个类，
+其中 3 个是 Spring + 真 Chrome 的重测试），处置建议见
+[E2E tag 稳定性评估](e2e-tag-stability-assessment.md)；其中 `Browser4MCPServerE2ETest`
+（mockk、无浏览器、2.8 s）建议改标 `Unit`+`Fast` 回到 PR 门禁 —— 该改名属于行为变更，等决策后执行。
