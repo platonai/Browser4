@@ -2107,3 +2107,31 @@ run id，之后只接受不在该集合里的 run；id 基线列不出来时，�
 
 验证：`yaml.safe_load` 解析三个 workflow 通过；`cli/scripts/tests/wait-for-oss-sync.tests.sh` 19/19 通过
 （预算改动未触碰其断言，测试只用 `--timeout 4` 跑）。
+
+### 30.5 结果：镜像补齐，`latest` 已切到 v4.13.21
+
+把 `--force` + `--update` + 发布时刻戳送上去之后，重跑变成了**单调收敛**：每一轮跳过镜像已有的对象，只传缺的。
+
+| 轮次 | 结果 | 镜像 |
+|---|---|---|
+| 35884200583 | 被取消（20 min，`--force` 已生效，无覆盖提示） | 5/11 |
+| 35888765827 | 45 min 上传步骤超时失败 | **10/11** |
+| 35894059576 | **success（12m15s）** | **11/11** |
+
+最后那一轮之所以能跑完并真正收尾，是因为只剩 22 MB 要传，上传步骤没有触顶，后面的安装脚本、校验和、
+`latest` 符号链接、`latest-release.json` 都执行了：
+
+```text
+$ curl -s https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest-release.json | jq -r .tag
+v4.13.21
+$ curl -sI .../releases/latest/download/Browser4.jar | head -1
+HTTP/1.1 200 OK
+```
+
+**运维要点**：这条链路慢的时候不要原地等——`--update` 让"再触发一次"变成增量操作，重复触发即可收敛
+（本轮实际用了三次）。不要并发触发（两条 run 会互抢带宽），也不要中途取消正在有进展的 run。
+
+**一个尚未收口的点**：`release.yml` / `release-cli.yml` 里的等待脚本用 `gh workflow run sync-to-oss.yml`
+**不指定 `--ref`**，因此它跑的是**默认分支（main）**上的 `sync-to-oss.yml`。本轮修好的 `--force` /
+`--update` / 超时预算目前只在 `4.13.x` 上，需要合并到 `main`（或让等待脚本显式带上发布分支）才会对下一次
+发布生效。v4.13.21 的镜像已经补齐，但下一次发布仍会踩到旧逻辑。
