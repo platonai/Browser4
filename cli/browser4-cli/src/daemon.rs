@@ -201,8 +201,9 @@ const FORCE_REMOTE_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REMOTE_BUNDLE";
 /// When set to `1`, `true`, `yes`, or `on`, forces the CLI to rebuild the
 /// Browser4 runtime bundle from source even if the build artifacts already
 /// exist.  Useful in development when the source code has changed but cached
-/// artifacts appear up-to-date.
-const FORCE_REBUILD_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REBUILD_BUNDLE";
+/// artifacts appear up-to-date.  Public so the e2e harness can assert that
+/// `--force-rebuild-bundle` sets the variable this code actually reads.
+pub const FORCE_REBUILD_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REBUILD_BUNDLE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeBundleArchiveKind {
