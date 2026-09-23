@@ -43,13 +43,15 @@ jobs:
             RELEASE_URL="${{ github.event.release.html_url }}"
             ASSETS_COUNT="${{ github.event.release.assets_count || 0 }}"
             IS_PRERELEASE="${{ github.event.release.prerelease }}"
+            PUBLISHED_AT="${{ github.event.release.published_at }}"
           elif [[ -n "${{ inputs.tag_name || '' }}" ]]; then
             TAG_NAME="${{ inputs.tag_name }}"
             # Validate the tag exists and fetch release info (include isPrerelease)
-            RELEASE_JSON=$(gh release view "$TAG_NAME" --repo "${{ github.repository }}" --json name,url,assets,isPrerelease --jq '.')
+            RELEASE_JSON=$(gh release view "$TAG_NAME" --repo "${{ github.repository }}" --json name,url,assets,isPrerelease,publishedAt --jq '.')
             RELEASE_URL=$(echo "$RELEASE_JSON" | jq -r '.url')
             ASSETS_COUNT=$(echo "$RELEASE_JSON" | jq '.assets | length')
             IS_PRERELEASE=$(echo "$RELEASE_JSON" | jq -r '.isPrerelease // false')
+            PUBLISHED_AT=$(echo "$RELEASE_JSON" | jq -r '.publishedAt // ""')
           else
             echo "::error::No release tag available"
             exit 1
@@ -59,7 +61,8 @@ jobs:
           echo "release_url=${RELEASE_URL}" >> "$GITHUB_OUTPUT"
           echo "assets_count=${ASSETS_COUNT}" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
-          echo "Resolved release: ${TAG_NAME} (${ASSETS_COUNT} assets, prerelease=${IS_PRERELEASE})"
+          echo "published_at=${PUBLISHED_AT}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release: ${TAG_NAME} (${ASSETS_COUNT} assets, prerelease=${IS_PRERELEASE}, published=${PUBLISHED_AT})"
 
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -80,6 +83,32 @@ jobs:
           echo "Assets downloaded:"
           ls -lh release-assets/
 
+      - name: Age the assets to the release time
+        # `ossutil cp --update` uploads only when the destination is missing or
+        # OLDER than the source, and a fresh download carries "now" as its mtime —
+        # so without this step every retry re-uploads all 551 MB, and on
+        # 2026-09-23 the runner managed that at 6.7 KB/s to 400 KB/s (a first
+        # sync had done it at ~4.4 MB/s).  Stamping the downloads with the
+        # release's publish time makes the comparison mean what we want:
+        #
+        #   * first sync        — destination missing              -> upload
+        #   * retry, same tag   — destination uploaded later        -> skip
+        #   * re-published tag  — destination older than publish    -> upload
+        #
+        # i.e. "upload the assets this release has, don't re-send the ones the
+        # mirror already holds".
+        run: |
+          set -euo pipefail
+          STAMP="${{ steps.resolve.outputs.published_at }}"
+          if [[ -z "$STAMP" ]]; then
+            echo "No publish timestamp on the release; leaving download times alone."
+            exit 0
+          fi
+
+          find release-assets -type f -exec touch -d "$STAMP" {} +
+          echo "Stamped release-assets/* with ${STAMP}"
+          ls -l --time-style=long-iso release-assets/ | head -4
+
       - name: Install ossutil
         run: |
           set -euo pipefail
@@ -96,11 +125,11 @@ jobs:
           ./ossutil version
 
       - name: Upload to OSS
-        # ~2 minutes for the 11 release assets in every earlier release (the
-        # largest single file: 43 s).  A re-sync is slower and legitimately so:
-        # the destination objects already exist, and on 2026-09-23 the GitHub
-        # runner reached Aliyun at ~200 KB/s instead of ~4 MB/s, so the full
-        # 551 MB took longer than the old 20-minute budget.
+        # 551 MB in ~2 minutes for the 11 release assets in every earlier
+        # release (the largest single file: 43 s).  A re-sync is a different
+        # animal: `--update` already skips what the mirror holds, but on
+        # 2026-09-23 the GitHub runner reached Aliyun at 6.7 KB/s - 400 KB/s,
+        # which even for the remaining assets outran the old 20-minute budget.
         #
         # `--force` is load-bearing, not tidiness: `ossutil cp` asks
         # "cp: overwrite '<path>' (y or N)?" when the destination exists, and a
@@ -127,12 +156,15 @@ jobs:
             oss_path="oss://${OSS_BUCKET}/releases/download/${TAG_NAME}/${asset_name}"
 
             echo "Uploading: $asset_name → $oss_path"
+            # `--force` never prompts; `--update` skips what the mirror already
+            # holds for this release (see the stamping step above).
             if ./ossutil cp "$asset" "$oss_path" \
               -e "$OSS_ENDPOINT" \
               --region "$OSS_REGION" \
               --acl public-read \
               --retry-times 3 \
-              --force; then
+              --force \
+              --update; then
               ((uploaded++)) || true
             else
               echo "::error::Failed to upload $asset_name"
