@@ -4,10 +4,27 @@ on:
   workflow_dispatch:
   push:
     paths:
+      # Packaged sources: every module listed here contributes an artifact to the
+      # runtime bundle (BOOT-INF/lib/*.jar or Browser4Bundle.jar), so a change in
+      # one of them can break the very bundle this workflow validates.  Test-only
+      # modules (browser4-tests/**, examples/**) and the CLI test tree
+      # (cli/browser4-cli/tests/**) are deliberately absent: they are in neither
+      # artifact, so building three platform bundles for them would be pure cost.
+      - 'pom.xml'
+      - 'mvnw'
+      - 'mvnw.cmd'
+      - '.mvn/**'
+      - 'browser4-dependencies/**'
+      - 'browser4-core/**'
+      - 'browser4-boot/**'
+      - 'browser4-agentic/**'
+      - 'browser4-agent-tools/**'
+      - 'browser4-rest/**'
+      - 'browser4-apps/**'
+      # Bundle assembly and smoke harness
       - 'cli/scripts/smoke-test-runtime-bundle.sh'
       - 'browser4-apps/browser4-bundle/build-runtime-bundle.ps1'
       - 'browser4-apps/browser4-bundle/verify-runtime-bundle.ps1'
-      - 'browser4-apps/browser4-bundle/pom.xml'
       - 'cli/browser4-cli/src/**'
       - 'cli/browser4-cli/Cargo.toml'
       - '.github/workflows/cross-platform-smoke.yml'
