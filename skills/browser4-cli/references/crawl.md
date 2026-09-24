@@ -166,6 +166,14 @@ browser4-cli crawl --seed-file urls.txt -d 0 --parallel 1 --refresh   # strictly
 | `--sql-base64` | | bool | — | Base64-decode the query value before execution |
 | `--format` | | string | `table` | Output format: `json`, `csv`, or `table` |
 | `--output` | `-o` | string | — | Write results to file instead of stdout |
+| `--verbose` | | bool | — | Show per-URL processing status in the crawl results (also surfaces per-page X-SQL diagnostics instead of only the aggregate error count) |
+
+> **Note — what `--output` writes:** `-o` writes the **crawl result** — the
+> aggregated X-SQL rows when `--sql` is given, or the crawled-page listing
+> (`depth=N | <url> | <title>`) when it is not.  It does **not** write the raw
+> HTML of each page.  To stage pages as HTML files on disk (e.g. for WebMiner),
+> use `htmlsnapshot export`, or `webdb export "<url1,url2,…>" <dir>` to pull the
+> already-fetched pages out of the page store.
 
 ### Link discovery flags
 
