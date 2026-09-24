@@ -1,6 +1,6 @@
-# E2E / E2ETest 标记的 10 个类：稳定性评估与接入建议
+# E2E / E2ETest 标记的 11 个类：稳定性评估与接入建议
 
-> 评估时间：2026-09（4.14.x）。触发原因：`docs/TESTING.md` 的覆盖盘点发现这 10 个类 / 82 个方法
+> 评估时间：2026-09（4.14.x）。触发原因：`docs/TESTING.md` 的覆盖盘点发现这 11 个类 / 86 个方法
 > **在任何 workflow 都不执行** —— nightly / ci / pr 都排除 `E2E` 与 `E2ETest` 两个 tag，
 > 而没有任何 workflow 传 `-DrunE2ETests=true`。本文回答一个问题：**能不能把它们接回门禁，接回哪里。**
 
@@ -18,13 +18,14 @@
 | 8 | `SkillInstallE2ETest`（browser4-e2e-tests） | 2 | `E2ETest`,`ManualOnly`,`Slow` | 类级 `@Disabled("ManualOnly")` | 恒跳过 | 同上 |
 | 9 | `SkillRegistrationAndInvocationE2ETest`（browser4-e2e-tests） | 1 | `E2ETest`,`RequiresAI`,`skills` | 需要真实 LLM 密钥 | — | `RequiresAI`：nightly 也排除，保持现状 |
 | 10 | `MCPToolControllerE2ETest`（rest-tests） | 18 | `E2ETest`,`RequiresAI` | MCP 工具契约，部分路径需要真实 LLM | — | 保持现状；其中不依赖 AI 的子集可另行拆分（未做） |
+| 11 | `NavigatorStealthE2ETest`（browser4-browser） | 4 | `E2E`,`ManualOnly`,`RequiresBrowser` | 真实 Chrome（headless 默认），`127.0.0.1` fixture + `launchRandomTempBrowser()`；只读 navigator 面（UA / Client Hints / deviceMemory / touch 一致性） | **39.0 s / 0 失败**（2026-09-24，4.14.x 合并后验证，1 次采样） | `ManualOnly`，保持现状 —— 4.13.x `NavigatorStealthIT`（`pulsar-it-tests`，该模块在 4.14.x 已删除）的落地位置 |
 
 ## 2. 结论：**不要**在 nightly 里放开 `E2E,E2ETest` 排除
 
 理由（全部可量化）：
 
-1. **放开也只会多跑 4 个类**：10 个类里有 6 个被 `ManualOnly`（3 个）、`RequiresAI`（2 个）或类级
-   `@Disabled`（2 个，与 ManualOnly 重叠）挡住，共 26 个方法无论如何都不会执行。
+1. **放开也只会多跑 4 个类**：11 个类里有 7 个被 `ManualOnly`（5 个：#5–#8、#11）、`RequiresAI`
+   （2 个：#9、#10）挡住，共 33 个方法无论如何都不会执行。
    真正会因放开 tag 而开始执行的是 **#1–#4：14 + 33 + 4 + 5 = 56 个方法**。
 2. **其中 3 个类是"Spring + 真实 Chrome"的重测试**，`HtmlSnapshotScenariosE2ETest` 单类约 **8 分钟**。
    直接塞进 nightly 的 Maven 阶段（75 分钟预算，已含 Slow/TestInfra 与 JaCoCo 开销）会明显抬高
@@ -47,7 +48,7 @@
 `-Dsurefire.excludedGroups=ManualOnly,RequiresAI`），先跑 N 轮观察，再决定是否并入 nightly 主阶段。
 不建议直接放开 tag 排除。
 
-### 3.3 其余 6 个类：保持现状，但把"人工触发方式"写进注释
+### 3.3 其余 7 个类：保持现状，但把"人工触发方式"写进注释
 `@Disabled("ManualOnly")` 的两个类（#7、#8）目前连"怎么手动跑"都没写；补一行命令即可，
 避免它们长期当死代码。
 
@@ -65,6 +66,19 @@
 
 两轮合计 **56 例 / 0 失败**（`BUILD SUCCESS`）。`HtmlSnapshotScenariosE2ETest` 的两次时长差 93 s
 （481 → 388）说明它的耗时对机器负载敏感，这也是它不适合塞进有硬预算的主阶段的另一个理由。
+
+`NavigatorStealthE2ETest`（#11）另计一次采样：**4 例 / 0 失败 / 39.0 s**（2026-09-24，4.14.x 合并
+`4.13.x` 之后，Windows + 本机 headless Chrome），命令与上表同类：
+
+```powershell
+.\mvnw.cmd -B -pl browser4-core/browser4-browser -am `
+  -D"test=NavigatorStealthE2ETest" -D"surefire.failIfNoSpecifiedTests=false" `
+  -D"surefire.excludedGroups=" test
+```
+
+它读到的实测值（可作为后续回归的基线）：`Chrome/153.0.0.0` 的 reduced UA、无 `Headless` token、
+`userAgentData.brands = Google Chrome, Not_A Brand, Chromium`、`deviceMemory = 32.0`、
+`maxTouchPoints = 10` + `any-pointer: coarse`。
 
 运行方式（两轮相同，Windows + 本机 Chrome，无 Docker 后端）：
 

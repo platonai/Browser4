@@ -239,7 +239,7 @@ Rust 单元测试（`cli/browser4-cli/src`，约 1400 个 `#[test]`/`#[tokio::te
 
 ### 已知覆盖缺口（尚未修，需要决策）
 
-* **`E2E`/`E2ETest` 标记的 10 个类 / 82 个方法在任何 workflow 都不执行**
+* **`E2E`/`E2ETest` 标记的 11 个类 / 86 个方法在任何 workflow 都不执行**
   （含 `HtmlSnapshotScenariosE2ETest` 32、`MCPToolControllerE2ETest` 18、`Browser4MCPServerE2ETest` 14 …），
   整个 `browser4-tests/browser4-e2e-tests` 模块（5 个方法）同样为死代码。
   原因是 nightly/ci/pr 都排除这两个 tag，而没有 workflow 传 `-DrunE2ETests=true`。

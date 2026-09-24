@@ -608,6 +608,11 @@ real browser that `navigator.userAgent` carries no `Headless` token, that
 the touch signals are coherent. It passes through the independent
 `launchRandomTempBrowser()` path — 4 tests, 0 failures.
 
+> **4.14.x 落地位置**：`pulsar-it-tests` 模块（连同 `WebDriverTestBase`）在 4.14.x 已删除，所以这份
+> 回归门禁现挂在 `browser4-core/browser4-browser/src/test/kotlin/ai/platon/pulsar/chrome/NavigatorStealthE2ETest.kt`
+> —— 同样 4 个真浏览器测试，tag `E2E`/`RequiresBrowser`/`ManualOnly`，用
+> `-D"surefire.excludedGroups="` 手动运行（4.14.x 合并后的实测：4 例 0 失败 / 39 s）。
+
 ## Issue 2 — fill with a selector that matches nothing reports success — FIXED
 
 `Browser4WebDriver.fillSafe()` wrote the value through `evaluateValue(selector, fillValueJs(text))`
@@ -841,7 +846,7 @@ A genuinely mistyped command keeps the previous behaviour
 |---|---|
 | `browser4-core/browser4-browser/src/test/.../Browser4UserAgentTest.kt` | **new** — 10 tests |
 | `browser4-core/browser4-browser/src/test/.../Browser4WebDriverTest.kt` | +7 input-target tests |
-| `browser4-tests/pulsar-it-tests/src/test/.../NavigatorStealthIT.kt` | **new** — 4 real-browser regression tests |
+| `browser4-tests/pulsar-it-tests/src/test/.../NavigatorStealthIT.kt` | **new** — 4 real-browser regression tests（4.14.x 已移至 `browser4-core/browser4-browser/src/test/.../NavigatorStealthE2ETest.kt`） |
 | `cli/browser4-cli/src/main.rs` (tests) | +20 tests (wait message, in-flight counters, block signatures, probe parsing, misplaced options) |
 | `cli/browser4-cli/src/commands.rs`, `src/snapshot.rs`, `src/daemon.rs` (tests) | +18 tests (marker sync, image format/reconcile, staleness policy, per-module staleness, build stamp, provenance) |
 | `browser4-agentic/src/test/.../BrowserTabToolExecutorTest.kt` | fill probe-then-write order, full-page format routing |
