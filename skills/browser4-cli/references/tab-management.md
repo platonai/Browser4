@@ -1,6 +1,6 @@
 ---
 title: "Tab Management"
-description: "Use when working with multiple tabs or windows in a browser session: tab lifecycle, GUID-based targeting, cross-session tab operations, and extension-session quirks."
+description: "Use when working with multiple tabs or windows in a browser session: the quick start, recipes (GUID targeting, cross-session work, windows), flags and error recovery for tab workflows. The behaviour behind the commands — GUID forms, JSON envelope, insert position, last-tab rule, extension quirks — is documented once in tabs.md."
 tier: procedure
 ---
 
@@ -31,17 +31,7 @@ Tab operations never leave the session — `window new` is the only command that
 
 ## How It Works
 
-- **GUIDs:** `tab-list` shows a `GUID` column. Use `--guid` for stable targeting across tab reordering. Extension sessions show a `chrome:` prefix on numeric GUIDs; regular sessions use 32-char hex GUIDs.
-- **Machine-readable output:** Use `--json` before or after the command: `browser4-cli --json tab-list` or `browser4-cli tab-list --json`. Output is a JSON envelope: `{"command":"tab-list","output":{"count":N,"tabs":[{"index":0,"guid":"...","url":"...","title":"..."}]},"status":"ok"}`. The `tabs` array and `count` are nested inside `output`.
-- **Tab insert position:** New tabs are inserted by Chrome (not Browser4). Position depends on Chrome's native behavior — on Windows headless CDP, new tabs appear at index 0 (before the active tab); on macOS and some configurations, after the active tab. Always run `tab-list` after creating tabs to confirm positions before switching by index.
-- **No auto-snapshot:** `tab-list` and `tab-close` do NOT trigger automatic snapshots. After `tab-select`, run `snapshot` explicitly to get fresh element refs for the new active tab — re-snapshot before interacting with elements in the new tab.
-
-### JSON example
-
-```bash
-browser4-cli --json tab-list
-# {"command":"tab-list","output":{"count":1,"tabs":[{"index":0,"guid":"...","url":"about:blank","title":"(no title)"}]},"status":"ok"}
-```
+Each tab command acts on the browser of the session it is given (`-s <session>`, otherwise the DEFAULT session), on the tab named by index or by `--guid`. Selecting a tab changes the active page context, so re-snapshot before touching elements in it. The behaviours behind that — GUID forms and prefixes, where Chrome inserts a new tab, the `--json` envelope, what happens to the last tab, and what an extension re-attach resets — are documented once in [tabs.md](tabs.md).
 
 ## Patterns
 
@@ -71,9 +61,9 @@ browser4-cli -s ext-session tab-new https://example.com
 browser4-cli -s ext-session tab-select 0
 ```
 
-### Extension re-attach creates a fresh tab scope
+### Extension re-attach starts a new tab scope
 
-Each `attach --extension` establishes a new WebSocket connection and creates its own tab tracking scope. After re-attaching (e.g., after navigating to `chrome://version/`, which drops the connection), only tabs created through the *new* connection are visible in `tab-list`. Tabs from the previous connection are still open in Chrome but not tracked. To work with those tabs, re-open them via `tab-new` in the new session, or use `-s <name>` to preserve a named session that survives re-attach.
+Tabs opened through the previous connection stay open in Chrome but leave `tab-list` — what that means for your session, and how a named session survives it, is in [tabs.md](tabs.md).
 
 ## Flags / Options
 
@@ -88,13 +78,14 @@ Each `attach --extension` establishes a new WebSocket connection and creates its
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Extension session reports an error on close | Chrome's `chrome.tabs.remove` callback fires an error after the tab is already gone | The CLI verifies the tab was removed and treats the operation as successful |
-| `tab-list` shows 1 tab after closing the last one | Chrome requires at least one open tab; a replacement `about:blank` is auto-created | Expected behavior — not an error |
+| `tab-list` shows 1 tab after closing the last one | Chrome keeps at least one tab open, so a replacement appears (see [tabs.md](tabs.md)) | Expected behavior — not an error |
 | Tabs missing after re-attach | New connection = new tab scope | Re-open via `tab-new`, or use a named session (`-s <name>`) |
 | "Stale" in `list` for extension sessions | All tabs closed; session lost its connection | Reconnect with `attach --extension` |
 | Refs fail after `tab-select` | The active page context changed | Re-snapshot before interacting — see [SKILL.md §5](../SKILL.md#5-critical-warnings) |
 
 ## See Also
 
+- [tabs.md](tabs.md) — the behaviour reference behind these commands: GUID forms and prefixes, the `--json` envelope, tab insert position, the last-tab rule, extension-session quirks
 - [snapshot.md](snapshot.md) — re-snapshot after tab switches to get fresh refs
 - [attach.md](attach.md) — extension sessions and re-attach behavior
 - [SKILL.md §2 Key Concepts](../SKILL.md#2-key-concepts) — sessions and tab scoping

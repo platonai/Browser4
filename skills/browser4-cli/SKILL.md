@@ -145,7 +145,7 @@ Running the CLI from inside a Browser4 checkout (a directory holding `ROOT.md` +
 
 ### Tab Management
 
-Tab commands (`tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new`) scope to a session. **Re-snapshot after `tab-select`** — tab switches change the active page context. See **[tab-management.md](references/tab-management.md)** for the tab lifecycle, GUID-based targeting, cross-session operations, and extension-session quirks.
+Tab commands (`tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new`) scope to a session. **Re-snapshot after `tab-select`** — tab switches change the active page context. See **[tab-management.md](references/tab-management.md)** for the workflow (quick start, recipes, error recovery) and **[tabs.md](references/tabs.md)** for the command behaviour (GUID forms, `--json` envelope, tab insert position, the last-tab rule, extension-session quirks).
 
 ### Frame Switching (iframes)
 
@@ -310,7 +310,7 @@ Organized by task — follow the link that matches what you're trying to do:
 **Start here (distilled core):** [quickstart.md](references/quickstart.md) — distilled resident quick reference (core loop, copy-paste template, key commands, snapshot vs htmlsnapshot, critical warnings); embedded in the CLI engine's system prompt — full details live in this SKILL.md.
 
 **Interact with pages (accessibility tree & element refs):** [snapshot.md](references/snapshot.md) — `snapshot`, `snapshot grep`, `-v` viewport paging, `--auto-diff`, `-i` interactive mode, element refs
-[tabs.md](references/tabs.md) — tab lifecycle, GUID targeting, last-tab behavior, extension-session quirks
+[tabs.md](references/tabs.md) — tab command reference: GUID forms and prefixes, `--json` envelope, tab insert position, last-tab rule, extension-session quirks
 [upload.md](references/upload.md) — upload local files to a page `<input type="file">` (multi-file, `--no-snapshot`, browser-host path rules)
 
 **Extract data from pages:**
@@ -331,7 +331,7 @@ Organized by task — follow the link that matches what you're trying to do:
 [browser-state-import.md](references/browser-state-import.md) — copy system browser state into Browser4-managed sessions
 [webdb.md](references/webdb.md) — export cached pages, normalize URLs for database lookups
 [attach.md](references/attach.md) — connect to existing Chrome/Edge via CDP
-[tab-management.md](references/tab-management.md) — multi-tab workflows: tab lifecycle, GUID targeting, cross-session operations
+[tab-management.md](references/tab-management.md) — multi-tab workflows: quick start, recipes (GUID targeting, cross-session, windows), flags, error recovery
 
 **Choose how the browser runs:**
 [browser-modes.md](references/browser-modes.md) — session (default / named / swarm) × display (headless / headed / SUPERVISED) × browser source (managed / `attach --cdp` / `attach --extension`), plus the headless→headed escalation when a site blocks the bot, profile mode, interact level, contexts, and their failure modes
