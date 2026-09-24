@@ -221,7 +221,7 @@ jobs:
         id: health
         uses: ./.github/actions/health-check
         with:
-          service_port: '8182'
+          service_port: '18182'
           timeout_minutes: '5'
           container_name: ${{ env.CONTAINER_NAME }}
 
@@ -234,7 +234,7 @@ jobs:
         timeout-minutes: 25
         shell: bash
         env:
-          BROWSER4_E2E_SERVICE_URL: http://localhost:8182
+          BROWSER4_E2E_SERVICE_URL: http://localhost:18182
           BROWSER4_E2E_FIXTURE_HOST: host.docker.internal
         run: |
           echo "::group::🧪 browser4-cli E2E Tests"

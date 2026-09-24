@@ -7,9 +7,9 @@ branding:
 
 inputs:
   service_port:
-    description: 'Service port (default: 8182)'
+    description: 'Service port (default: 18182)'
     required: false
-    default: '8182'
+    default: '18182'
   health_endpoint:
     description: 'Health endpoint (default: /actuator/health)'
     required: false

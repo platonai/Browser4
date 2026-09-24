@@ -410,4 +410,106 @@ class CrawlLedgerTest {
         assertEquals(pageCount, ledger.settled)
         assertEquals(pageCount / 2, ledger.failedPages().size)
     }
+
+    // ------------------------------------------------------------------
+    // Resumable work state (issue #606)
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("outstanding URLs keep the spelling they were submitted under, not the dedup key")
+    fun outstandingKeepsTheSubmittedSpelling() {
+        val ledger = CrawlLedger("t-spelling")
+        ledger.submit("https://Example.com/Product/1?sku=42", 1)
+        ledger.close()
+
+        val outstanding = ledger.outstanding().single()
+
+        assertEquals(
+            "https://Example.com/Product/1?sku=42",
+            outstanding.url,
+            "a resume re-submits this URL: handing it the dedup key would fetch a different page"
+        )
+    }
+
+    @Test
+    @DisplayName("links discovered after the round ended become frontier work, not losses")
+    fun frontierHoldsLinksThatCouldNotBeQueued() {
+        val ledger = CrawlLedger("t-frontier")
+        ledger.submit("https://example.com/a", 0)
+        ledger.recordSuccess("https://example.com/a")
+
+        // The round is terminal by now, so this link cannot be handed to the session.
+        assertFalse(ledger.submit("https://example.com/b", 1))
+        assertTrue(ledger.registerFrontier("https://example.com/b", 1))
+        assertFalse(ledger.registerFrontier("https://example.com/b", 2), "a URL is queued once")
+
+        val frontier = ledger.frontier().single()
+        assertEquals("https://example.com/b", frontier.url)
+        assertEquals(1, frontier.depth)
+        assertEquals(CrawlLedger.REASON_FRONTIER, frontier.reason)
+        assertEquals(
+            1, ledger.pagesExpected,
+            "a link that was never submitted must not be counted as an expected page"
+        )
+    }
+
+    @Test
+    @DisplayName("a URL this round already submitted is never frontier work")
+    fun frontierRejectsAlreadySubmittedUrls() {
+        val ledger = CrawlLedger("t-frontier-submitted")
+        ledger.submit("https://example.com/a", 0)
+        ledger.submit("https://example.com/b", 1)
+
+        assertFalse(ledger.registerFrontier("https://example.com/a", 0))
+        assertFalse(ledger.registerFrontier("https://example.com/b#frag", 1), "the fragment variant is the same page")
+        assertTrue(ledger.frontier().isEmpty())
+    }
+
+    @Test
+    @DisplayName("the work snapshot obeys the accounting law a checkpoint is written from")
+    fun workSnapshotIsConsistent() {
+        val ledger = CrawlLedger("t-snapshot")
+        ledger.submit("https://example.com/a", 0)
+        ledger.submit("https://example.com/b", 1)
+        ledger.submit("https://example.com/c", 1)
+        ledger.recordSuccess("https://example.com/a")
+        ledger.recordFailure("https://example.com/c", 1, 404, "gone")
+
+        val snapshot = ledger.workSnapshot(
+            pages = listOf(CrawlPageResult("https://example.com/a", depth = 0)),
+            linksDiscovered = 2,
+            completed = false,
+            status = "interrupted"
+        )
+
+        assertEquals(3, snapshot.pagesExpected)
+        assertEquals(2, snapshot.settled, "one row and one failure settled")
+        assertEquals(listOf("https://example.com/b"), snapshot.outstanding.map { it.url })
+        assertEquals(listOf("https://example.com/c"), snapshot.failed.map { it.url })
+        assertTrue(snapshot.isConsistent(), "pages + failed + outstanding must equal pagesExpected")
+
+        val slice = snapshot.toSeedCheckpoint("https://example.com/seed", depth = 1)
+        assertEquals(CrawlSeedCheckpoint.STATUS_INTERRUPTED, slice.status, "a round that has not completed is resumable")
+        assertFalse(slice.completed)
+        assertEquals(1, slice.pages.size)
+        assertEquals(1, slice.outstanding.size)
+        assertEquals(1, slice.remaining())
+    }
+
+    @Test
+    @DisplayName("a completed round's snapshot is a completed checkpoint slice")
+    fun completedSnapshotIsCompleted() {
+        val ledger = CrawlLedger("t-snapshot-done")
+        ledger.submit("https://example.com/a", 0)
+        ledger.recordSuccess("https://example.com/a")
+
+        val slice = ledger.workSnapshot(
+            pages = listOf(CrawlPageResult("https://example.com/a", depth = 0)),
+            linksDiscovered = 0
+        ).toSeedCheckpoint("https://example.com/a", depth = 0)
+
+        assertTrue(slice.completed)
+        assertEquals("fetched", slice.status)
+        assertEquals(0, slice.remaining())
+    }
 }

@@ -24,7 +24,7 @@ and one state directory:
 
 | | Installed / production | Development (source checkout) |
 |---|---|---|
-| Backend port | `8182` | first free port from **`8282`** upward (8282, 8283, …) |
+| Backend port | `18182` | first free port from **`8282`** upward (8282, 8283, …) |
 | CLI state, sessions, config | `~/.browser4/` | `~/.browser4/workspaces/<checkout>-<hash>/` |
 | Backend app data | `~/.browser4` | `…/app-data/` — browser profiles (`--user-data-dir`), H2/WebDB data, agent memory |
 | Browser prototype | `~/.browser4/browser/chrome/prototype` | linked (junction/symlink) to the global prototype — shared seed state for `SEQUENTIAL`/`TEMPORARY` contexts |
@@ -268,6 +268,7 @@ failed, with each task's `duration_ms`.
 |---|---|
 | `crawl [url]` | Crawl from a URL or seed file, with optional X-SQL extraction |
 | `crawl list` | List all tracked crawl tasks and their status |
+| `crawl resume <id>` | Continue an interrupted crawl from its checkpoint (no repeat requests for URLs that already succeeded) |
 
 `crawl` collects its units (one per seed URL) concurrently by default — each unit
 runs on its own browser tab leased from the driver pool. Use `--parallel <n>` to
@@ -278,6 +279,19 @@ of units that actually overlapped:
 ```bash
 browser4-cli crawl --seed-file urls.txt --depth 0 --parallel 8 --refresh
 ```
+
+A crawl interrupted by a backend restart, a crash, or the server-side `--timeout`
+budget is reported as `Interrupted` (never as a phantom `Processing`) and keeps a
+checkpoint of its work state. Continue it instead of re-crawling:
+
+```bash
+browser4-cli crawl list --status interrupted
+browser4-cli crawl resume 3f1c-…          # same task id, already-fetched URLs skipped
+browser4-cli crawl resume 3f1c-… --retry-failed
+```
+
+Automatic resume at startup is **off** by default (`crawl.autoResume=false`).
+Details: [Crawl checkpoint & resume](../../docs/crawl-checkpoint-resume.md).
 
 ### Snapshot
 

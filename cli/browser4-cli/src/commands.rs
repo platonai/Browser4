@@ -3898,12 +3898,15 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[
                 ArgDef { name: "id", description: "Task ID", optional: false },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "verbose", description: "Also print each page with its provenance (fetched by this run vs restored from a checkpoint)", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                if let Some(true) = get_bool(args, "verbose") { p["verbose"] = json!(true); }
                 p
             },
         },
@@ -3950,7 +3953,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "clear", description: "Remove all tracked crawl tasks from the list", is_bool: true, short: None },
                 OptionDef { name: "limit <n>", description: "Show at most N tasks (default: 20)", is_bool: false, short: None },
                 OptionDef { name: "offset <n>", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
-                OptionDef { name: "status <status>", description: "Filter by status: completed, running, failed, queued, or 'not found'", is_bool: false, short: None },
+                OptionDef { name: "status <status>", description: "Filter by status: completed, running, interrupted, failed, queued, or 'not found'", is_bool: false, short: None },
                 OptionDef { name: "since <time>", description: "Show only tasks submitted since a relative time (e.g. 1h, 30m, 1d)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -3962,6 +3965,33 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_str(args, "offset").and_then(|s| s.parse::<usize>().ok()) { p["offset"] = json!(v); }
                 if let Some(v) = get_str(args, "status") { p["status"] = json!(v); }
                 if let Some(v) = get_str(args, "since") { p["since"] = json!(v); }
+                p
+            },
+        },
+        CommandDef {
+            name: "crawl-resume",
+            description: "Continue an interrupted crawl task from its checkpoint; URLs it already fetched are not requested again",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "force", description: "Attempt a resume even when the task's record says it completed successfully (still a no-op if nothing is left to fetch; combine with --retry-failed to fetch the URLs it lost)", is_bool: true, short: Some("f") },
+                OptionDef { name: "retry-failed", description: "Re-submit the URLs that failed terminally before, instead of keeping them failed", is_bool: true, short: None },
+                OptionDef { name: "background", description: "Start the resumed run and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
+                OptionDef { name: "verbose", description: "List each page the resumed run records, marked fetched-by-this-run vs restored from the checkpoint", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                if let Some(true) = get_bool(args, "force") { p["force"] = json!(true); }
+                if let Some(true) = get_bool(args, "retry-failed") { p["retryFailed"] = json!(true); }
+                if let Some(true) = get_bool(args, "background") { p["background"] = json!(true); }
+                if let Some(true) = get_bool(args, "verbose") { p["verbose"] = json!(true); }
                 p
             },
         },
@@ -8472,6 +8502,79 @@ mod tests {
         args.insert("id".to_string(), json!("task-456"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["id"].as_str().unwrap(), "task-456");
+    }
+
+    #[test]
+    fn test_crawl_resume_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl-resume").expect("crawl-resume command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.category, Category::Swarm);
+        assert!(!cmd.batch_supported);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.e2e_coverage, E2eCoverage::Tested);
+    }
+
+    #[test]
+    fn test_crawl_resume_tool_name_is_empty() {
+        // REST-based command: dispatch happens in main.rs, so no MCP tool name
+        // may be sent (see the "REST-based commands (swarm, crawl)" note).
+        let map = commands_map();
+        let cmd = map.get("crawl-resume").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "");
+    }
+
+    #[test]
+    fn test_crawl_resume_has_expected_options() {
+        let map = commands_map();
+        let cmd = map.get("crawl-resume").unwrap();
+        let names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
+        assert_eq!(names, vec!["force", "retry-failed", "background", "verbose"]);
+        let shorts: Vec<Option<&str>> = cmd.options.iter().map(|o| o.short).collect();
+        assert_eq!(
+            shorts,
+            vec![Some("f"), None, Some("bg"), None],
+            "--force/-f and --background/-bg are the shortcuts; --retry-failed has no short form"
+        );
+        assert!(cmd.options.iter().all(|o| o.is_bool));
+    }
+
+    #[test]
+    fn test_crawl_resume_params_id_only() {
+        let map = commands_map();
+        let cmd = map.get("crawl-resume").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("task-789"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"].as_str().unwrap(), "task-789");
+        // Absent flags stay absent so the handler's `unwrap_or(false)` defaults
+        // apply (the sibling crawl-* commands never send false booleans).
+        assert!(params.get("force").is_none());
+        assert!(params.get("retryFailed").is_none());
+        assert!(params.get("background").is_none());
+        assert!(params.get("verbose").is_none());
+    }
+
+    #[test]
+    fn test_crawl_resume_params_flags() {
+        let map = commands_map();
+        let cmd = map.get("crawl-resume").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("task-789"));
+        args.insert("force".to_string(), json!(true));
+        args.insert("retry-failed".to_string(), json!(true));
+        args.insert("background".to_string(), json!(true));
+        args.insert("verbose".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"].as_str().unwrap(), "task-789");
+        assert_eq!(params["force"], json!(true));
+        // The CLI spelling is kebab-case; the handler reads camelCase.
+        assert_eq!(params["retryFailed"], json!(true));
+        assert_eq!(params["background"], json!(true));
+        assert_eq!(params["verbose"], json!(true));
     }
 
     // -------------------------------------------------------------------

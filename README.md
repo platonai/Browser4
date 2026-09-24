@@ -289,7 +289,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `close-all` | Close all sessions without stopping the backend. |
 | `kill-all` | Force-stop the backend and Browser4-managed browser processes. |
 | `stop` | Gracefully stop the Browser4 server. |
-| `status` | Show server version, port, health, and the web status panel URL (`http://<server>:8182/status`). When a session is active it also prints a current-session block: Name / Session ID / Status / Connection / Next open. |
+| `status` | Show server version, port, health, and the web status panel URL (`http://<server>:18182/status`). When a session is active it also prints a current-session block: Name / Session ID / Status / Connection / Next open. |
 | `doctor` | Run diagnostics: build info, LLM status, stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`. |
 | `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
 | `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
@@ -308,7 +308,7 @@ browser4-cli doctor metrics grep request
 browser4-cli doctor status --section skills --verbose
 ```
 
-**Web status panel:** open `http://127.0.0.1:8182/status` in a browser for a live dashboard
+**Web status panel:** open `http://127.0.0.1:18182/status` in a browser for a live dashboard
 (health, version, JVM/runtime, LLM config, sessions, **Pulsar sessions** — SDK identity,
 context and main-loop state, **swarm** — swarm session plus task summary, **URL pool** —
 queued/real-time/delay counts per priority cache, browsers & open tabs — per-session
@@ -322,7 +322,7 @@ is backed by the aggregated `GET /api/system/status` endpoint; the individual en
 reports load/enable state and SDK version for every installed plugin; the same reports can be
 read from the terminal with `browser4-cli doctor status`.
 
-**Page screenshots:** open `http://127.0.0.1:8182/pages.html` for a grid of every open page
+**Page screenshots:** open `http://127.0.0.1:18182/pages.html` for a grid of every open page
 across sessions. The active tab of each session is captured automatically (click a screenshot
 to re-capture it); inactive tabs show a placeholder that captures on click. Swarm sessions only
 show placeholders. Screenshots load **asynchronously** — the backend captures in the background
@@ -581,15 +581,17 @@ The `co` prefix is accepted as an alias for `swarm`.
 | `crawl [url]` | Crawl from a URL or seed file. Supports `--seed-file`, `--sql`, `--sql-stdin`, `--sql-base64`, `--format`, `--output`, `-d/--depth`, `-ol/--out-link-selector`, `-olp/--out-link-pattern`, `-tl/--top-links`, `-a/--args`, `--refresh`, `--parse`, `--expires`, `-p/--priority`, `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly`, `-bg/--background`. |
 | `crawl status <id>` | Check crawl task status. |
 | `crawl result <id>` | Fetch crawl results. |
-| `crawl cancel <id>` | Cancel a running crawl. |
-| `crawl clear` | Remove terminal-state crawl tasks; supports force-style cleanup options. |
-| `crawl list` | List tracked crawl tasks. |
+| `crawl cancel <id>` | Cancel a running crawl (the checkpoint is kept, so it can be resumed). |
+| `crawl resume <id>` | Continue an interrupted crawl from its checkpoint: same task id, no repeat requests for URLs that already succeeded. `--retry-failed` re-fetches terminal failures; automatic resume at startup is off by default (`crawl.autoResume`). See [Crawl checkpoint & resume](docs/crawl-checkpoint-resume.md). |
+| `crawl clear` | Remove terminal-state crawl tasks; supports force-style cleanup options. Resumable checkpoints are kept until `crawl clear --all`. |
+| `crawl list` | List tracked crawl tasks (`--status interrupted` shows the resumable ones). |
 
 ```bash
 browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
 browser4-cli swarm query --seed-file urls.txt --sql @query.sql --refresh
 browser4-cli crawl "https://example.com" --depth 2 --out-link-selector "a[href]"
 browser4-cli crawl list
+browser4-cli crawl resume <task-id>    # continue an interrupted crawl
 ```
 
 #### Bundled skill files vs installed runtime skills

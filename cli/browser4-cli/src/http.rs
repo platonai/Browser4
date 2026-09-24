@@ -1015,6 +1015,40 @@ pub async fn cancel_crawl(
     send_rest_request(client.post(url)).await
 }
 
+/// The URL of `CrawlController.resumeCrawl(id, force, retryFailed)`.
+///
+/// Built as a plain string (like the sibling crawl endpoints) instead of
+/// reqwest's `.query()` builder: the CLI's reqwest has default features off, and
+/// the two booleans are the whole query string, so a pure helper is both
+/// simpler and testable.
+fn resume_crawl_url(base_url: &str, task_id: &str, force: bool, retry_failed: bool) -> String {
+    build_endpoint_url(
+        base_url,
+        &format!(
+            "/api/crawl/{}/resume?force={}&retryFailed={}",
+            task_id, force, retry_failed
+        ),
+    )
+}
+
+/// Continue an interrupted crawl from its checkpoint via
+/// `CrawlController.resumeCrawl(id, force, retryFailed)`.
+///
+/// A rejection the user can act on (`resumed = false`: already completed,
+/// nothing left to fetch, no checkpoint on disk) is a 200 with a reason, so it
+/// is returned as a normal body here; only a live worker on the same task is an
+/// HTTP error (409), because that one is a conflict with a running operation.
+pub async fn resume_crawl(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+    force: bool,
+    retry_failed: bool,
+) -> Result<String, String> {
+    let url = resume_crawl_url(base_url, task_id, force, retry_failed);
+    send_rest_request(client.post(url)).await
+}
+
 /// Clear all terminal-state crawl tasks via `CrawlController.clearCrawls()`.
 pub async fn clear_crawls(client: &Client, base_url: &str) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/crawl/clear");
@@ -1629,6 +1663,37 @@ mod tests {
     fn build_endpoint_url_multiple_slashes() {
         let url = build_endpoint_url("http://localhost:8182///", "/api/crawl/clear");
         assert_eq!(url, "http://localhost:8182/api/crawl/clear");
+    }
+
+    // -------------------------------------------------------------------
+    // resume_crawl_url tests (POST /api/crawl/{id}/resume)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn resume_crawl_url_defaults_both_flags_to_false() {
+        let url = resume_crawl_url("http://localhost:8182", "task-1", false, false);
+        assert_eq!(
+            url,
+            "http://localhost:8182/api/crawl/task-1/resume?force=false&retryFailed=false"
+        );
+    }
+
+    #[test]
+    fn resume_crawl_url_carries_both_flags() {
+        let url = resume_crawl_url("http://localhost:8182/", "task-2", true, true);
+        assert_eq!(
+            url,
+            "http://localhost:8182/api/crawl/task-2/resume?force=true&retryFailed=true"
+        );
+    }
+
+    #[test]
+    fn resume_crawl_url_uses_the_camel_case_retry_failed_parameter() {
+        // The backend reads `@RequestParam("retryFailed")`; a kebab-case
+        // spelling would silently leave the flag at its default.
+        let url = resume_crawl_url("http://localhost:8182", "task-3", false, true);
+        assert!(url.contains("retryFailed=true"), "got: {url}");
+        assert!(!url.contains("retry-failed"), "got: {url}");
     }
 
     // -------------------------------------------------------------------

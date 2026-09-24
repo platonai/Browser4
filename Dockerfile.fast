@@ -48,7 +48,7 @@ ENV JAVA_OPTS="-Xms2G -Xmx10G -XX:+UseG1GC" \
 COPY browser4-apps/browser4-standalone/target/Browser4.jar app.jar
 
 # Expose port (documentation only)
-EXPOSE 8182
+EXPOSE 18182
 
 # Create non-root user and set directory permissions
 RUN addgroup --system --gid 1001 appuser && \

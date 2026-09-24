@@ -40,7 +40,7 @@ fallbacks — an explicit flag or environment variable always wins per invocatio
 browser4-cli config                              # List all values + config file path
 browser4-cli config list                         # Same as above
 browser4-cli config get server                   # Print one value ("(not set)" if unset)
-browser4-cli config set server http://localhost:8182
+browser4-cli config set server http://localhost:18182
 browser4-cli config set timeout 45               # Positive integer seconds
 browser4-cli config delete session               # Reset a key to its default
 ```

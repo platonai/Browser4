@@ -102,7 +102,7 @@ COPY --from=builder /build/app.jar app.jar
 COPY --from=builder /build/plugins/ /app/plugins/
 
 # Expose port (documentation only)
-EXPOSE 8182
+EXPOSE 18182
 
 # Create app data directory
 RUN mkdir -p ~/.browser4/

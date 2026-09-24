@@ -26,8 +26,8 @@ class Browser4BundleApplication(
 ) {
     private val logger = getLogger(Browser4BundleApplication::class)
 
-    @Value("\${server.port:8182}")
-    var port: Int = 8182
+    @Value("\${server.port:18182}")
+    var port: Int = 18182
 
     @Value("\${server.servlet.context-path:}")
     lateinit var contextPath: String

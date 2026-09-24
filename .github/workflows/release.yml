@@ -543,12 +543,12 @@ jobs:
           docker run -d \
             --name ${{ env.CONTAINER_NAME }} \
             --network ${{ env.NETWORK_NAME }} \
-            -p 8182:8182 \
+            -p 18182:18182 \
             --add-host=host.docker.internal:host-gateway \
             --shm-size=1g \
             -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
             -e JAVA_OPTS="-Xms512M -Xmx3G -XX:+UseG1GC" \
-            --health-cmd="curl -f http://localhost:8182/actuator/health || exit 1" \
+            --health-cmd="curl -f http://localhost:18182/actuator/health || exit 1" \
             --health-interval=10s \
             --health-timeout=5s \
             --health-retries=8 \
@@ -619,7 +619,7 @@ jobs:
         timeout-minutes: 15
         shell: bash
         env:
-          BROWSER4_E2E_SERVICE_URL: http://localhost:8182
+          BROWSER4_E2E_SERVICE_URL: http://localhost:18182
           BROWSER4_E2E_FIXTURE_HOST: host.docker.internal
         run: |
           echo "::group::🧪 browser4-cli E2E Tests"

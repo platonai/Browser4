@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
+import ai.platon.pulsar.rest.api.service.crawl.CrawlResumeResult
 import ai.platon.pulsar.rest.api.service.crawl.CrawlService
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import org.slf4j.LoggerFactory
@@ -100,7 +101,40 @@ class CrawlController(
     }
 
     /**
+     * Continue an interrupted crawl from its checkpoint.
+     *
+     * The task keeps its id: a resume is the same task continuing, not a new one.
+     * URLs the first run already fetched are not requested again, the URLs that were
+     * in flight and the discovered frontier are re-submitted, and terminally failed
+     * URLs stay failed unless `retryFailed` asks for them.
+     *
+     * @param id the task UUID returned by [startCrawl]
+     * @param force resume a task that is already in a successful terminal state
+     * @param retryFailed re-submit the URLs that failed terminally before
+     * @return what the call did; `resumed = false` carries the reason
+     */
+    @PostMapping("/{id}/resume", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun resumeCrawl(
+        @PathVariable(value = "id") taskId: String,
+        @RequestParam(value = "force", defaultValue = "false") force: Boolean,
+        @RequestParam(value = "retryFailed", defaultValue = "false") retryFailed: Boolean,
+    ): CrawlResumeResult {
+        if (taskId.isBlank()) {
+            throw IllegalArgumentException("id must not be blank")
+        }
+        val result = crawlService.resume(taskId, force = force, retryFailed = retryFailed)
+        logger.info(
+            "Crawl resume request: id={} force={} retryFailed={} → resumed={} ({})",
+            taskId, force, retryFailed, result.resumed, result.message
+        )
+        return result
+    }
+
+    /**
      * Remove all terminal-state tasks from the crawl task store.
+     *
+     * A checkpoint that still has work left is kept, so a cleared timed-out task can
+     * still be resumed; `clear-all` is the request that discards resumable state.
      *
      * @return the number of tasks removed
      */
@@ -127,5 +161,18 @@ class CrawlController(
     fun handleBadRequest(e: IllegalArgumentException): Map<String, Any> {
         logger.warn("Bad crawl request: {}", e.message)
         return mapOf("error" to "Bad Request", "message" to (e.message ?: ""))
+    }
+
+    /**
+     * A resume that conflicts with a running operation is a `409`, not a `500`: the
+     * request was well-formed and the task exists, it just cannot be resumed while
+     * its worker is alive (two workers on one checkpoint would fetch everything
+     * twice).
+     */
+    @ResponseStatus(HttpStatus.CONFLICT)
+    @ExceptionHandler(IllegalStateException::class)
+    fun handleConflict(e: IllegalStateException): Map<String, Any> {
+        logger.warn("Crawl request conflict: {}", e.message)
+        return mapOf("error" to "Conflict", "message" to (e.message ?: ""))
     }
 }

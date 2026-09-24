@@ -14,11 +14,11 @@ then owns its backend port, its CLI state namespace and its backend app data
 root, so `Browser4-4.13`, `Browser4-4.14` and git worktrees run side by side
 instead of adopting each other's backend, overwriting each other's sessions, or
 contending for one Chrome profile. Installed (production) builds are untouched:
-they keep port `8182` and the flat `~/.browser4` layout.
+they keep port `18182` and the flat `~/.browser4` layout.
 
 | | Installed / production | Development (source checkout) |
 |---|---|---|
-| Backend port | `8182` | first free port from **`8282`** upward |
+| Backend port | `18182` | first free port from **`8282`** upward |
 | CLI state, sessions, config | `~/.browser4/` | `~/.browser4/workspaces/<checkout>-<hash>/` |
 | Backend app data (`-Dapp.data.dir`) | `~/.browser4` | `<state dir>/app-data/` — browser profiles (`--user-data-dir`), H2/WebDB data, agent memory, logs |
 | Browser prototype | `~/.browser4/browser/chrome/prototype` | linked (junction/symlink) to the global prototype |
@@ -48,7 +48,7 @@ the port over in the meantime, the next command transparently re-allocates
 
 With 4.13 already serving on `8282`, the first command in 4.14 uses `8283`.
 Ports outside the development range, and URLs that resolve to a real host, are
-honoured untouched — an explicit `--server http://localhost:8182` keeps talking
+honoured untouched — an explicit `--server http://localhost:18182` keeps talking
 to the installed backend.
 
 ## State and App Data

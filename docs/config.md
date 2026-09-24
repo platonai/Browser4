@@ -339,6 +339,22 @@ docker run -d -p 8182:8182 `
   Enables the built-in `browser4-browser` runtime plugin wiring.
   Set `browser.enabled=false` to disable browser runtime beans.
 
+* **`crawl.autoResume`** *(default: `false`)*
+  Whether a crawl that was **running when the backend process died** is resumed
+  automatically at startup, from its checkpoint.
+
+  - `false` (default): such a task is reported as `Interrupted` and waits for an
+    explicit `browser4-cli crawl resume <task-id>`. A restart is not consent to keep
+    hitting third-party sites, so nothing is fetched until someone asks.
+  - `true`: every interrupted task is continued at startup — already-fetched URLs are
+    not requested again, the URLs that were in flight and the discovered frontier are
+    fetched, and the result is merged with per-row provenance.
+
+  Checkpoints live in `~/.browser4/data/crawl/checkpoints/<taskId>.json` (override the
+  root with `browser4.data.dir`), survive the task store's LRU and TTL, and are
+  discarded by `crawl clear --all`. See
+  [Crawl checkpoint & resume](crawl-checkpoint-resume.md).
+
 ### 📦 `browser.profile.mode` Comparison Table
 
 | Mode           | Description                                                                 | User Data Directory Behavior                             | Use Case            |

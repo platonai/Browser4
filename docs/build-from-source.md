@@ -93,7 +93,7 @@ browser prototype (`~/.browser4/browser/chrome/prototype`, the tree every
 working without duplication. Where links are unavailable the config tree is
 copied and re-synced, and a workspace whose prototype cannot be linked simply
 keeps its own. Installed builds
-keep the production default (8182) and the flat `~/.browser4` state. Point a
+keep the production default (18182) and the flat `~/.browser4` state. Point a
 command at a specific backend with `--server <url>` /
 `browser4-cli config set server <url>`, or disable development mode with
 `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1`.

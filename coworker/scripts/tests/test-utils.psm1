@@ -164,9 +164,9 @@ function Start-TestSession {
 
     $null = New-Item -Path $script:LogDir -ItemType Directory -Force -ErrorAction SilentlyContinue
 
-    # --- Pre-test port cleanup (prevents "Port 8182 already in use" failures) ---
+    # --- Pre-test port cleanup (prevents "Port 18182 already in use" failures) ---
     if (-not $SkipPortCleanup) {
-        Clear-Browser4Port -Port 8182 -WaitSeconds 2
+        Clear-Browser4Port -Port 18182 -WaitSeconds 2
     }
 
     Write-Host "`n📁 Log directory: $script:LogDir" -ForegroundColor DarkGray
@@ -245,7 +245,7 @@ function ConvertTo-WindowsCmdArg {
 }
 
 # ============================================================================
-# Public: kill any process holding the Browser4 port (8182) and stale servers
+# Public: kill any process holding the Browser4 port (18182) and stale servers
 # ============================================================================
 <#
 .SYNOPSIS
@@ -253,14 +253,14 @@ function ConvertTo-WindowsCmdArg {
     Browser4 Java process patterns, then wait for the port to be released.
 
 .DESCRIPTION
-    Cross-platform cleanup that helps prevent "Port 8182 was already in use"
+    Cross-platform cleanup that helps prevent "Port 18182 was already in use"
     failures caused by a stale server process from a prior test run.
 
     On Windows, uses netstat + taskkill; on Linux/macOS, uses lsof/fuser + kill.
     Also scans for Java processes whose command-line includes 'browser4'.
 
 .PARAMETER Port
-    TCP port to clear (default: 8182).
+    TCP port to clear (default: 18182).
 
 .PARAMETER WaitSeconds
     Seconds to wait after killing processes for the port to be released
@@ -268,12 +268,12 @@ function ConvertTo-WindowsCmdArg {
 
 .EXAMPLE
     Clear-Browser4Port
-    Clear-Browser4Port -Port 8182 -WaitSeconds 5
+    Clear-Browser4Port -Port 18182 -WaitSeconds 5
 #>
 function Clear-Browser4Port {
     [CmdletBinding()]
     param(
-        [int]$Port = 8182,
+        [int]$Port = 18182,
         [int]$WaitSeconds = 3
     )
 
@@ -536,7 +536,7 @@ function Invoke-TrackedCli {
         $output.Add("[DIAGNOSTIC] Run 'Clear-Browser4Port' before starting tests, or kill the process holding port $portNum.")
     }
     if ($allOutput -match 'Browser4 server startup failed') {
-        $output.Add("[DIAGNOSTIC] Browser4 server failed to start. Check if another process is holding the required port (default: 8182).")
+        $output.Add("[DIAGNOSTIC] Browser4 server failed to start. Check if another process is holding the required port (default: 18182).")
     }
     if ($allOutput -match 'APPLICATION FAILED TO START') {
         $output.Add("[DIAGNOSTIC] Spring application context failed to start. See server logs for details.")

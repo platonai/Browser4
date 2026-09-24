@@ -480,10 +480,10 @@ runs:
         echo "Test 3: Configuration validation..."
 
         # Check if required ports are exposed (if we know the expected port)
-        if docker image inspect "$image_name" --format '{{range $port, $config := .Config.ExposedPorts}}{{$port}}{{end}}' 2>/dev/null | grep -q "8182"; then
-          echo "  ✅ Expected port 8182 is exposed"
+        if docker image inspect "$image_name" --format '{{range $port, $config := .Config.ExposedPorts}}{{$port}}{{end}}' 2>/dev/null | grep -q "18182"; then
+          echo "  ✅ Expected port 18182 is exposed"
         else
-          echo "  ℹ️ Port 8182 not explicitly exposed (may be configured at runtime)"
+          echo "  ℹ️ Port 18182 not explicitly exposed (may be configured at runtime)"
         fi
 
         echo ""

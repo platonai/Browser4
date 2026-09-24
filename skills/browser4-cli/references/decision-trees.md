@@ -70,6 +70,10 @@ Need to process multiple pages?
 ├─ Multiple known URLs (list in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
 ├─ Need higher crawl throughput? → add --parallel 8 (crawl already collects on several tabs by default; each unit gets its own tab)
+├─ Crawl was interrupted (backend restart, crash, --timeout, or cancel)?
+│  → crawl list --status interrupted, then crawl resume <task-id>
+│  keeps the task id, already-fetched URLs are not requested again, crawl result returns the union of both runs
+│  (--retry-failed re-fetches terminal failures; automatic resume at startup is off by default)
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
 ├─ Repeated monitoring (check every hour)? → loop -i 3600 -- eval "..."
 └─ Just a few URLs in a shell script?

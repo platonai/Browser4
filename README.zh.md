@@ -301,7 +301,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `close-all` | 关闭所有会话，但不停止后端。 |
 | `kill-all` | 强制停止后端以及 Browser4 管理的浏览器进程。 |
 | `stop` | 优雅停止 Browser4 服务。 |
-| `status` | 显示服务版本、端口、健康状态，以及 Web 状态面板地址（`http://<server>:8182/status`）。存在活动会话时还会打印当前会话小节：Name / Session ID / Status / Connection / Next open。 |
+| `status` | 显示服务版本、端口、健康状态，以及 Web 状态面板地址（`http://<server>:18182/status`）。存在活动会话时还会打印当前会话小节：Name / Session ID / Status / Connection / Next open。 |
 | `doctor` | 运行诊断：构建信息、LLM 状态、陈旧 daemon 清理、可选修复。支持 `--verbose` 与 `--fix`。 |
 | `doctor log [name]` | 列出、查看、tail 或 grep 后端日志文件。支持 `--tail`、grep 风格参数，以及 `doctor log <name> grep <pattern>`。 |
 | `doctor metrics [filter]` | 列出、过滤或 grep 后端指标。支持 `doctor metrics grep <pattern>`。 |
@@ -320,7 +320,7 @@ browser4-cli doctor metrics grep request
 browser4-cli doctor status --section skills --verbose
 ```
 
-**Web 状态面板：** 在浏览器打开 `http://127.0.0.1:8182/status` 即可查看实时仪表盘
+**Web 状态面板：** 在浏览器打开 `http://127.0.0.1:18182/status` 即可查看实时仪表盘
 （健康状态、版本、JVM/运行时、LLM 配置、会话、**Pulsar 会话**——SDK 身份、上下文与主循环
 状态、**swarm**——swarm 会话及任务汇总、**URL 池**——按优先级缓存的排队/实时/延迟数量、
 浏览器与打开的标签页——每个会话的浏览器/驱动绑定与标签页数量，可点击按需加载实时标签页
@@ -331,7 +331,7 @@ browser4-cli doctor status --section skills --verbose
 `/api/skills`）继续可用。`browser4-cli plugin-list` 也会报告每个已安装插件的加载/启用状态与
 SDK 版本；同样的报告也可以在终端中通过 `browser4-cli doctor status` 分层查看。
 
-**页面截图：** 打开 `http://127.0.0.1:8182/pages.html` 可以网格形式查看所有会话中打开的网页。
+**页面截图：** 打开 `http://127.0.0.1:18182/pages.html` 可以网格形式查看所有会话中打开的网页。
 每个会话的活动页自动截图（点击截图可重新截取）；非活动页显示占位图，点击后截取展示；
 SWARM 会话的所有页面仅显示占位图。截图采用**异步加载**——后端在后台截取（截取中返回
 `202 Accepted` + `Retry-After`，完成后返回缓存的 `image/png`），面板不会阻塞等待截图。
@@ -588,15 +588,17 @@ browser4-cli network route "**/api/users" --body '{"users":[]}' --content-type a
 | `crawl [url]` | 从 URL 或 seed file 开始抓取。支持 `--seed-file`、`--sql`、`--sql-stdin`、`--sql-base64`、`--format`、`--output`、`-d/--depth`、`-ol/--out-link-selector`、`-olp/--out-link-pattern`、`-tl/--top-links`、`-a/--args`、`--refresh`、`--parse`、`--expires`、`-p/--priority`、`--page-load-timeout`、`--ignore-url-query`、`--no-norm`、`--readonly`、`-bg/--background`。 |
 | `crawl status <id>` | 查询 crawl 任务状态。 |
 | `crawl result <id>` | 获取 crawl 结果。 |
-| `crawl cancel <id>` | 取消运行中的 crawl 任务。 |
-| `crawl clear` | 删除处于终态的 crawl 任务；支持扩展清理选项。 |
-| `crawl list` | 列出已跟踪的 crawl 任务。 |
+| `crawl cancel <id>` | 取消运行中的 crawl 任务（检查点会保留，因此之后仍可续传）。 |
+| `crawl resume <id>` | 从检查点续传被中断的 crawl（断点续传）：任务 ID 不变，已成功抓取的 URL 不会重复请求。`--retry-failed` 可重试终态失败 URL；后端启动时自动续传默认关闭（`crawl.autoResume`）。详见 [Crawl checkpoint & resume](docs/crawl-checkpoint-resume.md)。 |
+| `crawl clear` | 删除处于终态的 crawl 任务；支持扩展清理选项。仍有剩余工作的检查点会被保留，直到 `crawl clear --all`。 |
+| `crawl list` | 列出已跟踪的 crawl 任务（`--status interrupted` 可筛出可续传的任务）。 |
 
 ```bash
 browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
 browser4-cli swarm query --seed-file urls.txt --sql @query.sql --refresh
 browser4-cli crawl "https://example.com" --depth 2 --out-link-selector "a[href]"
 browser4-cli crawl list
+browser4-cli crawl resume <task-id>    # 续传被中断的 crawl
 ```
 
 #### 内置 skill 文件 与 已安装运行时 skill

@@ -247,17 +247,24 @@ internal fun hasBudgetForRound(remainingTaskBudgetMs: Long): Boolean =
  * `failedPages.size = 1`): the seed URL is the only URL this crawl can still
  * prove it set out to fetch, and claiming any more would invent pages it never
  * submitted.
+ *
+ * The URL is also reported as [CrawlRound.outstanding] — not a second loss, the
+ * *same* one — because it is work, not a settled outcome: a resume re-submits it.
+ * Without that, a crawl the budget refused every seed of could be reported as
+ * resumable while having nothing left to resume (see `CrawlSeedCheckpoint`).
  */
-internal fun unstartedSeedRound(seedUrl: String): CrawlRound = CrawlRound(
-    pages = emptyList(),
-    failedPages = listOf(
-        CrawlFailedPage(url = seedUrl, depth = 0, protocolStatus = 0, reason = REASON_BUDGET_EXHAUSTED)
-    ),
-    pagesExpected = 1,
-    timedOut = true,
-    timeoutError = "Crawl timed out: the task budget was exhausted before every seed was submitted " +
-        "(partial results saved)"
-)
+internal fun unstartedSeedRound(seedUrl: String): CrawlRound {
+    val lost = CrawlFailedPage(url = seedUrl, depth = 0, protocolStatus = 0, reason = REASON_BUDGET_EXHAUSTED)
+    return CrawlRound(
+        pages = emptyList(),
+        failedPages = listOf(lost),
+        pagesExpected = 1,
+        timedOut = true,
+        timeoutError = "Crawl timed out: the task budget was exhausted before every seed was submitted " +
+            "(partial results saved)",
+        outstanding = listOf(lost)
+    )
+}
 
 /**
  * The seeds that never settled: no round of theirs completed, so their pages are
@@ -884,6 +891,8 @@ internal fun mergeIncrementalProgress(
     linksDiscovered: Int,
     diagnostic: String?,
     terminalStatuses: Set<String>,
+    remaining: Int = previous?.remaining ?: 0,
+    resumable: Boolean = previous?.resumable ?: false,
 ): CrawlResponse? {
     if (previous != null && previous.status in terminalStatuses) return null
     return CrawlResponse(
@@ -904,6 +913,14 @@ internal fun mergeIncrementalProgress(
         pagesExpected = previous?.pagesExpected ?: 0,
         parallelTabs = previous?.parallelTabs ?: 0,
         maxConcurrentFetches = previous?.maxConcurrentFetches ?: 0,
+        // Resume bookkeeping is part of the task's identity, not of the progress a
+        // publish reports: dropping it here would make a resumed task look like a
+        // fresh one the moment its first page arrives.
+        resumedFrom = previous?.resumedFrom,
+        resumeCount = previous?.resumeCount ?: 0,
+        skippedAlreadyFetched = previous?.skippedAlreadyFetched ?: 0,
+        remaining = remaining,
+        resumable = resumable,
     )
 }
 
