@@ -240,6 +240,89 @@ data class CrawlCheckpoint(
 }
 
 /**
+ * One row as it was appended to a task's row log, with the seed it was recorded for.
+ *
+ * @property seed the index of the seed whose round recorded the row.
+ * @property row the row itself; null only for a line that was written by a newer
+ *   version this one cannot read, which is skipped.
+ */
+data class CrawlCheckpointRow(
+    val seed: Int = 0,
+    val row: CrawlPageResult? = null,
+)
+
+/**
+ * Fold the rows appended since the last state write into a loaded checkpoint.
+ *
+ * The state file is a periodic *rewrite*, so a row that settled between two writes
+ * is not in it — and a resumed crawl that does not know about such a row would
+ * request that URL a second time, which is exactly what a resume promises never to
+ * do (issue #606).  The row log is an append per settled row, so it is durable the
+ * moment the row is recorded; merging it back is what makes "already fetched" mean
+ * what it says.
+ *
+ * The accounting law is preserved exactly, which is the reason for the three-way
+ * bookkeeping below: every appended row is either already known (nothing to do),
+ * still listed as in flight or failed (it is removed there — it settled), or was
+ * submitted after the last state write captured the submission (its expected count
+ * is raised, because the crawl did set out to fetch it).
+ *
+ * @param appended rows read from the task's row log, in no particular order.
+ */
+internal fun mergeAppendedRows(
+    checkpoint: CrawlCheckpoint,
+    appended: List<CrawlCheckpointRow>,
+): CrawlCheckpoint {
+    if (appended.isEmpty()) return checkpoint
+    val bySeed = appended.filter { it.row != null }
+        .groupBy({ it.seed }, { it.row!! })
+        .filterKeys { it in checkpoint.seedUrls.indices }
+    if (bySeed.isEmpty()) return checkpoint
+
+    var changed = false
+    val merged = checkpoint.seeds.toMutableList()
+    while (merged.size < checkpoint.seedUrls.size) {
+        merged.add(CrawlSeedCheckpoint(url = checkpoint.seedUrls[merged.size]))
+    }
+    bySeed.forEach { (index, rows) ->
+        val seed = merged[index]
+        val known = seed.pages.map { normalizeForVisit(it.url) }.toSet()
+        val fresh = rows.filterNot { normalizeForVisit(it.url) in known }
+            .distinctBy { normalizeForVisit(it.url) }
+        if (fresh.isEmpty()) return@forEach
+        val freshKeys = fresh.map { normalizeForVisit(it.url) }.toSet()
+        val accounted = seed.knownUrls()
+        // A row whose URL the state file never even listed as submitted: the crawl
+        // did set out to fetch it, so it is one more expected page.
+        val unaccounted = fresh.count { normalizeForVisit(it.url) !in accounted }
+        val outstandingAfter = seed.outstanding.filterNot { normalizeForVisit(it.url) in freshKeys }
+        // Every URL the round was still waiting for now has a row, and no discovered
+        // link is left unqueued: the seed finished after the last state write, and a
+        // resume must not run it again.
+        val completedAfter = seed.completed || (
+            seed.outstanding.isNotEmpty() && outstandingAfter.isEmpty() && seed.frontier.isEmpty()
+            )
+        merged[index] = seed.copy(
+            pages = seed.pages + fresh,
+            failed = seed.failed.filterNot { normalizeForVisit(it.url) in freshKeys },
+            outstanding = outstandingAfter,
+            pagesExpected = seed.pagesExpected + unaccounted,
+            // A seed with rows has been picked up, whatever the state file recorded
+            // before the rows settled; only a seed whose round is known to have
+            // finished is labelled as fetched.
+            status = when {
+                completedAfter -> "fetched"
+                seed.status == CrawlSeedCheckpoint.STATUS_PENDING -> CrawlSeedCheckpoint.STATUS_INTERRUPTED
+                else -> seed.status
+            },
+            completed = completedAfter
+        )
+        changed = true
+    }
+    return if (changed) checkpoint.copy(seeds = merged, updatedAt = System.currentTimeMillis()) else checkpoint
+}
+
+/**
  * How often a task's checkpoint may hit the disk.
  *
  * The checkpoint is a *rewrite* (atomic replace), so its cost grows with the state
@@ -320,16 +403,28 @@ internal class CheckpointWritePolicy(
 /**
  * Crash-safe, per-task storage for [CrawlCheckpoint]s.
  *
- * One file per task (`<taskId>.json`), written by **atomic replace**: the new
- * state goes to a sibling `.tmp` file, is flushed to disk, and is then moved over
- * the live file.  A crash therefore leaves either the previous checkpoint or the
- * new one — never a half-written one — which is what makes "resume after a
- * truncated checkpoint" a non-event rather than a corrupted task.
+ * Two files per task:
  *
- * The previous good file is kept as `<taskId>.json.bak` and is used when the live
- * file cannot be parsed (a disk-full truncation, a partially synced file on an
- * exotic filesystem).  A corrupt checkpoint degrades to [load] returning null:
- * the caller then resumes from the input contract, and never crashes.
+ *  * `<taskId>.json` — the work state (the input contract, and per seed what was
+ *    fetched, what failed, what is in flight and what is merely discovered),
+ *    written by **atomic replace**: the new state goes to a sibling `.tmp` file,
+ *    is flushed to disk, and is then moved over the live file.  A crash therefore
+ *    leaves either the previous checkpoint or the new one — never a half-written
+ *    one — which is what makes "resume after a truncated checkpoint" a non-event
+ *    rather than a corrupted task.  The previous good file is kept as
+ *    `<taskId>.json.bak` and is used when the live file cannot be parsed (a
+ *    disk-full truncation, a partially synced file on an exotic filesystem).
+ *  * `<taskId>.rows.jsonl` — the rows, **appended** as each one settles.  A
+ *    periodic rewrite cannot contain the rows that settled since the previous
+ *    write, and a resume that does not know about such a row would request the URL
+ *    again — the one thing a resume promises never to do.  An append costs a few
+ *    hundred bytes per settled URL and is durable immediately, so the two files
+ *    together mean: *the work state may be a second or two old, the fact that a URL
+ *    was already fetched may not.*
+ *
+ * A checkpoint that cannot be parsed degrades to "no checkpoint" (via the `.bak`
+ * copy first): the task is then reported as not resumable instead of taking the
+ * server down or re-fetching work it already has.
  *
  * Files are deliberately **not** size-bounded and **not** TTL-purged: a
  * resumable task's work state must outlive the task store's 100-entry LRU and
@@ -340,24 +435,83 @@ class CrawlCheckpointStore(private val dir: Path) {
 
     private val mapper = pulsarObjectMapper()
 
+    /** Serializes appends: several seeds of one task record rows concurrently. */
+    private val appendLock = Any()
+
     /** The checkpoint of [taskId], or null when none was persisted (or it is unreadable). */
     fun load(taskId: String): CrawlCheckpoint? {
         if (taskId.isBlank()) return null
-        read(fileFor(taskId))?.let { return it }
-        // The live file is unreadable: fall back to the last known-good copy
-        // rather than reporting "no checkpoint" and re-fetching work the crawl
-        // already has.
-        val backup = backupFileFor(taskId)
-        if (Files.exists(backup)) {
-            read(backup)?.let {
+        val state = read(fileFor(taskId)) ?: run {
+            // The live file is unreadable: fall back to the last known-good copy
+            // rather than reporting "no checkpoint" and re-fetching work the crawl
+            // already has.
+            val backup = backupFileFor(taskId)
+            if (!Files.exists(backup)) return null
+            read(backup)?.also {
                 logger.warn(
                     "Crawl {}: the checkpoint file is unreadable; continuing from the previous good copy {}",
                     taskId, backup
                 )
-                return it
             }
+        } ?: return null
+        // Rows settle between two state writes; the row log is what makes them
+        // durable, so the state is completed with them before it is handed out.
+        return mergeAppendedRows(state, loadRows(taskId))
+    }
+
+    /**
+     * Append one settled row to the task's row log.
+     *
+     * An append, deliberately: a rewrite of the whole state on every settled URL
+     * would cost more the more the crawl has collected, while a row is a few hundred
+     * bytes that are written exactly once.  This is what makes "an already-fetched
+     * URL is never requested again" true even when the process is killed between two
+     * state writes (see [mergeAppendedRows]).
+     *
+     * @return true when the row reached the disk.
+     */
+    fun appendRow(taskId: String, seedIndex: Int, row: CrawlPageResult): Boolean {
+        if (taskId.isBlank()) return false
+        return try {
+            val line = mapper.writeValueAsString(CrawlCheckpointRow(seed = seedIndex, row = row))
+            synchronized(appendLock) {
+                Files.createDirectories(dir)
+                Files.writeString(
+                    rowsFileFor(taskId),
+                    line + "\n",
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND
+                )
+            }
+            true
+        } catch (e: Exception) {
+            logger.warn("Crawl {}: failed to persist a checkpoint row for '{}': {}", taskId, row.url, e.message)
+            false
         }
-        return null
+    }
+
+    /**
+     * The rows appended for [taskId], in write order.
+     *
+     * A corrupt or truncated line is skipped, like every other persisted line in this
+     * service: a partially written row costs one re-fetch, never the crawl.
+     */
+    fun loadRows(taskId: String): List<CrawlCheckpointRow> {
+        val file = rowsFileFor(taskId)
+        if (!Files.isRegularFile(file)) return emptyList()
+        return try {
+            Files.newBufferedReader(file).use { reader ->
+                reader.lineSequence().mapNotNull { line ->
+                    if (line.isBlank()) return@mapNotNull null
+                    runCatching { mapper.readValue(line, CrawlCheckpointRow::class.java) }
+                        .onFailure { logger.debug("Skipping a corrupt checkpoint row in {}: {}", file, it.message) }
+                        .getOrNull()
+                }.toList()
+            }
+        } catch (e: Exception) {
+            logger.warn("Crawl {}: failed to read the checkpoint row log {}: {}", taskId, file, e.message)
+            emptyList()
+        }
     }
 
     /**
@@ -408,6 +562,7 @@ class CrawlCheckpointStore(private val dir: Path) {
         if (taskId.isBlank()) return
         runCatching { Files.deleteIfExists(fileFor(taskId)) }
         runCatching { Files.deleteIfExists(backupFileFor(taskId)) }
+        runCatching { Files.deleteIfExists(rowsFileFor(taskId)) }
         runCatching { Files.deleteIfExists(fileFor(taskId).resolveSibling("${taskId}.json.tmp")) }
     }
 
@@ -422,7 +577,11 @@ class CrawlCheckpointStore(private val dir: Path) {
             val name = file.fileName.toString()
             // Only ever remove files this store owns: the directory may be
             // shared with an operator's own notes.
-            if (!name.endsWith(".json") && !name.endsWith(".json.bak") && !name.endsWith(".json.tmp")) return@forEach
+            if (!name.endsWith(".json") && !name.endsWith(".json.bak") &&
+                !name.endsWith(".json.tmp") && !name.endsWith(".rows.jsonl")
+            ) {
+                return@forEach
+            }
             if (runCatching { Files.deleteIfExists(file) }.getOrDefault(false)) removed++
         }
         return removed
@@ -442,6 +601,9 @@ class CrawlCheckpointStore(private val dir: Path) {
     }
 
     fun fileFor(taskId: String): Path = dir.resolve("$taskId.json")
+
+    /** The append-only row log of [taskId] (see [appendRow]). */
+    fun rowsFileFor(taskId: String): Path = dir.resolve("$taskId.rows.jsonl")
 
     private fun backupFileFor(taskId: String): Path = dir.resolve("$taskId.json.bak")
 

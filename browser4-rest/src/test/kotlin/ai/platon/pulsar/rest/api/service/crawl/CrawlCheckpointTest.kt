@@ -264,6 +264,135 @@ class CrawlCheckpointTest {
     }
 
     // -----------------------------------------------------------------
+    // Row log: a settled row is durable the moment it exists
+    // -----------------------------------------------------------------
+
+    @Test
+    @DisplayName("a row appended after the last state write is restored, so its URL is never fetched twice")
+    fun appendedRowsSurviveASigkill(@TempDir dir: Path) {
+        val store = CrawlCheckpointStore(dir)
+        // The state was written with one row and one URL still in flight.
+        val state = checkpoint(
+            seeds = listOf(
+                seed(
+                    "https://example.com/a",
+                    pages = listOf(row("https://example.com/1")),
+                    outstanding = listOf(failure("https://example.com/2"))
+                )
+            )
+        )
+        assertTrue(store.save(state) > 0)
+
+        // Then the in-flight URL settles — and the process is killed before the next
+        // state write.  This is the measured failure the row log exists for: without
+        // it the resumed crawl requested /1 and /2 again.
+        assertTrue(store.appendRow("task-1", 0, row("https://example.com/2")))
+
+        val loaded = requireNotNull(store.load("task-1"))
+        val seed = loaded.seeds.single()
+
+        assertEquals(
+            listOf("https://example.com/1", "https://example.com/2"),
+            seed.pages.map { it.url },
+            "both rows must be known after the restart"
+        )
+        assertTrue(seed.outstanding.isEmpty(), "the row settled, so it is no longer in flight")
+        assertFalse(loaded.hasWork() || seed.remaining() > 0, "nothing is left to fetch for this seed")
+        assertTrue(
+            seed.completed,
+            "every URL the round was waiting for has a row and no frontier is left"
+        )
+        assertEquals(
+            seed.pagesExpected, seed.pages.size + seed.failed.size + seed.outstanding.size,
+            "the accounting law must hold after the merge"
+        )
+    }
+
+    @Test
+    @DisplayName("a row for a URL the state never recorded as submitted is counted as expected")
+    fun appendedRowUnknownToTheStateStillBalances(@TempDir dir: Path) {
+        val store = CrawlCheckpointStore(dir)
+        store.save(checkpoint(seeds = listOf(seed("https://example.com/a", pages = emptyList()))))
+
+        // The row was appended after a state write that predates the submission too.
+        store.appendRow("task-1", 0, row("https://example.com/late"))
+
+        val seed = requireNotNull(store.load("task-1")).seeds.single()
+
+        assertEquals(listOf("https://example.com/late"), seed.pages.map { it.url })
+        assertEquals(1, seed.pagesExpected, "the crawl did set out to fetch it, so it is one expected page")
+        assertEquals(seed.pagesExpected, seed.pages.size + seed.failed.size + seed.outstanding.size)
+        assertTrue(seed.started(), "a seed with a row has been picked up")
+        assertEquals(
+            CrawlSeedCheckpoint.STATUS_INTERRUPTED,
+            seed.status,
+            "the state never saw the seed finish, so the honest label is 'interrupted', not 'pending'"
+        )
+        assertFalse(seed.completed, "a round with an unknown number of outstanding URLs is not complete")
+    }
+
+    @Test
+    @DisplayName("appended rows are read in order, and a corrupt line costs one row, not the checkpoint")
+    fun rowLogSkipsCorruptLines(@TempDir dir: Path) {
+        val store = CrawlCheckpointStore(dir)
+        store.save(checkpoint(seeds = listOf(seed("https://example.com/a"))))
+        store.appendRow("task-1", 0, row("https://example.com/1"))
+        // A partially written line (the classic crash artefact).
+        Files.writeString(
+            store.rowsFileFor("task-1"),
+            "{ this is not a row }\n",
+            java.nio.file.StandardOpenOption.APPEND
+        )
+        store.appendRow("task-1", 0, row("https://example.com/2"))
+
+        val seed = requireNotNull(store.load("task-1")).seeds.single()
+
+        assertEquals(listOf("https://example.com/1", "https://example.com/2"), seed.pages.map { it.url })
+        assertEquals(2, seed.pagesExpected, "two rows, two expected pages — the corrupt line cost nothing")
+    }
+
+    @Test
+    @DisplayName("a row appended twice (a replayed line) is counted once")
+    fun duplicateAppendedRowsAreMerged(@TempDir dir: Path) {
+        val store = CrawlCheckpointStore(dir)
+        store.save(checkpoint(seeds = listOf(seed("https://example.com/a"))))
+        store.appendRow("task-1", 0, row("https://example.com/1"))
+        store.appendRow("task-1", 0, row("https://example.com/1"))
+
+        val seed = requireNotNull(store.load("task-1")).seeds.single()
+
+        assertEquals(1, seed.pages.size)
+        assertEquals(1, seed.pagesExpected)
+    }
+
+    @Test
+    @DisplayName("merging appended rows leaves a state that knows nothing of them untouched")
+    fun mergingIsANoOpWithoutAppendedRows() {
+        val state = checkpoint(seeds = listOf(seed("https://example.com/a", pages = listOf(row("https://example.com/1")))))
+
+        assertSame(state, mergeAppendedRows(state, emptyList()))
+        assertSame(
+            state,
+            mergeAppendedRows(state, listOf(CrawlCheckpointRow(seed = 9, row = CrawlPageResult("https://example.com/x")))),
+            "a row for a seed this checkpoint does not have is ignored"
+        )
+    }
+
+    @Test
+    @DisplayName("deleting a task's checkpoint removes its row log too")
+    fun deleteRemovesTheRowLog(@TempDir dir: Path) {
+        val store = CrawlCheckpointStore(dir)
+        store.save(checkpoint())
+        store.appendRow("task-1", 0, row("https://example.com/1"))
+        assertTrue(Files.exists(store.rowsFileFor("task-1")))
+
+        store.delete("task-1")
+
+        assertFalse(Files.exists(store.rowsFileFor("task-1")))
+        assertNull(store.load("task-1"))
+    }
+
+    // -----------------------------------------------------------------
     // Write policy
     // -----------------------------------------------------------------
 

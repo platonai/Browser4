@@ -104,6 +104,24 @@ class CrawlService(
     /** How often each task's checkpoint may be written; one policy per task. */
     private val checkpointPolicies = ConcurrentHashMap<String, CheckpointWritePolicy>()
 
+    /**
+     * Checkpoints whose in-memory state changed since their last write.
+     *
+     * The write policy is evaluated when a round publishes, and a round only
+     * publishes when something settles — so a crawl that goes quiet (a page that
+     * hangs, the last seed settling before a kill) could leave its state on disk
+     * stale for as long as that quiet lasts.  The ticker in [init] drains this set,
+     * which is what turns the policy's staleness bound from "the next time something
+     * happens" into wall-clock time.
+     */
+    private val dirtyCheckpoints: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * How many rows of each seed have already been appended to its task's row log,
+     * so a publish only appends the new ones.
+     */
+    private val appendedRows = ConcurrentHashMap<String, MutableMap<Int, Int>>()
+
     /** Set once [restoreFromDisk] has run, so tests can tell the two states apart. */
     @Volatile
     var autoResume: Boolean = autoResumeOnStart
@@ -124,11 +142,18 @@ class CrawlService(
         private val seedIndex: Int,
     ) : CrawlProgressSink {
 
-        override fun publishPages(pages: List<CrawlPageResult>, linksDiscovered: Int, diagnostic: String?) =
+        override fun publishPages(pages: List<CrawlPageResult>, linksDiscovered: Int, diagnostic: String?) {
             publishInFlight(task, seedIndex, pages, linksDiscovered, diagnostic)
+            // The rows are the "already fetched" set, so each one is made durable the
+            // moment it exists — a periodic state rewrite cannot be, and a resume
+            // that lost a row would request that URL a second time (issue #606).
+            appendNewRows(task, seedIndex, pages)
+        }
 
         override fun publishDiagnostic(diagnostic: String) =
             publishInFlight(task, seedIndex, emptyList(), task.linksDiscovered.get(), diagnostic)
+
+        override fun publishSubmitted(items: List<CrawlWorkItem>) = recordSubmitted(task, seedIndex, items)
 
         override fun publishWorkState(settled: Int, build: () -> CrawlWorkSnapshot) =
             recordWorkState(task, seedIndex, settled, build)
@@ -375,6 +400,27 @@ class CrawlService(
                 purgeExpiredTasks()
             }
         }
+        // Drain the checkpoints that changed since their last write, on a wall
+        // clock rather than "the next time a page settles": a crawl that is quiet
+        // (a hanging fetch, the last seed finishing right before a kill) is exactly
+        // when its state on disk matters most.  The write policy still owns the
+        // byte rate, so a large checkpoint is not rewritten every tick.
+        crawlScope.launch {
+            while (isActive) {
+                delay(CHECKPOINT_FLUSH_TICK_MS.milliseconds)
+                runCatching { flushDirtyCheckpoints() }
+                    .onFailure { logger.warn("Checkpoint flush tick failed: {}", it.message) }
+            }
+        }
+    }
+
+    /** Force a write for every checkpoint whose state changed since the last one. */
+    private fun flushDirtyCheckpoints() {
+        if (dirtyCheckpoints.isEmpty()) return
+        dirtyCheckpoints.toList().forEach { taskId ->
+            val written = flushCheckpoint(taskId, settled = checkpointSettled(taskId))
+            if (written) dirtyCheckpoints.remove(taskId)
+        }
     }
 
     /**
@@ -461,6 +507,10 @@ class CrawlService(
         )
         checkpoints[task.taskId] = checkpoint
         checkpointPolicies.computeIfAbsent(task.taskId) { CheckpointWritePolicy() }
+        // This run logs its own rows: the previous runs' rows are already in the row
+        // log, and each round's publish starts from an empty list again.
+        appendedRows[task.taskId] = ConcurrentHashMap()
+        dirtyCheckpoints.add(task.taskId)
         // Forced: the input contract reaches the disk before a single page is
         // fetched, so a task killed in its first second is still resumable.
         flushCheckpoint(task.taskId, settled = checkpointSettled(task.taskId), force = true)
@@ -1090,6 +1140,47 @@ class CrawlService(
             linksDiscovered = task.linksDiscovered.get()
         )
         checkpoints[task.taskId] = current.withSeed(index, seed.copy(status = status.status, error = status.error))
+        dirtyCheckpoints.add(task.taskId)
+    }
+
+    /**
+     * Record the URLs a round just handed to the session, and nothing else.
+     *
+     * This is the *cheap* half of the checkpoint: an incremental note that a URL is
+     * now in flight, so the full state (which costs a scan of everything the round has
+     * collected) can stay on its cadence.  Without it, a URL submitted between two
+     * state writes is invisible to a resume — and if the page that discovered it is
+     * itself restored as already fetched, it is never discovered again: the crawl
+     * reports success with fewer pages than the site has, silently.
+     *
+     * The expected count is raised with each newly recorded URL, so a state that has
+     * only ever seen submissions (and not yet a settle) still satisfies
+     * `pages + failed + outstanding == pagesExpected`.
+     */
+    private fun recordSubmitted(task: CrawlTaskContext, seedIndex: Int, items: List<CrawlWorkItem>) {
+        if (items.isEmpty()) return
+        synchronized(task.publishLock) {
+            val current = checkpoints[task.taskId] ?: return
+            val seedUrl = task.seedUrls.getOrElse(seedIndex) { task.request.url }
+            val seed = current.seed(seedIndex) ?: CrawlSeedCheckpoint(url = seedUrl)
+            val known = seed.knownUrls()
+            val fresh = items.filterNot { it.key in known }.distinctBy { it.key }
+            if (fresh.isEmpty()) return
+            val queued = fresh.map { CrawlFailedPage(it.url, it.depth, 0, CrawlLedger.REASON_ROUND_ENDED) }
+            checkpoints[task.taskId] = current.withSeed(
+                seedIndex,
+                seed.copy(
+                    outstanding = seed.outstanding + queued,
+                    pagesExpected = seed.pagesExpected + queued.size,
+                    status = if (seed.status == CrawlSeedCheckpoint.STATUS_PENDING) {
+                        CrawlSeedCheckpoint.STATUS_INTERRUPTED
+                    } else {
+                        seed.status
+                    }
+                )
+            )
+        }
+        dirtyCheckpoints.add(task.taskId)
     }
 
     /**
@@ -1143,6 +1234,10 @@ class CrawlService(
                 snapshot.completed
             }
         }
+        // A changed state is dirty whether or not the write was due: the ticker picks
+        // it up as soon as the policy allows, so the state on disk can never be older
+        // than that by more than a tick.
+        dirtyCheckpoints.add(task.taskId)
         // Forced when the round reports itself complete: that is a state the crawl
         // would otherwise only reach on its next transition, and it is the state a
         // killed process most needs to have said.
@@ -1160,20 +1255,65 @@ class CrawlService(
      *   change-based trigger.  `force` bypasses the policy entirely and is used on
      *   every transition (a round settling, a status change, shutdown), so the state
      *   on disk is complete at the moments that matter.
+     * @return true when the state reached the disk.
      */
-    private fun flushCheckpoint(taskId: String, settled: Int, force: Boolean = false) {
-        val checkpoint = checkpoints[taskId] ?: return
+    private fun flushCheckpoint(taskId: String, settled: Int, force: Boolean = false): Boolean {
+        val checkpoint = checkpoints[taskId] ?: return false
         val policy = checkpointPolicies.computeIfAbsent(taskId) { CheckpointWritePolicy() }
-        if (!policy.due(settled, force = force)) return
+        if (!policy.due(settled, force = force)) return false
         val bytes = checkpointStore.save(checkpoint)
-        if (bytes >= 0) {
-            policy.record(bytes, settled)
-        }
+        if (bytes < 0) return false
+        policy.record(bytes, settled)
+        return true
     }
 
     /** How many URLs a task's checkpoint already has an outcome for. */
     private fun checkpointSettled(taskId: String): Int =
         checkpoints[taskId]?.seeds?.sumOf { it.pages.size + it.failed.size } ?: 0
+
+    /**
+     * Append the rows of [pages] that have not been logged yet to the task's row log.
+     *
+     * A round publishes its own results list, which only ever grows, so the rows to
+     * append are the tail beyond what this seed has already logged.  The append is
+     * cheap (one line per row) and monotone (a row is never rewritten), which is what
+     * lets it happen on every settle while the state file itself is written on a
+     * cadence.
+     */
+    private fun appendNewRows(task: CrawlTaskContext, seedIndex: Int, pages: List<CrawlPageResult>) {
+        if (pages.isEmpty()) return
+        val counts = appendedRows.computeIfAbsent(task.taskId) { ConcurrentHashMap() }
+        val logged = counts[seedIndex] ?: 0
+        if (pages.size <= logged) return
+        val fresh = pages.drop(logged)
+        var appended = logged
+        fresh.forEach { row ->
+            if (checkpointStore.appendRow(task.taskId, seedIndex, row)) {
+                appended++
+            }
+        }
+        if (appended == logged) return
+        counts[seedIndex] = appended
+        // The in-memory state is reconciled with the same merge the store applies when
+        // it loads: the row settles a URL that was recorded as in flight, so the two
+        // must not both claim it while the next full snapshot is still pending.
+        val merged = fresh.take(appended - logged)
+        synchronized(task.publishLock) {
+            checkpoints[task.taskId]?.let { current ->
+                checkpoints[task.taskId] =
+                    mergeAppendedRows(current, merged.map { CrawlCheckpointRow(seedIndex, it) })
+            }
+        }
+        dirtyCheckpoints.add(task.taskId)
+    }
+
+    /** Forget the bookkeeping of a task whose checkpoint is gone. */
+    private fun forgetCheckpoint(taskId: String) {
+        checkpoints.remove(taskId)
+        checkpointPolicies.remove(taskId)
+        dirtyCheckpoints.remove(taskId)
+        appendedRows.remove(taskId)
+    }
 
     /**
      * How much work a running task still has, computed from its live round
@@ -1300,8 +1440,7 @@ class CrawlService(
             flushCheckpoint(taskId, settled = checkpointSettled(taskId), force = true)
             return
         }
-        checkpoints.remove(taskId)
-        checkpointPolicies.remove(taskId)
+        forgetCheckpoint(taskId)
         checkpointStore.delete(taskId)
     }
 
@@ -1616,6 +1755,8 @@ class CrawlService(
         interruptedStore.clear()
         checkpoints.clear()
         checkpointPolicies.clear()
+        dirtyCheckpoints.clear()
+        appendedRows.clear()
         val discarded = checkpointStore.deleteAll()
         persistence.clear()
         logger.info("Cleared all {} crawl tasks (including active) and {} checkpoint file(s)", size, discarded)
@@ -1645,10 +1786,9 @@ class CrawlService(
         expired.forEach { entry ->
             val checkpoint = checkpoints[entry.key]
             if (checkpoint != null && checkpoint.hasWork()) {
-                // Keep the file (resume must still work), drop the in-memory copy:
+                // Keep the files (resume must still work), drop the in-memory copy:
                 // nothing is running, and `crawl resume` loads it from disk.
-                checkpoints.remove(entry.key)
-                checkpointPolicies.remove(entry.key)
+                forgetCheckpoint(entry.key)
             } else {
                 finishCheckpoint(entry.key, resumable = false)
             }
@@ -1831,6 +1971,19 @@ class CrawlService(
     companion object {
         /** Delay in ms between seed URL processing to allow session cleanup. */
         private const val SEED_INTERVAL_MS = 500L
+
+        /**
+         * How often the service looks for checkpoints that changed since their last
+         * write (ms).
+         *
+         * The checkpoint's write policy is evaluated when a round publishes, and a
+         * round publishes when something settles — so without a tick, a crawl that
+         * goes quiet leaves its state on disk stale for as long as the quiet lasts
+         * (measured: a `SIGKILL` 8 s after the last settle found a state older than
+         * the 2 s bound).  A tick shorter than the policy's staleness bound is what
+         * makes that bound real; the policy still owns the write rate.
+         */
+        private const val CHECKPOINT_FLUSH_TICK_MS = 1_000L
 
         /**
          * Default parallelism budget for a crawl that does not ask for one, see

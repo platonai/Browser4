@@ -44,6 +44,20 @@ internal interface CrawlProgressSink {
     fun publishDiagnostic(diagnostic: String)
 
     /**
+     * Publish the *submission* of new work: the URLs a round has just handed to the
+     * session, with the depth they were discovered at.
+     *
+     * Settled work is published by [publishPages] (a row appears) and [publishWorkState]
+     * (the whole state, on a cadence); this is the third edge of the same triangle, and
+     * the one that cannot wait for a cadence: a URL that was submitted but never
+     * recorded is work a resume cannot know about — and if the page that discovered it
+     * is itself restored as already fetched, that work is lost silently.  It is
+     * incremental (one item per newly queued URL, no scanning), so it can be called on
+     * every submission.
+     */
+    fun publishSubmitted(items: List<CrawlWorkItem>)
+
+    /**
      * Publish the round's *work state* — what it submitted, settled, lost, and left
      * for later — so an interrupted crawl has something to resume from.
      *
@@ -388,7 +402,7 @@ internal class CrawlRoundRunner(
                             // instead of a hardcoded 1 (a depth-1 crawl queues everything
                             // at depth 1, but a resumed queue may carry deeper work).
                             val rowDepth = restoredDepths[normalizeForVisit(linkUrl)] ?: 1
-                            synchronized(results) {
+                            val published = synchronized(results) {
                                 results.add(
                                     CrawlPageResult(
                                         url = linkUrl,
@@ -404,11 +418,13 @@ internal class CrawlRoundRunner(
                                         run = run
                                     )
                                 )
-                                // Publish in-memory progress so the CLI poll loop sees
-                                // pages as they arrive instead of 'waiting for first
-                                // page' for the whole seed round.
-                                progress.publishPages(results.toList(), linksDiscovered.get())
+                                results.toList()
                             }
+                            // Publish outside the list's monitor: the *snapshot* is what
+                            // has to be consistent, and publishing also appends the row
+                            // to the durable row log — disk I/O has no business blocking
+                            // this round's other parse handlers.
+                            progress.publishPages(published, linksDiscovered.get())
                             ledger.recordSuccess(linkUrl)
                             publishWorkIfDue(progress, ledger, results, linksDiscovered.get())
                         } else {
@@ -453,10 +469,16 @@ internal class CrawlRoundRunner(
                 session.submit(hyperlink)
             }
 
+            // The whole queue is recorded as submitted before it is handed over: a URL
+            // this round queued must be resumable even if the process dies in the same
+            // millisecond, and the page that discovered it may itself be restored as
+            // already fetched (in which case it is never parsed again).
+            progress.publishSubmitted(outLinks.map { CrawlWorkItem(it, restoredDepths[normalizeForVisit(it)] ?: 1) })
             outLinks.forEach { linkUrl ->
+                val depth = restoredDepths[normalizeForVisit(linkUrl)] ?: 1
                 // Register before submitting: a page that settles faster than it is
                 // counted would end the round.
-                if (ledger.submit(linkUrl, restoredDepths[normalizeForVisit(linkUrl)] ?: 1)) {
+                if (ledger.submit(linkUrl, depth)) {
                     submitAttempt(linkUrl, ledger.beginAttempt(linkUrl))
                 } else {
                     logger.debug("Crawl {}: not submitting '{}' — the URL is already queued", taskId, linkUrl)
@@ -686,7 +708,7 @@ internal class CrawlRoundRunner(
                         executeCrawlSqlQuery(session, page.url, request.sql, page, document)
                     } else Pair(null, null)
                     val (servedFromStore, storeAgeSeconds) = storeServeMarkers(page)
-                    synchronized(results) {
+                    val published = synchronized(results) {
                         results.add(
                             CrawlPageResult(
                                 url = page.url,
@@ -702,12 +724,11 @@ internal class CrawlRoundRunner(
                                 run = run
                             )
                         )
-                        // Publish in-memory progress so the CLI poll loop sees real
-                        // page counts while the crawl is still running, instead of
-                        // repeating 'waiting for first page' until the whole crawl
-                        // finishes.
-                        progress.publishPages(results.toList(), linksDiscovered.get())
+                        results.toList()
                     }
+                    // Publish outside the list's monitor (see crawlDepth1): the row log
+                    // append it triggers is disk I/O, and the snapshot is already taken.
+                    progress.publishPages(published, linksDiscovered.get())
                     ledger.recordSuccess(key)
                     publishWorkIfDue(progress, ledger, results, linksDiscovered.get())
                     logger.debug("Crawl {}: depth={} page={}", taskId, currentDepth, servedUrl)
@@ -758,6 +779,11 @@ internal class CrawlRoundRunner(
                         if (newLinks.isNotEmpty()) {
                             linksDiscovered.addAndGet(newLinks.size)
                             val childDepth = currentDepth + 1
+                            // Recorded as submitted before they are handed over: a child
+                            // this crawl queued must be resumable even if the process
+                            // dies before the next state write — and its parent, once
+                            // restored as already fetched, is never parsed again.
+                            progress.publishSubmitted(newLinks.map { CrawlWorkItem(it, childDepth) })
                             newLinks.forEach { link ->
                                 depths[normalizeForVisit(link)] = childDepth
                                 // Register before submitting: a page that settles
@@ -871,6 +897,7 @@ internal class CrawlRoundRunner(
                     taskId, work.size, work.minOfOrNull { it.depth } ?: 0
                 )
                 var queued = 0
+                progress.publishSubmitted(work)
                 work.forEach { item ->
                     depths.putIfAbsent(item.key, item.depth)
                     if (ledger.submit(item.url, item.depth)) {
@@ -890,6 +917,7 @@ internal class CrawlRoundRunner(
                 val seedKey = normalizeForVisit(request.url)
                 visited.add(seedKey)
                 depths[seedKey] = 0
+                progress.publishSubmitted(listOf(CrawlWorkItem(request.url, 0)))
                 // A refused seed submission must not be followed by a wait for a page
                 // that was never queued.  (Nothing can make the ledger terminal this
                 // early, so this is a guard, not a path.)
