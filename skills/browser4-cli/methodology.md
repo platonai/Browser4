@@ -2,7 +2,7 @@
 title: "SKILL Document Methodology"
 description: "Use when creating, editing, or reviewing any document under skills/: read this first to learn the governing principles, document tiers and templates, frontmatter schema, and conformance rules."
 tier: decision
-version: 2.2
+version: 2.3
 x-exempt: P4
 ---
 
@@ -22,11 +22,11 @@ Every principle ends with a **test**. A rule without a test is a suggestion; tes
 
 SKILL.md teaches the agent **how to choose** between approaches. It does not exhaustively document flags or functions.
 
-- **Target length:** 200-250 lines; hard cap **300**. Length is counted in physical lines (blank lines, code blocks, and table rows all count — they consume the same context budget).
+- **Target length:** hard cap **500** physical lines, and **no minimum** — a short document that answers the four questions beats a padded one. Length is counted in physical lines (blank lines, code blocks, and table rows all count — they consume the same context budget).
 - **Keep:** core interaction loop, key concepts, command map, decision trees, critical warnings, quick patterns, reference map
 - **Move out:** complete flag lists, exhaustive function catalogs, detailed procedural walkthroughs, scenario recipes
 
-**Test P1 (machine):** SKILL.md ≤ 300 physical lines; no section whose body is a flag table of 20+ rows.
+**Test P1 (machine):** SKILL.md ≤ 500 physical lines; no section whose body is a flag table of 20+ rows.
 
 **Overflow procedure:** move the offending content to a `references/` file, add a one-line summary plus link in SKILL.md, and re-run the test. If the core loop itself cannot fit in 250 lines, the skill boundary is too large — split the skill rather than stretching the cap.
 
@@ -50,8 +50,8 @@ Every document is classified into exactly one tier, signaled by `tier:` in its f
 
 | Tier | Purpose | Target Length | Example |
 |------|---------|---------------|---------|
-| **decision** | Comparison tables, decision trees, trade-off analysis. Answers "which approach should I use?" | 100-300 lines (SKILL.md: 200-250) | SKILL.md, scenario comparison docs |
-| **procedure** | End-to-end workflows. Answers "I want to do X, show me the steps." | 100-500 lines | Operation walkthroughs, how-to guides |
+| **decision** | Comparison tables, decision trees, trade-off analysis. Answers "which approach should I use?" | ≤ 500 lines, no minimum (SKILL.md shares this cap) | SKILL.md, scenario comparison docs |
+| **procedure** | End-to-end workflows. Answers "I want to do X, show me the steps." | ≤ 500 lines, no minimum | Operation walkthroughs, how-to guides |
 | **catalog** | Exhaustive reference listings. Answers "what are all the options for Y?" Only consulted on demand. | Any length | API references, flag listings, function catalogs |
 
 **Critical rule:** a decision document never contains a complete flag listing; a procedure document never contains an exhaustive function catalog; a catalog never contains a decision tree.
@@ -223,7 +223,7 @@ An exemption must name the rule it breaks, and is itself reviewed under Conforma
 - M3. `name` in SKILL.md manifests matches the directory name (Frontmatter)
 - M4. Required template sections present in order (P4)
 - M5. Tier-content rules: no 20+ row flag tables in decision files, no `## Decision Tree` in catalogs, no function catalogs in procedures (P3)
-- M6. SKILL.md ≤ 300 lines; 100 ≤ decision ≤ 300; procedure ≤ 500 (P1, P3)
+- M6. Every document that loads in full is ≤ 500 lines — SKILL.md, `decision`, `procedure`; no minimum; `catalog` documents are unbounded (P1, P3)
 - M7. All relative links resolve; no dead links; no index links in SKILL.md (Style, P6)
 - M8. Callout lines contain no emoji; warning text unique outside SKILL.md §5 (P5)
 

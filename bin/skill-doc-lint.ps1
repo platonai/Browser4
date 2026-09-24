@@ -12,7 +12,7 @@
       M3  name in SKILL.md manifests matches the directory name
       M4  Required template sections present in order (per tier / SKILL.md variant)
       M5  Tier-content rules (flag tables, decision trees, function catalogs)
-      M6  Line-count limits (SKILL.md <= 300; 100 <= decision <= 300; procedure <= 500)
+      M6  Line-count limits (SKILL.md / decision / procedure <= 500; no minimum; catalogs unbounded)
       M7  All relative links resolve; no index links in SKILL.md
       M8  No emoji in callout lines; broad warnings unique outside SKILL.md section 5
 
@@ -248,12 +248,15 @@ foreach ($f in $files) {
     }
 
     # M6: line counts -------------------------------------------------------
+    # One cap for every document that loads in full: 500 physical lines, matching the
+    # agent-skills convention ("keep SKILL.md under 500 lines"; references/catalogs are
+    # read on demand and stay unbounded).  There is no lower bound — a short document
+    # that answers its tier's questions is conformant, and a minimum only rewards padding.
     if ($fm -and $fm['tier'] -and $role -ne 'distilled') {
         $n = $lines.Count
-        if ($isManifest -and $n -gt 300) { Add-Issue $rel 'M6' "SKILL.md is $n lines (cap 300)" }
-        elseif ($fm['tier'] -eq 'decision' -and ($n -lt 100 -or $n -gt 300)) { Add-Issue $rel 'M6' "decision doc is $n lines (target 100-300)" }
+        if ($isManifest -and $n -gt 500) { Add-Issue $rel 'M6' "SKILL.md is $n lines (cap 500)" }
+        elseif ($fm['tier'] -eq 'decision' -and $n -gt 500) { Add-Issue $rel 'M6' "decision doc is $n lines (cap 500)" }
         elseif ($fm['tier'] -eq 'procedure' -and $n -gt 500) { Add-Issue $rel 'M6' "procedure doc is $n lines (cap 500)" }
-        elseif ($fm['tier'] -eq 'procedure' -and $n -lt 100) { Add-Issue $rel 'M6' "procedure doc is $n lines (target >= 100)" }
     }
 
     # M7: links -------------------------------------------------------------
