@@ -524,7 +524,8 @@ prepended to the seed file list.
 | Server error | Exits with "Crawl failed: ..." and server error details |
 | No links found (depth >= 1) | Exit 0 with a `⚠ Link discovery found no out-links` warning plus the backend diagnostic (it distinguishes "selector matched nothing" from "pattern filtered them all") and the effective `--out-link-pattern`. The seed page is always counted in depth ≥ 2 crawls, so an all-filtered crawl reports `Crawl completed. 1 pages found.` (depth-1 crawls list only discovered pages and report `0 pages found`). Inspect the warning text and verify `--out-link-selector` / `--out-link-pattern` — a shell-mangled pattern (Git Bash `/`-prefix conversion) is the usual cause |
 | Pages lost (any depth) | Exit 0 with a `⚠ N of M submitted page(s) were never delivered` warning naming each lost URL, its depth, its protocol status and the reason. The crawl is **incomplete**, not merely small: `pagesFound + failedPages.size == pagesExpected` always holds. Check `failedPages` in the JSON output. A page is lost when its fetch failed after the retry budget was exhausted, when the task was dropped/evicted, when the crawl ran out of its time budget before the URL was submitted, or when the load returned no document of its own — a zero-byte fetch, or the page store substituted for a failed fetch (`reason = the load returned no document …`; such a URL is **withheld from the listing** rather than shown as a row with an empty title). Re-run, or lower `--depth` / reduce concurrency if it repeats — a repeated loss on a many-core host usually means the target site is refusing the parallel load, so try `--parallel 2` (or `--parallel 1` to rule parallelism out entirely) |
-| Crawl hit the task limit | The task ends `TIMEOUT` and the CLI exits non-zero ("Crawl failed: Crawl timed out while processing seeds …"). `crawl result <taskId>` still carries the accounting: the losses of the seeds that settled, plus **one lost-page row per seed whose round never returned**, reason `the server-side task limit fired while this URL was still being fetched`. The pages such a round had already published are deliberately *not* claimed — its submitted count is unknown, and claiming them would break the `pagesFound + failedPages.size == pagesExpected` invariant — so re-run those URLs. Lower `--depth`, raise `--timeout` (up to `1h`), or split the seeds across several crawls, to stay inside the limit. A seed that is refused *before* it starts reports `reason = the crawl ran out of its time budget before this URL was submitted` and a `skipped` seed status |
+| Crawl hit the task limit | The task ends `TIMEOUT` and the CLI exits non-zero ("Crawl failed: Crawl timed out while processing seeds …"). `crawl result <taskId>` still carries the accounting: the losses of the seeds that settled, plus **one lost-page row per seed whose round never returned**, reason `the server-side task limit fired while this URL was still being fetched`. The pages such a round had already published are deliberately *not* claimed — its submitted count is unknown, and claiming them would break the `pagesFound + failedPages.size == pagesExpected` invariant — so re-run those URLs. Lower `--depth`, raise `--timeout` (up to `1h`), or split the seeds across several crawls, to stay inside the limit. A seed that is refused *before* it starts reports `reason = the crawl ran out of its time budget before this URL was submitted` and a `skipped` seed status. **Such a task is resumable**: the record sets `resumable: true` with the URLs left in `remaining`, and the CLI prints a `crawl resume <task-id>` hint — continuing it fetches exactly those URLs instead of re-crawling from the seeds |
+| Task interrupted (backend restart, crash, SIGKILL) | `crawl status` reports `Interrupted` — never a phantom `Processing` — with `remaining` and `skippedAlreadyFetched`, and the CLI tells you to run `crawl resume <task-id>`. The task is terminal (nothing waits on it), exempt from the task store's LRU and TTL, and not removed by `crawl clear`; `crawl clear --all` discards it and its checkpoint. With no checkpoint on disk the record says it **cannot** be resumed and has to be submitted again |
 | Page listed with `depth=-1` (depth >= 2) | The page was fetched and recorded, but neither the URL it was queued under nor the URL it was served from is a URL this crawl submitted (a redirect combined with a `<base href>`). It is listed with `depth=-1`, counted in `pagesFound`, **not** reported as lost, and **not** expanded (`-1` is never read as depth 0). A single such row is a labelling gap; if every row has it, the site rewrites its document base URI and the listing depths are not meaningful — use `--depth 1`, or report it |
 | Invalid --format | Exits with "Invalid --format '...'. Expected: json, csv, or table" |
 | Invalid --parallel | Exits with "Invalid --parallel value '...'" — accepts a positive integer up to 32; `0` is rejected with the `--parallel 1` hint, and anything above 32 is refused by the server (HTTP 400) |
@@ -560,10 +561,18 @@ pages found so far and any error information.  Prints a compact one-line
 summary in front of the raw task record.
 
 The wire values are `ResourceStatus` display text — `Created`, `Processing`, `OK`,
-`Request Timeout`, `Internal Server Error`, `Not Found` (one vocabulary, defined
-by `CrawlStatus` on the backend).  The CLI maps them to lifecycle labels:
-`queued`, `processing`, `completed`, `failed (timeout)`, `failed (error)`,
-`failed (not found)`.
+`Request Timeout`, `Internal Server Error`, `Not Found`, plus `Interrupted` (the
+worker died with the backend — see [Resume after an interruption](#resume-after-an-interruption))
+(one vocabulary, defined by `CrawlStatus` on the backend).  The CLI maps them to
+lifecycle labels: `queued`, `processing`, `completed`, `failed (timeout)`,
+`failed (error)`, `failed (not found)`, `interrupted`.
+
+A record also carries the resume bookkeeping, whether or not the task was ever
+interrupted: `resumable` (is there a checkpoint with work left), `remaining`
+(URLs still to fetch), `skippedAlreadyFetched` (URLs restored instead of
+re-requested), `resumeCount`, and `resumedFrom` (the interruption a resumed run
+continued from).  `crawl status` prints them and emits them as JSON fields.
+`Interrupted` is **terminal**: `crawl status` never waits on it.
 
 ### crawl result
 
@@ -604,6 +613,42 @@ is found for the task (`{"cancelled": false}`), the CLI explains that the
 worker is already gone; the task record is still queryable and expires by
 TTL.
 
+A cancellation does **not** throw the work away: the task's checkpoint is kept,
+the record reports how much is left, and `crawl resume <task-id>` continues it.
+
+### crawl resume
+
+Continue an interrupted crawl from its checkpoint — after a backend restart, a
+crash, a `SIGKILL`, a `crawl cancel`, or a task the server-side `--timeout`
+budget cut off.
+
+```bash
+browser4-cli crawl resume <task-id>
+browser4-cli crawl resume <task-id> --bg
+browser4-cli crawl resume <task-id> --retry-failed
+browser4-cli crawl resume <task-id> --force
+```
+
+| Flag | Type | Description |
+|---|---|---|
+| `--force` / `-f` | bool | Resume even when the task's record says it completed successfully (a no-op when nothing is left; combine with `--retry-failed` to fetch the URLs it lost) |
+| `--retry-failed` | bool | Re-submit the URLs that failed terminally before, instead of keeping them failed |
+| `--bg` / `--background` | bool | Start the resume and return immediately; poll with `crawl status` / `crawl result` |
+| `--verbose` | bool | Mark each row as fetched-in-this-run or restored-from-checkpoint |
+
+The task keeps its id — `crawl resume` continues *that* task.  Already-fetched URLs
+are not requested again (they are counted in `skippedAlreadyFetched` and restored
+into the result), the URLs that were in flight are re-submitted with a fresh
+delivery-attempt budget, terminally failed URLs stay failed unless
+`--retry-failed`, and the discovered frontier is followed so a `--depth >= 1`
+crawl continues where it stopped instead of restarting at the seeds.  The result
+is the union of the runs: `pagesFound + failedPages.size == pagesExpected` still
+holds, and each row carries `run` / `fetchedAt` / `restoredFromCheckpoint`.
+
+A rejected resume (already completed, nothing left, no checkpoint on disk) prints
+the reason and exits non-zero; a task whose worker is still alive is refused by
+the server.
+
 ### crawl clear
 
 Remove completed, cancelled, or failed crawl tasks from the task store.
@@ -611,7 +656,13 @@ Running tasks are not affected.
 
 ```bash
 browser4-cli crawl clear
+browser4-cli crawl clear --all
 ```
+
+A checkpoint that still has work left is **kept**, so a cleared timed-out task can
+still be resumed by id; interrupted tasks are not touched at all (they are not
+finished tasks).  `crawl clear --all` is the explicit way to discard resumable
+state — after it, an interrupted task can only be submitted again.
 
 ### crawl list
 
@@ -620,6 +671,7 @@ List all tracked crawl tasks across all sessions.
 ```bash
 browser4-cli crawl list
 browser4-cli crawl list --limit 20
+browser4-cli crawl list --status interrupted
 browser4-cli crawl list --clear
 ```
 
@@ -627,10 +679,47 @@ browser4-cli crawl list --clear
 |---|---|---|
 | `--limit` | int | Show at most N tasks (latest first) |
 | `--offset` | int | Skip the first N tasks |
+| `--status` | string | Filter by status: `completed`, `running`, `failed`, `queued`, `interrupted`, `not found` |
+| `--since` | time | Show only tasks submitted since a relative time (e.g. `1h`, `30m`, `1d`) |
 | `--clear` | bool | Remove all tracked tasks from the list |
+
+## Resume after an interruption
+
+A crawl interrupted by a restart, a crash or the server-side `--timeout` budget is
+reported as `Interrupted` (never as a phantom `Processing`) and keeps a **checkpoint**
+on disk: its input contract, the URLs that succeeded, the URLs that failed
+terminally, the URLs that were in flight and the links it had discovered but never
+queued. `crawl resume <task-id>` continues it:
+
+```bash
+# A crawl cut off by its own --timeout budget, or by a canceled/restarted backend
+browser4-cli crawl list --status interrupted
+browser4-cli crawl resume 3f1c…             # continues and polls to completion
+browser4-cli crawl resume 3f1c… --bg        # fire and forget
+browser4-cli crawl result 3f1c…             # union of both runs, per-row provenance
+```
+
+What a resume promises:
+
+- **No repeat request for a URL that already succeeded.** It is restored from the
+  checkpoint and reported in `skippedAlreadyFetched`.
+- **Terminal failures stay failed** unless `--retry-failed`.
+- **The frontier is followed**, so `--depth >= 1` continues its breadth-first walk.
+- **The accounting survives the merge**: `pagesFound + failedPages.size == pagesExpected`.
+- **A rejected resume says why** (already completed → use `--force`; nothing left; no
+  checkpoint on disk) and exits non-zero.
+
+Automatic resume at backend startup is **off by default** (`crawl.autoResume=false`):
+a restart is not consent to keep hitting sites.  Checkpoints live under
+`~/.browser4/data/crawl/checkpoints/`, survive the task store's LRU and TTL, and are
+discarded by `crawl clear --all`.  The full contract — file layout, write cadence,
+crash safety, and the end-to-end SIGKILL test — is in
+[docs/crawl-checkpoint-resume.md](../../../docs/crawl-checkpoint-resume.md).
 
 ## See also
 
+- [Crawl checkpoint & resume](../../../docs/crawl-checkpoint-resume.md) — the backend
+  contract: checkpoint file layout, write cadence, resume semantics, `crawl.autoResume`
 - [X-SQL: DOM_LOAD_AND_SELECT](x-sql-dom-load-select.md) — the table-source
   function for loading pages in X-SQL queries
 - [Swarm reference](swarm.md) — parallel scraping and X-SQL extraction across

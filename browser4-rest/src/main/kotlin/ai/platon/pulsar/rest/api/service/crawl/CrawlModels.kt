@@ -78,8 +78,25 @@ object CrawlStatus {
     val INTERNAL_SERVER_ERROR: String = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR)
     val NOT_FOUND: String = ResourceStatus.getStatusText(ResourceStatus.SC_NOT_FOUND)
 
+    /**
+     * The state of a task whose worker is gone because the process died
+     * (restart, crash, `SIGKILL`) — see [CrawlService.restoreFromDisk].
+     *
+     * It is deliberately *terminal*: nothing will ever move such a task again
+     * unless someone asks for it in so many words (`crawl resume`), and a status
+     * that is neither terminal nor pollable would make every `crawl status` wait
+     * hang forever.  It is also resumable, which is what [CrawlResponse.resumable]
+     * reports, so "terminal" here means "the worker stopped", not "the work is
+     * gone".
+     *
+     * The display text is spelled out rather than derived from [ResourceStatus]
+     * because the status vocabulary has no interrupted code — `Gone` (410) is the
+     * closest and means something else entirely.
+     */
+    val INTERRUPTED: String = "Interrupted"
+
     /** States a task never leaves. */
-    val TERMINAL: Set<String> = setOf(OK, REQUEST_TIMEOUT, INTERNAL_SERVER_ERROR, NOT_FOUND)
+    val TERMINAL: Set<String> = setOf(OK, REQUEST_TIMEOUT, INTERNAL_SERVER_ERROR, NOT_FOUND, INTERRUPTED)
 
     /** States a task is still making progress in. */
     val RUNNING: Set<String> = setOf(CREATED, PROCESSING)
@@ -87,6 +104,9 @@ object CrawlStatus {
     fun isTerminal(status: String): Boolean = status in TERMINAL
 
     fun isRunning(status: String): Boolean = status in RUNNING
+
+    /** True when a task in [status] stopped because its worker died, and can be resumed. */
+    fun isInterrupted(status: String): Boolean = status == INTERRUPTED
 }
 
 data class CrawlSeedStatus(
@@ -172,6 +192,41 @@ data class CrawlResponse(
      * tabs.
      */
     val maxConcurrentFetches: Int = 0,
+    /**
+     * When this run resumed an interrupted crawl: the instant the interruption it
+     * continued from was recorded.  `null` for a task that never resumed, so
+     * "this task ran twice" is readable off the record instead of being inferred
+     * from timestamps.
+     */
+    val resumedFrom: Instant? = null,
+    /**
+     * How many times this task has been resumed.  `0` for a task that ran once,
+     * `1` after the first `crawl resume`, and so on.
+     */
+    val resumeCount: Int = 0,
+    /**
+     * URLs that were already fetched before the interruption and were therefore
+     * **not** requested again — the observable form of the promise that a resume
+     * does not re-hit the target site for work it already has.
+     */
+    val skippedAlreadyFetched: Int = 0,
+    /**
+     * How much work is left that a resume would pick up **without being asked
+     * twice**: the URLs that were submitted and never settled, the links the crawl
+     * discovered but never queued, and one per seed it never started.  It is `0` for
+     * a crawl that finished its submissions — which can still be [resumable], because
+     * a crawl that ended with terminally failed URLs keeps a checkpoint for
+     * `crawl resume --retry-failed`.
+     */
+    val remaining: Int = 0,
+    /**
+     * True when this task carries a checkpoint a resume could use: URLs left to fetch
+     * ([remaining] > 0), or URLs that failed terminally and `--retry-failed` would
+     * fetch again.  False when no work state was persisted, or when it has nothing
+     * left to do at all — so `crawl resume` never has to guess whether it is worth
+     * calling.
+     */
+    val resumable: Boolean = false,
 )
 
 /**
@@ -204,6 +259,23 @@ data class CrawlRound(
     /** True when the round hit its timeout — its losses include the outstanding URLs. */
     val timedOut: Boolean = false,
     val timeoutError: String? = null,
+    /**
+     * The URLs the round handed to the session that never settled.  A subset of
+     * [failedPages] for reporting (`pagesFound + failedPages.size == pagesExpected`
+     * must hold), and kept separately because they are *not* terminal failures:
+     * a resume re-submits them with a fresh attempt budget, while a [failedPages]
+     * entry that is not outstanding stays failed.
+     */
+    val outstanding: List<CrawlFailedPage> = emptyList(),
+    /**
+     * Links this round discovered at `depth < maxDepth` that it never handed to
+     * the session — the frontier a resumed crawl continues from instead of
+     * restarting at the seeds.
+     *
+     * Deliberately *not* part of [pagesExpected]: nothing was submitted, so
+     * counting them would break the loss accounting.
+     */
+    val frontier: List<CrawlFailedPage> = emptyList(),
 )
 
 data class CrawlPageResult(
@@ -218,4 +290,22 @@ data class CrawlPageResult(
     val servedFromStore: Boolean = false,
     /** Age in seconds of the stored content when [servedFromStore]. */
     val storeAgeSeconds: Long? = null,
+    /**
+     * When this row was recorded.  On a resumed crawl it is the provenance marker
+     * that separates the rows of the first run from the rows of the resume, so a
+     * consumer can tell which rows were fetched in which run (see [run]).
+     */
+    val fetchedAt: Instant? = null,
+    /**
+     * Which run produced this row: `1` for the run the task was submitted for,
+     * `2` for the first resume, and so on.  A resumed crawl's result is a merge
+     * of several runs, and this is what makes the merge readable.
+     */
+    val run: Int = 1,
+    /**
+     * True when the row was restored from a checkpoint instead of being fetched by
+     * the current run — the per-URL counterpart of
+     * [CrawlResponse.skippedAlreadyFetched].
+     */
+    val restoredFromCheckpoint: Boolean = false,
 )

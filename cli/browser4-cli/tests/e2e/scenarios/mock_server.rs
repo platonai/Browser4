@@ -3677,6 +3677,167 @@ pub(super) fn test_crawl_lifecycle_commands(ctx: &mut E2ECtx) {
     );
 }
 
+/// `crawl resume` (issue #606): continue an interrupted task from its
+/// checkpoint instead of re-running it from scratch.
+pub(super) fn test_crawl_resume(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // help crawl resume documents the command and its checkpoint flag.
+    let resume_help = run_command(ctx, &["help", "crawl", "resume"]);
+    assert!(
+        resume_help.stdout.contains("browser4-cli crawl resume"),
+        "Expected crawl-resume usage in:\n{}",
+        resume_help.stdout
+    );
+    assert!(
+        resume_help.stdout.contains("--retry-failed"),
+        "Expected --retry-failed in:\n{}",
+        resume_help.stdout
+    );
+
+    // The resumed run reaches OK: the CLI waits for it (foreground) and points
+    // at the full listing instead of re-printing it.
+    mock_server.set_crawl_result(
+        "crawl-job-resumed",
+        &serde_json::json!({
+            "taskId": "crawl-job-resumed",
+            "status": "OK",
+            "pagesFound": 2,
+            "remaining": 0,
+            "resumable": false,
+            "resumeCount": 1,
+            "skippedAlreadyFetched": 7,
+            "pages": [
+                {
+                    "url": "https://mock.browser4.local/a",
+                    "title": "A",
+                    "depth": 0,
+                    "run": 1,
+                    "restoredFromCheckpoint": true,
+                },
+                {
+                    "url": "https://mock.browser4.local/b",
+                    "title": "B",
+                    "depth": 1,
+                    "run": 2,
+                    "restoredFromCheckpoint": false,
+                },
+            ],
+        })
+        .to_string(),
+    );
+
+    let resumed = run_command(
+        ctx,
+        &[
+            "crawl",
+            "resume",
+            "crawl-job-resumed",
+            "--retry-failed",
+            "--verbose",
+        ],
+    );
+    let output = format!("{}\n{}", resumed.stdout, resumed.stderr);
+    assert!(
+        output.contains("resumed (run 2)"),
+        "Expected the resume report in:\n{output}"
+    );
+    assert!(
+        output.contains("7 already-fetched URL(s) restored from the checkpoint"),
+        "Expected the restored count in:\n{output}"
+    );
+    assert!(
+        output.contains("browser4-cli crawl result crawl-job-resumed"),
+        "Expected a pointer at the full listing in:\n{output}"
+    );
+    // --verbose marks the page that came from the checkpoint instead of being
+    // fetched again by this run.
+    assert!(
+        output.contains("restored from checkpoint, run 1"),
+        "Expected the restored-row marker in the resume output:\n{output}"
+    );
+    assert!(
+        output.contains("fetched this run, run 2"),
+        "Expected the fetched-this-run marker in the resume output:\n{output}"
+    );
+
+    // `crawl result --verbose` renders the same provenance from the record.
+    let listing = run_command(ctx, &["crawl", "result", "crawl-job-resumed", "--verbose"]);
+    let listing_output = format!("{}\n{}", listing.stdout, listing.stderr);
+    assert!(
+        listing_output.contains("restored from checkpoint, run 1"),
+        "Expected the restored-row marker in:\n{listing_output}"
+    );
+    assert!(
+        listing_output.contains("fetched this run, run 2"),
+        "Expected the fetched-this-run marker in:\n{listing_output}"
+    );
+
+    // An interrupted task is terminal but resumable: `crawl result` must say
+    // what happened and how to continue instead of telling the user to poll a
+    // task that will never move again.
+    mock_server.set_crawl_result(
+        "crawl-job-interrupted",
+        &serde_json::json!({
+            "taskId": "crawl-job-interrupted",
+            "status": "Interrupted",
+            "pagesFound": 1,
+            "resumable": true,
+            "resumeCount": 0,
+            "skippedAlreadyFetched": 7,
+            "remaining": 3,
+        })
+        .to_string(),
+    );
+    let interrupted = run_command(ctx, &["crawl", "result", "crawl-job-interrupted"]);
+    let interrupted_output = format!("{}\n{}", interrupted.stdout, interrupted.stderr);
+    assert!(
+        interrupted_output.contains("worker died with the backend process"),
+        "Expected the interrupted explanation in:\n{interrupted_output}"
+    );
+    assert!(
+        interrupted_output.contains("browser4-cli crawl resume crawl-job-interrupted"),
+        "Expected the resume command in:\n{interrupted_output}"
+    );
+    assert!(
+        !interrupted_output.contains("poll again"),
+        "An interrupted task is terminal — it must not be reported as still running:\n{interrupted_output}"
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot.crawl_resume_calls.iter().any(|path| {
+            path.contains("/api/crawl/crawl-job-resumed/resume")
+                && path.contains("force=false")
+                && path.contains("retryFailed=true")
+        }),
+        "Expected a resume call carrying both query params, got {:?}",
+        snapshot.crawl_resume_calls
+    );
+
+    // --bg returns immediately; the task is tracked with `crawl status`.
+    let background = run_command(ctx, &["crawl", "resume", "crawl-job-bg", "--bg"]);
+    assert!(
+        background.stdout.contains("resumed (run 2)"),
+        "Expected the background resume report in:\n{}",
+        background.stdout
+    );
+
+    // A benign rejection (no checkpoint on disk) is still a failure to a
+    // script: non-zero exit, and the server's reason is what the user reads.
+    let rejected = run_command_expecting_failure(
+        ctx,
+        &["crawl", "resume", "crawl-job-no-checkpoint"],
+        "was not resumed",
+    );
+    let rejected_output = format!("{}\n{}", rejected.stdout, rejected.stderr);
+    assert!(
+        rejected_output.contains("no checkpoint on disk"),
+        "Expected the server's reason in:\n{rejected_output}"
+    );
+}
+
 pub(super) fn test_crawl_command_help_and_validation(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

@@ -221,6 +221,12 @@ const TIPS_CRAWL: &[Tip] = &[
     Tip {
         text: "Use `--parallel 1` when a site rate-limits you — it restores the strictly sequential crawl",
     },
+    Tip {
+        text: "A crawl interrupted by a restart, a crash or `--timeout` keeps a checkpoint: `crawl list --status interrupted`, then `crawl resume <task-id>` continues it without re-requesting URLs that already succeeded",
+    },
+    Tip {
+        text: "`crawl resume <task-id> --retry-failed` re-fetches the URLs that failed terminally; plain `crawl resume` leaves them failed",
+    },
 ];
 
 const TIPS_SWARM: &[Tip] = &[
@@ -410,7 +416,7 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         "wait" => TIPS_WAIT,
         "screenshot" | "pdf" => TIPS_SCREENSHOT,
         "crawl" | "crawl-status" | "crawl-result" | "crawl-cancel" | "crawl-clear"
-        | "crawl-list" => TIPS_CRAWL,
+        | "crawl-list" | "crawl-resume" => TIPS_CRAWL,
         "swarm-create" | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result"
         | "swarm-list" | "swarm-close" => TIPS_SWARM,
         "agent-run" | "agent-status" | "agent-result" | "agent-list" => TIPS_AGENT,

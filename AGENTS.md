@@ -292,6 +292,7 @@ When adding a new CLI option or changing command behavior, always check these lo
 - [HTML Snapshot](docs/htmlsnapshot-inspect-summary.md)
 - [Eval Command Output](docs/eval-command-output.md)
 - [Load Options Guide](docs/load-options-guide.md)
+- [Crawl Checkpoint & Resume](docs/crawl-checkpoint-resume.md)
 - [Mock Site](docs/mocksite.md)
 - [QL Functions Guide](docs/ql-functions-guide.md)
 - [Coworker Automation](coworker/SKILL.md)

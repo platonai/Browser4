@@ -65,7 +65,7 @@ use http::{
     clear_all_crawls, clear_crawls, close_swarm_session, crawl_request_timeout,
     get_command_result, get_command_status, get_crawl_result, get_crawl_status,
     get_swarm_batch_status, get_swarm_result, get_swarm_status, is_stale_session_error, make_client,
-    submit_batch_commands, submit_crawl, submit_plain_command, submit_swarm_payload,
+    resume_crawl, submit_batch_commands, submit_crawl, submit_plain_command, submit_swarm_payload,
     submit_swarm_query, CallToolResult,
 };
 use managed_processes::{
@@ -490,6 +490,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "crawl-cancel",
         "crawl-clear",
         "crawl-list",
+        "crawl-resume",
         "htmlsnapshot",
         "htmlsnapshot-capture",
         "htmlsnapshot-get",
@@ -11827,9 +11828,220 @@ fn friendly_crawl_status(status: &str) -> String {
         "Internal Server Error" | "INTERNAL_SERVER_ERROR" | "SC_INTERNAL_SERVER_ERROR" => {
             "failed (error)".to_string()
         }
+        // Without this arm the interrupted status would be lowercased into a
+        // label of its own ("interrupted" — which happens to be right, but by
+        // accident), and `crawl list --status interrupted` could only ever be
+        // matched against whatever the fallthrough produced.
+        "Interrupted" | "INTERRUPTED" => "interrupted".to_string(),
         s if s.contains("Not Found") || s.contains("NOT_FOUND") => "failed (not found)".to_string(),
         other => other.to_lowercase(),
     }
+}
+
+/// Whether a crawl status text means the task's worker died with the backend
+/// process.
+///
+/// Such a task is **terminal** — nothing advances it on its own, so a poller
+/// must stop waiting on it — but **resumable** from its checkpoint, which is
+/// what `crawl resume` is for.  Spelling it out here keeps the poll loop, the
+/// status handler and the list filter agreeing on the same two spellings.
+fn is_interrupted_crawl_status(status: &str) -> bool {
+    matches!(status, "Interrupted" | "INTERRUPTED")
+}
+
+/// Whether a tracked task's status label matches a `crawl list --status` filter.
+///
+/// `last_status` is the friendly label stored by the tracking layer (see
+/// [friendly_crawl_status]): "failed (timeout)" matches `--status failed`, and an
+/// interrupted task matches only `--status interrupted` — it is terminal and
+/// resumable, so lumping it in with "running" (nothing is moving it) or "failed"
+/// (its work is not lost) would be wrong both ways.
+fn crawl_status_filter_matches(filter: &str, last_status: &str) -> bool {
+    let sf = filter.to_lowercase();
+    let s = last_status.to_lowercase();
+    match sf.as_str() {
+        "completed" => s == "completed" || s == "done" || s == "ok",
+        "running" => s == "running" || s == "queued" || s == "created",
+        "failed" => s.starts_with("failed") || s.contains("error") || s.contains("timeout"),
+        "queued" => s == "queued" || s == "created",
+        "interrupted" => s == "interrupted",
+        "not found" | "not-found" => s.contains("not found"),
+        _ => true, // unknown filter — show all
+    }
+}
+
+/// What a crawl record says about resuming: whether a checkpoint exists, how
+/// often the task was continued, and what the resumed run restored or still has
+/// to fetch.
+#[derive(Debug, PartialEq, Default, Clone)]
+struct CrawlResumeBookkeeping {
+    /// The `resumable` flag. `None` when the payload predates the field — an
+    /// unknown answer must not be read as "nothing to resume from".
+    resumable: Option<bool>,
+    /// `resumedFrom`: when the interruption this run continues from happened.
+    resumed_from: Option<String>,
+    resume_count: i64,
+    skipped_already_fetched: i64,
+    remaining: i64,
+}
+
+impl CrawlResumeBookkeeping {
+    /// The checkpoint accounting as one clause, e.g.
+    /// `7 URL(s) restored from the checkpoint, 3 URL(s) remaining`.  Empty when
+    /// the record carries neither count.
+    fn detail(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if self.skipped_already_fetched > 0 {
+            parts.push(format!(
+                "{} URL(s) restored from the checkpoint",
+                self.skipped_already_fetched
+            ));
+        }
+        if self.remaining > 0 {
+            parts.push(format!("{} URL(s) remaining", self.remaining));
+        }
+        parts.join(", ")
+    }
+
+    /// Whether this record says anything about resuming at all.  A crawl that
+    /// ran once and was never interrupted carries nothing, so its output stays
+    /// exactly as it was.
+    fn has_nothing_to_report(&self) -> bool {
+        self.resumable != Some(true)
+            && self.resume_count == 0
+            && self.skipped_already_fetched == 0
+            && self.remaining == 0
+    }
+}
+
+/// Read the resume bookkeeping out of a crawl status/result record.
+fn crawl_resume_bookkeeping(parsed: &Value) -> CrawlResumeBookkeeping {
+    CrawlResumeBookkeeping {
+        resumable: parsed["resumable"].as_bool(),
+        resumed_from: parsed["resumedFrom"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()),
+        resume_count: parsed["resumeCount"].as_i64().unwrap_or(0),
+        skipped_already_fetched: parsed["skippedAlreadyFetched"].as_i64().unwrap_or(0),
+        remaining: parsed["remaining"].as_i64().unwrap_or(0),
+    }
+}
+
+/// One line describing the resume bookkeeping of a task that was continued, e.g.
+/// `Resume state: resumed 1 time(s) (current run 2); 7 URL(s) restored from the
+/// checkpoint, 3 URL(s) remaining`.
+///
+/// `None` for a task that was never interrupted, so an ordinary crawl's status
+/// and result output is unchanged.
+fn crawl_resume_note(parsed: &Value) -> Option<String> {
+    let bookkeeping = crawl_resume_bookkeeping(parsed);
+    if bookkeeping.has_nothing_to_report() {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if bookkeeping.resume_count > 0 {
+        parts.push(format!(
+            "resumed {} time(s) (current run {})",
+            bookkeeping.resume_count,
+            bookkeeping.resume_count + 1
+        ));
+    }
+    if let Some(from) = bookkeeping.resumed_from.as_deref() {
+        parts.push(format!("continuing from the interruption at {}", from));
+    }
+    if bookkeeping.resumable == Some(true) {
+        parts.push("a checkpoint is available to continue it".to_string());
+    }
+    let detail = bookkeeping.detail();
+    if !detail.is_empty() {
+        parts.push(detail);
+    }
+    Some(format!("Resume state: {}", parts.join("; ")))
+}
+
+/// The one-liner `crawl status` prints for an interrupted task: what happened,
+/// what its checkpoint holds, and the exact command that continues it.
+///
+/// Interrupted is terminal, so nothing in the CLI keeps waiting for it; saying so
+/// — and giving the resume command — is the whole point of the line.
+fn crawl_interrupted_status_line(task_id: &str, parsed: &Value) -> String {
+    let bookkeeping = crawl_resume_bookkeeping(parsed);
+    let mut line = format!(
+        "Crawl {} was interrupted — its worker died with the backend process, so it is terminal \
+         (nothing will continue it on its own) but resumable from its checkpoint.",
+        task_id
+    );
+    let detail = bookkeeping.detail();
+    if !detail.is_empty() {
+        line.push_str(&format!(" {}", detail));
+    }
+    if bookkeeping.resumable == Some(false) {
+        line.push_str(
+            " No checkpoint was found for it, so there is nothing to continue from — submit the \
+             crawl again.",
+        );
+    } else {
+        line.push_str(&format!(
+            " Continue it with: browser4-cli crawl resume {}",
+            task_id
+        ));
+    }
+    line
+}
+
+/// The error a poll loop returns for a task whose worker died with the backend
+/// process: waiting is pointless (terminal), but the collected work is not lost
+/// (resumable), so the message is a resume instruction rather than a failure.
+fn crawl_interrupted_message(task_id: &str, parsed: &Value) -> String {
+    let bookkeeping = crawl_resume_bookkeeping(parsed);
+    let mut message = format!(
+        "Crawl {} was interrupted: its worker died with the backend process, so the task is \
+         terminal and nothing will advance it.",
+        task_id
+    );
+    let detail = bookkeeping.detail();
+    if !detail.is_empty() {
+        message.push_str(&format!("\n{}", detail));
+    }
+    if bookkeeping.resumable == Some(false) {
+        message.push_str(
+            "\nNo checkpoint was found for it, so there is nothing to continue from — submit the \
+             crawl again.",
+        );
+    } else {
+        message.push_str(&format!(
+            "\nContinue it from its checkpoint (already-fetched URLs are not requested again):\n  \
+             browser4-cli crawl resume {}\n\
+             Add --retry-failed to also re-submit the URLs that failed before.",
+            task_id
+        ));
+    }
+    message
+}
+
+/// The hint appended to a failed/timed-out crawl's message when the task kept a
+/// resumable checkpoint: the pages already collected are not thrown away, so the
+/// crawl can be continued instead of re-run from scratch.
+///
+/// A task cut off by the server-side `--timeout` budget is exactly this case.
+/// `None` unless the server says a checkpoint exists (`resumable == true`).
+fn crawl_resume_hint(task_id: &str, parsed: &Value) -> Option<String> {
+    let bookkeeping = crawl_resume_bookkeeping(parsed);
+    if bookkeeping.resumable != Some(true) {
+        return None;
+    }
+    let detail = bookkeeping.detail();
+    let suffix = if detail.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", detail)
+    };
+    Some(format!(
+        "The crawl kept a resumable checkpoint{}, so it can be continued instead of re-run from \
+         scratch:\n  browser4-cli crawl resume {}",
+        suffix, task_id
+    ))
 }
 
 /// Parse a relative time string like "1h", "30m", "1d" into a chrono DateTime.
@@ -12941,18 +13153,7 @@ async fn handle_crawl_list(
 
     // Apply --status filter
     if let Some(status_filter) = tool_params.get("status").and_then(|v| v.as_str()) {
-        let sf = status_filter.to_lowercase();
-        filtered.retain(|t| {
-            let s = t.last_status.to_lowercase();
-            match sf.as_str() {
-                "completed" => s == "completed" || s == "done" || s == "ok",
-                "running" => s == "running" || s == "queued" || s == "created",
-                "failed" => s.starts_with("failed") || s.contains("error") || s.contains("timeout"),
-                "queued" => s == "queued" || s == "created",
-                "not found" | "not-found" => s.contains("not found"),
-                _ => true, // unknown filter — show all
-            }
-        });
+        filtered.retain(|t| crawl_status_filter_matches(status_filter, &t.last_status));
         if filtered.is_empty() {
             cli_println!("No crawl tasks matching status filter '{}'.", status_filter);
             return Ok(());
@@ -13154,14 +13355,37 @@ async fn handle_crawl_status(
             if let Some(summary) = crawl_task_summary_line(&parsed) {
                 eprintln!("{}", summary);
             }
+            // An interrupted task is terminal but resumable — the two facts the
+            // raw record leaves implicit, and the ones that decide whether the
+            // user waits, re-runs, or resumes.
+            let status = parsed["status"].as_str().unwrap_or("");
+            if is_interrupted_crawl_status(status) {
+                eprintln!("{}", crawl_interrupted_status_line(id, &parsed));
+            } else if let Some(note) = crawl_resume_note(&parsed) {
+                eprintln!("{}", note);
+            }
         }
     }
     cli_println!("{}", result);
     json_field("task_id", json!(id));
+    let parsed = serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()));
+    // Resume bookkeeping as first-class fields so `crawl status --json` can
+    // decide whether to resume without re-parsing `raw`.
     json_field(
-        "raw",
-        json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
+        "resumable",
+        json!(parsed["resumable"].as_bool().unwrap_or(false)),
     );
+    json_field("remaining", json!(parsed["remaining"].as_i64().unwrap_or(0)));
+    json_field(
+        "skipped_already_fetched",
+        json!(parsed["skippedAlreadyFetched"].as_i64().unwrap_or(0)),
+    );
+    json_field(
+        "resume_count",
+        json!(parsed["resumeCount"].as_i64().unwrap_or(0)),
+    );
+    json_field("resumed_from", parsed["resumedFrom"].clone());
+    json_field("raw", json!(parsed));
     Ok(())
 }
 
@@ -13185,17 +13409,48 @@ async fn handle_crawl_result(
             if let Some(summary) = crawl_task_summary_line(&parsed) {
                 eprintln!("{}", summary);
             }
-            // The backend returns the current task record — including a
-            // PROCESSING status — for non-terminal tasks.  Say so instead of
-            // letting the raw record imply completion.
             let status = parsed["status"].as_str().unwrap_or("");
-            if !matches!(status, "OK" | "SC_OK" | "TIMEOUT" | "ERROR" | "CANCELLED") {
-                eprintln!(
-                    "Note: task is still {} — poll again with 'crawl status {}' or 'crawl result {}'.",
-                    status,
-                    id,
-                    id
-                );
+            if is_interrupted_crawl_status(status) {
+                // Interrupted is terminal, so "still …" would send the user
+                // back to polling a task that will never move. The interrupted
+                // line says what it means and how to continue it.
+                eprintln!("{}", crawl_interrupted_status_line(id, &parsed));
+            } else {
+                // The backend returns the current task record — including a
+                // PROCESSING status — for non-terminal tasks.  Say so instead of
+                // letting the raw record imply completion.
+                if !matches!(status, "OK" | "SC_OK" | "TIMEOUT" | "ERROR" | "CANCELLED") {
+                    eprintln!(
+                        "Note: task is still {} — poll again with 'crawl status {}' or 'crawl result {}'.",
+                        status,
+                        id,
+                        id
+                    );
+                }
+                // Resume bookkeeping: what a resumed run restored from the
+                // checkpoint and what is left, like the readonly/parallelism
+                // notes below the page listing.
+                if let Some(note) = crawl_resume_note(&parsed) {
+                    eprintln!("{}", note);
+                }
+            }
+            // Per-page provenance: a row that came from the checkpoint was NOT
+            // fetched again by this run, which is the difference between "this
+            // run fetched N pages" and "this task has N pages". Rows go to
+            // stderr so stdout stays the raw record scripts parse.
+            if tool_params
+                .get("verbose")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                if let Some(pages) = parsed["pages"].as_array() {
+                    if !pages.is_empty() {
+                        eprintln!("Pages ({}):", pages.len());
+                        for page in pages {
+                            eprintln!("{}", crawl_result_page_row(page));
+                        }
+                    }
+                }
             }
         }
     }
@@ -13244,6 +13499,41 @@ fn crawl_task_summary_line(parsed: &Value) -> Option<String> {
         }
     }
     Some(parts.join(" — "))
+}
+
+/// One page row for `crawl result --verbose`, with the row's provenance.
+///
+/// A resumed crawl's listing mixes rows the run actually fetched with rows it
+/// restored from the checkpoint; without the marker the two are
+/// indistinguishable, and a resume that fetched nothing would still look like a
+/// successful re-crawl.
+fn crawl_result_page_row(page: &Value) -> String {
+    let depth = page["depth"].as_i64().unwrap_or(0);
+    let url = page["url"].as_str().unwrap_or("");
+    let title = page["title"].as_str().unwrap_or("");
+    let run = page["run"].as_i64().unwrap_or(1);
+    let mut provenance: Vec<String> = Vec::new();
+    if page["restoredFromCheckpoint"].as_bool().unwrap_or(false) {
+        provenance.push(format!("restored from checkpoint, run {}", run));
+    } else if run > 1 {
+        // Run 1 is the original run, so any later run fetched this row itself.
+        provenance.push(format!("fetched this run, run {}", run));
+    }
+    if let Some(fetched_at) = page["fetchedAt"].as_str().filter(|s| !s.is_empty()) {
+        provenance.push(format!("fetched {}", fetched_at));
+    }
+    if provenance.is_empty() {
+        // Ordinary first-run row: same shape as the listing `crawl` prints.
+        format!("  depth={} | {} | {}", depth, url, title)
+    } else {
+        format!(
+            "  depth={} | {} | {} ({})",
+            depth,
+            url,
+            title,
+            provenance.join(", ")
+        )
+    }
 }
 
 async fn handle_crawl_cancel(
@@ -13311,6 +13601,261 @@ async fn handle_crawl_clear(
         cli_println!("Removed {} crawl task(s) from local tracking.", removed);
     }
     Ok(())
+}
+
+/// Continue a crawl from its checkpoint (`crawl resume <id>`).
+///
+/// The resume decision is the server's: `resumed = false` carries a reason
+/// (record says already completed without `--force`, nothing left to fetch, no
+/// checkpoint on disk) and is reported as a failure here, because a script that
+/// asked for a crawl to continue must not read a no-op as success.  `--force`
+/// only lifts the "record says completed" refusal — the plan still skips URLs
+/// that already have a row, so the combination that fetches anything is
+/// `--force --retry-failed` (the URLs the task lost).
+async fn handle_crawl_resume(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if id.is_empty() {
+        return Err("Task ID is required. Use 'crawl list' to see tracked tasks.".to_string());
+    }
+
+    let force = tool_params
+        .get("force")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let retry_failed = tool_params
+        .get("retryFailed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let background = tool_params
+        .get("background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let verbose = tool_params
+        .get("verbose")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let result = resume_crawl(client, base_url, id, force, retry_failed).await?;
+    let parsed: Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse crawl resume response: {}", e))?;
+
+    let resumed = parsed["resumed"].as_bool().unwrap_or(false);
+    let status = parsed["status"].as_str().unwrap_or("");
+    let message = parsed["message"].as_str().unwrap_or("");
+    let remaining = parsed["remaining"].as_i64().unwrap_or(0);
+    let skipped = parsed["skippedAlreadyFetched"].as_i64().unwrap_or(0);
+    let resume_count = parsed["resumeCount"].as_i64().unwrap_or(0);
+    // Run 1 is the original run, so the Nth resume is run N+1 (the backend
+    // counts resumes, not runs).
+    let run = resume_count + 1;
+
+    // Human report first, then the server's record as the machine-readable
+    // answer (both are stdout chatter, suppressed by --quiet / --json).
+    if resumed {
+        crawl_status_println!(
+            "Crawl {} resumed (run {}). {}",
+            id,
+            run,
+            crawl_resume_summary(skipped, remaining, resume_count)
+        );
+        if background {
+            crawl_status_println!(
+                "Use 'browser4-cli crawl status {}' or 'crawl list' to track progress.",
+                id
+            );
+        }
+    }
+
+    cli_println!("{}", result);
+    json_field("task_id", json!(id));
+    json_field("resumed", json!(resumed));
+    json_field("status", json!(status));
+    json_field("message", json!(message));
+    json_field("remaining", json!(remaining));
+    json_field("skipped_already_fetched", json!(skipped));
+    json_field("resume_count", json!(resume_count));
+
+    if !resumed {
+        // The server explains a no-op better than the CLI can: pass its message
+        // through and fail, so `crawl resume` in a script is not mistaken for a
+        // crawl that is now running.
+        let reason = if message.is_empty() {
+            "the server did not start a resumed run"
+        } else {
+            message
+        };
+        return Err(format!(
+            "Crawl {} was not resumed: {}.\n\
+             Inspect it with 'crawl status {}'; pass --force to attempt a resume anyway \
+             (combine it with --retry-failed to fetch the URLs the task lost).",
+            id, reason, id
+        ));
+    }
+
+    if background {
+        return Ok(());
+    }
+
+    // Poll the resumed run the same way `crawl <url>` does (2s cadence, quiet
+    // periodic progress); the per-page listing is not duplicated here — the
+    // user asked to continue a crawl, so a concise summary plus a pointer at
+    // `crawl result <id>` is what is useful.
+    let poll_interval = std::time::Duration::from_secs(2);
+    let timeout = crawl_request_timeout();
+    let start = std::time::Instant::now();
+    let mut last_report = std::time::Duration::ZERO;
+    let first_report_interval = std::time::Duration::from_secs(5);
+    let report_interval = std::time::Duration::from_secs(10);
+    // Signature of the last progress line: repeated identical counts are
+    // suppressed, exactly as in handle_crawl.
+    let mut last_report_pages: i64 = -1;
+    let mut last_report_remaining: i64 = -1;
+    // Pages already reported by --verbose, so each one is listed once.
+    let mut reported_pages: HashSet<String> = HashSet::new();
+
+    crawl_status_println!(
+        "Waiting for the resumed crawl to finish. Use --background for long-running crawls."
+    );
+
+    loop {
+        if start.elapsed() > timeout {
+            let _ = update_async_task_status(
+                id,
+                &format!("timeout after {}s", timeout.as_secs()),
+                None,
+            );
+            // Same contract as handle_crawl: the CLI's wait timing out does not
+            // stop the task, which keeps running server-side.
+            return Err(format!(
+                "Resumed crawl timed out after {} seconds (CLI wait). Task ID: {}.\n\
+                 The task keeps running server-side — poll it with:\n\
+                   browser4-cli crawl status {}\n\
+                   browser4-cli crawl result {}\n\
+                 Increase the CLI wait with the BROWSER4_CLI_CRAWL_TIMEOUT_SECS environment variable.",
+                timeout.as_secs(),
+                id,
+                id,
+                id
+            ));
+        }
+
+        tokio::time::sleep(poll_interval).await;
+
+        let response_text = get_crawl_result(client, base_url, id).await?;
+        let parsed: Value = serde_json::from_str(&response_text)
+            .map_err(|e| format!("Failed to parse crawl response: {}", e))?;
+
+        let status = parsed["status"].as_str().unwrap_or("");
+        let pages_found = parsed["pagesFound"].as_i64().unwrap_or(0);
+        let error = parsed["error"].as_str();
+
+        // --verbose: list each page the resumed run records, marked as
+        // restored-from-checkpoint or fetched-this-run — the distinction that
+        // makes "the resume only had to fetch the rest" visible.
+        if verbose {
+            if let Some(pages) = parsed["pages"].as_array() {
+                for page in pages {
+                    let page_url = page["url"].as_str().unwrap_or("").to_string();
+                    if page_url.is_empty() || !reported_pages.insert(page_url) {
+                        continue;
+                    }
+                    crawl_status_println!("{}", crawl_result_page_row(page));
+                }
+            }
+        }
+
+        // Periodic progress indicator so a foreground resume doesn't look hung.
+        // A resumed run re-fetches only what is left, so `remaining` is the
+        // count that actually moves.
+        let elapsed = start.elapsed();
+        let interval = if last_report == std::time::Duration::ZERO {
+            first_report_interval
+        } else {
+            report_interval
+        };
+        if elapsed - last_report >= interval {
+            last_report = elapsed;
+            let remaining = crawl_resume_bookkeeping(&parsed).remaining;
+            if pages_found != last_report_pages || remaining != last_report_remaining {
+                crawl_status_println!(
+                    "Resumed crawl... {} page(s) recorded, {} URL(s) remaining ({}s elapsed)",
+                    pages_found,
+                    remaining,
+                    elapsed.as_secs()
+                );
+                last_report_pages = pages_found;
+                last_report_remaining = remaining;
+            }
+        }
+
+        match status {
+            "OK" | "SC_OK" => {
+                let page_count = parsed["pages"].as_array().map(|p| p.len()).unwrap_or(0);
+                crawl_status_println!(
+                    "Resumed crawl {} finished (run {}, status {}). {} page(s) recorded.",
+                    id,
+                    run,
+                    status,
+                    page_count
+                );
+                if let Some(note) = crawl_resume_note(&parsed) {
+                    crawl_status_println!("{}", note);
+                }
+                crawl_status_println!("Full page listing: browser4-cli crawl result {}", id);
+                json_field("pages_found", json!(page_count));
+                json_field("pages", json!(parsed["pages"]));
+                // Keep local tracking honest, like handle_crawl's completion path.
+                let _ = update_async_task_status(
+                    id,
+                    &format!("{} ({} pages)", status, page_count),
+                    None,
+                );
+                return Ok(());
+            }
+            "SC_REQUEST_TIMEOUT" | "SC_INTERNAL_SERVER_ERROR" => {
+                let err_msg = error.unwrap_or("Unknown crawl error");
+                let _ = update_async_task_status(id, &format!("error: {}", err_msg), None);
+                let mut message = format!("Resumed crawl failed: {}", err_msg);
+                if let Some(hint) = crawl_resume_hint(id, &parsed) {
+                    message.push('\n');
+                    message.push_str(&hint);
+                }
+                return Err(message);
+            }
+            s if is_interrupted_crawl_status(s) => {
+                // The resumed worker died as well. Terminal again, and again
+                // resumable: another `crawl resume` continues from the newer
+                // checkpoint instead of re-fetching what this run got through.
+                let _ = update_async_task_status(id, &friendly_crawl_status(s), None);
+                return Err(crawl_interrupted_message(id, &parsed));
+            }
+            _ => {
+                // Still running — reported on the periodic cadence above.
+            }
+        }
+    }
+}
+
+/// What a resumed run restored and what is left, for the one-line resume
+/// report: `7 already-fetched URL(s) restored from the checkpoint, 3 URL(s)
+/// still to fetch (resume 1)`.
+///
+/// Both counts are always printed — including zeroes — because "nothing was
+/// restored" and "3 URLs were restored" are the two outcomes a user needs to
+/// tell apart, and an omitted count reads as unknown.
+fn crawl_resume_summary(skipped: i64, remaining: i64, resume_count: i64) -> String {
+    format!(
+        "{} already-fetched URL(s) restored from the checkpoint, {} URL(s) still to fetch (resume {})",
+        skipped, remaining, resume_count
+    )
 }
 
 /// Resolve @file references and --args-stdin in crawl args.
@@ -13656,6 +14201,10 @@ fn resolve_crawl_urls(url: &str, seed_file_content: Option<&str>) -> Result<Vec<
 }
 
 /// Parse the crawl poll response and classify its status.
+///
+/// Mirrors the poll loop's terminal branches: `Interrupted` is terminal (the
+/// worker died with the backend process, so a poller must stop waiting) and
+/// resumable, which is why it is neither `Error` nor `Running`.
 #[cfg(test)]
 #[derive(Debug, PartialEq)]
 enum CrawlPollStatus {
@@ -13663,6 +14212,8 @@ enum CrawlPollStatus {
     Done { pages_found: i64 },
     /// Crawl failed with a terminal error.
     Error { message: String },
+    /// Crawl's worker died with the backend process; `crawl resume` continues it.
+    Interrupted,
     /// Crawl is still in progress.
     Running { pages_found: i64 },
 }
@@ -13680,6 +14231,7 @@ fn parse_crawl_poll_response(parsed: &Value) -> CrawlPollStatus {
                 message: error.unwrap_or("Unknown crawl error").to_string(),
             }
         }
+        s if is_interrupted_crawl_status(s) => CrawlPollStatus::Interrupted,
         _ => CrawlPollStatus::Running { pages_found },
     }
 }
@@ -14567,7 +15119,23 @@ async fn handle_crawl(
                     &format!("error: {}", err_msg),
                     None,
                 );
-                return Err(format!("Crawl failed: {}", err_msg));
+                // A crawl cut off by the server-side --timeout budget keeps a
+                // resumable checkpoint, so the work already collected is not
+                // lost: say how to continue instead of only how it failed.
+                let mut message = format!("Crawl failed: {}", err_msg);
+                if let Some(hint) = crawl_resume_hint(&task_id, &parsed) {
+                    message.push('\n');
+                    message.push_str(&hint);
+                }
+                return Err(message);
+            }
+            s if is_interrupted_crawl_status(s) => {
+                // The worker died with the backend process.  Terminal — waiting
+                // here would hang forever, and letting the status fall into the
+                // `_` "still running" arm is exactly that bug.  Resumable, so
+                // the message is a resume instruction, not a dead end.
+                let _ = update_async_task_status(&task_id, &friendly_crawl_status(s), None);
+                return Err(crawl_interrupted_message(&task_id, &parsed));
             }
             _ => {
                 // Still running — progress is reported on the periodic cadence
@@ -19203,7 +19771,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     // "crawl" works standalone (crawl <url>) AND as a prefix (crawl list).
     // Only rewrite known crawl subcommands so positional URLs pass through.
     if prefix == "crawl" {
-        let known_subs = ["status", "result", "cancel", "clear", "list"];
+        let known_subs = ["status", "result", "cancel", "clear", "list", "resume"];
         if known_subs.contains(&sub.as_str()) {
             let mut rewritten = vec![format!("crawl-{}", sub)];
             rewritten.extend(args[2..].iter().cloned());
@@ -19317,6 +19885,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "crawl-cancel" => Some("crawl cancel"),
         "crawl-clear" => Some("crawl clear"),
         "crawl-list" => Some("crawl list"),
+        "crawl-resume" => Some("crawl resume"),
         "co-create" => Some("swarm create"),
         "co-submit" => Some("swarm submit"),
         "co-query" => Some("swarm query"),
@@ -21758,6 +22327,9 @@ async fn run(
         }
         "crawl-list" => {
             handle_crawl_list(&client, &base_url, &tool_params).await?;
+        }
+        "crawl-resume" => {
+            handle_crawl_resume(&client, &base_url, &tool_params).await?;
         }
         "experience-save" => {
             handle_experience_save(&client, &base_url, &tool_params).await?;
@@ -26865,6 +27437,24 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_prefixed_command_supports_crawl_resume() {
+        // Without the rewrite `crawl resume <id>` would be read as
+        // `crawl <url=resume>`, i.e. it would try to crawl a URL named
+        // "resume" instead of continuing a task.
+        let rewritten = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "resume".to_string(),
+            "task-id-606".to_string(),
+            "--bg".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "crawl-resume");
+        assert_eq!(rewritten[1], "task-id-606");
+        assert_eq!(rewritten[2], "--bg");
+    }
+
+    #[test]
     fn rewrite_prefixed_command_crawl_with_url_passes_through() {
         // crawl <url> should NOT be rewritten — it's a standalone crawl command
         let result = rewrite_prefixed_command(&[
@@ -28176,6 +28766,20 @@ mod tests {
         );
     }
 
+    /// The status that must never be classified "still running": waiting on it
+    /// would hang the poll loop forever, because nothing advances it.
+    #[test]
+    fn parse_crawl_poll_response_interrupted_is_terminal() {
+        for status in ["Interrupted", "INTERRUPTED"] {
+            let response = json!({"status": status, "pagesFound": 4, "remaining": 3});
+            assert_eq!(
+                parse_crawl_poll_response(&response),
+                CrawlPollStatus::Interrupted,
+                "status {status}"
+            );
+        }
+    }
+
     #[test]
     fn parse_crawl_poll_response_zero_pages_done() {
         let response = json!({"status": "OK", "pagesFound": 0});
@@ -28472,6 +29076,264 @@ mod tests {
             "failed (error)"
         );
         assert_eq!(friendly_crawl_status("Not Found"), "failed (not found)");
+    }
+
+    // -------------------------------------------------------------------
+    // crawl checkpoint/resume helpers
+    // -------------------------------------------------------------------
+
+    /// Interrupted is its own lifecycle label: it must not fall through to the
+    /// lowercased-remembered arm, and both spellings the backend may send have
+    /// to land on it.
+    #[test]
+    fn friendly_crawl_status_interrupted_is_interrupted() {
+        assert_eq!(friendly_crawl_status("Interrupted"), "interrupted");
+        assert_eq!(friendly_crawl_status("INTERRUPTED"), "interrupted");
+    }
+
+    #[test]
+    fn is_interrupted_crawl_status_accepts_both_spellings() {
+        let cases = [
+            ("Interrupted", true),
+            ("INTERRUPTED", true),
+            ("interrupted", false), // the friendly label, not a backend status
+            ("OK", false),
+            ("", false),
+            ("Processing", false),
+        ];
+        for (status, expected) in cases {
+            assert_eq!(
+                is_interrupted_crawl_status(status),
+                expected,
+                "status {status:?}"
+            );
+        }
+    }
+
+    /// `crawl list --status` filters: a terminal-but-resumable interrupted task
+    /// matches only its own filter, never "running" or "failed".
+    #[test]
+    fn crawl_status_filter_matches_table() {
+        let cases = [
+            // (filter, stored label, expected)
+            ("interrupted", "interrupted", true),
+            ("Interrupted", "interrupted", true),
+            ("interrupted", "running", false),
+            ("interrupted", "queued", false),
+            ("interrupted", "completed", false),
+            ("interrupted", "failed (timeout)", false),
+            // The existing arms keep working, and do not claim an interrupted task.
+            ("running", "interrupted", false),
+            ("failed", "interrupted", false),
+            ("completed", "interrupted", false),
+            ("queued", "interrupted", false),
+            ("running", "queued", true),
+            ("running", "processing", false),
+            ("failed", "failed (timeout)", true),
+            ("failed", "failed (error)", true),
+            ("completed", "completed", true),
+            ("not found", "failed (not found)", true),
+            // An unknown filter shows everything, as before.
+            ("whatever", "running", true),
+        ];
+        for (filter, label, expected) in cases {
+            assert_eq!(
+                crawl_status_filter_matches(filter, label),
+                expected,
+                "filter {filter:?} against label {label:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn crawl_resume_bookkeeping_reads_the_contract_fields() {
+        let parsed = json!({
+            "resumable": true,
+            "resumedFrom": "2026-08-25T10:00:00Z",
+            "resumeCount": 2,
+            "skippedAlreadyFetched": 7,
+            "remaining": 3,
+        });
+        assert_eq!(
+            crawl_resume_bookkeeping(&parsed),
+            CrawlResumeBookkeeping {
+                resumable: Some(true),
+                resumed_from: Some("2026-08-25T10:00:00Z".to_string()),
+                resume_count: 2,
+                skipped_already_fetched: 7,
+                remaining: 3,
+            }
+        );
+        assert_eq!(
+            crawl_resume_bookkeeping(&parsed).detail(),
+            "7 URL(s) restored from the checkpoint, 3 URL(s) remaining"
+        );
+    }
+
+    #[test]
+    fn crawl_resume_bookkeeping_defaults_when_fields_are_absent() {
+        // A record that predates the fields: `resumable` stays unknown (None),
+        // not false, so nothing claims "there is nothing to resume from".
+        let parsed = json!({"taskId": "t1", "status": "OK"});
+        let bookkeeping = crawl_resume_bookkeeping(&parsed);
+        assert_eq!(bookkeeping, CrawlResumeBookkeeping::default());
+        assert!(bookkeeping.has_nothing_to_report());
+        assert_eq!(bookkeeping.detail(), "");
+        // An empty resumedFrom is not a timestamp.
+        let parsed = json!({"resumedFrom": "", "resumeCount": 1});
+        assert_eq!(crawl_resume_bookkeeping(&parsed).resumed_from, None);
+    }
+
+    #[test]
+    fn crawl_resume_note_is_none_for_an_ordinary_crawl() {
+        assert_eq!(crawl_resume_note(&json!({"status": "OK", "pagesFound": 3})), None);
+        // ... but a never-resumed task that still has a checkpoint to continue
+        // from does report it.
+        let note = crawl_resume_note(&json!({"resumable": true, "remaining": 4}))
+            .expect("a resumable task must be reported");
+        assert!(note.contains("a checkpoint is available to continue it"), "got: {note}");
+        assert!(note.contains("4 URL(s) remaining"), "got: {note}");
+    }
+
+    #[test]
+    fn crawl_resume_note_reports_run_and_restored_counts() {
+        let note = crawl_resume_note(&json!({
+            "resumable": true,
+            "resumedFrom": "2026-08-25T10:00:00Z",
+            "resumeCount": 1,
+            "skippedAlreadyFetched": 7,
+            "remaining": 3,
+        }))
+        .expect("a resumed task must be reported");
+        assert!(note.starts_with("Resume state: "), "got: {note}");
+        assert!(note.contains("resumed 1 time(s) (current run 2)"), "got: {note}");
+        assert!(note.contains("2026-08-25T10:00:00Z"), "got: {note}");
+        assert!(
+            note.contains("7 URL(s) restored from the checkpoint, 3 URL(s) remaining"),
+            "got: {note}"
+        );
+    }
+
+    /// The interrupted one-liner: what happened, the checkpoint accounting, and
+    /// the exact command that continues the task.
+    #[test]
+    fn crawl_interrupted_status_line_names_the_resume_command() {
+        let line = crawl_interrupted_status_line(
+            "task-1",
+            &json!({"status": "Interrupted", "resumable": true, "skippedAlreadyFetched": 7, "remaining": 3}),
+        );
+        assert!(line.contains("task-1"), "got: {line}");
+        assert!(line.contains("worker died with the backend process"), "got: {line}");
+        assert!(line.contains("7 URL(s) restored from the checkpoint"), "got: {line}");
+        assert!(line.contains("3 URL(s) remaining"), "got: {line}");
+        assert!(line.contains("browser4-cli crawl resume task-1"), "got: {line}");
+        // One line, so it reads as a status rather than a wall of text.
+        assert!(!line.contains('\n'), "got: {line}");
+    }
+
+    #[test]
+    fn crawl_interrupted_status_line_without_a_checkpoint_says_so() {
+        let line = crawl_interrupted_status_line(
+            "task-2",
+            &json!({"status": "Interrupted", "resumable": false}),
+        );
+        assert!(line.contains("No checkpoint was found"), "got: {line}");
+        assert!(!line.contains("crawl resume task-2"), "got: {line}");
+    }
+
+    #[test]
+    fn crawl_interrupted_message_is_actionable() {
+        let message = crawl_interrupted_message(
+            "task-3",
+            &json!({"status": "Interrupted", "resumable": true, "skippedAlreadyFetched": 2, "remaining": 5}),
+        );
+        assert!(message.contains("terminal"), "got: {message}");
+        assert!(message.contains("2 URL(s) restored from the checkpoint"), "got: {message}");
+        assert!(message.contains("5 URL(s) remaining"), "got: {message}");
+        assert!(message.contains("browser4-cli crawl resume task-3"), "got: {message}");
+        assert!(message.contains("--retry-failed"), "got: {message}");
+    }
+
+    /// A task cut off by the server-side budget keeps a checkpoint, so the
+    /// failure message must point at `crawl resume` instead of implying the
+    /// pages already collected are lost.
+    #[test]
+    fn crawl_resume_hint_only_for_resumable_records() {
+        let hint = crawl_resume_hint(
+            "task-4",
+            &json!({"status": "Request Timeout", "resumable": true, "remaining": 9}),
+        )
+        .expect("a resumable timeout must carry the hint");
+        assert!(hint.contains("resumable checkpoint"), "got: {hint}");
+        assert!(hint.contains("9 URL(s) remaining"), "got: {hint}");
+        assert!(hint.contains("browser4-cli crawl resume task-4"), "got: {hint}");
+
+        // Not resumable, or unknown (older payload): no hint, no invented claim.
+        assert_eq!(
+            crawl_resume_hint("task-5", &json!({"status": "Request Timeout", "resumable": false})),
+            None
+        );
+        assert_eq!(crawl_resume_hint("task-6", &json!({"status": "Request Timeout"})), None);
+    }
+
+    /// `crawl resume`'s one-line summary: both counts always present, so
+    /// "nothing was restored" is distinguishable from "N URLs were restored".
+    #[test]
+    fn crawl_resume_summary_table() {
+        let cases = [
+            (
+                (7, 3, 1),
+                "7 already-fetched URL(s) restored from the checkpoint, 3 URL(s) still to fetch (resume 1)",
+            ),
+            (
+                (0, 5, 1),
+                "0 already-fetched URL(s) restored from the checkpoint, 5 URL(s) still to fetch (resume 1)",
+            ),
+            (
+                (12, 0, 2),
+                "12 already-fetched URL(s) restored from the checkpoint, 0 URL(s) still to fetch (resume 2)",
+            ),
+        ];
+        for ((skipped, remaining, resume_count), expected) in cases {
+            assert_eq!(
+                crawl_resume_summary(skipped, remaining, resume_count),
+                expected
+            );
+        }
+    }
+
+    /// Page rows from a checkpoint are marked as not-fetched-by-this-run; a
+    /// first run's rows keep exactly the shape the `crawl` listing prints.
+    #[test]
+    fn crawl_result_page_row_marks_provenance() {
+        let cases = [
+            // (page, expected suffix)
+            (
+                json!({"url": "https://a.com", "title": "A", "depth": 0, "run": 1}),
+                "  depth=0 | https://a.com | A",
+            ),
+            (
+                json!({"url": "https://b.com", "title": "B", "depth": 1, "run": 2, "restoredFromCheckpoint": true}),
+                "  depth=1 | https://b.com | B (restored from checkpoint, run 2)",
+            ),
+            (
+                json!({"url": "https://c.com", "title": "C", "depth": 1, "run": 2, "restoredFromCheckpoint": false}),
+                "  depth=1 | https://c.com | C (fetched this run, run 2)",
+            ),
+            (
+                json!({"url": "https://d.com", "depth": 0, "run": 1, "fetchedAt": "2026-08-25T10:00:00Z"}),
+                "  depth=0 | https://d.com |  (fetched 2026-08-25T10:00:00Z)",
+            ),
+            (
+                json!({"url": "https://e.com", "depth": 2, "run": 3, "restoredFromCheckpoint": true, "fetchedAt": "2026-08-24T09:00:00Z"}),
+                "  depth=2 | https://e.com |  (restored from checkpoint, run 3, fetched 2026-08-24T09:00:00Z)",
+            ),
+            // No provenance fields at all (pre-upgrade backend): plain row.
+            (json!({"url": "https://f.com", "title": "F", "depth": 0}), "  depth=0 | https://f.com | F"),
+        ];
+        for (page, expected) in cases {
+            assert_eq!(crawl_result_page_row(&page), expected, "page {page}");
+        }
     }
 
     #[test]

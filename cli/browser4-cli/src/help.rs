@@ -26,6 +26,7 @@ pub fn public_command_name(name: &str) -> &str {
         "crawl-cancel" => "crawl cancel",
         "crawl-clear" => "crawl clear",
         "crawl-list" => "crawl list",
+        "crawl-resume" => "crawl resume",
         "htmlsnapshot-capture" => "htmlsnapshot capture",
         "htmlsnapshot-get" => "htmlsnapshot get",
         "htmlsnapshot-get-all" => "htmlsnapshot get all",
@@ -1570,9 +1571,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Notes:".to_string());
         lines.push("  - Accepts the task ID returned by `crawl`.".to_string());
         lines.push("  - Only returns results for completed tasks.".to_string());
+        lines.push(
+            "  - --verbose also prints each page (on stderr) with its provenance: rows a resumed"
+                .to_string(),
+        );
+        lines.push(
+            "    run restored from a checkpoint were not fetched again by that run."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli crawl result <task-id>".to_string());
+        lines.push("  browser4-cli crawl result <task-id> --verbose".to_string());
     }
 
     if cmd.name == "crawl-cancel" {
@@ -1604,6 +1614,104 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli crawl list".to_string());
         lines.push("  browser4-cli crawl list --limit 20".to_string());
         lines.push("  browser4-cli crawl list --clear".to_string());
+    }
+
+    if cmd.name == "crawl-resume" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Continues a crawl whose worker died with the backend process — the status"
+                .to_string(),
+        );
+        lines.push(
+            "    `Interrupted`. Such a task is terminal (nothing advances it on its own) but"
+                .to_string(),
+        );
+        lines.push(
+            "    resumable: `crawl status <task-id>` reports `resumable` and what is left."
+                .to_string(),
+        );
+        lines.push(
+            "  - The task keeps its ID: a resume is the same task continuing, not a new one."
+                .to_string(),
+        );
+        lines.push(
+            "  - URLs the earlier run already fetched are restored from the checkpoint and are"
+                .to_string(),
+        );
+        lines.push(
+            "    NOT requested again; the URLs that were in flight and the discovered frontier"
+                .to_string(),
+        );
+        lines.push(
+            "    are re-submitted, and pages already fetched are marked `restoredFromCheckpoint`."
+                .to_string(),
+        );
+        lines.push(
+            "  - --retry-failed also re-submits the URLs that failed terminally before, instead"
+                .to_string(),
+        );
+        lines.push(
+            "    of keeping them failed (default: they stay failed)."
+                .to_string(),
+        );
+        lines.push(
+            "  - --force (-f) attempts a resume even when the task's record says it completed"
+                .to_string(),
+        );
+        lines.push(
+            "    successfully. URLs that already have a row are still skipped, so it stays a no-op"
+                .to_string(),
+        );
+        lines.push(
+            "    when nothing is left to fetch; without it such a task reports `resumed: false`."
+                .to_string(),
+        );
+        lines.push(
+            "  - Combine --force with --retry-failed to fetch the URLs the task lost: a completed"
+                .to_string(),
+        );
+        lines.push(
+            "    crawl keeps its checkpoint for exactly that."
+                .to_string(),
+        );
+        lines.push(
+            "  - --background (-bg) starts the resumed run and returns immediately; without it"
+                .to_string(),
+        );
+        lines.push(
+            "    the CLI polls the task until it reaches a terminal status."
+                .to_string(),
+        );
+        lines.push(
+            "  - A task still owned by a live worker is refused with HTTP 409: two workers on"
+                .to_string(),
+        );
+        lines.push(
+            "    one checkpoint would fetch everything twice."
+                .to_string(),
+        );
+        lines.push(
+            "  - `crawl clear --all` discards resumable state; plain `crawl clear` keeps the"
+                .to_string(),
+        );
+        lines.push(
+            "    checkpoint of a task that still has work left, so it stays resumable."
+                .to_string(),
+        );
+        lines.push(
+            "  - Automatic resume when the backend starts is OFF by default (`crawl.autoResume`),"
+                .to_string(),
+        );
+        lines.push(
+            "    so resuming is always an explicit request."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli crawl resume <task-id>".to_string());
+        lines.push("  browser4-cli crawl resume <task-id> --retry-failed".to_string());
+        lines.push("  browser4-cli crawl resume <task-id> --bg".to_string());
+        lines.push("  browser4-cli crawl resume <task-id> --force --retry-failed".to_string());
     }
 
     if cmd.name == "crawl" {
@@ -3244,6 +3352,36 @@ mod tests {
         assert!(help.contains("--offset N"));
         assert!(help.contains("--clear"));
         assert!(!help.contains("browser4-cli crawl-list"));
+    }
+
+    #[test]
+    fn test_generate_command_help_crawl_resume() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "crawl-resume").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli crawl resume <id>"), "help:\n{help}");
+        // What an interrupted task is, and that the checkpoint covers the
+        // already-fetched URLs.
+        assert!(help.contains("Interrupted"), "help:\n{help}");
+        assert!(help.contains("NOT requested again"), "help:\n{help}");
+        assert!(help.contains("--retry-failed"), "help:\n{help}");
+        assert!(help.contains("--force"), "help:\n{help}");
+        // --force lifts the "record says completed" refusal; it does not
+        // re-crawl, so the help must not promise that it does.
+        assert!(
+            help.contains("URLs that already have a row are still skipped"),
+            "help:\n{help}"
+        );
+        // Resumable state survives a plain clear but not `clear --all`, and
+        // nothing resumes automatically on backend start.
+        assert!(help.contains("crawl clear --all"), "help:\n{help}");
+        assert!(help.contains("crawl.autoResume"), "help:\n{help}");
+        assert!(help.contains("OFF by default"), "help:\n{help}");
+        // Examples
+        assert!(help.contains("browser4-cli crawl resume <task-id>"), "help:\n{help}");
+        assert!(help.contains("browser4-cli crawl resume <task-id> --retry-failed"), "help:\n{help}");
+        assert!(help.contains("browser4-cli crawl resume <task-id> --bg"), "help:\n{help}");
+        assert!(!help.contains("browser4-cli crawl-resume"), "help:\n{help}");
     }
 
     #[test]

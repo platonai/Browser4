@@ -522,15 +522,17 @@ The `co` prefix is accepted as an alias for `swarm`.
 | `crawl [url]` | Crawl from a URL or seed file. Supports `--seed-file`, `--sql`, `--sql-stdin`, `--sql-base64`, `--format`, `--output`, `-d/--depth`, `-ol/--out-link-selector`, `-olp/--out-link-pattern`, `-tl/--top-links`, `-a/--args`, `--refresh`, `--parse`, `--expires`, `-p/--priority`, `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly`, `-bg/--background`. |
 | `crawl status <id>` | Check crawl task status. |
 | `crawl result <id>` | Fetch crawl results. |
-| `crawl cancel <id>` | Cancel a running crawl. |
-| `crawl clear` | Remove terminal-state crawl tasks; supports force-style cleanup options. |
-| `crawl list` | List tracked crawl tasks. |
+| `crawl cancel <id>` | Cancel a running crawl (the checkpoint is kept, so it can be resumed). |
+| `crawl resume <id>` | Continue an interrupted crawl from its checkpoint: same task id, no repeat requests for URLs that already succeeded. `--retry-failed` re-fetches terminal failures; automatic resume at startup is off by default (`crawl.autoResume`). See [Crawl checkpoint & resume](docs/crawl-checkpoint-resume.md). |
+| `crawl clear` | Remove terminal-state crawl tasks; supports force-style cleanup options. Resumable checkpoints are kept until `crawl clear --all`. |
+| `crawl list` | List tracked crawl tasks (`--status interrupted` shows the resumable ones). |
 
 ```bash
 browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
 browser4-cli swarm query --seed-file urls.txt --sql @query.sql --refresh
 browser4-cli crawl "https://example.com" --depth 2 --out-link-selector "a[href]"
 browser4-cli crawl list
+browser4-cli crawl resume <task-id>    # continue an interrupted crawl
 ```
 
 #### Bundled skill files vs installed runtime skills

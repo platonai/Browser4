@@ -184,7 +184,7 @@ browser4-cli tab-close [index] | --guid <guid>   # no argument = current tab
 | `config` | Persistent CLI defaults (server, timeout, proxy, session) | Set default server URL, timeout, proxy, or session name | — |
 | `batch` | Run several commands in one invocation | Scripted multi-step flows, fewer round-trips | [quickstart.md](references/quickstart.md) |
 | `status`, `doctor`, `doctor log`, `doctor metrics` | Backend/process diagnostics and logs | Server not ready, startup failures, log/metric inspection | [quickstart.md](references/quickstart.md) |
-| `console`, `cdp`, `pdf`, `page-info`, `go-back`, `go-forward`, `keydown`, `keyup`, `mousedown`, `mouseup`, `mousewheel`, `snapshot list`, `snapshot clean`, `crawl status\|result\|cancel\|clear\|list`, `swarm submit\|status\|result\|list\|close`, `chat`, `session-default`, `delete-data`, `kill-all`, `stop`, `uninstall`, `plugin-*` | Remaining command families (not covered here) | Discover with `browser4-cli help` / `browser4-cli help <command>` | — |
+| `console`, `cdp`, `pdf`, `page-info`, `go-back`, `go-forward`, `keydown`, `keyup`, `mousedown`, `mouseup`, `mousewheel`, `snapshot list`, `snapshot clean`, `crawl status\|result\|cancel\|resume\|clear\|list`, `swarm submit\|status\|result\|list\|close`, `chat`, `session-default`, `delete-data`, `kill-all`, `stop`, `uninstall`, `plugin-*` | Remaining command families (not covered here) | Discover with `browser4-cli help` / `browser4-cli help <command>` | — |
 | `experience save`, `experience query`, `experience list`, `experience deep learn` | Progressive experience memory | Reuse selectors, extraction patterns and blocker awareness across sessions — see the sibling skill | [browser4-experience](../browser4-experience/SKILL.md) |
 
 ### Refreshing This Skill
@@ -278,6 +278,7 @@ Copy-paste template and expanded trees: [decision-trees.md](references/decision-
 - Single list page → `htmlsnapshot query` with `DOM_LOAD_AND_SELECT`.
 - Known URL list → `crawl --seed-file urls.txt --depth 0 --sql @query.sql` (add `--parallel 8`; each unit gets its own tab, and `--timeout 30m` when the 10-minute task budget is too short).
 - Crawl from a start URL → `crawl <url> --out-link-selector "…" --depth N`.
+- Interrupted crawl (backend restart, crash, `--timeout` cut it off, or you cancelled it) → `crawl list --status interrupted`, then `crawl resume <task-id>`: the task keeps its id, already-fetched URLs are **not** requested again, and `crawl result` returns the union of both runs. Add `--retry-failed` to re-fetch terminal failures. Automatic resume at startup is off by default (`crawl.autoResume`).
 - High throughput → `swarm create` → `swarm query --seed-file …`; `swarm query` returns rows, so stage the fetched corpus with `webdb export "url1,url2" <dir>` (URLs **comma-separated**).
 - Repeated monitoring → `loop -i 3600 -- eval "…"`.
 

@@ -10,6 +10,7 @@ import com.github.benmanes.caffeine.cache.Caffeine
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.event.EventListener
 import org.springframework.stereotype.Service
@@ -32,7 +33,19 @@ import kotlin.time.Duration.Companion.milliseconds
  */
 @Service
 class CrawlService(
-    private val sessionManager: PulsarSessionManager
+    private val sessionManager: PulsarSessionManager,
+    /**
+     * Whether an interrupted crawl is resumed automatically when the backend
+     * starts (`crawl.autoResume`, **default off**).
+     *
+     * It is off because auto-resume re-hits third-party sites without anyone
+     * asking: a restart is not consent to keep crawling.  With it on, every task
+     * that was running when the process died is continued from its checkpoint
+     * (see [restoreFromDisk]); with it off such a task is reported as
+     * [CrawlStatus.INTERRUPTED] and waits for an explicit `crawl resume`.
+     */
+    @param:Value("\${crawl.autoResume:false}")
+    private val autoResumeOnStart: Boolean = false,
 ) {
     private val logger = LoggerFactory.getLogger(CrawlService::class.java)
 
@@ -51,6 +64,17 @@ class CrawlService(
     /** Active coroutine jobs: taskId -> Job (for cancellation) */
     private val jobStore = ConcurrentHashMap<String, Job>()
 
+    /**
+     * Interrupted tasks: the record of a task whose worker died with the process.
+     *
+     * Deliberately outside [taskStore]: the 100-entry LRU would evict such a task
+     * — and with it the only in-memory pointer to a checkpoint that is still
+     * resumable — while a resumable task is exactly the one that must survive.
+     * Being outside the store also keeps them out of `crawl clear` (which removes
+     * *finished* tasks); `crawl clear --all` is the explicit way to discard them.
+     */
+    private val interruptedStore = ConcurrentHashMap<String, CrawlResponse>()
+
     /** Terminal task states: OK, TIMEOUT, ERROR.  Tasks in these states are
      *  purgeable, clearable, and never re-finalized by a late cancellation. */
     private val terminalStatuses = CrawlStatus.TERMINAL
@@ -60,6 +84,29 @@ class CrawlService(
         clazz = CrawlResponse::class,
         objectMapper = pulsarObjectMapper()
     )
+
+    /**
+     * Where a task's resumable work state lives, outside the bounded task store
+     * and outside its TTL (see [CrawlCheckpointStore]).
+     *
+     * Assignable so a test can point it at a temporary directory, the same way
+     * [persistence] is redirected by `CrawlServicePersistenceTest`.
+     */
+    internal var checkpointStore = CrawlCheckpointStore(crawlCheckpointDir())
+
+    /**
+     * The live checkpoint of every task this instance knows about, keyed by task
+     * id.  The rounds publish their work state into it; [flushCheckpoint] decides
+     * when it reaches the disk.
+     */
+    private val checkpoints = ConcurrentHashMap<String, CrawlCheckpoint>()
+
+    /** How often each task's checkpoint may be written; one policy per task. */
+    private val checkpointPolicies = ConcurrentHashMap<String, CheckpointWritePolicy>()
+
+    /** Set once [restoreFromDisk] has run, so tests can tell the two states apart. */
+    @Volatile
+    var autoResume: Boolean = autoResumeOnStart
 
     /** Executes one round of a crawl; stateless, so it is shared by all tasks. */
     private val roundRunner = CrawlRoundRunner(sessionManager)
@@ -82,22 +129,165 @@ class CrawlService(
 
         override fun publishDiagnostic(diagnostic: String) =
             publishInFlight(task, seedIndex, emptyList(), task.linksDiscovered.get(), diagnostic)
+
+        override fun publishWorkState(settled: Int, build: () -> CrawlWorkSnapshot) =
+            recordWorkState(task, seedIndex, settled, build)
     }
 
+    /**
+     * Rebuild the task store from the append-only task file at startup.
+     *
+     * Two things happen here, and the second one is the point of issue #606:
+     *
+     *  * settled tasks come back as they were (minus the ones already purged);
+     *  * a task that was **still running** when the process died comes back as
+     *    [CrawlStatus.INTERRUPTED], never as `Processing`.  The worker is gone, so
+     *    the old record was a phantom: `crawl status` reported a running task
+     *    forever, and nothing could ever finalize it.  The record now says what it
+     *    is (stopped), what it left behind (its checkpoint, if any), and what it
+     *    would take to finish it ([CrawlResponse.remaining]).
+     *
+     * With [`crawl.autoResume`][autoResumeOnStart] on, such a task is continued
+     * immediately; off (the default), it waits for `crawl resume`.
+     */
     @EventListener(ApplicationReadyEvent::class)
     fun restoreFromDisk() {
         val now = System.currentTimeMillis()
         val ttlMillis = taskTtlMinutes * 60_000L
+        val interrupted = mutableListOf<CrawlResponse>()
+        // The task file is an append-only log: the *last* line for a task is its
+        // current state (a resumed crawl appends its new records after the old ones).
+        // Collecting first and processing after is what makes "this task was
+        // interrupted" and "this task finished" mutually exclusive — processing line
+        // by line would leave a stale interrupted record behind a newer terminal one.
+        val latest = LinkedHashMap<String, CrawlResponse>()
         persistence.restore { entry ->
             if (entry.taskId.isBlank()) return@restore
+            latest[entry.taskId] = entry
+        }
+        latest.values.forEach { entry ->
             // Skip terminal entries that have already expired — they were
             // purged from memory before shutdown and should not be revived.
-            if (entry.status in terminalStatuses && (now - entry.createdAt) > ttlMillis) {
-                logger.debug("Skipping expired crawl task {} during restore", entry.taskId)
-                return@restore
+            val expired = (now - entry.createdAt) > ttlMillis
+            if (!CrawlStatus.isRunning(entry.status)) {
+                if (expired) {
+                    logger.debug("Skipping expired crawl task {} during restore", entry.taskId)
+                    return@forEach
+                }
+                // A resumed-and-finished task is in the store; nothing may keep a
+                // stale interrupted copy of it around.
+                interruptedStore.remove(entry.taskId)
+                taskStore.put(entry.taskId, entry)
+                return@forEach
             }
-            taskStore.put(entry.taskId, entry)
+            if (expired) {
+                // A task that never finished and is older than the TTL is not worth
+                // resuming; its checkpoint is kept (it is durable state), but the
+                // record is not revived.
+                logger.debug("Skipping expired interrupted crawl task {} during restore", entry.taskId)
+                return@forEach
+            }
+            val record = buildInterruptedRecord(entry, Instant.ofEpochMilli(now))
+            interruptedStore[record.taskId] = record
+            interrupted += record
         }
+
+        if (interrupted.isNotEmpty()) {
+            logger.warn(
+                "Restored {} crawl task(s) that were interrupted by a restart; they are not running. " +
+                    "Resume one with 'crawl resume <taskId>'{}",
+                interrupted.size,
+                if (autoResume) " (crawl.autoResume is on: resuming now)" else ""
+            )
+            interrupted.forEach { record ->
+                if (record.resumable) {
+                    logger.info(
+                        "Crawl {}: interrupted with {} URL(s) already fetched and {} left to fetch",
+                        record.taskId, record.skippedAlreadyFetched, record.remaining
+                    )
+                } else {
+                    logger.warn(
+                        "Crawl {}: interrupted with no checkpoint on disk — it cannot be resumed " +
+                            "and has to be submitted again",
+                        record.taskId
+                    )
+                }
+            }
+            if (autoResume) {
+                interrupted.forEach { record ->
+                    if (!record.resumable) return@forEach
+                    runCatching { resume(record.taskId, force = false, retryFailed = false) }
+                        .onFailure { logger.warn("Crawl {}: automatic resume failed: {}", record.taskId, it.message) }
+                }
+            }
+        }
+    }
+
+    /**
+     * Turn a record whose worker died into an honest [CrawlStatus.INTERRUPTED] one.
+     *
+     * The checkpoint is the source of truth for what the task left behind: the
+     * append-only task file may be older than the last checkpoint write (progress
+     * publishes are in-memory only), so a record that says "0 pages" can still
+     * have 40 rows in its checkpoint.  The report is rebuilt from the checkpoint
+     * through the same [planResume] the resume itself uses, which is what keeps
+     * `pagesFound + failedPages.size == pagesExpected` true for an interrupted
+     * task as well.
+     */
+    private fun buildInterruptedRecord(entry: CrawlResponse, interruptedAt: Instant): CrawlResponse {
+        val checkpoint = checkpoints[entry.taskId] ?: checkpointStore.load(entry.taskId)
+        if (checkpoint == null || !checkpoint.resumable) {
+            return entry.copy(
+                status = CrawlStatus.INTERRUPTED,
+                finishTime = interruptedAt,
+                resumable = false,
+                remaining = 0,
+                skippedAlreadyFetched = 0,
+                error = "Crawl was interrupted by a server restart and has no checkpoint on disk; " +
+                    "it cannot be resumed — submit the crawl again",
+                diagnostic = listOfNotNull(
+                    entry.diagnostic?.takeIf { it.isNotBlank() },
+                    REASON_NO_CHECKPOINT
+                ).joinToString(" | ")
+            )
+        }
+
+        checkpoints[entry.taskId] = checkpoint
+        val plan = planResume(entry.taskId, checkpoint.seedUrls, checkpoint)
+        val rows = plan.seeds.flatMap { it.restoredPages }
+        val keptFailures = plan.seeds.flatMap { it.restoredFailures }
+        val pending = plan.seeds.flatMap { seed ->
+            seed.work.map { CrawlFailedPage(it.url, it.depth, 0, REASON_INTERRUPTED) }
+        }
+        val unstarted = plan.seeds.filter { !it.started }
+            .map { CrawlFailedPage(it.seedUrl, 0, 0, REASON_INTERRUPTED) }
+        val failedPages = keptFailures + pending + unstarted
+        val pagesExpected = plan.seeds.sumOf { it.restoredExpected + it.work.size } + unstarted.size
+        val lossNote = buildLossNote(rows.size, pagesExpected, failedPages)
+        return entry.copy(
+            status = CrawlStatus.INTERRUPTED,
+            pagesFound = rows.size,
+            pages = rows.takeIf { it.isNotEmpty() } ?: entry.pages,
+            linksDiscovered = checkpoints[entry.taskId]?.seeds?.sumOf { it.linksDiscovered }
+                ?: entry.linksDiscovered,
+            failedPages = failedPages.takeIf { it.isNotEmpty() },
+            pagesExpected = pagesExpected,
+            seedStatuses = restoredSeedStatuses(plan).takeIf { it.isNotEmpty() } ?: entry.seedStatuses,
+            finishTime = interruptedAt,
+            resumable = true,
+            remaining = plan.remaining,
+            skippedAlreadyFetched = plan.skippedAlreadyFetched,
+            resumeCount = entry.resumeCount,
+            resumedFrom = entry.resumedFrom,
+            error = "Crawl was interrupted by a server restart; resume it with 'crawl resume ${entry.taskId}' " +
+                "to continue from the ${plan.skippedAlreadyFetched} URL(s) already fetched " +
+                "(${plan.remaining} left to fetch)",
+            diagnostic = listOfNotNull(
+                entry.diagnostic?.takeIf { it.isNotBlank() },
+                lossNote,
+                REASON_INTERRUPTED
+            ).joinToString(" | ").takeIf { it.isNotBlank() }
+        )
     }
 
     private fun onStatusChanged(response: CrawlResponse) {
@@ -187,9 +377,21 @@ class CrawlService(
         }
     }
 
+    /**
+     * Stop the workers and give every task's checkpoint its last, forced write.
+     *
+     * The forced flush is what makes an orderly shutdown lossless: the progress
+     * publishes are throttled, so without it the URLs settled since the last write
+     * would be re-fetched by whoever resumes the task.  `SIGKILL` cannot be hooked —
+     * that is what the write cadence bounds — but every shutdown that *does* run
+     * this method leaves a complete checkpoint behind.
+     */
     @PreDestroy
     fun shutdown() {
         crawlScope.cancel()
+        checkpoints.keys.forEach { taskId ->
+            runCatching { flushCheckpoint(taskId, settled = checkpointSettled(taskId), force = true) }
+        }
     }
 
     /**
@@ -222,9 +424,7 @@ class CrawlService(
             taskTimeoutMillis = resolveTaskTimeoutMillis(request)
         )
 
-        val job = crawlScope.launch { runCrawlTask(task) }
-
-        jobStore[taskId] = job
+        startTask(task)
 
         logger.info(
             "Crawl task submitted: {} seeds={} depth={} parallelTabs={} budget={}ms",
@@ -232,6 +432,215 @@ class CrawlService(
         )
         return taskId
     }
+
+    /**
+     * Persist the input contract of a task the moment it is admitted, and start its
+     * worker.
+     *
+     * The checkpoint is written *before* the worker runs: a task killed in its first
+     * second still knows its seeds and its `depth`, so "resume" is never a question
+     * of "what did it set out to fetch".
+     */
+    private fun startTask(task: CrawlTaskContext) {
+        val checkpoint = task.resume?.let { plan ->
+            // A resumed run continues the checkpoint it was planned from, keeping the
+            // rows and the work state of every seed that has not been touched yet.
+            (checkpoints[task.taskId] ?: checkpointStore.load(task.taskId))?.copy(
+                updatedAt = System.currentTimeMillis(),
+                resumeCount = task.resumeCount,
+                resumedFrom = task.resumedFrom,
+                run = task.run
+            )
+        } ?: CrawlCheckpoint.ofRequest(
+            taskId = task.taskId,
+            request = task.request,
+            seedUrls = task.seedUrls,
+            parallelTabs = task.parallelTabs,
+            taskTimeoutMillis = task.taskTimeoutMillis,
+            run = task.run
+        )
+        checkpoints[task.taskId] = checkpoint
+        checkpointPolicies.computeIfAbsent(task.taskId) { CheckpointWritePolicy() }
+        // Forced: the input contract reaches the disk before a single page is
+        // fetched, so a task killed in its first second is still resumable.
+        flushCheckpoint(task.taskId, settled = checkpointSettled(task.taskId), force = true)
+
+        val job = crawlScope.launch { runCrawlTask(task) }
+
+        jobStore[task.taskId] = job
+    }
+
+    /**
+     * Continue an interrupted (or timed-out) crawl from its checkpoint.
+     *
+     * The rules, and why each of them exists:
+     *
+     *  * **A task with a live worker is refused** (`IllegalStateException`, which the
+     *    controller maps to `409 Conflict`): two workers on one checkpoint would
+     *    fetch everything twice and race each other's work state.
+     *  * **A completed task is a no-op** unless [force] is given: there is nothing
+     *    to continue, and silently re-crawling a site the caller believes is done
+     *    is worse than saying so.
+     *  * **A task whose checkpoint is gone is refused** with an explanation rather
+     *    than restarted: without the input contract a "resume" would have to
+     *    re-fetch from the seeds while claiming to continue.
+     *  * **Already-fetched URLs are not requested again** ([CrawlResponse.skippedAlreadyFetched]);
+     *    terminally failed ones stay failed unless [retryFailed]; the URLs that were
+     *    in flight, plus the discovered frontier, are re-submitted; the task keeps
+     *    its id and gains a resume counter.
+     *
+     * @param taskId the task to continue — the same id the original submission
+     *   returned, because it is the same task.
+     * @param force continue a task that is already terminal in a *successful* state.
+     * @param retryFailed re-submit the URLs that failed terminally before, instead
+     *   of keeping them failed.
+     */
+    fun resume(taskId: String, force: Boolean = false, retryFailed: Boolean = false): CrawlResumeResult {
+        val running = jobStore[taskId]
+        if (running != null && running.isActive) {
+            throw IllegalStateException(
+                "Crawl $taskId is still running; a task cannot be resumed while its worker is alive"
+            )
+        }
+        val record = taskStore.getIfPresent(taskId) ?: interruptedStore[taskId]
+        val checkpoint = checkpoints[taskId] ?: checkpointStore.load(taskId)
+        if (record != null && record.status == CrawlStatus.OK && !force) {
+            val hint = if ((checkpoint?.seeds?.sumOf { it.failed.size } ?: 0) > 0) {
+                " pass --force --retry-failed to fetch the URLs it lost"
+            } else {
+                " pass --force to run it again"
+            }
+            return CrawlResumeResult(
+                taskId = taskId,
+                resumed = false,
+                status = record.status,
+                message = "Crawl $taskId already completed successfully;$hint",
+                remaining = 0,
+                skippedAlreadyFetched = record.skippedAlreadyFetched,
+                resumeCount = record.resumeCount
+            )
+        }
+        if (checkpoint == null || !checkpoint.resumable) {
+            return CrawlResumeResult(
+                taskId = taskId,
+                resumed = false,
+                status = record?.status ?: CrawlStatus.NOT_FOUND,
+                message = "Crawl $taskId has no checkpoint on disk, so there is nothing to continue " +
+                    "from; submit the crawl again",
+                remaining = 0,
+                skippedAlreadyFetched = 0,
+                resumeCount = record?.resumeCount ?: 0
+            )
+        }
+
+        val request = checkpoint.request
+        val seedUrls = checkpoint.seedUrls
+        val plan = planResume(taskId, seedUrls, checkpoint, retryFailed)
+        if (plan.nothingToDo) {
+            val keptFailures = plan.seeds.sumOf { it.restoredFailures.size }
+            val hint = if (keptFailures > 0) {
+                " ($keptFailures URL(s) failed terminally; pass --retry-failed to fetch them again)"
+            } else {
+                ""
+            }
+            return CrawlResumeResult(
+                taskId = taskId,
+                resumed = false,
+                status = record?.status ?: CrawlStatus.INTERRUPTED,
+                message = "Crawl $taskId has nothing left to fetch: every URL it submitted is settled$hint",
+                remaining = 0,
+                skippedAlreadyFetched = plan.skippedAlreadyFetched,
+                resumeCount = record?.resumeCount ?: 0
+            )
+        }
+
+        // The interruption the resumed run continues from: the finish time the
+        // interrupted record was given (see buildInterruptedRecord), so the merged
+        // result can say "these rows are from before that moment".
+        val interruptedAt = record?.finishTime ?: record?.startedTime ?: Instant.now()
+        val resumeCount = (record?.resumeCount ?: 0) + 1
+        val previous = buildInterruptedRecordForResume(record, checkpoint, plan, interruptedAt)
+
+        val task = CrawlTaskContext(
+            taskId = taskId,
+            request = request,
+            seedUrls = seedUrls,
+            parallelTabs = if (checkpoint.parallelTabs > 0) checkpoint.parallelTabs else resolveParallelTabs(request),
+            // A resumed run gets its own full budget: the URLs it re-submits are
+            // fresh work, and measuring them against a clock that already ran out
+            // would refuse every one of them.
+            taskTimeoutMillis = if (checkpoint.taskTimeoutMillis > 0) {
+                checkpoint.taskTimeoutMillis
+            } else {
+                resolveTaskTimeoutMillis(request)
+            },
+            resume = plan,
+            run = checkpoint.run + 1,
+            resumeCount = resumeCount,
+            resumedFrom = interruptedAt
+        )
+
+        // The interrupted record is replaced by the resumed run's own record, so a
+        // poller never sees two states for one task at the same time.
+        interruptedStore.remove(taskId)
+        val created = previous.copy(
+            status = CrawlStatus.CREATED,
+            startedTime = null,
+            finishTime = null,
+            resumedFrom = interruptedAt,
+            resumeCount = resumeCount,
+            skippedAlreadyFetched = plan.skippedAlreadyFetched,
+            remaining = plan.remaining,
+            resumable = true,
+            error = null,
+            diagnostic = listOfNotNull(
+                previous.diagnostic?.takeIf { it.isNotBlank() },
+                buildResumeNote(plan, task.run, interruptedAt, previous.remaining)
+            ).joinToString(" | ").takeIf { it.isNotBlank() }
+        )
+        taskStore.put(taskId, created)
+        onStatusChanged(created)
+
+        startTask(task)
+
+        logger.info(
+            "Crawl task {} resumed (run {}, {} already-fetched URL(s) restored, {} left to fetch, retryFailed={})",
+            taskId, task.run, plan.skippedAlreadyFetched, plan.remaining, retryFailed
+        )
+        return CrawlResumeResult(
+            taskId = taskId,
+            resumed = true,
+            status = created.status,
+            message = buildResumeNote(plan, task.run, interruptedAt, previous.remaining),
+            remaining = plan.remaining,
+            skippedAlreadyFetched = plan.skippedAlreadyFetched,
+            resumeCount = resumeCount
+        )
+    }
+
+    /**
+     * The record a resumed run starts from: whatever the task already knows about
+     * itself, rebuilt from its checkpoint when the old record is gone.
+     *
+     * A resume must work after the *record* was cleared while the checkpoint
+     * survived (`crawl clear` keeps resumable checkpoints on purpose), so this
+     * never depends on [record] being present.
+     */
+    private fun buildInterruptedRecordForResume(
+        record: CrawlResponse?,
+        checkpoint: CrawlCheckpoint,
+        plan: CrawlResumePlan,
+        interruptedAt: Instant,
+    ): CrawlResponse = record?.takeIf { it.taskId == checkpoint.taskId }
+        ?: CrawlResponse(
+            taskId = checkpoint.taskId,
+            status = CrawlStatus.INTERRUPTED,
+            createdAt = checkpoint.createdAt,
+            finishTime = interruptedAt,
+            resumable = true,
+            remaining = plan.remaining,
+            skippedAlreadyFetched = plan.skippedAlreadyFetched
+        )
 
     /**
      * The seed URLs this crawl will process: an explicit list wins over the
@@ -344,13 +753,11 @@ class CrawlService(
             val budget = task.parallelTabs.coerceAtMost(totalSeeds)
             if (budget > 1) {
                 mapCrawlSeedsConcurrently(task.seedUrls, budget) { index, seedUrl ->
-                    val (round, status) = fetchSeedUnit(task, sharedDepth0Session, index, seedUrl)
-                    recordSeedProgress(task, index, round, status)
+                    runSeedUnit(task, sharedDepth0Session, index, seedUrl)
                 }
             } else {
                 for ((index, seedUrl) in task.seedUrls.withIndex()) {
-                    val (round, status) = fetchSeedUnit(task, sharedDepth0Session, index, seedUrl)
-                    recordSeedProgress(task, index, round, status)
+                    runSeedUnit(task, sharedDepth0Session, index, seedUrl)
                     if (index < totalSeeds - 1) {
                         // The delay lets the browser settle between
                         // seeds.  It only exists on the sequential
@@ -385,6 +792,43 @@ class CrawlService(
     }
 
     /**
+     * Run one seed unit — fetch it, or restore what a previous run already fetched
+     * — and record its outcome.
+     *
+     * A seed the resume plan has nothing left for is **not touched at all**: its
+     * rows come out of the checkpoint, and the fact that the target site is never
+     * asked for it again is the observable form of the resume promise (see
+     * [CrawlResponse.skippedAlreadyFetched]).
+     */
+    private suspend fun runSeedUnit(
+        task: CrawlTaskContext,
+        sharedDepth0Session: PulsarSession?,
+        index: Int,
+        seedUrl: String
+    ) {
+        val restored = task.resumeFor(index)
+        if (restored != null && !restored.needsRun) {
+            logger.info(
+                "Crawl {}: seed URL {}/{} '{}' is already settled in the checkpoint " +
+                    "({} row(s) restored, nothing to fetch)",
+                task.taskId, index + 1, task.seedUrls.size, seedUrl, restored.restoredPages.size
+            )
+            recordSeedProgress(
+                task, index, restoredRound(restored),
+                CrawlSeedStatus(
+                    url = seedUrl,
+                    status = if (restored.completed) "fetched" else restored.status,
+                    pagesReturned = restored.restoredPages.size,
+                    error = restored.error
+                )
+            )
+            return
+        }
+        val (round, status) = fetchSeedUnit(task, sharedDepth0Session, index, seedUrl, restored)
+        recordSeedProgress(task, index, round, status)
+    }
+
+    /**
      * Fetch one seed URL and classify its outcome.
      *
      * A failed seed never throws (except cancellation): it is reported
@@ -399,18 +843,32 @@ class CrawlService(
      * A seed whose remaining budget cannot carry a round is not started at all
      * ([hasBudgetForRound]): it comes back as a "skipped" seed status plus one
      * lost page, because a round killed by the task limit would report neither.
+     *
+     * @param restored what a previous run left for this seed, when this is a
+     *   resumed task: the URLs to re-submit, the rows to restore, and the identity
+     *   sets a continued round has to remember.
      */
     private suspend fun fetchSeedUnit(
         task: CrawlTaskContext,
         sharedDepth0Session: PulsarSession?,
         index: Int,
-        seedUrl: String
+        seedUrl: String,
+        restored: CrawlSeedResume? = null
     ): Pair<CrawlRound, CrawlSeedStatus> {
+        // A depth-0 seed is one URL, so resuming it means re-fetching *that* URL —
+        // and the URL it was submitted under is the checkpoint's, not necessarily
+        // the spelling the seed list carries.
+        val targetUrl = if (task.request.depth == 0) {
+            restored?.work?.firstOrNull()?.url ?: seedUrl
+        } else {
+            seedUrl
+        }
         logger.info(
-            "Crawl {}: processing seed URL {}/{}: {}",
-            task.taskId, index + 1, task.seedUrls.size, seedUrl
+            "Crawl {}: processing seed URL {}/{}: {}{}",
+            task.taskId, index + 1, task.seedUrls.size, targetUrl,
+            if (restored?.isContinuation == true) " (continuing from the checkpoint)" else ""
         )
-        val seedRequest = task.request.copy(url = seedUrl, urls = null)
+        val seedRequest = task.request.copy(url = targetUrl, urls = null)
         val concurrent = task.inFlight.incrementAndGet()
         task.peakInFlight.accumulateAndGet(concurrent) { a, b -> maxOf(a, b) }
         return try {
@@ -424,14 +882,35 @@ class CrawlService(
                     "(${remainingBudgetMs}ms of the ${task.taskTimeoutMillis}ms task budget left)"
                 logger.warn(
                     "Crawl {}: seed URL {}/{} '{}' was not started — {}",
-                    task.taskId, index + 1, task.seedUrls.size, seedUrl, reason
+                    task.taskId, index + 1, task.seedUrls.size, targetUrl, reason
                 )
-                return unstartedSeedRound(seedUrl) to CrawlSeedStatus(
-                    url = seedUrl,
-                    status = "skipped",
-                    pagesReturned = 0,
-                    error = reason
-                )
+                // A seed that was already partly crawled keeps everything the
+                // checkpoint holds and leaves its remaining work for the next
+                // resume — reporting it as one lost page would throw that work (and
+                // the rows) away.
+                return if (restored != null && restored.started) {
+                    val lost = restored.work.map { CrawlFailedPage(it.url, it.depth, 0, reason) }
+                    CrawlRound(
+                        pages = restored.restoredPages,
+                        failedPages = restored.restoredFailures + lost,
+                        pagesExpected = restored.restoredExpected + lost.size,
+                        timedOut = true,
+                        timeoutError = reason,
+                        outstanding = lost
+                    ) to CrawlSeedStatus(
+                        url = seedUrl,
+                        status = "skipped",
+                        pagesReturned = restored.restoredPages.size,
+                        error = reason
+                    )
+                } else {
+                    unstartedSeedRound(seedUrl) to CrawlSeedStatus(
+                        url = seedUrl,
+                        status = "skipped",
+                        pagesReturned = 0,
+                        error = reason
+                    )
+                }
             }
             // Depth>=1 rounds wait for their URLs to settle, so they get a deadline
             // they can actually meet.  Depth=0 is a single blocking load, which no
@@ -445,24 +924,32 @@ class CrawlService(
                 // Depth=0 is bulk fetch: one URL, no link
                 // discovery, so its pages are its whole round.
                 seedRequest.depth == 0 -> CrawlRound(
-                    pages = roundRunner.crawlDepth0(task.taskId, seedRequest, sharedDepth0Session)
+                    pages = roundRunner.crawlDepth0(task.taskId, seedRequest, sharedDepth0Session, task.run)
                 )
                 seedRequest.depth <= 1 -> roundRunner.crawlDepth1(
-                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs, seedProgress
+                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs, seedProgress,
+                    resume = restored, run = task.run
                 )
                 else -> roundRunner.crawlDepthN(
-                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs, seedProgress
+                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs, seedProgress,
+                    resume = restored, run = task.run
                 )
             }
+            // One merge, in one place: a continued round reports only what *this*
+            // run fetched, and the rows and the kept failures of the interrupted run
+            // are what make the merged result the union of the two.  Doing it here
+            // means the terminal write, the progress publishes and the checkpoint all
+            // see the same round.
+            val round = mergeRestoredRound(restored, fetched)
             logger.info(
-                "Crawl {}: seed URL {}/{} completed: {} → {} page(s), {} lost",
-                task.taskId, index + 1, task.seedUrls.size, seedUrl,
-                fetched.pages.size, fetched.failedPages.size
+                "Crawl {}: seed URL {}/{} completed: {} → {} page(s) ({} restored), {} lost",
+                task.taskId, index + 1, task.seedUrls.size, targetUrl,
+                round.pages.size, restored?.restoredPages?.size ?: 0, round.failedPages.size
             )
-            fetched to CrawlSeedStatus(
+            round to CrawlSeedStatus(
                 url = seedUrl,
                 status = "fetched",
-                pagesReturned = fetched.pages.size
+                pagesReturned = round.pages.size
             )
         } catch (e: CancellationException) {
             // The task-wide timeout cancelled this crawl: let it
@@ -475,28 +962,47 @@ class CrawlService(
         } catch (e: Exception) {
             logger.error(
                 "Crawl {}: seed URL {}/{} failed: {} — {}",
-                task.taskId, index + 1, task.seedUrls.size, seedUrl, e.message, e
+                task.taskId, index + 1, task.seedUrls.size, targetUrl, e.message, e
             )
             // The seed failure is carried by seedStatuses (the
             // synthetic row keeps the URL visible in `pages`),
             // so it is not also a lost page: the
             // `pages + failedPages == pagesExpected` invariant
             // must stay exact.
-            CrawlRound(
+            val failedRound = CrawlRound(
                 pages = listOf(
                     CrawlPageResult(
-                        url = seedUrl,
+                        url = targetUrl,
                         title = null,
                         contentLength = null,
-                        depth = 0
+                        depth = 0,
+                        // The row is a fact of *this* run (the seed did not produce a
+                        // page for it), so it carries this run's provenance like any
+                        // other row of the merged result.
+                        fetchedAt = Instant.now(),
+                        run = task.run
                     )
                 ),
                 failedPages = emptyList(),
                 pagesExpected = 1
-            ) to CrawlSeedStatus(
+            )
+            // A seed that had already been partly crawled keeps its rows: the
+            // failure of *this* attempt is reported by the seed status, and
+            // dropping the restored pages would report a smaller crawl than the
+            // one that actually happened.
+            val round = if (restored != null && restored.started) {
+                CrawlRound(
+                    pages = restored.restoredPages + failedRound.pages,
+                    failedPages = restored.restoredFailures,
+                    pagesExpected = restored.restoredExpected + 1
+                )
+            } else {
+                failedRound
+            }
+            round to CrawlSeedStatus(
                 url = seedUrl,
                 status = "error",
-                pagesReturned = 0,
+                pagesReturned = restored?.restoredPages?.size ?: 0,
                 error = e.message
             )
         } finally {
@@ -546,9 +1052,142 @@ class CrawlService(
                 // fast parallel one.
                 parallelTabs = task.parallelTabs,
                 taskTimeoutMillis = task.taskTimeoutMillis,
-                maxConcurrentFetches = task.peakInFlight.get()
+                maxConcurrentFetches = task.peakInFlight.get(),
+                // Resume bookkeeping travels on every in-flight record too, so a
+                // poller watching a resumed task sees what it skipped and what is
+                // left instead of a fresh-looking crawl.
+                resumedFrom = task.resumedFrom,
+                resumeCount = task.resumeCount,
+                skippedAlreadyFetched = task.skippedAlreadyFetched,
+                remaining = liveRemaining(task),
+                resumable = checkpoints.containsKey(task.taskId)
             )
             taskStore.put(task.taskId, incrementalResponse)
+            // A round that has settled is the most valuable thing to checkpoint:
+            // these are exactly the URLs a resume must not fetch again.
+            updateCheckpointSeed(task, index, round, status)
+        }
+        // Forced when the round timed out: that is the moment the work state is
+        // least recoverable from anywhere else (the round is gone, only the
+        // checkpoint knows what it left behind).
+        flushCheckpoint(task.taskId, settled = checkpointSettled(task.taskId), force = round.timedOut)
+    }
+
+    /**
+     * Fold a settled round into the task's checkpoint.
+     *
+     * Called under the task's publish lock: the checkpoint is the durable twin of
+     * the in-memory round bookkeeping, and letting a progress publish and a seed
+     * settlement write it concurrently would let the slower writer win.
+     */
+    private fun updateCheckpointSeed(task: CrawlTaskContext, index: Int, round: CrawlRound, status: CrawlSeedStatus) {
+        val current = checkpoints[task.taskId] ?: return
+        val seedUrl = task.seedUrls.getOrElse(index) { task.request.url }
+        val seed = roundToSeedCheckpoint(
+            seedUrl = seedUrl,
+            requestDepth = task.request.depth,
+            round = round,
+            linksDiscovered = task.linksDiscovered.get()
+        )
+        checkpoints[task.taskId] = current.withSeed(index, seed.copy(status = status.status, error = status.error))
+    }
+
+    /**
+     * Record the work state one round just published, without writing it yet.
+     *
+     * The round publishes on a cadence it can afford; this is where the *disk*
+     * policy lives, so a crawl that settles hundreds of URLs a second does not turn
+     * into hundreds of checkpoint rewrites a second.  When the state is due, the
+     * snapshot is merged with what the checkpoint already holds for that seed (a
+     * continued round reports only its own rows, and the restored rows must not fall
+     * out of the checkpoint).
+     */
+    private fun recordWorkState(
+        task: CrawlTaskContext,
+        seedIndex: Int,
+        settled: Int,
+        build: () -> CrawlWorkSnapshot
+    ) {
+        val policy = checkpointPolicies.computeIfAbsent(task.taskId) { CheckpointWritePolicy() }
+        // Ask the policy before building the snapshot: it is linear in the pages
+        // recorded so far, and declining early is what keeps publishing cheap.
+        if (!policy.due(settled)) return
+        val snapshot = build()
+        val completed = synchronized(task.publishLock) {
+            val current = checkpoints[task.taskId]
+            if (current == null) {
+                false
+            } else {
+                val seedUrl = task.seedUrls.getOrElse(seedIndex) { task.request.url }
+                val restored = task.resumeFor(seedIndex)
+                val slice = if (restored != null && restored.started) {
+                    val mergedFailures = restored.restoredFailures +
+                        snapshot.failed.filterNot { f -> restored.restoredFailures.any { it.url == f.url } }
+                    CrawlSeedCheckpoint(
+                        url = seedUrl,
+                        depth = current.seed(seedIndex)?.depth ?: 0,
+                        completed = snapshot.completed,
+                        status = if (snapshot.completed) snapshot.status else CrawlSeedCheckpoint.STATUS_INTERRUPTED,
+                        pages = restored.restoredPages + snapshot.pages,
+                        failed = mergedFailures,
+                        outstanding = snapshot.outstanding,
+                        frontier = snapshot.frontier,
+                        pagesExpected = restored.restoredExpected + snapshot.pagesExpected,
+                        linksDiscovered = snapshot.linksDiscovered,
+                        error = snapshot.error
+                    )
+                } else {
+                    snapshot.toSeedCheckpoint(seedUrl, current.seed(seedIndex)?.depth ?: 0)
+                }
+                checkpoints[task.taskId] = current.withSeed(seedIndex, slice)
+                snapshot.completed
+            }
+        }
+        // Forced when the round reports itself complete: that is a state the crawl
+        // would otherwise only reach on its next transition, and it is the state a
+        // killed process most needs to have said.
+        flushCheckpoint(task.taskId, settled = settled, force = completed)
+    }
+
+    /**
+     * Write a task's checkpoint when its write policy says so.
+     *
+     * A failure to write never takes the crawl down, but it is not silent either:
+     * the whole point of the checkpoint is that a crash does not lose the work, so
+     * "the checkpoint could not be written" is a warning the operator has to see.
+     *
+     * @param settled how many URLs the task has an outcome for; the policy's
+     *   change-based trigger.  `force` bypasses the policy entirely and is used on
+     *   every transition (a round settling, a status change, shutdown), so the state
+     *   on disk is complete at the moments that matter.
+     */
+    private fun flushCheckpoint(taskId: String, settled: Int, force: Boolean = false) {
+        val checkpoint = checkpoints[taskId] ?: return
+        val policy = checkpointPolicies.computeIfAbsent(taskId) { CheckpointWritePolicy() }
+        if (!policy.due(settled, force = force)) return
+        val bytes = checkpointStore.save(checkpoint)
+        if (bytes >= 0) {
+            policy.record(bytes, settled)
+        }
+    }
+
+    /** How many URLs a task's checkpoint already has an outcome for. */
+    private fun checkpointSettled(taskId: String): Int =
+        checkpoints[taskId]?.seeds?.sumOf { it.pages.size + it.failed.size } ?: 0
+
+    /**
+     * How much work a running task still has, computed from its live round
+     * bookkeeping rather than from the checkpoint (which is written on a cadence).
+     */
+    private fun liveRemaining(task: CrawlTaskContext): Int = synchronized(task.publishLock) {
+        task.seedUrls.indices.sumOf { index ->
+            val round = task.seedRounds[index]
+            when {
+                round != null -> round.outstanding.size + round.frontier.size
+                task.seedStatuses[index] != null -> 0
+                task.resumeFor(index)?.completed == true -> 0
+                else -> 1
+            }
         }
     }
 
@@ -559,6 +1198,13 @@ class CrawlService(
      * terminal write used to overwrite it with OK, so a truncated crawl reported
      * success.  Keep the timeout status and say how much of the work never
      * completed.
+     *
+     * A crawl that still has work left (a timed-out round's outstanding URLs, a
+     * discovered frontier, or a seed the budget refused) keeps its checkpoint and
+     * says so: [CrawlResponse.remaining] is what `crawl resume` would pick up, and
+     * [CrawlResponse.resumable] is whether it can.  A crawl that finished deletes
+     * the checkpoint — there is nothing left to continue, and leaving files behind
+     * for every successful task would make the checkpoint store useless.
      */
     private fun writeCompleted(task: CrawlTaskContext, collected: SeedCollection) {
         val allPages = collected.pages
@@ -576,6 +1222,22 @@ class CrawlService(
         val pagesExpected = collected.rounds.sumOf { it.pagesExpected }
         val timedOut = collected.rounds.firstOrNull { it.timedOut }
         val lossNote = buildLossNote(allPages.size, pagesExpected, failedPages)
+        val remaining = collected.rounds.sumOf { it.outstanding.size + it.frontier.size }
+        // A crawl can finish with pages it never received: a URL that failed
+        // terminally is settled, not outstanding, and the run is still "complete".
+        // Its checkpoint is kept for that case alone — it is the only state
+        // `crawl resume --retry-failed` could recover those URLs from.
+        val retryableFailures = failedPages.count { loss ->
+            collected.rounds.none { round -> round.outstanding.any { it.url == loss.url } }
+        }
+        val keepCheckpoint = remaining > 0 || retryableFailures > 0
+        val resumeNote = when {
+            remaining > 0 -> "$remaining URL(s) of this crawl were not delivered; resume it with " +
+                "'crawl resume ${task.taskId}' to continue from the checkpoint"
+            retryableFailures > 0 -> "$retryableFailures URL(s) failed terminally; " +
+                "'crawl resume ${task.taskId} --retry-failed' fetches them again"
+            else -> null
+        }
         val completed = CrawlResponse(
             taskId = task.taskId,
             status = if (timedOut != null) {
@@ -588,7 +1250,7 @@ class CrawlService(
             pages = allPages,
             // The loss note is appended, never substituted: a diagnostic
             // that explained "no out-links" must not hide dropped pages.
-            diagnostic = listOfNotNull(existingDiagnostic, lossNote).joinToString(" | ")
+            diagnostic = listOfNotNull(existingDiagnostic, lossNote, resumeNote).joinToString(" | ")
                 .takeIf { it.isNotBlank() },
             error = timedOut?.timeoutError,
             startedTime = previous?.startedTime ?: now,
@@ -599,15 +1261,48 @@ class CrawlService(
             pagesExpected = pagesExpected,
             parallelTabs = task.parallelTabs,
             taskTimeoutMillis = task.taskTimeoutMillis,
-            maxConcurrentFetches = task.peakInFlight.get()
+            maxConcurrentFetches = task.peakInFlight.get(),
+            resumedFrom = task.resumedFrom,
+            resumeCount = task.resumeCount,
+            skippedAlreadyFetched = task.skippedAlreadyFetched,
+            remaining = remaining,
+            resumable = keepCheckpoint && checkpoints.containsKey(task.taskId)
         )
         taskStore.put(task.taskId, completed)
         onStatusChanged(completed)
+        finishCheckpoint(task.taskId, resumable = completed.resumable)
         logger.info(
-            "Crawl task {} completed: {} pages, {} lost, status {}, parallel budget {} (peak {} in flight)",
+            "Crawl task {} completed: {} pages, {} lost, status {}, parallel budget {} (peak {} in flight){}",
             task.taskId, allPages.size, failedPages.size, completed.status,
-            task.parallelTabs, task.peakInFlight.get()
+            task.parallelTabs, task.peakInFlight.get(),
+            when {
+                remaining > 0 -> ", $remaining URL(s) resumable"
+                retryableFailures > 0 -> ", $retryableFailures failed URL(s) retryable"
+                else -> ""
+            }
         )
+    }
+
+    /**
+     * Settle the fate of a task's checkpoint once the task reaches a terminal state.
+     *
+     * Kept when the task still has something a resume could do — URLs left in
+     * flight, a frontier that was discovered but never queued, or URLs that failed
+     * terminally (which `--retry-failed` fetches again) — and deleted otherwise: a
+     * checkpoint with nothing left to do is dead weight, and its rows are already in
+     * the record.
+     */
+    private fun finishCheckpoint(taskId: String, resumable: Boolean) {
+        val checkpoint = checkpoints[taskId]
+        if (resumable && checkpoint != null) {
+            // The terminal work state is the one a resume reads, so it is written
+            // unconditionally rather than on the write cadence.
+            flushCheckpoint(taskId, settled = checkpointSettled(taskId), force = true)
+            return
+        }
+        checkpoints.remove(taskId)
+        checkpointPolicies.remove(taskId)
+        checkpointStore.delete(taskId)
     }
 
     /**
@@ -652,13 +1347,30 @@ class CrawlService(
             val snapshot = synchronized(task.publishLock) {
                 val settled = task.seedRounds.filterNotNull()
                 val unfinished = unfinishedSeedLosses(task.seedUrls, task.seedStatuses, unfinishedReason)
+                // A seed whose round never returned is not the only seed with
+                // something to carry over: a *resumed* seed may already have rows
+                // from the run this one continues, and those rows are as true as the
+                // ones collected now.  Claiming only the settled rounds' pages would
+                // report a resumed crawl as smaller than the work it actually did.
+                val unsettledRestored = task.seedUrls.indices
+                    .filter { task.seedRounds[it] == null }
+                    .mapNotNull { task.resumeFor(it) }
+                    .filter { it.started }
                 CancelledSnapshot(
-                    pages = settled.flatMap { it.pages },
-                    failures = settled.flatMap { it.failedPages },
+                    pages = unsettledRestored.flatMap { it.restoredPages } + settled.flatMap { it.pages },
+                    failures = unsettledRestored.flatMap { it.restoredFailures } + settled.flatMap { it.failedPages },
                     unfinished = unfinished,
-                    pagesExpected = settled.sumOf { it.pagesExpected } + unfinished.size,
+                    pagesExpected = unsettledRestored.sumOf { it.restoredExpected } +
+                        settled.sumOf { it.pagesExpected } + unfinished.size,
                     seedStatuses = task.seedUrls.indices.map { index ->
-                        task.seedStatuses[index] ?: CrawlSeedStatus(
+                        task.seedStatuses[index] ?: task.resumeFor(index)?.takeIf { it.started }?.let { restored ->
+                            CrawlSeedStatus(
+                                url = task.seedUrls[index],
+                                status = restored.status,
+                                pagesReturned = restored.restoredPages.size,
+                                error = unfinishedReason
+                            )
+                        } ?: CrawlSeedStatus(
                             url = task.seedUrls[index], status = "timeout", pagesReturned = 0, error = unfinishedReason
                         )
                     }
@@ -666,6 +1378,13 @@ class CrawlService(
             }
             val failedPages = snapshot.failures + snapshot.unfinished
             val lossNote = buildLossNote(snapshot.pages.size, snapshot.pagesExpected, failedPages)
+            val remaining = liveRemaining(task)
+            val resumeNote = if (remaining > 0) {
+                "$remaining URL(s) of this crawl were left unfinished; resume it with " +
+                    "'crawl resume ${task.taskId}' to continue from the checkpoint"
+            } else {
+                null
+            }
             val timedOut = CrawlResponse(
                 taskId = task.taskId,
                 status = CrawlStatus.REQUEST_TIMEOUT,
@@ -681,9 +1400,9 @@ class CrawlService(
                 seedStatuses = snapshot.seedStatuses,
                 // The loss note is appended, never substituted: a diagnostic that
                 // explained "no out-links" must not hide the seeds that never ran.
-                diagnostic = listOfNotNull(existing?.diagnostic?.takeIf { it.isNotBlank() }, lossNote)
-                    .joinToString(" | ")
-                    .takeIf { it.isNotBlank() },
+                diagnostic = listOfNotNull(
+                    existing?.diagnostic?.takeIf { it.isNotBlank() }, lossNote, resumeNote
+                ).joinToString(" | ").takeIf { it.isNotBlank() },
                 failedPages = failedPages.takeIf { it.isNotEmpty() },
                 pagesExpected = snapshot.pagesExpected,
                 // A timed-out crawl still reports the parallelism it was
@@ -693,13 +1412,24 @@ class CrawlService(
                 taskTimeoutMillis = existing?.taskTimeoutMillis ?: task.taskTimeoutMillis,
                 maxConcurrentFetches = maxOf(existing?.maxConcurrentFetches ?: 0, task.peakInFlight.get()),
                 startedTime = existing?.startedTime ?: now,
-                finishTime = now
+                finishTime = now,
+                resumedFrom = task.resumedFrom,
+                resumeCount = task.resumeCount,
+                skippedAlreadyFetched = task.skippedAlreadyFetched,
+                remaining = remaining,
+                // A run cut off by the task limit or by a caller is the case resume
+                // exists for: its checkpoint is written out and kept, so the task can
+                // be continued instead of re-submitted.
+                resumable = remaining > 0 && checkpoints.containsKey(task.taskId)
             )
             taskStore.put(task.taskId, timedOut)
             onStatusChanged(timedOut)
+            finishCheckpoint(task.taskId, resumable = timedOut.resumable)
             logger.warn(
-                "Crawl task {} cancelled or timed out: {} — {} page(s) recorded, {} lost, {} seed(s) never settled",
-                task.taskId, e.message, snapshot.pages.size, failedPages.size, snapshot.unfinished.size
+                "Crawl task {} cancelled or timed out: {} — {} page(s) recorded, {} lost, " +
+                    "{} seed(s) never settled, {} URL(s) resumable",
+                task.taskId, e.message, snapshot.pages.size, failedPages.size,
+                snapshot.unfinished.size, remaining
             )
         } else {
             logger.warn("Crawl task {} cancelled or timed out: {}", task.taskId, e.message)
@@ -710,6 +1440,7 @@ class CrawlService(
     private fun writeFailed(task: CrawlTaskContext, e: Exception) {
         val existing = taskStore.getIfPresent(task.taskId)
         val now = Instant.now()
+        val remaining = liveRemaining(task)
         val failed = CrawlResponse(
             taskId = task.taskId,
             status = CrawlStatus.INTERNAL_SERVER_ERROR,
@@ -718,10 +1449,19 @@ class CrawlService(
             taskTimeoutMillis = task.taskTimeoutMillis,
             maxConcurrentFetches = task.peakInFlight.get(),
             startedTime = existing?.startedTime ?: now,
-            finishTime = now
+            finishTime = now,
+            resumedFrom = task.resumedFrom,
+            resumeCount = task.resumeCount,
+            skippedAlreadyFetched = task.skippedAlreadyFetched,
+            remaining = remaining,
+            // A task that died on an error is resumable exactly when it has work
+            // left: whatever it had fetched is in the checkpoint, and the URLs it
+            // never reached are what a resume would fetch.
+            resumable = remaining > 0 && checkpoints.containsKey(task.taskId)
         )
         taskStore.put(task.taskId, failed)
         onStatusChanged(failed)
+        finishCheckpoint(task.taskId, resumable = failed.resumable)
         logger.error("Crawl task {} failed: {}", task.taskId, e.message, e)
     }
 
@@ -751,7 +1491,12 @@ class CrawlService(
             val aggregated = aggregateInFlightPages(task.publishedPages)
             val previous = taskStore.getIfPresent(task.taskId)
             val merged = mergeIncrementalProgress(
-                task.taskId, previous, aggregated, linksDiscovered, diagnostic, terminalStatuses
+                task.taskId, previous, aggregated, linksDiscovered, diagnostic, terminalStatuses,
+                remaining = liveRemaining(task),
+                // The checkpoint exists from the first page of the task on, so an
+                // in-flight record says "resumable" for the same reason the settled
+                // ones do.
+                resumable = checkpoints.containsKey(task.taskId)
             )
             if (merged == null) {
                 // The task is finished (round timeout, cancellation, completion)
@@ -769,6 +1514,12 @@ class CrawlService(
 
     /**
      * Cancel a running crawl task by its ID.
+     *
+     * A cancellation is a *choice*, not a loss: the task's checkpoint is written
+     * out and kept, the record says how much is left, and `crawl resume` continues
+     * it.  The workflow that made this worth doing is the one where a caller
+     * cancels a crawl that is taking too long and then decides to finish it.
+     *
      * @return true if the task was found and cancelled, false otherwise.
      */
     fun cancel(taskId: String): Boolean {
@@ -776,6 +1527,8 @@ class CrawlService(
         job.cancel()
         val now = Instant.now()
         val previous = taskStore.getIfPresent(taskId)
+        val checkpoint = checkpoints[taskId]
+        val remaining = checkpoint?.remaining() ?: 0
         val cancelled = CrawlResponse(
             taskId = taskId,
             status = CrawlStatus.REQUEST_TIMEOUT,
@@ -784,22 +1537,53 @@ class CrawlService(
             taskTimeoutMillis = previous?.taskTimeoutMillis ?: 0,
             maxConcurrentFetches = previous?.maxConcurrentFetches ?: 0,
             startedTime = previous?.startedTime ?: now,
-            finishTime = now
+            finishTime = now,
+            pagesFound = previous?.pagesFound ?: 0,
+            pages = previous?.pages,
+            failedPages = previous?.failedPages,
+            pagesExpected = previous?.pagesExpected ?: 0,
+            resumedFrom = previous?.resumedFrom,
+            resumeCount = previous?.resumeCount ?: 0,
+            skippedAlreadyFetched = previous?.skippedAlreadyFetched ?: 0,
+            remaining = remaining,
+            resumable = remaining > 0 && checkpoint != null,
+            diagnostic = listOfNotNull(
+                previous?.diagnostic?.takeIf { it.isNotBlank() },
+                if (remaining > 0) {
+                    "cancelled with $remaining URL(s) left; resume it with 'crawl resume $taskId'"
+                } else {
+                    null
+                }
+            ).joinToString(" | ").takeIf { it.isNotBlank() }
         )
         taskStore.put(taskId, cancelled)
         onStatusChanged(cancelled)
-        logger.info("Crawl task {} cancelled by user", taskId)
+        finishCheckpoint(taskId, resumable = cancelled.resumable)
+        logger.info("Crawl task {} cancelled by user ({} URL(s) left, resumable={})", taskId, remaining, cancelled.resumable)
         return true
     }
 
     /**
      * Remove all terminal-state tasks from the store.
+     *
+     * A checkpoint that still has work left is **kept**: `crawl resume <taskId>`
+     * reads the input contract and the work state from it, so a cleared
+     * timed-out task can still be continued (the record is what was cleared, not
+     * the ability to finish the work).  `crawl clear --all` is the explicit way to
+     * throw resumable state away.
+     *
      * @return the number of tasks removed.
      */
     fun clearTerminal(): Int {
         val toRemove = taskStore.asMap().entries.filter { it.value.status in terminalStatuses }
         toRemove.forEach { taskStore.invalidate(it.key) }
-        logger.info("Cleared {} terminal crawl tasks", toRemove.size)
+        val keptResumable = toRemove.count { entry -> checkpoints[entry.key]?.hasWork() == true }
+        toRemove.filterNot { entry -> checkpoints[entry.key]?.hasWork() == true }
+            .forEach { entry -> finishCheckpoint(entry.key, resumable = false) }
+        logger.info(
+            "Cleared {} terminal crawl tasks ({} resumable checkpoint(s) kept)",
+            toRemove.size, keptResumable
+        )
 
         // Rewrite the JSONL persistence file so cleared tasks don't revive on restart.
         // Without this, terminal tasks removed from the in-memory Caffeine cache are
@@ -812,8 +1596,12 @@ class CrawlService(
     }
 
     /**
-     * Remove ALL tasks from the store, including actively-running ones.
-     * Cancels running jobs before clearing.  Use with caution.
+     * Remove ALL tasks from the store, including actively-running ones, and discard
+     * every checkpoint.  Cancels running jobs before clearing.  Use with caution.
+     *
+     * This is the one explicit way to throw resumable state away: after it, an
+     * interrupted task cannot be resumed, only submitted again.
+     *
      * @return the number of tasks removed.
      */
     fun clearAll(): Int {
@@ -821,16 +1609,27 @@ class CrawlService(
         jobStore.values.forEach { it.cancel() }
         jobStore.clear()
 
-        val size = taskStore.asMap().size.toInt()
+        val size = taskStore.asMap().size + interruptedStore.size
         taskStore.invalidateAll()
+        // Interrupted tasks live outside the bounded store (they must survive
+        // eviction), so clearing them is explicit here — and only here.
+        interruptedStore.clear()
+        checkpoints.clear()
+        checkpointPolicies.clear()
+        val discarded = checkpointStore.deleteAll()
         persistence.clear()
-        logger.info("Cleared all {} crawl tasks (including active)", size)
+        logger.info("Cleared all {} crawl tasks (including active) and {} checkpoint file(s)", size, discarded)
         return size
     }
 
     /**
      * Purge tasks whose TTL has expired.  Only removes terminal-state tasks;
      * actively-running tasks are never purged.
+     *
+     * Interrupted tasks are not in [taskStore] at all, so they are never purged —
+     * that is the point (see [interruptedStore]).  A task that is terminal but
+     * still has resumable work keeps its **checkpoint** when its record expires:
+     * the record is a report, the checkpoint is the ability to finish the crawl.
      */
     private fun purgeExpiredTasks() {
         val now = System.currentTimeMillis()
@@ -843,6 +1642,17 @@ class CrawlService(
         if (expired.isEmpty()) return
 
         expired.forEach { taskStore.invalidate(it.key) }
+        expired.forEach { entry ->
+            val checkpoint = checkpoints[entry.key]
+            if (checkpoint != null && checkpoint.hasWork()) {
+                // Keep the file (resume must still work), drop the in-memory copy:
+                // nothing is running, and `crawl resume` loads it from disk.
+                checkpoints.remove(entry.key)
+                checkpointPolicies.remove(entry.key)
+            } else {
+                finishCheckpoint(entry.key, resumable = false)
+            }
+        }
         logger.info("Purged {} expired crawl tasks (TTL: {} min)", expired.size, taskTtlMinutes)
 
         // Rewrite the persistence file so purged tasks don't revive on restart.
@@ -859,13 +1669,22 @@ class CrawlService(
     private fun rewritePersistence() {
         persistence.clear()
         taskStore.asMap().values.forEach { persistence.append(it) }
+        // Interrupted tasks are not in the store but are very much part of the
+        // state to restore, so they are written back explicitly.
+        interruptedStore.values.forEach { persistence.append(it) }
     }
 
     /**
      * Get the current status/result of a crawl task.
+     *
+     * An interrupted task is answered from [interruptedStore]: it is still a task
+     * the caller can ask about (and resume), even though it is deliberately kept
+     * out of the bounded store.
      */
     fun getResult(taskId: String): CrawlResponse {
-        return taskStore.getIfPresent(taskId) ?: CrawlResponse(
+        taskStore.getIfPresent(taskId)?.let { return it }
+        interruptedStore[taskId]?.let { return it }
+        return CrawlResponse(
             taskId = taskId,
             status = CrawlStatus.NOT_FOUND,
             error = "Task not found: $taskId"
@@ -889,12 +1708,33 @@ class CrawlService(
          * the terminal record reports (see [resolveTaskTimeoutMillis]).
          */
         val taskTimeoutMillis: Long,
+        /**
+         * What this run continues, or null when it is the task's first run.
+         *
+         * A plan is not a summary of the checkpoint: it is the decision of what to
+         * fetch, what to skip and what to leave failed, taken once so the worker and
+         * the report cannot disagree about it (see [planResume]).
+         */
+        val resume: CrawlResumePlan? = null,
+        /**
+         * Which run this is: 1 for the submission, 2 for the first resume, and so on.
+         * Recorded on every row ([CrawlPageResult.run]) so a merged result says
+         * which rows came from which run.
+         */
+        val run: Int = 1,
+        /** How many times this task has been resumed, this run included. */
+        val resumeCount: Int = 0,
+        /** The interruption this run continues from; null for a first run. */
+        val resumedFrom: Instant? = null,
     ) {
         // Out-links discovered beyond the seed URLs (depth>=1 crawls),
         // aggregated across seeds.  Kept separate from the result size so a
         // crawl that only records seed page(s) (0 discovered links) is
         // distinguishable from one that followed links.
-        val linksDiscovered = AtomicInteger()
+        //
+        // A resumed run starts from what the checkpoint already discovered, so the
+        // merged report counts the links of both runs instead of restarting at zero.
+        val linksDiscovered = AtomicInteger(resume?.seeds?.sumOf { it.linksDiscovered } ?: 0)
 
         // How many fetch units are in flight right now, and the peak this crawl
         // reached.  The peak is the observed counterpart of the budget:
@@ -903,11 +1743,17 @@ class CrawlService(
         val inFlight = AtomicInteger()
         val peakInFlight = AtomicInteger()
 
+        /** URLs the checkpoint already delivered and this run therefore never requests. */
+        val skippedAlreadyFetched: Int get() = resume?.skippedAlreadyFetched ?: 0
+
         // Seed rounds and per-seed statuses are stored by seed index, so the
         // final response keeps the seed order even when the seeds are fetched
         // concurrently (see [mapCrawlSeedsConcurrently]).
         val seedRounds: Array<CrawlRound?> = arrayOfNulls(seedUrls.size)
         val seedStatuses: Array<CrawlSeedStatus?> = arrayOfNulls(seedUrls.size)
+
+        /** What the resume planned for seed [index] (null for a seed it runs from scratch). */
+        fun resumeFor(index: Int): CrawlSeedResume? = resume?.seeds?.getOrNull(index)
 
         /**
          * The pages each seed round has published so far, by seed index.
@@ -1017,9 +1863,31 @@ class CrawlService(
          */
         const val DEFAULT_TASK_TIMEOUT_MS = 600_000L // 10 minutes
 
+        /** Why an interrupted URL is still outstanding: its worker died. */
+        const val REASON_INTERRUPTED =
+            "the crawl was interrupted by a server restart before this URL settled"
+
+        /** Why an interrupted task cannot be resumed: its work state was never persisted. */
+        const val REASON_NO_CHECKPOINT =
+            "no resume checkpoint was found, so the work this crawl had already done is not recoverable"
+
         fun crawlPersistencePath(): Path = Path.of(
             System.getProperty("browser4.data.dir", System.getProperty("user.home")),
             ".browser4", "data", "crawl", "crawl-tasks.jsonl"
+        )
+
+        /**
+         * Where the resumable checkpoints live: a directory of their own, next to
+         * the task file but *outside* its lifecycle.
+         *
+         * The task file is rewritten whenever tasks are cleared or purged, and the
+         * task store is bounded at 100 entries; a checkpoint has to outlive both, so
+         * it gets its own file per task and its own explicit deletion
+         * (`crawl clear --all`, or a terminal state with nothing left to do).
+         */
+        fun crawlCheckpointDir(): Path = Path.of(
+            System.getProperty("browser4.data.dir", System.getProperty("user.home")),
+            ".browser4", "data", "crawl", "checkpoints"
         )
     }
 }

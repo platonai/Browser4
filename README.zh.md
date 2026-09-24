@@ -534,15 +534,17 @@ browser4-cli loop --list
 | `crawl [url]` | 从 URL 或 seed file 开始抓取。支持 `--seed-file`、`--sql`、`--sql-stdin`、`--sql-base64`、`--format`、`--output`、`-d/--depth`、`-ol/--out-link-selector`、`-olp/--out-link-pattern`、`-tl/--top-links`、`-a/--args`、`--refresh`、`--parse`、`--expires`、`-p/--priority`、`--page-load-timeout`、`--ignore-url-query`、`--no-norm`、`--readonly`、`-bg/--background`。 |
 | `crawl status <id>` | 查询 crawl 任务状态。 |
 | `crawl result <id>` | 获取 crawl 结果。 |
-| `crawl cancel <id>` | 取消运行中的 crawl 任务。 |
-| `crawl clear` | 删除处于终态的 crawl 任务；支持扩展清理选项。 |
-| `crawl list` | 列出已跟踪的 crawl 任务。 |
+| `crawl cancel <id>` | 取消运行中的 crawl 任务（检查点会保留，因此之后仍可续传）。 |
+| `crawl resume <id>` | 从检查点续传被中断的 crawl（断点续传）：任务 ID 不变，已成功抓取的 URL 不会重复请求。`--retry-failed` 可重试终态失败 URL；后端启动时自动续传默认关闭（`crawl.autoResume`）。详见 [Crawl checkpoint & resume](docs/crawl-checkpoint-resume.md)。 |
+| `crawl clear` | 删除处于终态的 crawl 任务；支持扩展清理选项。仍有剩余工作的检查点会被保留，直到 `crawl clear --all`。 |
+| `crawl list` | 列出已跟踪的 crawl 任务（`--status interrupted` 可筛出可续传的任务）。 |
 
 ```bash
 browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
 browser4-cli swarm query --seed-file urls.txt --sql @query.sql --refresh
 browser4-cli crawl "https://example.com" --depth 2 --out-link-selector "a[href]"
 browser4-cli crawl list
+browser4-cli crawl resume <task-id>    # 续传被中断的 crawl
 ```
 
 #### 内置 skill 文件 与 已安装运行时 skill

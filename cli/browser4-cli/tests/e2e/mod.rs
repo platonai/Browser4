@@ -666,6 +666,9 @@ struct MockBrowser4State {
     crawl_submissions: Vec<serde_json::Value>,
     crawl_cancel_calls: Vec<String>,
     crawl_clear_calls: u32,
+    /// `POST /api/crawl/{id}/resume` requests, as full request paths (query
+    /// string included) so tests can assert `force`/`retryFailed` were sent.
+    crawl_resume_calls: Vec<String>,
     /// Custom command_status responses keyed by task ID. When set, these override
     /// the default response for `command_status`.
     custom_command_statuses: HashMap<String, serde_json::Value>,
@@ -1430,6 +1433,47 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 "text/plain; charset=utf-8",
                 &format!("Task {} cancelled.", task_id),
             );
+        }
+        _ if method == "POST" && route.starts_with("/api/crawl/") && route.ends_with("/resume") => {
+            let task_id = route
+                .strip_prefix("/api/crawl/")
+                .and_then(|rest| rest.strip_suffix("/resume"))
+                .unwrap_or_default()
+                .to_string();
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .crawl_resume_calls
+                .push(path.clone());
+            // A task with no checkpoint is a *benign* rejection: 200 with
+            // `resumed: false` and a reason, which the CLI must still report as
+            // a failure.  A task id containing "no-checkpoint" selects it.
+            let response = if task_id.contains("no-checkpoint") {
+                serde_json::json!({
+                    "taskId": task_id,
+                    "resumed": false,
+                    "status": "Interrupted",
+                    "message": format!(
+                        "Crawl {task_id} has no checkpoint on disk, so there is nothing to \
+                         continue from; submit the crawl again"
+                    ),
+                    "remaining": 0,
+                    "skippedAlreadyFetched": 0,
+                    "resumeCount": 0,
+                })
+            } else {
+                serde_json::json!({
+                    "taskId": task_id,
+                    "resumed": true,
+                    "status": "Created",
+                    "message": format!("Crawl {task_id} resumed from its checkpoint"),
+                    "remaining": 3,
+                    "skippedAlreadyFetched": 7,
+                    "resumeCount": 1,
+                })
+            }
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
         }
         _ if method == "POST" && route == "/api/crawl/clear" => {
             state
@@ -4558,6 +4602,7 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "crawl-clear",
         "crawl-list",
         "crawl-result",
+        "crawl-resume",
         "crawl-status",
         // test_wait_*
         "wait",

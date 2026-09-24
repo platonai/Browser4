@@ -86,6 +86,13 @@ class CrawlLedger(
         const val REASON_ROUND_ENDED = "the crawl finished before this page produced a document"
 
         /**
+         * The link was discovered, but the round had already ended — so it is work
+         * for a resume, and never a lost page of this round (nothing was submitted).
+         */
+        const val REASON_FRONTIER =
+            "the link was discovered after the round ended; a resumed crawl picks it up"
+
+        /**
          * How many loads a URL gets by default: the first attempt plus one retry.
          *
          * One retry is what a *delivery* failure is worth: the second load is a
@@ -114,6 +121,28 @@ class CrawlLedger(
 
     /** Submitted URL key -> discovery depth.  Reporting only. */
     private val submittedUrls = ConcurrentHashMap<String, Int>()
+
+    /**
+     * Submitted URL key -> the URL as it was handed to the session.
+     *
+     * The key is a normalized identity (lowercased, query and fragment stripped,
+     * trailing slash removed) — right for dedup, wrong for re-fetching: a resume
+     * that re-submitted the key would fetch `…/product/1` where the crawl had asked
+     * for `…/product/1?sku=2`.  The spelling is therefore kept next to the key.  A
+     * duplicate submission does not overwrite it, so the first spelling — the one
+     * the crawl actually queued — is the one a resumed run re-uses.
+     */
+    private val submittedSpellings = ConcurrentHashMap<String, String>()
+
+    /**
+     * Links this round discovered at a depth below its limit and could not hand to
+     * the session, because the round had already reached a terminal state.
+     *
+     * This is the frontier a resumed crawl continues from: without it a `depth >= 1`
+     * crawl whose round ended mid-discovery could only be resumed by re-fetching
+     * (and re-parsing) every page it already had.
+     */
+    private val frontierUrls = ConcurrentHashMap<String, Int>()
 
     /** Submitted URL keys already settled as failures — makes failure reporting idempotent. */
     private val failedKeys = ConcurrentHashMap.newKeySet<String>()
@@ -152,6 +181,7 @@ class CrawlLedger(
         if (url.isBlank() || terminal.get()) return false
         val key = normalizeForVisit(url)
         if (submittedUrls.putIfAbsent(key, depth) != null) return false
+        submittedSpellings.putIfAbsent(key, url.trim())
         submittedCount.incrementAndGet()
         return true
     }
@@ -306,19 +336,79 @@ class CrawlLedger(
      * Submitted URLs that never settled.  Used when a round is abandoned
      * (timeout, cancellation) so the loss is reported instead of the partial
      * result passing as a complete one.
+     *
+     * Each entry carries the URL **as it was submitted** — the spelling a resumed
+     * run re-submits — not the dedup key it is tracked under.
      */
     fun outstanding(): List<CrawlFailedPage> =
         submittedUrls.keys
             .filter { it !in failedKeys && it !in succeededKeys }
             .map { key ->
                 CrawlFailedPage(
-                    url = key,
+                    url = submittedSpellings[key] ?: key,
                     depth = submittedUrls[key] ?: -1,
                     protocolStatus = 0,
                     reason = REASON_ROUND_ENDED
                 )
             }
             .sortedWith(compareBy({ it.depth }, { it.url }))
+
+    /**
+     * Record a link this round discovered but could not hand to the session
+     * because the round had already ended.
+     *
+     * A URL this round already submitted is not a frontier URL (it is either
+     * succeeded, failed or outstanding), and the first depth a URL was discovered
+     * at wins — a link reachable from two pages belongs to the shallower one, which
+     * is the depth a breadth-first resume has to expand it at.
+     */
+    fun registerFrontier(url: String, depth: Int): Boolean {
+        if (url.isBlank()) return false
+        val key = normalizeForVisit(url)
+        if (submittedUrls.containsKey(key) || key in succeededKeys) return false
+        return frontierUrls.putIfAbsent(key, depth) == null
+    }
+
+    /** The links this round discovered and could not submit, shallowest first. */
+    fun frontier(): List<CrawlFailedPage> =
+        frontierUrls.entries
+            .sortedWith(compareBy({ it.value }, { it.key }))
+            .map { (key, depth) ->
+                CrawlFailedPage(
+                    url = key,
+                    depth = depth,
+                    protocolStatus = 0,
+                    reason = REASON_FRONTIER
+                )
+            }
+
+    /**
+     * The state a resumed crawl needs from this round, as one consistent snapshot.
+     *
+     * Taken under no lock on purpose: every collection read here is concurrent and
+     * the counts are derived from atomics, so the worst a racing parse handler can
+     * do is move a URL from `outstanding` to `pages` between two reads — and the
+     * snapshot is a *checkpoint*, not a report, so a URL that is briefly counted in
+     * both places is settled by the next publish.
+     */
+    internal fun workSnapshot(
+        pages: List<CrawlPageResult>,
+        linksDiscovered: Int,
+        completed: Boolean = isComplete,
+        status: String = "fetched",
+        error: String? = null,
+    ): CrawlWorkSnapshot = CrawlWorkSnapshot(
+        pages = pages,
+        linksDiscovered = linksDiscovered,
+        failed = failedPages(),
+        outstanding = outstanding(),
+        frontier = frontier(),
+        pagesExpected = pagesExpected,
+        settled = settled,
+        status = status,
+        completed = completed,
+        error = error
+    )
 
     /**
      * Abandon the round: refuse further work without pretending it completed.

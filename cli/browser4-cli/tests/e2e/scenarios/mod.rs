@@ -966,6 +966,16 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         level: ScenarioLevel::Basic,
     },
     ScenarioDef {
+        name: "test_e2e_crawl_resume",
+        short_name: "test_crawl_resume",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_crawl_resume,
+        group: Some("crawl"),
+        level: ScenarioLevel::Basic,
+    },
+    ScenarioDef {
         name: "test_e2e_crawl_command_help_and_validation",
         short_name: "test_crawl_command_help_and_validation",
         requires_browser4: false,
