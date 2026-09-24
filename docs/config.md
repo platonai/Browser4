@@ -113,7 +113,7 @@ For Docker deployments, use environment variables in the `docker run` command.
 **Linux/macOS:**
 
 ```bash
-docker run -d -p 8182:8182 \
+docker run -d -p 18182:18182 \
   -e OPENROUTER_API_KEY=${OPENROUTER_API_KEY} \
   -e PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint \
   -e BROWSER_CONTEXT_MODE=SEQUENTIAL \
@@ -126,7 +126,7 @@ docker run -d -p 8182:8182 \
 **Windows (PowerShell):**
 
 ```powershell
-docker run -d -p 8182:8182 `
+docker run -d -p 18182:18182 `
   -e OPENROUTER_API_KEY=$env:OPENROUTER_API_KEY `
   -e PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint `
   -e BROWSER_CONTEXT_MODE=SEQUENTIAL `

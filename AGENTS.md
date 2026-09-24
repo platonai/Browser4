@@ -185,7 +185,7 @@ logger.info("Task {} finished in {} ms", taskId, cost)  // placeholders, never c
 | PR Quality Gate | `.github/workflows/pr.yml` | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,Heavy,HeavyTest,Integration,IntegrationTest,RequiresServer,RequiresBrowser,RequiresDocker,TestInfraCheck` | fast/unit only (`run_pulsar_tests: 'false'`) |
 | CI/CD Pipeline (main + release tags) | `.github/workflows/ci.yml` | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck` | adds integration/infra tests that need Chrome, Docker and the started app |
 
-Both gates pass `-Dsurefire.excludes=**integration**` (class-file pattern, not tags) and both derive success from the surefire XML totals — a test class is skipped by **tag**, never by name. `SDK` is excluded by neither gate (no test carries that tag today); `Heavy` is excluded only by the PR gate, `HeavyTest` by both. `.github/workflows/ci.yml` also builds all-main-modules, starts a Dockerized app on port 8182 and runs `cargo test` in `cli/browser4-cli`.
+Both gates pass `-Dsurefire.excludes=**integration**` (class-file pattern, not tags) and both derive success from the surefire XML totals — a test class is skipped by **tag**, never by name. `SDK` is excluded by neither gate (no test carries that tag today); `Heavy` is excluded only by the PR gate, `HeavyTest` by both. `.github/workflows/ci.yml` also builds all-main-modules, starts a Dockerized app on port 18182 and runs `cargo test` in `cli/browser4-cli`.
 See [CI stabilization notes](docs-dev/copilot/ci-stabilization-4.13.x.md) before changing either list.
 
 ## Configuration
@@ -265,7 +265,7 @@ File-queue system for task-driven AI workflows (`coworker/`). Task files (Markdo
 | `mvnw` no execute permission | `chmod +x mvnw` |
 | JDK version mismatch | JDK 17+ in `JAVA_HOME` |
 | Windows parameter escaping | `-D"key.with.dots=value"` |
-| Port 8182 in use | Override `server.port` in root `application.properties` |
+| Port 18182 in use | Override `server.port` in root `application.properties` |
 | BrowserProtocol retry log storms | Use existing retry utilities, lower log level |
 
 ## Documentation Update Rule
