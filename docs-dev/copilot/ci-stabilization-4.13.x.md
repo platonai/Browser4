@@ -1849,3 +1849,289 @@ crawl 排的。
 
 
 
+
+## 28. `release.yml` `v4.13.21`：导航探针与 `fill` 的拒绝让 7 个 CLI e2e 场景变红（4.13.x，2026-09-23）
+
+`release.yml` run 35853681478（tag `v4.13.21`）的 `Build core artifacts and Docker image` 挂在
+`Run browser4-cli E2E Tests`：`153 passed; 7 failed; ... (7 failure entries; allowed <= 5)`——场景本身没有
+"硬失败"机制，只有 5 个的容忍额度，第 6 个失败才让步骤以 101 退出。
+
+7 个失败分成三组，都不是 flake，而是**当天两笔产品改动改了行为、断言还停在旧行为**，外加一条早已修在
+`main` 上、4.13.x 没有的旧帐：
+
+### 28.1 五条：`open`/`goto` 多了一次导航探针
+
+`41a5007982`（bot-stealth 报告）给每次成功导航加了一次**建议性**的 `browser_evaluate`
+（`BLOCK_PROBE_JS`）：把落地页的 URL 与可见正文一次取回，按 SKILL §2 的封禁/挑战签名打分，命中就写一条
+stderr 提示、`--json` 里报 `challenge_detected`。它不改退出码、不重试、探针失败就静默跳过，代价是**每次导航
+多一次往返**。
+
+于是所有"数 `browser_evaluate` 次数"的 mock 场景都开始把**导航路径**当成**被测命令**来量：
+
+| 场景 | 旧断言 | 实际 |
+|---|---|---|
+| `test_e2e_mock_eval_command` | `2` | `3` |
+| `test_e2e_mock_eval_css_selector_passthrough` | `1` | `2` |
+| `test_e2e_mock_eval_await_command` | `1` | `2` |
+| `test_e2e_mock_eval_without_await_omits_flag` | `1` | `2` |
+| `test_e2e_mock_press_command_uses_direct_tool_dispatch` | 断言"press 不合成 `browser_evaluate`" | 探针在前，断言必红 |
+
+这五条断言的**意图**没错（`eval` 一次命令一次调用、CSS 选择器不被改写成 `backend:N`、`--await` 才带
+`awaitPromise`、`press` 走直连工具分发），错的是**取样范围**：它们取的是整台 mock server 的记录，而记录里
+第一次导航自己的调用也在内。
+
+修法是给取样划一条界，而不是按探针的 JS 文本去过滤（那会把主仓 `main.rs` 里的一个字符串常量复制进测试，
+下次改探针就失效）：`mod.rs` 新增 `tool_calls_before_command(&mock_server)`，在 `run_open_command` 之后
+立刻记下偏移，之后用 `&tool_calls[after_open..]` 切片。导航路径以后再加调用，也不会再动这些断言；
+反过来，被测命令自己多出一次 `browser_evaluate` 仍然会被抓到（切片是从导航之后算起的）。
+
+### 28.2 一条：`fill` 对"收不了输入的目标"改成拒绝
+
+`571bd10693` 让 `fillSafe()` 先探目标再写：定位不到、或 `disabled`/`readonly`，直接抛
+`fill: target [#x] is disabled|read-only — user input is blocked.`。此前这条路径是**静默成功**——`fill` 的 JS
+作用在空 `this` 上是 no-op，`evaluateValue` 返回 `null`，CLI 照样打 `✓ Filled ...` 并退出 0。
+
+`test_e2e_keyboard_edge_inputs` 正是按旧契约写的：它对 `#readonly-target` / `#disabled-target` 调
+`run_command`（要求退出 0），随后断言值没变。值没变这条仍然成立，但**退出码变了**。改成
+`run_command_expecting_failure(..., "target [#readonly-target] is read-only")`：既钉住"被拒绝"，也钉住
+**是哪个目标**被拒绝（只写 `"is read-only"` 的话，CLI 认错元素也会过），随后保留原来的"值未被改写"断言。
+
+### 28.3 一条：`--sql` 的载荷独占 stdout（早就有的旧帐）
+
+`test_e2e_crawl_foreground_with_sql` 把 `Crawl task submitted:` / `X-SQL extraction: enabled` 断言在 **stdout**
+上，但带 `--sql` 且没有 `--output` 时，抽取出来的载荷独占 stdout，`crawl_status_println!` 会把这些状态行
+按 `CRAWL_STRUCTURED_STDOUT` **有意**改道到 stderr（`987bf9aba9` 起，2026-09-07）。这条在 4.13.x 上一直红着，
+靠 5 个失败的额度活着；`main` 上 `befd1f1c74`（2026-09-17）已经修过——本轮把那一半**回移**到 4.13.x：状态
+断言读两路合并（`stdout + stderr`），载荷断言仍然只看 stdout。
+
+### 28.4 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| mock 组（本地，`--level=EXTENDED`） | `--scenario='test_e2e_mock_*'` | **8 / 0 / 0** |
+| crawl 组（本地，`--level=EXTENDED`） | `--scenario='test_e2e_crawl*'` | **16 / 0 / 0** |
+| 真后端（本地） | `--scenario='test_e2e_keyboard_edge_inputs'`（自启后端 + 真浏览器）：`cli (expect failure) fill #readonly-target` / `#disabled-target` 各一步，随后两次取值断言 | **1 / 0 / 0** |
+| 全量门禁（本地） | `cargo test --test e2e -- --nocapture --level=EXTENDED --enable-batch-scenario`（与 CI 同一命令行，`running 160 tests` / 159 个场景） | **159 / 1 / 0**，见 §28.6 |
+
+### 28.6 全量门禁的那 1 个失败：与本轮无关的 Windows-only 断言
+
+全量跑下来只剩 `test_e2e_session_lifecycle` 一条红，且**只在 Windows 上红**：`browser.rs:41` 断言引导语里
+写着 ``run `browser4-cli open <url>` to start a new session.``，而 CLI 在 Windows 上打印的是可执行文件的
+**实际文件名** ``run `browser4-cli.exe open <url>` ``（Linux/CI 上没有 `.exe`，所以这条在 CI 上一直是绿的）。
+它与本轮的三个改动没有任何交集（本轮只动了 `browser.rs` 的 `test_keyboard_edge_inputs`），属于与
+`resolve_storage_state_path_*` 同一类的"本地 Windows 环境假红"，本轮按"不扩大范围"处理，没有改动它。
+
+除此之外，CI 那 7 条逐条复跑均为 `ok`：`test_e2e_mock_eval_command` /
+`test_e2e_mock_eval_css_selector_passthrough` / `test_e2e_keyboard_edge_inputs` /
+`test_e2e_mock_eval_await_command` / `test_e2e_mock_eval_without_await_omits_flag` /
+`test_e2e_mock_press_command_uses_direct_tool_dispatch` / `test_e2e_crawl_foreground_with_sql`。
+
+### 28.5 留下的判断
+
+* **没有动产品代码**：三组失败都是"行为改了、断言没改"。探针与 `fill` 的拒绝都是同一天**有意**加的行为，
+  Kotlin 单测（`Browser4WebDriverTest#inputTargetErrorRefusesADisabledTarget` / `...ReadOnlyTarget`）已经把
+  两条消息逐字钉住，回退产品行为不在本轮范围。
+* **没有按探针 JS 文本过滤**：`tool_calls_before_command` 只依赖"导航之后"这个位置，不复制 `BLOCK_PROBE_JS`。
+  代价是它必须**放在 `run_open_command` 之后、被测命令之前**——放错时切片为空或含探针，断言会**响亮地**
+  失败（本轮第一次改就踩了：偏移记在被测命令之后，`eval_calls` 变成 0），不会静默放过。
+* **5 个失败的容忍额度仍然偏松**：7 个失败里有 4 个是"每次都红"的确定性失败，却因为额度只报了 exit 101 而
+  没有更早暴露。额度本身是 §12 定的，本轮没动。
+
+## 29. `release.yml` `v4.13.21`：OSS CDN 同步挂住，发布任务被自己的 15 分钟上限判红（4.13.x，2026-09-23）
+
+`release.yml` run 35860129386（tag `v4.13.21`）的 `Publish GitHub release` 只有一个失败步骤：
+
+```
+2026-09-23T13:20:13.9383720Z ##[error]The action 'Sync to Aliyun OSS CDN' has timed out after 15 minutes.
+```
+
+其余 13 个步骤全绿——`Create or update GitHub Release`、`Generate Artifact Attestation`、`Verify Release`、
+`Release Summary` 都成功，11 个资产（551 MB）已经带在这个 release 上，npm 与容器镜像也都已经发布。**红的是
+CDN 镜像那一步，不是发布本身**；而这一步之所以红，是因为它**等的东西自己挂住了**。
+
+### 29.1 根因：被等的 run 卡在 `Upload to OSS`，越过了等待方的 15 分钟上限
+
+该步骤只做三件事：`gh workflow run sync-to-oss.yml` → 找到刚触发的 run → `gh run watch` 等它结束。
+它触发的 run 35864655616 的步骤时序：
+
+| 步骤 | v4.13.20（run 35519287410，09-20） | v4.13.21（run 35864655616，09-23） |
+|---|---|---|
+| `Download Release Assets` | 6 s | 4 s |
+| `Install ossutil` | 2 s | 4 s |
+| **`Upload to OSS`** | **2 分 04 秒（成功）** | **13:05:21 起 `in_progress`，超过 1 小时仍未结束** |
+| 之后 7 个步骤 | 合计约 2 分钟，全部成功 | 全部 `pending` |
+| 整个 job | 4 分 16 秒 | 无结论 |
+
+两次上传的是同一批 11 个资产（551 MB，最大单个 121 MB）；09-20 那次逐个资产的耗时是
+`7.5 / 5.2 / 20.9 / 43.0 / 3.7 / 3.5 / 26.0 / 3.3 / 3.4 / 3.4 / 3.7` 秒（最慢 42.98 秒，合计约 127 秒），
+而 `Create latest symlinks`（1 分 36 秒）已经是整个 job 里最慢的一步。所以 09-23 不是"慢"，是**挂**：
+`ossutil cp` 停在第一个资产上不再推进，run 记录自 13:05:14 之后再没有更新过。
+
+**一个资产都没落地**这一点可以直接查证：镜像上 v4.13.20 的 `Browser4.jar` 返回 `HTTP 200`，而 v4.13.21 的
+同名对象返回 `HTTP 404`——正常一次上传只需要 7.5 秒。上游没有结论，下游的 `gh run watch` 只能一直等，
+直到步骤级 `timeout-minutes: 15` 把步骤杀掉——顺带把「同步失败」和「我们放弃了等待」这两件事混成了同一条消息。
+
+顺带记下一个观测约束：**在途 run 的日志取不回来**。`gh api repos/.../actions/jobs/<id>/logs` 对 `in_progress`
+的 job 返回 `HTTP 404`，所以事故当下既看不到 `ossutil` 的进度，也说不清它卡在哪个资产上。这决定了本轮的做法
+是"把边界和诊断放在能被看到的地方"，而不是"等它自己好"。
+
+### 29.2 三处修法
+
+**1. `sync-to-oss.yml` 的每条执行路径都必须有结论**（这是等待方唯一能拿到的东西）：
+
+* `sync` job 加 `timeout-minutes: 30`：任何步骤挂住，run 也会以 failure 收尾，而不是永远 `in_progress`；
+* `Upload to OSS` 加 `timeout-minutes: 20`：正常 2 分钟、最慢单文件 43 秒，只有真正的停滞才可能触发，
+  而步骤级上限能**指名**是哪个步骤挂了；
+* `Install ossutil` 的 `curl` 加 `--connect-timeout 15 --max-time 300`：同样是"无界网络调用"的形状。
+
+**2. `cli/scripts/wait-for-oss-sync.sh`（新增）**：把触发、选 run、等待三段合成一处，供 `release.yml` 与
+`release-cli.yml` 共用——两者此前是**逐字相同**的副本（只有 tag 的来源和一句注释不同），改一处漏一处是迟早的事。
+脚本自身带预算（默认 2700 s > 上游 job 上限 30 分钟），**不睡过截止时间**，并在成功、失败、**超时**三种结局下
+都打印 run id、run URL、已用时间与**当前卡住的步骤名**。超时的消息形如：
+
+```
+::error::sync-to-oss.yml run 35864655616 was still in_progress (step: Upload to OSS) after 2700s -- the OSS CDN was not confirmed updated for v4.13.21.
+::error::Run URL: https://github.com/platonai/Browser4/actions/runs/35864655616
+::error::Re-check it with: gh run view 35864655616
+::error::Then re-trigger with: gh workflow run sync-to-oss.yml -f tag_name=v4.13.21
+```
+
+**3. 两个调用方的步骤体缩成一次脚本调用**，`timeout-minutes: 15 → 50`：必须大于上游 job 的 30 分钟上限
+**加上排队时间**，否则等待方还是会先于上游超时（这正是 v4.13.21 发生的事）。另外 `publish-github-release`
+此前**没有 checkout**，脚本不会出现在 runner 上；按 4.14.x `41c012aaf5` 的做法把 checkout 加为该 job 的
+**第一个**步骤（checkout 会清理工作区，必须排在下载产物之前）。
+
+### 29.3 顺带修掉的一个假绿：等待方可能等在"上一次发布"的 run 上
+
+旧写法是"`gh run list` 的第一个非空答案就是它"：
+
+```bash
+gh workflow run sync-to-oss.yml -f tag_name="$TAG"
+sleep 3
+for i in $(seq 1 20); do
+  RUN_ID=$(gh run list --workflow=sync-to-oss.yml --limit 1 --json databaseId -q '.[0].databaseId' ...)
+  [ -n "$RUN_ID" ] && break
+  sleep 3
+done
+gh run watch "$RUN_ID" --exit-status
+```
+
+`gh run list` 是**新的在前**，而派发刚发出、GitHub 还没把新 run 索引出来时，这个查询返回的是**上一次发布**的
+sync run——早已 `completed` / `success`。于是步骤会打出 "Aliyun OSS CDN updated" 直接放行，而当前这次同步
+**从未被等待过**：CDN 会不会落后，发布会给出一个无法区分的"绿"。这与 `bd18d2b7d8`（`monitor-release.ps1`
+认错 run、把旧 run 的结论当成新 run 的结论）是同一类缺陷，本轮按同样的办法修：**派发之前**先记下已存在的
+run id，之后只接受不在该集合里的 run；id 基线列不出来时，退化为派发前取的**本地时间水印**（`createdAt`
+在派发时刻之前的 run 一律不接受，并且**继续轮询**而不是把旧 run 当答案返回）。id 集合的比较不涉及时钟，
+所以正常路径连时钟偏差都不可能影响判定。
+
+### 29.4 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 新套件（本地，无网络，`gh` 全部打桩） | `bash cli/scripts/tests/wait-for-oss-sync.tests.sh` | **19 / 19** |
+| 变异 1：删掉"排除旧 run"的闸（回到旧行为） | 同一套件 | **3 条红**（含 `never adopts the previous run's success`） |
+| 变异 2：超时消息里丢掉"卡在哪一步" | 同一套件 | **1 条红**（`reports the stuck run when the budget expires`） |
+| 变异 3：等待超时反而报成功 | 同一套件 | **3 条红** |
+| 真 `gh`（只读，对着仍在跑的 run） | `gh run view 35864655616 --json status,conclusion,jobs -q '[.status, (.conclusion // "--"), ...] \| @tsv'` | 当场返回 `in_progress\t--\tUpload to OSS`——脚本的两个过滤器逐字验证，卡的正是本次事故的步骤 |
+| 既有套件（未改动，应保持全绿） | `install-browser4-cli.tests.sh` / `wait-for-npm-version.tests.sh` | **66 / 66**、**11 / 11** |
+| 四个 workflow 文件的语法 | `python -c "import yaml,sys; yaml.safe_load(open(...))"` | 全部可解析；`publish-github-release` 新 checkout 与 `release-assets/`、`release-notes/` 无路径冲突 |
+| 调用方清点 | `grep -rn "sync-to-oss.yml" .github/` | 只有 `release.yml` 与 `release-cli.yml` 调用，两者都已换成脚本调用；没有第三处内联副本 |
+| 事故的线上证据（只读 HTTP） | `curl -sI .../releases/download/{v4.13.20,v4.13.21}/Browser4.jar` | v4.13.20 **200**、v4.13.21 **404**——本轮同步一个资产都没落地，与"卡在第一个资产"一致 |
+
+### 29.5 留下的判断
+
+* **没有把 OSS 同步降级为"建议性"**：`00aafa902c` 是**有意**让同步不成功就红（否则 CDN 会静默落后，而
+  `latest` 符号链接是安装脚本的入口）。本轮保留这条闸门，只把"它失败了"和"我们放弃了"分开——超时会明确
+  说明 run 还在跑、卡在哪一步、怎么复查与重跑。
+* **脚本不自动重试同步**：重新触发一次同步会把每个资产**再传一遍**（551 MB），代价不小，而且第一次挂住的
+  原因未知；自动重试只是把同一个问题再花一遍钱。判决权留给调用方。
+* **没有在 `sync-to-oss.yml` 里给单个资产加 `timeout` 包裹**：`ossutil cp` 自带 `--retry-times 3`，用
+  `timeout` 掐掉整个 cp 反而会**绕过**它自己的重试。步骤级 20 分钟 + job 级 30 分钟的边界已经足够，而且能
+  指名步骤。
+* **旧代码里的 `WATCH_OK` 死变量随这段代码一起消失了**：它从来没被用于判定，真正决定成败的一直是后面的
+  `gh run watch --exit-status` 退出码。
+* **套件覆盖的是脚本的判断逻辑，不是 `gh` 的行为**：打桩意味着"`gh run list` 新的在前"这一前提是**断言**
+  而非**被测**（本轮用真实 `gh` 只读核对了过滤器，见 29.4）。`gh` 若改变排序或字段语义，套件不会红——
+  这是刻意取舍，让套件能在没有网络、没有 token 的 CI 里跑。
+
+---
+
+## 30. `sync-to-oss.yml` `v4.13.21` 重试：`ossutil cp` 在等交互式确认，且回传链路退化（4.13.x，2026-09-23）
+
+§29.5 留下了一句"第一次挂住的原因未知"。补跑 v4.13.21 的镜像同步后，日志把两个原因都摊开了。
+
+### 30.1 重试确定性地卡在 `cp: overwrite ... (y or N)?`
+
+第二次和第三次重试的日志里都有这一行：
+
+```text
+13:51:56  Uploading: Browser4.jar → oss://browser4/releases/download/v4.13.21/Browser4.jar
+13:51:56  cp: overwrite 'oss://browser4/releases/download/v4.13.21/Browser4.jar' (y or N)?
+13:51:57  Uploading: browser4-bundle-runtime-darwin-arm64.tar.gz → ...
+13:51:57  cp: overwrite '...darwin-arm64.tar.gz' (y or N)?
+```
+
+`ossutil cp` 在目标已存在时会**问一句要不要覆盖**，而 CI 步骤里没人能回答——于是它一直等到步骤超时。只要同步是"重跑"（目标对象已存在），这就必然发生，与网络快慢无关。
+
+`sync-to-oss.yml` 里三处 `cp` 因此补上了 `--force`（发布资产、版本化安装脚本、校验和文件；`latest` 符号链接和 metadata 那几处本来就有）。`--force` 不是"顺手加的整洁"，而是这条重试路径能成立的前提。
+
+### 30.2 另一半原因：GitHub runner → 阿里云的回传速率退化
+
+第一次运行的日志（目标为空，因此没有覆盖提示）：
+
+```text
+13:05:21  Uploading: Browser4.jar
+13:38:29  Uploading: browser4-bundle-runtime-darwin-arm64.tar.gz     # 13 MB 用了 33 分钟
+13:45:56  Uploading: browser4-bundle-runtime-linux-x64.tar.gz        # 再 7.5 分钟
+```
+
+13 MB / 33 分钟 ≈ 6.7 KB/s；而首发的历史值是 551 MB / 2 分钟 ≈ 4.4 MB/s。重试期间回升到约 200-400 KB/s，仍比首发慢一个数量级。这一半**不在仓库里**，只能在预算上认账。
+
+### 30.3 因此调整的预算
+
+| 位置 | 旧 | 新 | 依据 |
+|---|---|---|---|
+| `sync-to-oss.yml` job | 30 min | 60 min | 上传步骤的上限必须在 job 之内先触发，才能指名卡住的步骤 |
+| `sync-to-oss.yml` `Upload to OSS` | 20 min | 45 min | 551 MB 在约 400 KB/s 下需要约 23 分钟，20 分钟上限会在"只是慢"时误杀 |
+| `wait-for-oss-sync.sh` 默认 `--timeout` | 2700 s | 3900 s | 必须高于被等 job 的最坏情况（60 min）+ 排队时间 |
+| `release.yml` / `release-cli.yml` 等待步骤 | 50 min | 75 min | 同上；否则等待方又先于同步得出结论 |
+
+顺序是关键：**步骤上限 < job 上限 < 等待方上限**，这样超时永远指向真正卡住的那一层。
+
+### 30.4 镜像现状与验证
+
+同步过（部分）资产之后，`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/v4.13.21/` 的
+`Browser4.jar`、三个 runtime bundle、`browser4-cli-darwin-arm64` 均已返回 200；本轮重试补齐其余资产。
+因为这些对象**全部**产生于 v4.13.21 重新打 tag 之后（第一次触发同步的时间晚于重新打 tag），所以镜像里
+不存在旧构建的混合。
+
+验证：`yaml.safe_load` 解析三个 workflow 通过；`cli/scripts/tests/wait-for-oss-sync.tests.sh` 19/19 通过
+（预算改动未触碰其断言，测试只用 `--timeout 4` 跑）。
+
+### 30.5 结果：镜像补齐，`latest` 已切到 v4.13.21
+
+把 `--force` + `--update` + 发布时刻戳送上去之后，重跑变成了**单调收敛**：每一轮跳过镜像已有的对象，只传缺的。
+
+| 轮次 | 结果 | 镜像 |
+|---|---|---|
+| 35884200583 | 被取消（20 min，`--force` 已生效，无覆盖提示） | 5/11 |
+| 35888765827 | 45 min 上传步骤超时失败 | **10/11** |
+| 35894059576 | **success（12m15s）** | **11/11** |
+
+最后那一轮之所以能跑完并真正收尾，是因为只剩 22 MB 要传，上传步骤没有触顶，后面的安装脚本、校验和、
+`latest` 符号链接、`latest-release.json` 都执行了：
+
+```text
+$ curl -s https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest-release.json | jq -r .tag
+v4.13.21
+$ curl -sI .../releases/latest/download/Browser4.jar | head -1
+HTTP/1.1 200 OK
+```
+
+**运维要点**：这条链路慢的时候不要原地等——`--update` 让"再触发一次"变成增量操作，重复触发即可收敛
+（本轮实际用了三次）。不要并发触发（两条 run 会互抢带宽），也不要中途取消正在有进展的 run。
+
+**一个尚未收口的点**：`release.yml` / `release-cli.yml` 里的等待脚本用 `gh workflow run sync-to-oss.yml`
+**不指定 `--ref`**，因此它跑的是**默认分支（main）**上的 `sync-to-oss.yml`。本轮修好的 `--force` /
+`--update` / 超时预算目前只在 `4.13.x` 上，需要合并到 `main`（或让等待脚本显式带上发布分支）才会对下一次
+发布生效。v4.13.21 的镜像已经补齐，但下一次发布仍会踩到旧逻辑。

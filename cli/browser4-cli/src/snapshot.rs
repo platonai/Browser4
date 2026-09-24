@@ -79,6 +79,96 @@ pub fn save_binary(path: &Path, data: &[u8]) -> std::io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Screenshot image formats — the requested format comes from the output file
+// extension, and the *written* path always follows the bytes that came back.
+// ---------------------------------------------------------------------------
+
+/// Image formats the screenshot command can ask the backend for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFormat {
+    Png,
+    Jpeg,
+}
+
+impl ImageFormat {
+    /// Value of the MCP `format` argument for this image format.
+    pub fn param_value(self) -> &'static str {
+        match self {
+            ImageFormat::Png => "png",
+            ImageFormat::Jpeg => "jpeg",
+        }
+    }
+
+    /// Canonical file extension for this image format.
+    pub fn extension(self) -> &'static str {
+        match self {
+            ImageFormat::Png => "png",
+            ImageFormat::Jpeg => "jpg",
+        }
+    }
+
+    /// Image format named by a file extension, if it is one the screenshot
+    /// command understands (`.` is optional, case-insensitive).
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.trim_start_matches('.').to_ascii_lowercase().as_str() {
+            "png" => Some(ImageFormat::Png),
+            "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+            _ => None,
+        }
+    }
+
+    /// Image format encoded in `bytes`, detected from the file signature.
+    ///
+    /// Returns `None` for payloads that are not a PNG/JPEG image (for example
+    /// the mock-server payload used by the e2e harness): guessing a format
+    /// there would rename a perfectly good file.
+    pub fn from_magic(bytes: &[u8]) -> Option<Self> {
+        const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        if bytes.starts_with(&PNG_MAGIC) {
+            Some(ImageFormat::Png)
+        } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            Some(ImageFormat::Jpeg)
+        } else {
+            None
+        }
+    }
+}
+
+/// The image format the user asked for, taken from the screenshot output file
+/// extension, defaulting to PNG when the name carries no (or an unrecognised)
+/// extension.
+///
+/// `screenshot` has no `--format` flag — the extension *is* the request, so a
+/// file named `*.png` must end up holding PNG bytes.
+pub fn requested_screenshot_format(filename: Option<&str>) -> ImageFormat {
+    filename
+        .and_then(|name| Path::new(name).extension())
+        .and_then(|ext| ext.to_str())
+        .and_then(ImageFormat::from_extension)
+        .unwrap_or(ImageFormat::Png)
+}
+
+/// Rewrite `path`'s extension when the captured bytes do not match it, so the
+/// printed `[Screenshot](...)` link never names a PNG file that holds JPEG
+/// data (the driver's element-capture path is JPEG-only).
+///
+/// Paths with no extension or a non-image extension are left alone — they make
+/// no promise about the payload — as are payloads whose format is unknown.
+pub fn reconcile_screenshot_path(path: &Path, bytes: &[u8]) -> PathBuf {
+    let Some(actual) = ImageFormat::from_magic(bytes) else {
+        return path.to_path_buf();
+    };
+    let requested = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .and_then(ImageFormat::from_extension);
+    match requested {
+        Some(requested) if requested != actual => path.with_extension(actual.extension()),
+        _ => path.to_path_buf(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Snapshot rotation — move older snapshots into dated archive directories
 // ---------------------------------------------------------------------------
 
@@ -218,5 +308,99 @@ mod tests {
         save_snapshot(&path, "content: here").unwrap();
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(content, "content: here");
+    }
+
+    // -----------------------------------------------------------------------
+    // Screenshot format / extension reconciliation
+    // -----------------------------------------------------------------------
+
+    /// PNG signature + a minimal body; only the magic bytes matter here.
+    const PNG_BYTES: [u8; 12] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01, 0x02, 0x03];
+    /// JFIF header start (`ff d8 ff e0`) followed by padding.
+    const JPEG_BYTES: [u8; 8] = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46];
+
+    #[test]
+    fn test_requested_screenshot_format_from_extension() {
+        assert_eq!(
+            requested_screenshot_format(Some("out.png")),
+            ImageFormat::Png
+        );
+        assert_eq!(
+            requested_screenshot_format(Some("dir\\out.PNG")),
+            ImageFormat::Png
+        );
+        assert_eq!(
+            requested_screenshot_format(Some("out.jpg")),
+            ImageFormat::Jpeg
+        );
+        assert_eq!(
+            requested_screenshot_format(Some("out.jpeg")),
+            ImageFormat::Jpeg
+        );
+        // No name (timestamped default) and unknown extensions both promise
+        // nothing, so the lossless default is used.
+        assert_eq!(requested_screenshot_format(None), ImageFormat::Png);
+        assert_eq!(
+            requested_screenshot_format(Some("out.webp")),
+            ImageFormat::Png
+        );
+        assert_eq!(requested_screenshot_format(Some("out")), ImageFormat::Png);
+    }
+
+    #[test]
+    fn test_image_format_from_magic() {
+        assert_eq!(ImageFormat::from_magic(&PNG_BYTES), Some(ImageFormat::Png));
+        assert_eq!(ImageFormat::from_magic(&JPEG_BYTES), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::from_magic(b"mock screenshot"), None);
+        assert_eq!(ImageFormat::from_magic(&[]), None);
+    }
+
+    #[test]
+    fn test_reconcile_screenshot_path_keeps_matching_extension() {
+        let png = Path::new("/tmp/out.png");
+        assert_eq!(reconcile_screenshot_path(png, &PNG_BYTES), png);
+
+        // `.jpeg` and `.jpg` both describe JPEG bytes, so neither is rewritten.
+        assert_eq!(
+            reconcile_screenshot_path(Path::new("/tmp/out.jpeg"), &JPEG_BYTES),
+            PathBuf::from("/tmp/out.jpeg")
+        );
+        assert_eq!(
+            reconcile_screenshot_path(Path::new("/tmp/out.jpg"), &JPEG_BYTES),
+            PathBuf::from("/tmp/out.jpg")
+        );
+    }
+
+    #[test]
+    fn test_reconcile_screenshot_path_rewrites_mismatched_extension() {
+        // The reported defect: a `.png` name holding JPEG bytes (full-page and
+        // element captures used to be JPEG) must not keep the `.png` extension.
+        assert_eq!(
+            reconcile_screenshot_path(Path::new("/tmp/out-fullpage.png"), &JPEG_BYTES),
+            PathBuf::from("/tmp/out-fullpage.jpg")
+        );
+        assert_eq!(
+            reconcile_screenshot_path(Path::new("/tmp/out.jpg"), &PNG_BYTES),
+            PathBuf::from("/tmp/out.png")
+        );
+    }
+
+    #[test]
+    fn test_reconcile_screenshot_path_keeps_unpromising_paths() {
+        // A payload we cannot identify (e.g. the e2e mock server) must not
+        // trigger a rename.
+        assert_eq!(
+            reconcile_screenshot_path(Path::new("/tmp/out.png"), b"mock screenshot"),
+            PathBuf::from("/tmp/out.png")
+        );
+        // Neither must a name that never promised an image format.
+        assert_eq!(
+            reconcile_screenshot_path(Path::new("/tmp/out"), &JPEG_BYTES),
+            PathBuf::from("/tmp/out")
+        );
+        assert_eq!(
+            reconcile_screenshot_path(Path::new("/tmp/out.bin"), &JPEG_BYTES),
+            PathBuf::from("/tmp/out.bin")
+        );
     }
 }

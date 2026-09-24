@@ -1892,6 +1892,7 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
+    let after_open = tool_calls_before_command(&mock_server);
 
     let page_eval = run_command(ctx, &["eval", "document.title"]);
     assert_eq!(
@@ -1911,7 +1912,7 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     );
 
     let tool_calls = mock_server.snapshot().tool_calls;
-    let eval_calls: Vec<_> = tool_calls
+    let eval_calls: Vec<_> = tool_calls[after_open..]
         .iter()
         .filter(|call| call.tool == "browser_evaluate")
         .collect();
@@ -2033,6 +2034,7 @@ pub(super) fn test_eval_css_selector_passthrough(ctx: &mut E2ECtx) {
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
+    let after_open = tool_calls_before_command(&mock_server);
 
     // CSS selectors should be passed through *without* the eN → backend:N
     // conversion that happens for snapshot refs.
@@ -2046,7 +2048,7 @@ pub(super) fn test_eval_css_selector_passthrough(ctx: &mut E2ECtx) {
     );
 
     let tool_calls = mock_server.snapshot().tool_calls;
-    let eval_calls: Vec<_> = tool_calls
+    let eval_calls: Vec<_> = tool_calls[after_open..]
         .iter()
         .filter(|call| call.tool == "browser_evaluate")
         .collect();
@@ -2111,6 +2113,7 @@ pub(super) fn test_eval_await_command(ctx: &mut E2ECtx) {
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
+    let after_open = tool_calls_before_command(&mock_server);
 
     // eval --await should pass awaitPromise: true through to the MCP tool call
     let result = run_command(ctx, &["eval", "--await", "new Promise(r => setTimeout(() => r(42), 100))"]);
@@ -2120,7 +2123,7 @@ pub(super) fn test_eval_await_command(ctx: &mut E2ECtx) {
     );
 
     let tool_calls = mock_server.snapshot().tool_calls;
-    let eval_calls: Vec<_> = tool_calls
+    let eval_calls: Vec<_> = tool_calls[after_open..]
         .iter()
         .filter(|call| call.tool == "browser_evaluate")
         .collect();
@@ -2150,6 +2153,7 @@ pub(super) fn test_eval_without_await_omits_flag(ctx: &mut E2ECtx) {
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
+    let after_open = tool_calls_before_command(&mock_server);
 
     // eval without --await should NOT include awaitPromise in the arguments
     let result = run_command(ctx, &["eval", "document.title"]);
@@ -2159,7 +2163,7 @@ pub(super) fn test_eval_without_await_omits_flag(ctx: &mut E2ECtx) {
     );
 
     let tool_calls = mock_server.snapshot().tool_calls;
-    let eval_calls: Vec<_> = tool_calls
+    let eval_calls: Vec<_> = tool_calls[after_open..]
         .iter()
         .filter(|call| call.tool == "browser_evaluate")
         .collect();
@@ -2258,6 +2262,7 @@ pub(super) fn test_press_command_uses_direct_tool_dispatch(ctx: &mut E2ECtx) {
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
+    let after_open = tool_calls_before_command(&mock_server);
 
     let press_result = run_command(ctx, &["press", "!", "#type-target"]);
     assert_eq!(
@@ -2274,11 +2279,12 @@ pub(super) fn test_press_command_uses_direct_tool_dispatch(ctx: &mut E2ECtx) {
     assert_eq!(press_calls[0].arguments["sessionId"], "swarm-session-1");
     assert_eq!(press_calls[0].arguments["ref"], "#type-target");
     assert_eq!(press_calls[0].arguments["key"], "!");
+    let press_scope = &tool_calls[after_open..];
     assert!(
-        tool_calls
+        press_scope
             .iter()
             .all(|call| call.tool != "browser_evaluate"),
-        "press should not synthesize browser_evaluate calls: {tool_calls:?}"
+        "press should not synthesize browser_evaluate calls: {press_scope:?}"
     );
 }
 
@@ -4173,15 +4179,19 @@ pub(super) fn test_crawl_foreground_with_sql(ctx: &mut E2ECtx) {
     );
 
     let stdout = &result.stdout;
+    // With `--sql` and no `--output`, the extracted payload owns stdout and the
+    // progress lines are routed to stderr (see CRAWL_STRUCTURED_STDOUT), so the
+    // status assertions read both streams.  The payload assertion stays on stdout.
+    let combined = format!("{}\n{}", result.stdout, result.stderr);
     assert!(
-        stdout.contains("Crawl task submitted: crawl-job-42"),
+        combined.contains("Crawl task submitted: crawl-job-42"),
         "Expected submission in:\n{}",
-        stdout
+        combined
     );
     assert!(
-        stdout.contains("X-SQL extraction: enabled"),
+        combined.contains("X-SQL extraction: enabled"),
         "Expected X-SQL indicator in:\n{}",
-        stdout
+        combined
     );
     // The mock server result page doesn't have extracted data, so we should
     // see either "No extracted data" or a completion message

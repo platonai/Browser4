@@ -7,6 +7,7 @@ import ai.platon.pulsar.chrome.protocol.DialogEvent
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -176,6 +177,69 @@ class Browser4WebDriverTest {
             "Option target not found: #missing",
             Browser4WebDriver.selectOptionTargetError("#missing", false)
         )
+    }
+
+    // -------------------------------------------------------------------------
+    // input target probe (fill / type)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("inputTargetError accepts a resolvable, enabled target")
+    fun inputTargetErrorAcceptsAResolvableTarget() {
+        val probe = mapOf("found" to true, "kind" to "input", "disabled" to false, "readOnly" to false, "text" to "")
+
+        assertNull(Browser4WebDriver.inputTargetError("fill", "#q", probe))
+    }
+
+    @Test
+    @DisplayName("inputTargetError reports a null probe as an unmatched selector")
+    fun inputTargetErrorReportsANullProbe() {
+        val error = Browser4WebDriver.inputTargetError("fill", "#definitely-not-here-xyz", null)
+
+        assertNotNull(error)
+        assertTrue(error!!.startsWith("fill: no element found for selector [#definitely-not-here-xyz]"), error)
+        assertTrue(error.contains("snapshot"), "the message must point at the stale-ref remedy: $error")
+    }
+
+    @Test
+    @DisplayName("inputTargetError reports a probe without found=true as unmatched")
+    fun inputTargetErrorReportsAnUnfoundProbe() {
+        val error = Browser4WebDriver.inputTargetError("type", "#missing", mapOf("found" to false))
+
+        assertNotNull(error)
+        assertTrue(error!!.startsWith("type: no element found for selector [#missing]"), error)
+    }
+
+    @Test
+    @DisplayName("inputTargetError refuses a disabled target")
+    fun inputTargetErrorRefusesADisabledTarget() {
+        val probe = mapOf("found" to true, "kind" to "input", "disabled" to true, "readOnly" to false)
+
+        val error = Browser4WebDriver.inputTargetError("fill", "#q", probe)
+
+        assertEquals("fill: target [#q] is disabled — user input is blocked.", error)
+    }
+
+    @Test
+    @DisplayName("inputTargetError refuses a read-only target")
+    fun inputTargetErrorRefusesAReadOnlyTarget() {
+        val probe = mapOf("found" to true, "kind" to "input", "disabled" to false, "readOnly" to true)
+
+        val error = Browser4WebDriver.inputTargetError("fill", "#q", probe)
+
+        assertEquals("fill: target [#q] is read-only — user input is blocked.", error)
+    }
+
+    @Test
+    @DisplayName("the shared input target probe binds the element and reports its state")
+    fun inputTargetProbeJsReportsTheElementState() {
+        val js = Browser4WebDriver.inputTargetProbeJs()
+
+        assertTrue(js.contains("var el = this;"), "expected `this`-bound element: $js")
+        assertFalse(js.contains("document.querySelector"), "must not use document.querySelector")
+        assertTrue(js.contains("found: false"), "expected an unresolved-locator marker: $js")
+        assertTrue(js.contains("disabled"), "expected the disabled flag: $js")
+        assertTrue(js.contains("readOnly"), "expected the readOnly flag: $js")
     }
 
     // -------------------------------------------------------------------------

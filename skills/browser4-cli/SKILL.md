@@ -34,6 +34,8 @@ source tree use one of the following:
 
 > **⚡ First-run latency:** From a source tree, the first launch builds the runtime bundle via Maven (~1–3 min, before the spinner appears) and then starts the Browser4 backend (Spring Boot + JVM, ~10s). Subsequent commands are instant — the server stays alive between invocations.
 
+> **🛑 Dev mode never serves a stale backend.** From a source tree the backend must be the checked-out code. An already assembled runtime bundle is reused as-is while it matches the checkout. If it was built from a **different project version**, the command **fails with a non-zero exit** and names the reason, the bundled/checked-out versions, the bundle's build time and the rebuild command — nothing is started. If the checkout's sources merely look **newer than the bundle jars**, the command rebuilds from source and then starts (that signal cannot tell a real source change from a touched-but-unchanged tree, so refusing on it would block startup on a false positive). Rebuild with `powershell -ExecutionPolicy Bypass -File browser4-apps/browser4-bundle/build-runtime-bundle.ps1` (`pwsh -File …` on Linux/macOS) or re-run with `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1`. To deliberately test the older backend, set the single opt-out `BROWSER4_CLI_ALLOW_STALE_BUNDLE=1` — the warning stays, and `status` / `doctor` keep reporting the skew (`local_bundle` in `--json`).
+
 > **🖥️ Headless is the default for AI agents:** always `open --headless` unless the user explicitly asks to see the window, a human must act on the page, or the site blocked the headless browser — in that last case retry `--headed` **once** (§2 Display Mode).
 
 ```
@@ -54,7 +56,8 @@ browser4-cli open --headless "https://example.com"  # headless by default for AI
 browser4-cli snapshot -v 0 --stdout       # read the page; note refs
 browser4-cli fill <ref> "<value>"         # interact
 browser4-cli press Enter
-browser4-cli wait --load networkidle
+browser4-cli wait --load networkidle   # prove the network settled — nothing more
+browser4-cli wait "<result-selector>"  # poll the element carrying the result (late-rendered pages)
 browser4-cli snapshot -v 0 --auto-diff --stdout  # verify what changed
 browser4-cli htmlsnapshot get all text "<css-selector>"   # extract from the live page
 ```
@@ -106,7 +109,7 @@ Refs are **ephemeral** — treat them as single-use handles:
 
 Use `--headed` for exactly three reasons: (1) the user explicitly asks for a visible browser; (2) a human must act on the page (login, CAPTCHA, QR code, 2FA); (3) **anti-bot escalation**.
 
-**Anti-bot escalation — retry once:** when a page looks blocked (CAPTCHA/verification widget, Cloudflare/DataDome/Akamai/PerimeterX challenge, Google `/sorry/`, "unusual traffic" / "access denied", or an implausibly empty body), `close` then `open --headed` **with the same `-s <name>`** so profile and cookies survive, retry the same step **once**, and **tell the user the mode was switched**. If the headed retry is blocked too, stop — the block is fingerprint/IP-level: prefer `attach --cdp` / `attach --extension` (a real logged-in profile), raise `--interact-level`, or report the site as unreachable. GUI-less environments (CI, Docker) degrade `--headed` to headless — say the retry ran headless instead of claiming a visible window.
+**Anti-bot escalation — retry once:** when a page looks blocked (CAPTCHA/verification widget, Cloudflare/DataDome/Akamai/PerimeterX challenge, Google `/sorry/`, "unusual traffic" / "access denied", or an implausibly empty body), `close` then `open --headed` **with the same `-s <name>`** so profile and cookies survive, retry the same step **once**, and **tell the user the mode was switched**. If the headed retry is blocked too, stop — the block is fingerprint/IP-level: prefer `attach --cdp` / `attach --extension` (a real logged-in profile), raise `--interact-level`, or report the site as unreachable. GUI-less environments (CI, Docker) degrade `--headed` to headless — say the retry ran headless instead of claiming a visible window. `goto`/`open` run a one-call probe after a successful navigation and print this escalation as an **advisory stderr warning** (naming the signature that fired) when the landed page matches a challenge URL or body marker; the command still succeeds, so act on the warning yourself rather than waiting for a failure (`--json` reports it as `challenge_detected` / `challenge_signature`).
 
 The display mode is **fixed at session creation**: `goto` cannot change it and `open --headed` on a live session only warns on stderr. To change modes, `close` first (`open --fresh` closes and reopens). Full decision guide: [browser-modes.md](references/browser-modes.md).
 
@@ -298,6 +301,8 @@ Full reference: **[web-miner/SKILL.md](../browser4-web-miner/SKILL.md)**.
 > **Don't cat snapshot files** — they can exceed 256KB, and `--stdout` can dump 63KB+ trees. Bound the capture with `-v 0`, `--depth`, `--selector`, `--no-boxes`, or use `snapshot grep` / `htmlsnapshot`. `snapshot --stdout`, `htmlsnapshot get html` and `grep` paginate at 2000 lines by default (`--all` / `--page-size 0` disables); `get all …` and `text`/`textcontent` reads print in full.
 
 > **`eval --ref` requires an arrow function:** `element => element.textContent`. Writing `element.textContent` (or `this.textContent`) returns `null` — the #1 mistake with element-scoped eval.
+
+> **`wait --load networkidle` is not "the page is ready".** It proves only that the network went quiet: a page whose results are computed by page JS after load (dashboards, bot-detection verdicts), or fetched by a long-running XHR, can still be empty when it reports success — and the CLI now says so. For result pages, poll the result element first (`wait "<result-selector>"`, or `eval --wait-selector <css>`); treat `wait --load networkidle` as a network-settling extra step.
 
 > **Sandboxed environments:** the backend writes its logs inside the runtime bundle, so a workspace-only sandbox makes `open`/`goto` hang until the startup timeout with `Access denied` (see the startup log path under `🧾 Details`). Fix before the first launch: point `BROWSER4_RUNTIME_DIR` and `BROWSER4_CLI_STATE_DIR` at writable directories.
 

@@ -851,6 +851,121 @@ $hasTreeBanner = $output -match 'Task directory tree:'
 Assert-Returns -Label 'RWS backward: no tree banner without --tree' -Actual $hasTreeBanner -Expected $false
 
 # ═══════════════════════════════════════════════════════════════════
+# TESTS: streaming child-process relay (used by `rws sc|dir|task`)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ RWS run: Get-PwshExecutable ━━━" -ForegroundColor Cyan
+
+$pwshExe = Get-PwshExecutable
+Assert-NotNull -Label 'Pwsh exe: resolved' -Value $pwshExe
+Assert-Returns -Label 'Pwsh exe: path exists' -Actual (Test-Path -LiteralPath $pwshExe) -Expected $true
+
+Write-Host "━━━ RWS run: relay echoes and logs child output ━━━" -ForegroundColor Cyan
+
+# Cross-platform temp dir (Windows: %TEMP%, Unix: $TMPDIR or /tmp)
+$relayTmpRoot = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { '/tmp' }
+$relayDir = Join-Path $relayTmpRoot ("b4-relay-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$null = New-Item -ItemType Directory -Path $relayDir -Force
+
+$chattyChild = Join-Path $relayDir 'chatty.ps1'
+@'
+Write-Output 'relay-stdout-one'
+[Console]::Error.WriteLine('relay-stderr-one')
+Write-Output 'relay-stdout-two'
+exit 3
+'@ | Set-Content -LiteralPath $chattyChild -Encoding utf8
+
+$relayLog = Join-Path $relayDir 'chatty.log'
+$relayOutput = & {
+    Invoke-ChildProcessStreaming -FilePath $pwshExe `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $chattyChild) `
+        -LogFile $relayLog -HeartbeatSeconds 0
+} 6>&1
+
+$relayResult = @($relayOutput | Where-Object { $_ -is [hashtable] })[0]
+Assert-NotNull -Label 'Relay: returns a result hashtable' -Value $relayResult
+Assert-Returns -Label 'Relay: reports the child exit code' -Actual $relayResult.ExitCode -Expected 3
+Assert-Returns -Label 'Relay: counts stdout + stderr lines' -Actual $relayResult.OutputLines -Expected 3
+Assert-Returns -Label 'Relay: counts stderr lines' -Actual $relayResult.StderrLines -Expected 1
+Assert-Returns -Label 'Relay: reports the log path' -Actual $relayResult.LogFile -Expected $relayLog
+
+$relayLogText = if (Test-Path -LiteralPath $relayLog) { Get-Content -LiteralPath $relayLog -Raw } else { '' }
+Assert-ContainsString -Label 'Relay: log has first stdout line' -Haystack $relayLogText -Needle 'relay-stdout-one'
+Assert-ContainsString -Label 'Relay: log has the stderr line' -Haystack $relayLogText -Needle 'relay-stderr-one'
+Assert-ContainsString -Label 'Relay: log has second stdout line' -Haystack $relayLogText -Needle 'relay-stdout-two'
+
+Write-Host "━━━ RWS run: heartbeat while the child is silent ━━━" -ForegroundColor Cyan
+
+$quietChild = Join-Path $relayDir 'quiet-then-loud.ps1'
+@'
+Start-Sleep -Seconds 5
+Write-Output 'relay-late-line'
+'@ | Set-Content -LiteralPath $quietChild -Encoding utf8
+
+$heartbeatOutput = & {
+    Invoke-ChildProcessStreaming -FilePath $pwshExe `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $quietChild) `
+        -LogFile (Join-Path $relayDir 'heartbeat.log') -HeartbeatSeconds 2
+} 6>&1
+$heartbeatText = ($heartbeatOutput | ForEach-Object { "$_" }) -join "`n"
+Assert-ContainsString -Label 'Relay heartbeat: reports still running' -Haystack $heartbeatText -Needle 'still running'
+Assert-ContainsString -Label 'Relay heartbeat: reports no output yet' -Haystack $heartbeatText -Needle 'no output yet'
+
+Write-Host "━━━ RWS run: silent child is detected (no empty mystery) ━━━" -ForegroundColor Cyan
+
+$muteChild = Join-Path $relayDir 'mute.ps1'
+@'
+exit 0
+'@ | Set-Content -LiteralPath $muteChild -Encoding utf8
+
+$muteOutput = & {
+    Invoke-ChildProcessStreaming -FilePath $pwshExe `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $muteChild) `
+        -LogFile (Join-Path $relayDir 'mute.log') -HeartbeatSeconds 0
+} 6>&1
+$muteResult = @($muteOutput | Where-Object { $_ -is [hashtable] })[0]
+Assert-Returns -Label 'Relay: silent child reports zero output lines' -Actual $muteResult.OutputLines -Expected 0
+Assert-Returns -Label 'Relay: silent child still reports its exit code' -Actual $muteResult.ExitCode -Expected 0
+
+Remove-Item -LiteralPath $relayDir -Recurse -Force -ErrorAction SilentlyContinue
+
+Write-Host "━━━ RWS sc: child output reaches the caller ━━━" -ForegroundColor Cyan
+
+# Regression guard: the child's own text must appear in the caller's output.
+# The previous relay (Start-Process -RedirectStandardOutput + polling) could
+# leave this section completely empty, which is what the caller reported.
+$rwsOutput = pwsh -NoProfile -Command "& '$testPs1Abs' rws sc no-such-scenario-xyz *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS sc: streams child warning' -Haystack $rwsOutput -Needle 'not found among discovered tasks'
+Assert-ContainsString -Label 'RWS sc: streams child summary' -Haystack $rwsOutput -Needle 'No matching tasks to run.'
+Assert-ContainsString -Label 'RWS sc: announces the run log' -Haystack $rwsOutput -Needle 'rws-scenarios.log'
+Assert-ContainsString -Label 'RWS sc: reports the output line count' -Haystack $rwsOutput -Needle 'line(s) of output'
+
+Write-Host "━━━ RWS run: fallback when the relay cannot be compiled ━━━" -ForegroundColor Cyan
+
+# Simulate an environment where Add-Type is unavailable (e.g. constrained
+# language mode): the runner must still launch the child and report its exit
+# code instead of capturing into a file nothing would ever read.
+# NOTE: this overrides Initialize-ChildOutputRelay for the rest of this
+# process — keep it as the last relay test.
+$fallbackChild = Join-Path $relayTmpRoot ("b4-fallback-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.ps1')
+@'
+Write-Output 'fallback-child-ran'
+exit 4
+'@ | Set-Content -LiteralPath $fallbackChild -Encoding utf8
+
+function Initialize-ChildOutputRelay { return $false }
+
+$fallbackOutput = & {
+    Invoke-ChildProcessStreaming -FilePath $pwshExe `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fallbackChild) `
+        -HeartbeatSeconds 0
+} 6>&1
+$fallbackResult = @($fallbackOutput | Where-Object { $_ -is [hashtable] })[0]
+Assert-NotNull -Label 'Relay fallback: returns a result hashtable' -Value $fallbackResult
+Assert-Returns -Label 'Relay fallback: reports the child exit code' -Actual $fallbackResult.ExitCode -Expected 4
+Assert-Returns -Label 'Relay fallback: reports no captured log' -Actual $fallbackResult.LogFile -Expected ''
+Remove-Item -LiteralPath $fallbackChild -Force -ErrorAction SilentlyContinue
+
+# ═══════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════
 Write-Host ''

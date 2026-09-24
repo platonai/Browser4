@@ -77,6 +77,26 @@ cargo run -- <command>
 
 The backend server starts automatically on first use (no manual `./mvnw` required).
 
+Dev mode only ever serves the **checked-out** code: an already assembled runtime
+bundle under `browser4-apps/browser4-bundle/target/runtime-bundle/` is reused
+without rebuilding while it matches the checkout. A bundle built from a
+different project version makes the CLI **refuse to start**, printing the
+detected reason, the bundled/checked-out versions and build time, and the exact
+rebuild command; sources that merely look newer than the bundle jars are
+rebuilt before the server starts instead. Rebuild from source with:
+
+```bash
+# Rebuild the runtime bundle from source (Windows; on Linux/macOS use: pwsh -File ...):
+powershell -ExecutionPolicy Bypass -File browser4-apps/browser4-bundle/build-runtime-bundle.ps1
+
+# Or let the next command rebuild it first (value: 1/true/yes/on):
+BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1 browser4-cli goto https://example.com
+```
+
+Deliberately testing an older backend requires the explicit opt-out
+`BROWSER4_CLI_ALLOW_STALE_BUNDLE=1`, which keeps the warning and is reported by
+`browser4-cli status` / `browser4-cli doctor`.
+
 **Building the release binary:**
 
 ```bash

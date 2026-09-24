@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "browser4-cli"
-version = "4.13.21"
+version = "4.13.22"
 dependencies = [
  "base64",
  "chrono",

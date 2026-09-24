@@ -204,6 +204,18 @@ const FORCE_REMOTE_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REMOTE_BUNDLE";
 /// artifacts appear up-to-date.  Public so the e2e harness can assert that
 /// `--force-rebuild-bundle` sets the variable this code actually reads.
 pub const FORCE_REBUILD_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REBUILD_BUNDLE";
+/// When set to `1`, `true`, `yes`, or `on`, dev mode starts the server against
+/// the existing local runtime bundle even though it does not match the
+/// checked-out sources.
+///
+/// This is the ONLY opt-out from the default "dev mode runs the checked-out
+/// code" rule: without it a stale bundle is a hard startup failure, because a
+/// backend that silently predates the checkout invalidates every test run made
+/// against it.  Note that this is not the same lever as
+/// `BROWSER4_CLI_FORCE_REBUILD_BUNDLE` ("rebuild now"): this one means "run the
+/// old build anyway".  Public so the e2e harness can assert agreement on the
+/// name this code actually reads.
+pub const ALLOW_STALE_BUNDLE_ENV: &str = "BROWSER4_CLI_ALLOW_STALE_BUNDLE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeBundleArchiveKind {
@@ -1444,6 +1456,15 @@ fn normalize_release_tag(tag: Option<&str>) -> Option<String> {
     }
 }
 
+/// Interpret a boolean-ish environment value as `true`.
+///
+/// Only the spellings below count: an unset variable, or a typo, must never
+/// silently change which backend the CLI serves.  Pure so the parsing is
+/// unit-testable without touching the process environment.
+fn env_flag_is_on(raw: Option<&str>) -> bool {
+    matches!(raw, Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"))
+}
+
 /// Check whether `BROWSER4_CLI_FORCE_REMOTE_BUNDLE` is set.
 ///
 /// When this flag is active the CLI skips the local Maven/jlink build
@@ -1451,10 +1472,7 @@ fn normalize_release_tag(tag: Option<&str>) -> Option<String> {
 /// server.  This is primarily useful in CI / corporate environments
 /// where Maven or jlink dependencies are unavailable.
 fn should_force_remote_bundle() -> bool {
-    match env::var(FORCE_REMOTE_BUNDLE_ENV).ok().as_deref() {
-        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") => true,
-        _ => false,
-    }
+    env_flag_is_on(env::var(FORCE_REMOTE_BUNDLE_ENV).ok().as_deref())
 }
 
 /// Check whether `BROWSER4_CLI_FORCE_REBUILD_BUNDLE` is set.
@@ -1464,10 +1482,17 @@ fn should_force_remote_bundle() -> bool {
 /// This is useful when the source changed but the timestamps/cache make
 /// the existing artifacts appear up-to-date.
 fn should_force_rebuild_bundle() -> bool {
-    match env::var(FORCE_REBUILD_BUNDLE_ENV).ok().as_deref() {
-        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") => true,
-        _ => false,
-    }
+    env_flag_is_on(env::var(FORCE_REBUILD_BUNDLE_ENV).ok().as_deref())
+}
+
+/// Check whether `BROWSER4_CLI_ALLOW_STALE_BUNDLE` is set.
+///
+/// When this flag is active dev mode starts the server against a local runtime
+/// bundle that does not match the checked-out sources instead of failing fast.
+/// It exists so the refusal has exactly one documented escape hatch for the
+/// (rare) case of deliberately testing an older backend.
+fn should_allow_stale_bundle() -> bool {
+    env_flag_is_on(env::var(ALLOW_STALE_BUNDLE_ENV).ok().as_deref())
 }
 
 /// Return `true` when `s` looks like a version tag: starts with `v` followed
@@ -4386,6 +4411,54 @@ enum LocalBundleStaleness {
     SourcesNewerThanBundle,
 }
 
+/// Filesystem layout of the locally assembled dev-mode runtime bundle.
+///
+/// Kept in one place so the launcher, the staleness check and the
+/// `status` / `doctor` provenance report can never disagree about which bundle
+/// is being served.
+struct LocalBundlePaths {
+    /// `browser4-apps/browser4-bundle` — the module owning the build script.
+    module_dir: PathBuf,
+    /// `.../browser4-bundle/target/runtime-bundle` — holds the archive.
+    runtime_bundle_dir: PathBuf,
+    /// `.../runtime-bundle/_work/<platform>/<platform>` — the assembled runtime.
+    work_dir: PathBuf,
+}
+
+impl LocalBundlePaths {
+    /// Backend jars (`browser4-rest-*.jar` plus third-party jars).
+    fn lib_dir(&self) -> PathBuf {
+        self.work_dir.join("lib")
+    }
+
+    /// The jlink JRE launcher the bundle starts the server with.
+    fn java_path(&self) -> PathBuf {
+        self.work_dir
+            .join("runtime")
+            .join("bin")
+            .join(browser4_java_executable_name())
+    }
+}
+
+/// Resolve the local runtime bundle layout for this checkout and platform.
+///
+/// Fails only for a platform with no bundle build script at all.
+fn local_bundle_paths(root: &Path) -> Result<LocalBundlePaths, String> {
+    let platform = detect_current_runtime_bundle_platform()?;
+    let bundle_dir_name = platform.bundle_dir_name();
+    let module_dir = root.join("browser4-apps").join("browser4-bundle");
+    let runtime_bundle_dir = module_dir.join("target").join("runtime-bundle");
+    let work_dir = runtime_bundle_dir
+        .join("_work")
+        .join(&bundle_dir_name)
+        .join(&bundle_dir_name);
+    Ok(LocalBundlePaths {
+        module_dir,
+        runtime_bundle_dir,
+        work_dir,
+    })
+}
+
 /// Read the checked-out project version from the root `pom.xml` of a Browser4
 /// repository checkout.  Returns the `<version>` that belongs to the root
 /// artifact itself (`<artifactId>browser4</artifactId>`), NOT the parent POM
@@ -4468,63 +4541,171 @@ fn bundled_project_version(lib_dir: &Path) -> Option<(String, std::time::SystemT
     newest
 }
 
-/// Newest modification time of any Kotlin/Java source (or pom.xml) under the
-/// modules whose code ships in the runtime bundle, when newer than `baseline`.
-/// Returns `true` when at least one source file is newer than the bundle jars.
-fn local_sources_newer_than(root: &Path, baseline: std::time::SystemTime) -> bool {
-    let mut source_roots: Vec<PathBuf> = vec![
-        root.join("browser4-rest").join("src"),
-        root.join("browser4-agentic").join("src"),
-        root.join("browser4-common").join("src"),
-        root.join("browser4-apps").join("browser4-bundle").join("pom.xml"),
-    ];
+/// Source roots of the modules whose code ships in the runtime bundle, as
+/// `(module name, src/main)` pairs.
+///
+/// The module name is the artifact id prefix the bundle's `lib/` uses, so each
+/// root can be compared against its own jar.
+fn bundled_module_source_roots(root: &Path) -> Vec<(String, PathBuf)> {
+    let mut modules: Vec<(String, PathBuf)> = ["browser4-rest", "browser4-agentic", "browser4-common"]
+        .into_iter()
+        .map(|name| (name.to_string(), root.join(name).join("src").join("main")))
+        .collect();
+
     // browser4-core ships multiple modules (skeleton, browser, parse, ...).
-    let core_src = root.join("browser4-core");
-    if let Ok(entries) = std::fs::read_dir(&core_src) {
+    if let Ok(entries) = std::fs::read_dir(root.join("browser4-core")) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() && path.join("src").join("main").is_dir() {
-                source_roots.push(path.join("src"));
+            let main_src = path.join("src").join("main");
+            if !path.is_dir() || !main_src.is_dir() {
+                continue;
+            }
+            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                modules.push((name.to_string(), main_src));
             }
         }
     }
 
-    fn walk_newer(dir: &Path, baseline: std::time::SystemTime, found: &mut bool) {
-        if *found {
-            return;
+    modules
+}
+
+/// Newest modified time of the bundle jar built from `module`, or `None` when the
+/// bundle carries no jar for it.
+fn module_jar_mtime(lib_dir: &Path, module: &str) -> Option<std::time::SystemTime> {
+    let prefix = format!("{module}-");
+    let mut newest: Option<std::time::SystemTime> = None;
+    for entry in std::fs::read_dir(lib_dir).ok()?.flatten() {
+        let path = entry.path();
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        if !name.starts_with(&prefix) || !name.ends_with(".jar") {
+            continue;
         }
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk_newer(&path, baseline, found);
-            } else {
-                let is_source = matches!(
-                    path.extension().and_then(|e| e.to_str()),
-                    Some("kt" | "java")
-                );
-                if is_source {
-                    if let Ok(metadata) = path.metadata() {
-                        if let Ok(mtime) = metadata.modified() {
-                            if mtime > baseline {
-                                *found = true;
-                                return;
-                            }
-                        }
-                    }
-                }
+        let Ok(mtime) = path.metadata().and_then(|metadata| metadata.modified()) else { continue };
+        if newest.is_none_or(|current| mtime > current) {
+            newest = Some(mtime);
+        }
+    }
+    newest
+}
+
+/// Marker written into the assembled bundle after a local rebuild that refreshed
+/// the backend jars from the checked-out sources.
+///
+/// It exists because a module jar's mtime cannot answer "was this module rebuilt
+/// from the current sources?" on its own: this project builds reproducibly
+/// (`project.build.outputTimestamp`), so a repackage whose compiled content is
+/// byte-identical leaves the file's timestamp untouched, and a "sources look
+/// newer" reading would never clear no matter how often the user rebuilds.  The
+/// stamp records the one fact the mtimes cannot: *at this time every module was
+/// repackaged from this tree*.
+const BUNDLE_BUILD_STAMP_FILE: &str = ".browser4-bundle-build-stamp";
+
+/// Path of the build stamp inside the assembled bundle's `lib/`.
+fn bundle_build_stamp_path(lib_dir: &Path) -> PathBuf {
+    lib_dir.join(BUNDLE_BUILD_STAMP_FILE)
+}
+
+/// When the bundle was last rebuilt from the checked-out sources, if it ever was.
+fn read_bundle_build_stamp(lib_dir: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(bundle_build_stamp_path(lib_dir))
+        .and_then(|metadata| metadata.modified())
+        .ok()
+}
+
+/// Record that the backend jars in `lib_dir` were just refreshed from this tree.
+///
+/// Best effort: a read-only bundle directory must not fail a build that
+/// otherwise succeeded — the staleness check then simply keeps using the jar
+/// mtimes.
+fn write_bundle_build_stamp(lib_dir: &Path) {
+    let path = bundle_build_stamp_path(lib_dir);
+    if let Err(error) = std::fs::write(&path, b"rebuilt from the checked-out sources\n") {
+        eprintln!(
+            "Could not write the bundle build stamp at {} ({error}); \
+             dev mode will keep re-checking the bundle against the source timestamps.",
+            path.display()
+        );
+    }
+}
+
+/// Whether any source file that ships in the runtime bundle is newer than the jar
+/// built from it.
+///
+/// Each module is compared against **its own** jar, taking the newer of that jar
+/// and the bundle build stamp (see [BUNDLE_BUILD_STAMP_FILE]).  A single global
+/// baseline cannot work: Maven rewrites only the jar whose contents changed, so
+/// after an incremental build one module's jar is minutes old while another's is
+/// days old, and comparing every source against one of them would report a
+/// permanent, unfixable staleness.
+///
+/// Only `src/main` is walked: test sources are not compiled into the bundle, so
+/// treating a test edit as "the backend is stale" would refuse startup for a
+/// change that cannot affect the served backend — and clearing that refusal costs
+/// a full Maven + jlink rebuild.
+///
+/// The bundle module's `pom.xml` is a build input too (a dependency or plugin
+/// change alters the assembled bundle without touching a `.kt` file), so it is
+/// compared against the newest project jar in the bundle.
+fn local_sources_newer_than(root: &Path, lib_dir: &Path, newest_jar_mtime: std::time::SystemTime) -> bool {
+    let stamp = read_bundle_build_stamp(lib_dir);
+    let floor = |mtime: std::time::SystemTime| match stamp {
+        Some(stamp) if stamp > mtime => stamp,
+        _ => mtime,
+    };
+
+    for (module, source_root) in bundled_module_source_roots(root) {
+        // A module whose jar is missing from the bundle is either new or was
+        // never assembled — either way the bundle cannot be trusted to contain it.
+        let Some(jar_mtime) = module_jar_mtime(lib_dir, &module) else {
+            if source_root.is_dir() {
+                return true;
             }
+            continue;
+        };
+        if newest_source_after(&source_root, floor(jar_mtime)).is_some() {
+            return true;
         }
     }
 
-    let mut found = false;
-    for root_dir in &source_roots {
-        walk_newer(root_dir, baseline, &mut found);
-        if found {
-            break;
+    let bundle_pom = root
+        .join("browser4-apps")
+        .join("browser4-bundle")
+        .join("pom.xml");
+    if let Ok(mtime) = bundle_pom.metadata().and_then(|metadata| metadata.modified()) {
+        if mtime > floor(newest_jar_mtime) {
+            return true;
         }
     }
-    found
+
+    false
+}
+
+/// The newest `.kt`/`.java` file under `path` that is newer than `baseline`,
+/// if any.  `path` may itself be a file.
+fn newest_source_after(path: &Path, baseline: std::time::SystemTime) -> Option<PathBuf> {
+    if path.is_file() {
+        let is_source = matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("kt" | "java")
+        );
+        if !is_source {
+            return None;
+        }
+        return path
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .filter(|mtime| *mtime > baseline)
+            .map(|_| path.to_path_buf());
+    }
+
+    let entries = std::fs::read_dir(path).ok()?;
+    for entry in entries.flatten() {
+        if let Some(found) = newest_source_after(&entry.path(), baseline) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// Detect whether an existing local runtime bundle at `lib_dir` was built from
@@ -4539,16 +4720,61 @@ fn detect_local_bundle_staleness(root: &Path, lib_dir: &Path) -> Option<LocalBun
             bundled,
         });
     }
-    if local_sources_newer_than(root, newest_jar_mtime) {
+    if local_sources_newer_than(root, lib_dir, newest_jar_mtime) {
         return Some(LocalBundleStaleness::SourcesNewerThanBundle);
     }
     None
 }
 
-/// Print a loud, actionable warning when the existing local runtime bundle was
-/// built from older sources than the current checkout.
-fn warn_bundle_staleness(root: &Path, staleness: &LocalBundleStaleness) {
-    let reason = match staleness {
+/// What dev mode should do with an existing local runtime bundle.
+#[derive(Debug, PartialEq, Eq)]
+enum LocalBundleAction {
+    /// Serve the bundle on disk.  `staleness` carries the deviation the user
+    /// accepted through `BROWSER4_CLI_ALLOW_STALE_BUNDLE` (warned about loudly,
+    /// never silently).
+    ServeExisting { staleness: Option<LocalBundleStaleness> },
+    /// Rebuild from source before serving.  Used for the mtime-based deviation,
+    /// which cannot be told apart from a tree whose files were merely touched
+    /// (a `git checkout`, an editor re-save): the rebuild is then a no-op
+    /// repackage, while a genuine source change is picked up instead of being
+    /// silently served.
+    RebuildAndServe { staleness: LocalBundleStaleness },
+    /// Refuse to start: the bundle names a different project version, so it is
+    /// unambiguously not the checked-out code and cannot be repaired by looking
+    /// at timestamps.
+    RefuseStale(LocalBundleStaleness),
+}
+
+/// Map the detected staleness plus the opt-out state onto an action.
+///
+/// Pure on purpose: the policy — dev mode runs the checked-out code, and
+/// serving an outdated backend requires an explicit opt-out — is the part worth
+/// testing, and testing it must not need a Maven build or a real bundle.
+fn decide_local_bundle_action(
+    staleness: Option<LocalBundleStaleness>,
+    allow_stale: bool,
+) -> LocalBundleAction {
+    match staleness {
+        // The explicit opt-out wins over every deviation; the caller warns.
+        staleness if allow_stale => LocalBundleAction::ServeExisting { staleness },
+        Some(staleness @ LocalBundleStaleness::VersionMismatch { .. }) => {
+            LocalBundleAction::RefuseStale(staleness)
+        }
+        // A newer source file only *suggests* the jar is behind it: the jar
+        // plugin skips a repackage whose result would be byte-identical, so a
+        // tree that was checked out or re-saved without a content change also
+        // trips this.  Rebuilding resolves both readings — and a rebuild that
+        // changes nothing is cheap compared with testing the wrong backend.
+        Some(staleness @ LocalBundleStaleness::SourcesNewerThanBundle) => {
+            LocalBundleAction::RebuildAndServe { staleness }
+        }
+        None => LocalBundleAction::ServeExisting { staleness: None },
+    }
+}
+
+/// The reason phrase shared by the staleness warning and the startup refusal.
+fn describe_staleness(staleness: &LocalBundleStaleness) -> String {
+    match staleness {
         LocalBundleStaleness::VersionMismatch {
             checked_out,
             bundled,
@@ -4561,10 +4787,27 @@ fn warn_bundle_staleness(root: &Path, staleness: &LocalBundleStaleness) {
              Browser4 runtime bundle"
                 .to_string()
         }
-    };
-    // Name the rebuild command for the platform we are running on:
-    // powershell.exe on Windows (also runnable from cmd/Git Bash), pwsh elsewhere.
-    let rebuild_command = if cfg!(windows) {
+    }
+}
+
+/// Machine-readable staleness label, used by the `status` / `doctor` report.
+fn staleness_kind(staleness: &LocalBundleStaleness) -> &'static str {
+    match staleness {
+        LocalBundleStaleness::VersionMismatch { .. } => "version_mismatch",
+        LocalBundleStaleness::SourcesNewerThanBundle => "sources_newer_than_bundle",
+    }
+}
+
+/// Render a bundle build time in local time, e.g. `2026-08-25 09:12:03 +08:00`.
+fn format_bundle_build_time(time: std::time::SystemTime) -> String {
+    let local: chrono::DateTime<chrono::Local> = time.into();
+    local.format("%Y-%m-%d %H:%M:%S %:z").to_string()
+}
+
+/// Name the rebuild command for the platform we are running on:
+/// powershell.exe on Windows (also runnable from cmd/Git Bash), pwsh elsewhere.
+fn runtime_bundle_rebuild_command(root: &Path) -> String {
+    if cfg!(windows) {
         format!(
             "powershell -ExecutionPolicy Bypass -File {}\\browser4-apps\\browser4-bundle\\build-runtime-bundle.ps1",
             root.display()
@@ -4574,14 +4817,176 @@ fn warn_bundle_staleness(root: &Path, staleness: &LocalBundleStaleness) {
             "pwsh -File {}/browser4-apps/browser4-bundle/build-runtime-bundle.ps1",
             root.display()
         )
+    }
+}
+
+/// Provenance of the locally assembled dev-mode runtime bundle.
+///
+/// Dev mode refuses to start against a bundle that does not match the checkout,
+/// and `status` / `doctor` report the same facts so a test run can be audited
+/// after the fact: which backend version actually served it, when that backend
+/// was built, and whether the staleness check was opted out of.
+pub struct LocalBundleProvenance {
+    /// Assembled runtime directory (`.../_work/<platform>/<platform>`).
+    pub work_dir: PathBuf,
+    /// Where the backend jars live (`work_dir/lib`).
+    pub lib_dir: PathBuf,
+    /// Project version embedded in the bundled backend jar names.
+    pub bundled_version: Option<String>,
+    /// Project version declared by the checked-out root `pom.xml`.
+    pub checked_out_version: Option<String>,
+    /// When the newest bundled backend jar was written, i.e. when the bundle
+    /// was assembled (local time).
+    pub built_at: Option<String>,
+    /// Why the bundle does not match the checkout, or `None` when it does.
+    pub staleness: Option<&'static str>,
+    /// True when `BROWSER4_CLI_ALLOW_STALE_BUNDLE` is set for this run.
+    pub allow_stale: bool,
+}
+
+impl LocalBundleProvenance {
+    /// Human-readable `(label, value)` rows for the `status` / `doctor` report.
+    pub fn report_rows(&self) -> Vec<(&'static str, String)> {
+        let matches = match self.staleness {
+            None => "yes".to_string(),
+            Some(kind) if self.allow_stale => {
+                format!("no ({kind}) — allowed by {ALLOW_STALE_BUNDLE_ENV}=1")
+            }
+            Some(kind) => format!("no ({kind}) — dev mode refuses to start"),
+        };
+        vec![
+            ("Bundle", self.work_dir.display().to_string()),
+            (
+                "Bundled backend version",
+                self.bundled_version
+                    .clone()
+                    .unwrap_or_else(|| "(unknown)".to_string()),
+            ),
+            (
+                "Bundle built at",
+                self.built_at
+                    .clone()
+                    .unwrap_or_else(|| "(unknown)".to_string()),
+            ),
+            (
+                "Checked-out version",
+                self.checked_out_version
+                    .clone()
+                    .unwrap_or_else(|| "(unknown)".to_string()),
+            ),
+            ("Matches checkout", matches),
+        ]
+    }
+
+    /// Structured form of the same facts, for `--json` output modes.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "path": self.work_dir.display().to_string(),
+            "lib_dir": self.lib_dir.display().to_string(),
+            "bundled_version": self.bundled_version.clone(),
+            "checked_out_version": self.checked_out_version.clone(),
+            "built_at": self.built_at.clone(),
+            "staleness": self.staleness,
+            "allow_stale": self.allow_stale,
+        })
+    }
+}
+
+/// Describe the local runtime bundle dev-mode auto-start would serve.
+///
+/// Returns `None` when there is nothing to describe: not a repository checkout,
+/// an unsupported platform, or no bundle assembled yet.
+pub fn local_bundle_provenance() -> Option<LocalBundleProvenance> {
+    let root = find_browser4_root()?;
+    let paths = local_bundle_paths(&root).ok()?;
+    let staleness = detect_local_bundle_staleness(&root, &paths.lib_dir());
+    Some(local_bundle_provenance_at(&root, &paths, staleness.as_ref()))
+}
+
+/// Core of `local_bundle_provenance` with the layout and staleness injected, so
+/// the report can be built from values the caller already computed.
+fn local_bundle_provenance_at(
+    root: &Path,
+    paths: &LocalBundlePaths,
+    staleness: Option<&LocalBundleStaleness>,
+) -> LocalBundleProvenance {
+    let lib_dir = paths.lib_dir();
+    let (bundled_version, built_at) = match bundled_project_version(&lib_dir) {
+        Some((version, mtime)) => (Some(version), Some(format_bundle_build_time(mtime))),
+        None => (None, None),
     };
+    LocalBundleProvenance {
+        work_dir: paths.work_dir.clone(),
+        lib_dir,
+        bundled_version,
+        checked_out_version: checked_out_project_version(root),
+        built_at,
+        staleness: staleness.map(staleness_kind),
+        allow_stale: should_allow_stale_bundle(),
+    }
+}
+
+/// Print a loud, actionable warning when dev mode serves a bundle the user
+/// explicitly allowed to be stale.
+///
+/// Only `BROWSER4_CLI_ALLOW_STALE_BUNDLE` gets here — by default a stale bundle
+/// is a startup refusal (`stale_bundle_refusal_message`), never a warning.
+fn warn_bundle_staleness(
+    root: &Path,
+    provenance: &LocalBundleProvenance,
+    staleness: &LocalBundleStaleness,
+) {
     eprintln!(
         "\n\u{26A0}  {reason}.\n\
+         \u{26A0}  Bundled backend version: {bundled} (jars built {built_at}); checked-out version: {checked_out}.\n\
          \u{26A0}  Serving the OLD backend build — behaviour may not match the checked-out code.\n\
+         \u{26A0}  Allowed by {ALLOW_STALE_BUNDLE_ENV}=1; unset it and re-run to make dev mode use the checked-out sources instead.\n\
          \u{26A0}  To rebuild from source, run:\n\
          \u{26A0}    {rebuild_command}\n\
-         \u{26A0}  (or set BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1 and re-run this command)"
+         \u{26A0}  (or set {FORCE_REBUILD_BUNDLE_ENV}=1 to rebuild on the next start)",
+        reason = describe_staleness(staleness),
+        bundled = provenance.bundled_version.as_deref().unwrap_or("(unknown)"),
+        built_at = provenance.built_at.as_deref().unwrap_or("(unknown)"),
+        checked_out = provenance
+            .checked_out_version
+            .as_deref()
+            .unwrap_or("(unknown)"),
+        rebuild_command = runtime_bundle_rebuild_command(root),
     );
+}
+
+/// Build the fail-fast message for a bundle that does not match the checkout.
+///
+/// It has to carry everything needed to act without reading the source: what
+/// was detected, the bundle's versions and build time, the exact rebuild
+/// command, and the single documented opt-out.  It also states plainly that
+/// nothing was started, because "did it start the stale backend anyway?" is
+/// exactly the ambiguity this failure mode exists to remove.
+fn stale_bundle_refusal_message(
+    root: &Path,
+    provenance: &LocalBundleProvenance,
+    staleness: &LocalBundleStaleness,
+) -> String {
+    format!(
+        "\n\u{2716}  Refusing to start the Browser4 server: {reason}.\n\
+         \u{2716}  Nothing was started — dev mode does not serve a backend that predates the checked-out sources.\n\
+         \u{2716}  Bundle: {bundle}\n\
+         \u{2716}  Bundled backend version: {bundled} (jars built {built_at}); checked-out version: {checked_out}.\n\
+         \u{2716}  Rebuild it from source, then re-run this command:\n\
+         \u{2716}    {rebuild_command}\n\
+         \u{2716}  (or set {FORCE_REBUILD_BUNDLE_ENV}=1 to rebuild on the next start)\n\
+         \u{2716}  To start against the stale bundle anyway — its OLD behaviour only — set:\n\
+         \u{2716}    {ALLOW_STALE_BUNDLE_ENV}=1",
+        reason = describe_staleness(staleness),
+        bundle = provenance.work_dir.display(),
+        bundled = provenance.bundled_version.as_deref().unwrap_or("(unknown)"),
+        built_at = provenance.built_at.as_deref().unwrap_or("(unknown)"),
+        checked_out = provenance
+            .checked_out_version
+            .as_deref()
+            .unwrap_or("(unknown)"),
+        rebuild_command = runtime_bundle_rebuild_command(root),
+    )
 }
 
 /// Check whether the Maven-built fat JAR is present and has valid content.
@@ -4591,6 +4996,16 @@ fn maven_jar_exists(bundle_module_dir: &Path) -> bool {
     // above 4 KB is a credible build artifact.  Stale / corrupt files
     // are typically zero-length or a few hundred bytes.
     jar.is_file() && jar.metadata().map(|m| m.len() > 4_096).unwrap_or(false)
+}
+
+/// Why dev-mode resolution of the local runtime bundle failed.
+enum LocalBundleFailure {
+    /// The on-disk bundle does not match the checkout and the user did not opt
+    /// out.  Carries the ready-to-print refusal (see
+    /// `stale_bundle_refusal_message`); nothing was started.
+    StaleBundle(String),
+    /// A rebuild could not be run or failed.
+    Build(String),
 }
 
 /// Attempt to auto-build the local runtime bundle from source when running in a
@@ -4606,12 +5021,20 @@ fn maven_jar_exists(bundle_module_dir: &Path) -> bool {
 ///   archive (`browser4-bundle-runtime-<platform>.zip` / `.tar.gz`) is written next
 ///   to `_work/`.
 /// - **When it is rebuilt:** dev-mode auto-start from a checkout reuses an existing
-///   bundle WITHOUT rebuilding (fast path below) unless the bundle is missing or
-///   broken, or `BROWSER4_CLI_FORCE_REBUILD_BUNDLE` is set.  If the staleness check
-///   finds the on-disk bundle older than the checked-out sources it is still reused
-///   (the rebuild may be a deliberate, slow operation) but a loud warning names the
-///   rebuild command.  A full rebuild (Maven `install` + the platform build script)
-///   only runs when no valid bundle exists.
+///   bundle WITHOUT rebuilding (fast path below) when it matches the checked-out
+///   sources.  A bundle that is missing or broken, `BROWSER4_CLI_FORCE_REBUILD_BUNDLE`
+///   being set, or sources that look newer than the bundle jars all trigger a full
+///   rebuild (Maven `install` + the platform build script).
+/// - **When it is refused:** when the on-disk bundle names a **different project
+///   version** the launcher fails fast instead of serving it — dev mode exists to run
+///   the checked-out code, and a silently stale backend invalidates everything tested
+///   against it.  The refusal names the detected reason, the bundle's versions and
+///   build time, the rebuild command and the single opt-out
+///   (`BROWSER4_CLI_ALLOW_STALE_BUNDLE=1`), and states that nothing was started.
+///   A "sources are newer" deviation is *not* refused but rebuilt (see
+///   [`decide_local_bundle_action`]): jar mtimes cannot distinguish a real source
+///   change from a touched-but-unchanged tree, and refusing on that signal would block
+///   startup on a false positive.
 /// - **How to force a rebuild:** set `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1` and re-run
 ///   the command, or run `build-runtime-bundle.ps1` manually (optionally after
 ///   deleting `browser4-apps/browser4-bundle/target/runtime-bundle/_work`).
@@ -4622,45 +5045,77 @@ fn maven_jar_exists(bundle_module_dir: &Path) -> bool {
 ///    contains `lib/*.jar` and `runtime/bin/java`.
 async fn try_build_local_runtime_bundle(
     root: &Path,
-) -> Result<Option<InstalledBrowser4Runtime>, String> {
-    let bundle_module_dir = root.join("browser4-apps").join("browser4-bundle");
-    if !bundle_module_dir.is_dir() {
+) -> Result<Option<InstalledBrowser4Runtime>, LocalBundleFailure> {
+    let paths = local_bundle_paths(root).map_err(LocalBundleFailure::Build)?;
+    if !paths.module_dir.is_dir() {
         return Ok(None);
     }
 
-    let platform = detect_current_runtime_bundle_platform()?;
-    let bundle_dir_name = platform.bundle_dir_name();
-    let bundle_runtime_dir = bundle_module_dir.join("target").join("runtime-bundle");
-    let work_dir = bundle_runtime_dir
-        .join("_work")
-        .join(&bundle_dir_name)
-        .join(&bundle_dir_name);
-    let lib_dir = work_dir.join("lib");
-    let java_path = work_dir
-        .join("runtime")
-        .join("bin")
-        .join(browser4_java_executable_name());
+    let platform = detect_current_runtime_bundle_platform().map_err(LocalBundleFailure::Build)?;
+    let lib_dir = paths.lib_dir();
+    let java_path = paths.java_path();
 
     // Fast path: runtime bundle already assembled — nothing to do
-    // (unless --force-rebuild-bundle is active).  The bundle is reused
-    // UNCONDITIONALLY on the happy path, so when it looks stale relative to
-    // the checked-out sources we still reuse it (the rebuild may be
-    // deliberate, e.g. a slow machine) but warn loudly and name the rebuild
-    // command — a silently stale backend costs hours of misdiagnosis.
+    // (unless --force-rebuild-bundle is active).  Reusing the bundle is the
+    // whole point of the fast path (no Maven, no jlink), so it stays a pure
+    // filesystem check: it is only taken when the bundle matches the checkout,
+    // or when the user explicitly accepted a stale one.  A stale bundle is
+    // otherwise a hard failure — a silently stale backend costs hours of
+    // misdiagnosis, and dev mode promises the checked-out code.
+    // `RebuildAndServe` below has to run Maven even though a bundle JAR exists,
+    // otherwise "the sources look newer" would be answered with an assembly-only
+    // rebuild that repackages nothing and reports success.
+    let mut rebuild_maven = should_force_rebuild_bundle();
     if !should_force_rebuild_bundle() {
-        if let Some(runtime) = existing_runtime_bundle(&lib_dir, &java_path, &work_dir) {
-            if let Some(staleness) = detect_local_bundle_staleness(root, &lib_dir) {
-                warn_bundle_staleness(root, &staleness);
+        if let Some(runtime) = existing_runtime_bundle(&lib_dir, &java_path, &paths.work_dir) {
+            let staleness = detect_local_bundle_staleness(root, &lib_dir);
+            let mut reuse_existing = true;
+            match decide_local_bundle_action(staleness, should_allow_stale_bundle()) {
+                LocalBundleAction::RefuseStale(staleness) => {
+                    let provenance = local_bundle_provenance_at(root, &paths, Some(&staleness));
+                    return Err(LocalBundleFailure::StaleBundle(
+                        stale_bundle_refusal_message(root, &provenance, &staleness),
+                    ));
+                }
+                LocalBundleAction::RebuildAndServe { staleness } => {
+                    // Fall through to the rebuild below instead of serving the
+                    // existing bundle.
+                    let provenance = local_bundle_provenance_at(root, &paths, Some(&staleness));
+                    eprintln!(
+                        "\n\u{26A0}  {}.\n\
+                         \u{26A0}  Rebuilding from source before starting, so dev mode cannot serve a \
+                         backend older than the checked-out code.\n\
+                         \u{26A0}  Bundled backend version: {} (jars built {}); checked-out version: {}.",
+                        describe_staleness(&staleness),
+                        provenance.bundled_version.as_deref().unwrap_or("(unknown)"),
+                        provenance.built_at.as_deref().unwrap_or("(unknown)"),
+                        provenance
+                            .checked_out_version
+                            .as_deref()
+                            .unwrap_or("(unknown)")
+                    );
+                    reuse_existing = false;
+                    rebuild_maven = true;
+                }
+                LocalBundleAction::ServeExisting {
+                    staleness: Some(staleness),
+                } => {
+                    let provenance = local_bundle_provenance_at(root, &paths, Some(&staleness));
+                    warn_bundle_staleness(root, &provenance, &staleness);
+                }
+                LocalBundleAction::ServeExisting { staleness: None } => {}
             }
-            eprintln!(
-                "Using existing local Browser4 runtime bundle at {}.",
-                work_dir.display()
-            );
-            return Ok(Some(runtime));
+            if reuse_existing {
+                eprintln!(
+                    "Using existing local Browser4 runtime bundle at {}.",
+                    paths.work_dir.display()
+                );
+                return Ok(Some(runtime));
+            }
         }
     }
 
-    let build_script = bundle_module_dir.join(platform.build_script_name());
+    let build_script = paths.module_dir.join(platform.build_script_name());
     if !build_script.is_file() {
         eprintln!(
             "Build script not found at {}; skipping local bundle build.",
@@ -4673,10 +5128,14 @@ async fn try_build_local_runtime_bundle(
     // previous build is still present; this saves 10–30 s on every invocation
     // when only the runtime assembly step needs to be re-run.  When
     // --force-rebuild-bundle is active, always rebuild regardless.
-    if !should_force_rebuild_bundle() && maven_jar_exists(&bundle_module_dir) {
+    // Whether the Maven step ran to completion in this call, i.e. whether the
+    // installed jars were refreshed from this tree (see the build stamp below).
+    let mut maven_ran = false;
+    if !rebuild_maven && maven_jar_exists(&paths.module_dir) {
         eprintln!(
             "Using existing Browser4 bundle JAR at {}; skipping Maven package.",
-            bundle_module_dir
+            paths
+                .module_dir
                 .join("target")
                 .join("Browser4Bundle.jar")
                 .display()
@@ -4690,7 +5149,7 @@ async fn try_build_local_runtime_bundle(
         } else {
             eprintln!(
                 "Building local Browser4 runtime bundle from {} ...",
-                bundle_module_dir.display()
+                paths.module_dir.display()
             );
         }
         let mvn_program = resolve_maven_program(root);
@@ -4703,6 +5162,14 @@ async fn try_build_local_runtime_bundle(
                         "install",
                         "-Pall-main-modules,asset-bundle",
                         "-DskipTests",
+                        // The jar plugin skips repackaging when it thinks nothing
+                        // changed, and it compares the jar against the classes
+                        // *directory* mtime — which does not move when only the
+                        // contents of existing class files change.  Force it, or a
+                        // rebuild can leave a module jar older than the sources it
+                        // was compiled from, and the staleness refusal below would
+                        // never clear no matter how often the user rebuilds.
+                        "-Dmaven.jar.forceCreation=true",
                         "-q",
                     ])
                     .current_dir(&root)
@@ -4713,10 +5180,12 @@ async fn try_build_local_runtime_bundle(
             }
         })
         .await
-        .map_err(|e| format!("Maven package task panicked: {e}"))?;
+        .map_err(|e| LocalBundleFailure::Build(format!("Maven package task panicked: {e}")))?;
 
         match mvn_status {
-            Ok(status) if status.success() => {}
+            Ok(status) if status.success() => {
+                maven_ran = true;
+            }
             Ok(status) => {
                 eprintln!(
                     "Maven package for browser4-bundle exited with {}; falling back to download.",
@@ -4738,13 +5207,13 @@ async fn try_build_local_runtime_bundle(
     // Step 2 – run the platform build script (jlink + assembly).
     eprintln!(
         "Assembling Browser4 runtime bundle from {} ...",
-        bundle_module_dir.display()
+        paths.module_dir.display()
     );
     let build_result = if cfg!(windows) {
-        run_bundle_build_script("powershell.exe", &build_script, &bundle_module_dir).await
+        run_bundle_build_script("powershell.exe", &build_script, &paths.module_dir).await
     } else {
         // PowerShell Core may be installed as `pwsh` on Linux / macOS.
-        run_bundle_build_script("pwsh", &build_script, &bundle_module_dir).await
+        run_bundle_build_script("pwsh", &build_script, &paths.module_dir).await
     };
 
     match build_result {
@@ -4756,17 +5225,26 @@ async fn try_build_local_runtime_bundle(
     }
 
     // Verify the expected output was produced.
-    if let Some(runtime) = existing_runtime_bundle(&lib_dir, &java_path, &work_dir) {
+    if let Some(runtime) = existing_runtime_bundle(&lib_dir, &java_path, &paths.work_dir) {
+        // Record when the bundle was last assembled from these sources.  Needed
+        // because a jar whose fresh content is byte-identical keeps its old mtime
+        // (Maven's reproducible-build configuration pins the archive entries and
+        // the plugin leaves such a file alone), so jar mtimes alone can never
+        // clear a "sources look newer" reading.  Only stamped when Maven actually
+        // ran, i.e. when the installed jars were refreshed from this tree.
+        if maven_ran {
+            write_bundle_build_stamp(&lib_dir);
+        }
         eprintln!(
             "Local Browser4 runtime bundle built successfully at {}.",
-            bundle_runtime_dir.display()
+            paths.runtime_bundle_dir.display()
         );
         return Ok(Some(runtime));
     }
 
     eprintln!(
         "Runtime bundle build completed but expected layout under {} was not found; falling back to download.",
-        work_dir.display()
+        paths.work_dir.display()
     );
     Ok(None)
 }
@@ -4892,7 +5370,12 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
                          browser4-cli <command>"
                     ));
                 }
-                Err(error) => {
+                // A stale bundle is a policy refusal, not a build failure: its
+                // message is already complete and actionable, so it is surfaced
+                // verbatim.  Wrapping it in build-failure advice would bury the
+                // rebuild command and the opt-out it already names.
+                Err(LocalBundleFailure::StaleBundle(message)) => return Err(message),
+                Err(LocalBundleFailure::Build(error)) => {
                     return Err(format!(
                         "Local Browser4 runtime bundle build failed: {error}\n\
                          \n\
@@ -8124,6 +8607,323 @@ mod tests {
             detect_local_bundle_staleness(tmp.path(), &lib_dir),
             Some(LocalBundleStaleness::SourcesNewerThanBundle)
         );
+    }
+
+    #[test]
+    fn detect_staleness_compares_each_module_against_its_own_jar() {
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        // An incremental Maven build rewrites only the module whose contents
+        // changed, so the other jars keep their original timestamps.
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+        write_bundle_lib_jar(&lib_dir, "browser4-agentic-4.13.13-SNAPSHOT.jar");
+
+        let rest_jar = lib_dir.join("browser4-rest-4.13.13-SNAPSHOT.jar");
+        let rest_mtime = rest_jar.metadata().unwrap().modified().unwrap();
+        let agentic_jar = lib_dir.join("browser4-agentic-4.13.13-SNAPSHOT.jar");
+        fs::File::options()
+            .write(true)
+            .open(&agentic_jar)
+            .unwrap()
+            .set_modified(rest_mtime + std::time::Duration::from_secs(3600))
+            .unwrap();
+
+        // The agentic source is older than the agentic jar (it was rebuilt) but
+        // newer than the much older rest jar.  Comparing every source against a
+        // single baseline would call this stale forever, and now refuse to start.
+        let src = tmp.path().join("browser4-agentic").join("src").join("main");
+        create_dir_all(&src).unwrap();
+        let source_file = src.join("Fresh.kt");
+        write(&source_file, "package fresh\n").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&source_file)
+            .unwrap()
+            .set_modified(rest_mtime + std::time::Duration::from_secs(60))
+            .unwrap();
+
+        assert_eq!(detect_local_bundle_staleness(tmp.path(), &lib_dir), None);
+    }
+
+    #[test]
+    fn detect_staleness_flags_a_module_missing_from_the_bundle() {
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        // A module with sources but no jar in the bundle cannot be part of the
+        // backend that is about to be served.
+        let src = tmp.path().join("browser4-agentic").join("src").join("main");
+        create_dir_all(&src).unwrap();
+        write(src.join("Fresh.kt"), "package fresh\n").unwrap();
+
+        assert_eq!(
+            detect_local_bundle_staleness(tmp.path(), &lib_dir),
+            Some(LocalBundleStaleness::SourcesNewerThanBundle)
+        );
+    }
+
+    #[test]
+    fn a_build_stamp_clears_newer_source_timestamps() {
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        let src = tmp.path().join("browser4-rest").join("src").join("main");
+        create_dir_all(&src).unwrap();
+        let source_file = src.join("Fresh.kt");
+        write(&source_file, "package fresh\n").unwrap();
+        set_newer_than_bundle_jar(&source_file, &lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        assert_eq!(
+            detect_local_bundle_staleness(tmp.path(), &lib_dir),
+            Some(LocalBundleStaleness::SourcesNewerThanBundle)
+        );
+
+        // A rebuild whose recompiled content is byte-identical leaves the jar
+        // timestamp untouched (reproducible builds pin the archive entries), so
+        // without the stamp this reading would never clear and dev mode would
+        // rebuild — or refuse — forever.
+        let jar_mtime = lib_dir
+            .join("browser4-rest-4.13.13-SNAPSHOT.jar")
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap();
+        write_bundle_build_stamp(&lib_dir);
+        fs::File::options()
+            .write(true)
+            .open(bundle_build_stamp_path(&lib_dir))
+            .unwrap()
+            .set_modified(jar_mtime + std::time::Duration::from_secs(120))
+            .unwrap();
+
+        assert_eq!(detect_local_bundle_staleness(tmp.path(), &lib_dir), None);
+    }
+
+    /// Set a file's mtime relative to the bundle jar so staleness is decided by
+    /// the ordering, never by a sleep (the filesystem rounds to the clock tick).
+    fn set_newer_than_bundle_jar(path: &Path, lib_dir: &Path, jar_name: &str) {
+        let jar_mtime = lib_dir
+            .join(jar_name)
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(jar_mtime + std::time::Duration::from_secs(60))
+            .unwrap();
+    }
+
+    #[test]
+    fn detect_staleness_ignores_test_sources() {
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        // Test sources are not compiled into the runtime bundle.  Counting them
+        // would refuse dev-mode startup — and demand a full Maven + jlink rebuild
+        // — for a test edit that cannot change the served backend.
+        let test_src = tmp.path().join("browser4-rest").join("src").join("test");
+        create_dir_all(&test_src).unwrap();
+        let test_file = test_src.join("FreshTest.kt");
+        write(&test_file, "package fresh\n").unwrap();
+        set_newer_than_bundle_jar(&test_file, &lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        assert_eq!(detect_local_bundle_staleness(tmp.path(), &lib_dir), None);
+    }
+
+    #[test]
+    fn detect_staleness_flags_a_changed_bundle_pom() {
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        // A dependency or plugin change alters the assembled bundle without
+        // touching a .kt file, so the bundle POM is a build input too.
+        let module_dir = tmp
+            .path()
+            .join("browser4-apps")
+            .join("browser4-bundle");
+        create_dir_all(&module_dir).unwrap();
+        let pom = module_dir.join("pom.xml");
+        write(&pom, "<project/>\n").unwrap();
+        set_newer_than_bundle_jar(&pom, &lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        assert_eq!(
+            detect_local_bundle_staleness(tmp.path(), &lib_dir),
+            Some(LocalBundleStaleness::SourcesNewerThanBundle)
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Stale-bundle policy: dev mode runs the checked-out code by default,
+    // and serving an outdated bundle requires an explicit opt-out.  The
+    // decision is pure, so these tests need neither Maven nor a bundle.
+    // -------------------------------------------------------------------
+
+    fn version_mismatch_staleness() -> LocalBundleStaleness {
+        LocalBundleStaleness::VersionMismatch {
+            checked_out: "4.13.14-SNAPSHOT".to_string(),
+            bundled: "4.13.13-SNAPSHOT".to_string(),
+        }
+    }
+
+    #[test]
+    fn fresh_bundle_is_served_without_opt_out() {
+        assert_eq!(
+            decide_local_bundle_action(None, false),
+            LocalBundleAction::ServeExisting { staleness: None }
+        );
+    }
+
+    #[test]
+    fn version_skew_is_refused_by_default() {
+        // The bundle names a different project version, so it is unambiguously
+        // not the checked-out code — that used to serve 4.13.13 while the tree
+        // was 4.13.14.
+        assert_eq!(
+            decide_local_bundle_action(Some(version_mismatch_staleness()), false),
+            LocalBundleAction::RefuseStale(version_mismatch_staleness())
+        );
+    }
+
+    #[test]
+    fn newer_sources_trigger_a_rebuild_instead_of_a_refusal() {
+        // The mtime signal cannot tell a real source change from a tree whose
+        // files were merely touched, so the default is to rebuild: correct in
+        // the first case, a no-op repackage in the second.  Refusing here would
+        // block dev-mode startup on a false positive.
+        assert_eq!(
+            decide_local_bundle_action(Some(LocalBundleStaleness::SourcesNewerThanBundle), false),
+            LocalBundleAction::RebuildAndServe {
+                staleness: LocalBundleStaleness::SourcesNewerThanBundle
+            }
+        );
+    }
+
+    #[test]
+    fn stale_bundle_is_served_when_the_opt_out_is_set() {
+        // The opt-out changes the action, not the detection: the staleness is
+        // still reported so the caller can warn loudly.
+        assert_eq!(
+            decide_local_bundle_action(Some(version_mismatch_staleness()), true),
+            LocalBundleAction::ServeExisting {
+                staleness: Some(version_mismatch_staleness())
+            }
+        );
+        assert_eq!(
+            decide_local_bundle_action(Some(LocalBundleStaleness::SourcesNewerThanBundle), true),
+            LocalBundleAction::ServeExisting {
+                staleness: Some(LocalBundleStaleness::SourcesNewerThanBundle)
+            }
+        );
+    }
+
+    #[test]
+    fn env_flag_is_on_accepts_only_documented_spellings() {
+        for value in ["1", "true", "TRUE", "yes", "YES", "on", "ON"] {
+            assert!(env_flag_is_on(Some(value)), "{value} should be on");
+        }
+        // Unset and typos must not silently change the bundle policy.
+        for value in [None, Some(""), Some("0"), Some("True"), Some("no"), Some("off")] {
+            assert!(!env_flag_is_on(value), "{value:?} should be off");
+        }
+    }
+
+    #[test]
+    fn refusal_message_names_reason_provenance_rebuild_and_opt_out() {
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.14-SNAPSHOT");
+        let paths = LocalBundlePaths {
+            module_dir: tmp.path().join("browser4-apps").join("browser4-bundle"),
+            runtime_bundle_dir: tmp.path().join("runtime-bundle"),
+            work_dir: tmp.path().join("work"),
+        };
+        let staleness = version_mismatch_staleness();
+        let provenance = LocalBundleProvenance {
+            work_dir: paths.work_dir.clone(),
+            lib_dir: paths.lib_dir(),
+            bundled_version: Some("4.13.13-SNAPSHOT".to_string()),
+            checked_out_version: Some("4.13.14-SNAPSHOT".to_string()),
+            built_at: Some("2026-08-25 09:12:03 +08:00".to_string()),
+            staleness: Some(staleness_kind(&staleness)),
+            allow_stale: false,
+        };
+
+        let message = stale_bundle_refusal_message(tmp.path(), &provenance, &staleness);
+        // The reason, the bundled and checked-out versions, and the build time.
+        assert!(message.contains("4.13.13-SNAPSHOT"), "{message}");
+        assert!(message.contains("4.13.14-SNAPSHOT"), "{message}");
+        assert!(message.contains("2026-08-25 09:12:03 +08:00"), "{message}");
+        // A copy-pasteable rebuild command for this platform.
+        assert!(
+            message.contains("build-runtime-bundle.ps1"),
+            "{message}"
+        );
+        // Exactly one documented escape hatch, and both levers named.
+        assert!(message.contains(ALLOW_STALE_BUNDLE_ENV), "{message}");
+        assert!(message.contains(FORCE_REBUILD_BUNDLE_ENV), "{message}");
+        // The user must not be left guessing whether the server started.
+        assert!(message.contains("Nothing was started"), "{message}");
+    }
+
+    #[test]
+    fn staleness_kind_labels_are_stable() {
+        // `status` / `doctor` JSON exposes these labels; tests and users key on
+        // them, so their spelling is part of the contract.
+        assert_eq!(
+            staleness_kind(&version_mismatch_staleness()),
+            "version_mismatch"
+        );
+        assert_eq!(
+            staleness_kind(&LocalBundleStaleness::SourcesNewerThanBundle),
+            "sources_newer_than_bundle"
+        );
+    }
+
+    #[test]
+    fn provenance_rows_and_json_carry_the_versions_and_build_time() {
+        let tmp = test_temp_dir();
+        let provenance = LocalBundleProvenance {
+            work_dir: tmp.path().join("work"),
+            lib_dir: tmp.path().join("work").join("lib"),
+            bundled_version: Some("4.13.13-SNAPSHOT".to_string()),
+            checked_out_version: Some("4.13.14-SNAPSHOT".to_string()),
+            built_at: Some("2026-08-25 09:12:03 +08:00".to_string()),
+            staleness: Some("version_mismatch"),
+            allow_stale: true,
+        };
+
+        let rows = provenance.report_rows();
+        let rendered = rows
+            .iter()
+            .map(|(label, value)| format!("{label}: {value}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("4.13.13-SNAPSHOT"), "{rendered}");
+        assert!(rendered.contains("4.13.14-SNAPSHOT"), "{rendered}");
+        assert!(
+            rendered.contains("2026-08-25 09:12:03 +08:00"),
+            "{rendered}"
+        );
+        // With the opt-out in effect the rows must say so, not report "yes".
+        assert!(rendered.contains(ALLOW_STALE_BUNDLE_ENV), "{rendered}");
+
+        let json = provenance.to_json();
+        assert_eq!(json["bundled_version"], "4.13.13-SNAPSHOT");
+        assert_eq!(json["checked_out_version"], "4.13.14-SNAPSHOT");
+        assert_eq!(json["built_at"], "2026-08-25 09:12:03 +08:00");
+        assert_eq!(json["staleness"], "version_mismatch");
+        assert_eq!(json["allow_stale"], true);
     }
 
     #[test]

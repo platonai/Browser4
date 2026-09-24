@@ -338,6 +338,11 @@ jobs:
         shell: bash
         run: bash cli/scripts/tests/wait-for-npm-version.tests.sh
 
+      - name: Run wait-for-oss-sync.tests.sh
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash cli/scripts/tests/wait-for-oss-sync.tests.sh
+
       - name: Run install-browser4-cli.tests.ps1
         if: runner.os == 'Windows'
         shell: pwsh
@@ -1365,6 +1370,14 @@ jobs:
       id-token: write
 
     steps:
+      # The job needs the repository for its own scripts (the OSS sync waiter
+      # below, cli/scripts/wait-for-oss-sync.sh).  Checkout first: it cleans
+      # the workspace, so it must run before the artifacts are downloaded.
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
       - name: Download JAR artifact
         uses: actions/download-artifact@v7
         with:
@@ -1528,55 +1541,23 @@ jobs:
         id: oss_sync
         if: success()
         shell: bash
-        timeout-minutes: 15
+        # Must exceed sync-to-oss.yml's own worst case (its job timeout is
+        # 60 min, its upload step 45 min) plus its queue time, so that the step
+        # reports the sync's verdict rather than timing out on top of it.
+        # v4.13.21 gave up after 15 minutes on a sync whose "Upload to OSS" step
+        # had stalled, and the release job went red with nothing but "timed out"
+        # to say.  Both numbers are raised again because a re-sync is genuinely
+        # slow: the GitHub runner reached Aliyun at ~400 KB/s for 551 MB, while
+        # the first sync of a tag had managed ~4 MB/s.
+        timeout-minutes: 75
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
-
-          # Trigger the OSS sync workflow.  The release event may have already
-          # auto-triggered a run; this ensures one is queued.
-          echo "Triggering sync-to-oss.yml for tag ${TAG_NAME}"
-          gh workflow run sync-to-oss.yml \
-            --repo "${{ github.repository }}" \
-            -f tag_name="$TAG_NAME"
-
-          # Wait for GitHub to create the run record.
-          sleep 3
-
-          # Find the most recent run of sync-to-oss.yml.
-          RUN_ID=""
-          for i in $(seq 1 20); do
-            RUN_ID=$(gh run list --workflow=sync-to-oss.yml \
-              --repo "${{ github.repository }}" \
-              --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || echo "")
-            if [ -n "$RUN_ID" ]; then
-              break
-            fi
-            echo "Waiting for run to appear (attempt $i/20)..."
-            sleep 3
-          done
-
-          if [ -z "$RUN_ID" ]; then
-            echo "::error::Could not find sync-to-oss.yml workflow run"
-            exit 1
-          fi
-
-          echo "Waiting for sync-to-oss run ${RUN_ID} to complete..."
-          gh run watch "$RUN_ID" --repo "${{ github.repository }}" --exit-status && WATCH_OK=true || WATCH_OK=false
-
-          CONCLUSION=$(gh run view "$RUN_ID" --repo "${{ github.repository }}" --json conclusion -q '.conclusion')
-          echo "sync-to-oss run ${RUN_ID} completed with conclusion: ${CONCLUSION}"
-          echo "Run URL: https://github.com/${{ github.repository }}/actions/runs/${RUN_ID}"
-
-          if [ "$CONCLUSION" != "success" ]; then
-            echo "::error::OSS sync workflow failed — CDN may still serve an older release."
-            echo "::error::Verify the run at https://github.com/${{ github.repository }}/actions/runs/${RUN_ID} and re-trigger if needed."
-            exit 1
-          fi
-
-          echo "✅ Aliyun OSS CDN updated to ${TAG_NAME}"
+          bash cli/scripts/wait-for-oss-sync.sh \
+            --tag "$TAG_NAME" \
+            --repo "${{ github.repository }}"
 
   cleanup-on-failure:
     name: Report failed release

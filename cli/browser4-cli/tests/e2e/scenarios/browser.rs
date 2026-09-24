@@ -2310,16 +2310,26 @@ pub(super) fn test_keyboard_edge_inputs(ctx: &mut E2ECtx) {
         "Expected password input to accept value",
     );
 
-    // ── readonly input: value should remain unchanged ───────────────
-    run_command(ctx, &["fill", "#readonly-target", "new val"]);
+    // ── readonly input: refused loudly, value unchanged ─────────────
+    // A read-only target cannot receive user input, so `fill` reports it instead of
+    // silently leaving the value alone — the same contract `type` already had.
+    run_command_expecting_failure(
+        ctx,
+        &["fill", "#readonly-target", "new val"],
+        "target [#readonly-target] is read-only",
+    );
     let readonly_val = eval_text_for_target(ctx, "element => element.value", "#readonly-target");
     assert_eq!(
         readonly_val.trim(), "read-only",
         "Expected readonly input to retain original value, got: {:?}", readonly_val.trim()
     );
 
-    // ── disabled input ──────────────────────────────────────────────
-    run_command(ctx, &["fill", "#disabled-target", "new val"]);
+    // ── disabled input: refused loudly, value unchanged ─────────────
+    run_command_expecting_failure(
+        ctx,
+        &["fill", "#disabled-target", "new val"],
+        "target [#disabled-target] is disabled",
+    );
     let disabled_val = eval_text_for_target(
         ctx, "element => element.value", "#disabled-target"
     );

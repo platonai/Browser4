@@ -14,11 +14,12 @@ browser4-cli snapshot -v 0
 browser4-cli fill <email-ref> "user@example.com"
 browser4-cli fill <password-ref> "password"
 browser4-cli click <submit-ref>
-browser4-cli wait --load networkidle
+browser4-cli wait --load networkidle      # proves the network settled — nothing more
+browser4-cli wait "<result-selector>"     # poll late-rendered results before reading them
 browser4-cli snapshot -v 0 --auto-diff
 ```
 
-Every interaction should be followed by verification (`snapshot -v 0 --auto-diff` or `snapshot grep`).
+Every interaction should be followed by verification (`snapshot -v 0 --auto-diff` or `snapshot grep`). When the result is rendered by page JS after load, wait for the result element first — `wait --load networkidle` only proves the network went quiet and can return while the page is still blank.
 
 ## When to Use
 
@@ -51,7 +52,7 @@ browser4-cli snapshot -v 0
 browser4-cli fill <email-ref> "user@example.com"
 browser4-cli fill <password-ref> "password"
 browser4-cli click <submit-ref>
-browser4-cli wait --load networkidle
+browser4-cli wait --load networkidle      # network settled — add `wait "<result-selector>"` when the result renders late
 browser4-cli snapshot -v 0 --auto-diff
 ```
 

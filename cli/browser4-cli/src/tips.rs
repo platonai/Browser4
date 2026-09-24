@@ -162,7 +162,7 @@ const TIPS_AI_EXTRACTION: &[Tip] = &[
 
 const TIPS_SCROLL: &[Tip] = &[
     Tip {
-        text: "Use `wait --load networkidle` after scrolling to ensure infinite-scroll content has loaded",
+        text: "After scrolling, wait for the newly loaded items (`wait <selector>`) — `wait --load networkidle` only proves the network went quiet",
     },
     Tip {
         text: "Use `scroll down <px>` with incremental values (e.g. 300px) to trigger lazy-loading without overshooting",
@@ -171,10 +171,10 @@ const TIPS_SCROLL: &[Tip] = &[
 
 const TIPS_WAIT: &[Tip] = &[
     Tip {
-        text: "Use `wait --load networkidle` instead of fixed `wait <ms>` for reliable page readiness",
+        text: "`wait --load networkidle` only proves the network went quiet — for results rendered by page JS, poll the result element: `wait <result-selector>`",
     },
     Tip {
-        text: "Chain wait conditions: `wait <ref> && wait --load networkidle` for dynamic content that loads after interaction",
+        text: "Chain wait conditions: `wait <result-selector> && wait --load networkidle` for dynamic content that loads after interaction",
     },
     Tip {
         text: "Use `wait --fn \"document.readyState === 'complete'\"` for custom page-ready checks",

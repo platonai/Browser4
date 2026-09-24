@@ -218,6 +218,58 @@ Starting server from Browser4 runtime at .../v4.11.0 using .../bin/java on port 
 You can skip the local-repo auto-build detection by setting
 `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1`.
 
+### Dev mode: the backend must match the checkout
+
+When the current directory **is** a Browser4 repository checkout (dev mode), the
+CLI builds the runtime bundle from those sources instead of downloading one, so
+the backend under test is the checked-out code. An already assembled bundle is
+reused **without rebuilding** while it matches the checkout; the two deviations
+are handled differently, because only one of them is unambiguous:
+
+- **Different project version** — the bundle was built from another release, so
+  it is definitively not the checked-out code. The CLI refuses to start the
+  server, prints why, and exits non-zero.
+- **Sources newer than the bundle jars** — a heuristic, not proof: Maven skips a
+  repackage whose result would be byte-identical, so a tree that was checked out
+  or re-saved without a content change looks the same as one that really changed.
+  The CLI therefore **rebuilds from source and then starts** (a no-op repackage
+  in the harmless case, the checked-out code in the real one) instead of blocking
+  startup on a signal it cannot verify.
+
+The version-skew refusal looks like this:
+
+```
+✖  Refusing to start the Browser4 server: the existing local Browser4 runtime
+   bundle was built from 4.13.13-SNAPSHOT sources, but the checked-out sources
+   are 4.13.14-SNAPSHOT.
+✖  Nothing was started — dev mode does not serve a backend that predates the
+   checked-out sources.
+✖  Bundle: <root>/browser4-apps/browser4-bundle/target/runtime-bundle/_work/...
+✖  Bundled backend version: 4.13.13-SNAPSHOT (jars built 2026-08-25 09:12:03 +08:00);
+   checked-out version: 4.13.14-SNAPSHOT.
+✖  Rebuild it from source, then re-run this command:
+✖    powershell -ExecutionPolicy Bypass -File <root>\browser4-apps\browser4-bundle\build-runtime-bundle.ps1
+✖  (or set BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1 to rebuild on the next start)
+✖  To start against the stale bundle anyway — its OLD behaviour only — set:
+✖    BROWSER4_CLI_ALLOW_STALE_BUNDLE=1
+```
+
+The two levers mean opposite things and are both documented:
+
+| Variable | Meaning |
+|---|---|
+| `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1` | **Rebuild now:** Maven `install` + the platform build script run before the server starts (slow), so the backend matches the checkout |
+| `BROWSER4_CLI_ALLOW_STALE_BUNDLE=1` | **Run the old build anyway:** the documented opt-out from the refusal, for deliberately testing an older backend. The CLI still warns loudly, and `status` / `doctor` keep reporting the skew |
+
+Both build paths pass `-Dmaven.jar.forceCreation=true`: the jar plugin otherwise
+skips a repackage when it believes nothing changed, which is how a module jar can
+end up older than the sources it was compiled from.
+
+`browser4-cli status` and `browser4-cli doctor` report the same provenance in
+text and in `--json` (`local_bundle`: `path`, `bundled_version`,
+`checked_out_version`, `built_at`, `staleness`, `allow_stale`), so a test run's
+backend provenance can be checked after the fact.
+
 ---
 
 ## Download mirrors
@@ -415,6 +467,8 @@ to PowerShell's `Invoke-WebRequest` which uses the WinINET proxy stack.
 | `BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST` | Set to `1` to skip speed tests; use TCP reachability only |
 | `BROWSER4_CLI_PROXY` | Explicit download proxy URL |
 | `BROWSER4_CLI_FORCE_REMOTE_BUNDLE` | Skip local repo build; always download (`1`/`true`/`yes`/`on`) |
+| `BROWSER4_CLI_FORCE_REBUILD_BUNDLE` | Dev mode: rebuild the runtime bundle from the checked-out sources before starting (`1`/`true`/`yes`/`on`) |
+| `BROWSER4_CLI_ALLOW_STALE_BUNDLE` | Dev mode: start against a bundle that does not match the checkout instead of refusing (`1`/`true`/`yes`/`on`) |
 | `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | HTTP request timeout in seconds (default: `30`) |
 | `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | Navigation request timeout in seconds (default: `120`) |
 
