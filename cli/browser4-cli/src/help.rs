@@ -1171,7 +1171,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - --endpoint accepts a remote Browser4 server URL (e.g. http://browser4-server:8182) for distributed setups."
+            "  - --endpoint accepts a remote Browser4 server URL (e.g. http://browser4-server:18182) for distributed setups."
                 .to_string(),
         );
         lines.push(
@@ -1202,8 +1202,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli attach --extension".to_string());
         lines.push("  browser4-cli attach --extension chrome-canary".to_string());
         lines.push("  browser4-cli attach --extension msedge".to_string());
-        lines.push("  browser4-cli attach --endpoint http://browser4-server:8182".to_string());
-        lines.push("  browser4-cli attach --endpoint http://remote:8182 --cdp chrome".to_string());
+        lines.push("  browser4-cli attach --endpoint http://browser4-server:18182".to_string());
+        lines.push("  browser4-cli attach --endpoint http://remote:18182 --cdp chrome".to_string());
     }
 
     if cmd.name == "open" {

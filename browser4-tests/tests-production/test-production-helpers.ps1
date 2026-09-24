@@ -141,7 +141,7 @@ $script:AppData = if ($env:APPDATA) {
 $InstallPs1Url   = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1'
 $InstallShUrl    = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh'
 $Browser4Home    = if ($script:OSWin) { Join-Path $env:USERPROFILE '.browser4' } else { Join-Path $env:HOME '.browser4' }
-$ServerBaseUrl   = 'http://localhost:8182'
+$ServerBaseUrl   = 'http://localhost:18182'
 $ServerHealthUrl = "$ServerBaseUrl/actuator/health"
 
 # Runtime data directory (mirrors lines 158-169)

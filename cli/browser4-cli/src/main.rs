@@ -2317,8 +2317,8 @@ async fn handle_attach(
              browser4-cli attach --cdp http://localhost:9222\n  \
              browser4-cli attach --extension\n  \
              browser4-cli attach --extension chrome-canary\n  \
-             browser4-cli attach --endpoint http://browser4-server:8182\n  \
-             browser4-cli attach --endpoint http://remote:8182 --cdp chrome"
+             browser4-cli attach --endpoint http://browser4-server:18182\n  \
+             browser4-cli attach --endpoint http://remote:18182 --cdp chrome"
                 .to_string(),
         );
     };

@@ -1222,9 +1222,9 @@ pub async fn ensure_server_running(base_url: &str, enforce_version: bool) -> Res
 
 pub fn extract_port(base_url: &str) -> u16 {
     if let Ok(url) = reqwest::Url::parse(base_url) {
-        url.port().unwrap_or(8182)
+        url.port().unwrap_or(18182)
     } else {
-        8182
+        18182
     }
 }
 
@@ -1243,12 +1243,12 @@ pub fn extract_port(base_url: &str) -> u16 {
 //   * every checkout gets its own backend port, allocated by scanning upward
 //     from `DEV_SERVER_PORT_START` and skipping ports that are already taken.
 //
-// Production installs are untouched: they keep the documented 8182 default and
+// Production installs are untouched: they keep the documented 18182 default and
 // the flat `~/.browser4` state.
 
-/// First port a development checkout tries for its backend.  Chosen one
-/// thousand above the production default (8182) so a dev server and an
-/// installed server can run at the same time without colliding.
+/// First port a development checkout tries for its backend.  Chosen far from
+/// the production default (18182) so a dev server and an installed server can
+/// run at the same time without colliding.
 pub const DEV_SERVER_PORT_START: u16 = 8282;
 
 /// How many consecutive ports the development allocator scans before giving
@@ -1350,7 +1350,7 @@ pub fn local_backend_port(base_url: &str) -> Option<u16> {
     if !is_loopback_base_url(&parsed) {
         return None;
     }
-    Some(parsed.port().unwrap_or(8182))
+    Some(parsed.port().unwrap_or(18182))
 }
 
 /// True when [parsed] points at a loopback host — i.e. a backend on this
@@ -1384,7 +1384,7 @@ fn is_dev_port(port: u16) -> bool {
 ///   by this checkout's own server (sticky across restarts); re-allocate when
 ///   another workspace has taken it over.
 /// * Anything else (a remote host, an explicit `--server`, a non-dev loopback
-///   port such as the production 8182) → honoured untouched.
+///   port such as the production 18182) → honoured untouched.
 fn dev_base_url_for_workspace(recorded: &str, has_state: bool) -> String {
     decide_dev_base_url(
         recorded,
@@ -1408,7 +1408,7 @@ fn decide_dev_base_url(
     // a dev-range port that somebody else has taken over since is honoured.
     if has_state {
         if let Ok(parsed) = reqwest::Url::parse(recorded) {
-            let port = parsed.port().unwrap_or(8182);
+            let port = parsed.port().unwrap_or(18182);
             if !is_loopback_base_url(&parsed) || !is_dev_port(port) || is_usable(port) {
                 return recorded.to_string();
             }

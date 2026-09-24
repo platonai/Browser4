@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component
  * always target THIS backend and can never auto-start/restart a server.
  *
  * The port is read from Spring's `server.port` (the CLI daemon always launches
- * with `--server.port=<port>`), falling back to 8182. An explicit
+ * with `--server.port=<port>`), falling back to 18182. An explicit
  * `-Dbrowser4.server.url=...` override wins.
  */
 @Component
@@ -26,7 +26,7 @@ class Browser4ServerUrlPublisher(
     @PostConstruct
     fun publish() {
         if (System.getProperty(BROWSER4_SERVER_URL_KEY) != null) return
-        val port = environment.getProperty("server.port", "8182")
+        val port = environment.getProperty("server.port", "18182")
         val host = System.getenv("BROWSER4_SERVER_HOST") ?: "localhost"
         val url = "http://$host:$port"
         System.setProperty(BROWSER4_SERVER_URL_KEY, url)

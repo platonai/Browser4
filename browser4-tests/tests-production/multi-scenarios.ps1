@@ -357,7 +357,7 @@ if ($ShouldPreStartServer) {
     Write-Host '── Pre-starting Browser4 server (warm-up) ──' -ForegroundColor DarkYellow
     try {
         # Kill any stale port holders first.
-        Clear-Browser4Port -Port 8182 -WaitSeconds 2
+        Clear-Browser4Port -Port 18182 -WaitSeconds 2
 
         # Open a trivial session to trigger server download/start.
         $preTimeout = 120

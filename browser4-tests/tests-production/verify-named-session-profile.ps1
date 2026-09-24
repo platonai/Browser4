@@ -95,7 +95,7 @@ $ErrorActionPreference = 'Continue'
 # -------------------------------------------------------------------
 Import-Module "$PSScriptRoot\test-utils.psm1" -Force
 # -SkipPortCleanup: this is a measurement against the user's live setup, so it
-# must not kill whatever currently holds port 8182.  The only destructive step
+# must not kill whatever currently holds port 18182.  The only destructive step
 # (backend restart) is the opt-in Phase B below.
 Start-TestSession -Name 'verify-named-session-profile' -SkipPortCleanup
 

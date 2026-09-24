@@ -545,7 +545,7 @@ function Assert-SnapshotContains {
 # anything still holding it so the next `open` doesn't hang.
 # -------------------------------------------------------------------
 function Clear-Browser4Port {
-    param([int]$Port = 8182)
+    param([int]$Port = 18182)
     $netstat = netstat -ano 2>$null | Select-String ":$Port " | Select-String 'LISTENING'
     if ($netstat) {
         $lines = $netstat | ForEach-Object { $_.Line.Trim() }
@@ -609,7 +609,7 @@ Write-Host "-- Ensuring clean slate (close current session if any) --" -Foregrou
 # to navigate to about:blank.
 try { $null = Invoke-Cli close } catch { Write-Host "       (no session to close)" -ForegroundColor DarkGray }
 Wait-WithStatus -Seconds 2
-# Kill any stale server holding port 8182 (e.g. from a previous aborted run).
+# Kill any stale server holding port 18182 (e.g. from a previous aborted run).
 Clear-Browser4Port
 
 if (-not $SkipInstall) {
@@ -783,7 +783,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         Remove-Item $ManagedProcsFile -Force -ErrorAction SilentlyContinue
         Write-Host "       (cleared stale managed-processes.json)" -ForegroundColor DarkGray
     }
-    # Ensure port 8182 is actually free — a stale server from a
+    # Ensure port 18182 is actually free — a stale server from a
     # previous run can hold the port even after `stop`.
     Clear-Browser4Port
 

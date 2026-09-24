@@ -32,7 +32,7 @@ pub fn is_server_config_key(key: &str) -> bool {
 /// Persistent CLI configuration stored in `~/.browser4/config.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigStore {
-    /// Default Browser4 server URL (e.g. `http://localhost:8182`).
+    /// Default Browser4 server URL (e.g. `http://localhost:18182`).
     /// Overrides the hardcoded default; still overridden by `--server`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,

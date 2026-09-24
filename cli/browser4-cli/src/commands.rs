@@ -481,7 +481,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "endpoint",
-                    description: "Remote Browser4 server endpoint URL (e.g. http://browser4-server:8182)",
+                    description: "Remote Browser4 server endpoint URL (e.g. http://browser4-server:18182)",
                     is_bool: false,
                     short: None,
                 },
@@ -3360,7 +3360,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "section", short: None, is_bool: false, description: "Show only one report section in full detail. One of: health, build, runtime, llm, sessions, pulsar-sessions, swarm, url-pool, browsers, drivers, privacy, plugins, skills, metrics, logs" },
                 OptionDef { name: "verbose", short: Some("v"), is_bool: true, description: "Show the full detail layer of every report section (default: summary layer only)" },
-                OptionDef { name: "server", short: None, is_bool: false, description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)" },
+                OptionDef { name: "server", short: None, is_bool: false, description: "Server URL to check (defaults to saved or http://127.0.0.1:18182)" },
             ],
             e2e_coverage: E2eCoverage::Tested, // mock /api/system/status scenario
             tool_name_fn: |_| String::new(),

@@ -8,7 +8,7 @@
 param(
     [string]$DeployDir = "",
     [switch]$RestInstall,
-    [string]$RestUrl = "http://localhost:8182"
+    [string]$RestUrl = "http://localhost:18182"
 )
 
 $ErrorActionPreference = "Stop"

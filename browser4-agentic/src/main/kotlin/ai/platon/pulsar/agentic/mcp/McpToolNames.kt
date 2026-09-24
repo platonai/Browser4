@@ -6,7 +6,7 @@ package ai.platon.pulsar.agentic.mcp
  * Browser4 exposes the same tools through two channels:
  *
  * - the standard MCP server — `Browser4MCPServer` (stdio / HTTP+SSE on 8088)
- * - the private MCP dispatcher — `MCPToolController` (`POST /mcp/call-tool` on 8182)
+ * - the private MCP dispatcher — `MCPToolController` (`POST /mcp/call-tool` on 18182)
  *
  * Both must spell a tool the same way, otherwise a model that learned a name on
  * one channel gets "unknown tool" on the other. This object is the single source

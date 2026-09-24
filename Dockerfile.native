@@ -78,7 +78,7 @@ COPY --from=builder /build/browser4-apps/browser4-standalone/target/browser4-sta
 RUN chmod +x /app/browser4-standalone
 
 # Expose port (documentation only)
-EXPOSE 8182
+EXPOSE 18182
 
 # Create app data directory
 RUN mkdir -p ~/.browser4/

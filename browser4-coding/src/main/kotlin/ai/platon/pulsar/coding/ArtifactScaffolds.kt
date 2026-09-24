@@ -141,7 +141,7 @@ object ArtifactScaffolds {
             param(
                 [string]${'$'}DeployDir = "",
                 [switch]${'$'}RestInstall,
-                [string]${'$'}RestUrl = "http://localhost:8182"
+                [string]${'$'}RestUrl = "http://localhost:18182"
             )
 
             ${'$'}ErrorActionPreference = "Stop"
@@ -543,7 +543,7 @@ object ArtifactScaffolds {
         ```powershell
         .\build.ps1                  # build + verify JAR structure
         .\build.ps1 -DeployDir ..    # build + copy JAR to a plugins directory
-        .\build.ps1 -RestInstall     # build + install via REST API (default http://localhost:8182)
+        .\build.ps1 -RestInstall     # build + install via REST API (default http://localhost:18182)
         ```
 
         Or with Maven directly:

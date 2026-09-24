@@ -13,7 +13,7 @@ import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
  * text for the same call:
  *
  * - the standard MCP server — `Browser4MCPServer` (stdio / HTTP+SSE, port 8088)
- * - the private MCP dispatcher — `MCPToolController` (`POST /mcp/call-tool`, port 8182)
+ * - the private MCP dispatcher — `MCPToolController` (`POST /mcp/call-tool`, port 18182)
  *
  * Keeping the rendering in one place is what makes a tool's output portable
  * between the two channels. Before this existed, the standard server returned

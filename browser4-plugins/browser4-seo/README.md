@@ -40,7 +40,7 @@ Or use the build script:
 Copy the JAR to Browser4's `plugins/` directory and restart, or install via REST:
 
 ```bash
-curl -X POST http://localhost:8182/api/plugins/install \
+curl -X POST http://localhost:18182/api/plugins/install \
   -F "file=@target/browser4-seo-4.13.4-SNAPSHOT.jar"
 ```
 

@@ -34,8 +34,8 @@ import java.util.concurrent.TimeUnit
  * yet reports `null` rather than a misleading `0`.
  *
  * ```
- * curl -s localhost:8182/api/mcp/stats | jq
- * curl -s localhost:8182/api/mcp/stats?top=20
+ * curl -s localhost:18182/api/mcp/stats | jq
+ * curl -s localhost:18182/api/mcp/stats?top=20
  * ```
  */
 @RestController

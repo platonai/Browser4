@@ -146,7 +146,7 @@ Run:
 Verify:
 - The command exits with code 0.
 - The output contains "Extension session created:" followed by a session ID.
-- The output contains "Relay endpoint: ws://127.0.0.1:8182/ws/extension/<session-id>".
+- The output contains "Relay endpoint: ws://127.0.0.1:18182/ws/extension/<session-id>".
 - The output contains "Extension connected and healthy!" within a reasonable time
   (typically 1-5 s; up to 15 s is acceptable).
 - The output contains "Session ready: <session-id>".

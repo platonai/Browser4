@@ -26,8 +26,8 @@ class ExtensionWebSocketConfig(
     private val sessionManager: PulsarSessionManager
 ) : WebSocketConfigurer {
 
-    @Value("\${server.port:8182}")
-    private var serverPort: Int = 8182
+    @Value("\${server.port:18182}")
+    private var serverPort: Int = 18182
 
     @PostConstruct
     fun init() {

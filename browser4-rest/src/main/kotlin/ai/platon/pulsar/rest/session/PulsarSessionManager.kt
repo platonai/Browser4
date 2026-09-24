@@ -680,7 +680,7 @@ class PulsarSessionManager(
 
     /** Injected by [ai.platon.pulsar.rest.config.ExtensionWebSocketConfig]. */
     @Volatile
-    var serverPort: Int = 8182
+    var serverPort: Int = 18182
 
     /**
      * Creates a pending session that will be bound to the Browser4 Chrome
