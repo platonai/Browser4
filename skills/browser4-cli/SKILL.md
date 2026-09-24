@@ -214,9 +214,23 @@ unchanged files are skipped, so re-running is cheap. `install` / `upgrade` also 
 skills into `~/.agents/skills` so agents (e.g. Codex) load them automatically. Overrides:
 `BROWSER4_SKILLS_DIR`, `BROWSER4_AGENTS_SKILLS_DIR`.
 
-## 4. Choosing an Approach
+## 4. Decision Trees
 
-Choosing how to extract or process data? The full decision trees, comparisons, and the X-SQL quickstart template live in **[decision-trees.md](references/decision-trees.md)**. The essentials:
+What kind of work is this? Pick the branch first — it names the command family; the
+expanded trees, the comparisons behind them and the X-SQL quickstart template live in
+**[decision-trees.md](references/decision-trees.md)**.
+
+```text
+What do you need to do?
+|- act on a page (click, fill, press, upload) ..... snapshot -> act on refs -> re-snapshot
+|- read content off the live page ................. htmlsnapshot get / get all / query
+|- compute something in page JS ................... eval          (--ref takes an arrow function)
+|- understand a page, or find selectors ........... htmlsnapshot inspect | summary
+|- fetch many known or linked pages ............... crawl         (--seed-file, --depth N)
+|- the same task across many URLs, in parallel .... swarm
+|- repeat on a schedule ........................... loop
+`- structure pages you already have ............... webminer all  (< 1,000 pages, no tokens)
+```
 
 - **4a. Extraction method:** interact → `snapshot` + refs; read content → `htmlsnapshot`; live DOM → `eval --json`; natural language → `extract`; many pages → `crawl`/`swarm`. **`htmlsnapshot` reads the LIVE page — no prior capture is needed** for `get`/`get all`/`inspect`/`summary`/`grep`/`export`/`query`; an empty read means the selector did not match (or no page is loaded), not a missing capture — per-command matrix in [decision-trees.md](references/decision-trees.md).
 - **4b. Bulk/scale:** one list page → `query`; known URLs → `crawl --seed-file`; follow links → `crawl <url> --depth N`; more crawl overlap → `crawl --parallel 8` (each unit collects on its own tab); parallel → `swarm`; scheduled → `loop`.
@@ -253,7 +267,7 @@ Choosing how to extract or process data? The full decision trees, comparisons, a
 >
 > **`-i` does not shrink the tree:** it aggregates text into element names — addressable headings, paragraphs and generic containers all remain. It changes the layout, it does not reduce the tree to buttons/links; use `htmlsnapshot` when you need CSS-selector extraction instead of refs.
 
-## 6. Recipes & Deep Dives
+## 6. Quick Patterns & Deep Dives
 
 Copy-paste pairs for the common flows — form fill, `snapshot grep`, mouse/drag, dialog handling,
 verify-after-interaction, single-field and bulk extraction, PowerCSS, agent tasks:
