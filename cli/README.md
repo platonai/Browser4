@@ -224,7 +224,7 @@ These flags can appear before any command.
 | `-h`, `--help [command\|category]` | Show top-level help, category help, or detailed command help |
 | `--help-json` | Emit the machine-readable command reference |
 | `-v`, `--version` | Print the CLI version |
-| `-s`, `--session <name>` | Use a named session instead of the default session |
+| `-s`, `--session <name>` | Use a named session instead of the default session. A **global** flag: place it **before** the command (`browser4-cli -s job-42 snapshot`) — after the command it is rejected as a positional argument |
 | `--server <url>` | Override the Browser4 server URL |
 | `--timeout <seconds>` | Override the HTTP timeout for the current command |
 | `--proxy <url>` | Proxy used for runtime downloads/install operations |
@@ -349,7 +349,7 @@ browser4-cli wait --load networkidle
 
 | Command | Description |
 |---|---|
-| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`/`--no-boxes`, `-i/--interactive`, `-u/--urls`, `-c/--compact`, `--no-compact`, `-d/--depth`, `-l/--limit`, `-s/--selector`, `--raw`, `--stdout`, `-vp/--viewport`, `--filename`. `--stdout`/`--raw` output is paginated at 2000 lines/page by default — when truncated, stdout (if piped) gets a `# … output truncated: showing N of M lines …` hint and the full footer goes to stderr; use `--all` or `--page-size 0` for the complete tree, and bound very large pages with `-v N`/`--depth`/`--selector`/`--no-boxes`. |
+| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`/`--no-boxes`, `-i/--interactive`, `-u/--urls`, `-c/--compact`, `--no-compact`, `-d/--depth`, `-l/--limit`, `--selector`, `--raw`, `--stdout`, `-vp/--viewport`, `--filename`. `--stdout`/`--raw` output is paginated at 2000 lines/page by default — when truncated, stdout (if piped) gets a `# … output truncated: showing N of M lines …` hint and the full footer goes to stderr; use `--all` or `--page-size 0` for the complete tree, and bound very large pages with `-v N`/`--depth`/`--selector`/`--no-boxes`. |
 | `snapshot grep <pattern>` | Search saved/current snapshot YAML with grep-style flags such as `-i`, `-v`, `-c`, `-l`, `-F`, `-w`, `-A`, `-B`, `-C`, `--selector`, `--page`, `--page-size`, `--all`. |
 | `snapshot list` | List saved snapshot files with timestamps and sizes. |
 | `snapshot clean` | Remove old snapshot files. Supports `--dry-run`. |

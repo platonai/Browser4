@@ -7,7 +7,8 @@ tier: procedure
 # Tabs — Lifecycle, GUIDs, and Extension Sessions
 
 Tab commands scope to a session — all operations affect the session targeted via
-`-s <session>` (or the DEFAULT session when `-s` is omitted).
+`-s <session>` (or the DEFAULT session when `-s` is omitted). `-s` is a **global** flag, so it
+always goes **before** the command: `browser4-cli -s job-42 tab-list`.
 
 ## Tab lifecycle
 

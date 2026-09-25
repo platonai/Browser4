@@ -78,7 +78,7 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 
 | Command | Description |
 |---|---|
-| `snapshot` | Capture page snapshot to obtain element refs. Supports `--boxes`, `-i`/`--interactive`, `-u`/`--urls`, `-c`/`--compact`, `-d`/`--depth <n>`, `-s`/`--selector <sel>`, `--raw`, `--stdout`. `--stdout`/`--raw` paginate large trees at 2000 lines/page by default (truncated output appends a hint to stdout when piped; footer goes to stderr) — use `--page N`, `--page-size N`, or `--all`/`--page-size 0` for the complete tree |
+| `snapshot` | Capture page snapshot to obtain element refs. Supports `--boxes`, `-i`/`--interactive`, `-u`/`--urls`, `-c`/`--compact`, `-d`/`--depth <n>`, `--selector <sel>`, `--raw`, `--stdout`. `--stdout`/`--raw` paginate large trees at 2000 lines/page by default (truncated output appends a hint to stdout when piped; footer goes to stderr) — use `--page N`, `--page-size N`, or `--all`/`--page-size 0` for the complete tree |
 | `get <mode> <selector> [name]` | Extract data from a page element (text, html, box, styles, property, attr) |
 | `eval [expression] [ref]` | Evaluate JavaScript expression on page or element |
 | `wait [target]` | Wait for a condition: element, time, text, URL pattern, page load, or JS expression |

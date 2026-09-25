@@ -122,7 +122,7 @@ When `--endpoint` is used alone (without `--cdp`), it switches the CLI to the re
 ### 4. Named Sessions
 
 ```bash
-browser4-cli attach --cdp chrome -s debug-session
+browser4-cli -s debug-session attach --cdp chrome   # -s is global: before the command
 browser4-cli -s debug-session snapshot
 browser4-cli -s debug-session screenshot --filename state.png
 ```

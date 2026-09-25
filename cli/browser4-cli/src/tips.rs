@@ -117,7 +117,7 @@ const TIPS_NAVIGATION: &[Tip] = &[
         text: "Browsers open headless by default. Use `--headed` to see the browser window for debugging",
     },
     Tip {
-        text: "Use named sessions (`-s <name>`) with `goto` to maintain separate browser state per task",
+        text: "`-s <name>` is a GLOBAL flag — place it BEFORE the command: `browser4-cli -s job-42 goto <url>`; after the command it is rejected as a positional argument",
     },
 ];
 
@@ -358,7 +358,7 @@ const TIPS_HTMLSNAPSHOT_GREP: &[Tip] = &[
 
 const TIPS_GENERAL: &[Tip] = &[
     Tip {
-        text: "Use named sessions (`-s <name>`) to isolate different tasks with separate browser state",
+        text: "Isolate tasks with named sessions — `-s <name>` is a GLOBAL flag, so write it BEFORE the command: `browser4-cli -s job-42 snapshot`",
     },
     Tip {
         text: "Use `batch` for multi-step workflows — executes commands sequentially with state sharing",

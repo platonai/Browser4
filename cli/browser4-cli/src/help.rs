@@ -285,7 +285,11 @@ pub fn generate_help() -> String {
         "show a relevant tip on stderr after each command",
         30,
     ));
-    lines.push(format_with_gap("  -s <name>", "named session label", 30));
+    lines.push(format_with_gap(
+        "  -s <name>",
+        "named session label — a GLOBAL flag: place it BEFORE the command (`browser4-cli -s job-42 snapshot`); after the command it is rejected as a positional argument",
+        30,
+    ));
     lines.push(format_with_gap(
         "  --timeout <seconds>",
         "override the default HTTP timeout for tool calls (e.g. --timeout 300 for long-running plugin tools)",
@@ -379,7 +383,10 @@ pub fn generate_quick_reference() -> String {
     // ── Global flags ──
     lines.push(String::new());
     lines.push("── Global flags ────────────────────────────────────────────────────".to_string());
-    lines.push(fmt_cmd("-s <name>", "Named session label"));
+    lines.push(fmt_cmd(
+        "-s <name>",
+        "Named session label — a global flag: place it before the command",
+    ));
     lines.push(fmt_cmd("--json", "Machine-parseable JSON output"));
     lines.push(fmt_cmd("-q, --quiet", "Suppress normal output"));
     lines.push(fmt_cmd("--server <url>", "Override Browser4 server URL"));
@@ -449,7 +456,7 @@ pub fn generate_help_json(sub_command: Option<&str>) -> String {
 
     // Global options
     let global_options = serde_json::json!({
-        "-s, --session": {"type": "string", "description": "Named session label"},
+        "-s, --session": {"type": "string", "description": "Named session label — a global option: place it before the command, e.g. `browser4-cli -s job-42 snapshot`. After the command a bare `-s` is rejected as a positional argument."},
         "--json": {"type": "bool", "description": "Emit machine-parseable JSON to stdout"},
         "-q, --quiet": {"type": "bool", "description": "Suppress normal output, only show errors"},
         "--server": {"type": "string", "description": "Override Browser4 server URL"},
@@ -1226,12 +1233,21 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Use `-s <name>` to create a named session that can be targeted by subsequent commands."
                 .to_string(),
         );
+        lines.push(
+            "    `-s` / `--session` is a GLOBAL flag, so it goes BEFORE the command: `browser4-cli -s job-42 open <url>`."
+                .to_string(),
+        );
+        lines.push(
+            "    Written after the command (`open <url> -s job-42`) it is rejected as a positional argument."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli open https://browser4.io                      # headless (default)".to_string());
         lines.push("  browser4-cli open --headed https://browser4.io              # visible browser window".to_string());
         lines.push("  browser4-cli open --headless https://browser4.io            # explicit headless".to_string());
         lines.push("  browser4-cli open --fresh --headless https://browser4.io    # new session, not a reconnect".to_string());
+        lines.push("  browser4-cli -s job-42 open https://browser4.io            # named session (global flag first)".to_string());
     }
 
     if cmd.name == "install" {
