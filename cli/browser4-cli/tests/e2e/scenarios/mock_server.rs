@@ -2489,6 +2489,7 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
+    let after_open = tool_calls_before_command(&mock_server);
 
     // ── 1. dialog-status ──────────────────────────────────────────────
     let dialog_status = run_command(ctx, &["dialog-status"]);
@@ -2658,7 +2659,10 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
     );
 
     // ── Verify recorded tool calls ────────────────────────────────────
-    let tool_calls = mock_server.snapshot().tool_calls;
+    // Counting starts after the `open`, because navigation adds its own
+    // calls (the advisory block probe issues one `browser_evaluate`).
+    let recorded = mock_server.snapshot().tool_calls;
+    let tool_calls = &recorded[after_open..];
     let names: Vec<&str> = tool_calls.iter().map(|call| call.tool.as_str()).collect();
 
     for tool in [
@@ -4468,7 +4472,9 @@ pub(super) fn test_crawl_foreground_reports_lost_pages(ctx: &mut E2ECtx) {
     .to_string();
     mock_server.set_crawl_result("crawl-job-42", &body);
 
-    let result = run_command(
+    // A crawl that lost pages exits non-zero on purpose, so the outcome is
+    // asserted below instead of by the `run_command` success wrapper.
+    let result = run_command_allowing_failure(
         ctx,
         &[
             "crawl",
@@ -4480,7 +4486,14 @@ pub(super) fn test_crawl_foreground_reports_lost_pages(ctx: &mut E2ECtx) {
     );
 
     let stdout = &result.stdout;
-    assert_eq!(result.exit_code, 0, "Expected exit 0, got:\n{}", result.stdout);
+    // A lost page is a failure: the CLI must not exit 0 for a crawl it knows
+    // is incomplete.  Exit 6 is `ExitCode::PartialFailure`, so automation can
+    // detect a partially failed crawl without parsing the ⚠ lines.
+    assert_eq!(
+        result.exit_code, 6,
+        "Expected exit code 6 (partial failure) for a crawl that lost pages, got:\n{}",
+        result.stdout
+    );
     assert!(
         stdout.contains("⚠ 2 of 10 submitted page(s) were never delivered"),
         "Expected the lost-pages warning in:\n{}",
@@ -7392,6 +7405,7 @@ pub(super) fn test_vitals_commands(ctx: &mut E2ECtx) {
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
+    let after_open = tool_calls_before_command(&mock_server);
 
     let vitals = run_command(ctx, &["vitals"]);
     assert_eq!(
@@ -7408,10 +7422,10 @@ pub(super) fn test_vitals_commands(ctx: &mut E2ECtx) {
     );
 
     // Both commands must issue the same browser_evaluate call: the VITALS
-    // injection script with awaitPromise enabled.
+    // injection script with awaitPromise enabled.  Counting starts after the
+    // `open`, because navigation adds its own calls (the advisory block probe).
     let snapshot = mock_server.snapshot();
-    let evaluate_calls: Vec<_> = snapshot
-        .tool_calls
+    let evaluate_calls: Vec<_> = snapshot.tool_calls[after_open..]
         .iter()
         .filter(|call| call.tool == "browser_evaluate")
         .collect();

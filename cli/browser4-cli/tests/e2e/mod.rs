@@ -64,7 +64,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::{sleep, JoinHandle};
@@ -222,6 +222,17 @@ struct FixturePages {
     frame_nested_html: String,
     frame_inner_html: String,
     console_probe_html: String,
+    /// Port the cross-origin listener ([`CrossOriginFixtureServer`]) actually
+    /// bound on `127.0.0.2`, published by the scenario that starts it.  The
+    /// cross-origin page's iframe `src` must carry this port, and it cannot be
+    /// derived from the fixture listener: with an external Docker service the
+    /// fixture binds `0.0.0.0:<port>`, which already owns `127.0.0.2:<port>`.
+    cross_origin_port: Arc<Mutex<Option<u16>>>,
+    /// How many times the attachment ([`DOWNLOAD_FILE_PATH`]) has been fetched.
+    /// The browser fetches it over HTTP when a download is triggered, so this
+    /// counter is evidence a download started — including when the browser runs
+    /// on another host (Docker), where the written file is unobservable.
+    download_requests: Arc<AtomicUsize>,
 }
 
 impl FixtureServer {
@@ -231,7 +242,16 @@ impl FixtureServer {
     ///   local-only, `"0.0.0.0"` when an external Docker service must reach it).
     /// * `fixture_host` – hostname/IP used in URLs handed to the Browser4
     ///   service (see [`fixture_host`]).
-    fn start(bind_addr: &str, fixture_host: &str) -> Self {
+    /// * `cross_origin_port` – slot shared with the scenario that starts the
+    ///   cross-origin listener (see [`FixturePages::cross_origin_port`]).
+    /// * `download_requests` – counter shared with the download scenario (see
+    ///   [`FixturePages::download_requests`]).
+    fn start(
+        bind_addr: &str,
+        fixture_host: &str,
+        cross_origin_port: Arc<Mutex<Option<u16>>>,
+        download_requests: Arc<AtomicUsize>,
+    ) -> Self {
         let listener = TcpListener::bind(format!("{}:0", bind_addr))
             .unwrap_or_else(|e| panic!("fixture server bind failed on {bind_addr}:0 – {e}"));
         let port = listener.local_addr().unwrap().port();
@@ -252,6 +272,8 @@ impl FixtureServer {
             frame_nested_html: load_html_fixture(FRAME_NESTED_FIXTURE_FILE),
             frame_inner_html: load_html_fixture(FRAME_INNER_FIXTURE_FILE),
             console_probe_html: load_html_fixture(CONSOLE_PROBE_FIXTURE_FILE),
+            cross_origin_port,
+            download_requests,
         });
 
         thread::spawn(move || {
@@ -408,8 +430,14 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
         // iframe points at 127.0.0.2 — a different origin (and a different
         // renderer process), so the driver can list and select the frame but
         // cannot operate inside it. The scenario starts a dedicated listener
-        // on 127.0.0.2:<this port> (see CrossOriginFixtureServer).
-        let port = stream.local_addr().map(|a| a.port()).unwrap_or(0);
+        // on 127.0.0.2 and publishes its port here (see
+        // CrossOriginFixtureServer); until then the iframe would point at a
+        // dead port, which is why the slot is read rather than guessed.
+        let port = pages
+            .cross_origin_port
+            .lock()
+            .expect("cross-origin port mutex poisoned")
+            .unwrap_or(0);
         let body = format!(
             r#"<!DOCTYPE html>
 <html lang="en">
@@ -431,6 +459,10 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
     } else if path == DOWNLOAD_FILE_PATH {
         // Attachment download: Chrome saves this to the download directory
         // configured via `download --dir` (Browser.setDownloadBehavior).
+        // The fetch is recorded because it is the only download evidence that
+        // survives when the browser runs on another host (see
+        // `FixturePages::download_requests`).
+        pages.download_requests.fetch_add(1, Ordering::Relaxed);
         let body = DOWNLOAD_FILE_CONTENT.as_bytes();
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"download-me.txt\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -800,14 +832,30 @@ fn serve_download_request(
 struct CrossOriginFixtureServer {
     port: u16,
     shutdown: Arc<AtomicBool>,
+    /// Slot published to the fixture server so the cross-origin page embeds
+    /// this listener's port (see [`FixturePages::cross_origin_port`]).
+    published_port: Arc<Mutex<Option<u16>>>,
 }
 
 impl CrossOriginFixtureServer {
-    /// Serves [html] for every request on `127.0.0.2:{port}` (the port of the
-    /// main fixture server, so the cross-origin iframe src needs no lookup).
-    fn start(port: u16, html: String) -> Self {
-        let listener = TcpListener::bind(format!("127.0.0.2:{port}"))
+    /// Serves [html] on a free port of `127.0.0.2` and publishes that port to
+    /// `published_port` so the fixture's cross-origin page points its iframe at
+    /// this listener.
+    ///
+    /// The listener deliberately takes a port of its own instead of reusing the
+    /// fixture server's port: against an external Docker service the fixture
+    /// binds `0.0.0.0:<port>`, and a second bind of `127.0.0.2:<port>` then
+    /// fails with `EADDRINUSE`.
+    fn start(html: String, published_port: Arc<Mutex<Option<u16>>>) -> Self {
+        let listener = TcpListener::bind("127.0.0.2:0")
             .expect("cross-origin fixture server bind on 127.0.0.2 failed");
+        let port = listener
+            .local_addr()
+            .expect("cross-origin fixture server local_addr failed")
+            .port();
+        *published_port
+            .lock()
+            .expect("cross-origin port mutex poisoned") = Some(port);
         let shutdown = Arc::new(AtomicBool::new(false));
         let flag = shutdown.clone();
         thread::spawn(move || {
@@ -840,7 +888,11 @@ impl CrossOriginFixtureServer {
                 }
             }
         });
-        Self { port, shutdown }
+        Self {
+            port,
+            shutdown,
+            published_port,
+        }
     }
 
     fn base_url(&self) -> String {
@@ -851,6 +903,10 @@ impl CrossOriginFixtureServer {
 impl Drop for CrossOriginFixtureServer {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
+        *self
+            .published_port
+            .lock()
+            .expect("cross-origin port mutex poisoned") = None;
     }
 }
 
@@ -2370,6 +2426,19 @@ impl ScenarioOutcome {
 #[derive(Clone)]
 struct E2ECtx {
     fixture_base_url: String,
+    /// Port slot shared with the fixture server; the cross-origin frame
+    /// scenario publishes the `127.0.0.2` listener's port through it (see
+    /// [`FixturePages::cross_origin_port`]).
+    cross_origin_port: Arc<Mutex<Option<u16>>>,
+    /// How many times the download fixture attachment has been fetched by the
+    /// browser (see [`FixturePages::download_requests`]).
+    download_requests: Arc<AtomicUsize>,
+    /// `true` when the Browser4 service (and therefore its browser) runs on
+    /// another host, e.g. the Docker image in CI.  Files the browser writes —
+    /// downloads in particular — then land on the service host's filesystem and
+    /// are not observable here, so scenarios that inspect such files must say
+    /// what they can still verify instead.
+    external_service: bool,
     browser4_base_url: String,
     invocation_dir: PathBuf,
     use_maven_startup: bool,
@@ -4530,7 +4599,14 @@ fn create_e2e_test_resources() -> E2ETestResources {
     // the runner is not exposed to untrusted networks.
     let bind_addr = if is_external { "0.0.0.0" } else { "127.0.0.1" };
     let fhost = fixture_host();
-    let fixture = FixtureServer::start(bind_addr, &fhost);
+    let cross_origin_port: Arc<Mutex<Option<u16>>> = Arc::new(Mutex::new(None));
+    let download_requests: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+    let fixture = FixtureServer::start(
+        bind_addr,
+        &fhost,
+        cross_origin_port.clone(),
+        download_requests.clone(),
+    );
     let fixture_base_url = fixture.base_url();
 
     let browser4_base_url =
@@ -4595,6 +4671,9 @@ fn create_e2e_test_resources() -> E2ETestResources {
         pending_cleanup: None,
         ctx: E2ECtx {
             fixture_base_url,
+            cross_origin_port,
+            download_requests,
+            external_service: is_external,
             browser4_base_url,
             invocation_dir,
             use_maven_startup,
