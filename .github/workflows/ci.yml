@@ -143,22 +143,46 @@ jobs:
           # point, so CrawlTestBase.crawlTerminalWait derives its bound from that
           # budget (12 min) instead of a hand-picked 4. The four crawls of run
           # 36164169973 that the 4-minute wait abandoned finished 46 s, 2 m 14 s,
-          # 1 m 42 s and 5 m 30 s later — waiting them out honestly costs ~10 minutes
-          # more than that run's 2423 s, which is already past the 3000 s cap.
-          # See docs-dev/copilot/ci-stabilization-4.13.x.md §24.2 and §31 before
+          # 1 m 42 s and 5 m 30 s later.
+          #
+          # 60 was itself too tight for that (§32, run 36172619505): `timeout` killed
+          # Maven at 3601 s with the reactor still inside browser4-rest-tests, so the
+          # last class plus three whole modules (141 of 2316 tests) never ran and the
+          # gate reported "2 failed" for a run that was really "results incomplete".
+          # The cost is the crawl acceptance classes, and it tracks runner speed, not
+          # the code: 32 minutes of the same step in run 36164169973, >55 minutes in
+          # run 36172619505, which fetched pages at 0.02/s instead of 0.04/s and spent
+          # a silent 2 m 42 s in the middle of one page load. Waiting those crawls out
+          # honestly needs ~4150 s in the slow run, ~4385 s with the modules it never
+          # reached.
+          #
+          # 90 minutes is that measurement with room for the same 2x spread; it is
+          # cheaper than a gate that is red by construction. Do not lower it without
+          # re-reading how much of the step the crawl classes own.
+          # See docs-dev/copilot/ci-stabilization-4.13.x.md §24.2, §31 and §32 before
           # changing this.
-          timeout_minutes: '60'
+          timeout_minutes: '90'
 
       - name: Check Test Status
         if: inputs.skip_tests != true
         run: |
           if [ "${{ steps.run-tests.outputs.test_status }}" != "success" ]; then
+            # A killed reactor first, so the reason is not read as a test failure
+            # (§32, run 36172619505: the step said "Failed Tests: 2 / Total: 2172"
+            # and nothing about the 141 tests that never ran).
+            if [ "${{ steps.run-tests.outputs.run_exit_code }}" = "124" ]; then
+              echo "⏱️ The reactor was killed by the Run Tests time limit (Maven exit 124)."
+              echo "   The count and the list below cover only the modules that finished;"
+              echo "   some modules never ran, so this is NOT a full test result."
+              echo ""
+            fi
             echo "❌ Tests failed with status: ${{ steps.run-tests.outputs.test_status }}"
-            echo "📊 Test Results:"
+            echo "📊 Test Results (incomplete if the reactor was killed):"
             echo "  - Total Tests: ${{ steps.run-tests.outputs.test_count }}"
             echo "  - Failed Tests: ${{ steps.run-tests.outputs.failed_count }}"
             echo "  - Passed Tests: ${{ steps.run-tests.outputs.passed_count }}"
             echo "  - Skipped Tests: ${{ steps.run-tests.outputs.skipped_count }}"
+            echo "  - Maven exit code: ${{ steps.run-tests.outputs.run_exit_code }}"
             FAILED_LIST="${{ steps.run-tests.outputs.failed_test_list }}"
             if [ -n "$FAILED_LIST" ]; then
               echo ""
