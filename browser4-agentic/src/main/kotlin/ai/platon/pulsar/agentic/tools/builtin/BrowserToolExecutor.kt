@@ -133,8 +133,14 @@ class BrowserToolExecutor : AbstractToolExecutor() {
                 // closeMe), so a failed close would otherwise report success
                 // while every tab stays open.  Verify the tab is actually gone
                 // and surface the failure (AGENTS.md: no silent failures).
-                val stillOpen = browser.listDrivers().any { it.guid == guid }
-                if (stillOpen) {
+                //
+                // The verification waits out the CDP teardown: Target.closeTarget
+                // returns before the browser has dropped the target, so a single
+                // immediate check intermittently finds the closing tab still
+                // listed (observed as a flaky closeTab failure in CI).  A tab that
+                // is genuinely still open never disappears, so the throw below
+                // still fires for real failures.
+                if (!awaitTabClosed(browser, guid)) {
                     throw IllegalStateException(
                         "Failed to close tab '$guid': the tab is still open after destroyDriver"
                     )
@@ -203,5 +209,30 @@ class BrowserToolExecutor : AbstractToolExecutor() {
                 ?: throw IllegalArgumentException("Invalid tab index '$raw' for $functionName")
             else -> throw IllegalArgumentException("Invalid tab index '$raw' for $functionName")
         }
+    }
+
+    /**
+     * Wait for [guid] to disappear from the browser's live tab list.
+     *
+     * `Target.closeTarget` resolves before the browser has finished tearing the
+     * target down, so an immediate single check can still see the closing tab.
+     * Polls for a short bounded window ([TAB_CLOSE_GRACE_MILLIS]) and returns
+     * false only when the tab is still listed at the end of it.
+     */
+    private suspend fun awaitTabClosed(browser: AbstractBrowser, guid: String): Boolean {
+        val deadline = System.currentTimeMillis() + TAB_CLOSE_GRACE_MILLIS
+        while (true) {
+            if (browser.listDrivers().none { it.guid == guid }) return true
+            if (System.currentTimeMillis() >= deadline) return false
+            kotlinx.coroutines.delay(TAB_CLOSE_POLL_MILLIS)
+        }
+    }
+
+    private companion object {
+        /** How long `closeTab` waits for the CDP target teardown to land. */
+        const val TAB_CLOSE_GRACE_MILLIS = 2_000L
+
+        /** Interval between live-tab checks inside the grace window. */
+        const val TAB_CLOSE_POLL_MILLIS = 100L
     }
 }
