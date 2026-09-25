@@ -7,6 +7,7 @@ import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.JsEvaluation
+import ai.platon.pulsar.api.model.NavigateEntry
 import ai.platon.pulsar.api.model.WebDriverException
 import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.protocol.Keyboard
@@ -122,6 +123,9 @@ open class Browser4WebDriver(
 
         /** Confirmation text of [consoleClear]; unchanged from the page-side implementation. */
         internal const val CONSOLE_CLEARED_MESSAGE = "Console cleared"
+
+        /** The CDP command behind [ensureFocusEmulation]. */
+        internal const val FOCUS_EMULATION_CDP = "Emulation.setFocusEmulationEnabled"
 
         private val storageStateMapper: ObjectMapper = jacksonObjectMapper()
             .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
@@ -1989,6 +1993,35 @@ internal enum class DragDropPosition(val key: String) {
     private val consoleCaptureOverCdp: Boolean
         get() = settings.config.getBoolean(B4Constants.CONSOLE_CAPTURE_CDP, B4Constants.CONSOLE_CAPTURE_CDP_DEFAULT)
 
+    // ---------------------------------------------------------------------------
+    // Focus emulation — a tab created over CDP is never made the selected tab of
+    // its window, so every page driven by this driver reports itself unfocused,
+    // and one that is not the selected tab reports itself hidden as well, unless
+    // the tab is told otherwise.  A bot detector reads that as a headless
+    // browser, and it is not what a plainly launched Chrome reports on the same
+    // host.  See [ensureFocusEmulation] for the measurement.
+    // ---------------------------------------------------------------------------
+
+    /** Guards the one-time focus emulation setup; see [ensureFocusEmulation]. */
+    private val focusEmulationStarted = AtomicBoolean(false)
+
+    /** Set once the emulation is in effect, so the hot path is a field read. */
+    @Volatile
+    private var focusEmulationEnabled = false
+
+    /** Set when the transport cannot enable the emulation, so it is not retried. */
+    @Volatile
+    private var focusEmulationUnavailable = false
+
+    /**
+     * Whether the CDP focus emulation is enabled by configuration; see [B4Constants.FOCUS_EMULATION].
+     *
+     * Read per call: the settings of a browser are immutable, and a `false` value must not send
+     * anything at all — no command, no latch.
+     */
+    private val focusEmulationOverCdp: Boolean
+        get() = settings.config.getBoolean(B4Constants.FOCUS_EMULATION, B4Constants.FOCUS_EMULATION_DEFAULT)
+
     /**
      * Read the buffered browser console messages filtered to [level] and above
      * (error=0, warn=1, info=2, log=2, debug=3).
@@ -2094,6 +2127,111 @@ internal enum class DragDropPosition(val key: String) {
         }
 
         return true
+    }
+
+    // ---------------------------------------------------------------------------
+    // Focus emulation — see the field group above for why the driver needs it.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Tell this tab it is focused and active, once per driver, so the page does not
+     * advertise itself as a background tab of a headless browser.
+     *
+     * A tab created over CDP (`Target.createTarget`) is not made the selected tab of its window, so it
+     * reports `document.hasFocus() == false`, and when it is not the window's selected tab it also
+     * reports `document.visibilityState == "hidden"` and `document.hidden == true`. A bot detector
+     * reads those as an automation verdict — ipfighter's `windowFocus` rule is exactly
+     * `document.hasFocus()`, and its description says "Headless browsers often don't have focus" —
+     * and they are not what a plainly launched Chrome reports on the same host: measured on Chrome
+     * 153.0.8010.53 against the very same profile, plain Chrome reports `visible / false / true`,
+     * while a Browser4-driven tab reports `visible / false / false` when it is the window's selected
+     * tab and `hidden / true / false` when it is not (measured with two driven tabs in one browser).
+     * The reverse flip was verified in isolation on the same Chrome: a background tab reports
+     * `hidden / true / false` and turns `visible / false / true` on a single
+     * `Emulation.setFocusEmulationEnabled {enabled: true}`.
+     *
+     * The emulation is per target, so it is issued once per driver — the command belongs to the
+     * CDP session and survives navigations, hence the second call and every later navigation only
+     * read a field. It deliberately does **not** activate the tab: `Target.activateTarget` and
+     * `Page.bringToFront` would, which in a pooled browser running concurrent sessions means one
+     * session's navigation silently sends every other session's tab back to `hidden`, and it would
+     * also steal the real window focus in `--headed` mode. It is enabled in every display mode for
+     * the same reason it is needed at all: the cause is "the tab was never activated", which is
+     * equally true of a headed window, not something specific to `--headless`.
+     *
+     * @return false when the transport rejects the command (an extension relay that does not
+     * implement `Emulation`), in which case the page keeps the tab's real focus and visibility state
+     *
+     * The decision is taken once per driver: a transport that rejects the command is remembered, so
+     * the emulation is neither retried on every navigation nor warned about twice. The command is
+     * sent straight through [browserProtocol] rather than through [evaluate], which would recurse
+     * into this driver's own `evaluate` override.
+     */
+    private suspend fun ensureFocusEmulation(): Boolean {
+        if (focusEmulationEnabled) {
+            return true
+        }
+        if (focusEmulationUnavailable || !focusEmulationOverCdp) {
+            return false
+        }
+
+        if (!focusEmulationStarted.compareAndSet(false, true)) {
+            // Another call is enabling the emulation; give it a moment instead of enabling twice.
+            repeat(50) {
+                if (focusEmulationEnabled) {
+                    return true
+                }
+                delay(10)
+            }
+            return focusEmulationEnabled
+        }
+
+        val enabled = runCatching {
+            browserProtocol.executeCdpCommand(FOCUS_EMULATION_CDP, mapOf("enabled" to true))
+        }
+        if (enabled.isFailure) {
+            focusEmulationUnavailable = true
+            logger.warn(
+                "{} is not available on this transport ({}); pages keep the tab's real focus and " +
+                    "visibility state and report themselves unfocused (and hidden, when the tab is " +
+                    "not the window's selected tab)",
+                FOCUS_EMULATION_CDP,
+                enabled.exceptionOrNull()?.message
+            )
+            return false
+        }
+
+        focusEmulationEnabled = true
+        return true
+    }
+
+    /**
+     * Navigate this tab, telling it it is focused first (see [ensureFocusEmulation]).
+     *
+     * The hook is here because every driver binding path arrives through a navigation or an
+     * evaluation: a new driver navigates, a pooled tab is re-used by navigating, and a driver
+     * bound to a tab that already has a document evaluates. The call is idempotent and, once the
+     * emulation is in effect, costs a single field read.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun navigate(entry: NavigateEntry) {
+        ensureFocusEmulation()
+        super.navigate(entry)
+    }
+
+    /**
+     * Evaluate JavaScript on this tab, telling it it is focused first (see [ensureFocusEmulation]).
+     *
+     * A driver bound to an already-loaded tab — a tab opened by `tab-new` and then switched to, or
+     * any driver swap, both of which construct a fresh driver through [from] with an empty latch —
+     * reaches the page through this method without navigating, so the emulation is issued here as
+     * well. It is not issued for [evaluateDetail] and the `evaluateValue*` family, which reach the
+     * protocol directly; those callers run after one of the two hooks above has already fired.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun evaluate(expression: String): Any? {
+        ensureFocusEmulation()
+        return super.evaluate(expression)
     }
 
     // ---------------------------------------------------------------------------

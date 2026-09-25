@@ -43,4 +43,13 @@ class B4ConstantsTest {
         // `console` command touches the page world, which is what the key exists to decide.
         assertEquals(true, B4Constants.CONSOLE_CAPTURE_CDP_DEFAULT)
     }
+
+    @Test
+    @DisplayName("the focus emulation key and its default are pinned")
+    fun focusEmulationKeyAndDefaultArePinned() {
+        assertEquals("browser.focus.emulation", B4Constants.FOCUS_EMULATION)
+        // The emulation stays the default: without it every driven tab advertises itself as an
+        // unfocused background tab, which is the signal the key exists to suppress.
+        assertEquals(true, B4Constants.FOCUS_EMULATION_DEFAULT)
+    }
 }

@@ -1,6 +1,10 @@
 package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.WebDriverTestBase
+import ai.platon.pulsar.api.WebDriver
+import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.PulsarWebDriver
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -23,6 +27,12 @@ import org.junit.jupiter.api.Test
  *    `navigator.maxTouchPoints` come from Chrome and the host, not from browser4. The assertions
  *    below encode the coherence rules real Chrome satisfies, so a future override that produces a
  *    raw host value (31.7 GB) or a touch count without a coarse pointer is caught here.
+ * 3. **A driven tab must not advertise itself as an unfocused background tab.** A tab created over
+ *    CDP is never made the window's selected tab, so it reports `hasFocus()=false`, and one that is
+ *    not the selected tab additionally reports `hidden` / `hidden=true` — which ipfighter's
+ *    `windowFocus` rule reads as "Headless browsers often don't have focus".
+ *    [Browser4WebDriver.ensureFocusEmulation] fixes that per tab; the assertions below are the
+ *    contract, and the two-tab case pins that every tab gets it — not just the first.
  */
 @Tag("Integration")
 @Tag("RequiresBrowser")
@@ -120,5 +130,59 @@ class NavigatorStealthIT : WebDriverTestBase() {
         if (coarse) {
             assertTrue(anyCoarse, "'(pointer: coarse)' is true while '(any-pointer: coarse)' is false")
         }
+    }
+
+    @Test
+    @DisplayName("a driven document reports itself visible and focused, not as a background tab")
+    fun drivenDocumentReportsItselfVisibleAndFocused() = runWebDriverTest(simpleDomURL, browser) { driver ->
+        // Every session is bound to a Browser4WebDriver (AbstractPulsarSession.createBoundDriver); a
+        // raw browser hands out the plain driver, which does not carry the focus emulation.
+        val b4Driver = Browser4WebDriver.from(driver as PulsarWebDriver)
+
+        assertVisibleAndFocused(b4Driver, "the driven tab")
+    }
+
+    @Test
+    @DisplayName("every tab of one browser reports a visible, focused document")
+    fun everyTabReportsVisibleAndFocused(): Unit = runBlocking {
+        // Two tabs in the same browser: the emulation is per target and never activates a tab, so
+        // the second tab is not what makes the first one hidden — the reason the emulation is used
+        // instead of Target.activateTarget / Page.bringToFront.
+        val drivers = listOf(browser.newDriver(), browser.newDriver())
+            .map { Browser4WebDriver.from(it as PulsarWebDriver) }
+
+        try {
+            drivers.forEachIndexed { index, driver ->
+                driver.open(simpleDomURL)
+                assertVisibleAndFocused(driver, "tab ${index + 1} of ${drivers.size}")
+            }
+        } finally {
+            drivers.forEach { runCatching { it.close() } }
+        }
+    }
+
+    /**
+     * Assert the document of [driver]'s tab reports itself as a foreground, focused page.
+     *
+     * The three readings are the ones ipfighter's `windowFocus` rule and its peers look at; a tab
+     * created over CDP reports `hidden` / `true` / `false` until the focus emulation reaches it.
+     */
+    private suspend fun assertVisibleAndFocused(driver: WebDriver, label: String) {
+        val visibilityState = driver.evaluate("document.visibilityState", "")
+        val hidden = driver.evaluate("document.hidden", true)
+        val hasFocus = driver.evaluate("document.hasFocus()", false)
+        println(
+            "$label: document.visibilityState=$visibilityState, document.hidden=$hidden, " +
+                "document.hasFocus()=$hasFocus"
+        )
+
+        assertEquals(
+            "visible", visibilityState,
+            "$label must report a visible document; a CDP-created tab is never made the window's " +
+                "selected tab, so without the focus emulation one that is not the selected tab " +
+                "reports 'hidden'"
+        )
+        assertFalse(hidden, "$label must not report document.hidden")
+        assertTrue(hasFocus, "$label must report document.hasFocus()")
     }
 }

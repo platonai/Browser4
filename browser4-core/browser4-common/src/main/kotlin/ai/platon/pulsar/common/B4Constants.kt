@@ -32,6 +32,33 @@ object B4Constants {
     /** Default of [CONSOLE_CAPTURE_CDP]; pinned by B4ConstantsTest. */
     const val CONSOLE_CAPTURE_CDP_DEFAULT = true
 
+    /**
+     * Whether each driven tab is told it is focused and active over CDP (`true`, the default) or
+     * keeps the real window/tab visibility state (`false`).
+     *
+     * A tab created over CDP is never made the selected tab of its window, so a page driven by
+     * Browser4 reports `document.hasFocus() == false`, and a driven tab that is not the window's
+     * selected tab additionally reports `document.visibilityState == "hidden"` and
+     * `document.hidden == true`. A bot detector reads those as a headless browser
+     * (`document.hasFocus()` is checked by, for example, ipfighter's `windowFocus` rule), and they
+     * are not what a plainly launched headless Chrome reports on the same host: measured on Chrome
+     * 153.0.8010.53 against the same profile, plain Chrome reports `visible / false / true`, while a
+     * Browser4-driven tab reports `visible / false / false` when it is the window's selected tab and
+     * `hidden / true / false` when it is not (measured with two driven tabs in one browser).
+     *
+     * `true` sends `Emulation.setFocusEmulationEnabled {enabled: true}` once per tab, which makes the
+     * tab report itself visible and focused without activating it — the mechanism Playwright uses.
+     * Because the emulation is per target and never activates the tab, concurrent sessions in the
+     * same browser do not steal each other's focus; `Target.activateTarget` / `Page.bringToFront`
+     * would, so they are deliberately not used. The switch stays as the escape hatch for a
+     * deployment that prefers the real window state (it is also the only way to keep background-tab
+     * throttling and lazy-loading behaviour identical to a real user's inactive tab).
+     */
+    const val FOCUS_EMULATION = "browser.focus.emulation"
+
+    /** Default of [FOCUS_EMULATION]; pinned by B4ConstantsTest. */
+    const val FOCUS_EMULATION_DEFAULT = true
+
 
     const val SESSION_ID_CAPABILITY = "sessionId"
     const val PROFILE_MODE_CAPABILITY = "profileMode"
