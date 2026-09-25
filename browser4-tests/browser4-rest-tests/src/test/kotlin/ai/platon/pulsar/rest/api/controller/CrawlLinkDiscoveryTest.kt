@@ -3,8 +3,6 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
 import ai.platon.pulsar.test.TestUrls
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -13,8 +11,6 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.client.expectBody
-import java.time.Duration
-import java.time.Instant
 
 /**
  * Link discovery over a storefront that offers the same page through several
@@ -33,7 +29,7 @@ import java.time.Instant
  * Tagged [IntegrationTest]: it drives real browser crawls through the REST API.
  */
 @Tag("IntegrationTest")
-class CrawlLinkDiscoveryTest : RestAPITestBase() {
+class CrawlLinkDiscoveryTest : CrawlTestBase() {
 
     private val crawlBase: String by lazy { TestUrls.MOCK_CRAWL_BASE }
 
@@ -150,34 +146,5 @@ class CrawlLinkDiscoveryTest : RestAPITestBase() {
         check(!taskId.isNullOrBlank()) { "Expected non-blank crawl task id but got: $rawTaskId" }
 
         return taskId
-    }
-
-    private fun waitForTerminal(taskId: String): CrawlResponse {
-        val deadline = Instant.now().plus(Duration.ofMinutes(4))
-        var last: CrawlResponse? = null
-        while (Instant.now().isBefore(deadline)) {
-            Thread.sleep(2000)
-            // The result body is deserialized with the Kotlin-aware mapper:
-            // `expectBody<CrawlResponse>()` uses the client-side converter, which
-            // binds no field of an all-default Kotlin class (`status` would stay
-            // at its default forever).
-            val raw = client.get().uri("/api/crawl/$taskId/result")
-                .exchange()
-                .expectStatus().is2xxSuccessful
-                .expectBody<String>()
-                .returnResult()
-                .responseBody
-            val result = requireNotNull(raw) { "Empty crawl result body for $taskId" }
-                .let {
-                    jacksonObjectMapper()
-                        .registerModule(JavaTimeModule())
-                        .readValue(it, CrawlResponse::class.java)
-                }
-            last = result
-            if (CrawlStatus.isTerminal(result.status)) {
-                return result
-            }
-        }
-        error("Crawl $taskId did not reach a terminal state within 4 minutes, last status: ${last?.status}")
     }
 }

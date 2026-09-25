@@ -129,14 +129,25 @@ jobs:
           # infrastructure suite (Chrome, Docker and the started app are available
           # here). See docs-dev/copilot/ci-stabilization-4.13.x.md before editing.
           excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck'
-          # 50 minutes, not 35. The crawl integration classes are the long pole and
+          # 60 minutes, not 50. The crawl integration classes are the long pole and
           # grew to ~11 minutes each on GitHub runners (CrawlFixtureMetadataTest
           # 668.8 s + CrawlParallelTabsTest 671.7 s in run 35507033919), so the old
           # 35-minute cap killed the reactor while ScrapeServiceTests was still
           # running — the gate failed on budget with zero test failures
-          # (status=timeout, Maven exit 124). See
-          # docs-dev/copilot/ci-stabilization-4.13.x.md §19.7 before changing this.
-          timeout_minutes: '50'
+          # (status=timeout, Maven exit 124).
+          #
+          # 50 was then measured at only 74 s of margin on a green run (§24.2, run
+          # 35646179429: 2926 s of 3000 s), and the crawl tests have since been given
+          # the wait they actually need: a crawl may legitimately run for
+          # CrawlService.DEFAULT_TASK_TIMEOUT_MS (10 min) and report terminal at that
+          # point, so CrawlTestBase.crawlTerminalWait derives its bound from that
+          # budget (12 min) instead of a hand-picked 4. The four crawls of run
+          # 36164169973 that the 4-minute wait abandoned finished 46 s, 2 m 14 s,
+          # 1 m 42 s and 5 m 30 s later — waiting them out honestly costs ~10 minutes
+          # more than that run's 2423 s, which is already past the 3000 s cap.
+          # See docs-dev/copilot/ci-stabilization-4.13.x.md §24.2 and §31 before
+          # changing this.
+          timeout_minutes: '60'
 
       - name: Check Test Status
         if: inputs.skip_tests != true

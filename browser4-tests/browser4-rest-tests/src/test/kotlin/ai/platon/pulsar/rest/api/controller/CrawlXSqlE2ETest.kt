@@ -1,9 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
-import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
-import ai.platon.pulsar.test.TestUrls
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -14,8 +11,6 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.client.expectBody
-import java.time.Duration
-import java.time.Instant
 
 /**
  * Acceptance test for the crawl's X-SQL, end to end on a real browser and a real h2 engine.
@@ -41,11 +36,7 @@ import java.time.Instant
  * main CI + nightly (not PR CI).
  */
 @Tag("IntegrationTest")
-class CrawlXSqlE2ETest : RestAPITestBase() {
-
-    private val probeBase: String by lazy {
-        "${TestUrls.MOCK_CRAWL_BASE.substringBefore("/generated")}/__probe"
-    }
+class CrawlXSqlE2ETest : CrawlTestBase() {
 
     @Test
     @DisplayName("a crawl with an X-SQL extracts from its own page and never fetches it again")
@@ -129,42 +120,6 @@ class CrawlXSqlE2ETest : RestAPITestBase() {
             .removeSurrounding("\"")
         check(taskId.isNotBlank()) { "blank crawl task id" }
 
-        val deadline = Instant.now().plus(Duration.ofMinutes(4))
-        var last: CrawlResponse? = null
-        while (Instant.now().isBefore(deadline)) {
-            Thread.sleep(1_000)
-            val raw = client.get().uri("/api/crawl/$taskId/result")
-                .exchange()
-                .expectStatus().is2xxSuccessful
-                .expectBody<String>()
-                .returnResult()
-                .responseBody
-            val result = requireNotNull(raw) { "empty crawl result for $taskId" }
-                .let { jacksonObjectMapper().registerModule(JavaTimeModule()).readValue(it, CrawlResponse::class.java) }
-            last = result
-            // Terminal detection defers to CrawlStatus — the one vocabulary definition.
-            if (CrawlStatus.isTerminal(result.status)) {
-                return result
-            }
-        }
-        error("Crawl $taskId did not reach a terminal state within 4 minutes, last: ${last?.status}")
-    }
-
-    private fun resetProbe() {
-        client.post().uri("$probeBase/reset")
-            .exchange()
-            .expectStatus().is2xxSuccessful
-    }
-
-    private fun probeStats(): Map<String, Int> {
-        val raw = client.get().uri("$probeBase/stats")
-            .exchange()
-            .expectStatus().is2xxSuccessful
-            .expectBody<String>()
-            .returnResult()
-            .responseBody
-        val body = requireNotNull(raw) { "empty /__probe/stats body" }
-        return jacksonObjectMapper().readValue(body, Map::class.java)
-            .entries.associate { (k, v) -> k.toString() to (v as Number).toInt() }
+        return waitForTerminal(taskId)
     }
 }

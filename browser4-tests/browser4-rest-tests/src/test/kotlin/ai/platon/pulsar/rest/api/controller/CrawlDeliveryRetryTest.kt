@@ -2,8 +2,6 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
-import ai.platon.pulsar.test.TestUrls
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -12,8 +10,6 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.client.expectBody
-import java.time.Duration
-import java.time.Instant
 import java.util.UUID
 
 /**
@@ -42,9 +38,7 @@ import java.util.UUID
  * Tagged [IntegrationTest] so it runs in main CI + nightly (not PR CI).
  */
 @Tag("IntegrationTest")
-class CrawlDeliveryRetryTest : RestAPITestBase() {
-
-    private val probeBase: String by lazy { "${TestUrls.MOCK_CRAWL_BASE.substringBefore("/generated")}/__probe" }
+class CrawlDeliveryRetryTest : CrawlTestBase() {
 
     /** Per-test ids, so a run cannot be answered by the page store of an earlier one. */
     private val runTag: String by lazy { "retry-" + UUID.randomUUID().toString().take(8) }
@@ -116,7 +110,12 @@ class CrawlDeliveryRetryTest : RestAPITestBase() {
         )
     }
 
-    /** GET /__probe/stats -> the per-id flaky hit counts. */
+    /**
+     * GET /__probe/stats -> the per-id flaky hit counts.
+     *
+     * The one nested shape in the probe's body, so it is read here rather than through
+     * [probeStats] — which reads the flat numeric counters and skips everything else.
+     */
     private fun flakyHits(): Map<String, Int> {
         val raw = client.get().uri("$probeBase/stats")
             .exchange()
@@ -128,12 +127,6 @@ class CrawlDeliveryRetryTest : RestAPITestBase() {
         val stats = jacksonObjectMapper().readValue(body, Map::class.java)
         val hits = stats["flakyHits"] as? Map<*, *> ?: emptyMap<Any?, Any?>()
         return hits.entries.associate { (key, value) -> key.toString() to ((value as? Number)?.toInt() ?: 0) }
-    }
-
-    private fun resetProbe() {
-        client.post().uri("$probeBase/reset")
-            .exchange()
-            .expectStatus().is2xxSuccessful
     }
 
     private fun runCrawl(seed: String, depth: Int, args: String): CrawlResponse =
@@ -154,30 +147,5 @@ class CrawlDeliveryRetryTest : RestAPITestBase() {
         val taskId = rawTaskId?.trim()?.removeSurrounding("\"")
         check(!taskId.isNullOrBlank()) { "Expected non-blank crawl task id but got: $rawTaskId" }
         return taskId
-    }
-
-    private fun waitForTerminal(taskId: String): CrawlResponse {
-        val deadline = Instant.now().plus(Duration.ofMinutes(4))
-        var last: CrawlResponse? = null
-        while (Instant.now().isBefore(deadline)) {
-            Thread.sleep(1000)
-            val raw = client.get().uri("/api/crawl/$taskId/result")
-                .exchange()
-                .expectStatus().is2xxSuccessful
-                .expectBody<String>()
-                .returnResult()
-                .responseBody
-            val result = requireNotNull(raw) { "Empty crawl result body for $taskId" }
-                .let {
-                    jacksonObjectMapper()
-                        .registerModule(JavaTimeModule())
-                        .readValue(it, CrawlResponse::class.java)
-                }
-            last = result
-            if (CrawlStatus.isTerminal(result.status)) {
-                return result
-            }
-        }
-        error("Crawl $taskId did not reach a terminal state within 4 minutes, last status: ${last?.status}")
     }
 }

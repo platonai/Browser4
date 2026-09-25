@@ -3,9 +3,7 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlService
-import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
 import ai.platon.pulsar.test.TestUrls
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -14,8 +12,6 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.client.expectBody
-import java.time.Duration
-import java.time.Instant
 
 /**
  * Acceptance tests for multi-tab parallel collection: a crawl with several
@@ -38,9 +34,7 @@ import java.time.Instant
  * site, so it runs in main CI + nightly (not PR CI).
  */
 @Tag("IntegrationTest")
-class CrawlParallelTabsTest : RestAPITestBase() {
-
-    private val probeBase: String by lazy { "${TestUrls.MOCK_CRAWL_BASE.substringBefore("/generated")}/__probe" }
+class CrawlParallelTabsTest : CrawlTestBase() {
 
     /** The static /generated/crawl/ fixture the link-discovery round test crawls. */
     private val crawlBase: String by lazy { TestUrls.MOCK_CRAWL_BASE }
@@ -187,24 +181,6 @@ class CrawlParallelTabsTest : RestAPITestBase() {
     private fun idOf(url: String): String =
         url.substringAfter("/slow/", "").substringBefore('?')
 
-    private fun resetProbe() {
-        client.post().uri("$probeBase/reset")
-            .exchange()
-            .expectStatus().is2xxSuccessful
-    }
-
-    private fun probeStats(): Map<String, Int> {
-        val raw = client.get().uri("$probeBase/stats")
-            .exchange()
-            .expectStatus().is2xxSuccessful
-            .expectBody<String>()
-            .returnResult()
-            .responseBody
-        val body = requireNotNull(raw) { "empty /__probe/stats body" }
-        return jacksonObjectMapper().readValue(body, Map::class.java)
-            .entries.associate { (k, v) -> k.toString() to (v as Number).toInt() }
-    }
-
     private fun crawlSeeds(ids: List<String>, parallelTabs: Int): CrawlResponse {
         // Distinct *paths*, not merely distinct query strings: a crawler that
         // normalizes query params away would otherwise collapse four probe pages
@@ -262,78 +238,5 @@ class CrawlParallelTabsTest : RestAPITestBase() {
             .trim()
             .removeSurrounding("\"")
             .also { check(it.isNotBlank()) { "blank crawl task id" } }
-    }
-
-    /**
-     * Terminal-state wait for a single crawl.
-     *
-     * This was a hard-coded 4 minutes, which a loaded CI runner ate: a healthy local
-     * run of this class finishes in ~64–91 s, while on CI the same code took 7.4x
-     * longer (class 72.7 s green → 538.1 s red) and the sequential control run hit
-     * the cap while still `PROCESSING`, failing the gate twice — see
-     * `docs-dev/copilot/ci-stabilization-4.13.x.md` §19.  10 minutes keeps roughly a
-     * 7x margin over the healthy time while staying bounded, so a genuinely stuck
-     * crawl still fails — now with the task's own account of where it stopped.
-     */
-    private val terminalWait: Duration = Duration.ofMinutes(10)
-
-    private fun waitForTerminal(taskId: String): CrawlResponse {
-        val deadline = Instant.now().plus(terminalWait)
-        var last: CrawlResponse? = null
-        while (Instant.now().isBefore(deadline)) {
-            Thread.sleep(1_000)
-            val raw = client.get().uri("/api/crawl/$taskId/result")
-                .exchange()
-                .expectStatus().is2xxSuccessful
-                .expectBody<String>()
-                .returnResult()
-                .responseBody
-            val result = requireNotNull(raw) { "empty crawl result for $taskId" }
-                .let {
-                    jacksonObjectMapper()
-                        .registerModule(JavaTimeModule())
-                        .readValue(it, CrawlResponse::class.java)
-                }
-            last = result
-            if (result.isTerminal()) {
-                return result
-            }
-        }
-        // The old failure said only "last: PROCESSING", which said nothing about how
-        // far the crawl got.  Report the task's own accounting instead (§19.5).
-        error(
-            "Crawl $taskId did not reach a terminal state within ${terminalWait.toMinutes()} minutes: " +
-                (last?.describe() ?: "no result was ever returned")
-        )
-    }
-
-    /**
-     * Terminal detection defers to [CrawlStatus] — the one vocabulary definition —
-     * so this test cannot drift from the service again.  The previous check
-     * compared against `"SC_REQUEST_TIMEOUT"` / `"SC_INTERNAL_SERVER_ERROR"`
-     * spellings the service never emitted, so a crawl that had already timed out
-     * could never be recognised and the wait ran out its whole cap before blaming a
-     * stall.  [CrawlResponse.finishTime] is the model's own terminal marker.
-     */
-    private fun CrawlResponse.isTerminal(): Boolean =
-        finishTime != null || CrawlStatus.isTerminal(status)
-
-    /** One line of the task's own accounting, for a timeout that has to be actionable. */
-    private fun CrawlResponse.describe(): String = buildString {
-        append("status=").append(status)
-        append(", pages=").append(pagesFound).append('/').append(pagesExpected)
-        append(", links=").append(linksDiscovered)
-        append(", parallelTabs=").append(parallelTabs)
-        append(", waiting=").append(
-            Duration.between(startedTime ?: Instant.ofEpochMilli(createdAt), Instant.now()).seconds
-        ).append('s')
-        error?.let { append(", error=").append(it) }
-        diagnostic?.let { append(", diagnostic=").append(it) }
-        failedPages?.takeIf { it.isNotEmpty() }?.let { append(", failedPages=").append(it.size) }
-        seedStatuses?.takeIf { it.isNotEmpty() }?.let { seeds ->
-            append(", seeds=[").append(
-                seeds.joinToString("; ") { "${it.url.substringAfterLast('/')}:${it.status}" }
-            ).append(']')
-        }
     }
 }

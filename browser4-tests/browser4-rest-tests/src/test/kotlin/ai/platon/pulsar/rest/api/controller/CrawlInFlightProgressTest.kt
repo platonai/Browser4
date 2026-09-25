@@ -2,7 +2,6 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
-import ai.platon.pulsar.test.TestUrls
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -12,7 +11,6 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.client.expectBody
-import java.time.Duration
 import java.time.Instant
 
 /**
@@ -40,9 +38,7 @@ import java.time.Instant
  * site.
  */
 @Tag("IntegrationTest")
-class CrawlInFlightProgressTest : RestAPITestBase() {
-
-    private val probeBase: String by lazy { "${TestUrls.MOCK_CRAWL_BASE.substringBefore("/generated")}/__probe" }
+class CrawlInFlightProgressTest : CrawlTestBase() {
 
     /** Links per hub, and how long each of them holds the server open. */
     private val linksPerHub = 3
@@ -183,7 +179,10 @@ class CrawlInFlightProgressTest : RestAPITestBase() {
             .trim().removeSurrounding("\"")
 
         val trace = mutableListOf<Sample>()
-        val deadline = Instant.now().plus(Duration.ofMinutes(4))
+        // The shared bound, not a hand-chosen one: this class polls every 150 ms, but it
+        // must wait at least as long as the server's own task budget can hold a crawl
+        // (see [crawlTerminalWait]).
+        val deadline = Instant.now().plus(crawlTerminalWait)
         while (Instant.now().isBefore(deadline)) {
             Thread.sleep(150)
             val response = readResult(taskId)

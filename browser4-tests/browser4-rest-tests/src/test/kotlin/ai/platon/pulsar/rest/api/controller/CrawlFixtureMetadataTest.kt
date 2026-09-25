@@ -3,8 +3,6 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
 import ai.platon.pulsar.test.TestUrls
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -14,8 +12,6 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.client.expectBody
-import java.time.Duration
-import java.time.Instant
 
 /**
  * Verifies that a link-discovery crawl records each page's metadata under the
@@ -35,7 +31,7 @@ import java.time.Instant
  * Tagged [IntegrationTest] so it runs in main CI + nightly (not PR CI).
  */
 @Tag("IntegrationTest")
-class CrawlFixtureMetadataTest : RestAPITestBase() {
+class CrawlFixtureMetadataTest : CrawlTestBase() {
 
     private val crawlBase: String by lazy { TestUrls.MOCK_CRAWL_BASE }
 
@@ -256,36 +252,4 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
         return taskId
     }
 
-    private fun waitForTerminal(taskId: String): CrawlResponse {
-        val deadline = Instant.now().plus(Duration.ofMinutes(6))
-        var last: CrawlResponse? = null
-        while (Instant.now().isBefore(deadline)) {
-            Thread.sleep(2000)
-            // Fetch the raw body and deserialize with the Kotlin-aware Jackson
-            // mapper.  `expectBody<CrawlResponse>()` uses the client-side
-            // converter without the Kotlin module: CrawlResponse's all-default
-            // constructor lets it instantiate the class, but no field is ever
-            // bound — status would stay at its "CREATED" default forever even
-            // though the server reports PROCESSING/OK.
-            val raw = client.get().uri("/api/crawl/$taskId/result")
-                .exchange()
-                .expectStatus().is2xxSuccessful
-                .expectBody<String>()
-                .returnResult()
-                .responseBody
-            val result = requireNotNull(raw) { "Empty crawl result body for $taskId" }
-                .let {
-                    jacksonObjectMapper()
-                        .registerModule(JavaTimeModule())
-                        .readValue(it, CrawlResponse::class.java)
-                }
-            last = result
-            // Terminal detection defers to CrawlStatus — the one vocabulary
-            // definition — so this test cannot drift from the service.
-            if (CrawlStatus.isTerminal(result.status)) {
-                return result
-            }
-        }
-        error("Crawl $taskId did not reach a terminal state within 6 minutes, last status: ${last?.status}")
-    }
 }
