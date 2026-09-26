@@ -28,9 +28,13 @@ import org.springframework.test.web.servlet.client.expectBody
  * verifies every page was fetched fresh from the live site; in both branches
  * each stored title still matches its URL.
  *
- * Tagged [IntegrationTest] so it runs in main CI + nightly (not PR CI).
+ * Tagged [IntegrationTest] and [Heavy]: it fetches and re-reads every fixture page
+ * through a real browser, and its honest runtime is minutes (253 s at best, 956 s
+ * on a slow runner), so `Heavy` keeps it in the nightly comprehensive suite and out
+ * of the release gate.  See docs-dev/copilot/ci-stabilization-4.13.x.md §33.
  */
 @Tag("IntegrationTest")
+@Tag("Heavy")
 class CrawlFixtureMetadataTest : CrawlTestBase() {
 
     private val crawlBase: String by lazy { TestUrls.MOCK_CRAWL_BASE }

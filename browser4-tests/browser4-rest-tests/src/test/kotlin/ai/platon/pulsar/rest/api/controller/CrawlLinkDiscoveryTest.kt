@@ -26,9 +26,13 @@ import org.springframework.test.web.servlet.client.expectBody
  *  * the dedup identity is query- and fragment-insensitive, so a page offered
  *    under two spellings is fetched once, under the first spelling seen.
  *
- * Tagged [IntegrationTest]: it drives real browser crawls through the REST API.
+ * Tagged [IntegrationTest] and [Heavy]: it drives real browser crawls through the
+ * REST API and its honest runtime is minutes (481 s at best, 625 s on a slow
+ * runner), so `Heavy` keeps it in the nightly comprehensive suite and out of the
+ * release gate.  See docs-dev/copilot/ci-stabilization-4.13.x.md §33.
  */
 @Tag("IntegrationTest")
+@Tag("Heavy")
 class CrawlLinkDiscoveryTest : CrawlTestBase() {
 
     private val crawlBase: String by lazy { TestUrls.MOCK_CRAWL_BASE }

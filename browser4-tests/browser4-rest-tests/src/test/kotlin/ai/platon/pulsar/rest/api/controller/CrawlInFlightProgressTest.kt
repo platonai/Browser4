@@ -34,10 +34,13 @@ import java.time.Instant
  * publish reports 1); the two-seed run adds the case where two rounds publish at
  * the same time.
  *
- * Tagged [IntegrationTest]: needs a real browser, the driver pool and the mock
- * site.
+ * Tagged [IntegrationTest] and [Heavy]: it needs a real browser, the driver pool and
+ * the mock site, and its honest runtime is minutes (123 s at best, 409 s on a slow
+ * runner), so `Heavy` keeps it in the nightly comprehensive suite and out of the
+ * release gate.  See docs-dev/copilot/ci-stabilization-4.13.x.md §33.
  */
 @Tag("IntegrationTest")
+@Tag("Heavy")
 class CrawlInFlightProgressTest : CrawlTestBase() {
 
     /** Links per hub, and how long each of them holds the server open. */

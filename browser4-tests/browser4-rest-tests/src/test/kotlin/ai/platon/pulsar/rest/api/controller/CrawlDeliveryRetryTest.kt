@@ -35,9 +35,14 @@ import java.util.UUID
  * out-links to the session itself (`crawlDepth1`), while a depth-2 round submits the children its
  * parse handler discovers (`crawlDepthN`).
  *
- * Tagged [IntegrationTest] so it runs in main CI + nightly (not PR CI).
+ * Tagged [IntegrationTest] and [Heavy].  The class is one of the crawl acceptance
+ * classes whose honest runtime is minutes (480 s at best, 1045 s on a slow runner),
+ * and `Heavy` is the taxonomy's own answer for >30 s / resource-hungry suites:
+ * nightly and resource-isolated runs, not the release gate, which has to stay
+ * inside its own time limit.  See docs-dev/copilot/ci-stabilization-4.13.x.md §33.
  */
 @Tag("IntegrationTest")
+@Tag("Heavy")
 class CrawlDeliveryRetryTest : CrawlTestBase() {
 
     /** Per-test ids, so a run cannot be answered by the page store of an earlier one. */

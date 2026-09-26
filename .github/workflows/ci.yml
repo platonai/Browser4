@@ -125,10 +125,21 @@ jobs:
           # (Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,
           #  Integration,E2E,ManualOnly,TestInfraCheck,IntegrationTest,E2ETest,HeavyTest)
           # this short list deliberately re-enables Integration/IntegrationTest/
-          # Heavy/Requires* so the pipeline also covers the integration and
+          # Requires* so the pipeline also covers the integration and
           # infrastructure suite (Chrome, Docker and the started app are available
-          # here). See docs-dev/copilot/ci-stabilization-4.13.x.md before editing.
-          excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck'
+          # here). It does NOT re-enable Slow or Heavy. See
+          # docs-dev/copilot/ci-stabilization-4.13.x.md before editing.
+          #
+          # §33 — `Heavy` was added back to this list for the crawl acceptance
+          # classes. Their honest runtime is minutes each (CrawlDeliveryRetryTest
+          # 480-1045 s, CrawlLinkDiscoveryTest 481-625 s, CrawlFixtureMetadataTest
+          # 253-956 s, CrawlInFlightProgressTest 123-409 s) and they alone owned
+          # 1600-2300 s of this step, which is why run 36172619505 was killed at
+          # the limit with 141 tests never run.  `Heavy` is the taxonomy's own
+          # answer for them (docs/TESTING.md: `Heavy` → nightly / manual /
+          # resource-isolated), and nightly.yml still runs them.  This is the
+          # structural half of the fix; the time limit below is the other half.
+          excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,Heavy,HeavyTest,TestInfraCheck'
           # 60 minutes, not 50. The crawl integration classes are the long pole and
           # grew to ~11 minutes each on GitHub runners (CrawlFixtureMetadataTest
           # 668.8 s + CrawlParallelTabsTest 671.7 s in run 35507033919), so the old
@@ -159,8 +170,14 @@ jobs:
           # 90 minutes is that measurement with room for the same 2x spread; it is
           # cheaper than a gate that is red by construction. Do not lower it without
           # re-reading how much of the step the crawl classes own.
-          # See docs-dev/copilot/ci-stabilization-4.13.x.md §24.2, §31 and §32 before
-          # changing this.
+          #
+          # §33 then took the four Heavy crawl classes out of this step, which is
+          # worth 1600-2300 s of it. With them excluded the step is expected to land
+          # near 40 minutes even on a slow runner; 90 stays as the ceiling for a
+          # pathological one, not as a budget this step needs. The exclusion, not
+          # this number, is what makes the gate fit.
+          # See docs-dev/copilot/ci-stabilization-4.13.x.md §24.2, §31, §32 and §33
+          # before changing this.
           timeout_minutes: '90'
 
       - name: Check Test Status

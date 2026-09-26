@@ -2419,3 +2419,77 @@ event`）。断言 `assertEquals(CrawlStatus.OK, ...)` 要钉的契约（"第一
 * **上下文泄漏**——ci.2 里 19:17:46 仍有 `Privacy context has lived for 50m21s ... leaked`（§31.3，独立课题）。
 * **`CrawlDeliveryRetryTest` 的轮次结算竞态**（§32.4，§17 / §26）。
 * **`CrawlCheckpointStore.save()` 共用临时文件名**（§31.6）。
+
+## 33. 门禁 `v4.13.22-ci.3` 之前：`Heavy` 的 crawl 验收类搬出发布门禁，进 nightly（4.13.x，2026-09-26）
+
+| 项 | 值 |
+|---|---|
+| 触发 | 门禁 `v4.13.22-ci.2`（run [36172619505](https://github.com/platonai/Browser4/actions/runs/36172619505)）在 3601 s 被 `timeout` 掐掉，账目 2172 / 2316（§32） |
+| 性质 | 红线换了内容：**不再是"哪几个用例坏了"，而是这套 suite 装不进门禁的时间上限** |
+| 处置 | 4 个固有耗时以分钟计的 crawl 验收类改挂 `@Tag("Heavy")`；`ci.yml` 的 `excluded_groups` 加回 `Heavy`；`nightly.yml` 预算 **60 → 150** 分钟 |
+| 依据 | `docs/TESTING.md`：`Slow` = 5–30 s，`Heavy` = **> 30 s / 高资源**，且 `Heavy` 的去处明写为**夜间 / 手动 / 资源隔离** |
+
+### 33.1 这是容量问题，不是测试缺陷问题
+
+§31 修掉的三个族、§32 修掉的读超时都真实有效：8 个红点降到 2 个（`CrawlParallelTabsTest` 5/0/0、
+`CrawlXSqlE2ETest` 2/0/0、`CrawlLinkDiscoveryTest` 3/0/0 全部转绿）。但同一轮里 `Run Tests` 用满了 3600 s 的
+上限，`timeout` 在 `[29/32] browser4-rest-tests` 里掐掉 Maven，最后 3 个 reactor 模块（141 个用例）根本没进入。
+
+把每个 crawl 类在三轮里的耗时并排放，"天生慢"和"被满载 runner 拖慢"就分得开：
+
+| 类 | ci.2 绿<br>`35646179429` | ci.1 红<br>`36164169973` | ci.2 红<br>`36172619505` | 最小 | 最大 |
+|---|---|---|---|---|---|
+| `CrawlDeliveryRetryTest` | — | 480.6 s | 1045 s | **480.6 s** | 1045 s |
+| `CrawlLinkDiscoveryTest` | 685.3 s | 481.6 s | 624.8 s | **481.6 s** | 685.3 s |
+| `CrawlFixtureMetadataTest` | 956.1 s | 253.2 s | 266.8 s | **253.2 s** | 956.1 s |
+| `CrawlInFlightProgressTest` | 123.3 s | 408.5 s | 未跑（被掐） | **123.3 s** | 408.5 s |
+| `CrawlXSqlE2ETest` | **6.07 s** | 170.0 s | 377.5 s | 6.07 s | 377.5 s |
+| `CommandXSqlTest` | **16.50 s** | 90.0 s | 180.1 s | 16.5 s | 180.1 s |
+| `CrawlParallelTabsTest` | 708.8 s | 52.3 s（早退） | 55.26 s | 52.3 s | 708.8 s |
+| `CrawlControllerResumeTest` | — | 0.085 s | 0.083 s | 0.083 s | 0.085 s |
+
+**判据：只看"最好一次"**。一个类如果在**最顺的一轮**里都要几分钟，它的成本是固有的；如果最顺的一轮只要几秒，
+它就是被满载 runner 放大的（其红点应按负载问题处理，而不是按"太慢"搬走）。
+
+按这条判据：
+
+* **搬走（4 个）**：`CrawlDeliveryRetryTest`、`CrawlLinkDiscoveryTest`、`CrawlFixtureMetadataTest`、
+  `CrawlInFlightProgressTest`——最好一次 480.6 / 481.6 / 253.2 / 123.3 s，合计 **1339 s**；逐类最差之和
+  **3095 s**。这 4 个类就是这一步 1600–2300 s 的开销来源。
+* **留下**：`CrawlXSqlE2ETest`（最好 6.07 s）、`CommandXSqlTest`（最好 16.50 s）——它们的正常耗时只有几秒，
+  把负载型的红点当成"太慢"搬去 nightly 会掩盖真正该修的读超时（§32.3 已经修了）。
+* **留下但需观察**：`CrawlParallelTabsTest`——健康时 55 s，但 ci.2 曾用 708.8 s。它单独一个类还在 90 分钟上限
+  之内，所以留在门禁里；若它再次逼近上限，下一个该搬的就是它。
+
+### 33.2 改动
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `browser4-tests/.../Crawl{DeliveryRetry,LinkDiscovery,FixtureMetadata,InFlightProgress}Test.kt` | 在既有 `@Tag("IntegrationTest")` 之外补 `@Tag("Heavy")`，并把 KDoc 里"runs in main CI + nightly"改为准确说法 |
+| 2 | `.github/workflows/ci.yml` | `excluded_groups` 加回 `Heavy`（原文写的是"故意重新启用 …/Heavy/Requires*"，已同步改正）；`timeout_minutes` 保持 §32 的 90，并注明**排除**才是让门禁装得下的原因，90 只是病态 runner 的天花板 |
+| 3 | `.github/workflows/nightly.yml` | `Run Comprehensive Tests` 的 `timeout_minutes` **60 → 150**：§32.5 结尾留的"下一次动 nightly 预算"在这里兑现，否则只是把门禁的超时搬家 |
+
+### 33.3 覆盖代价（必须明说）
+
+`nightly.yml` 的 `cron` 触发跑在**默认分支（`main`）**上，不在 `4.13.x`。所以这 4 个类在 **4.13.x 维护线上不会
+再被自动跑到**，要覆盖它们得显式派发：
+
+```bash
+gh workflow run nightly.yml --ref 4.13.x
+```
+
+这是用"维护线的重型验收不再自动跑"换"发布门禁能在预算内给出可信结论"。取舍是明确的；如果维护线上也要自动覆盖，
+下一步应当是给 `ci.yml` 增加一个**并行的** `runs-on: ubuntu-latest` 作业专门跑 `Heavy`（而不是把它们塞回同一个
+串行步骤——那正是 §19.7 / §24.2 / §32 反复撞的墙）。
+
+### 33.4 验证与遗留
+
+验证：`yaml.safe_load` 解析 `ci.yml` / `nightly.yml` 通过；`mvn -o -Pall-main-modules,all-test-modules -pl
+browser4-tests/browser4-rest-tests test-compile` 通过（EXIT=0）。**标签是否真的生效只能由下一轮门禁证明**——本地
+无法跑这些类（需要浏览器后端）。
+
+遗留（本轮**未**修）：
+
+* **上下文泄漏**（§31.3）与 **`CrawlCheckpointStore.save()` 共用临时文件名**（§31.6）。
+* **`CrawlDeliveryRetryTest` 的轮次结算竞态**（§32.4）——搬去 nightly 不等于修好，它仍会在 nightly 上红。
+* **`CommandXSqlTest` 的负载型读超时**：§32.3 已把上限改为从服务端预算推导，但仍需在慢 runner 上实测确认。

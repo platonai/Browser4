@@ -77,7 +77,18 @@ jobs:
           maven_profiles: 'all-main-modules,all-test-modules'
           excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest' # E2E tests might be flaky in CI, so we run them separately in a different workflow
           run_pulsar_tests: 'true'
-          timeout_minutes: '60'
+          # 150 minutes, not 60.  This run is where the `Heavy` suites live:
+          # docs/TESTING.md sends >30 s / resource-hungry classes here, and §33
+          # moved the four crawl acceptance classes (CrawlDeliveryRetryTest,
+          # CrawlLinkDiscoveryTest, CrawlFixtureMetadataTest,
+          # CrawlInFlightProgressTest) out of the release gate and into this one.
+          # They cost 1339 s combined at their best (480.6 / 481.6 / 253.2 /
+          # 123.3 s) and up to 3095 s using each class's worst observed run, on top
+          # of everything else this step already ran in 60 — so 60 would just move
+          # the release gate's timeout here.  This job is a nightly cron, not a merge
+          # gate, so paying those minutes here is the point of the move.
+          # See docs-dev/copilot/ci-stabilization-4.13.x.md §33 before editing.
+          timeout_minutes: '150'
 
       - name: Check Test Status
         id: test-check
