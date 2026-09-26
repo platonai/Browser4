@@ -2487,3 +2487,361 @@ HTTP/1.1 200 OK
 **不指定 `--ref`**，因此它跑的是**默认分支（main）**上的 `sync-to-oss.yml`。本轮修好的 `--force` /
 `--update` / 超时预算目前只在 `4.13.x` 上，需要合并到 `main`（或让等待脚本显式带上发布分支）才会对下一次
 发布生效。v4.13.21 的镜像已经补齐，但下一次发布仍会踩到旧逻辑。
+
+## 31. 门禁 `v4.13.22-ci.1`：crawl 测试的等待短于服务端自己的预算（4 分钟 vs 10 分钟）（4.13.x，2026-09-25）
+
+| 项 | 值 |
+|---|---|
+| tag | `v4.13.22-ci.1` |
+| run | [36164169973](https://github.com/platonai/Browser4/actions/runs/36164169973) |
+| job | `ci-build`（16:58:32 → 17:43:08 UTC） |
+| 结果 | **failure**（`Check Test Status` 红，8 个用例） |
+| 用例账目 | **Total 2316 / Passed 2252 / Skipped 56 / Failed 8** |
+| 红点模块 | `browser4-rest-tests`：**Tests run: 43, Failures: 1, Errors: 7, Skipped: 1** |
+| `Run Tests` 步骤 | 17:02:44 → 17:43:07 = **2423 s**（上限 3000 s，余量 577 s） |
+
+8 个红点全是 `rest` 集成类的用例，分三族，逐族查完的结论是：**族 A 是测试的确定性缺陷，族 B 是测试的等待
+上限短于服务端自己的契约，族 C 是环境生命周期（不是产品逻辑）**。三族之外没有产品回归。
+
+| 类 | 用例 | 耗时 | 结果 |
+|---|---|---|---|
+| `CrawlParallelTabsTest` | `testSequentialControlRunDoesNotOverlap` | 21.65 s | ERROR |
+| `CrawlParallelTabsTest` | `testParallelSeedCrawlOverlapsOnTheServer` | 5.118 s | ERROR |
+| `CrawlLinkDiscoveryTest` | `testRepeatsDoNotSpendTheBudget` | 240.9 s | ERROR |
+| `CrawlLinkDiscoveryTest` | `testIgnoreUrlQueryShapesDiscoveredUrls` | 240.8 s | ERROR |
+| `CrawlXSqlE2ETest` | `testCrawlWithSqlExtractsWithoutASecondFetch` | 170.0 s | ERROR |
+| `CrawlDeliveryRetryTest` | `testOutLinkThatFailedItsFirstLoadIsDelivered` | 240.3 s | ERROR |
+| `CrawlDeliveryRetryTest` | `testDiscoveredChildThatFailedItsFirstLoadIsDelivered` | 240.3 s | ERROR |
+| `CommandXSqlTest` | `testPageVisitWithXSqlReturnsRows` | 89.99 s | FAILURE |
+
+### 31.1 族 A（3 个 ERROR）：`/__probe/stats` 多了嵌套字段，`probeStats()` 还在整表强转 `Number`
+
+```text
+java.lang.ClassCastException: class java.util.LinkedHashMap cannot be cast to class java.lang.Number
+	at ...CrawlParallelTabsTest.probeStats(CrawlParallelTabsTest.kt:205)
+	at ...CrawlXSqlE2ETest.probeStats(CrawlXSqlE2ETest.kt:168)
+```
+
+§26 给探针加了 `flakyHits`（每个 id 的命中次数，`Map<String, Int>`，提交 `5b2c450cee`，2026-09-22），
+`stats()` 从此**不是一张平表**。而 `CrawlParallelTabsTest` / `CrawlXSqlE2ETest` 里那份手抄的 `probeStats()`
+仍按"每个 value 都是 Number"写成 `(value as Number).toInt()`——于是一进循环就抛，**且是在真跑完一整轮 crawl
+之后抛**（控制用例 21.65 s、X-SQL 用例 170.0 s 都花在了浏览器上）。这类红的代价最高：测试看着像功能坏了，
+其实是读统计表读崩了。
+
+修复：只取数值项，非数值项留给知道自己形状的调用方（`CrawlDeliveryRetryTest` 自己读 `flakyHits`）：
+
+```kotlin
+.mapNotNull { (key, value) -> (value as? Number)?.let { key.toString() to it.toInt() } }
+```
+
+### 31.2 族 B（4 个 ERROR）：4 分钟的等待上限**低于**服务端 10 分钟的任务预算
+
+四个 `IllegalStateException: Crawl <id> did not reach a terminal state within 4 minutes, last status: Processing`
+——四个 crawl 在服务端都**有终态**，只是晚于测试自己定的 4 分钟：
+
+| crawl task | 提交 | 测试的 4 分钟到期 | 服务端终态 | 超出 |
+|---|---|---|---|---|
+| `ba4591ee` | 17:12:31 | 17:16:31 | 17:17:17 **OK，4 页，0 丢** | +46 s |
+| `fbab4cce` | 17:16:32 | 17:20:32 | 17:22:46 **OK，6 页，0 丢** | +2 m 14 s |
+| `e37f1841` | 17:23:22 | 17:27:22 | 17:32:52 自身超时（1 页，1 丢） | +5 m 30 s |
+| `cfcaf34c` | 17:27:23 | 17:31:23 | 17:33:05 **OK，2 页，0 丢** | +1 m 42 s |
+
+提交时服务端记的是 `budget=600000ms`——**请求并没有要更短的超时**，4 分钟是测试自己加的。而
+`CrawlService.DEFAULT_TASK_TIMEOUT_MS` 是 10 分钟，轮次还会在预算内留 `ROUND_REPORT_MARGIN_MS`（30 s）
+发布自己的失败账目，所以一轮**健康**的 crawl 完全可以在 ~10 分钟处才报终态。结论：**测试的上限不得低于
+服务端自己的契约**，否则它测的不是产品，是运气。
+
+§19.6 只给 `CrawlParallelTabsTest` 修过这个问题（10 分钟 + `describe()`），另外五个类仍带着各自的硬编码
+（4 分钟；`CrawlFixtureMetadataTest` 是 6 分钟，同样低于 10 分钟）。本轮把上限改成从服务端预算推导：
+
+```kotlin
+protected val crawlTerminalWait: Duration =
+    Duration.ofMillis(CrawlService.DEFAULT_TASK_TIMEOUT_MS + TERMINAL_WAIT_SLACK_MS)  // 600 s + 120 s
+```
+
+超时报文也换成了 crawl 自己的账目（`status/pages/links/parallelTabs/waiting/error/diagnostic/seedStatuses`），
+不再是只有一句 `last status: Processing`——§19.5 的老毛病。
+
+**这四个红的去向要分开说**：改完之后 `ba4591ee` / `fbab4cce` / `cfcaf34c` 三条会**转绿**（crawl 本来就是
+OK、0 丢）；`e37f1841` 仍会红，但会红在**它自己的**账目上（`depth>1 timed out after collecting 1 pages`，
+1 页 1 丢），也就是一个"这一轮在满载 runner 上确实慢"的真红，而不是被测试提前判死的假红。若它反复出现，
+下一个要看的是满载下的轮次预算（§17），而不是继续加测试等待。
+
+### 31.3 族 C（1 个 FAILURE）：泄漏的浏览器上下文被回收时，正在加载的页面报 `OK(200)` 却没有内容
+
+`CommandXSqlTest.testPageVisitWithXSqlReturnsRows` 断言 `[{title=}]` 空标题。日志里的因果链是完整的：
+
+```text
+17:07:32  Context 3/#8 建立（startTime=17:07:32.327Z）
+17:32:52  64. Context 3/#8 is not active | Canceled(1602) | {closed,leaked,...} | .../ec/dp/B0E000001
+17:32:52  StatefulPageVisitor - Finished executeCommandStepByStep | status: Processing | .../ec/dp/B0E000001
+17:32:53  XSQLHyperlink - No content | Protocol Status: OK(200) | Page URL: .../ec/dp/B0E000001
+```
+
+这个上下文活了 **25 分 20 秒**、被标成 `leaked`，在 `MultiPrivacyContextManager` 回收它（`Canceled(1602)`）的
+同一秒，正好有一次到 `/ec/dp/B0E000001` 的加载在飞。加载被取消 ⇒ 页面没有内容 ⇒ X-SQL 正确地返回空行 ⇒
+断言看到的 title 是空的。
+
+这是**环境/生命周期**问题，不是本次改动引入的产品逻辑回归：没有任何产品代码在这条链路上被改，失败的形状
+（`Protocol Status: OK(200)` 但无内容）也是"取消"这一路径的既有语义。真正的修法在**上下文泄漏**本身（谁把
+这个上下文借出去 25 分钟又没还），属于会话/上下文生命周期的独立课题，本轮不动。**不要**为了让这条绿掉去
+放宽断言：空标题正是它要抓的东西（§18）。
+
+### 31.4 根因收敛：一份 `CrawlTestBase`
+
+族 A 和族 B 是同一件事的两半——**每个 crawl 测试类都手抄了一份轮询循环、终态词表和探针计数读取**，于是
+探针加字段时只有一份跟着改，等待上限被证明太短时也只有一份被修（§19.6）。本轮不再逐个打补丁，而是新建
+
+`browser4-tests/browser4-rest-tests/src/test/kotlin/ai/platon/pulsar/rest/api/controller/CrawlTestBase.kt`
+
+把四样东西收成**一份定义**：`probeBase`、`probeStats()`/`resetProbe()`、`crawlTerminalWait`/`waitForTerminal()`、
+以及"终态"的判定（直接委派 `CrawlStatus.isTerminal`，不再让测试自己拼 `"SC_REQUEST_TIMEOUT"` 这类**服务端
+从未发出过的**拼写）。六个 crawl 类改为继承它：
+
+`CrawlParallelTabsTest`、`CrawlLinkDiscoveryTest`、`CrawlDeliveryRetryTest`、`CrawlXSqlE2ETest`、
+`CrawlFixtureMetadataTest`、`CrawlInFlightProgressTest`
+
+下一次改其中任何一处，就是**同时**改所有消费者。
+
+### 31.5 预算：`timeout_minutes` 50 → 60（§24.2 的"需要决策"落地）
+
+本轮 2423 s 看着比 ci.2 的 2926 s 宽裕，但那是**靠提前判死四个 crawl 省出来的**：把 31.2 的四条按真实终态
+等到底，要多花 46 + 134 + 102 + 330 = **612 s**，2423 + 612 = **3035 s > 3000 s**——不改上限，下一次就是
+"8 个红点变 3 个、但门禁因为预算超时整体判红"（§19.7 的失败模式）。故：
+
+```yaml
+# .github/workflows/ci.yml, Run Tests
+timeout_minutes: '60'
+```
+
+这与 §19.7"不要盲目加预算"不冲突：那次是"没跑起来/卡住"，该先查为什么；这次是**可归因的测试成本**——
+每一条等待都能指到某个 crawl 的终态时刻。
+
+### 31.6 顺带发现、本轮未修的两点
+
+* **`CrawlCheckpointStore.save()` 的临时文件名是共用的**（`${taskId}.json.tmp`，`CrawlCheckpoint.kt`），同一
+  个 task 并发写检查点会互踩；本轮日志里有 **8 条** `failed to persist the resume checkpoint`。与本轮 8 个
+  红点无关（没有用例断言检查点），但值得单独开一条。
+* **上下文泄漏**（31.3 的 `leaked`，活了 25 分钟）——见上。
+
+验证：`browser4-tests/browser4-rest-tests` 上 `clean test-compile` 通过（Kotlin 2.3.21，无 accidental-override
+报错）；`yaml.safe_load` 解析 `.github/workflows/ci.yml` 通过。
+
+## 32. 门禁 `v4.13.22-ci.2`：`timeout` 在 3601 s 掐掉 reactor，"2 failed" 少了 144 个用例（4.13.x，2026-09-26）
+
+| 项 | 值 |
+|---|---|
+| tag | `v4.13.22-ci.2` |
+| run | [36172619505](https://github.com/platonai/Browser4/actions/runs/36172619505) |
+| job | `ci-build`（18:18:54 → 19:23:19 UTC） |
+| 结果 | **failure**（`Check Test Status` 红，2 个用例） |
+| 用例账目 | **Total 2172 / Passed 2156 / Skipped 14 / Failed 2** ← **不完整**（见 32.1） |
+| 红点模块 | `browser4-rest-tests`：`CommandXSqlTest`（2 个用例里 1 个 ERROR）、`CrawlDeliveryRetryTest`（3 个用例里 1 个 FAILURE） |
+| `Run Tests` 步骤 | 18:23:11 → 19:23:11 = **3600.6 s**（上限 3600 s，`Maven exit code: 124`） |
+
+§31 把预算从 50 提到 60，是按"每一次等待都能指到某个 crawl 的终态时刻"算出来的（§31.5：2423 + 612 = 3035 s）。
+这一次是**同一笔成本在一台更慢的 runner 上翻倍**：`Run Tests` 走满 3600 s 被 `timeout` 掐掉，门禁报出的是
+"2 failed"，而真实结果是"**还有 144 个用例根本没跑**"。
+
+### 32.1 先把"结果不完整"证成算术，而不是感觉
+
+两次 tag 的模块账目对得上，一分不差：
+
+| 模块（reactor 位次） | ci.1 | ci.2 |
+|---|---|---|
+| `Browser4 Rest Tests` [29/32] | Tests run: 43 | 43 个用例；`CrawlInFlightProgressTest` 只有 `[INFO] Running`，3 个用例一条都没报 |
+| `Pulsar IT Tests` [30/32] | Tests run: 79 | **模块未进入** |
+| `Browser4 E2E Tests` [31/32] | Tests run: 0 | **模块未进入** |
+| `Pulsar E2E Tests` [32/32] | Tests run: 62 | **模块未进入** |
+
+2316 − (79 + 0 + 62) − 3 = **2172** ✓
+
+`[29/32] Browser4 Rest Tests` 从 18:27:08 一直跑到被掐——`CrawlInFlightProgressTest` 里最后一个 crawl 在
+19:20:46 才刚开出 `round budget 300000ms`——**30/31/32 三个模块一行日志都没有**。这 141 个用例既没跑、也没被记为
+skipped：在门禁眼里它们**不存在**。"Tests run: N" 这种单值账目在 reactor 被掐时天然是**中间态**，必须与
+"是否跑完"一起读。
+
+### 32.2 3601 s 花在哪：同一台 runner 的抓取速率掉了一半
+
+```text
+19:22:48 🚚 Fetched 70 pages in 55m(0.02 pages/s)     ← ci.2
+ci.1     🚚 Fetched 81 pages in 32m(0.04 pages/s)     ← 同一套用例
+```
+
+速率从 0.04 pages/s 掉到 0.02 pages/s，crawl 验收类的成本**直接翻倍**。掉下去的直接证据——2 KiB 的本地 fixture
+页面、一个 flaky 子页的第二次（成功的）加载：
+
+```text
+19:02:16 [crawl#3728] 💯 ⚡ U for N  got 200 2.3212891 KiB [💿2.3212891 KiB] in 3m8.722s, fc:1 | .../flaky-hub/retry-5366abd5
+19:07:23 [@w#3779]   💯 🖴 U for RR got 200 2.0087891 KiB [💿2.0087891 KiB] in 2m44.317s, last fetched 3m31s ago, fc:2
+19:07:38 [-9 @w#3780]  💯 🖴 U for RR got 200 2.0087891 KiB [💿2.0087891 KiB] in 2m44.275s, last fetched 3m41s ago, fc:2
+```
+
+只提供 localhost fixture 的机器上，2 KiB 的页面要 **2 分 44 秒**；driver 池那边同时排着 **46–47 个活跃
+context**，取驱动要等满池子自己的上限：
+
+```text
+19:20:36 WARN WebDriverPoolManager - Coroutine canceled(10m) (by [withTimeout]) | 46/45/0/1/4/0/0 (active/standby/waiting/working/slots/retired/closed)
+19:20:56 WARN LoadingWebDriverPool - A task waited more than 1x the driver wait warning threshold (10s) | driver pool #2: no driver became available
+```
+
+所以这不是"测试变慢"，是**满载 runner 上这套验收用例的固有成本**。§31.5 把等待对齐到服务端契约是对的；它的
+推论是总时长必须按**最慢实测值**留余量，而不是按最快的一次。
+
+### 32.3 `CommandXSqlTest`：那个 180 s 的读超时从来不是本套件选的
+
+```text
+19:10:17 [ERROR] CommandXSqlTest.testPageVisitWithXSqlReturnsRows -- Time elapsed: 180.1 s <<< ERROR!
+         ResourceAccessException: I/O error on POST request for "http://127.0.0.1:40361/api/commands": Read timed out
+Caused by: java.net.SocketTimeoutException: Read timed out
+```
+
+`/api/commands` 上的这个 POST 是**同步**的：服务端在自己的任务预算（`CrawlService.DEFAULT_TASK_TIMEOUT_MS`，10
+分钟）里跑完一整次页面访问才回包。而测试里的 `client = RestTestClient.bindToServer()` 从没设过超时——那 180 s 是
+Apache HttpClient 5 的 `RequestConfig.DEFAULT`，由 Spring 自动探测到哪个客户端**顺带**带进来的。**没有人选过这个
+数字**，它却比自己等待的契约短三倍多：这正是 §31.2 在 crawl 等待上修掉的同一个错误（"测试的上限不得低于服务端自己
+的契约"），只是这次藏在 HTTP 客户端里，光看测试代码是看不出来的。
+
+修法用同一套推导——上限从服务端预算来：
+
+```kotlin
+// IntegrationTestBase
+protected val pageVisitClient: RestTestClient get() =
+    RestTestClient.bindToServer(pageVisitRequestFactory).baseUrl(baseUri).build()
+
+private val pageVisitRequestFactory: ClientHttpRequestFactory by lazy {
+    HttpComponentsClientHttpRequestFactory().apply { setReadTimeout(PAGE_VISIT_READ_TIMEOUT) }
+}
+
+private val PAGE_VISIT_READ_TIMEOUT: Duration =
+    Duration.ofMillis(CrawlService.DEFAULT_TASK_TIMEOUT_MS + 120_000L)  // 与 CrawlTestBase.crawlTerminalWait 同源
+```
+
+**只有真正在等一次页面访问的调用**才用它（本轮是 `CommandXSqlTest` 的那一个 POST）；轮询性质的调用继续用 `client`
+——轮询挂住应该快速失败，而不是把套件再拖十分钟。同一模块里其它碰 `/api/commands` 的类不受影响：
+`CommandControllerE2ETest` / `CommandControllerSSETest` / `MassiveScrapeTaskTest` / `HtmlSnapshotScenariosE2ETest`
+分别带 `E2ETest`/`Slow`/`ManualOnly`（门禁本就排除），`CrawlXSqlE2ETest` 走的是异步提交 + 轮询。
+
+### 32.4 `CrawlDeliveryRetryTest`：轮次预算先于重试节奏用尽——本轮**不修**，理由如下
+
+```text
+19:07:16 WARN  CrawlRoundRunner - Crawl dce1be98...: depth=1 timed out after collecting 0 pages; saving partial results
+19:07:16 INFO  CrawlService    - Crawl task dce1be98... completed: 0 pages, 2 lost, status Request Timeout, 2 URL(s) resumable
+19:07:17 ERROR CrawlDeliveryRetryTest.testOutLinkThatFailedItsFirstLoadIsDelivered -- Time elapsed: 526.9 s:
+         2 of 2 page(s) were submitted but never delivered (0 recorded) ==> expected: <OK> but was: <Request Timeout>
+19:07:23 DEBUG CrawlRoundRunner - ... ignoring a late parse event for '.../flaky/retry-5366abd5-1?failures=1' — the round is already complete
+19:07:38 DEBUG CrawlRoundRunner - ... ignoring a late parse event for '.../flaky/retry-5366abd5-2?failures=1' — the round is already complete
+```
+
+深度 1 的轮次预算（300 s）先被种子页自己的加载吃掉，两个子页的"第一次失败 → 退避 → 重试成功"晚了 **7 s / 22 s**，
+而轮次已经在 19:07:16 按 `Request Timeout` 结算——两个页面随后都到了，到的时候轮次已经关上（`ignoring a late parse
+event`）。断言 `assertEquals(CrawlStatus.OK, ...)` 要钉的契约（"第一次加载失败的页面最终必须被送达，绝不能报成
+丢失"）**没有被违反**：`failedPages` 为空，页面也确实送达了；违约的是**结算时刻**——轮次在"还在飞的尝试"落地之前
+就宣布本轮结束。
+
+这属于 §17（轮次预算）与 §26（在途尝试报账）的地界，不在本轮 4 项改动能覆盖的范围：
+
+* 不是断言漂移——两个子页确实各被请求了两次，探针计数与断言一致；
+* 是真红，但根因是"轮次结算 vs 在途尝试"的竞态，满载 runner 只是把它放大；
+* 因此本轮**不**放宽断言、**不**加测试等待：把 300 s 的轮次预算调大等于改产品行为，应当按 §17 的既有议题单独做，
+  并把这一个用例当作验收。
+
+### 32.5 本轮改动（4 项）
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `.github/workflows/ci.yml` | `Run Tests` 的 `timeout_minutes` **60 → 90**（按 32.2 的实测：慢 runner 上光是 crawl 验收类就要 ~4150 s，再加上没跑到的三个模块 ~4385 s） |
+| 2 | `.github/workflows/ci.yml` | `Check Test Status` 在列清单**之前**先说明 reactor 是被掐的（`run_exit_code = 124` ⇒ "下面这份账目只覆盖跑完的模块，**不是**完整结果"）——这次任务单读到的正是"Failed Tests: 2"，而真相是"结果不完整" |
+| 3 | `browser4-tests/.../IntegrationTestBase.kt` | 新增 `pageVisitClient`：显式 `HttpComponentsClientHttpRequestFactory` + 从服务端任务预算推导的读超时（32.3） |
+| 4 | `browser4-tests/.../CommandXSqlTest.kt` | 那个同步的页面访问 POST 改用 `pageVisitClient` |
+
+`nightly.yml` 里同名步骤仍是 60 分钟，会在慢 runner 上撞同一面墙；本轮不动它（不在这次 tag 红点的范围内），但
+**下一次动 nightly 预算时就按 32.2 的量级改**。
+
+### 32.6 验证与遗留
+
+验证：`mvn -o -Pall-test-modules,all-main-modules -pl browser4-tests/browser4-rest-tests test-compile` 通过
+（Kotlin 2.3.21）；`yaml.safe_load` 解析 `.github/workflows/ci.yml` 通过（`timeout_minutes: '90'`）；
+`HttpComponentsClientHttpRequestFactory.setReadTimeout(Duration)` 是本仓库 test classpath 上确实存在的重载
+（Spring 7.0.7 已无 `setConnectTimeout`，改为 `setConnectionRequestTimeout`，故未设连接超时——localhost 的连接
+要么立刻成功、要么立刻被拒）。
+
+遗留（本轮**未**修，都是已记录议题）：
+
+* **上下文泄漏**——ci.2 里 19:17:46 仍有 `Privacy context has lived for 50m21s ... leaked`（§31.3，独立课题）。
+* **`CrawlDeliveryRetryTest` 的轮次结算竞态**（§32.4，§17 / §26）。
+* **`CrawlCheckpointStore.save()` 共用临时文件名**（§31.6）。
+
+## 33. 门禁 `v4.13.22-ci.3` 之前：`Heavy` 的 crawl 验收类搬出发布门禁，进 nightly（4.13.x，2026-09-26）
+
+| 项 | 值 |
+|---|---|
+| 触发 | 门禁 `v4.13.22-ci.2`（run [36172619505](https://github.com/platonai/Browser4/actions/runs/36172619505)）在 3601 s 被 `timeout` 掐掉，账目 2172 / 2316（§32） |
+| 性质 | 红线换了内容：**不再是"哪几个用例坏了"，而是这套 suite 装不进门禁的时间上限** |
+| 处置 | 4 个固有耗时以分钟计的 crawl 验收类改挂 `@Tag("Heavy")`；`ci.yml` 的 `excluded_groups` 加回 `Heavy`；`nightly.yml` 预算 **60 → 150** 分钟 |
+| 依据 | `docs/TESTING.md`：`Slow` = 5–30 s，`Heavy` = **> 30 s / 高资源**，且 `Heavy` 的去处明写为**夜间 / 手动 / 资源隔离** |
+
+### 33.1 这是容量问题，不是测试缺陷问题
+
+§31 修掉的三个族、§32 修掉的读超时都真实有效：8 个红点降到 2 个（`CrawlParallelTabsTest` 5/0/0、
+`CrawlXSqlE2ETest` 2/0/0、`CrawlLinkDiscoveryTest` 3/0/0 全部转绿）。但同一轮里 `Run Tests` 用满了 3600 s 的
+上限，`timeout` 在 `[29/32] browser4-rest-tests` 里掐掉 Maven，最后 3 个 reactor 模块（141 个用例）根本没进入。
+
+把每个 crawl 类在三轮里的耗时并排放，"天生慢"和"被满载 runner 拖慢"就分得开：
+
+| 类 | ci.2 绿<br>`35646179429` | ci.1 红<br>`36164169973` | ci.2 红<br>`36172619505` | 最小 | 最大 |
+|---|---|---|---|---|---|
+| `CrawlDeliveryRetryTest` | — | 480.6 s | 1045 s | **480.6 s** | 1045 s |
+| `CrawlLinkDiscoveryTest` | 685.3 s | 481.6 s | 624.8 s | **481.6 s** | 685.3 s |
+| `CrawlFixtureMetadataTest` | 956.1 s | 253.2 s | 266.8 s | **253.2 s** | 956.1 s |
+| `CrawlInFlightProgressTest` | 123.3 s | 408.5 s | 未跑（被掐） | **123.3 s** | 408.5 s |
+| `CrawlXSqlE2ETest` | **6.07 s** | 170.0 s | 377.5 s | 6.07 s | 377.5 s |
+| `CommandXSqlTest` | **16.50 s** | 90.0 s | 180.1 s | 16.5 s | 180.1 s |
+| `CrawlParallelTabsTest` | 708.8 s | 52.3 s（早退） | 55.26 s | 52.3 s | 708.8 s |
+| `CrawlControllerResumeTest` | — | 0.085 s | 0.083 s | 0.083 s | 0.085 s |
+
+**判据：只看"最好一次"**。一个类如果在**最顺的一轮**里都要几分钟，它的成本是固有的；如果最顺的一轮只要几秒，
+它就是被满载 runner 放大的（其红点应按负载问题处理，而不是按"太慢"搬走）。
+
+按这条判据：
+
+* **搬走（4 个）**：`CrawlDeliveryRetryTest`、`CrawlLinkDiscoveryTest`、`CrawlFixtureMetadataTest`、
+  `CrawlInFlightProgressTest`——最好一次 480.6 / 481.6 / 253.2 / 123.3 s，合计 **1339 s**；逐类最差之和
+  **3095 s**。这 4 个类就是这一步 1600–2300 s 的开销来源。
+* **留下**：`CrawlXSqlE2ETest`（最好 6.07 s）、`CommandXSqlTest`（最好 16.50 s）——它们的正常耗时只有几秒，
+  把负载型的红点当成"太慢"搬去 nightly 会掩盖真正该修的读超时（§32.3 已经修了）。
+* **留下但需观察**：`CrawlParallelTabsTest`——健康时 55 s，但 ci.2 曾用 708.8 s。它单独一个类还在 90 分钟上限
+  之内，所以留在门禁里；若它再次逼近上限，下一个该搬的就是它。
+
+### 33.2 改动
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `browser4-tests/.../Crawl{DeliveryRetry,LinkDiscovery,FixtureMetadata,InFlightProgress}Test.kt` | 在既有 `@Tag("IntegrationTest")` 之外补 `@Tag("Heavy")`，并把 KDoc 里"runs in main CI + nightly"改为准确说法 |
+| 2 | `.github/workflows/ci.yml` | `excluded_groups` 加回 `Heavy`（原文写的是"故意重新启用 …/Heavy/Requires*"，已同步改正）；`timeout_minutes` 保持 §32 的 90，并注明**排除**才是让门禁装得下的原因，90 只是病态 runner 的天花板 |
+| 3 | `.github/workflows/nightly.yml` | `Run Comprehensive Tests` 的 `timeout_minutes` **60 → 150**：§32.5 结尾留的"下一次动 nightly 预算"在这里兑现，否则只是把门禁的超时搬家 |
+
+### 33.3 覆盖代价（必须明说）
+
+`nightly.yml` 的 `cron` 触发跑在**默认分支（`main`）**上，不在 `4.13.x`。所以这 4 个类在 **4.13.x 维护线上不会
+再被自动跑到**，要覆盖它们得显式派发：
+
+```bash
+gh workflow run nightly.yml --ref 4.13.x
+```
+
+这是用"维护线的重型验收不再自动跑"换"发布门禁能在预算内给出可信结论"。取舍是明确的；如果维护线上也要自动覆盖，
+下一步应当是给 `ci.yml` 增加一个**并行的** `runs-on: ubuntu-latest` 作业专门跑 `Heavy`（而不是把它们塞回同一个
+串行步骤——那正是 §19.7 / §24.2 / §32 反复撞的墙）。
+
+### 33.4 验证与遗留
+
+验证：`yaml.safe_load` 解析 `ci.yml` / `nightly.yml` 通过；`mvn -o -Pall-main-modules,all-test-modules -pl
+browser4-tests/browser4-rest-tests test-compile` 通过（EXIT=0）。**标签是否真的生效只能由下一轮门禁证明**——本地
+无法跑这些类（需要浏览器后端）。
+
+遗留（本轮**未**修）：
+
+* **上下文泄漏**（§31.3）与 **`CrawlCheckpointStore.save()` 共用临时文件名**（§31.6）。
+* **`CrawlDeliveryRetryTest` 的轮次结算竞态**（§32.4）——搬去 nightly 不等于修好，它仍会在 nightly 上红。
+* **`CommandXSqlTest` 的负载型读超时**：§32.3 已把上限改为从服务端预算推导，但仍需在慢 runner 上实测确认。

@@ -7,7 +7,8 @@ tier: catalog
 # Tabs — Lifecycle, GUIDs, and Extension Sessions
 
 Tab commands scope to a session — all operations affect the session targeted via
-`-s <session>` (or the DEFAULT session when `-s` is omitted).
+`-s <session>` (or the DEFAULT session when `-s` is omitted). `-s` is a **global** flag, so it
+always goes **before** the command: `browser4-cli -s job-42 tab-list`.
 
 ## Overview
 
@@ -37,6 +38,11 @@ All four accept `-s <session>` (DEFAULT session otherwise) and `--json`.
   `browser4-cli --json tab-list` or `browser4-cli tab-list --json`. Output is a JSON envelope —
   `{"status":"ok","command":"tab-list","output":{"tabs":[{"index":0,"guid":"…","url":"…","title":"…","active":true}],"count":N}}`.
   The `tabs` array and `count` are nested inside `output`, and each tab also carries `active`.
+  `active` is **Browser4's own marker for the tab the session currently targets** (the one
+  `tab-select` last switched to), not CDP tab activation in the browser window: Browser4 opens tabs
+  over CDP and never makes one the browser's foreground tab, so `active: true` does not mean the tab
+  is the window's selected tab, and it does not mean the page sees itself as focused — that comes
+  from the per-tab focus emulation (see [browser-modes.md](browser-modes.md)).
 - **Session scoping:** Prefix tab commands with `-s <session-id>` to target a non-default session.
   The `list` command shows all tracked sessions and their IDs.
 - **Last-tab behavior:** Chrome requires at least one open tab. Closing the last tab makes Chrome

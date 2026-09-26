@@ -6244,7 +6244,7 @@ async fn handle_snapshot(
             eprintln!(
                 "\n💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, read the page viewport by viewport — just like a human scrolls. Important content usually comes first:\n\
                    --viewport, -v <N>       Capture a specific viewport (-v 0 = current, -v 1 = next below)\n\
-                   -s, --selector <CSS>     Scope to a CSS selector\n\
+                   --selector <CSS>         Scope to a CSS selector (-s is reserved for --session)\n\
                    -i, --interactive        Interactive-oriented text layout (not a strict filter)\n\
                    -d, --depth <N>           Limit tree depth\n\
                    --raw --page 1            View first page of snapshot content",

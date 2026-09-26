@@ -247,7 +247,7 @@ browser4-cli pdf --filename page.pdf
 | `-h`, `--help [command\|category]` | 显示顶层帮助、分类帮助或某个命令的详细帮助 |
 | `--help-json` | 输出机器可读的命令参考 JSON |
 | `-v`, `--version` | 打印 CLI 版本 |
-| `-s`, `--session <name>` | 使用命名会话，而不是默认会话 |
+| `-s`, `--session <name>` | 使用命名会话，而不是默认会话。这是**全局**标志，必须写在命令**之前**（`browser4-cli -s job-42 snapshot`）——写在命令之后会被当作位置参数而报错 |
 | `--server <url>` | 覆盖 Browser4 服务端 URL |
 | `--timeout <seconds>` | 覆盖当前命令的 HTTP 超时时间 |
 | `--proxy <url>` | 安装 / 下载运行时使用的代理 |

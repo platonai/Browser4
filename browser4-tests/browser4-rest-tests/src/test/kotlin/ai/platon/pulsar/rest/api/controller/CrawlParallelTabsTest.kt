@@ -3,9 +3,7 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlService
-import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
 import ai.platon.pulsar.test.TestUrls
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -14,8 +12,6 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.client.expectBody
-import java.time.Duration
-import java.time.Instant
 
 /**
  * Acceptance tests for multi-tab parallel collection: a crawl with several
@@ -34,16 +30,19 @@ import java.time.Instant
  * *not* overlap.  Without the control, a passing parallel assertion could just be
  * the probe counting unrelated requests.
  *
- * Tagged [IntegrationTest]: needs a real browser, the driver pool and the mock
- * site, so it runs in main CI + nightly (not PR CI).  Measured 81 s for 5 tests
- * (2026-09), hence [Heavy] and [RequiresBrowser].
+ * Tagged [IntegrationTest] and [RequiresBrowser]: needs a real browser, the driver
+ * pool and the mock site, so it runs in main CI + nightly (not PR CI).
+ *
+ * Deliberately **not** `Heavy`.  §33 measured its healthy runtime at ~55 s (708.8 s
+ * on a loaded runner) and kept it in the release gate — "留下但需观察": the slow run is a
+ * load problem the gate exists to notice, not an intrinsic cost of the class, so
+ * moving it to nightly would hide it.  If it approaches the step's limit again, §33
+ * says it is the next class to move.
+ * See docs-dev/copilot/ci-stabilization-4.13.x.md §33.
  */
 @Tag("IntegrationTest")
-@Tag("Heavy")
 @Tag("RequiresBrowser")
-class CrawlParallelTabsTest : RestAPITestBase() {
-
-    private val probeBase: String by lazy { "${TestUrls.MOCK_CRAWL_BASE.substringBefore("/generated")}/__probe" }
+class CrawlParallelTabsTest : CrawlTestBase() {
 
     /** The static /generated/crawl/ fixture the link-discovery round test crawls. */
     private val crawlBase: String by lazy { TestUrls.MOCK_CRAWL_BASE }
@@ -190,28 +189,6 @@ class CrawlParallelTabsTest : RestAPITestBase() {
     private fun idOf(url: String): String =
         url.substringAfter("/slow/", "").substringBefore('?')
 
-    private fun resetProbe() {
-        client.post().uri("$probeBase/reset")
-            .exchange()
-            .expectStatus().is2xxSuccessful
-    }
-
-    private fun probeStats(): Map<String, Int> {
-        val raw = client.get().uri("$probeBase/stats")
-            .exchange()
-            .expectStatus().is2xxSuccessful
-            .expectBody<String>()
-            .returnResult()
-            .responseBody
-        val body = requireNotNull(raw) { "empty /__probe/stats body" }
-        // `/stats` also carries the per-id `flakyHits` map (a delivery retry is only
-        // observable from the site's side), which is not a scalar counter, so only the
-        // numeric entries are read here.  `CrawlDeliveryRetryTest.flakyHits()` reads the map.
-        return jacksonObjectMapper().readValue(body, Map::class.java)
-            .entries.mapNotNull { (k, v) -> (v as? Number)?.let { k.toString() to it.toInt() } }
-            .toMap()
-    }
-
     private fun crawlSeeds(ids: List<String>, parallelTabs: Int): CrawlResponse {
         // Distinct *paths*, not merely distinct query strings: a crawler that
         // normalizes query params away would otherwise collapse four probe pages
@@ -270,93 +247,4 @@ class CrawlParallelTabsTest : RestAPITestBase() {
             .removeSurrounding("\"")
             .also { check(it.isNotBlank()) { "blank crawl task id" } }
     }
-
-    /**
-     * Wait for a crawl to settle.
-     *
-     * The wall-clock cap is a ceiling for a hang, not a speed assertion: on a loaded CI runner a
-     * healthy crawl fetches a page in ~80-100 s instead of ~2.6 s, and a fixed 4 minute cap then
-     * fails crawls that go on to finish normally (the recorded CI failure completed 2.5 minutes
-     * after the test gave up).  A crawl that stops moving is still caught, by the stall limit on
-     * the progress the record reports.
-     * */
-    private fun waitForTerminal(
-        taskId: String,
-        ceiling: Duration = Duration.ofMinutes(12),
-        stallLimit: Duration = Duration.ofMinutes(3)
-    ): CrawlResponse {
-        val deadline = Instant.now().plus(ceiling)
-        var last: CrawlResponse? = null
-        var lastProgress = ""
-        var progressAt = Instant.now()
-        while (Instant.now().isBefore(deadline)) {
-            Thread.sleep(1_000)
-            val raw = client.get().uri("/api/crawl/$taskId/result")
-                .exchange()
-                .expectStatus().is2xxSuccessful
-                .expectBody<String>()
-                .returnResult()
-                .responseBody
-            val result = requireNotNull(raw) { "empty crawl result for $taskId" }
-                .let {
-                    jacksonObjectMapper()
-                        .registerModule(JavaTimeModule())
-                        .readValue(it, CrawlResponse::class.java)
-                }
-            last = result
-            if (result.isTerminal()) {
-                return result
-            }
-
-            val progress = progressOf(result)
-            if (progress != lastProgress) {
-                lastProgress = progress
-                progressAt = Instant.now()
-            } else if (Duration.between(progressAt, Instant.now()) > stallLimit) {
-                error("Crawl $taskId stopped making progress for $stallLimit ($progress, status ${result.status})")
-            }
-        }
-        // The old failure said only "last: PROCESSING", which said nothing about how
-        // far the crawl got.  Report the task's own accounting instead (§19.5).
-        error(
-            "Crawl $taskId did not reach a terminal state within $ceiling: " +
-                (last?.describe() ?: "no result was ever returned")
-        )
-    }
-
-    /**
-     * Terminal detection defers to [CrawlStatus] — the one vocabulary definition —
-     * so this test cannot drift from the service again.  The previous check
-     * compared against `"SC_REQUEST_TIMEOUT"` / `"SC_INTERNAL_SERVER_ERROR"`
-     * spellings the service never emitted, so a crawl that had already timed out
-     * could never be recognised and the wait ran out its whole cap before blaming a
-     * stall.  [CrawlResponse.finishTime] is the model's own terminal marker.
-     */
-    private fun CrawlResponse.isTerminal(): Boolean =
-        finishTime != null || CrawlStatus.isTerminal(status)
-
-    /** One line of the task's own accounting, for a timeout that has to be actionable. */
-    private fun CrawlResponse.describe(): String = buildString {
-        append("status=").append(status)
-        append(", pages=").append(pagesFound).append('/').append(pagesExpected)
-        append(", links=").append(linksDiscovered)
-        append(", parallelTabs=").append(parallelTabs)
-        append(", waiting=").append(
-            Duration.between(startedTime ?: Instant.ofEpochMilli(createdAt), Instant.now()).seconds
-        ).append('s')
-        error?.let { append(", error=").append(it) }
-        diagnostic?.let { append(", diagnostic=").append(it) }
-        failedPages?.takeIf { it.isNotEmpty() }?.let { append(", failedPages=").append(it.size) }
-        seedStatuses?.takeIf { it.isNotEmpty() }?.let { seeds ->
-            append(", seeds=[").append(
-                seeds.joinToString("; ") { "${it.url.substringAfterLast('/')}:${it.status}" }
-            ).append(']')
-        }
-    }
-
-    /** What the record reports about the work it has actually done so far. */
-    private fun progressOf(result: CrawlResponse): String =
-        "pagesFound=${result.pagesFound}, linksDiscovered=${result.linksDiscovered}, " +
-                "seedsSettled=${result.seedStatuses?.size ?: 0}, " +
-                "seedsSkipped=${result.seedStatuses?.count { it.status == "skipped" } ?: 0}"
 }

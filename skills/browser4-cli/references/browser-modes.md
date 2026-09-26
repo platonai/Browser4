@@ -170,6 +170,20 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
   `(pointer: fine)` matches — that is what a desktop Chrome with a touch-capable display
   reports, and `(any-pointer: coarse)` is true in that case. Compare against a plain
   `chrome --headless` reading on the same host before filing either as a driver bug.
+- A driven tab reports itself **visible and focused** by default. A tab created over CDP is never
+  made the window's selected tab, so without help it reports `document.hasFocus() == false`, and one
+  that is not the selected tab additionally reports `document.visibilityState == "hidden"` /
+  `document.hidden == true` — readings a bot detector takes as a headless browser (ipfighter's
+  `windowFocus` rule checks `document.hasFocus()`), and not what a plainly launched headless Chrome
+  reports on the same host. Measure both: on Chrome 153.0.8010.53 a single driven tab reads
+  `visible / false / false` while two driven tabs in one browser give `hidden / true / false` for the
+  tab that is not selected. Each tab is therefore sent one
+  `Emulation.setFocusEmulationEnabled {enabled: true}` (the mechanism Playwright uses), which makes
+  it report a foreground document **without activating it** — `Target.activateTarget` /
+  `Page.bringToFront` are deliberately avoided because they would steal the focus of concurrent
+  sessions in the same browser. Set `browser.focus.emulation=false` to keep the real window state
+  instead: the only way to preserve background-tab throttling and lazy-loading exactly as an
+  inactive tab behaves, at the cost of the hidden/unfocused readings above.
 - `console` (list console messages) reads them from the DevTools protocol, so it does **not**
   patch the page: `console.log` stays the native function and no driver-owned global appears on
   `window`. Capture starts with the first `console` call of a session, so messages logged before it

@@ -235,7 +235,7 @@ These flags can appear before any command.
 | `-h`, `--help [command\|category]` | Show top-level help, category help, or detailed command help |
 | `--help-json` | Emit the machine-readable command reference |
 | `-v`, `--version` | Print the CLI version |
-| `-s`, `--session <name>` | Use a named session instead of the default session |
+| `-s`, `--session <name>` | Use a named session instead of the default session. A **global** flag: place it **before** the command (`browser4-cli -s job-42 snapshot`) — after the command it is rejected as a positional argument |
 | `--server <url>` | Override the Browser4 server URL |
 | `--timeout <seconds>` | Override the HTTP timeout for the current command |
 | `--proxy <url>` | Proxy used for runtime downloads/install operations |

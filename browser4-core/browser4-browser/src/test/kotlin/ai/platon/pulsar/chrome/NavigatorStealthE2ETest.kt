@@ -31,6 +31,12 @@ import java.net.InetSocketAddress
  *    `navigator.maxTouchPoints` come from Chrome and the host, not from browser4. The assertions
  *    below encode the coherence rules real Chrome satisfies, so a future override that produces a
  *    raw host value (31.7 GB) or a touch count without a coarse pointer is caught here.
+ * 3. **A driven tab must not advertise itself as an unfocused background tab.** A tab created over
+ *    CDP is never made the window's selected tab, so it reports `hasFocus()=false`, and one that is
+ *    not the selected tab additionally reports `hidden` / `hidden=true` — which ipfighter's
+ *    `windowFocus` rule reads as "Headless browsers often don't have focus".
+ *    [Browser4WebDriver.ensureFocusEmulation] fixes that per tab; the assertions below are the
+ *    contract, and the two-tab case pins that every tab gets it — not just the first.
  *
  * This is the 4.14.x home of the `NavigatorStealthIT` that lived in `browser4-tests/pulsar-it-tests`
  * (that module — and its `WebDriverTestBase` — no longer exists here). The fixture is a page served
@@ -178,13 +184,83 @@ class NavigatorStealthE2ETest {
         }
     }
 
+    @Test
+    @DisplayName("a driven document reports itself visible and focused, not as a background tab")
+    fun drivenDocumentReportsItselfVisibleAndFocused() = runBlocking {
+        assertVisibleAndFocused(openEmulatedFixture(), "the driven tab")
+    }
+
+    @Test
+    @DisplayName("every tab of one browser reports a visible, focused document")
+    fun everyTabReportsVisibleAndFocused(): Unit = runBlocking {
+        // Two tabs in the same browser: the emulation is per target and never activates a tab, so
+        // the second tab is not what makes the first one hidden — the reason the emulation is used
+        // instead of Target.activateTarget / Page.bringToFront.
+        val drivers = listOf(browser.newDriver(), browser.newDriver())
+            .map { Browser4WebDriver.from(it as PulsarWebDriver) }
+
+        try {
+            drivers.forEachIndexed { index, driver ->
+                openFixtureIn(driver)
+                assertVisibleAndFocused(driver, "tab ${index + 1} of ${drivers.size}")
+            }
+        } finally {
+            drivers.forEach { runCatching { it.close() } }
+        }
+    }
+
+    /**
+     * Assert the document of [driver]'s tab reports itself as a foreground, focused page.
+     *
+     * The three readings are the ones ipfighter's `windowFocus` rule and its peers look at; a tab
+     * created over CDP reports `hidden` / `true` / `false` until the focus emulation reaches it.
+     */
+    private suspend fun assertVisibleAndFocused(driver: WebDriver, label: String) {
+        val visibilityState = driver.evaluate("document.visibilityState", "")
+        val hidden = driver.evaluate("document.hidden", true)
+        val hasFocus = driver.evaluate("document.hasFocus()", false)
+        println(
+            "$label: document.visibilityState=$visibilityState, document.hidden=$hidden, " +
+                "document.hasFocus()=$hasFocus"
+        )
+
+        assertEquals(
+            "visible", visibilityState,
+            "$label must report a visible document; a CDP-created tab is never made the window's " +
+                "selected tab, so without the focus emulation one that is not the selected tab " +
+                "reports 'hidden'"
+        )
+        assertFalse(hidden, "$label must not report document.hidden")
+        assertTrue(hasFocus, "$label must report document.hasFocus()")
+    }
+
     /** Open the fixture page and keep the driver for teardown. */
     private suspend fun openFixture(): WebDriver {
         val driver = browser.newDriver().also { this.driver = it }
+        openFixtureIn(driver)
+        return driver
+    }
+
+    /**
+     * Open the fixture page in a tab whose driver carries the focus emulation, and keep it for
+     * teardown.
+     *
+     * Every session is bound to a [Browser4WebDriver] (`AbstractPulsarSession.createBoundDriver`); a
+     * raw browser hands out the plain driver, which does not carry the focus emulation. The
+     * conversion reuses the tab and the CDP connection rather than opening a second one.
+     */
+    private suspend fun openEmulatedFixture(): Browser4WebDriver {
+        val driver = Browser4WebDriver.from(browser.newDriver() as PulsarWebDriver)
+        this.driver = driver
+        openFixtureIn(driver)
+        return driver
+    }
+
+    /** Navigate [driver] to the fixture page and wait until its document is there. */
+    private suspend fun openFixtureIn(driver: WebDriver) {
         driver.navigate(fixtureUrl)
         driver.waitForNavigation()
         driver.waitForSelector("body")
-        return driver
     }
 
     companion object {

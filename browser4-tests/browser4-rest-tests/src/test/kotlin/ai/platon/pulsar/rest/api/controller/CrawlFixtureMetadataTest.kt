@@ -3,8 +3,6 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
 import ai.platon.pulsar.test.TestUrls
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -14,8 +12,6 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.client.expectBody
-import java.time.Duration
-import java.time.Instant
 
 /**
  * Verifies that a link-discovery crawl records each page's metadata under the
@@ -32,14 +28,16 @@ import java.time.Instant
  * verifies every page was fetched fresh from the live site; in both branches
  * each stored title still matches its URL.
  *
- * Tagged [IntegrationTest] so it runs in main CI + nightly (not PR CI).
- * Measured 232 s for 5 tests (2026-09), so it is also [Heavy] and needs a real
- * browser ([RequiresBrowser]).
+ * Tagged [IntegrationTest] and [Heavy]: it fetches and re-reads every fixture page
+ * through a real browser, and its honest runtime is minutes (253 s at best, 956 s
+ * on a slow runner), so `Heavy` keeps it in the nightly comprehensive suite and out
+ * of the release gate.  It needs a real browser ([RequiresBrowser]).  See
+ * docs-dev/copilot/ci-stabilization-4.13.x.md §33.
  */
 @Tag("IntegrationTest")
 @Tag("Heavy")
 @Tag("RequiresBrowser")
-class CrawlFixtureMetadataTest : RestAPITestBase() {
+class CrawlFixtureMetadataTest : CrawlTestBase() {
 
     private val crawlBase: String by lazy { TestUrls.MOCK_CRAWL_BASE }
 
@@ -260,68 +258,4 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
         return taskId
     }
 
-    /**
-     * Wait for a crawl to settle.
-     *
-     * The wall-clock cap is a ceiling for a hang, not a speed assertion: on a loaded CI runner a
-     * healthy crawl fetches a page in ~80-100 s instead of ~2.6 s, and the recorded CI failure
-     * ("did not reach a terminal state within 6 minutes") belongs to a crawl that went on to finish
-     * with `status OK, 10 pages, 0 lost` moments later.  A crawl that stops moving is still caught,
-     * by the stall limit on the progress the record reports.
-     * */
-    private fun waitForTerminal(
-        taskId: String,
-        ceiling: Duration = Duration.ofMinutes(20),
-        stallLimit: Duration = Duration.ofMinutes(5)
-    ): CrawlResponse {
-        val deadline = Instant.now().plus(ceiling)
-        var last: CrawlResponse? = null
-        var lastProgress = ""
-        var progressAt = Instant.now()
-        while (Instant.now().isBefore(deadline)) {
-            Thread.sleep(2000)
-            // Fetch the raw body and deserialize with the Kotlin-aware Jackson
-            // mapper.  `expectBody<CrawlResponse>()` uses the client-side
-            // converter without the Kotlin module: CrawlResponse's all-default
-            // constructor lets it instantiate the class, but no field is ever
-            // bound — status would stay at its "CREATED" default forever even
-            // though the server reports PROCESSING/OK.
-            val raw = client.get().uri("/api/crawl/$taskId/result")
-                .exchange()
-                .expectStatus().is2xxSuccessful
-                .expectBody<String>()
-                .returnResult()
-                .responseBody
-            val result = requireNotNull(raw) { "Empty crawl result body for $taskId" }
-                .let {
-                    jacksonObjectMapper()
-                        .registerModule(JavaTimeModule())
-                        .readValue(it, CrawlResponse::class.java)
-                }
-            last = result
-            // Terminal detection defers to CrawlStatus — the one vocabulary
-            // definition — so this test cannot drift from the service.
-            if (CrawlStatus.isTerminal(result.status)) {
-                return result
-            }
-
-            val progress = progressOf(result)
-            if (progress != lastProgress) {
-                lastProgress = progress
-                progressAt = Instant.now()
-            } else if (Duration.between(progressAt, Instant.now()) > stallLimit) {
-                error("Crawl $taskId stopped making progress for $stallLimit ($progress, status ${result.status})")
-            }
-        }
-        error(
-            "Crawl $taskId did not reach a terminal state within $ceiling, " +
-                    "last status: ${last?.status}, progress: ${last?.let { progressOf(it) }}"
-        )
-    }
-
-    /** What the record reports about the work it has actually done so far. */
-    private fun progressOf(result: CrawlResponse): String =
-        "pagesFound=${result.pagesFound}, linksDiscovered=${result.linksDiscovered}, " +
-                "seedsSettled=${result.seedStatuses?.size ?: 0}, " +
-                "seedsSkipped=${result.seedStatuses?.count { it.status == "skipped" } ?: 0}"
 }

@@ -37,7 +37,10 @@ class CommandXSqlTest : RestAPITestBase() {
             async = false
         )
 
-        val status = client.post().uri("/api/commands")
+        // pageVisitClient, not client: this call is synchronous and its server side loads a page,
+        // so it may legitimately take minutes.  Run 36172619505 held it to the inherited
+        // 3-minute socket timeout and killed it while the server was still visiting.
+        val status = pageVisitClient.post().uri("/api/commands")
             .body(request)
             .exchange()
             .expectStatus().is2xxSuccessful

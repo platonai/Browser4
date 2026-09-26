@@ -130,6 +130,18 @@ Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedica
 
 > **Concurrent runs — always pass `-s <name>`:** the unnamed DEFAULT session is a singleton shared by every invocation that omits `-s` (last writer wins), so parallel agents navigate each other's pages. Give each run its own `-s job-42`.
 
+> **`-s` is a GLOBAL flag — its position is part of the syntax.** Write it **before** the
+> command: `browser4-cli -s job-42 goto <url>`. Written after the command —
+> `goto <url> -s job-42` — it is not recognised as the session option and is rejected as an
+> unexpected positional argument. The long form `--session <name>` behaves identically (also
+> before the command). Because `-s` is reserved globally for `--session`, scope a snapshot with
+> the long form `--selector <css>`, never `-s <css>`.
+>
+> Other ways to pin the session: `BROWSER4_CLI_SESSION=job-42` (per-invocation env var, overridden
+> by `-s` / `--session`), `browser4-cli config set session job-42` (persisted default), or
+> `browser4-cli session-default <name>` (promote an existing named session to the default).
+> `browser4-cli list` shows every session and its current page URL.
+
 Two on-disk locations — don't confuse them:
 
 - **Session state** lives in `~/.browser4` by default (per checkout in development mode — see **Development Mode** below), falling back to `./.browser4-cli-state` when unwritable; override with `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR`.
