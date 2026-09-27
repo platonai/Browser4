@@ -38,13 +38,13 @@ Consequences worth knowing:
   `application-private.properties`, or exported in the backend's environment) **wins over**
   `openai.api.key`, so `openai.base.url` / `openai.model.name` appear to be ignored.
 - A key that is set but **empty** (`deepseek.api.key=`) has no value and must never win.
-  With `browser4-base` 4.11.20+ it is ignored; on older versions remove or comment the line.
+  `browser4-base` 4.11.20+ ignores it; in older Browser4 releases remove or comment the line.
 - Two ways to force the provider:
   - `llm.provider.deny.list=deepseek` — the denied provider is skipped during detection
     (works on every version).
-  - `llm.provider=openai` — explicit selection, wins over the order above.
-    Requires `browser4-base` 4.11.20+; on older versions it is only consulted when no
-    provider key is configured at all.
+  - `llm.provider=openai` — explicit selection, wins over the order above. Available since
+    `browser4-base` 4.11.20 (Browser4 4.13.x pins it); in older Browser4 releases it is only
+    consulted when no provider key is configured at all.
 
 `browser4-cli doctor` reports what the backend will actually do:
 
