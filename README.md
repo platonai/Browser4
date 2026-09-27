@@ -267,6 +267,12 @@ AI-powered commands such as `extract`, `summarize`, `chat`, `agent run`, and X-S
 export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
+> Configure **one** provider. When several provider keys are present, the first one in the
+> built-in detection order wins — `openai` comes after the dedicated providers such as
+> `deepseek`, so a leftover `DEEPSEEK_API_KEY` silently wins over `OPENAI_*`.
+> `browser4-cli doctor` prints the key that won (`Selected key`) and the model the backend
+> will request (`Active model`). See [LLM configuration](docs/config.md#which-provider-is-used).
+
 ### Complete command reference
 
 #### Session lifecycle and server administration

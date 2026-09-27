@@ -18843,6 +18843,146 @@ fn parse_major_minor(v: &str) -> Option<(u64, u64)> {
     Some((major, minor))
 }
 
+/// Render the `-- LLM Status --` body from the backend's
+/// `GET /api/doctor/llm-status` payload.
+///
+/// "✓ LLM is configured" alone cannot be trusted: any configured provider key
+/// wins over the one the user just added when it sits higher in the built-in
+/// priority list, so a leftover `DEEPSEEK_API_KEY` in the same properties file
+/// keeps the routing on DeepSeek while `OPENAI_*` looks configured.  The lines
+/// below therefore name the configured keys *with their source*, the key that won
+/// the selection, and the model the backend will actually request.
+///
+/// Kept pure (no I/O) so it can be unit tested.
+fn render_llm_status_lines(llm_info: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    let configured = llm_info
+        .get("configured")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if !configured {
+        if let Some(message) = llm_info.get("message").and_then(|v| v.as_str()) {
+            for line in message.lines() {
+                lines.push(format!("  {}", line));
+            }
+        } else {
+            lines.push("  LLM is not configured.".to_string());
+            lines.push(
+                "  It is highly recommended to set OPENROUTER_API_KEY or other LLM keys to enable LLM features."
+                    .to_string(),
+            );
+        }
+        // Even when nothing is usable, reporting the keys that *are* set — and the
+        // ones that are set but empty — explains why.
+        lines.extend(llm_status_configured_key_lines(llm_info));
+        if let Some(warning) = llm_info.get("warning").and_then(|v| v.as_str()) {
+            if !warning.is_empty() {
+                lines.push(format!("  ⚠  {}", warning));
+            }
+        }
+        return lines;
+    }
+
+    lines.push("  ✓ LLM is configured.".to_string());
+
+    lines.extend(llm_status_configured_key_lines(llm_info));
+
+    let selected_key = llm_info.get("selectedKey").and_then(|v| v.as_str());
+    let selected_by = llm_info.get("selectedBy").and_then(|v| v.as_str());
+    match (selected_key, selected_by) {
+        (Some(key), _) => lines.push(format!(
+            "  Selected key: {} (first in the built-in priority list)",
+            key
+        )),
+        (None, Some(by)) if by.starts_with("llm.provider=") => {
+            lines.push(format!("  Selected by: {}", by))
+        }
+        _ => {}
+    }
+
+    if let Some(active) = llm_info.get("activeModel") {
+        let model = active.get("model").and_then(|v| v.as_str());
+        let client = active.get("client").and_then(|v| v.as_str());
+        if let Some(model) = model {
+            match client {
+                Some(client) => lines.push(format!("  Active model: {} ({})", model, client)),
+                None => lines.push(format!("  Active model: {}", model)),
+            }
+        }
+    }
+
+    if let Some(warning) = llm_info.get("warning").and_then(|v| v.as_str()) {
+        if !warning.is_empty() {
+            lines.push(format!("  ⚠  {}", warning));
+        }
+    }
+
+    match llm_info.get("detectedVia").and_then(|v| v.as_str()) {
+        Some("env") => lines.push("  Source: environment variables".to_string()),
+        Some("system_property") => lines.push("  Source: JVM system properties".to_string()),
+        Some("configuration") => {
+            lines.push("  Source: configuration file (~/.browser4/config/)".to_string())
+        }
+        // Older backends reported `config_file` for *any* configured key, including
+        // keys that came from the environment — only trust it when the payload does
+        // not also report an environment variable.
+        Some("config_file")
+            if llm_info
+                .get("foundEnvVars")
+                .and_then(|v| v.as_array())
+                .map_or(true, |vars| vars.is_empty()) =>
+        {
+            lines.push("  Source: configuration file (~/.browser4/config/)".to_string())
+        }
+        _ => {}
+    }
+
+    lines
+}
+
+/// The configured-key lines, preferring the per-key `source` reported by the
+/// backend and falling back to the plain env-var list of older backends.
+fn llm_status_configured_key_lines(llm_info: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if let Some(keys) = llm_info.get("configuredKeys").and_then(|v| v.as_array()) {
+        let rendered: Vec<String> = keys
+            .iter()
+            .filter_map(|entry| {
+                let key = entry.get("key").and_then(|v| v.as_str())?;
+                match entry.get("source").and_then(|v| v.as_str()) {
+                    Some(source) => Some(format!("{} ({})", key, describe_llm_key_source(source))),
+                    None => Some(key.to_string()),
+                }
+            })
+            .collect();
+        if !rendered.is_empty() {
+            lines.push(format!("  Configured keys: {}", rendered.join(", ")));
+        }
+        return lines;
+    }
+
+    if let Some(vars) = llm_info.get("foundEnvVars").and_then(|v| v.as_array()) {
+        let names: Vec<&str> = vars.iter().filter_map(|v| v.as_str()).collect();
+        if !names.is_empty() {
+            lines.push(format!("  Configured keys: {}", names.join(", ")));
+        }
+    }
+
+    lines
+}
+
+fn describe_llm_key_source(source: &str) -> &str {
+    match source {
+        "env" => "environment variable",
+        "system_property" => "JVM system property",
+        "configuration" => "configuration file",
+        other => other,
+    }
+}
+
 async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, Value>) -> Result<(), String> {
     cli_println!("Browser4 Doctor");
     cli_println!("================");
@@ -19004,32 +19144,8 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
     let llm_url = format!("{base_url}/api/doctor/llm-status");
     match get_json(client, &llm_url).await {
         Ok(llm_info) => {
-            let configured = llm_info
-                .get("configured")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if configured {
-                cli_println!("  ✓ LLM is configured.");
-                if let Some(vars) = llm_info.get("foundEnvVars").and_then(|v| v.as_array()) {
-                    if !vars.is_empty() {
-                        let names: Vec<&str> = vars.iter().filter_map(|v| v.as_str()).collect();
-                        cli_println!("  Configured keys: {}", names.join(", "));
-                    }
-                }
-                if let Some(detected) = llm_info.get("detectedVia").and_then(|v| v.as_str()) {
-                    match detected {
-                        "config_file" => cli_println!("  Source: configuration file (~/.browser4/config/)"),
-                        "env_or_property" => {} // already shown via Configured keys above
-                        _ => {}
-                    }
-                }
-            } else if let Some(message) = llm_info.get("message").and_then(|v| v.as_str()) {
-                for line in message.lines() {
-                    cli_println!("  {}", line);
-                }
-            } else {
-                cli_println!("  LLM is not configured.");
-                cli_println!("  It is highly recommended to set OPENROUTER_API_KEY or other LLM keys to enable LLM features.");
+            for line in render_llm_status_lines(&llm_info) {
+                cli_println!("{}", line);
             }
             json_field("llm_status", llm_info);
         }
@@ -25458,6 +25574,122 @@ mod tests {
         let raw = "The LLM is not configured; see docs/config/llm/llm-config.md";
         let formatted = format_missing_llm_error(raw, "extract");
         assert!(!formatted.contains("docs/config/llm"));
+    }
+
+    // -----------------------------------------------------------------------
+    // render_llm_status_lines
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_llm_status_reports_selected_key_model_and_source() {
+        // The shape served by DoctorController: DEEPSEEK_API_KEY won over the
+        // OPENAI_* the user just configured.
+        let payload = json!({
+            "configured": true,
+            "detectedVia": "configuration",
+            "foundEnvVars": [],
+            "foundProperties": [],
+            "configuredKeys": [
+                {"key": "DEEPSEEK_API_KEY", "source": "configuration"},
+                {"key": "OPENAI_API_KEY", "source": "env"}
+            ],
+            "emptyKeys": [],
+            "selectedKey": "DEEPSEEK_API_KEY",
+            "selectedBy": "auto-detection",
+            "multipleProviders": true,
+            "warning": "Several LLM providers are configured: DEEPSEEK_API_KEY, OPENAI_API_KEY.",
+            "activeModel": {"model": "deepseek-v4-flash", "client": "OpenAiChatModel"},
+            "message": null
+        });
+
+        let lines = render_llm_status_lines(&payload);
+        let text = lines.join("\n");
+
+        assert!(text.contains("✓ LLM is configured."));
+        assert!(text.contains("DEEPSEEK_API_KEY (configuration file)"));
+        assert!(text.contains("OPENAI_API_KEY (environment variable)"));
+        assert!(text.contains("Selected key: DEEPSEEK_API_KEY"));
+        assert!(text.contains("Active model: deepseek-v4-flash (OpenAiChatModel)"));
+        assert!(text.contains("⚠"));
+        assert!(text.contains("Source: configuration file"));
+    }
+
+    #[test]
+    fn render_llm_status_reports_explicit_provider_selection() {
+        let payload = json!({
+            "configured": true,
+            "detectedVia": "multiple",
+            "configuredKeys": [{"key": "OPENAI_API_KEY", "source": "env"}],
+            "selectedKey": null,
+            "selectedBy": "llm.provider=openai",
+            "multipleProviders": false,
+            "warning": null,
+            "activeModel": {"model": "gpt-5.6-sol", "client": "OpenAiChatModel"},
+            "message": null
+        });
+
+        let text = render_llm_status_lines(&payload).join("\n");
+
+        assert!(text.contains("Selected by: llm.provider=openai"));
+        assert!(text.contains("Active model: gpt-5.6-sol"));
+        // "multiple" sources are already spelled out per key
+        assert!(!text.contains("Source:"));
+    }
+
+    #[test]
+    fn render_llm_status_falls_back_to_env_var_list_of_older_backends() {
+        // Older backends report `config_file` unconditionally, so the claim is only
+        // repeated when no environment variable was reported.
+        let payload = json!({
+            "configured": true,
+            "detectedVia": "config_file",
+            "foundEnvVars": ["OPENAI_API_KEY"],
+            "message": null
+        });
+
+        let text = render_llm_status_lines(&payload).join("\n");
+
+        assert!(text.contains("Configured keys: OPENAI_API_KEY"));
+        assert!(!text.contains("Source:"), "a config-file claim next to an env var is a lie");
+
+        let from_file = json!({
+            "configured": true,
+            "detectedVia": "config_file",
+            "foundEnvVars": [],
+            "message": null
+        });
+        assert!(render_llm_status_lines(&from_file)
+            .join("\n")
+            .contains("Source: configuration file"));
+    }
+
+    #[test]
+    fn render_llm_status_reports_not_configured_message_and_empty_keys() {
+        let payload = json!({
+            "configured": false,
+            "detectedVia": null,
+            "configuredKeys": [{"key": "OPENAI_API_KEY", "source": "configuration"}],
+            "emptyKeys": ["OPENAI_API_KEY"],
+            "warning": "These provider keys are set but empty, and are ignored: OPENAI_API_KEY.",
+            "message": "LLM is not configured, you can only use non-LLM commands."
+        });
+
+        let text = render_llm_status_lines(&payload).join("\n");
+
+        assert!(!text.contains("✓"));
+        assert!(text.contains("LLM is not configured"));
+        assert!(text.contains("OPENAI_API_KEY (configuration file)"));
+        assert!(text.contains("set but empty"));
+    }
+
+    #[test]
+    fn render_llm_status_uses_default_hint_without_message() {
+        let payload = json!({"configured": false, "detectedVia": null});
+
+        let text = render_llm_status_lines(&payload).join("\n");
+
+        assert!(text.contains("LLM is not configured."));
+        assert!(text.contains("OPENROUTER_API_KEY"));
     }
 
     // -----------------------------------------------------------------------

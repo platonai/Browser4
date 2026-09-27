@@ -279,6 +279,11 @@ browser4-cli pdf --filename page.pdf
 export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
+> 只配置**一个**提供商。当存在多个提供商 key 时，按内置检测顺序先命中的那个生效——`openai`
+> 排在 `deepseek` 等专用提供商之后，因此残留的 `DEEPSEEK_API_KEY` 会静默压过 `OPENAI_*`。
+> `browser4-cli doctor` 会显示最终生效的 key（`Selected key`）和后端实际请求的模型
+> （`Active model`）。详见 [LLM 配置](docs/config.md#which-provider-is-used)。
+
 ### 完整命令参考
 
 #### 会话生命周期与服务端管理

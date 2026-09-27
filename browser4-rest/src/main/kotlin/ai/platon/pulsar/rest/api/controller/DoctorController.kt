@@ -1,7 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agentic.context.AgenticContext
-import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import com.codahale.metrics.*
 import org.slf4j.LoggerFactory
@@ -120,64 +119,18 @@ class DoctorController(
         )
     }
 
+    /**
+     * Report whether an LLM is configured, and which provider the requests will
+     * actually go to.
+     *
+     * The second half matters as much as the first: a configured `OPENAI_API_KEY`
+     * is silently ignored when another provider key (a leftover `DEEPSEEK_API_KEY`
+     * in the same properties file, for example) sits higher in the built-in
+     * priority list.  See [LlmStatusReporter].
+     */
     @GetMapping("llm-status")
     fun llmStatus(): ResponseEntity<Map<String, Any?>> {
-        val envKeyNames = listOf(
-            "OPENROUTER_API_KEY",
-            "DEEPSEEK_API_KEY",
-            "VOLCENGINE_API_KEY",
-            "OPENAI_API_KEY",
-            "LLM_API_KEY",
-        )
-        val propertyKeyNames = listOf(
-            "llm.api.key",
-            "openrouter.api.key",
-            "volcengine.api.key",
-            "deepseek.api.key",
-            "openai.api.key",
-        )
-
-        val foundEnvVars = envKeyNames.filter { System.getenv(it) != null }
-        val foundProperties = propertyKeyNames.filter { System.getProperty(it) != null }
-
-        // Primary check: use ChatModelFactory which reads from the Pulsar SDK's
-        // ImmutableConfig (loaded from ~/.browser4/config/conf-enabled/). This is
-        // the same check used by Browser4StandaloneApplication at startup.
-        val factoryConfigured = try {
-            ChatModelFactory.isModelConfigured(agenticContext.configuration, verbose = false)
-        } catch (e: Exception) {
-            logger.warn("ChatModelFactory.isModelConfigured threw: {}", e.message)
-            null
-        }
-
-        val configured = when {
-            factoryConfigured == true -> true
-            foundEnvVars.isNotEmpty() || foundProperties.isNotEmpty() -> true
-            else -> false
-        }
-
-        val message = if (configured) {
-            null
-        } else {
-            "LLM is not configured, you can only use non-LLM commands. " +
-                "X-SQL is still available. " +
-                "It is highly recommended to set OPENROUTER_API_KEY or other LLM keys to enable LLM features."
-        }
-
-        return ResponseEntity.ok(
-            mapOf(
-                "configured" to configured,
-                "detectedVia" to when {
-                    factoryConfigured == true -> "config_file"
-                    foundEnvVars.isNotEmpty() || foundProperties.isNotEmpty() -> "env_or_property"
-                    else -> null
-                },
-                "foundEnvVars" to foundEnvVars,
-                "foundProperties" to foundProperties,
-                "keyPrefixes" to listOf("OPENROUTER", "DEEPSEEK", "VOLCENGINE", "OPENAI"),
-                "message" to message,
-            )
-        )
+        return ResponseEntity.ok(LlmStatusReporter.report(agenticContext.configuration))
     }
 
     @GetMapping("metrics")
