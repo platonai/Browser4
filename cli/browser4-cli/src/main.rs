@@ -18929,9 +18929,10 @@ fn render_llm_status_lines(llm_info: &Value) -> Vec<String> {
     match llm_info.get("detectedVia").and_then(|v| v.as_str()) {
         Some("env") => lines.push("  Source: environment variables".to_string()),
         Some("system_property") => lines.push("  Source: JVM system properties".to_string()),
-        Some("configuration") => {
-            lines.push("  Source: configuration file (~/.browser4/config/)".to_string())
-        }
+        // The exact file is already printed by the `Config file:` line above — naming a
+        // fixed `~/.browser4/config/` here would be wrong whenever the data directory
+        // lives elsewhere (`-Dapp.data.dir`, containers).
+        Some("configuration") => lines.push("  Source: configuration file".to_string()),
         // Older backends reported `config_file` for *any* configured key, including
         // keys that came from the environment — only trust it when the payload does
         // not also report an environment variable.
@@ -18941,7 +18942,7 @@ fn render_llm_status_lines(llm_info: &Value) -> Vec<String> {
                 .and_then(|v| v.as_array())
                 .map_or(true, |vars| vars.is_empty()) =>
         {
-            lines.push("  Source: configuration file (~/.browser4/config/)".to_string())
+            lines.push("  Source: configuration file".to_string())
         }
         _ => {}
     }

@@ -61,6 +61,7 @@ Consequences worth knowing:
   Config file: ~/.browser4/config/conf-enabled/application-private.properties
   Selected key: DEEPSEEK_API_KEY (first in the built-in priority list)
   Active model: deepseek-v4-flash (OpenAiChatModel)
+  Source: configuration file
   ⚠  Several LLM providers are configured: ...
 ```
 
