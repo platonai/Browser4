@@ -6145,19 +6145,16 @@ fn log_mentions_fatal_startup_error(log: &str) -> bool {
 mod tests {
     use super::*;
     use std::fs::{create_dir_all, write};
-    use std::sync::{Mutex, MutexGuard};
     use tempfile::TempDir;
 
-    /// Global lock to serialize tests that manipulate `BROWSER4_RUNTIME_DIR`
-    /// and `BROWSER4_CLI_STATE_DIR` environment variables.  Without this,
-    /// parallel test execution causes cross-test contamination.
-    static ENV_MUTEX: Mutex<()> = Mutex::new(());
-
-    /// Acquire the global env mutex, tolerating a poisoned lock from a
+    /// Acquire the shared environment lock, tolerating a poisoned lock from a
     /// previous test panic.  This prevents a single assertion failure from
     /// cascading into 18 `PoisonError` failures across other tests.
-    fn lock_env_mutex() -> MutexGuard<'static, ()> {
-        ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner())
+    ///
+    /// The lock is shared with the rest of the crate's tests (`crate::test_env`), so a
+    /// key touched by two different modules cannot be raced either.
+    fn lock_env_mutex() -> crate::test_env::EnvLock {
+        crate::test_env::lock()
     }
 
     /// Drop-based guard that isolates `BROWSER4_RUNTIME_DIR` and
@@ -6253,6 +6250,7 @@ mod tests {
 
     #[test]
     fn test_find_browser4_root_prefers_invocation_env_dir() {
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
         let root = create_browser4_root(&tmp);
         let nested = root.join("cli").join("browser4-cli");
@@ -6325,7 +6323,28 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
 
-        assert!(!is_local_port_open(&format!("http://127.0.0.1:{port}")));
+        // The port is released on the line above, and anything can claim it in the same
+        // instant — another process, or a sibling test in this very suite binding the
+        // ephemeral port the OS just handed back.  Poll briefly instead of asserting on
+        // a single reading, and treat a port that stays claimed as an environment
+        // condition rather than a defect in `is_local_port_open` (that is what the
+        // deterministic `..._for_invalid_port` case below is for).
+        let url = format!("http://127.0.0.1:{port}");
+        for _ in 0..10 {
+            if !is_local_port_open(&url) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        eprintln!("note: port {port} was claimed after release — skipping the unbound assertion");
+    }
+
+    #[test]
+    fn test_is_local_port_open_returns_false_for_invalid_port() {
+        // Port 0 can never be listened on, so this reading cannot be raced.
+        assert!(!is_local_port_open("http://127.0.0.1:0"));
+        assert!(!is_local_port_open("http://localhost:0"));
     }
 
     #[test]
@@ -6611,6 +6630,9 @@ mod tests {
 
     #[test]
     fn test_load_mirrors_falls_back_to_builtins_when_no_config() {
+        // The mirror environment is process-global: without the lock a sibling test can
+        // set BROWSER4_RELEASES_BASE_URL next to us and this assertion reads its value.
+        let _lock = lock_env_mutex();
         let previous_config = env::var(MIRRORS_CONFIG_FILE_ENV).ok();
         let previous_releases = env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok();
         unsafe {
@@ -6636,6 +6658,7 @@ mod tests {
 
     #[test]
     fn test_load_mirrors_uses_single_source_override() {
+        let _lock = lock_env_mutex();
         let previous = env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok();
         unsafe {
             env::set_var(

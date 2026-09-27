@@ -23342,6 +23342,57 @@ fn interpret_block_probe(probe_result: &str, fallback_url: &str) -> Option<Block
     detect_block_signature(landed_url, &probe.text)
 }
 
+/// Serialises tests that mutate process-global environment variables.
+///
+/// `env::set_var` is process-wide, so two tests that touch the same key (or read a
+/// value another test just wrote) race unless they hold a shared lock for their whole
+/// duration.  The suite has many such tests — timeouts, mirrors, locale, runtime dirs,
+/// `PATH` — and the races show up as one-off `left == right` failures under load.
+///
+/// The lock is **reentrant per thread**: a single test may take several scoped guards
+/// (`set_env(a, ..)` followed by `set_env(b, ..)`) without deadlocking on a
+/// non-reentrant mutex.  Each test runs on its own thread, so the depth counter never
+/// leaks between tests.
+#[cfg(test)]
+pub(crate) mod test_env {
+    use std::cell::Cell;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    thread_local! {
+        static DEPTH: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Held for the duration of an env-mutating scope.
+    pub(crate) struct EnvLock {
+        _guard: Option<MutexGuard<'static, ()>>,
+    }
+
+    /// Acquire the shared environment lock, tolerating a poisoned mutex from a test
+    /// that panicked while holding it.
+    pub(crate) fn lock() -> EnvLock {
+        let depth = DEPTH.with(|depth| {
+            let current = depth.get();
+            depth.set(current + 1);
+            current
+        });
+
+        if depth == 0 {
+            EnvLock { _guard: Some(ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())) }
+        } else {
+            EnvLock { _guard: None }
+        }
+    }
+
+    impl Drop for EnvLock {
+        fn drop(&mut self) {
+            DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+            // `_guard` drops right after this, releasing the lock for the outermost holder.
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -23365,10 +23416,12 @@ mod tests {
             .unwrap()
     }
 
-    /// Guard that restores an env var to its previous value on drop.
+    /// Guard that restores an env var to its previous value on drop, holding the shared
+    /// environment lock so that two tests cannot interleave on the same key.
     struct EnvGuard {
         key: &'static str,
         prev: Option<String>,
+        _lock: crate::test_env::EnvLock,
     }
 
     impl Drop for EnvGuard {
@@ -23383,15 +23436,17 @@ mod tests {
     }
 
     fn set_env(key: &'static str, val: &str) -> EnvGuard {
+        let lock = crate::test_env::lock();
         let prev = std::env::var(key).ok();
         unsafe { std::env::set_var(key, val); }
-        EnvGuard { key, prev }
+        EnvGuard { key, prev, _lock: lock }
     }
 
     fn clear_env(key: &'static str) -> EnvGuard {
+        let lock = crate::test_env::lock();
         let prev = std::env::var(key).ok();
         unsafe { std::env::remove_var(key); }
-        EnvGuard { key, prev }
+        EnvGuard { key, prev, _lock: lock }
     }
 
     /// Ordinary, long-enough page text: keeps the block signatures and the
