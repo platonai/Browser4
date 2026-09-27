@@ -20,6 +20,12 @@ The backend reads these files at startup, so **restart the backend** after editi
 `browser4-cli stop`, then any command (e.g. `browser4-cli open <url>`) starts it again with
 the new configuration.
 
+`browser4-cli doctor` prints the exact file it will read (`Config file: …`), and
+`browser4-cli doctor --fix` writes a **commented template** there — every provider commented
+out, so it changes nothing until you uncomment one block and add a real key. The template
+ships inside the runtime; the `--fix` step only materializes and enables it, and it never
+overwrites a file you already edited.
+
 ## Which provider is used?
 
 When **more than one** provider key is configured, the first one in the built-in detection
@@ -52,9 +58,18 @@ Consequences worth knowing:
 -- LLM Status --
   ✓ LLM is configured.
   Configured keys: DEEPSEEK_API_KEY (configuration file), OPENAI_API_KEY (environment variable)
+  Config file: ~/.browser4/config/conf-enabled/application-private.properties
   Selected key: DEEPSEEK_API_KEY (first in the built-in priority list)
   Active model: deepseek-v4-flash (OpenAiChatModel)
   ⚠  Several LLM providers are configured: ...
+```
+
+When nothing is configured yet, the same line names the file to create and how:
+
+```
+-- LLM Status --
+  LLM is not configured, you can only use non-LLM commands. …
+  Config file: ~/.browser4/config/conf-enabled/application-private.properties (not present — 'browser4-cli doctor --fix' writes a commented template)
 ```
 
 `Selected key` + `Active model` are the authoritative answer to "where do my requests go?".
@@ -358,6 +373,9 @@ The routing follows the detection order, not the key you added last. Work throug
 5. **Check for an empty key.** A line like `deepseek.api.key=` counts as *present* on
    `browser4-base` < 4.11.20 and can hijack the selection; `doctor` reports such keys under
    `emptyKeys` with a warning. Comment the line out.
+6. **Let the tooling create the file.** `browser4-cli doctor --fix` writes a commented
+   template to `~/.browser4/config/conf-enabled/application-private.properties` (it never
+   overwrites an existing file) and prints the path, so the location never has to be guessed.
 
 ### "✓ LLM is configured" but every LLM command fails
 

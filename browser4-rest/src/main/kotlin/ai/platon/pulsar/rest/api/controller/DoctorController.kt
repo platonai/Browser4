@@ -133,6 +133,64 @@ class DoctorController(
         return ResponseEntity.ok(LlmStatusReporter.report(agenticContext.configuration))
     }
 
+    /**
+     * Write the bundled LLM configuration template and enable it.
+     *
+     * `browser4-cli doctor --fix` calls this so that a user who needs to keep an API
+     * key in a file is handed the exact writable path instead of a directory name.
+     * Both paths are idempotent: an existing file is never overwritten, so a user's
+     * edited configuration always wins.  See [LlmConfigTemplate].
+     */
+    @PostMapping("llm-config/enable")
+    fun enableLlmConfigTemplate(): ResponseEntity<Map<String, Any?>> {
+        val enabledPathDisplay = LlmConfigTemplate.displayPath(LlmConfigTemplate.enabledPath())
+
+        val installation = try {
+            LlmConfigTemplate.install()
+        } catch (e: Exception) {
+            logger.warn("Failed to install the LLM config template: {}", e.message)
+            return ResponseEntity.internalServerError().body(
+                mapOf(
+                    "installed" to false,
+                    "error" to (e.message ?: "unknown error"),
+                    "enabledPathDisplay" to enabledPathDisplay,
+                )
+            )
+        }
+
+        if (installation == null) {
+            return ResponseEntity.ok(
+                mapOf(
+                    "installed" to false,
+                    "error" to "The bundled LLM config template is missing from the classpath",
+                    "enabledPathDisplay" to enabledPathDisplay,
+                )
+            )
+        }
+
+        val message = if (installation.enabledWritten) {
+            "A commented template was created — add your API key to it, then restart the " +
+                "backend ('browser4-cli stop')."
+        } else {
+            "The file already exists and was left untouched."
+        }
+
+        return ResponseEntity.ok(
+            mapOf(
+                "installed" to true,
+                "fileName" to installation.fileName,
+                "availablePath" to installation.availablePath.toAbsolutePath().toString(),
+                "availablePathDisplay" to LlmConfigTemplate.displayPath(installation.availablePath),
+                "enabledPath" to installation.enabledPath.toAbsolutePath().toString(),
+                "enabledPathDisplay" to enabledPathDisplay,
+                "templateWritten" to installation.templateWritten,
+                "enabledWritten" to installation.enabledWritten,
+                "restartRequired" to installation.restartRequired,
+                "message" to message,
+            )
+        )
+    }
+
     @GetMapping("metrics")
     fun metrics(
         @RequestParam(defaultValue = "") filter: String

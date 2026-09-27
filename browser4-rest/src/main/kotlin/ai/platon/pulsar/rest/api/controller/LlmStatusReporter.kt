@@ -3,6 +3,7 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.impl.CachedBrowserChatModel
+import java.nio.file.Files
 
 /**
  * Builds the LLM status report served by `GET /api/doctor/llm-status`.
@@ -87,6 +88,26 @@ object LlmStatusReporter {
         runCatching { ChatModelFactory.isProviderDenied(keyName, conf) }.getOrDefault(false)
 
     /**
+     * The user-editable configuration file.
+     *
+     * A client can then print the *writable* path instead of a directory the user has
+     * to fill in themselves — the difference between "configure your key" and
+     * "put it here".  Both the loaded copy and the inert template are reported, so a
+     * client can also say "a template is waiting to be enabled".
+     */
+    private fun configFile(): Map<String, Any?> {
+        val enabled = LlmConfigTemplate.enabledPath()
+        val available = LlmConfigTemplate.availablePath()
+        return linkedMapOf(
+            "enabledPath" to enabled.toAbsolutePath().toString(),
+            "enabledPathDisplay" to LlmConfigTemplate.displayPath(enabled),
+            "availablePathDisplay" to LlmConfigTemplate.displayPath(available),
+            "enabledExists" to Files.exists(enabled),
+            "availableExists" to Files.exists(available),
+        )
+    }
+
+    /**
      * Build the status report for [conf].
      *
      * @param conf The configuration the backend actually uses for LLM calls.
@@ -146,6 +167,7 @@ object LlmStatusReporter {
             "multipleProviders" to (competing.size > 1),
             "warning" to warning(competing, emptyKeys, explicitProvider),
             "activeModel" to if (configured) activeModel(conf) else null,
+            "configFile" to configFile(),
             "keyPrefixes" to listOf("OPENROUTER", "DEEPSEEK", "VOLCENGINE", "OPENAI"),
             "message" to message,
         )

@@ -167,4 +167,21 @@ class LlmStatusReporterTest {
         assertNull(report["activeModel"])
         assertFalse((report["warning"] as String?).isNullOrEmpty(), "the empty key must be explained")
     }
+
+    @Test
+    @DisplayName("report should name the writable configuration file")
+    fun reportShouldNameTheWritableConfigFile() {
+        val report = LlmStatusReporter.report(isolatedConfig())
+
+        @Suppress("UNCHECKED_CAST")
+        val configFile = report["configFile"] as Map<String, Any?>?
+        assertNotNull(configFile)
+        assertNotNull(configFile!!["enabledExists"], "existence must be reported, not assumed")
+
+        val display = configFile["enabledPathDisplay"] as String
+        assertTrue(
+            display.replace('\\', '/').endsWith("config/conf-enabled/${LlmConfigTemplate.FILE_NAME}"),
+            "the report must name the file the loader reads, actual: $display"
+        )
+    }
 }

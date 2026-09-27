@@ -27,6 +27,11 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 
 > The key must reach the backend server process, not just your CLI shell. Run `browser4-cli doctor` to confirm whether "✓ LLM is configured" on the backend.
 >
+> `doctor` also prints the configuration file it reads (`Config file: …`), and
+> `browser4-cli doctor --fix` writes a commented template there
+> (`~/.browser4/config/conf-enabled/application-private.properties`) — uncomment one provider
+> block, add the key, then restart the backend. The template never overwrites an existing file.
+>
 > ⚠️ Configure **exactly one** provider. When several provider keys are present only one is
 > used — the first in the built-in detection order, in which `openai` comes *after* the
 > dedicated providers such as `deepseek`. `doctor` now prints which key won
