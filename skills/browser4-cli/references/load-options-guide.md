@@ -321,7 +321,10 @@ Set an explicit deadline:
 
 ## Choosing Load Options
 
-Need to pick which LoadOptions to use? See [LoadOptions — Choosing Options](load-options-decision.md) — the decision tree lives there.
+Need to pick which LoadOptions to use? Start from [Quick Reference](#quick-reference) above
+for the option index, then check [Parameter Relationships](#parameter-relationships) for the
+options that interact, and [Common Pitfalls & Solutions](#common-pitfalls--solutions) for the
+failure modes that call for a quality gate.
 
 
 ## Portal vs Item Pattern

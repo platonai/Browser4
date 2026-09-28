@@ -216,7 +216,7 @@ unchanged files are skipped, so re-running is cheap. `install` / `upgrade` also 
 skills into `~/.agents/skills` so agents (e.g. Codex) load them automatically. Overrides:
 `BROWSER4_SKILLS_DIR`, `BROWSER4_AGENTS_SKILLS_DIR`.
 
-## 4. Choosing an Approach
+## 4. Decision Trees
 
 ### 4a. snapshot vs htmlsnapshot
 
@@ -321,7 +321,7 @@ Full reference: **[web-miner/SKILL.md](../browser4-web-miner/SKILL.md)**.
 
 > **`get` value contract:** a matched element returns its value — or `""` when the attribute/property is absent; `null` means the selector matched nothing; an unresolvable `eN` ref fails with an explicit error.
 
-## 6. Recipes & Deep Dives
+## 6. Quick Patterns & Deep Dives
 
 Copy-paste pairs for the common flows — form fill, `snapshot grep`, mouse/drag, dialog handling,
 verify-after-interaction, single-field and bulk extraction, PowerCSS, agent tasks:
@@ -392,7 +392,7 @@ Organized by task — follow the link that matches what you're trying to do:
 [shell-quoting.md](references/shell-quoting.md) — avoid shell-quoting breakage for complex JS/X-SQL on Windows / Git Bash
 
 **Developers:**
-[development.md](references/development.md) — build the CLI from source (Rust, Java 17+)
+[Build from Source](../../docs/build-from-source.md) — build the CLI and backend from source (Rust, Java 17+)
 
 ## Installation
 

@@ -1,6 +1,6 @@
 ---
 name: browser4-experience
-title: "Progressive Experience Memory — Learning from Past Tasks"
+title: "Progressive Experience Memory (PEM)"
 description: "Use experience_save to persist task traces, experience_query to recall them on revisit, and experience_list to inspect stored knowledge. Reuses selectors, extraction patterns, and blocker awareness across sessions."
 allowed-tools: Bash(browser4-cli:*)
 tier: decision
@@ -36,35 +36,15 @@ browser4-cli agent run "Go to https://amazon.com/dp/test and extract product det
 browser4-cli agent run "List experience knowledge entries for amazon"
 ```
 
-## 2. Decision Tree
+## 2. Key Concepts
 
-```
-Starting a new task?
-├─ experience_query returns P1 (confidence ≥ 0.85)?
-│  → Replay stored steps directly. Selectors verified by existence check only.
-├─ experience_query returns P2 (confidence 0.60–0.84)?
-│  → Use stored selectors as primary candidates. Verify each before use.
-├─ experience_query returns P3 (confidence 0.40–0.59)?
-│  → Use stored knowledge as hints. Run full discovery for any failed selector.
-├─ experience_query returns P4/P5 (confidence < 0.40, or cold start)?
-│  → Full discovery mode. Run htmlsnapshot inspect, discover selectors fresh.
-│  → Call experience_save after success to bootstrap knowledge.
-└─ Always call experience_save after task completion (success or failure).
-   → Success path: stores selectors, steps, extraction patterns.
-   → Failure path: records negative evidence (what broke, why).
-```
+- **Knowledge store** — a local directory tree of memory artifacts (`traces/`, `experience/`, `facts/`); the store layout is described in section 8.
+- **experience_save** — persist a completed task's trace (steps, selectors, extraction results, plus any lessons supplied through `facts`) into the store.
+- **experience_query** — retrieve relevant past traces before starting a new task; returns a replay tier P1-P5.
+- **experience_list** — inspect what is stored, filtered by domain or intent.
+- **Replay tiers** — P1 (replay directly) → P5 (cold start), the confidence ladder used by the Decision Trees in section 4.
 
-## 3. Retrieval Tiers
-
-| Tier | Confidence | Behavior |
-|------|-----------|----------|
-| **P1** Direct replay | ≥ 0.85 | Steps executed without verification. Selectors used as-is. |
-| **P2** Verify-before-replay | 0.60–0.84 | Each selector validated via `htmlsnapshot get` before use. |
-| **P3** Hint mode | 0.40–0.59 | Playbook provides suggestions but full discovery runs. |
-| **P4** Advisory | < 0.40 | Knowledge surfaced as suggestion only. Full discovery required. |
-| **P5** Cold start | No data | No prior knowledge. Full exploration. |
-
-## 4. Tool Reference
+## 3. Command Map
 
 ### experience_save
 
@@ -118,7 +98,35 @@ Lists stored knowledge entries (diagnostic/debug tool).
 | `page` | No | Page number (default 1) |
 | `page_size` | No | Results per page (default 20, max 100) |
 
-## 5. Critical Warnings
+## 4. Decision Trees
+
+```
+Starting a new task?
+├─ experience_query returns P1 (confidence ≥ 0.85)?
+│  → Replay stored steps directly. Selectors verified by existence check only.
+├─ experience_query returns P2 (confidence 0.60–0.84)?
+│  → Use stored selectors as primary candidates. Verify each before use.
+├─ experience_query returns P3 (confidence 0.40–0.59)?
+│  → Use stored knowledge as hints. Run full discovery for any failed selector.
+├─ experience_query returns P4/P5 (confidence < 0.40, or cold start)?
+│  → Full discovery mode. Run htmlsnapshot inspect, discover selectors fresh.
+│  → Call experience_save after success to bootstrap knowledge.
+└─ Always call experience_save after task completion (success or failure).
+   → Success path: stores selectors, steps, extraction patterns.
+   → Failure path: records negative evidence (what broke, why).
+```
+
+## 5. Retrieval Tiers
+
+| Tier | Confidence | Behavior |
+|------|-----------|----------|
+| **P1** Direct replay | ≥ 0.85 | Steps executed without verification. Selectors used as-is. |
+| **P2** Verify-before-replay | 0.60–0.84 | Each selector validated via `htmlsnapshot get` before use. |
+| **P3** Hint mode | 0.40–0.59 | Playbook provides suggestions but full discovery runs. |
+| **P4** Advisory | < 0.40 | Knowledge surfaced as suggestion only. Full discovery required. |
+| **P5** Cold start | No data | No prior knowledge. Full exploration. |
+
+## 6. Critical Warnings
 
 > **Warning:** Phase 1 (MVP) requires the agent to explicitly call `experience_save` after task completion. The automatic engine hook (`onTaskComplete`) is Phase 2+. Forgetting to save means knowledge is lost.
 
@@ -128,7 +136,38 @@ Lists stored knowledge entries (diagnostic/debug tool).
 
 > **Note:** The knowledge store is file-backed YAML under `knowledge/`, resolved **relative to the backend process working directory** (there is no `knowledge.dir` config option to relocate it). The store is safe to version with git. Raw traces (under `knowledge/traces/<domain>/`) are ephemeral (30-day TTL) and not versioned; facts entries (`knowledge/facts/<domain>/<intent>.yaml`) are immutable once VERIFIED.
 
-## 6. Knowledge Store Layout
+## 7. Quick Patterns
+
+### Before a task — query prior knowledge
+
+```text
+experience_query(url="<target-url>", intent="extract product details")
+```
+
+The response carries `tier` and `confidence`; follow the matching branch of the decision trees in section 4 before spending steps on fresh discovery.
+
+### After a task — save what you learned
+
+```text
+# MCP tool form — trace (JSON) is required; facts patches knowledge onto the (domain, intent) entry
+experience_save(url="<target-url>", trace="<execution trace JSON>", outcome="success",
+                intent="extract product details", task_type="extract_product_list",
+                facts='{"interaction_hints":["open the price popover before reading"],
+                        "anti_patterns":["clicking the thumbnail before the modal loads"]}')
+
+# CLI equivalent — trace is inline JSON; --facts accepts inline JSON or @file.json
+browser4-cli experience save "https://example.com/products" '<trace-json>' --facts @lessons.json
+```
+
+A lesson (a selector that broke, a blocker, an anti-pattern) can be recorded immediately after the task with `--facts` — no need to wait for `deep_learn`.
+
+### Inspect the store
+
+```text
+experience_list(filter="amazon")
+```
+
+## 8. Knowledge Store Layout
 
 The store is **file-level YAML per (domain, intent)** — no per-site blob files:
 
@@ -140,8 +179,7 @@ knowledge/                          ← root: relative to the backend process CW
                                       (VERIFIED entries are immutable; merge is refused)
 ```
 
-## 7. Reference Map
+## 9. Reference Map
 
 - [Design document](../../docs/experience-memory.md) — Full architecture and implementation guide
-- [Proposal (v2)](../../coworker/plan/feature/evolve/synthesis-proposed-solution.md) — 2300-line technical design
 - [CLAUDE.md](../../CLAUDE.md) — Project context and conventions

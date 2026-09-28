@@ -1,7 +1,7 @@
 ---
 title: "Tabs — Lifecycle, GUIDs, and Extension Sessions"
 description: "Reference for tab management: tab-list / tab-new / tab-select / tab-close, stable GUID targeting, session scoping, last-tab behavior, insert-position caveats, and the extension-attached session quirks (delayed close confirmation, re-attach tab scope)."
-tier: procedure
+tier: catalog
 ---
 
 # Tabs — Lifecycle, GUIDs, and Extension Sessions
@@ -9,6 +9,24 @@ tier: procedure
 Tab commands scope to a session — all operations affect the session targeted via
 `-s <session>` (or the DEFAULT session when `-s` is omitted). `-s` is a **global** flag, so it
 always goes **before** the command: `browser4-cli -s job-42 tab-list`.
+
+## Overview
+
+Canonical reference for the tab command family and the behaviour behind it: the tab
+lifecycle, stable GUID targeting, session scoping, last-tab handling, insert-position
+caveats, and the quirks of extension-attached sessions. Read it before you rely on a tab
+index, or when a tab you expected is missing from `tab-list`.
+
+## Quick Index
+
+| Command | One-line description |
+|---|---|
+| `tab-list` | List the session's tabs with index, GUID, title and URL |
+| `tab-new [url]` | Open a new tab; `about:blank` when the URL is omitted |
+| `tab-select <index>` / `--guid <guid>` | Make a tab the active page context — re-`snapshot` afterwards |
+| `tab-close [index]` / `--guid <guid>` | Close a tab; closes the current tab when no target is given |
+
+All four accept `-s <session>` (the DEFAULT session otherwise).
 
 ## Tab lifecycle
 

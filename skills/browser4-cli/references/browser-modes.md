@@ -33,6 +33,20 @@ isolation) → display (whether a human must participate) → secondary knobs.
 
 ---
 
+## Quick Comparison
+
+| Axis | Option | Choose it when | Cost / caveat |
+|---|---|---|---|
+| **Session** | default (unnamed) | one task, sequential script, CI one-liner | singleton — two processes without `-s` navigate each other's pages |
+| | named `-s <name>` | **any parallelism**; per-task isolation; login survives reopens | one permanent profile dir per name, no automatic eviction |
+| | `SWARM` | bulk, non-interactive, throughput | launches its own browsers only; needs the `browser4-swarm` plugin; first jobs wait ~30–60 s |
+| **Display** | `HEADLESS` (default) | AI agents, CI, Docker, batch extraction | likelier to be fingerprinted as automation; nobody can intervene |
+| | `GUI` (`--headed`) | a human must act (login, CAPTCHA, QR code); demos; visual debugging | uses the desktop; impossible in CI / no-display environments |
+| | `SUPERVISED` | wrapping Chrome in an external supervisor process | inert unless a supervisor is configured; **not** implicitly headless |
+| **Source** | backend-launched (`open`) | production batches, clean environments, CI | `close` terminates the browser process |
+| | `attach --cdp` | debugging live issues, cloud browsers, Electron, remote Chrome | needs a debugging endpoint (explicit one on Linux/macOS) |
+| | `attach --extension` | "just use my own browser" with zero flags/ports | not for CI; one relay connection per browser; extension required |
+
 ## 1. Axis 1 — Session
 
 | | Default (unnamed) | Named `-s <name>` | SWARM |
@@ -322,7 +336,7 @@ use `state-save` / `state-load`.
 
 ---
 
-## 5. Decision Tree
+## Decision Tree
 
 ```
 Need to drive a browser
@@ -349,7 +363,7 @@ Need to drive a browser
         (FAST → GOOD_DATA/BEST_DATA), or switch to attach
 ```
 
-## 6. Scenario Recipes
+## When to Use Each
 
 | Scenario | Session | Display | Source |
 |---|---|---|---|
@@ -362,6 +376,28 @@ Need to drive a browser
 | Cloud browser / headless server / Electron | `-s cloud` | n/a | `attach --cdp <ws|url>` |
 | CI / Docker | default | headless (forced) | managed |
 | One-off clean scrape | default | headless | managed + `--profile-mode TEMPORARY` |
+
+## Quick Patterns
+
+```bash
+# Headless one-off in the default (singleton) session
+browser4-cli open --headless https://example.com
+# Parallel work: one named session per task, isolated profile and login state
+browser4-cli -s task-a open --headless https://example.com
+# A human must act (login/CAPTCHA/QR): headed, then reuse the profile afterwards
+browser4-cli -s task-a open --headed https://example.com
+# Reuse your own logged-in browser: no ports, no flags
+browser4-cli attach --extension
+# Controlled or remote endpoint; `close` leaves that browser running
+browser4-cli attach --cdp http://localhost:9222
+# Bulk throughput: swarm jobs, then always close the swarm
+browser4-cli swarm create --profile-mode TEMPORARY --max-browser-contexts 4
+browser4-cli swarm query --sql @q.sql --seed-file urls.txt --refresh
+browser4-cli swarm close
+```
+
+Display mode is fixed at session creation — `close` + `open`, or `open --fresh`, to change
+it. When a page withholds data from "robots", raise `--interact-level`.
 
 ## 7. Limits Worth Verifying Before You Rely On Them
 
@@ -445,7 +481,7 @@ these as current behaviour.
 - **Mode-specific media behaviour** (video, clipboard, downloads) is not
   implemented per mode, so no differences can be promised.
 
-## See Also
+## Reference Map
 
 - [attach.md](attach.md) — full `attach` reference (CDP and extension)
 - [swarm.md](swarm.md) — swarm session, jobs, and lifecycle

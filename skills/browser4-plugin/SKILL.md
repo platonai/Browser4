@@ -1,51 +1,65 @@
 ---
 name: browser4-plugin
-title: "Browser4 Plugin Development — AI Agent Skill"
+title: "Browser4 Plugin Development"
 description: "Guides the creation of Browser4 plugins from requirements gathering through deployment. Use when the user wants to create, build, scaffold, or extend Browser4 with a new plugin — whether for CAPTCHA solving, media processing, content conversion, page category detection, custom RPA actions, or new LLM agent tools."
 tier: procedure
 ---
 
 # Browser4 Plugin Development
 
-Step-by-step guide to creating a Browser4 plugin — from scaffolding via the Maven archetype through implementing `PluginMount` interfaces, services, event handlers, tool executors, and tests.
+Step-by-step guide to creating a Browser4 plugin — from clarifying requirements and scaffolding via the Maven archetype through implementing `PluginMount` interfaces, services, event handlers and tool executors, wiring Spring auto-configuration, writing tests, building, and deploying. It includes decision tables to help identify which extension points to use and concrete code patterns drawn from the five built-in first-party plugins.
 
-## Description
+## Quick Start
 
-This skill covers the complete plugin development lifecycle: clarifying requirements, choosing the right `PluginMount` interfaces, scaffolding a project from the PDK archetype, implementing business logic (event handlers, services, LLM agent tools), wiring Spring auto-configuration, writing tests, building, and deploying. It includes decision trees to help identify which extension points to use and concrete code patterns drawn from the five built-in first-party plugins.
+Scaffold, build, deploy, verify — the 80% path:
+
+```bash
+# 1. Scaffold from the PDK archetype (every -D flag: see [Flags](#flags))
+mvn archetype:generate \
+  -DarchetypeGroupId=ai.platon.pulsar \
+  -DarchetypeArtifactId=browser4-plugin-archetype \
+  -DarchetypeVersion=4.12.0 \
+  -DgroupId=com.example \
+  -DartifactId=browser4-myfeature \
+  -Dversion=1.0.0-SNAPSHOT \
+  -DpluginName="My Feature" \
+  -DpluginDescription="A Browser4 plugin that performs custom page processing"
+
+# 2. Build the thin JAR
+cd browser4-myfeature
+mvn package -DskipTests
+
+# 3. Verify the JAR structure (optional but recommended)
+# bin/verify-plugin.ps1 target/browser4-myfeature-1.0.0-SNAPSHOT.jar
+
+# 4. Deploy — copy to Browser4's plugins/ directory and restart
+cp target/browser4-myfeature-1.0.0-SNAPSHOT.jar /path/to/browser4/plugins/
+
+# 5. Or install over the REST API without touching the filesystem
+curl -X POST http://localhost:18182/api/plugins/install \
+  -F "file=@target/browser4-myfeature-1.0.0-SNAPSHOT.jar"
+curl http://localhost:18182/api/plugins
+```
+
+The archetype writes a new Maven project directory at the path given by `artifactId`, and the build produces a **thin** JAR (`target/<artifactId>-<version>.jar`) deployable to Browser4's `plugins/` directory. The plugin is auto-discovered on restart and logs:
+
+```text
+PluginManager: Found X PluginMount bean(s)
+PluginManager:   ✓ Configured browse event handlers
+PluginManager: Found X Browser4Plugin bean(s)
+  - browser4-myfeature v4.12.0-rc.1
+```
+
+If a line is missing, the auto-configuration was not discovered — see [Errors & Recovery](#errors--recovery).
 
 ## Dependencies
 
 - JDK 17+
 - Maven 3.9+
-- Access to the Browser4 PDK parent POM (`ai.platon.pulsar:browser4-pdk`) — published to Maven Central
+- Access to the Browser4 PDK parent POM (`ai.platon.pulsar:browser4-pdk`) — published to Maven Central and extending `pulsar-parent`, so third-party developers need the archetype plus a Maven installation, not a clone of the full Browser4 repo
 - For building the archetype locally: `mvn -pl browser4-pdk install` from this repository
 
-## Parameters
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `groupId` | String | Yes | — | Maven groupId for the new plugin project (e.g., `com.example`) |
-| `artifactId` | String | Yes | — | Maven artifactId, conventionally `browser4-<feature-name>` |
-| `version` | String | No | `1.0.0-SNAPSHOT` | Plugin version |
-| `pluginName` | String | Yes | — | Human-readable plugin name (e.g., `"My Feature Plugin"`) |
-| `pluginDescription` | String | No | `"A Browser4 plugin that provides custom functionality"` | One-line description |
-| `mountPoints` | String[] | No | `["BrowseEventMount"]` | Which `PluginMount` interfaces to implement. Options: `BrowseEventMount`, `LoadEventMount`, `CrawlEventMount`, `ToolMount`, `PageSnifferMount` |
-| `hasCustomTools` | Boolean | No | `false` | Whether the plugin registers LLM agent tool executors |
-| `hasLifecycle` | Boolean | No | `false` | Whether the plugin implements the `Browser4Plugin` lifecycle interface |
-| `features` | String[] | No | — | List of concrete capabilities to implement (e.g., `"detect media on page"`, `"download files"`, `"expose LLM tool"`) |
-
-## Return Value
-
-A new Maven project directory at the path specified by `artifactId`. The project builds to a thin JAR (`target/<artifactId>-<version>.jar`) deployable to Browser4's `plugins/` directory. The plugin is auto-discovered on restart and logs:
-
-```
-PluginManager: Found X PluginMount bean(s)
-PluginManager:   ✓ Configured browse event handlers
-PluginManager: Found X Browser4Plugin bean(s)
-  - <plugin-name> v<version>
-```
-
-## When to Create a Plugin
+## When to Use
 
 Create a plugin when you need to:
 
@@ -61,71 +75,13 @@ Create a plugin when you need to:
 - One-off browser automation — the CLI or a quick script is faster.
 - Modifying core Browser4 behavior — that belongs in the main source tree, not a plugin.
 
-## Usage Examples
+## How It Works
 
-### Example 1: Scaffold a New Plugin (Quick Start)
+A plugin is a thin JAR on the host's classpath. Its entry point is a Spring `@AutoConfiguration` class that implements one or more `PluginMount` sub-interfaces (`BrowseEventMount`, `LoadEventMount`, `CrawlEventMount`, `ToolMount`, `PageSnifferMount`); the JAR registers that class in `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`, and `META-INF/browser4-plugin.json` carries the manifest the registry discovers it by. At startup `PluginManager` collects those beans and appends the handlers, tool executors and page sniffers they return to the browse, load and crawl event chains, so plugin code runs inside the same lifecycle as the built-in features — no core change, no fork, and a restart (or a REST install) is the entire deployment step.
 
-```bash
-mvn archetype:generate \
-  -DarchetypeGroupId=ai.platon.pulsar \
-  -DarchetypeArtifactId=browser4-plugin-archetype \
-  -DarchetypeVersion=4.12.0 \
-  -DgroupId=com.example \
-  -DartifactId=browser4-myfeature \
-  -Dversion=1.0.0-SNAPSHOT \
-  -DpluginName="My Feature" \
-  -DpluginDescription="A Browser4 plugin that performs custom page processing"
-```
+## Patterns
 
-### Example 2: Build and Deploy
-
-```bash
-cd browser4-myfeature
-mvn package -DskipTests
-cp target/browser4-myfeature-1.0.0-SNAPSHOT.jar /path/to/browser4/plugins/
-# Restart Browser4 — plugin is auto-discovered
-```
-
-### Example 3: Install via REST API
-
-```bash
-curl -X POST http://localhost:18182/api/plugins/install \
-  -F "file=@target/browser4-myfeature-1.0.0-SNAPSHOT.jar"
-curl http://localhost:18182/api/plugins
-```
-
-### Example 4: Complete Auto-Configuration with BrowseEventMount + Config + Service
-
-```kotlin
-@AutoConfiguration
-@ConditionalOnProperty(name = ["myfeature.enabled"], havingValue = "true", matchIfMissing = true)
-@Lazy
-open class MyFeatureAutoConfiguration(
-    private val applicationContext: ApplicationContext,
-) : BrowseEventMount {
-
-    override fun configureBrowseHandlers(handlers: BrowseEventHandlers) {
-        handlers.onDocumentSteady.addLast { page, driver ->
-            val service = applicationContext.getBean(MyFeatureService::class.java)
-            service.process(page, driver)
-        }
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
-    open fun myFeatureConfig(conf: Config): MyFeatureConfig =
-        MyFeatureConfig.fromConfig(conf)
-
-    @Bean
-    @ConditionalOnMissingBean
-    open fun myFeatureService(config: MyFeatureConfig): MyFeatureService =
-        MyFeatureService(config)
-}
-```
-
----
-
-## Step-by-Step Workflow
+Eight numbered recipes take you from an empty directory to a deployed plugin; each names the decisions it resolves, the artifacts it produces, and the code to copy.
 
 ### Step 1: Clarify Requirements
 
@@ -173,19 +129,22 @@ Map the plugin's capabilities to one or more mount points. The auto-configuratio
 
 Run the Maven archetype command from the Quick Start. The generated project contains:
 
-```
+```text
 browser4-<feature>/
-├── pom.xml                          # Maven build (parent: browser4-pdk)
+├── pom.xml                          # Required: Maven build (parent: browser4-pdk)
 ├── .gitignore
-├── README.md
+├── README.md                        # Common: plugin documentation
 └── src/main/
     ├── kotlin/<package>/
     │   ├── MyPlugin.kt              # Optional: Browser4Plugin lifecycle
     │   ├── config/
-    │   │   └── PluginAutoConfiguration.kt  # Required: @AutoConfiguration + mounts
+    │   │   ├── PluginAutoConfiguration.kt  # Required: @AutoConfiguration + mounts
+    │   │   └── MyFeatureConfig.kt          # Common: config data class
     │   ├── integration/
     │   │   ├── MyBrowseEventHandler.kt     # Optional: browse event handler
     │   │   └── MyLoadEventHandler.kt       # Optional: load event handler
+    │   ├── service/
+    │   │   └── MyFeatureService.kt         # Common: business logic service
     │   └── tools/
     │       └── MyToolExecutor.kt           # Optional: LLM agent tool
     └── resources/
@@ -202,7 +161,7 @@ browser4-<feature>/
 3. Rename handler classes: `MyBrowseEventHandler` → `<Feature>BrowseEventHandler`
 4. Update `browser4-plugin.json` — change the `name`, `description`, and `autoConfigurationClasses` to match
 5. Update `AutoConfiguration.imports` — replace the FQN with the renamed class
-6. Delete stub files you won't use (removing unused files is better than leaving dead code)
+6. Delete stub files you won't use
 
 ### Step 4: Implement Mount Points
 
@@ -231,27 +190,7 @@ open class MyFeatureAutoConfiguration : BrowseEventMount {
 }
 ```
 
-**Browse event hooks in execution order:**
-
-| Position | Hook | Best for |
-|----------|------|----------|
-| 1 | `onWillLaunchBrowser` | Pre-launch setup |
-| 2 | `onBrowserLaunched` | First access to `WebDriver` |
-| 3 | `onWillFetch` | Pre-fetch configuration |
-| 4 | `onWillNavigate` | **Block resources, set headers** |
-| 5 | `onNavigated` | Post-navigation checks |
-| 6 | `onWillInteract` | Pre-interaction setup |
-| 7 | `onWillCheckDocumentState` | Check readyState |
-| 8 | `onDocumentFullyLoaded` | DOM ready |
-| 9 | `onWillScroll` | Pre-scroll |
-| 10 | `onDidScroll` | Post-scroll |
-| 11 | `onDocumentSteady` | **★ Best for custom RPA** |
-| 12 | `onWillComputeFeature` | Pre-feature computation |
-| 13 | `onFeatureComputed` | Features computed |
-| 14 | `onDidInteract` | All interactions complete |
-| 15 | `onWillStopTab` | **Last chance before tab close** |
-| 16 | `onTabStopped` | Tab stopped |
-| 17 | `onFetched` | Fetch complete |
+**Browse event hooks in execution order:** `onWillLaunchBrowser` (pre-launch setup) → `onBrowserLaunched` (first access to `WebDriver`) → `onWillFetch` (pre-fetch configuration) → `onWillNavigate` (**block resources, set headers**) → `onNavigated` (post-navigation checks) → `onWillInteract` → `onWillCheckDocumentState` (check readyState) → `onDocumentFullyLoaded` (DOM ready) → `onWillScroll` → `onDidScroll` → `onDocumentSteady` (**★ best for custom RPA**) → `onWillComputeFeature` → `onFeatureComputed` → `onDidInteract` (all interactions complete) → `onWillStopTab` (**last chance before tab close**) → `onTabStopped` → `onFetched`.
 
 #### 4b. LoadEventMount — Content Interception During Loading
 
@@ -359,7 +298,7 @@ open class MyFeaturePlugin(
 
 ### Step 5: Implement Services and Config
 
-Separate business logic from mount-point wiring. The auto-configuration class wires dependencies; the service class contains business logic; the config data class holds tunable settings.
+Separate business logic from mount-point wiring. The auto-configuration class wires dependencies and mount points; the service class contains business logic; the config data class holds tunable settings.
 
 ```kotlin
 // config/MyFeatureConfig.kt
@@ -387,6 +326,20 @@ open class MyFeatureService(
         // OkHttpClient for HTTP calls, etc.
     }
 }
+
+// config/MyFeatureAutoConfiguration.kt — add these beans to the
+// auto-configuration class from Step 4a, which carries the annotations and
+// configureBrowseHandlers(). Inject ApplicationContext into its constructor
+// when Step 4d's getToolExecutors() has to look up executor beans.
+@Bean
+@ConditionalOnMissingBean
+open fun myFeatureConfig(conf: Config): MyFeatureConfig =
+    MyFeatureConfig.fromConfig(conf)
+
+@Bean
+@ConditionalOnMissingBean
+open fun myFeatureService(config: MyFeatureConfig): MyFeatureService =
+    MyFeatureService(config)
 ```
 
 ### Step 6: Create Plugin Manifest and Auto-Configuration Imports
@@ -407,9 +360,9 @@ Two mandatory resource files in every plugin JAR:
 }
 ```
 
-**`src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`** (single line):
+**`src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`** — a single line, the FQN of the `@AutoConfiguration` class:
 
-```
+```text
 ai.platon.pulsar.myfeature.config.MyFeatureAutoConfiguration
 ```
 
@@ -417,7 +370,7 @@ ai.platon.pulsar.myfeature.config.MyFeatureAutoConfiguration
 
 Place tests in `src/test/kotlin/` mirroring the source package. Use JUnit 5 + `kotlin-test-junit5` + `spring-boot-test` (all `test` scope).
 
-**Config test pattern:**
+**Config and event-handler test patterns** — use `runBlocking` for coroutine handlers:
 
 ```kotlin
 @Test
@@ -433,6 +386,13 @@ fun `test fromConfig reads properties`() {
     val config = MyFeatureConfig.fromConfig(conf)
     assertFalse(config.enabled)
 }
+
+@Test
+fun `test browse event handler processes page`() = runBlocking {
+    val handler = MyFeatureService(mockConfig)
+    val result = handler.process(webPageProxy(), mockDriver)
+    assertNotNull(result)
+}
 ```
 
 **Service test pattern — use `java.lang.reflect.Proxy` for lightweight mocks:**
@@ -447,59 +407,43 @@ private fun webPageProxy(): WebPage {
 }
 ```
 
-**Event handler test pattern — use `runBlocking` for coroutine testing:**
+### Step 8: Deploy and Verify
 
-```kotlin
-@Test
-fun `test browse event handler processes page`() = runBlocking {
-    val handler = MyFeatureService(mockConfig)
-    val result = handler.process(webPageProxy(), mockDriver)
-    assertNotNull(result)
-}
-```
-
-### Step 8: Build, Verify, and Deploy
-
-```bash
-# Build the thin JAR
-mvn package -DskipTests
-
-# Verify the JAR structure (optional but recommended)
-# bin/verify-plugin.ps1 target/browser4-myfeature-1.0.0-SNAPSHOT.jar
-
-# Deploy — copy to Browser4's plugins/ directory and restart
-cp target/browser4-myfeature-1.0.0-SNAPSHOT.jar /path/to/browser4/plugins/
-# Or install via REST API
-curl -X POST http://localhost:18182/api/plugins/install \
-  -F "file=@target/browser4-myfeature-1.0.0-SNAPSHOT.jar"
-```
-
-After restart, check application logs for:
-
-```
-PluginManager: Found X PluginMount bean(s)
-PluginManager:   ✓ Configured browse event handlers
-PluginManager: Found X Browser4Plugin bean(s)
-  - browser4-myfeature v4.12.0-rc.1
-```
+Build, optionally verify the JAR, and deploy exactly as in [Quick Start](#quick-start). After the JAR lands in `plugins/` and Browser4 restarts, look for the four `PluginManager` lines shown there: a missing `Found X PluginMount bean(s)` line means the auto-configuration class was not discovered, and a missing `✓ Configured browse event handlers` line means the mount interface or the `AutoConfiguration.imports` entry is wrong.
 
 ---
 
-## File Reference
+## Flags
 
-| File | Required | Purpose |
-|------|----------|---------|
-| `pom.xml` | Yes | Maven build with `browser4-pdk` parent; all Browser4 deps in `provided` scope |
-| `src/main/resources/META-INF/browser4-plugin.json` | Yes | Plugin manifest: name, version, description, dependsOn, autoConfigurationClasses |
-| `src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` | Yes | Single line: FQN of the `@AutoConfiguration` class |
-| `config/<Feature>AutoConfiguration.kt` | Yes | Spring `@AutoConfiguration` — implements `PluginMount` sub-interfaces and defines beans |
-| `config/<Feature>Config.kt` | Common | Configuration data class read from Properties/Config |
-| `integration/<Feature>BrowseEventHandler.kt` | Common | Browse-phase event handler with business logic for each hook |
-| `integration/<Feature>LoadEventHandler.kt` | Optional | Load-phase event handler for URL/parsing hooks |
-| `service/<Feature>Service.kt` | Common | Business logic service (injected into event handlers and tool executors) |
-| `tools/<Feature>ToolExecutor.kt` | Optional | LLM agent tool extending `AbstractToolExecutor` |
-| `<Feature>Plugin.kt` | Optional | `Browser4Plugin` lifecycle (manifest + onStartup/onShutdown) |
-| `README.md` | Common | Plugin documentation |
+Archetype `-D` flags — every flag except `groupId`, `artifactId` and `pluginName` has a default. Runtime behavior is configured through the host application's properties (e.g., `myfeature.enabled`), not through these flags — see Step 5.
+
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `groupId` | String | Yes | — | Maven groupId for the new plugin project (e.g., `com.example`) |
+| `artifactId` | String | Yes | — | Maven artifactId, conventionally `browser4-<feature-name>` |
+| `version` | String | No | `1.0.0-SNAPSHOT` | Plugin version |
+| `pluginName` | String | Yes | — | Human-readable plugin name (e.g., `"My Feature Plugin"`) |
+| `pluginDescription` | String | No | `"A Browser4 plugin that provides custom functionality"` | One-line description |
+| `mountPoints` | String[] | No | `["BrowseEventMount"]` | Which `PluginMount` interfaces to implement. Options: `BrowseEventMount`, `LoadEventMount`, `CrawlEventMount`, `ToolMount`, `PageSnifferMount` |
+| `hasCustomTools` | Boolean | No | `false` | Whether the plugin registers LLM agent tool executors |
+| `hasLifecycle` | Boolean | No | `false` | Whether the plugin implements the `Browser4Plugin` lifecycle interface |
+| `features` | String[] | No | — | List of concrete capabilities to implement (e.g., `"detect media on page"`, `"download files"`, `"expose LLM tool"`) |
+
+## Errors & Recovery
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| Plugin not loaded at startup; no "registered plugin" log | `browser4-plugin.json` missing, malformed, or JAR not in the plugins directory | Verify JAR is in the configured plugins directory; verify JSON is valid; verify `autoConfigurationClasses` FQN matches |
+| `ClassNotFoundException` for Browser4 API classes | Dependency scope is `compile` instead of `provided` | Change all `browser4-*` and Spring Boot deps to `<scope>provided</scope>` |
+| Mount point handlers never fire | Auto-configuration class doesn't implement the correct `PluginMount` interface, or `AutoConfiguration.imports` file is missing/wrong | Verify `AutoConfiguration.imports` contains the exact FQN; verify the auto-config class implements the mount interface |
+| `BeanCreationException` at startup | A bean dependency is missing or circular | Check bean constructor args; ensure `@Lazy` on the auto-config class |
+| Tool executor not available to agents | `getToolExecutors()` returns empty list, or executor not exposed as a Spring bean | Verify the list contains beans from `applicationContext`; verify executor has `@Bean` in auto-config |
+| Archetype generation fails | Maven can't resolve `browser4-plugin-archetype` | Build the PDK locally first: `mvn -pl browser4-pdk install` |
+| `onDocumentSteady` handler throws silently | Missing try-catch in handler body | Always wrap handler body in try-catch; log errors via a logger |
+| Config properties have no effect | Config class not reading from `Config` or property prefix mismatch | Verify `fromConfig()` method reads all keys with correct prefix; verify property names in application config |
+| `NoSuchMethodError` at runtime | Plugin compiled against a different Browser4 version than the host | Rebuild with matching `browser4-pdk` version; or reinstall the matching Browser4 version |
+| JAR contains embedded dependencies | Fat JAR instead of thin JAR — `spring-boot-maven-plugin` with `repackage` goal | Remove or skip the `repackage` goal; ensure only `maven-jar-plugin` is active |
+| `NoClassDefFoundError` for third-party libraries | Third-party dependency not bundled in the plugin JAR | Use `compile` scope for third-party deps (not `provided`) so they are included in the JAR |
 
 ---
 
@@ -518,28 +462,9 @@ Key source files to read for patterns and examples:
 | ToolMount + registry | `browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/ToolMount.kt` | `ToolMount` interface + `CustomToolRegistry` singleton |
 | ToolExecutor base | `browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/AbstractToolExecutor.kt` | `ToolExecutor` interface and `AbstractToolExecutor` base class |
 | PDK parent POM | `browser4-pdk/pom.xml` | Parent POM for plugin projects (standalone — inherits from `pulsar-parent` on Maven Central) |
-| Plugin dev docs | `docs/plugin-development.md` | Full plugin development guide with API reference |
 | **Most complete reference plugin** | `browser4-plugins/browser4-images/` | Implements BrowseEventMount + ToolMount + Browser4Plugin + Config + Service + BrowseEventHandler + ToolExecutor — all major patterns |
 | CAPTCHA plugin | `browser4-plugins/browser4-captcha/` | Reference for PageSnifferMount + multi-tool executor |
 | PDK test plugin source | `browser4-pdk/browser4-pdk-test-plugin/src/main/kotlin/ai/platon/pulsar/pdk/testplugin/config/TestPluginAutoConfiguration.kt` | Minimal mount-point wiring for all three event phases |
-
----
-
-## Error Handling
-
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| Plugin not loaded at startup; no "registered plugin" log | `browser4-plugin.json` missing, malformed, or JAR not in the plugins directory | Verify JAR is in the configured plugins directory; verify JSON is valid; verify `autoConfigurationClasses` FQN matches |
-| `ClassNotFoundException` for Browser4 API classes | Dependency scope is `compile` instead of `provided` | Change all `browser4-*` and Spring Boot deps to `<scope>provided</scope>` |
-| Mount point handlers never fire | Auto-configuration class doesn't implement the correct `PluginMount` interface, or `AutoConfiguration.imports` file is missing/wrong | Verify `AutoConfiguration.imports` contains the exact FQN; verify the auto-config class implements the mount interface |
-| `BeanCreationException` at startup | A bean dependency is missing or circular | Check bean constructor args; ensure `@Lazy` on the auto-config class |
-| Tool executor not available to agents | `getToolExecutors()` returns empty list, or executor not exposed as a Spring bean | Verify the list contains beans from `applicationContext`; verify executor has `@Bean` in auto-config |
-| Archetype generation fails | Maven can't resolve `browser4-plugin-archetype` | Build the PDK locally first: `mvn -pl browser4-pdk install` |
-| `onDocumentSteady` handler throws silently | Missing try-catch in handler body | Always wrap handler body in try-catch; log errors via a logger |
-| Config properties have no effect | Config class not reading from `Config` or property prefix mismatch | Verify `fromConfig()` method reads all keys with correct prefix; verify property names in application config |
-| `NoSuchMethodError` at runtime | Plugin compiled against a different Browser4 version than the host | Rebuild with matching `browser4-pdk` version; or reinstall the matching Browser4 version |
-| JAR contains embedded dependencies | Fat JAR instead of thin JAR — `spring-boot-maven-plugin` with `repackage` goal | Remove or skip the `repackage` goal; ensure only `maven-jar-plugin` is active |
-| `NoClassDefFoundError` for third-party libraries | Third-party dependency not bundled in the plugin JAR | Use `compile` scope for third-party deps (not `provided`) so they are included in the JAR |
 
 ---
 
@@ -555,8 +480,6 @@ Key source files to read for patterns and examples:
 
 > **Warning:** An uncaught exception in one event handler can break the entire handler chain. Always wrap handler bodies in try-catch and log failures.
 
-> **Note:** For lightweight plugin development without cloning the full Browser4 repo, the `browser4-pdk` parent POM extends `pulsar-parent` from Maven Central. Third-party developers only need the archetype and a Maven installation.
-
 > **Tip:** Build and test incrementally. After scaffolding, immediately run `mvn package` to verify the build works before writing any custom code. Then implement one mount point at a time, rebuilding and testing after each.
 
 > **Tip:** Read the `browser4-pdk-test-plugin` source before writing complex handlers. It demonstrates every mount point and serves as the compatibility canary.
@@ -569,7 +492,7 @@ Key source files to read for patterns and examples:
 
 ## See Also
 
-- [Plugin Development Guide](../docs/plugin-development.md) — Official plugin development documentation
-- [AGENTS.md](../AGENTS.md) — Project architecture, build commands, code style, and testing conventions
-- [PDK Test Plugin](browser4-pdk/browser4-pdk-test-plugin/) — Minimal reference plugin implementing all mount points
-- [Built-in Plugins](browser4-plugins/) — Five first-party plugin implementations (captcha, images, media, pptx, markdown)
+- [Plugin Development Guide](../../docs-dev/plugin-development.md) — standalone guide to creating, building, and deploying a plugin without cloning the repository, including the Plugin API reference
+- [AGENTS.md](../../AGENTS.md) — Project architecture, build commands, code style, and testing conventions
+- [PDK Test Plugin](../../browser4-pdk/browser4-pdk-test-plugin/) — Minimal reference plugin implementing all mount points
+- [Built-in Plugins](../../browser4-plugins/) — Five first-party plugin implementations (captcha, images, media, pptx, markdown)

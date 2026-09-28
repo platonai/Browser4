@@ -54,12 +54,6 @@ browser4-cli upload e5 /tmp/export.csv --no-snapshot
 
 > **Shell quoting:** on PowerShell, quote paths starting with `@` and wrap paths containing spaces: `browser4-cli upload e5 "C:\My Docs\resume.pdf"`.
 
-### Flags
-
-| Option | Description |
-|--------|-------------|
-| `--no-snapshot` | Skip the automatic post-command accessibility snapshot (interaction commands capture one by default) |
-
 ## Patterns
 
 ### Typical agent flow
@@ -76,6 +70,12 @@ browser4-cli snapshot -v 0 --auto-diff # verify upload result
 ### Re-verify after upload
 
 Uploading can change the page (file name chips, previews, enabled submit buttons). Re-snapshot and check with `snapshot grep "<expected filename>"` before proceeding — and remember refs are ephemeral, so use fresh refs after any interaction.
+
+## Flags
+
+| Option | Description |
+|--------|-------------|
+| `--no-snapshot` | Skip the automatic post-command accessibility snapshot (interaction commands capture one by default) |
 
 ## Errors & Recovery
 

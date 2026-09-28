@@ -1,9 +1,80 @@
+---
+name: browser4-web-miner
+title: "WebMiner — Convert Detail Web Pages into Interactive Views"
+description: "Groups similar web pages together and produces an interactive HTML report with clusters of related pages, plus Excel spreadsheets for analysis. Use when the user wants to cluster downloaded HTML files, convert detail web pages into interactive views, or analyze a folder of web pages locally."
+tier: procedure
+---
+
 # WebMiner — Convert Detail Web Pages into Interactive Views
+
+## Quick Start
+
+```bash
+browser4-cli webminer install            # one-time install (Java 17+ required)
+browser4-cli webminer all <html-dir>     # full pipeline: encode → cluster → views
+```
 
 WebMiner groups similar web pages together and produces an interactive HTML
 report with clusters of related pages — plus Excel spreadsheets for further
 analysis. Give it a folder of downloaded HTML files, and it handles the rest.
 Everything runs locally; no data leaves your machine.
+
+## When to Use
+
+Use WebMiner when you have a **folder of downloaded HTML pages** and want to
+cluster them into interactive views and Excel reports — fully local, no LLM
+tokens. It complements rather than replaces `browser4-cli crawl` / `swarm`
+(which acquire pages): WebMiner analyzes pages you already have. For
+single-page extraction use `htmlsnapshot` instead.
+
+## How It Works
+
+WebMiner runs a three-stage local pipeline — **encode** turns each HTML page
+into a feature vector, **cluster** groups similar pages with KMeans, and
+**views** renders an interactive HTML report plus Excel spreadsheets. The
+cluster count is always auto-detected from the data, which produces better
+results than guessing a number. Nothing leaves your machine.
+
+## Patterns
+
+### 1. Full pipeline on a folder of pages
+
+```bash
+browser4-cli webminer all /path/to/html/files
+```
+
+### 2. Rebuild views from an existing run
+
+```bash
+browser4-cli webminer views <html-dir>-ml-output/kmeans-result/p<timestamp>
+```
+
+### 3. Try it on the sample dataset
+
+```bash
+browser4-cli webminer run-example     # downloads a real-page dataset (needs 7-Zip), then runs the pipeline
+```
+
+## Flags
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--max-files <n>` | `40` | Maximum number of HTML files to process |
+| `--output <dir>` | `<html-dir>-ml-output` | Where to write the clustered results (CSV + clustering info; the views stage uses the app temp root — see [Output](#output)) |
+| `--resume [<project-id>]` | — | Pick up where a previous run left off. If no project ID is given, the most recent project is used. |
+
+`webminer all <dir>` accepts these directly; any other `webminer` subcommand is
+forwarded verbatim to `scent-miner.jar`.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `java` not found / pipeline will not start | No Java 17+ on PATH | Install JDK 17+ and put `java` on your PATH |
+| `webminer all` finds no pages | The directory has no `.html` / `.htm` files | Check the input path — every other file type is ignored |
+| `webminer run-example` fails to extract | 7-Zip is missing | Install 7-Zip, or fetch your own pages and run `webminer all <dir>` |
+| Views are not beside the clustered results | The views stage writes to the app temp task-output root | Rebuild them into the result directory with `webminer views <result-dir>` (see [Output](#output)) |
+| A run stops partway through | Interrupted pipeline | Re-run with `--resume` to continue from the last completed stage |
 
 ## Using from the Browser4 CLI
 
@@ -82,14 +153,6 @@ java -jar scent-miner.jar all /path/to/html/files
 
 The cluster count is always auto-detected from the data — this produces better
 results than guessing a number.
-
-### Options
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--max-files <n>` | `40` | Maximum number of HTML files to process |
-| `--output <dir>` | `<html-dir>-ml-output` | Where to write the clustered results (CSV + clustering info; the views stage uses the app temp root — see [Output](#output)) |
-| `--resume [<project-id>]` | — | Pick up where a previous run left off. If no project ID is given, the most recent project is used. |
 
 ### Building Views from an Existing Run
 
