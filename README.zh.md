@@ -287,6 +287,11 @@ browser4-cli pdf --filename page.pdf
 export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
+> 只配置**一个**提供商。当存在多个提供商 key 时，按内置检测顺序先命中的那个生效——`openai`
+> 排在 `deepseek` 等专用提供商之后，因此残留的 `DEEPSEEK_API_KEY` 会静默压过 `OPENAI_*`。
+> `browser4-cli doctor` 会显示最终生效的 key（`Selected key`）和后端实际请求的模型
+> （`Active model`）。详见 [LLM 配置](docs/config.md#which-provider-is-used)。
+
 ### 完整命令参考
 
 #### 会话生命周期与服务端管理
@@ -302,7 +307,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `kill-all` | 强制停止后端以及 Browser4 管理的浏览器进程。 |
 | `stop` | 优雅停止 Browser4 服务。 |
 | `status` | 显示服务版本、端口、健康状态，以及 Web 状态面板地址（`http://<server>:18182/status`）。存在活动会话时还会打印当前会话小节：Name / Session ID / Status / Connection / Next open。 |
-| `doctor` | 运行诊断：构建信息、LLM 状态、陈旧 daemon 清理、可选修复。支持 `--verbose` 与 `--fix`。 |
+| `doctor` | 运行诊断：构建信息、LLM 状态（含实际读取的配置文件、生效的 provider key 与实际请求的模型）、陈旧 daemon 清理、可选修复。支持 `--verbose` 与 `--fix`；`--fix` 还会写入一份带注释的 LLM 配置模板。 |
 | `doctor log [name]` | 列出、查看、tail 或 grep 后端日志文件。支持 `--tail`、grep 风格参数，以及 `doctor log <name> grep <pattern>`。 |
 | `doctor metrics [filter]` | 列出、过滤或 grep 后端指标。支持 `doctor metrics grep <pattern>`。 |
 | `doctor status [--section <name>] [--verbose]` | 在终端分层显示状态面板聚合报告：默认显示概要层，`--verbose` 显示完整明细，`--section` 钻取单个报告（health、build、runtime、llm、sessions、pulsar-sessions、swarm、url-pool、browsers、drivers、privacy、plugins、skills、metrics、logs），`--json` 输出机器可读 JSON。 |

@@ -275,6 +275,12 @@ AI-powered commands such as `extract`, `summarize`, `chat`, `agent run`, and X-S
 export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
+> Configure **one** provider. When several provider keys are present, the first one in the
+> built-in detection order wins — `openai` comes after the dedicated providers such as
+> `deepseek`, so a leftover `DEEPSEEK_API_KEY` silently wins over `OPENAI_*`.
+> `browser4-cli doctor` prints the key that won (`Selected key`) and the model the backend
+> will request (`Active model`). See [LLM configuration](docs/config.md#which-provider-is-used).
+
 ### Complete command reference
 
 #### Session lifecycle and server administration
@@ -290,7 +296,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `kill-all` | Force-stop the backend and Browser4-managed browser processes. |
 | `stop` | Gracefully stop the Browser4 server. |
 | `status` | Show server version, port, health, and the web status panel URL (`http://<server>:18182/status`). When a session is active it also prints a current-session block: Name / Session ID / Status / Connection / Next open. |
-| `doctor` | Run diagnostics: build info, LLM status, stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`. |
+| `doctor` | Run diagnostics: build info, LLM status (including the configuration file it reads, the winning provider key and the active model), stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`; `--fix` also writes a commented LLM config template. |
 | `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
 | `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
 | `doctor status [--section <name>] [--verbose]` | Print the aggregated status panel report in the terminal: summary layer by default, full detail with `--verbose`, one report with `--section` (health, build, runtime, llm, sessions, pulsar-sessions, swarm, url-pool, browsers, drivers, privacy, plugins, skills, metrics, logs), machine-readable JSON with `--json`. |

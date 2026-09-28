@@ -2,6 +2,10 @@
 
 Browser4 supports multiple LLM providers. Configure **one** provider with its API key, and optionally the model name and base URL.
 
+> ⚠️ Configure **exactly one** provider. When several provider keys are present, only one of
+> them is used — see [Which provider is used?](#which-provider-is-used) — and the others are
+> silently ignored, which is the most common cause of "my new key has no effect".
+
 ## Configuration methods
 
 Properties can be set in two ways (in order of precedence):
@@ -10,6 +14,68 @@ Properties can be set in two ways (in order of precedence):
 2. **`application.properties`** — the project's Spring Boot config file
 
 Property names use dots (e.g. `openrouter.api.key`). For environment variables, uppercase and replace dots with underscores: `OPENROUTER_API_KEY`.
+
+The backend reads these files at startup, so **restart the backend** after editing
+`~/.browser4/config/conf-enabled/application-private.properties`:
+`browser4-cli stop`, then any command (e.g. `browser4-cli open <url>`) starts it again with
+the new configuration.
+
+`browser4-cli doctor` prints the exact file it will read (`Config file: …`), and
+`browser4-cli doctor --fix` writes a **commented template** there — every provider commented
+out, so it changes nothing until you uncomment one block and add a real key. The template
+ships inside the runtime; the `--fix` step only materializes and enables it, and it never
+overwrites a file you already edited.
+
+## Which provider is used?
+
+When **more than one** provider key is configured, the first one in the built-in detection
+order wins. `OPENAI_API_KEY` is deliberately near the end of that order, so a generic
+OpenAI-compatible key never shadows a dedicated provider:
+
+```
+openrouter → groq → together → mistral → xai → perplexity → fireworks → deepseek →
+dashscope(bailian) → volcengine → zhipu → moonshot → baichuan → yi → stepfun →
+hunyuan → qianfan → openai → anthropic → gemini → minimax → (alias keys, e.g. KIMI_API_KEY)
+```
+
+Consequences worth knowing:
+
+- A leftover `deepseek.api.key` (still uncommented in the same
+  `application-private.properties`, or exported in the backend's environment) **wins over**
+  `openai.api.key`, so `openai.base.url` / `openai.model.name` appear to be ignored.
+- A key that is set but **empty** (`deepseek.api.key=`) has no value and must never win.
+  `browser4-base` 4.11.20+ ignores it; in older Browser4 releases remove or comment the line.
+- Two ways to force the provider:
+  - `llm.provider.deny.list=deepseek` — the denied provider is skipped during detection
+    (works on every version).
+  - `llm.provider=openai` — explicit selection, wins over the order above. Available since
+    `browser4-base` 4.11.20 (Browser4 4.13.x pins it); in older Browser4 releases it is only
+    consulted when no provider key is configured at all.
+
+`browser4-cli doctor` reports what the backend will actually do:
+
+```
+-- LLM Status --
+  ✓ LLM is configured.
+  Configured keys: DEEPSEEK_API_KEY (configuration file), OPENAI_API_KEY (environment variable)
+  Config file: ~/.browser4/config/conf-enabled/application-private.properties
+  Selected key: DEEPSEEK_API_KEY (first in the built-in priority list)
+  Active model: deepseek-v4-flash (OpenAiChatModel)
+  Source: configuration file
+  ⚠  Several LLM providers are configured: ...
+```
+
+When nothing is configured yet, the same line names the file to create and how:
+
+```
+-- LLM Status --
+  LLM is not configured, you can only use non-LLM commands. …
+  Config file: ~/.browser4/config/conf-enabled/application-private.properties (not present — 'browser4-cli doctor --fix' writes a commented template)
+```
+
+`Selected key` + `Active model` are the authoritative answer to "where do my requests go?".
+The backend log line `Using LLM provider | provider=… model=… baseUrl=… apiKey=…` carries the
+same information (see `browser4-cli doctor --verbose`).
 
 ## Providers
 
@@ -24,7 +90,8 @@ openrouter.base.url=https://openrouter.ai/api/v1/  # optional
 | Env var                 | Property                | Default |
 |-------------------------|-------------------------|---|
 | `OPENROUTER_API_KEY`    | `openrouter.api.key`    | — |
-| `OPENROUTER_MODEL_NAME` | `openrouter.model.name` | — |
+| `OPENROUTER_MODEL_NAME` | `openrouter.model.name` | `bytedance-seed/seed-1.6` |
+| `OPENROUTER_BASE_URL`   | `openrouter.base.url`   | `https://openrouter.ai/api/v1` |
 
 OpenRouter gives access to many models through one API. `model.name` defaults to a reasonable choice; override it to use any model available on OpenRouter (e.g. `bytedance-seed/seed-2.0-lite`).
 
@@ -38,7 +105,8 @@ deepseek.model.name=deepseek-v4-flash[1m]
 | Env var               | Property              | Default |
 |-----------------------|-----------------------|---|
 | `DEEPSEEK_API_KEY`    | `deepseek.api.key`    | — |
-| `DEEPSEEK_MODEL_NAME` | `deepseek.model.name` | — |
+| `DEEPSEEK_MODEL_NAME` | `deepseek.model.name` | `deepseek-v4-flash` |
+| `DEEPSEEK_BASE_URL`   | `deepseek.base.url`   | `https://api.deepseek.com/v1` |
 
 
 Uses DeepSeek's official API. Model defaults to DeepSeek's latest.
@@ -54,6 +122,8 @@ openai.base.url=https://api.openai.com/v1       # optional
 | Env var | Property | Default |
 |---|---|---|
 | `OPENAI_API_KEY` | `openai.api.key` | — |
+| `OPENAI_MODEL_NAME` | `openai.model.name` | `gpt-5.6-sol` |
+| `OPENAI_BASE_URL` | `openai.base.url` | `https://api.openai.com/v1` |
 
 Works with any OpenAI-compatible API by changing `base.url`. For example, Aliyun Qwen (DashScope):
 
@@ -62,6 +132,10 @@ openai.api.key=sk-...
 openai.model.name=qwen-plus
 openai.base.url=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
+
+> 💡 `openai.*` is the generic "any OpenAI-compatible endpoint" slot (DeepInfra, vLLM,
+> LM Studio, DashScope, ...). Because it sits near the end of the detection order, remove or
+> deny every other provider key — see [Which provider is used?](#which-provider-is-used).
 
 ### Volcengine (ByteDance)
 
@@ -425,6 +499,54 @@ captcha.auto.solve.types=RECAPTCHA_V2,RECAPTCHA_V3,HCAPTCHA,TURNSTILE
 | Yes | `true` (or absent) | CAPTCHA fully active |
 | Yes | `false` | CAPTCHA disabled (property blocks it) |
 | No | any value | CAPTCHA silently skipped (no error) |
+
+---
+
+## 🔎 Troubleshooting
+
+### "I configured `OPENAI_*` (or DeepInfra / vLLM / DashScope) but requests still go to DeepSeek"
+
+The routing follows the detection order, not the key you added last. Work through this list:
+
+1. **Look at what won:** `browser4-cli doctor` now prints `Selected key`, `Active model` and a
+   warning when several providers compete. `Selected key: DEEPSEEK_API_KEY` while
+   `OPENAI_API_KEY` is also listed means a DeepSeek key is still configured somewhere.
+2. **Find the other key.** The backend reads, in this order:
+   `-D` system properties, environment variables of the **backend process**, and every
+   `application.properties` / `application-private.properties` in the working directory,
+   `./config/`, the project root, and `~/.browser4/config/conf-enabled/`.
+   The shipped `application-private.properties` lists *all* providers — an uncommented
+   `deepseek.*` block left over from an earlier setup wins over `openai.*`.
+3. **Remove it** (comment the unused block out) and restart the backend: the configuration
+   is read once at startup, so editing the file alone changes nothing.
+4. **Or force the choice** without editing keys:
+   ```properties
+   # Every version: skip the provider you do not want
+   llm.provider.deny.list=deepseek
+   # browser4-base 4.11.20+: select explicitly
+   llm.provider=openai
+   ```
+5. **Check for an empty key.** A line like `deepseek.api.key=` counts as *present* on
+   `browser4-base` < 4.11.20 and can hijack the selection; `doctor` reports such keys under
+   `emptyKeys` with a warning. Comment the line out.
+6. **Let the tooling create the file.** `browser4-cli doctor --fix` writes a commented
+   template to `~/.browser4/config/conf-enabled/application-private.properties` (it never
+   overwrites an existing file) and prints the path, so the location never has to be guessed.
+
+### "✓ LLM is configured" but every LLM command fails
+
+The key is visible to the backend but rejected (wrong provider for that key, expired key,
+or a base URL that does not serve the configured model). `doctor` shows the model and client
+the backend built: `Active model: … (OpenAiChatModel)`. Compare it against the provider that
+issued the key. Requests fail loudly in the backend log
+(`browser4-cli doctor --verbose --log-filter "Chat"`).
+
+### The key works in my shell but not in Browser4
+
+The CLI only sends HTTP requests; the **backend process** calls the LLM. When the CLI
+auto-starts the backend it inherits the CLI's environment, so export the key before the first
+`browser4-cli` command of the session — or put it in
+`~/.browser4/config/conf-enabled/application-private.properties` and restart the backend.
 
 ---
 

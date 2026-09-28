@@ -21115,6 +21115,187 @@ fn parse_major_minor(v: &str) -> Option<(u64, u64)> {
     Some((major, minor))
 }
 
+/// Render the `-- LLM Status --` body from the backend's
+/// `GET /api/doctor/llm-status` payload.
+///
+/// "✓ LLM is configured" alone cannot be trusted: any configured provider key
+/// wins over the one the user just added when it sits higher in the built-in
+/// priority list, so a leftover `DEEPSEEK_API_KEY` in the same properties file
+/// keeps the routing on DeepSeek while `OPENAI_*` looks configured.  The lines
+/// below therefore name the configured keys *with their source*, the key that won
+/// the selection, and the model the backend will actually request.
+///
+/// Kept pure (no I/O) so it can be unit tested.
+fn render_llm_status_lines(llm_info: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    let configured = llm_info
+        .get("configured")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if !configured {
+        if let Some(message) = llm_info.get("message").and_then(|v| v.as_str()) {
+            for line in message.lines() {
+                lines.push(format!("  {}", line));
+            }
+        } else {
+            lines.push("  LLM is not configured.".to_string());
+            lines.push(
+                "  It is highly recommended to set OPENROUTER_API_KEY or other LLM keys to enable LLM features."
+                    .to_string(),
+            );
+        }
+        // Even when nothing is usable, reporting the keys that *are* set — and the
+        // ones that are set but empty — explains why.
+        for line in llm_status_config_file_lines(llm_info) {
+            lines.push(line);
+        }
+        lines.extend(llm_status_configured_key_lines(llm_info));
+        if let Some(warning) = llm_info.get("warning").and_then(|v| v.as_str()) {
+            if !warning.is_empty() {
+                lines.push(format!("  ⚠  {}", warning));
+            }
+        }
+        return lines;
+    }
+
+    lines.push("  ✓ LLM is configured.".to_string());
+
+    lines.extend(llm_status_configured_key_lines(llm_info));
+
+    for line in llm_status_config_file_lines(llm_info) {
+        lines.push(line);
+    }
+
+    let selected_key = llm_info.get("selectedKey").and_then(|v| v.as_str());
+    let selected_by = llm_info.get("selectedBy").and_then(|v| v.as_str());
+    match (selected_key, selected_by) {
+        (Some(key), _) => lines.push(format!(
+            "  Selected key: {} (first in the built-in priority list)",
+            key
+        )),
+        (None, Some(by)) if by.starts_with("llm.provider=") => {
+            lines.push(format!("  Selected by: {}", by))
+        }
+        _ => {}
+    }
+
+    if let Some(active) = llm_info.get("activeModel") {
+        let model = active.get("model").and_then(|v| v.as_str());
+        let client = active.get("client").and_then(|v| v.as_str());
+        if let Some(model) = model {
+            match client {
+                Some(client) => lines.push(format!("  Active model: {} ({})", model, client)),
+                None => lines.push(format!("  Active model: {}", model)),
+            }
+        }
+    }
+
+    if let Some(warning) = llm_info.get("warning").and_then(|v| v.as_str()) {
+        if !warning.is_empty() {
+            lines.push(format!("  ⚠  {}", warning));
+        }
+    }
+
+    match llm_info.get("detectedVia").and_then(|v| v.as_str()) {
+        Some("env") => lines.push("  Source: environment variables".to_string()),
+        Some("system_property") => lines.push("  Source: JVM system properties".to_string()),
+        // The exact file is already printed by the `Config file:` line above — naming a
+        // fixed `~/.browser4/config/` here would be wrong whenever the data directory
+        // lives elsewhere (`-Dapp.data.dir`, containers).
+        Some("configuration") => lines.push("  Source: configuration file".to_string()),
+        // Older backends reported `config_file` for *any* configured key, including
+        // keys that came from the environment — only trust it when the payload does
+        // not also report an environment variable.
+        Some("config_file")
+            if llm_info
+                .get("foundEnvVars")
+                .and_then(|v| v.as_array())
+                .map_or(true, |vars| vars.is_empty()) =>
+        {
+            lines.push("  Source: configuration file".to_string())
+        }
+        _ => {}
+    }
+
+    lines
+}
+
+/// The user-editable LLM configuration file, with the writable path it actually
+/// has on the backend host and whether that file exists yet.
+///
+/// Reporting the path — not just "configure an API key" — is the difference
+/// between a user guessing a location and a user editing the right file; until
+/// now the path had to be reconstructed from the SDK's internals.
+fn llm_status_config_file_lines(llm_info: &Value) -> Vec<String> {
+    let Some(config_file) = llm_info.get("configFile") else {
+        return Vec::new();
+    };
+    let path = config_file
+        .get("enabledPathDisplay")
+        .or_else(|| config_file.get("enabledPath"))
+        .and_then(|v| v.as_str());
+    let Some(path) = path else {
+        return Vec::new();
+    };
+
+    let exists = config_file
+        .get("enabledExists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if exists {
+        vec![format!("  Config file: {}", path)]
+    } else {
+        vec![format!(
+            "  Config file: {} (not present — 'browser4-cli doctor --fix' writes a commented template)",
+            path
+        )]
+    }
+}
+
+/// The configured-key lines, preferring the per-key `source` reported by the
+/// backend and falling back to the plain env-var list of older backends.
+fn llm_status_configured_key_lines(llm_info: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if let Some(keys) = llm_info.get("configuredKeys").and_then(|v| v.as_array()) {
+        let rendered: Vec<String> = keys
+            .iter()
+            .filter_map(|entry| {
+                let key = entry.get("key").and_then(|v| v.as_str())?;
+                match entry.get("source").and_then(|v| v.as_str()) {
+                    Some(source) => Some(format!("{} ({})", key, describe_llm_key_source(source))),
+                    None => Some(key.to_string()),
+                }
+            })
+            .collect();
+        if !rendered.is_empty() {
+            lines.push(format!("  Configured keys: {}", rendered.join(", ")));
+        }
+        return lines;
+    }
+
+    if let Some(vars) = llm_info.get("foundEnvVars").and_then(|v| v.as_array()) {
+        let names: Vec<&str> = vars.iter().filter_map(|v| v.as_str()).collect();
+        if !names.is_empty() {
+            lines.push(format!("  Configured keys: {}", names.join(", ")));
+        }
+    }
+
+    lines
+}
+
+fn describe_llm_key_source(source: &str) -> &str {
+    match source {
+        "env" => "environment variable",
+        "system_property" => "JVM system property",
+        "configuration" => "configuration file",
+        other => other,
+    }
+}
+
 async fn handle_doctor(
     client: &Client,
     base_url: &str,
@@ -21286,34 +21467,8 @@ async fn handle_doctor(
     let llm_url = format!("{base_url}/api/doctor/llm-status");
     match get_json(client, &llm_url).await {
         Ok(llm_info) => {
-            let configured = llm_info
-                .get("configured")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if configured {
-                cli_println!("  ✓ LLM is configured.");
-                if let Some(vars) = llm_info.get("foundEnvVars").and_then(|v| v.as_array()) {
-                    if !vars.is_empty() {
-                        let names: Vec<&str> = vars.iter().filter_map(|v| v.as_str()).collect();
-                        cli_println!("  Configured keys: {}", names.join(", "));
-                    }
-                }
-                if let Some(detected) = llm_info.get("detectedVia").and_then(|v| v.as_str()) {
-                    match detected {
-                        "config_file" => {
-                            cli_println!("  Source: configuration file (~/.browser4/config/)")
-                        }
-                        "env_or_property" => {} // already shown via Configured keys above
-                        _ => {}
-                    }
-                }
-            } else if let Some(message) = llm_info.get("message").and_then(|v| v.as_str()) {
-                for line in message.lines() {
-                    cli_println!("  {}", line);
-                }
-            } else {
-                cli_println!("  LLM is not configured.");
-                cli_println!("  It is highly recommended to set OPENROUTER_API_KEY or other LLM keys to enable LLM features.");
+            for line in render_llm_status_lines(&llm_info) {
+                cli_println!("{}", line);
             }
             json_field("llm_status", llm_info);
         }
@@ -21488,9 +21643,22 @@ async fn handle_doctor(
         let fix_count = run_destructive_repairs();
         cli_println!("  Repairs applied: {}", fix_count);
         json_field("repairs_applied", json!(fix_count));
+
+        // The LLM configuration file: a repair that hands the user the writable path
+        // (and a commented template) instead of a directory they must complete
+        // themselves.  Never overwrites an existing file, so it is safe to repeat.
+        let llm_config_url = format!("{base_url}/api/doctor/llm-config/enable");
+        let llm_config_result = post_json(client, &llm_config_url).await;
+        for line in render_llm_config_fix_lines(&llm_config_result, base_url) {
+            cli_println!("{}", line);
+        }
+        match &llm_config_result {
+            Ok(info) => json_field("llm_config_file", info.clone()),
+            Err(_) => json_field("llm_config_file", json!(null)),
+        }
     } else {
         cli_println!("");
-        cli_println!("💡 Tip: Run 'browser4-cli doctor --fix' to auto-repair common issues (reinstall Chrome, purge old state, clean temp files).");
+        cli_println!("💡 Tip: Run 'browser4-cli doctor --fix' to auto-repair common issues (reinstall Chrome, purge old state, clean temp files, write a commented LLM config template).");
     }
 
     Ok(())
@@ -22157,6 +22325,54 @@ async fn handle_doctor_status(
     Ok(())
 }
 
+/// The lines the `--fix` step prints for the LLM configuration template.
+///
+/// A configuration file created by the backend lives on the **backend host**, which is
+/// why a non-local backend says so — otherwise "I edited the file and nothing happened"
+/// follows a Docker deployment.  Pure so both branches can be unit tested.
+fn render_llm_config_fix_lines(result: &Result<Value, String>, base_url: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    let info = match result {
+        Ok(info) => info,
+        Err(e) => {
+            lines.push(format!("  LLM config file: not created ({})", e));
+            lines.push(
+                "  ℹ  This backend does not create the template — set the key as an environment \
+                 variable, or see docs/config.md for the file locations."
+                    .to_string(),
+            );
+            return lines;
+        }
+    };
+
+    if let Some(display) = info.get("enabledPathDisplay").and_then(|v| v.as_str()) {
+        lines.push(format!("  LLM config file: {}", display));
+        if !is_local_backend(base_url) {
+            lines.push(format!(
+                "  ℹ  That path is on the backend host ({}), which is not this machine.",
+                base_url
+            ));
+        }
+    }
+    if let Some(message) = info.get("message").and_then(|v| v.as_str()) {
+        lines.push(format!("  ℹ  {}", message));
+    }
+    if let Some(error) = info.get("error").and_then(|v| v.as_str()) {
+        lines.push(format!("  ⚠  LLM config file: {}", error));
+    }
+
+    lines
+}
+
+/// Whether a backend URL points at this machine.
+fn is_local_backend(base_url: &str) -> bool {
+    let url = base_url.to_ascii_lowercase();
+    ["//localhost", "//127.0.0.1", "//[::1]", "//0.0.0.0"]
+        .iter()
+        .any(|host| url.contains(host))
+}
+
 /// GET a JSON endpoint and return the parsed Value.
 async fn get_json(client: &Client, url: &str) -> Result<Value, String> {
     let response = client
@@ -22170,6 +22386,28 @@ async fn get_json(client: &Client, url: &str) -> Result<Value, String> {
     response
         .json::<Value>()
         .await
+        .map_err(|e| format!("JSON parse failed: {e}"))
+}
+
+/// POST a JSON endpoint with an empty body and return the parsed Value.
+///
+/// The response body is included in the error so that a backend-side failure
+/// (e.g. an unwritable configuration directory) reaches the user instead of
+/// being collapsed into a bare status code.
+async fn post_json(client: &Client, url: &str) -> Result<Value, String> {
+    let response = client.post(url).send().await
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        let body = body.trim();
+        return Err(if body.is_empty() {
+            format!("HTTP {}", status)
+        } else {
+            format!("HTTP {}: {}", status, body)
+        });
+    }
+    response.json::<Value>().await
         .map_err(|e| format!("JSON parse failed: {e}"))
 }
 
@@ -26707,6 +26945,11 @@ fn interpret_block_probe(probe_result: &str, fallback_url: &str) -> Option<Block
     detect_block_signature(landed_url, &probe.text)
 }
 
+// The shared process-wide env lock used by this crate's tests; the rationale
+// and the reentrancy rules live in `src/test_env.rs`.
+#[cfg(test)]
+pub(crate) mod test_env;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -26730,10 +26973,12 @@ mod tests {
             .unwrap()
     }
 
-    /// Guard that restores an env var to its previous value on drop.
+    /// Guard that restores an env var to its previous value on drop, holding the shared
+    /// environment lock so that two tests cannot interleave on the same key.
     struct EnvGuard {
         key: &'static str,
         prev: Option<String>,
+        _lock: crate::test_env::EnvLock,
     }
 
     impl Drop for EnvGuard {
@@ -26748,19 +26993,21 @@ mod tests {
     }
 
     fn set_env(key: &'static str, val: &str) -> EnvGuard {
+        let lock = crate::test_env::lock();
         let prev = std::env::var(key).ok();
         unsafe {
             std::env::set_var(key, val);
         }
-        EnvGuard { key, prev }
+        EnvGuard { key, prev, _lock: lock }
     }
 
     fn clear_env(key: &'static str) -> EnvGuard {
+        let lock = crate::test_env::lock();
         let prev = std::env::var(key).ok();
         unsafe {
             std::env::remove_var(key);
         }
-        EnvGuard { key, prev }
+        EnvGuard { key, prev, _lock: lock }
     }
 
     /// Ordinary, long-enough page text: keeps the block signatures and the
@@ -30111,6 +30358,246 @@ mod tests {
         let raw = "The LLM is not configured; see docs/config/llm/llm-config.md";
         let formatted = format_missing_llm_error(raw, "extract");
         assert!(!formatted.contains("docs/config/llm"));
+    }
+
+    // -----------------------------------------------------------------------
+    // render_llm_status_lines
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_llm_status_reports_selected_key_model_and_source() {
+        // The shape served by DoctorController: DEEPSEEK_API_KEY won over the
+        // OPENAI_* the user just configured.
+        let payload = json!({
+            "configured": true,
+            "detectedVia": "configuration",
+            "foundEnvVars": [],
+            "foundProperties": [],
+            "configuredKeys": [
+                {"key": "DEEPSEEK_API_KEY", "source": "configuration"},
+                {"key": "OPENAI_API_KEY", "source": "env"}
+            ],
+            "emptyKeys": [],
+            "selectedKey": "DEEPSEEK_API_KEY",
+            "selectedBy": "auto-detection",
+            "multipleProviders": true,
+            "warning": "Several LLM providers are configured: DEEPSEEK_API_KEY, OPENAI_API_KEY.",
+            "activeModel": {"model": "deepseek-v4-flash", "client": "OpenAiChatModel"},
+            "message": null
+        });
+
+        let lines = render_llm_status_lines(&payload);
+        let text = lines.join("\n");
+
+        assert!(text.contains("✓ LLM is configured."));
+        assert!(text.contains("DEEPSEEK_API_KEY (configuration file)"));
+        assert!(text.contains("OPENAI_API_KEY (environment variable)"));
+        assert!(text.contains("Selected key: DEEPSEEK_API_KEY"));
+        assert!(text.contains("Active model: deepseek-v4-flash (OpenAiChatModel)"));
+        assert!(text.contains("⚠"));
+        assert!(text.contains("Source: configuration file"));
+    }
+
+    #[test]
+    fn render_llm_status_reports_explicit_provider_selection() {
+        let payload = json!({
+            "configured": true,
+            "detectedVia": "multiple",
+            "configuredKeys": [{"key": "OPENAI_API_KEY", "source": "env"}],
+            "selectedKey": null,
+            "selectedBy": "llm.provider=openai",
+            "multipleProviders": false,
+            "warning": null,
+            "activeModel": {"model": "gpt-5.6-sol", "client": "OpenAiChatModel"},
+            "message": null
+        });
+
+        let text = render_llm_status_lines(&payload).join("\n");
+
+        assert!(text.contains("Selected by: llm.provider=openai"));
+        assert!(text.contains("Active model: gpt-5.6-sol"));
+        // "multiple" sources are already spelled out per key
+        assert!(!text.contains("Source:"));
+    }
+
+    #[test]
+    fn render_llm_status_falls_back_to_env_var_list_of_older_backends() {
+        // Older backends report `config_file` unconditionally, so the claim is only
+        // repeated when no environment variable was reported.
+        let payload = json!({
+            "configured": true,
+            "detectedVia": "config_file",
+            "foundEnvVars": ["OPENAI_API_KEY"],
+            "message": null
+        });
+
+        let text = render_llm_status_lines(&payload).join("\n");
+
+        assert!(text.contains("Configured keys: OPENAI_API_KEY"));
+        assert!(!text.contains("Source:"), "a config-file claim next to an env var is a lie");
+
+        let from_file = json!({
+            "configured": true,
+            "detectedVia": "config_file",
+            "foundEnvVars": [],
+            "message": null
+        });
+        assert!(render_llm_status_lines(&from_file)
+            .join("\n")
+            .contains("Source: configuration file"));
+    }
+
+    #[test]
+    fn render_llm_status_reports_not_configured_message_and_empty_keys() {
+        let payload = json!({
+            "configured": false,
+            "detectedVia": null,
+            "configuredKeys": [{"key": "OPENAI_API_KEY", "source": "configuration"}],
+            "emptyKeys": ["OPENAI_API_KEY"],
+            "warning": "These provider keys are set but empty, and are ignored: OPENAI_API_KEY.",
+            "message": "LLM is not configured, you can only use non-LLM commands."
+        });
+
+        let text = render_llm_status_lines(&payload).join("\n");
+
+        assert!(!text.contains("✓"));
+        assert!(text.contains("LLM is not configured"));
+        assert!(text.contains("OPENAI_API_KEY (configuration file)"));
+        assert!(text.contains("set but empty"));
+    }
+
+    #[test]
+    fn render_llm_status_uses_default_hint_without_message() {
+        let payload = json!({"configured": false, "detectedVia": null});
+
+        let text = render_llm_status_lines(&payload).join("\n");
+
+        assert!(text.contains("LLM is not configured."));
+        assert!(text.contains("OPENROUTER_API_KEY"));
+    }
+
+    #[test]
+    fn render_llm_status_reports_the_writable_config_file_path() {
+        let payload = json!({
+            "configured": false,
+            "detectedVia": null,
+            "message": "LLM is not configured, you can only use non-LLM commands.",
+            "configFile": {
+                "enabledPath": "/root/.browser4/config/conf-enabled/application-private.properties",
+                "enabledPathDisplay": "~/.browser4/config/conf-enabled/application-private.properties",
+                "enabledExists": true
+            }
+        });
+
+        let text = render_llm_status_lines(&payload).join("\n");
+
+        assert!(text.contains("Config file: ~/.browser4/config/conf-enabled/application-private.properties"));
+        assert!(!text.contains("not present"), "an existing file is not reported as missing");
+        assert!(!text.contains("/root/"), "the home prefix must be abbreviated");
+    }
+
+    #[test]
+    fn render_llm_status_points_at_doctor_fix_when_the_config_file_is_missing() {
+        let payload = json!({
+            "configured": false,
+            "detectedVia": null,
+            "message": "LLM is not configured, you can only use non-LLM commands.",
+            "configFile": {
+                "enabledPathDisplay": "~/.browser4/config/conf-enabled/application-private.properties",
+                "enabledExists": false
+            }
+        });
+
+        let text = render_llm_status_lines(&payload).join("\n");
+
+        assert!(text.contains("Config file: ~/.browser4/config/conf-enabled/application-private.properties"));
+        assert!(text.contains("not present"));
+        assert!(text.contains("doctor --fix"));
+    }
+
+    #[test]
+    fn render_llm_status_omits_the_config_file_line_for_older_backends() {
+        let payload = json!({
+            "configured": true,
+            "detectedVia": "env",
+            "configuredKeys": [{"key": "OPENAI_API_KEY", "source": "env"}],
+            "activeModel": {"model": "gpt-5.6-sol", "client": "OpenAiChatModel"},
+            "message": null
+        });
+
+        let text = render_llm_status_lines(&payload).join("\n");
+
+        assert!(text.contains("✓ LLM is configured."));
+        assert!(!text.contains("Config file:"), "an old backend reports no config file");
+    }
+
+    #[test]
+    fn is_local_backend_detects_this_machine() {
+        assert!(is_local_backend("http://localhost:18182"));
+        assert!(is_local_backend("http://127.0.0.1:18182"));
+        assert!(is_local_backend("http://0.0.0.0:8182"));
+
+        assert!(!is_local_backend("http://192.168.1.10:18182"));
+        assert!(!is_local_backend("https://browser4.example.com"));
+    }
+
+    // -----------------------------------------------------------------------
+    // render_llm_config_fix_lines (doctor --fix)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_llm_config_fix_reports_the_created_file() {
+        let result = Ok(json!({
+            "installed": true,
+            "enabledPathDisplay": "~/.browser4/config/conf-enabled/application-private.properties",
+            "enabledWritten": true,
+            "message": "A commented template was created — add your API key to it, then restart the backend ('browser4-cli stop')."
+        }));
+
+        let text = render_llm_config_fix_lines(&result, "http://localhost:18182").join("\n");
+
+        assert!(text.contains("LLM config file: ~/.browser4/config/conf-enabled/application-private.properties"));
+        assert!(text.contains("A commented template was created"));
+        assert!(!text.contains("backend host"), "a local backend needs no host caveat");
+    }
+
+    #[test]
+    fn render_llm_config_fix_warns_about_a_remote_backend() {
+        let result = Ok(json!({
+            "enabledPathDisplay": "/root/.browser4/config/conf-enabled/application-private.properties",
+            "message": "The file already exists and was left untouched."
+        }));
+
+        let text = render_llm_config_fix_lines(&result, "http://10.0.0.5:18182").join("\n");
+
+        assert!(text.contains("LLM config file: /root/.browser4/config/conf-enabled/application-private.properties"));
+        assert!(text.contains("backend host"));
+        assert!(text.contains("left untouched"));
+    }
+
+    #[test]
+    fn render_llm_config_fix_reports_a_backend_side_error() {
+        let result = Ok(json!({
+            "installed": false,
+            "error": "Read-only file system",
+            "enabledPathDisplay": "~/.browser4/config/conf-enabled/application-private.properties"
+        }));
+
+        let text = render_llm_config_fix_lines(&result, "http://localhost:18182").join("\n");
+
+        assert!(text.contains("LLM config file: ~/.browser4/config/conf-enabled/application-private.properties"));
+        assert!(text.contains("Read-only file system"));
+    }
+
+    #[test]
+    fn render_llm_config_fix_falls_back_for_older_backends() {
+        let result: Result<Value, String> = Err("HTTP 404: {\"error\":\"Not Found\"}".to_string());
+
+        let text = render_llm_config_fix_lines(&result, "http://localhost:18182").join("\n");
+
+        assert!(text.contains("not created"));
+        assert!(text.contains("HTTP 404"));
+        assert!(text.contains("docs/config.md"));
     }
 
     // -----------------------------------------------------------------------

@@ -1,0 +1,64 @@
+# ============================================================================
+# Browser4 LLM configuration — template
+# ============================================================================
+#
+# This file is a TEMPLATE: while it sits in "conf-available/" it has no effect.
+# Only its copy in the sibling directory is read, and that copy is read once,
+# when the backend starts:
+#
+#     <app data dir>/config/conf-enabled/application-private.properties
+#     e.g. ~/.browser4/config/conf-enabled/application-private.properties
+#
+# `browser4-cli doctor --fix` creates and enables that copy for you, and
+# `browser4-cli doctor` prints the exact path in use plus the key that won.
+#
+# How to use this file:
+#   1. Uncomment exactly ONE provider block below and fill in a real API key.
+#   2. Restart the backend: `browser4-cli stop` (then any command restarts it).
+#   3. Verify the routing: `browser4-cli doctor` →
+#      "Configured keys" / "Selected key" / "Active model".
+#
+# Configure EXACTLY ONE provider. When several provider keys are present, the
+# first one in the built-in detection order wins — `openai` comes after the
+# dedicated providers such as `deepseek`, so a leftover DeepSeek key silently
+# wins over OPENAI_*. Decide explicitly with:
+#     llm.provider=openai              # select one (browser4-base 4.11.20+)
+#     llm.provider.deny.list=deepseek  # skip one (any version)
+#
+# Environment variables work as well, and are the recommended home for secrets:
+# OPENROUTER_API_KEY, DEEPSEEK_API_KEY, OPENAI_API_KEY, VOLCENGINE_API_KEY, ...
+#
+# ----------------------------------------------------------------------------
+
+## OpenRouter (default) — 300+ models behind a single key
+# openrouter.api.key=sk-or-v1-...
+# openrouter.model.name=bytedance-seed/seed-1.6
+# openrouter.base.url=https://openrouter.ai/api/v1
+
+## DeepSeek
+# deepseek.api.key=sk-...
+# deepseek.model.name=deepseek-v4-flash
+# deepseek.base.url=https://api.deepseek.com/v1
+
+## OpenAI-compatible — any OpenAI-compatible endpoint: DeepInfra, Groq, vLLM,
+## LM Studio, a corporate gateway, ...
+# openai.api.key=sk-...
+# openai.model.name=gpt-5.6-sol
+# openai.base.url=https://api.openai.com/v1
+#
+# Example — DeepInfra:
+# openai.api.key=<your deepinfra key>
+# openai.model.name=deepseek-ai/DeepSeek-V4.1-Flash
+# openai.base.url=https://api.deepinfra.com/v1/openai
+
+## Aliyun DashScope (Qwen) — also an OpenAI-compatible endpoint
+# openai.api.key=sk-...
+# openai.model.name=qwen-plus
+# openai.base.url=https://dashscope.aliyuncs.com/compatible-mode/v1
+
+## Volcengine (ByteDance / Doubao)
+# volcengine.api.key=...
+# volcengine.model.name=doubao-seed-2-0-pro-260215
+# volcengine.base.url=https://ark.cn-beijing.volces.com/api/v3
+
+## Full provider list, precedence and troubleshooting: docs/config.md

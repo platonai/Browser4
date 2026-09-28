@@ -7,3 +7,8 @@ pub mod java;
 pub mod managed_processes;
 pub mod skills;
 pub mod state;
+
+// Test-only: `daemon.rs` is compiled into both this library and the CLI binary,
+// and resolves the shared env lock through `crate::test_env`.
+#[cfg(test)]
+pub(crate) mod test_env;

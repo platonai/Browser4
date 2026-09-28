@@ -1,8 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agentic.context.AgenticContext
-import ai.platon.pulsar.external.ChatModelFactory
-import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import com.codahale.metrics.*
 import org.slf4j.LoggerFactory
@@ -121,64 +119,73 @@ class DoctorController(
         )
     }
 
+    /**
+     * Report whether an LLM is configured, and which provider the requests will
+     * actually go to.
+     *
+     * The second half matters as much as the first: a configured `OPENAI_API_KEY`
+     * is silently ignored when another provider key (a leftover `DEEPSEEK_API_KEY`
+     * in the same properties file, for example) sits higher in the built-in
+     * priority list.  See [LlmStatusReporter].
+     */
     @GetMapping("llm-status")
     fun llmStatus(): ResponseEntity<Map<String, Any?>> {
-        val envKeyNames = listOf(
-            "OPENROUTER_API_KEY",
-            "DEEPSEEK_API_KEY",
-            "VOLCENGINE_API_KEY",
-            "OPENAI_API_KEY",
-            "LLM_API_KEY",
-        )
-        val propertyKeyNames = listOf(
-            "llm.api.key",
-            "openrouter.api.key",
-            "volcengine.api.key",
-            "deepseek.api.key",
-            "openai.api.key",
-        )
+        return ResponseEntity.ok(LlmStatusReporter.report(agenticContext.configuration))
+    }
 
-        val foundEnvVars = envKeyNames.filter { System.getenv(it) != null }
-        val foundProperties = propertyKeyNames.filter { System.getProperty(it) != null }
-        val testLlmEnabled = TestChatModelFactory.isEnabled()
+    /**
+     * Write the bundled LLM configuration template and enable it.
+     *
+     * `browser4-cli doctor --fix` calls this so that a user who needs to keep an API
+     * key in a file is handed the exact writable path instead of a directory name.
+     * Both paths are idempotent: an existing file is never overwritten, so a user's
+     * edited configuration always wins.  See [LlmConfigTemplate].
+     */
+    @PostMapping("llm-config/enable")
+    fun enableLlmConfigTemplate(): ResponseEntity<Map<String, Any?>> {
+        val enabledPathDisplay = LlmConfigTemplate.displayPath(LlmConfigTemplate.enabledPath())
 
-        // Primary check: use ChatModelFactory which reads from the Pulsar SDK's
-        // ImmutableConfig (loaded from ~/.browser4/config/conf-enabled/). This is
-        // the same check used by Browser4StandaloneApplication at startup.
-        val factoryConfigured = try {
-            ChatModelFactory.isModelConfigured(agenticContext.configuration, verbose = false)
+        val installation = try {
+            LlmConfigTemplate.install()
         } catch (e: Exception) {
-            logger.warn("ChatModelFactory.isModelConfigured threw: {}", e.message)
-            null
+            logger.warn("Failed to install the LLM config template: {}", e.message)
+            return ResponseEntity.internalServerError().body(
+                mapOf(
+                    "installed" to false,
+                    "error" to (e.message ?: "unknown error"),
+                    "enabledPathDisplay" to enabledPathDisplay,
+                )
+            )
         }
 
-        val configured = when {
-            testLlmEnabled -> true
-            factoryConfigured == true -> true
-            foundEnvVars.isNotEmpty() || foundProperties.isNotEmpty() -> true
-            else -> false
+        if (installation == null) {
+            return ResponseEntity.ok(
+                mapOf(
+                    "installed" to false,
+                    "error" to "The bundled LLM config template is missing from the classpath",
+                    "enabledPathDisplay" to enabledPathDisplay,
+                )
+            )
         }
 
-        val message = if (configured) {
-            null
+        val message = if (installation.enabledWritten) {
+            "A commented template was created — add your API key to it, then restart the " +
+                "backend ('browser4-cli stop')."
         } else {
-            "LLM is not configured, you can only use non-LLM commands. " +
-                "X-SQL is still available. " +
-                "It is highly recommended to set OPENROUTER_API_KEY or other LLM keys to enable LLM features."
+            "The file already exists and was left untouched."
         }
 
         return ResponseEntity.ok(
             mapOf(
-                "configured" to configured,
-                "detectedVia" to when {
-                    testLlmEnabled -> "test_file_backed"
-                    factoryConfigured == true -> "config_file"
-                    foundEnvVars.isNotEmpty() || foundProperties.isNotEmpty() -> "env_or_property"
-                    else -> null
-                },
-                "foundEnvVars" to foundEnvVars,
-                "foundProperties" to foundProperties,
-                "keyPrefixes" to listOf("OPENROUTER", "DEEPSEEK", "VOLCENGINE", "OPENAI"),
+                "installed" to true,
+                "fileName" to installation.fileName,
+                "availablePath" to installation.availablePath.toAbsolutePath().toString(),
+                "availablePathDisplay" to LlmConfigTemplate.displayPath(installation.availablePath),
+                "enabledPath" to installation.enabledPath.toAbsolutePath().toString(),
+                "enabledPathDisplay" to enabledPathDisplay,
+                "templateWritten" to installation.templateWritten,
+                "enabledWritten" to installation.enabledWritten,
+                "restartRequired" to installation.restartRequired,
                 "message" to message,
             )
         )
