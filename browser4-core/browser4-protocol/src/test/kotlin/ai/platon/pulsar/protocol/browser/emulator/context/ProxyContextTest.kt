@@ -19,6 +19,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.parallel.Execution
+import org.junit.jupiter.api.parallel.ExecutionMode
 import org.mockito.kotlin.any
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
@@ -38,6 +40,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 @Tag("Unit")
 @Tag("Fast")
+@Execution(ExecutionMode.SAME_THREAD)
 @DisplayName("ProxyContext lifecycle and accounting")
 class ProxyContextTest {
 
@@ -45,9 +48,12 @@ class ProxyContextTest {
     private lateinit var driverContext: WebDriverContext
     private lateinit var entry: ProxyEntry
 
+    // The absence counters and the running-task gauge are process-wide companion state, so every
+    // case snapshots them and puts them back.  SAME_THREAD keeps two cases from racing over them.
     private val savedNumProxyAbsence = ProxyContext.numProxyAbsence.get()
     private val savedLastProxyAbsentTime = ProxyContext.lastProxyAbsentTime
     private val savedMaxAllowedProxyAbsence = ProxyContext.maxAllowedProxyAbsence
+    private val savedNumRunningTasks = ProxyContext.numRunningTasks.get()
 
     @BeforeEach
     fun setUp() {
@@ -65,10 +71,11 @@ class ProxyContextTest {
 
     @AfterEach
     fun tearDown() {
-        // numProxyAbsence / maxAllowedProxyAbsence are process-wide companion state.
+        // numProxyAbsence / maxAllowedProxyAbsence / numRunningTasks are process-wide companion state.
         ProxyContext.numProxyAbsence.set(savedNumProxyAbsence)
         ProxyContext.lastProxyAbsentTime = savedLastProxyAbsentTime
         ProxyContext.maxAllowedProxyAbsence = savedMaxAllowedProxyAbsence
+        ProxyContext.numRunningTasks.set(savedNumRunningTasks)
     }
 
     private fun newContext(proxyEntry: ProxyEntry? = entry): ProxyContext =
