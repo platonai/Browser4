@@ -3040,11 +3040,29 @@ pub(super) fn test_download_command(ctx: &mut E2ECtx) {
     );
 
     // Clicking the fixture link must land the file in the configured dir.
+    // The download is triggered by the browser, so the attachment is fetched
+    // over HTTP from the fixture server first — that request is the observable
+    // half of the flow when the browser runs on another host.
+    let fetches_before = ctx
+        .download_requests
+        .load(std::sync::atomic::Ordering::Relaxed);
     run_command(ctx, &["click", "#download-link"]);
 
     let target = dl_dir.join("download-me.txt");
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
+        // Against a local browser the file is the signal; wait for it to land
+        // and be non-empty.  Against a remote one it never lands here, so the
+        // fixture fetch (the first half of the download) is as far as we can
+        // wait.
+        if ctx.external_service
+            && ctx
+                .download_requests
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > fetches_before
+        {
+            break;
+        }
         if target.exists() {
             let len = target.metadata().map(|m| m.len()).unwrap_or(0);
             if len > 0 {
@@ -3053,6 +3071,32 @@ pub(super) fn test_download_command(ctx: &mut E2ECtx) {
         }
         thread::sleep(Duration::from_millis(500));
     }
+
+    if ctx.external_service {
+        // The browser runs inside the Browser4 service (Docker in CI), so
+        // `download --dir` names a directory on the *service* host and the
+        // written file never appears here.  What is still verifiable across the
+        // boundary is that the click actually started a download: the browser
+        // had to fetch the attachment from this fixture server.
+        let fetches = ctx
+            .download_requests
+            .load(std::sync::atomic::Ordering::Relaxed);
+        eprintln!(
+            "[download_command] external service: skipping the on-disk check for {} \
+             (the file lands on the service host); fixture attachment fetches: {fetches_before} → {fetches}",
+            target.display()
+        );
+        assert!(
+            fetches > fetches_before,
+            "Expected clicking #download-link to start a download (fixture attachment fetch), \
+             but {} was never requested. Service-host download dir: {}",
+            DOWNLOAD_FILE_PATH,
+            dl_dir_str
+        );
+        run_command(ctx, &["close"]);
+        return;
+    }
+
     assert!(
         target.exists(),
         "Expected the downloaded file at {} (dir listing: {:?})",
@@ -3743,15 +3787,11 @@ pub(super) fn test_frame_switch_commands(ctx: &mut E2ECtx) {
     // (The assertion accepts both failure flavors: "Frame not found" when
     // the frame is invisible to the tree, or "not reachable" on Chrome
     // builds without site isolation where it is listed but not pierceable.)
-    let fixture_port = ctx
-        .fixture_base_url
-        .rsplit(':')
-        .next()
-        .and_then(|s| s.parse::<u16>().ok())
-        .expect("fixture base url should carry a port");
+    // The listener takes its own 127.0.0.2 port and publishes it, so the
+    // fixture can embed it in the cross-origin page's iframe src.
     let _cross_server = CrossOriginFixtureServer::start(
-        fixture_port,
         load_html_fixture(FRAME_OTHER_FIXTURE_FILE),
+        ctx.cross_origin_port.clone(),
     );
     run_command(ctx, &["goto", &ctx.frame_cross_url()]);
     // Give the cross-origin iframe time to start (its element exists in the
