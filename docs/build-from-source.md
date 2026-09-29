@@ -98,6 +98,19 @@ command at a specific backend with `--server <url>` /
 `browser4-cli config set server <url>`, or disable development mode with
 `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1`.
 
+**Redirecting dev-mode output:** the working directory during `cargo run` is
+`cli/browser4-cli/`, so relative file paths in redirected output must account for it.
+Use `--quiet` to suppress cargo's `Finished` / `Running` build-status lines — they go to
+stderr but `2>&1` captures them along with the data:
+
+```bash
+# From the repo root: write query results straight to a file
+cd cli/browser4-cli && cargo run --quiet -- htmlsnapshot query --sql @../../query.sql --result-only > ../../results.json
+
+# From cli/browser4-cli/: same pattern with shorter relative paths
+cargo run --quiet -- htmlsnapshot query --sql @query.sql --result-only > results.json
+```
+
 Dev mode only ever serves the **checked-out** code: an already assembled runtime
 bundle under `browser4-apps/browser4-bundle/target/runtime-bundle/` is reused
 without rebuilding while it matches the checkout. A bundle built from a
