@@ -1081,6 +1081,45 @@ pub async fn get_crawl_result(
     send_rest_request(client.get(url)).await
 }
 
+/// Submit a search task via the MCP `search_submit` tool.
+pub async fn submit_search(
+    client: &Client,
+    base_url: &str,
+    params: &Value,
+) -> Result<String, String> {
+    call_tool(client, base_url, "search_submit", params.clone()).await
+}
+
+/// Cancel a running search task via `SearchController.cancelSearch(id)`.
+pub async fn cancel_search(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/search/{task_id}/cancel"));
+    send_rest_request(client.post(url)).await
+}
+
+/// Get the status of a search task via `SearchController.getStatus(id)`.
+pub async fn get_search_status(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/search/{task_id}/status"));
+    send_rest_request(client.get(url)).await
+}
+
+/// Get the result of a search task via `SearchController.getResult(id)`.
+pub async fn get_search_result(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/search/{task_id}/result"));
+    send_rest_request(client.get(url)).await
+}
+
 /// Get the status of a command by its task ID via the MCP endpoint.
 pub async fn get_command_status(
     client: &Client,
