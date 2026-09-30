@@ -3,6 +3,7 @@ package ai.platon.pulsar.skeleton.workflow.common
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import kotlin.test.*
+import org.junit.jupiter.api.Tag
 import oshi.SystemInfo
 import oshi.hardware.CentralProcessor.TickType
 import java.time.Instant
@@ -51,6 +52,7 @@ class TestAppSystemInfo {
     }
 
     @Test
+    @Tag("Slow")
     fun testCPULoad() {
         val systemInfo = AppSystemInfo.systemInfo ?: return
 

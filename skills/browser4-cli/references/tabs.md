@@ -1,7 +1,7 @@
 ---
 title: "Tabs — Lifecycle, GUIDs, and Extension Sessions"
 description: "Reference for tab management: tab-list / tab-new / tab-select / tab-close, stable GUID targeting, session scoping, last-tab behavior, insert-position caveats, and the extension-attached session quirks (delayed close confirmation, re-attach tab scope)."
-tier: procedure
+tier: catalog
 ---
 
 # Tabs — Lifecycle, GUIDs, and Extension Sessions
@@ -10,18 +10,24 @@ Tab commands scope to a session — all operations affect the session targeted v
 `-s <session>` (or the DEFAULT session when `-s` is omitted). `-s` is a **global** flag, so it
 always goes **before** the command: `browser4-cli -s job-42 tab-list`.
 
-## Tab lifecycle
+## Overview
 
-```
-1. LIST     browser4-cli tab-list                    # See all tabs: index, GUID, title, URL
-2. CREATE   browser4-cli tab-new [url]               # Open a new tab (about:blank if URL omitted)
-3. SWITCH   browser4-cli tab-select <index>          # Switch by index
-           browser4-cli tab-select --guid <guid>    # Switch by stable GUID
-4. CLOSE    browser4-cli tab-close <index>           # Close by index
-           browser4-cli tab-close                   # Close current tab
-           browser4-cli tab-close --guid <guid>     # Close by GUID
-5. VERIFY   browser4-cli tab-list                    # Confirm state after changes
-```
+Canonical reference for the tab command family and the behaviour behind it: stable GUID
+targeting, session scoping, last-tab handling, insert-position caveats, and the quirks of
+extension-attached sessions. Read it when a tab you expected is missing from `tab-list`, or
+before you rely on an index. The step-by-step workflow, the recipes and the error recovery
+live in [tab-management.md](tab-management.md).
+
+## Quick Index
+
+| Command | Returns | One-line description |
+|---------|---------|----------------------|
+| `tab-list` | tab table, or a JSON envelope with `output.tabs[]` and `output.count` | List the session's tabs with index, GUID, title, URL and active flag |
+| `tab-new [url]` | the new tab's GUID (the index is Chrome's choice) | Open a tab; `about:blank` when the URL is omitted |
+| `tab-select <index>` / `--guid <guid>` | — | Make a tab the active page context — re-`snapshot` afterwards |
+| `tab-close [index]` / `--guid <guid>` | — | Close a tab; closes the current tab when no target is given |
+
+All four accept `-s <session>` (DEFAULT session otherwise) and `--json`.
 
 ## Key notes
 
@@ -85,14 +91,10 @@ browser4-cli tab-new https://httpbin.org/get
 
 # Close by GUID (survives reordering)
 browser4-cli tab-close --guid 2AAA0C47D288D3943BA85D31AA8D084C
-
-# Cross-session tab operations
-browser4-cli -s ext-session tab-list
-browser4-cli -s ext-session tab-new https://example.com
-browser4-cli -s ext-session tab-select 0
 ```
 
 ## Related
 
+- [tab-management.md](tab-management.md) — the tab workflow procedures: quick start, recipes, flags, error recovery
 - [browser-modes.md](browser-modes.md) — session and browser-source choices (managed / `attach --cdp` / `attach --extension`)
 - [snapshot.md](snapshot.md) — re-capturing refs after a tab switch

@@ -3,12 +3,13 @@ package ai.platon.pulsar.agentic.tools.experience
 import kotlinx.coroutines.*
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.deleteRecursively
@@ -17,14 +18,27 @@ import kotlin.test.*
 /**
  * Tests for concurrent access to KnowledgeStore.
  *
- * Verifies that per-domain [Mutex] serialization in [KnowledgeStore.saveFacts]
- * prevents data corruption when multiple coroutines write to the same domain
- * simultaneously, while writes to different domains proceed concurrently.
+ * Verifies that concurrent writers do not corrupt or lose what they store: the
+ * per-domain [Mutex] serialization of fact writes, the file/YAML monitor around
+ * reads and publishes, and the atomic read-modify-write of experience stats.
  *
- * DISABLED: Flaky on Windows due to snakeyaml concurrency issues and
- * file-locking during atomic writes. See KnowledgeStore.writeAtomicYaml.
+ * This suite was disabled for a long time with "flaky on Windows". It was not
+ * flaky, it was three real races that each had a deterministic failure mode:
+ *
+ * 1. one shared SnakeYAML instance served `dump` and `load` with no
+ *    synchronisation → truncated documents ("expected '<document start>', but
+ *    found '<scalar>'");
+ * 2. the atomic write used a fixed `${name}.tmp` and deleted the target before
+ *    moving it, while Windows' `move(REPLACE_EXISTING)` itself falls back to
+ *    delete-then-rename → readers saw missing files and `NoSuchFileException`;
+ * 3. `updateStats` read the stats file, merged, and wrote it back with no lock
+ *    spanning the three steps → **lost updates**: ten concurrent trace saves left
+ *    `successes = 2`, silently under-counting the evidence behind confidence and
+ *    promotion.
+ *
+ * Re-enabled after all three were fixed in [KnowledgeStore]; it passes repeatedly.
  */
-@Disabled("Flaky on Windows due to snakeyaml concurrency and file-locking issues")
+@Timeout(value = 180, unit = TimeUnit.SECONDS)
 @OptIn(ExperimentalPathApi::class)
 @DisplayName("KnowledgeStore — Concurrent Access")
 class KnowledgeStoreConcurrencyTest {

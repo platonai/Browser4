@@ -7,12 +7,11 @@ import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.sse.SSE
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import io.modelcontextprotocol.kotlin.sdk.client.Client
-import io.modelcontextprotocol.kotlin.sdk.client.SseClientTransport
+import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpClientTransport
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import kotlinx.coroutines.CoroutineScope
@@ -95,16 +94,18 @@ class McpHttpServerE2ETest {
             toolManager = toolManager,
             port = testPort,
             serverInfo = Implementation(name = "browser4-e2e-http-test", version = "1.0.0"),
+            // Isolate from the process-wide CustomToolRegistry: this test asserts
+            // the exact tool set discovered from the mocked AgentToolManager.
+            customExecutors = { emptyList() },
+            frontendAliases = emptyList(),
         )
         mcpHttpServer.start()
 
-        // Connect the MCP client via Streamable HTTP
-        httpClient = HttpClient(CIO) {
-            install(SSE)
-        }
-        val transport = SseClientTransport(
+        // Connect the MCP client over the stateless Streamable HTTP transport
+        httpClient = HttpClient(CIO)
+        val transport = StreamableHttpClientTransport(
             httpClient,
-            "http://localhost:$testPort/mcp/sse",
+            "http://localhost:$testPort${McpHttpServer.MCP_ENDPOINT_PATH}",
         )
         client = Client(clientInfo = Implementation(name = "test-mcp-client", version = "1.0.0"))
         client.connect(transport)
@@ -255,6 +256,38 @@ class McpHttpServerE2ETest {
         val js = client.callTool("evaluate", mapOf("expression" to "1 + 1"))
         assertFalse(js.isError == true, "evaluate failed")
         assertEquals("42", (js.content.firstOrNull() as? TextContent)?.text)
+    }
+
+    // -------------------------------------------------------------------------
+    // Port fallback (P2.3)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("start falls back to an ephemeral port when the configured port is busy")
+    fun startFallsBackWhenConfiguredPortBusy() {
+        // P2.3 regression: a busy mcp.http.port used to leave MCP-over-HTTP
+        // unavailable (WARN only). It must bind an ephemeral port instead.
+        val blocker = ServerSocket(0)
+        try {
+            val busyPort = blocker.localPort
+            val fallbackServer = McpHttpServer(
+                toolManager = toolManager,
+                port = busyPort,
+                host = "127.0.0.1",
+                serverInfo = Implementation(name = "browser4-e2e-http-test", version = "1.0.0"),
+                customExecutors = { emptyList() },
+                frontendAliases = emptyList(),
+            )
+            try {
+                fallbackServer.start()
+                assertTrue(fallbackServer.actualPort > 0, "a port must be bound")
+                assertTrue(fallbackServer.actualPort != busyPort, "must not use the busy port")
+            } finally {
+                fallbackServer.stop()
+            }
+        } finally {
+            blocker.close()
+        }
     }
 
     // -------------------------------------------------------------------------

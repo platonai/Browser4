@@ -20,6 +20,44 @@ pub const KEYBOARD_PATH: &str = "/keyboard";
 
 pub const DRAG_PATH: &str = "/drag-test";
 
+pub const NETWORK_PATH: &str = "/network";
+
+/// Download fixture page (link to a `Content-Disposition: attachment` file).
+pub const DOWNLOAD_PATH: &str = "/download";
+
+/// Frame-switch fixture: a page embedding named same-origin iframes
+/// (payment form, secondary frame, and a nested frame host).
+pub const FRAME_PATH: &str = "/frame-switch";
+
+/// Cross-origin frame fixture: a page embedding an iframe served from a
+/// different host (localhost vs 127.0.0.1), i.e. a cross-origin / out-of-process
+/// frame that the driver can list and select but cannot operate inside.
+pub const FRAME_CROSS_PATH: &str = "/frame-cross";
+
+/// Payment form iframe content (served inside FRAME_PATH via a relative src).
+pub const FRAME_PAY_PATH: &str = "/frame-pay.html";
+
+/// Secondary iframe content (served inside FRAME_PATH via a relative src).
+pub const FRAME_OTHER_PATH: &str = "/frame-other.html";
+
+/// Nested-frame host content: hosts another iframe.
+pub const FRAME_NESTED_PATH: &str = "/frame-nested.html";
+
+/// Innermost iframe content (served inside FRAME_NESTED_PATH).
+pub const FRAME_INNER_PATH: &str = "/frame-inner.html";
+
+/// The downloadable file served by the fixture server (attachment download).
+pub const DOWNLOAD_FILE_PATH: &str = "/files/download-me.txt";
+
+/// Content of the downloadable fixture file.
+pub const DOWNLOAD_FILE_CONTENT: &str = "browser4 download fixture payload\n";
+
+/// 200 JSON endpoint served by the fixture server (fetched by the network fixture).
+pub const NETWORK_OK_ENDPOINT: &str = "/api/network-endpoint-ok.json";
+
+/// Not served by the fixture server — resolves to a 404 (fetched by the network fixture).
+pub const NETWORK_MISSING_ENDPOINT: &str = "/api/network-endpoint-missing.json";
+
 /// The console serialization probe page: it logs objects carrying getters and a Proxy prototype, so
 /// a remote client that serializes console arguments becomes observable to the page.
 pub const CONSOLE_PROBE_PATH: &str = "/console-probe";
@@ -64,12 +102,29 @@ pub const KEYBOARD_FIXTURE_FILE: &str = "mcp-tool-controller-keyboard-fixture.ht
 
 pub const DRAG_FIXTURE_FILE: &str = "drag-test.html";
 
+pub const NETWORK_FIXTURE_FILE: &str = "network-fixture.html";
+
+pub const DOWNLOAD_FIXTURE_FILE: &str = "download-test.html";
+
+pub const FRAME_FIXTURE_FILE: &str = "frame-switch.html";
+
+pub const FRAME_PAY_FIXTURE_FILE: &str = "frame-pay.html";
+
+pub const FRAME_OTHER_FIXTURE_FILE: &str = "frame-other.html";
+
+pub const FRAME_NESTED_FIXTURE_FILE: &str = "frame-nested.html";
+
+pub const FRAME_INNER_FIXTURE_FILE: &str = "frame-inner.html";
+
 pub const CONSOLE_PROBE_FIXTURE_FILE: &str = "console-probe-fixture.html";
 
 pub const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attempt
 
 pub const OUTPUT_COLLECTOR_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Default number of failing scenarios the harness tolerates before the run
+/// fails.  Overridable per run with `--max-failures=<count>`; CI gates that must
+/// not hide damage pass `--max-failures=0`.
 pub const MAX_ALLOWED_FAILED_SCENARIOS: usize = 5;
 
 pub const COVERAGE_TEST_NAME: &str = "test_e2e_command_coverage";
@@ -86,16 +141,17 @@ Scenario selection:
   --failed                          Rerun scenarios that failed in the previous run
   --group=<name>, -g                Run only scenarios in the specified group
                                     (repeatable; e.g. --group=open --group=eval)
-  --level=<BASIC|EXTENDED|ALL>, -L  Max scenario level (default: BASIC)
+  --level=<SMOKE|BASIC|EXTENDED|ALL>, -L  Max scenario level (default: BASIC)
+                                    SMOKE: critical-path only, sub-15-second gate
 
 Scenario inclusion (disabled by default):
-  --enable-batch-scenario, -b       Include batch-command scenarios
-  --enable-install-scenario, -i     Include install/upgrade scenarios
+  --enable-all, -a                  Include scenarios excluded by default
+                                    (batch-command, install/upgrade, etc.)
   --enable-stealth-scenario, -t     Include the stealth scenarios, which drive real
                                     bot-detection services over the public internet
                                     (takes minutes; also selectable with
                                     --group=stealth)
-  --batch-only                      Run only batch-command scenarios
+  --batch-only                      Run only excluded-by-default scenarios
 
 Output control:
   --list, -l                        List all scenario names (dry run)
@@ -105,6 +161,11 @@ Output control:
 
 Execution:
   --fail-fast, -F                   Stop after the first failure
+  --max-failures=<count>            Tolerate up to <count> failing scenarios
+                                    before the run fails (default: 5).  Pass 0
+                                    in CI gates that must not hide damage;
+                                    tolerated failures are printed with the
+                                    pass rate and annotated on GitHub Actions
   --force-remote-bundle, -R         Download runtime bundle from remote release
                                     (sets BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1)
   --force-rebuild-bundle            Rebuild the local runtime bundle (Maven package

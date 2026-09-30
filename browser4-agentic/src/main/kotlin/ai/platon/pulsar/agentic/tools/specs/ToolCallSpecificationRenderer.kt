@@ -31,7 +31,7 @@ enum class ToolSpecFormat {
  *
  * ## Built-in domain specs (dynamic registry)
  *
- * Executors that are part of the core agent (e.g., coding, cli) can register
+ * Executors that are part of the core agent (e.g., coding, b4) can register
  * their tool specs via [registerBuiltinDomainSpecs] so they appear in the LLM
  * prompt without being hardcoded in [ToolSpecification.TOOL_CALL_SPECIFICATION].
  * Registration is idempotent — calling it multiple times with the same domain
@@ -41,7 +41,7 @@ object ToolCallSpecificationRenderer {
 
     /**
      * Registry of tool specs for built-in domains that live outside the hardcoded
-     * [ToolSpecification.TOOL_CALL_SPECIFICATION] string (e.g., coding, cli).
+     * [ToolSpecification.TOOL_CALL_SPECIFICATION] string (e.g., coding, b4).
      *
      * Keyed by domain name; each entry is an immutable list of [ToolSpec].
      * Populated by [AgentToolManager] (or other framework code) at init time.
@@ -55,7 +55,7 @@ object ToolCallSpecificationRenderer {
      * built-in tools.  Domains already present in [ToolSpecification.TOOL_CALL_SPECIFICATION]
      * are skipped (the hardcoded version takes precedence).
      *
-     * @param domain  The domain name (e.g. "coding", "cli").
+     * @param domain  The domain name (e.g. "coding", "b4").
      * @param specs   The tool specs to expose to the LLM.
      */
     fun registerBuiltinDomainSpecs(domain: String, specs: List<ToolSpec>) {
@@ -128,6 +128,45 @@ object ToolCallSpecificationRenderer {
         }
     }
 
+    /** Page-interaction domains collapsed to a one-line summary for coding tasks. */
+    private val PAGE_DOMAINS = setOf("tab", "browser")
+
+    /** Developer domains collapsed to a one-line summary for browsing tasks. */
+    private val DEV_DOMAINS = setOf("coding", "b4")
+
+    /**
+     * Tiered, task-adaptive disclosure (design §1.2):
+     * - coding task → coding/b4/custom in full; page domains collapsed to a
+     *   one-line summary (expand via `system.help("<domain>")`).
+     * - browsing task → page/agent domains in full; dev domains collapsed.
+     * - [codingTask] == null or disclosure == "full" → flat disclosure (legacy).
+     */
+    fun renderTiered(
+        includeCustomDomains: Boolean = true,
+        codingTask: Boolean? = null,
+        disclosure: String = "tiered",
+    ): String {
+        if (codingTask == null || disclosure.equals("full", ignoreCase = true)) {
+            return render(includeCustomDomains)
+        }
+
+        val all = collectAllToolSpecs(includeCustomDomains)
+        val collapsedDomains = if (codingTask) PAGE_DOMAINS else DEV_DOMAINS
+        val included = all.filter { it.domain !in collapsedDomains }
+        val excluded = all.filter { it.domain in collapsedDomains }
+
+        if (excluded.isEmpty()) {
+            return render(included)
+        }
+
+        val domainNames = excluded.map { it.domain }.distinct().joinToString(", ")
+        val methodPreview = excluded.distinctBy { it.method }.take(8).joinToString("/") { it.method }
+        val summary = "// 其他可用工具（$domainNames）: $methodPreview 等 ${excluded.size} 个；" +
+            "需要完整签名时调用 system.help(\"$domainNames\")"
+
+        return render(included) + "\n\n" + summary
+    }
+
     /**
      * Render built-in and custom tool-call specs as JSON.
      *
@@ -141,7 +180,7 @@ object ToolCallSpecificationRenderer {
     ): String {
         val builtInSpecs = parseBuiltInSpecifications()
 
-        // Merge dynamically-registered built-in domain specs (e.g., coding, cli)
+        // Merge dynamically-registered built-in domain specs (e.g., coding, b4)
         val hardcodedDomains = ToolSpecification.BUILTIN_DOMAINS_IN_SPEC
         val extraBuiltinSpecs = builtinDomainSpecs
             .filterKeys { it !in hardcodedDomains }

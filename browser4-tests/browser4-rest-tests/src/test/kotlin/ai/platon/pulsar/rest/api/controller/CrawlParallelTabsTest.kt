@@ -35,9 +35,12 @@ import java.time.Instant
  * the probe counting unrelated requests.
  *
  * Tagged [IntegrationTest]: needs a real browser, the driver pool and the mock
- * site, so it runs in main CI + nightly (not PR CI).
+ * site, so it runs in main CI + nightly (not PR CI).  Measured 81 s for 5 tests
+ * (2026-09), hence [Heavy] and [RequiresBrowser].
  */
 @Tag("IntegrationTest")
+@Tag("Heavy")
+@Tag("RequiresBrowser")
 class CrawlParallelTabsTest : RestAPITestBase() {
 
     private val probeBase: String by lazy { "${TestUrls.MOCK_CRAWL_BASE.substringBefore("/generated")}/__probe" }
@@ -201,8 +204,12 @@ class CrawlParallelTabsTest : RestAPITestBase() {
             .returnResult()
             .responseBody
         val body = requireNotNull(raw) { "empty /__probe/stats body" }
+        // `/stats` also carries the per-id `flakyHits` map (a delivery retry is only
+        // observable from the site's side), which is not a scalar counter, so only the
+        // numeric entries are read here.  `CrawlDeliveryRetryTest.flakyHits()` reads the map.
         return jacksonObjectMapper().readValue(body, Map::class.java)
-            .entries.associate { (k, v) -> k.toString() to (v as Number).toInt() }
+            .entries.mapNotNull { (k, v) -> (v as? Number)?.let { k.toString() to it.toInt() } }
+            .toMap()
     }
 
     private fun crawlSeeds(ids: List<String>, parallelTabs: Int): CrawlResponse {
@@ -265,21 +272,23 @@ class CrawlParallelTabsTest : RestAPITestBase() {
     }
 
     /**
-     * Terminal-state wait for a single crawl.
+     * Wait for a crawl to settle.
      *
-     * This was a hard-coded 4 minutes, which a loaded CI runner ate: a healthy local
-     * run of this class finishes in ~64–91 s, while on CI the same code took 7.4x
-     * longer (class 72.7 s green → 538.1 s red) and the sequential control run hit
-     * the cap while still `PROCESSING`, failing the gate twice — see
-     * `docs-dev/copilot/ci-stabilization-4.13.x.md` §19.  10 minutes keeps roughly a
-     * 7x margin over the healthy time while staying bounded, so a genuinely stuck
-     * crawl still fails — now with the task's own account of where it stopped.
-     */
-    private val terminalWait: Duration = Duration.ofMinutes(10)
-
-    private fun waitForTerminal(taskId: String): CrawlResponse {
-        val deadline = Instant.now().plus(terminalWait)
+     * The wall-clock cap is a ceiling for a hang, not a speed assertion: on a loaded CI runner a
+     * healthy crawl fetches a page in ~80-100 s instead of ~2.6 s, and a fixed 4 minute cap then
+     * fails crawls that go on to finish normally (the recorded CI failure completed 2.5 minutes
+     * after the test gave up).  A crawl that stops moving is still caught, by the stall limit on
+     * the progress the record reports.
+     * */
+    private fun waitForTerminal(
+        taskId: String,
+        ceiling: Duration = Duration.ofMinutes(12),
+        stallLimit: Duration = Duration.ofMinutes(3)
+    ): CrawlResponse {
+        val deadline = Instant.now().plus(ceiling)
         var last: CrawlResponse? = null
+        var lastProgress = ""
+        var progressAt = Instant.now()
         while (Instant.now().isBefore(deadline)) {
             Thread.sleep(1_000)
             val raw = client.get().uri("/api/crawl/$taskId/result")
@@ -298,11 +307,19 @@ class CrawlParallelTabsTest : RestAPITestBase() {
             if (result.isTerminal()) {
                 return result
             }
+
+            val progress = progressOf(result)
+            if (progress != lastProgress) {
+                lastProgress = progress
+                progressAt = Instant.now()
+            } else if (Duration.between(progressAt, Instant.now()) > stallLimit) {
+                error("Crawl $taskId stopped making progress for $stallLimit ($progress, status ${result.status})")
+            }
         }
         // The old failure said only "last: PROCESSING", which said nothing about how
         // far the crawl got.  Report the task's own accounting instead (§19.5).
         error(
-            "Crawl $taskId did not reach a terminal state within ${terminalWait.toMinutes()} minutes: " +
+            "Crawl $taskId did not reach a terminal state within $ceiling: " +
                 (last?.describe() ?: "no result was ever returned")
         )
     }
@@ -336,4 +353,10 @@ class CrawlParallelTabsTest : RestAPITestBase() {
             ).append(']')
         }
     }
+
+    /** What the record reports about the work it has actually done so far. */
+    private fun progressOf(result: CrawlResponse): String =
+        "pagesFound=${result.pagesFound}, linksDiscovered=${result.linksDiscovered}, " +
+                "seedsSettled=${result.seedStatuses?.size ?: 0}, " +
+                "seedsSkipped=${result.seedStatuses?.count { it.status == "skipped" } ?: 0}"
 }

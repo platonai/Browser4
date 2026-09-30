@@ -1,9 +1,12 @@
 package ai.platon.pulsar.agentic.mcp.server
 
+import ai.platon.pulsar.agentic.model.RateLimit
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCallResult
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
+import ai.platon.pulsar.agentic.tools.ToolRateLimiter
+import ai.platon.pulsar.agentic.tools.ToolResultCache
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -98,7 +101,11 @@ class Browser4MCPServerTest {
 
         mcpServer = Browser4MCPServer(
             toolManager = toolManager,
-            serverInfo = Implementation(name = "browser4-test", version = "0.0.0")
+            serverInfo = Implementation(name = "browser4-test", version = "0.0.0"),
+            // Isolate from the process-wide CustomToolRegistry: this test asserts
+            // the exact tool set discovered from the mocked AgentToolManager.
+            customExecutors = { emptyList() },
+            frontendAliases = emptyList(),
         )
     }
 
@@ -158,9 +165,7 @@ class Browser4MCPServerTest {
     fun navigateToolRoutesCallThroughManager() = runBlocking {
         coEvery { toolManager.execute(any()) } returns toolCallResult(value = "Navigated to https://example.com")
 
-        val tool = mcpServer.server.tools["navigate"]!!
-        val request = buildRequest("navigate", mapOf("url" to "https://example.com"))
-        val result = tool.handler(request)
+        val result = mcpServer.invokeTool("navigate", mcpArgs("url" to "https://example.com"))
 
         assertFalse(result.isError == true, "Expected success result")
         coVerify(exactly = 1) {
@@ -171,14 +176,139 @@ class Browser4MCPServerTest {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Rate limiting (requirement 9)
+    // -------------------------------------------------------------------------
+
+    /**
+     * A server whose limiter rejects after [burst] calls, with a frozen clock so
+     * the bucket cannot refill during the test.
+     */
+    private fun serverWithSpentBucket(burst: Int = 1): Browser4MCPServer = Browser4MCPServer(
+        toolManager = toolManager,
+        serverInfo = Implementation(name = "browser4-test", version = "0.0.0"),
+        customExecutors = { emptyList() },
+        frontendAliases = emptyList(),
+        toolRateLimiter = ToolRateLimiter(
+            modeProvider = { ToolRateLimiter.Mode.ERROR },
+            overrideProvider = { mapOf("click" to RateLimit(0.001, burst), "fs_read_string" to RateLimit(0.001, burst)) },
+            clock = { 0L },
+        ),
+    )
+
+    @Test
+    @DisplayName("a throttled call is rejected with RATE_LIMITED and retryAfterMs, and never dispatched")
+    fun throttledCallIsRejected() = runBlocking {
+        coEvery { toolManager.execute(any()) } returns toolCallResult(value = "clicked")
+        val server = serverWithSpentBucket(burst = 1)
+
+        val first = server.invokeTool("click", mcpArgs("selector" to "#a"))
+        assertFalse(first.isError == true, "the burst call passes")
+
+        val second = server.invokeTool("click", mcpArgs("selector" to "#a"))
+
+        assertTrue(second.isError == true, "the second call must be throttled")
+        assertTrue(
+            second.content.first().toString().contains("RATE_LIMITED"),
+            "the text must carry the code: ${second.content}",
+        )
+        assertEquals("RATE_LIMITED", second.meta?.get("errorCode")?.toString()?.trim('"'))
+        assertNotNull(second.meta?.get("retryAfterMs"), "a client needs to know how long to wait")
+        coVerify(exactly = 1) { toolManager.execute(any()) }
+    }
+
+    @Test
+    @DisplayName("read-only tools are never throttled")
+    fun readOnlyToolsAreNotThrottled() = runBlocking {
+        coEvery { toolManager.execute(any()) } returns toolCallResult(value = "top")
+        val server = serverWithSpentBucket(burst = 1)
+
+        repeat(5) {
+            val result = server.invokeTool("scroll_to_top", mcpArgs())
+            assertFalse(result.isError == true, "scroll_to_top is read-only and unlimited")
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Result cache (requirement 10)
+    // -------------------------------------------------------------------------
+
+    /** A server with its own cache and a frozen clock, so TTLs cannot interfere. */
+    private fun serverWithCache(): Browser4MCPServer = Browser4MCPServer(
+        toolManager = toolManager,
+        serverInfo = Implementation(name = "browser4-test", version = "0.0.0"),
+        customExecutors = { emptyList() },
+        frontendAliases = emptyList(),
+        toolResultCache = ToolResultCache(
+            enabledProvider = { true },
+            ttlMultiplierProvider = { 1.0 },
+            maxEntriesProvider = { 100 },
+            clock = { 0L },
+        ),
+    )
+
+    @Test
+    @DisplayName("a repeated read is served from the cache and the tool runs once")
+    fun repeatedReadIsCached() = runBlocking {
+        coEvery { toolManager.execute(any()) } returns toolCallResult(value = "Current URL")
+        val server = serverWithCache()
+
+        val first = server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+        assertFalse(first.isError == true)
+        assertNull(first.meta?.get("cached"), "the first answer was not cached")
+
+        val second = server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+
+        assertFalse(second.isError == true)
+        assertEquals("true", second.meta?.get("cached")?.toString(), "the second answer must be marked cached")
+        assertNotNull(second.meta?.get("ageMs"))
+        assertEquals(
+            second.content.first().toString(), first.content.first().toString(),
+            "a cached answer is the same answer",
+        )
+        coVerify(exactly = 1) { toolManager.execute(any()) }
+    }
+
+    @Test
+    @DisplayName("a page action invalidates the cached reads of that session")
+    fun pageActionInvalidatesTheCache() = runBlocking {
+        coEvery { toolManager.execute(any()) } returns toolCallResult(value = "text")
+        val server = serverWithCache()
+
+        server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+        val cached = server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+        assertEquals("true", cached.meta?.get("cached")?.toString())
+
+        // A click may have changed the page.
+        server.invokeTool("click", mcpArgs("selector" to "#a"))
+
+        val afterAction = server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+        assertNull(afterAction.meta?.get("cached"), "the read must run again after a state change")
+        coVerify(exactly = 3) { toolManager.execute(any()) }
+    }
+
+    @Test
+    @DisplayName("cache:false bypasses the cache for one call")
+    fun cacheFalseBypassesTheCache() = runBlocking {
+        coEvery { toolManager.execute(any()) } returns toolCallResult(value = "text")
+        val server = serverWithCache()
+
+        server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+        val fresh = server.invokeTool("get_text", mcpArgs("selector" to "#a", "cache" to "false"))
+
+        assertNull(fresh.meta?.get("cached"), "the caller asked for the real thing")
+        coVerify(exactly = 2) { toolManager.execute(any()) }
+    }
+
     @Test
     @DisplayName("fs_write_string tool handler routes call through AgentToolManager.execute")
     fun fsWriteStringRoutesCallThroughManager() = runBlocking {
         coEvery { toolManager.execute(any()) } returns toolCallResult(value = "OK")
 
-        val tool = mcpServer.server.tools["fs_write_string"]!!
-        val request = buildRequest("fs_write_string", mapOf("filename" to "out.txt", "content" to "hello"))
-        val result = tool.handler(request)
+        val result = mcpServer.invokeTool(
+            "fs_write_string",
+            mcpArgs("filename" to "out.txt", "content" to "hello"),
+        )
 
         assertFalse(result.isError == true)
         coVerify(exactly = 1) {
@@ -194,8 +324,7 @@ class Browser4MCPServerTest {
     fun toolHandlerReturnsResultValue() = runBlocking {
         coEvery { toolManager.execute(any()) } returns toolCallResult(value = "navigated")
 
-        val tool = mcpServer.server.tools["navigate"]!!
-        val result = tool.handler(buildRequest("navigate", mapOf("url" to "https://example.com")))
+        val result = mcpServer.invokeTool("navigate", mcpArgs("url" to "https://example.com"))
 
         assertFalse(result.isError == true)
         val text = (result.content.firstOrNull() as? TextContent)?.text
@@ -211,8 +340,7 @@ class Browser4MCPServerTest {
     fun toolHandlerReturnsErrorOnManagerException() = runBlocking {
         coEvery { toolManager.execute(any()) } throws RuntimeException("driver crashed")
 
-        val tool = mcpServer.server.tools["navigate"]!!
-        val result = tool.handler(buildRequest("navigate", mapOf("url" to "https://example.com")))
+        val result = mcpServer.invokeTool("navigate", mcpArgs("url" to "https://example.com"))
 
         assertTrue(result.isError == true, "Expected error result when manager throws")
         val text = (result.content.firstOrNull() as? TextContent)?.text
@@ -228,8 +356,7 @@ class Browser4MCPServerTest {
         )
         coEvery { toolManager.execute(any()) } returns toolCallResult(evaluate = evaluate)
 
-        val tool = mcpServer.server.tools["navigate"]!!
-        val result = tool.handler(buildRequest("navigate", mapOf("url" to "https://bad.url")))
+        val result = mcpServer.invokeTool("navigate", mcpArgs("url" to "https://bad.url"))
 
         assertTrue(result.isError == true, "Expected error result when TcEvaluate has exception")
     }

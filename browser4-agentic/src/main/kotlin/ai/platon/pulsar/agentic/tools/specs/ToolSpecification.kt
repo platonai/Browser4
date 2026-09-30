@@ -36,22 +36,13 @@ tab.delay(millis: Long)
 // domain: browser
 browser.switchTab(tabId: String): Int
 browser.closeTab(tabId: String)
-
-// domain: fs
-fs.writeString(filename: String, content: String)
-fs.readString(filename: String): String
-fs.append(filename: String, content: String)
-fs.replaceContent(filename: String, oldStr: String, newStr: String): String
-fs.fileExists(filename: String): String
-fs.getFileInfo(filename: String): String
-fs.deleteFile(filename: String): String
-fs.copyFile(source: String, dest: String): String
-fs.moveFile(source: String, dest: String): String
-fs.listFiles(): String
+browser.newTab(url: String = "about:blank"): Map<String, String>
+browser.listTabs(): List<Map<String, String>>
 
 // domain: agent
 agent.extract(instruction: String, schema: String): String // Extract data with given JSON schema
 agent.summarize(instruction: String?, selector: String?): String // Extract textContent and generate a summary
+agent.observe(instruction: String): String                 // observe the current page following the instruction
 
 // domain: system
 system.help(domain: String): String                        // get help for tool calls in a domain
@@ -74,8 +65,15 @@ system.help(domain: String, method: String): String        // get help for a too
      * The set of domain names that already have their tool specs hardcoded in
      * [TOOL_CALL_SPECIFICATION].  Used by [ToolCallSpecificationRenderer] to decide
      * which dynamically-registered domain specs are supplementary vs. duplicates.
+     *
+     * NOTE: the legacy `fs` domain (fs.writeString etc.) is intentionally NOT
+     * listed/advertised here — its executor is deprecated and unregistered, so
+     * advertising it only makes agents attempt calls that fail with
+     * "Unsupported receiver class".  Agents must use the `coding.*` tools
+     * (coding.read/write/append/replace/listDir/glob/grep/...) instead, which
+     * operate on the configurable coding workspace.
      */
-    val BUILTIN_DOMAINS_IN_SPEC: Set<String> = setOf("tab", "browser", "fs", "agent", "system")
+    val BUILTIN_DOMAINS_IN_SPEC: Set<String> = setOf("tab", "browser", "agent", "system")
 
     /**
      * Domains whose actions directly interact with the browser page and may change its visual state.
@@ -92,9 +90,12 @@ system.help(domain: String, method: String): String        // get help for a too
      * webpage and therefore do not require fresh screenshots or page-state comparisons.
      */
     fun isBrowserInteraction(domain: String?): Boolean {
-        // Default to true for safety: ensures screenshots are captured when the domain is
-        // unknown or on the first step where no previous action exists.
-        if (domain.isNullOrBlank()) return true
+        // A null/blank domain means "no tool call was attempted" (e.g. the model returned
+        // plain text, or the previous state had no action at all). That cannot be a browser
+        // interaction: it does not change the page, must not count as a no-op, and does not
+        // require a fresh screenshot. Callers that need the "first step / unknown domain"
+        // safety (e.g. initial screenshot) must handle it explicitly.
+        if (domain.isNullOrBlank()) return false
         return BROWSER_INTERACTION_DOMAINS.contains(domain.lowercase())
     }
 }

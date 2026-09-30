@@ -99,6 +99,88 @@ sufficient; each gate below has burned this project before.
 | `cdp-protocol` | Chrome DevTools Protocol JSON definitions |
 | `coworker/` | File-queue automation for task-driven AI workflows |
 
+## Development Environment (Running from Source)
+
+When developing or running the CLI from the source tree (not an installed
+binary), the following applies.
+
+### Invocation wrappers
+
+| Shell | Command | Notes |
+|-------|---------|-------|
+| PowerShell (Windows) | `./b4w.ps1 <command>` | Primary dev wrapper; builds from source if needed |
+| Git Bash (Windows) | `./b4w.sh <command>` | Quotes args automatically for pwsh safety |
+| Git Bash (alt) | `pwsh ./b4w.ps1 <command>` | Direct PowerShell invocation |
+| Linux / macOS | `./b4w.sh <command>` | Same script works cross-platform |
+| Any (installed) | `browser4-cli <command>` | After `browser4-cli install` |
+
+> **Important:** The `$(./b4w.ps1) <command>` syntax shown in some task
+> instructions does **not** work in bash — `$(…)` is command substitution, not
+> invocation. Use `pwsh ./b4w.ps1 <command>` or `./b4w.sh <command>` instead.
+
+### First-run latency from a source tree
+
+The first launch builds the runtime bundle via Maven (~1–3 min, before the
+spinner appears) and then starts the Browser4 backend (Spring Boot + JVM,
+~10s). Subsequent commands are instant — the server stays alive between
+invocations. The spinner shows stage-level progress (JVM → Spring Boot → MCP
+tools).
+
+### Prerequisites for development
+
+- **[Rust](https://rustup.rs/)** — via `rustup`; needed to compile the CLI binary.
+- **Java 25+** — required by the Browser4 backend server.
+- **[Git](https://git-scm.com/)** — for cloning the repository.
+
+Verify your setup with:
+
+```bash
+cargo --version && java -version
+```
+
+### Running the CLI from source
+
+When running from source (not a globally installed binary), use `cargo run`
+from the CLI directory:
+
+```bash
+cd cli/browser4-cli
+cargo build                     # build the binary
+cargo run -- <command>          # run a command (the -- separates cargo args from CLI args)
+cargo run -- goto "https://example.com"
+cargo run -- snapshot -v 0
+```
+
+**Note:** All docs use `browser4-cli` as the generic command name. If running
+from source, substitute `cargo run --` (with the leading
+`cd cli/browser4-cli &&` if not already in that directory).
+
+**From repo root (no `cd` required):**
+
+```bash
+cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>
+```
+
+This pattern works from any directory — no need to `cd` first.
+
+### Output Redirection in Dev Mode
+
+The working directory during `cargo run` is `cli/browser4-cli/`, so relative
+file paths must account for this. Use `--quiet` to suppress cargo build output:
+
+```bash
+# From repo root: redirect query results to a file
+cd cli/browser4-cli && cargo run --quiet -- htmlsnapshot query --sql @../../query.sql --result-only > ../../results.json
+
+# From cli/browser4-cli/: same pattern with shorter relative paths
+cargo run --quiet -- htmlsnapshot query --sql @query.sql --result-only > results.json
+```
+
+> **Tip:** `--quiet` passes through to cargo and suppresses the "Finished" /
+> "Running" build-status lines that would otherwise pollute the output file.
+> Without `--quiet`, those lines appear on stderr but `2>&1` captures them
+> along with the data — use `--quiet` instead of `2>&1` for clean output.
+
 ## Build & Test
 
 ### Quick commands
@@ -131,11 +213,11 @@ Maven profile switches in root `pom.xml`: `-DrunITs=true`, `-DrunE2ETests=true`,
 cargo test --test e2e -- --help           # All options
 --scenario <pattern>                      # Glob filter
 --group <name>                            # Group filter (repeatable)
---level BASIC|EXTENDED|ALL                # Test depth
+--level SMOKE|BASIC|EXTENDED|ALL          # Test depth
 --fail-fast / --failed                    # Stop early / rerun failures
+--max-failures <count>                    # Tolerated failing scenarios (default 5, 0 = none)
 --list / --list-groups                    # Discover without running
---enable-install-scenario                 # Opt into install tests
---enable-batch-scenario                   # Opt into batch tests
+--enable-all                              # Opt into excluded-by-default tests
 --force-rebuild-bundle                    # Force local Maven + runtime rebuild
 --force-remote-bundle                     # Download pre-built bundle instead
 ```
@@ -145,11 +227,13 @@ cargo test --test e2e -- --help           # All options
 | Scope | Path |
 |---|---|
 | Unit tests | `src/test/kotlin/...` |
-| Integration | `browser4-tests/pulsar-it-tests/` |
-| E2E | `browser4-tests/pulsar-e2e-tests/` |
 | REST integration/E2E | `browser4-tests/browser4-rest-tests/` |
 | Shared utilities | `browser4-tests/pulsar-tests-common/` |
 | Rust E2E | `cli/browser4-cli/tests/e2e/` |
+
+> **Note:** The former integration/E2E suites in `pulsar-it-tests` and `pulsar-e2e-tests`
+> have been migrated into the base library (browser4-core modules and
+> `pulsar-tests-common`); the placeholder modules have been removed from this repo.
 
 ## Code Style
 
@@ -185,7 +269,12 @@ logger.info("Task {} finished in {} ms", taskId, cost)  // placeholders, never c
 | PR Quality Gate | `.github/workflows/pr.yml` | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,Heavy,HeavyTest,Integration,IntegrationTest,RequiresServer,RequiresBrowser,RequiresDocker,TestInfraCheck` | fast/unit only (`run_pulsar_tests: 'false'`) |
 | CI/CD Pipeline (main + release tags) | `.github/workflows/ci.yml` | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck` | adds integration/infra tests that need Chrome, Docker and the started app |
 
-Both gates pass `-Dsurefire.excludes=**integration**` (class-file pattern, not tags) and both derive success from the surefire XML totals — a test class is skipped by **tag**, never by name. `SDK` is excluded by neither gate (no test carries that tag today); `Heavy` is excluded only by the PR gate, `HeavyTest` by both. `.github/workflows/ci.yml` also builds all-main-modules, starts a Dockerized app on port 18182 and runs `cargo test` in `cli/browser4-cli`.
+Both gates pass `-Dsurefire.excludes=**integration**` (class-file pattern, not tags) and both derive success from **the Maven exit code plus the surefire XML totals** — the exit code is authoritative (`reconcile-status` in `.github/actions/run-tests/action.yml` refuses to turn a non-zero exit into a pass, and refuses a pass when no XML was produced at all), so a breached JaCoCo floor, a compile error or a dead test fork fails the gate even with zero parsed test failures. A test class is skipped by **tag**, never by name. `SDK` is excluded by neither gate (no test carries that tag today); `Heavy` is excluded only by the PR gate, `HeavyTest` by both. `.github/workflows/ci.yml` also builds all-main-modules, starts a Dockerized app on port 18182 and runs `cargo test` in `cli/browser4-cli`.
+
+Neither `ci.yml` nor `nightly.yml` fails early any more: `Check Test Status` only records `MAVEN_TESTS_FAILED` in `$GITHUB_ENV`, the Docker build / app startup / CLI e2e stages still run, and a final `Enforce CI Gate` / `Enforce Nightly Gate` step (after `Pipeline Summary`) decides the job outcome from the JVM stage flag plus the CLI e2e outcome. So one round reports both sides instead of hiding the CLI suite behind a single broken JVM test.
+
+The nightly gate (`.github/workflows/nightly.yml`, 00:00 UTC) is a superset: it adds `Slow`/`HeavyTest`/`TestInfraCheck`, measures JaCoCo in observe-only mode
+(`-P...,quality-gate -Djacoco.check.skip=true`, no floor), runs `cargo test --bin browser4-cli --lib` (the only place the Rust unit tests run), runs the CLI e2e suite with `--level=EXTENDED --enable-all --max-failures=0`, and defers the job outcome to a final `Enforce Nightly Gate` step so a failing JVM test never skips the CLI e2e stage. See [TESTING.md § CI 门禁实际覆盖](docs/TESTING.md) for the current coverage inventory.
 See [CI stabilization notes](docs-dev/copilot/ci-stabilization-4.13.x.md) before changing either list.
 
 ## Configuration
@@ -197,6 +286,35 @@ See [CI stabilization notes](docs-dev/copilot/ci-stabilization-4.13.x.md) before
 - LLM providers configured via env vars: `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `VOLCENGINE_API_KEY`, `OPENAI_API_KEY`
 
 ## Development Patterns
+
+### CLI command naming: spaced form preferred
+
+New CLI commands must use the **spaced name** style (`verb noun`) — e.g.
+`swarm submit`, `htmlsnapshot get`, `profiles list`, `plugin <domain>` — to
+stay consistent with every other prefixed command. Internally the CLI is
+kebab-case (`swarm-submit`); users type the spaced form, which
+`rewrite_prefixed_command()` (main.rs) rewrites to the internal kebab name.
+
+When adding a prefixed command:
+
+1. `CommandDef.name` stays kebab-case (the internal dispatch name).
+2. Register the prefix in `rewrite_prefixed_command()` so `prefix sub` →
+   `prefix-sub`. If the prefix also works standalone (`crawl`, `webdb`,
+   `doctor`, `webminer`, …), gate it with a `known_subs` allowlist so bare
+   usage and positional args pass through untouched.
+3. Register the kebab form in `preferred_spaced_command_form()` (and the bare
+   prefix in `preferred_prefixed_group_form()` when the bare prefix is
+   invalid) so users get a "Use 'browser4-cli prefix sub' instead" hint.
+4. Single-word commands without subcommands (`goto`, `close`, `eval`, …) stay
+   bare kebab — no prefix, no spaced form.
+5. Plugin tool domains are already invoked spaced as `plugin <domain> <method>`
+   (dynamic discovery via `/mcp/tools`, no registration needed).
+6. Plugins can declare a **named CLI command** without any CLI change: set
+   `ToolSpec.cliName` (spaced form, e.g. `"profile import"`) on the tool spec.
+   The CLI discovers these from `GET /mcp/tools/specs` at startup and renders
+   them as first-class commands with argument parsing (`browser4-cli profile
+   import --source chrome`). No `CommandDef` needed — the spec's `arguments`
+   define the `--key value` options.
 
 ### Adding a `browser4-cli` command
 
@@ -228,7 +346,7 @@ Category `Category::Snapshot`:
 
 After changing `cli/browser4-cli/src/daemon.rs`, run install-scenario e2e tests:
 ```bash
-cargo test --test e2e -- --nocapture --level ALL --enable-install-scenario --scenario '*install*'
+cargo test --test e2e -- --nocapture --level EXTENDED --enable-all --scenario '*install*'
 ```
 
 ## PowerShell Cross-Platform Compatibility
@@ -263,9 +381,10 @@ File-queue system for task-driven AI workflows (`coworker/`). Task files (Markdo
 |---|---|
 | `.ps1` scripts don't run on Linux | `sudo apt-get install -y powershell`, then `pwsh script.ps1` |
 | `mvnw` no execute permission | `chmod +x mvnw` |
-| JDK version mismatch | JDK 17+ in `JAVA_HOME` |
+| JDK version mismatch | JDK 25+ in `JAVA_HOME` |
 | Windows parameter escaping | `-D"key.with.dots=value"` |
 | Port 18182 in use | Override `server.port` in root `application.properties` |
+| JaCoCo reports empty / coverage floor never trips | The surefire `argLine` in the root `pom.xml` must use late binding `@{jacocoArgLine}`, never `${jacocoArgLine}`: the property is declared empty, so `${...}` is substituted to `""` while the effective model is built — before `prepare-agent` sets it — and the agent never attaches (`Skipping JaCoCo execution due to missing execution data file`). Verify with `mvn -X -Pquality-gate -pl :browser4-common test` and look for `-javaagent:` on the surefire fork command line |
 | BrowserProtocol retry log storms | Use existing retry utilities, lower log level |
 
 ## Documentation Update Rule

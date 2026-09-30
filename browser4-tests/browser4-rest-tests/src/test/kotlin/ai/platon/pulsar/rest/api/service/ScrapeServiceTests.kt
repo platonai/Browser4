@@ -13,7 +13,7 @@ import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.api.common.MockEcServerTestBase
 import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
 import ai.platon.pulsar.test.server.MockServerPorts
-import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.DisplayName
 import org.springframework.beans.factory.annotation.Autowired

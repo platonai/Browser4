@@ -157,11 +157,12 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
 /// The boolean set is used by `parse_raw_args` to avoid consuming the next
 /// argument as a value for boolean flags (e.g. `-i` should not consume
 /// `"search"` in `snapshot grep -i "search"`).
-///
 /// Both collections hold machine keys: [`OptionDef::key`] strips an
 /// embedded help placeholder (`"max-files <n>"` → `"max-files"`) so the
 /// parsed argument map always uses the bare flag name.
-pub fn build_short_option_map(options: &[crate::commands::OptionDef]) -> (HashMap<String, String>, HashSet<String>) {
+pub fn build_short_option_map(
+    options: &[crate::commands::OptionDef],
+) -> (HashMap<String, String>, HashSet<String>) {
     let mut map = HashMap::new();
     let mut bool_opts = HashSet::new();
     for opt in options {
@@ -341,6 +342,33 @@ fn looks_like_negative_value(token: &str) -> bool {
             .all(|c| c.is_ascii_digit() || c == '-' || c == '.' || c == ',')
 }
 
+/// A token that is a known global flag mistakenly placed after the command
+/// name (e.g. `htmlsnapshot -q`).  Used to produce a targeted error hint
+/// instead of a bare "unexpected positional arguments" rejection.
+fn is_global_flag_token(token: &str) -> bool {
+    matches!(
+        token,
+        "-q" | "--quiet"
+            | "--json"
+            | "--pretty"
+            | "--show-tip"
+            | "-tip"
+            | "--help-json"
+            | "--timeout"
+    ) || token.starts_with("--timeout=")
+}
+
+/// Build the hint appended to "unexpected positional arguments" errors when
+/// any offending token is a global flag.
+fn global_flag_hint(tokens: &[&String]) -> String {
+    if tokens.iter().any(|t| is_global_flag_token(t)) {
+        " (global flags must appear before the command, e.g. 'browser4-cli -q htmlsnapshot')"
+            .to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// Build the argument map for the `upload` command.
 ///
 /// Upload accepts a target ref followed by ONE OR MORE file paths
@@ -417,9 +445,10 @@ pub fn build_command_args(
     };
 
     if positional.len() > arg_names.len() && arg_names.is_empty() {
+        let hint = global_flag_hint(&positional.iter().collect::<Vec<_>>());
         return Err(format!(
-            "error: unexpected positional arguments (this command accepts none): {:?}",
-            &positional
+            "error: unexpected positional arguments (this command accepts none): {:?}{}",
+            &positional, hint
         ));
     }
 
@@ -460,10 +489,12 @@ pub fn build_command_args(
                     .map(|(_, t)| t)
                     .collect();
                 if !offending.is_empty() {
+                    let hint = global_flag_hint(&offending);
                     return Err(format!(
-                        "error: unexpected positional arguments (this command accepts {}): {:?}",
+                        "error: unexpected positional arguments (this command accepts {}): {:?}{}",
                         arg_names.len(),
-                        &offending
+                        &offending,
+                        hint
                     ));
                 }
                 result.insert(name.to_string(), json!(positional[i..].join(" ")));
@@ -709,7 +740,16 @@ mod tests {
         assert_eq!(flags.session_name, None);
         assert_eq!(
             flags.args,
-            vec!["loop", "--count", "2", "--", "-s", "price-watch", "eval", "1+1"]
+            vec![
+                "loop",
+                "--count",
+                "2",
+                "--",
+                "-s",
+                "price-watch",
+                "eval",
+                "1+1"
+            ]
         );
     }
 
@@ -725,10 +765,7 @@ mod tests {
         let flags = parse_global_flags(&argv);
 
         assert_eq!(flags.session_name, None);
-        assert_eq!(
-            flags.args,
-            vec!["loop", "--", "-s=price-watch", "eval"]
-        );
+        assert_eq!(flags.args, vec!["loop", "--", "-s=price-watch", "eval"]);
     }
 
     #[test]
@@ -841,8 +878,12 @@ mod tests {
         .into_iter()
         .collect();
         let bool_opts: HashSet<String> = [
-            "ignore-case", "invert-match", "count", "fixed-strings",
-            "word-regexp", "files-with-matches",
+            "ignore-case",
+            "invert-match",
+            "count",
+            "fixed-strings",
+            "word-regexp",
+            "files-with-matches",
         ]
         .into_iter()
         .map(String::from)
@@ -861,7 +902,11 @@ mod tests {
         let pos = map["_"].as_array().unwrap();
         assert_eq!(pos.len(), 2, "expected 2 positionals: command + pattern");
         assert_eq!(pos[0].as_str(), Some("snapshot-grep"));
-        assert_eq!(pos[1].as_str(), Some("search"), "pattern should be 'search', not consumed by -i");
+        assert_eq!(
+            pos[1].as_str(),
+            Some("search"),
+            "pattern should be 'search', not consumed by -i"
+        );
     }
 
     #[test]
@@ -894,8 +939,9 @@ mod tests {
     fn test_parse_raw_args_short_option_consumes_negative_numeric_value() {
         // `snapshot -v -1` — the negative, scroll-relative viewport index must be
         // consumed as -v's value, not treated as a boolean flag.
-        let short_to_long: HashMap<String, String> =
-            [("v".to_string(), "viewport".to_string())].into_iter().collect();
+        let short_to_long: HashMap<String, String> = [("v".to_string(), "viewport".to_string())]
+            .into_iter()
+            .collect();
         let bool_opts: HashSet<String> = HashSet::new();
 
         let raw = vec!["snapshot".to_string(), "-v".to_string(), "-1".to_string()];
@@ -909,14 +955,19 @@ mod tests {
 
     #[test]
     fn test_parse_raw_args_short_option_consumes_negative_range_and_list() {
-        let short_to_long: HashMap<String, String> =
-            [("v".to_string(), "viewport".to_string())].into_iter().collect();
+        let short_to_long: HashMap<String, String> = [("v".to_string(), "viewport".to_string())]
+            .into_iter()
+            .collect();
         let bool_opts: HashSet<String> = HashSet::new();
 
         for spec in ["-1-3", "-1,2", "-3.5"] {
             let raw = vec!["snapshot".to_string(), "-v".to_string(), spec.to_string()];
             let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
-            assert_eq!(map.get("viewport"), Some(&json!(spec)), "spec {spec} should be consumed as value");
+            assert_eq!(
+                map.get("viewport"),
+                Some(&json!(spec)),
+                "spec {spec} should be consumed as value"
+            );
         }
     }
 
@@ -976,7 +1027,42 @@ mod tests {
         raw.insert("_".to_string(), json!(["cmd", "a"]));
         let result = build_command_args(&raw, &[], &[]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unexpected positional arguments"));
+        assert!(result
+            .unwrap_err()
+            .contains("unexpected positional arguments"));
+    }
+
+    #[test]
+    fn test_global_flag_rejection_carries_position_hint() {
+        // When the stray token is a known global flag, the error must point at
+        // the placement rule instead of leaving the user with a bare
+        // "unexpected positional arguments" rejection.
+        let mut raw = HashMap::new();
+        raw.insert("_".to_string(), json!(["htmlsnapshot", "-q"]));
+        let result = build_command_args(&raw, &[], &[]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("global flags must appear before the command"),
+            "error should hint at the placement rule: {err}"
+        );
+
+        // The hint also rides on the flag-aware "accepts N" path.
+        let mut raw_flag = HashMap::new();
+        raw_flag.insert("_".to_string(), json!(["goto", "http://example.com/page", "--quiet"]));
+        let err_flag = build_command_args(&raw_flag, &["url"], &[]).unwrap_err();
+        assert!(
+            err_flag.contains("global flags must appear before the command"),
+            "error should hint at the placement rule: {err_flag}"
+        );
+
+        // Non-flag-like stray positionals don't get the hint.
+        let mut raw2 = HashMap::new();
+        raw2.insert("_".to_string(), json!(["htmlsnapshot", "extra"]));
+        let result2 = build_command_args(&raw2, &[], &[]);
+        assert!(!result2
+            .unwrap_err()
+            .contains("global flags must appear before the command"));
     }
 
     #[test]
@@ -1410,11 +1496,9 @@ mod tests {
     #[test]
     fn test_parse_raw_args_repeatable_non_boolean_option_collected_to_array() {
         // -e price -e rating -e stars should produce regexp: ["price", "rating", "stars"]
-        let short_to_long: HashMap<String, String> = [
-            ("e".to_string(), "regexp".to_string()),
-        ]
-        .into_iter()
-        .collect();
+        let short_to_long: HashMap<String, String> = [("e".to_string(), "regexp".to_string())]
+            .into_iter()
+            .collect();
         // -e is NOT boolean — it takes a value
         let bool_opts: HashSet<String> = HashSet::new();
 
@@ -1437,11 +1521,9 @@ mod tests {
     #[test]
     fn test_parse_raw_args_repeatable_boolean_flag_not_collected() {
         // -i -i should still be ignore-case: true (not [true, true])
-        let short_to_long: HashMap<String, String> = [
-            ("i".to_string(), "ignore-case".to_string()),
-        ]
-        .into_iter()
-        .collect();
+        let short_to_long: HashMap<String, String> = [("i".to_string(), "ignore-case".to_string())]
+            .into_iter()
+            .collect();
         let bool_opts: HashSet<String> = ["ignore-case".to_string()].into_iter().collect();
 
         let raw = vec![
@@ -1456,11 +1538,9 @@ mod tests {
     #[test]
     fn test_parse_raw_args_single_non_boolean_option_not_array() {
         // A single -e should still be a string, not an array
-        let short_to_long: HashMap<String, String> = [
-            ("e".to_string(), "regexp".to_string()),
-        ]
-        .into_iter()
-        .collect();
+        let short_to_long: HashMap<String, String> = [("e".to_string(), "regexp".to_string())]
+            .into_iter()
+            .collect();
         let bool_opts: HashSet<String> = HashSet::new();
 
         let raw = vec![

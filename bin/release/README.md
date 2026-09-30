@@ -118,11 +118,14 @@ checks and previews the tag and release notes; it never creates or pushes anythi
   is available. The tag message (What's New + curated sections) is also
   prepended into the GitHub Release body by `release.yml`.
 - Supports `-remote`, `-message`, `-Apply`, `-DryRun`, and `-Agent`.
-- **Non-interactive hosts (CI/automation)**: set `BROWSER4_RELEASE_ASSUME_YES=1`
+- **Non-interactive hosts (CI/automation)**: set `BROWSER4_RELEASE_YES=1`
   to auto-confirm every interactive prompt (Read-Host throws in
-  NonInteractive PowerShell). Pairs with `monitor-release.ps1 -NoWatch`.
-  The release-message prompt auto-skips, producing a lightweight tag unless
-  `-message` is given.
+  NonInteractive PowerShell). Pairs with `monitor-release.ps1 -NoWatch`,
+  which triggers this script in-process — so the same variable covers the
+  whole release run. The release-message prompt auto-skips, producing a
+  lightweight tag unless `-message` is given. The pre-rename name
+  `BROWSER4_RELEASE_ASSUME_YES` is still honoured as a legacy alias (with a
+  migration warning); `BROWSER4_RELEASE_YES` wins when both are set.
 
 ```
 .\bin\release\trigger-release.ps1                             # dry run (preview)
@@ -162,6 +165,9 @@ actually trigger and monitor.
 - Supports `-NoWatch` for non-interactive terminals (polls via `gh run list`/`gh run view`).
   The poll loop retries transient `gh` failures (10 attempts) and can be bounded with
   `-MaxMonitorMinutes` (default 0 = unlimited) so a stuck workflow run can't hang forever.
+  On a non-interactive host, also set `BROWSER4_RELEASE_YES=1`: this script
+  invokes `trigger-release.ps1` in-process, and that variable is what makes the
+  trigger's confirmations auto-answer (see the trigger-release section above).
 - Supports `-Apply`, `-DryRun`, `-Agent`, `-SkipVersionBump`, and `-MaxMonitorMinutes`.
 
 ```
@@ -225,3 +231,18 @@ Invoke-Pester .\bin\release\tests\monitor-release.tests.ps1
 6. Run `.\bin\release\monitor-release.ps1 -Apply` (or `node bin/version.mjs bump patch`)
    to bump the version for the next bug-fix cycle. main is never rewritten to
    match the tag; it simply moves forward with the next `-SNAPSHOT` version.
+
+## Release Testing Division (no duplicated smoke tests)
+
+The multi-platform runtime smoke test lives in **exactly one place** —
+`release.yml`'s `smoke-test-runtime-bundle` job (Windows x64 / Linux x64 /
+macOS ARM64), which downloads the release's runtime-bundle artifacts and
+runs `cli/scripts/smoke-test-runtime-bundle.sh` against them. It is a
+mandatory gate for `publish-github-release`.
+
+- The former `cross-platform-smoke.yml` was an exact duplicate of that job
+  (same script, same matrix) and has been removed — do not re-add it.
+- Additional coverage in the release path: full CLI E2E suite (Linux, inside
+  `build-core-and-docker`) and install-script tests (Linux + Windows).
+- `release-cli.yml` (the `v*-cli` tag flow) keeps its own native
+  Linux/macOS/Windows E2E matrix for CLI-only releases.

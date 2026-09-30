@@ -58,11 +58,14 @@ fn read_version(path: &std::path::Path) -> Option<String> {
 fn find_skills_dir() -> Option<PathBuf> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").ok()?);
     let candidate = manifest_dir
-        .parent()?   // cli/
-        .parent()?   // repo root
+        .parent()? // cli/
+        .parent()? // repo root
         .join("skills");
     if candidate.is_dir() {
-        println!("cargo:rerun-if-changed={}", candidate.join("browser4-cli").display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            candidate.join("browser4-cli").display()
+        );
         Some(candidate)
     } else {
         None
@@ -96,15 +99,17 @@ fn collect_skill_files(skills_dir: &Path) -> Vec<(String, String, String)> {
     files
 }
 
-fn collect_files_recursive(skills_dir: &Path, dir: &Path, skill_name: &str, out: &mut Vec<(String, String, String)>) {
+fn collect_files_recursive(
+    skills_dir: &Path,
+    dir: &Path,
+    skill_name: &str,
+    out: &mut Vec<(String, String, String)>,
+) {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
     };
-    let mut children: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .collect();
+    let mut children: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
     children.sort();
     for path in children {
         if path.is_dir() {
@@ -172,15 +177,9 @@ fn generate_skills_data(skills_dir: &Path, out_dir: &Path) {
         for (skill_name, rel_path, content) in &files {
             let escaped = escape_for_rust_string(content);
             code.push_str("    SkillFile {\n");
-            code.push_str(&format!(
-                "        skill_name: \"{}\",\n", skill_name
-            ));
-            code.push_str(&format!(
-                "        rel_path: \"{}\",\n", rel_path
-            ));
-            code.push_str(&format!(
-                "        content: \"{}\",\n", escaped
-            ));
+            code.push_str(&format!("        skill_name: \"{}\",\n", skill_name));
+            code.push_str(&format!("        rel_path: \"{}\",\n", rel_path));
+            code.push_str(&format!("        content: \"{}\",\n", escaped));
             code.push_str("    },\n");
         }
         code.push_str("];\n");
@@ -197,9 +196,7 @@ fn generate_skills_data(skills_dir: &Path, out_dir: &Path) {
             );
         }
         Err(e) => {
-            println!(
-                "cargo:warning=browser4-cli: failed to write skills_data.rs: {e}"
-            );
+            println!("cargo:warning=browser4-cli: failed to write skills_data.rs: {e}");
             // Write a fallback empty file so compilation doesn't fail.
             let fallback = "pub static SKILL_FILES: &[SkillFile] = &[];\n";
             let _ = fs::write(&out_path, fallback);
@@ -232,9 +229,6 @@ fn main() {
         );
         // Write an empty fallback so compilation succeeds.
         let out_path = out_dir.join("skills_data.rs");
-        let _ = fs::write(
-            &out_path,
-            "pub static SKILL_FILES: &[SkillFile] = &[];\n",
-        );
+        let _ = fs::write(&out_path, "pub static SKILL_FILES: &[SkillFile] = &[];\n");
     }
 }

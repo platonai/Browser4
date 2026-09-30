@@ -1,6 +1,6 @@
 {
   "name": "browser4-cli",
-  "version": "4.13.22",
+  "version": "4.14.0-rc.6",
   "description": "Browser automation CLI for AI agents",
   "type": "module",
   "files": [
@@ -9,8 +9,9 @@
     "skills"
   ],
   "bin": {
-    "browser4-cli": "bin/browser4-cli.js",
-    "browser4": "bin/browser4-cli.js"
+    "b4": "bin/browser4-cli.js",
+    "browser4": "bin/browser4-cli.js",
+    "browser4-cli": "bin/browser4-cli.js"
   },
   "scripts": {
     "sync:readme": "node scripts/sync-readme.mjs sync",

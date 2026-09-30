@@ -3,6 +3,7 @@ package ai.platon.pulsar.skeleton.event
 import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.skeleton.event.PulsarEventBus.serverSideEventHandlers
 import ai.platon.pulsar.skeleton.event.PulsarEventBus.withServerSideEventHandlers
+import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.*
 import kotlin.coroutines.CoroutineContext
 
@@ -23,8 +24,24 @@ object PulsarEventBus {
      * The calling order rule:
      *
      * The more specific handlers has the opportunity to override the result of more general handlers.
+     *
+     * Lazily initialized via [ensurePageEventHandlers] so that plugin mounts
+     * ([BrowseEventMount]/[LoadEventMount]/[CrawlEventMount]) wired by the
+     * PluginManager — and every `?.` hook point in the load pipeline — always
+     * observe a non-null bus instead of being silently skipped.
      * */
+    @Volatile
     var pageEventHandlers: PageEventHandlers? = null
+
+    /**
+     * Return the global [PageEventHandlers], creating the default set on first
+     * access. Idempotent and thread-safe; callers that previously null-checked
+     * `pageEventHandlers` can call this instead to guarantee a non-null bus.
+     */
+    @Synchronized
+    fun ensurePageEventHandlers(): PageEventHandlers {
+        return pageEventHandlers ?: PageEventHandlersFactory.create().also { pageEventHandlers = it }
+    }
 
     /**
      * The server-side event handlers for broadcasting events to external listeners.

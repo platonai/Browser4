@@ -1,6 +1,9 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
+import ai.platon.pulsar.agentic.model.AgentHistory
+import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
+import ai.platon.pulsar.api.model.BrowserUseState
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -86,6 +89,71 @@ class AgentRunnerPersistenceTest {
         val restored = mutableListOf<AgentTaskStatus>()
         val count = persistence.restore { restored.add(it) }
         assertEquals(0, count)
+    }
+
+    // -----------------------------------------------------------------
+    // agentHistory survives the JSONL round-trip (restart persistence)
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `agent task status round-trips agent history with state fields`(@TempDir tempDir: Path) {
+        val persistence = createPersistence(tempDir)
+        val state = AgentState(step = 2, instruction = "open the page", browserUseState = BrowserUseState.DUMMY).apply {
+            sessionId = "run-1"
+            domain = "tab"
+            method = "click"
+            description = "clicked the button"
+            thinking = "button matches the goal"
+            nextGoal = "verify result"
+            evaluationPreviousGoal = "success"
+            summary = "done"
+            isComplete = true
+        }
+        val task = AgentTaskStatus(id = "t1", statusCode = 200, processState = "done").apply {
+            startedTime = null; lastModifiedTime = null; finishTime = null
+            agentHistory = AgentHistory(mutableListOf(state))
+        }
+        persistence.append(task)
+
+        val restored = mutableListOf<AgentTaskStatus>()
+        val count = persistence.restore { restored.add(it) }
+
+        assertEquals(1, count)
+        val history = restored[0].agentHistory
+        assertNotNull(history, "agentHistory should survive the JSONL round-trip")
+        assertEquals(1, history!!.states.size)
+        val rs = history.states.single()
+        assertEquals(2, rs.step)
+        assertEquals("run-1", rs.sessionId)
+        assertEquals("tab", rs.domain)
+        assertEquals("click", rs.method)
+        assertEquals("success", rs.evaluationPreviousGoal)
+        assertEquals(true, rs.isComplete)
+        assertEquals("done", rs.summary)
+    }
+
+    @Test
+    fun `agent task status round-trips agent history with failed state`(@TempDir tempDir: Path) {
+        val persistence = createPersistence(tempDir)
+        val state = AgentState(step = 1, instruction = "click submit", browserUseState = BrowserUseState.DUMMY).apply {
+            sessionId = "run-1"
+            domain = "tab"
+            method = "click"
+            exception = IllegalStateException("element not found")
+        }
+        val task = AgentTaskStatus(id = "t2", statusCode = 500, processState = "done").apply {
+            startedTime = null; lastModifiedTime = null; finishTime = null
+            agentHistory = AgentHistory(mutableListOf(state))
+        }
+        persistence.append(task)
+
+        val restored = mutableListOf<AgentTaskStatus>()
+        val count = persistence.restore { restored.add(it) }
+
+        assertEquals(1, count)
+        val rs = restored[0].agentHistory!!.states.single()
+        assertEquals("element not found", rs.exception?.message)
+        assertFalse(rs.isSuccess)
     }
 
     // -----------------------------------------------------------------

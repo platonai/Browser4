@@ -272,6 +272,28 @@ backend provenance can be checked after the fact.
 
 ---
 
+## Plugin warm restart
+
+Runtime plugins live in the server's `plugins/` directory and are wired into
+the Spring context during startup, so installing or removing a plugin JAR
+(via `POST /api/plugins/install` or by copying a JAR into `plugins/`)
+normally requires a server restart to take effect.
+
+The CLI automates this: it fingerprints the `plugins/` directory when it
+launches the server, and on every later command it re-checks the
+fingerprint. When the plugin set has changed, the local server is stopped
+and relaunched automatically before the command runs — a "warm restart"
+that takes seconds thanks to the trained JVM AOT cache.
+
+Notes:
+
+- Only servers started by this CLI are restarted; servers launched
+  externally are never touched.
+- Set `BROWSER4_CLI_DISABLE_PLUGIN_WARM_RESTART=1` to opt out and fall back
+  to manual restarts.
+
+---
+
 ## Download mirrors
 
 The CLI selects the best download mirror using a combination of locale-aware
@@ -436,7 +458,7 @@ Use `--force` to bypass the cache and fetch a fresh download.
 | macOS | ARM64 (Apple Silicon) | `browser4-bundle-runtime-darwin-arm64.tar.gz` |
 
 If your platform is not listed, the CLI prints an error with instructions to
-install Java 17+ and use the standalone `Browser4.jar` release asset instead.
+install Java 25+ and use the standalone `Browser4.jar` release asset instead.
 
 ---
 
@@ -467,6 +489,7 @@ to PowerShell's `Invoke-WebRequest` which uses the WinINET proxy stack.
 | `BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST` | Set to `1` to skip speed tests; use TCP reachability only |
 | `BROWSER4_CLI_PROXY` | Explicit download proxy URL |
 | `BROWSER4_CLI_FORCE_REMOTE_BUNDLE` | Skip local repo build; always download (`1`/`true`/`yes`/`on`) |
+| `BROWSER4_CLI_DISABLE_PLUGIN_WARM_RESTART` | Set to `1` to stop the CLI from auto-restarting the local server when its `plugins/` directory changes; plugins then require a manual restart (`1`/`true`/`yes`/`on`) |
 | `BROWSER4_CLI_FORCE_REBUILD_BUNDLE` | Dev mode: rebuild the runtime bundle from the checked-out sources before starting (`1`/`true`/`yes`/`on`) |
 | `BROWSER4_CLI_ALLOW_STALE_BUNDLE` | Dev mode: start against a bundle that does not match the checkout instead of refusing (`1`/`true`/`yes`/`on`) |
 | `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | HTTP request timeout in seconds (default: `30`) |

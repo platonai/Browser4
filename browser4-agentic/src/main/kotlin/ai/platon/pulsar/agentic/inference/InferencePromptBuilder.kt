@@ -9,7 +9,7 @@ object InferencePromptBuilder {
     fun buildObserveMessages(params: ObserveParams): AgentMessageList {
         return if (params.multistep) {
             // Multistep agents uses start with agent.run()
-            promptBuilder.buildMultistepAgentMessageListAll(params.context)
+            promptBuilder.buildMultistepAgentMessageListAll(params.context, params.codingMode)
         } else {
             // Single step agents uses observe() -> act()
             promptBuilder.buildSingleObserveMessageListAll(params, params.context)

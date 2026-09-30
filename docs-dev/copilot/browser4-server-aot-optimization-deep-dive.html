@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Browser4 服务器端 AOT 优化方案深度分析</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1f2328; --muted: #57606a;
+    --border: #d8dee4; --accent: #0969da; --good: #1a7f37; --warn: #9a6700; --bad: #cf222e;
+    --code-bg: #f0f2f5; --tag-bg: #ddf4ff; --tag-ink: #0969da;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.65; font-size: 15px; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 24px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
+  h2 { font-size: 19px; margin: 40px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; margin: 14px 0; }
+  .tldr { border-left: 4px solid var(--accent); }
+  code, pre { font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace; font-size: 13px; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--code-bg); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; background: var(--card);
+    font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef1f4; }
+  .tag { display: inline-block; background: var(--tag-bg); color: var(--tag-ink);
+    border-radius: 10px; padding: 0 8px; font-size: 12px; font-weight: 600; margin-right: 6px; }
+  .p0 { background: #ffebe9; color: var(--bad); }
+  .p1 { background: #fff8c5; color: var(--warn); }
+  .p2 { background: #dafbe1; color: var(--good); }
+  .risk-high { color: var(--bad); font-weight: 600; }
+  .risk-mid { color: var(--warn); font-weight: 600; }
+  .risk-low { color: var(--good); font-weight: 600; }
+  ul { padding-left: 22px; margin: 8px 0; }
+  li { margin: 4px 0; }
+  .small { font-size: 12.5px; color: var(--muted); }
+  .note { background: #fff8e5; border: 1px solid #e6d9a8; border-radius: 8px; padding: 10px 14px;
+    margin: 12px 0; font-size: 13.5px; }
+  .highlight { background: #ddf4ff; border-radius: 4px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Browser4 服务器端 AOT 优化方案深度分析</h1>
+<div class="meta">2026-08-15 · 基于 Browser4-4.14 工作区 · Spring Boot 4.0.6 / Kotlin 2.3.21 · 本文为《启动速度优化评估》的 AOT 专项补充</div>
+
+<div class="card tldr">
+<strong>结论（TL;DR）</strong>
+<p>社区口语里的「AOT」其实是<strong>三件原理、产物、约束都不同的事</strong>，混为一谈会得出错误结论：</p>
+<ul>
+  <li><strong>JVM AOT Cache</strong>（Project Leyden，JEP 483/514/515）——纯 JVM 旗标，缓存「已加载+已链接」的类与 JIT 热点 profile。它<strong>不改变 bean 装配来源</strong>，因此与 Browser4 的运行时插件加载（<code>PluginClasspathEnhancer</code> 的 URLClassLoader）<strong>无冲突</strong>，是唯一可默认启用的 AOT。硬前提是 <strong>JDK 24/25</strong>：官方 bundle 已是 25（可用），但 <code>Dockerfile</code>/本地开发默认 21（需升或回退 AppCDS）。</li>
+  <li><strong>Spring AOT</strong>（<code>spring.aot.enabled=true</code>）——构建期生成 bean 定义，消除运行时反射与条件评估。与插件动态加载<strong>结构性冲突</strong>，只能作为「无第三方插件」的独立发布形态。</li>
+  <li><strong>GraalVM Native Image</strong>——整机 AOT 编译，启动最快但封闭世界假设，与插件模型彻底冲突；已铺路但仅适合 Serverless/冷启动场景。</li>
+</ul>
+<p>三者<strong>可叠加</strong>：官方基准里 Spring AOT + AOT Cache 组合把 Spring PetClinic 压到 <strong>0.58s</strong>。对 Browser4 的务实路线是：<span class="highlight">先上 JVM AOT Cache（需 JDK 25 + 修 classpath 通配符 + 训练跑设计），再把 Spring AOT 作为无插件形态的可选项</span>。</p>
+</div>
+
+<h2>1. 先厘清：三种「AOT」不是一回事</h2>
+
+<table>
+<tr><th>维度</th><th>JVM AOT Cache（Leyden）</th><th>Spring AOT</th><th>GraalVM Native Image</th></tr>
+<tr>
+  <td><strong>作用层</strong></td>
+  <td>JVM：类加载 / 链接 / JIT profile</td>
+  <td>框架：bean 定义 / 反射 / 条件装配</td>
+  <td>整机：字节码 → 原生机器码</td>
+</tr>
+<tr>
+  <td><strong>何时工作</strong></td>
+  <td>运行时（训练跑 + 冷启动）</td>
+  <td>构建期（process-aot）+ 运行时开关</td>
+  <td>构建期（native-image 编译）</td>
+</tr>
+<tr>
+  <td><strong>产物</strong></td>
+  <td><code>app.aot</code> 缓存文件</td>
+  <td>AOT 生成的 <code>*.class</code> / bean 定义</td>
+  <td>独立可执行文件（无 JVM）</td>
+</tr>
+<tr>
+  <td><strong>代码改动</strong></td>
+  <td>零（仅 JVM 旗标）</td>
+  <td>零到少（需审计条件装配）</td>
+  <td>多（反射/资源/序列化 hints 持续维护）</td>
+</tr>
+<tr>
+  <td><strong>收益（官方基准）</strong></td>
+  <td>启动 −41%（JEP 483）；warmup −15~25%（JEP 515）</td>
+  <td>叠加后 −20~30%</td>
+  <td>启动 ~0.1–0.5s（数量级）</td>
+</tr>
+<tr>
+  <td><strong>封闭世界？</strong></td>
+  <td class="risk-low">否 —— 动态类照常加载，只是不被缓存</td>
+  <td class="risk-mid">部分 —— classpath 构建期固定，bean 不可运行时变</td>
+  <td class="risk-high">是 —— 未登记即不可用</td>
+</tr>
+<tr>
+  <td><strong>对插件（URLClassLoader）</strong></td>
+  <td class="risk-low">兼容</td>
+  <td class="risk-high">冲突</td>
+  <td class="risk-high">冲突（native 分支已显式跳过）</td>
+</tr>
+<tr>
+  <td><strong>JDK 门槛</strong></td>
+  <td>24+（25 更佳）</td>
+  <td>21+（Boot 4 基线）</td>
+  <td>21+（GraalVM 发行版）</td>
+</tr>
+</table>
+
+<p>一句话记忆：<strong>Spring AOT 消灭「框架自己的反射工作」；JVM AOT Cache 消灭「JVM 加载/链接类的工作」；GraalVM 把整个 JVM 都消灭了。</strong>前两者正交可叠加，后者是另一条路线。</p>
+
+<h2>2. JVM AOT Cache（Leyden）—— 首选，唯一无冲突的 AOT</h2>
+
+<h3>2.1 原理：训练跑 + 冷凝器</h3>
+<p>Project Leyden 的核心思想是「把每次冷启动都重复做的 JVM 工作，在训练跑里做一次、固化下来复用」。普通 Spring Boot 应用冷启动要读入、解析、校验、加载、链接 <strong>15,000–25,000 个类</strong>——这些工作在每次启动都重来一遍。AOT cache 在训练跑中记录这些状态，冷凝成二进制缓存，之后每次启动直接从缓存取「已加载+已链接」的类。</p>
+
+<h3>2.2 版本演进</h3>
+<table>
+<tr><th>JEP</th><th>JDK</th><th>能力</th><th>关键旗标</th></tr>
+<tr><td>JEP 483</td><td>24</td><td>AOT 类加载与链接（AppCDS 的后继，缓存完整链接态而非仅解析元数据）</td><td><code>-XX:AOTMode=record/create</code>、<code>-XX:AOTConfiguration</code>、<code>-XX:AOTCache</code></td></tr>
+<tr><td>JEP 514</td><td>25</td><td>命令行人机工程：训练+组装合并为一步</td><td><code>-XX:AOTCacheOutput=app.aot</code>（训练+产出）、<code>-XX:AOTCache=app.aot</code>（生产）</td></tr>
+<tr><td>JEP 515</td><td>25</td><td>AOT 方法 profiling：缓存 JIT 热点方法 profile，冷启动即热编译</td><td>复用上述旗标，自动生效</td></tr>
+<tr><td>JEP 516</td><td>26</td><td>AOT 对象缓存（任意 GC，含 ZGC），尚未发布</td><td>—</td></tr>
+</table>
+
+<pre># JDK 25 两步工作流
+# ① 训练跑（记录 + 组装，进程退出时产出缓存）
+java -XX:AOTCacheOutput=app.aot -cp lib/* MainClass --server.port=8182
+# ② 生产跑
+java -XX:AOTCache=app.aot -cp lib/* MainClass --server.port=8182</pre>
+
+<div class="note">
+<strong>注意：单步 <code>-XX:AOTCacheOutput</code> 在组装阶段会另起一个同堆大小的子 JVM，内存峰值是命令里堆大小的 2 倍</strong>。若 <code>-Xms2G -Xmx2G</code>，则需 4GB。资源受限时改用三步（record → create → run），可在小实例训练、大实例组装。
+</div>
+
+<h3>2.3 硬约束（必须逐条满足，失配静默降级为普通启动）</h3>
+<ul>
+  <li><strong>同一 JDK 版本</strong>：训练跑与生产跑必须用同一 JVM（版本号精确匹配）。</li>
+  <li><strong>同一 classpath（JAR 列表，非目录/通配）</strong>：缓存按 classpath 校验。这正是当前 <code>daemon.rs</code> 里 <code>-cp {lib_dir}/*</code> 目录通配符的<strong>致命障碍</strong>——目录通配符不产生稳定、有序的 jar 列表。</li>
+  <li><strong>同一 JVM 参数集</strong>：影响类加载/编译的参数（如 <code>-XX:TieredStopAtLevel</code>、GC 选择）需纳入缓存失效 hash。</li>
+  <li><strong>缓存失效策略</strong>：升级版本 / 换 JDK / 换参数后必须重新训练，否则静默回退。</li>
+</ul>
+
+<h3>2.4 对 Browser4 的适用性与缺口</h3>
+<p><strong>为什么它是首选</strong>：<code>PluginClasspathEnhancer</code> 在 <code>main()</code> 里用 URLClassLoader 挂载 <code>plugins/*.jar</code>。JVM AOT cache 只缓存训练跑里<em>实际加载过</em>的类；插件类不在缓存里，就按普通路径加载——<strong>不报错、不降级功能，只是插件类享受不到缓存加速</strong>。这与 Spring AOT / native 的「封闭世界直接 break」本质不同。</p>
+<p><strong>当前缺口（要落地必须先补）</strong>：</p>
+<ul>
+  <li><strong>JDK 版本三轨并存</strong>：官方 runtime bundle 经 <code>release.yml</code> 的 <code>BUNDLE_JAVA_VERSION='25'</code> 用 jlink 打包 <strong>Temurin JDK 25</strong>——AOT cache（JEP 483/514/515）对官方 bundle 用户<strong>直接可用</strong>。但 <code>Dockerfile</code> 运行时仍是 <code>eclipse-temurin:21-jre-alpine</code>，本地 <code>install-depends.ps1</code> 默认装 Temurin 21——这两条路径要么升 25、要么回退 AppCDS。</li>
+  <li><strong>classpath 通配符</strong>：<code>daemon.rs</code> 的 <code>-cp {lib_dir}/*</code> 需改为显式枚举 <code>lib/*.jar</code>（runtime bundle 已产出 <code>lib/</code> 目录，只需在启动器里展开为有序列表）。</li>
+  <li><strong>懒加载下的训练跑设计</strong>：<code>spring.main.lazy-initialization=true</code> 下，用 <code>-Dspring.context.exit=onRefresh</code> 训练会漏掉大部分 bean（都是懒代理）。训练跑应走「启动 → <code>StartupWarmer</code> 完成 → 一轮轻量 MCP 调用 → 退出」的仿真负载序列。</li>
+  <li><strong>缓存失效 hash</strong>：把「JDK 版本 + lib 目录 jar 内容 hash + 关键 JVM 参数集」作为缓存文件名或清单的 key。</li>
+</ul>
+
+<h2>3. Spring AOT —— 无第三方插件形态的可选项</h2>
+
+<h3>3.1 原理与收益</h3>
+<p><code>process-aot</code> 在构建期把 Spring 的注解扫描、条件装配、反射实例化<em>提前算好</em>，生成静态 bean 定义代码；运行时加 <code>-Dspring.aot.enabled=true</code> 跳过这些反射工作。它通常与 CDS / AOT cache 组合。独立测试（deepaksorthiya/spring-boot-docker，Spring Boot 4.0.3）：</p>
+<table>
+<tr><th>形态</th><th>启动耗时</th></tr>
+<tr><td>exploded jar（基线）</td><td>2.309s</td></tr>
+<tr><td>+ AppCDS</td><td>1.338s</td></tr>
+<tr><td>+ Spring AOT + CDS</td><td>0.92s</td></tr>
+<tr><td>+ Spring AOT + AOT cache（JDK 24+）</td><td>0.817s</td></tr>
+</table>
+
+<h3>3.2 结构性冲突：插件加载</h3>
+<p>Spring AOT 的约束原文是「<strong>classpath 在构建期固定且完全定义；bean 定义运行时不可变</strong>」。而 <code>Browser4StandaloneApplication.kt</code> 里：</p>
+<pre>if (System.getProperty("org.graalvm.nativeimage.imagecode") == null) {
+    PluginClasspathEnhancer.enhance(Path.of("plugins"))  // 运行时动态挂 jar
+}</pre>
+<p>第三方插件是「编译完成后丢进 <code>./plugins/</code>」的分发方式，构建期根本不知道有哪些插件类，AOT 自然也无法为其生成 bean 定义。<strong>结论：Spring AOT 只适用于「插件全部打进 fat jar、无运行时扩展」的官方 bundle 形态。</strong></p>
+
+<h3>3.3 与懒加载 / StartupWarmer 的交互</h3>
+<p>AOT 生成的代码预计算了条件装配结果；懒加载语义保留，但 AOT 会在需要处注入 bean 实例化逻辑。<code>StartupWarmer</code> 用 <code>applicationContext.getBean(name)</code> 触发创建，AOT 下仍成立——但<strong>必须重跑</strong> <code>SwarmCrawlFixtureTest</code> 那类回归（懒加载+预热竞态曾导致 "Protocol not found (1600)"）。</p>
+
+<h3>3.4 其他约束</h3>
+<ul>
+  <li><code>@Profile</code>：AOT 下 profile 构建期固定。Browser4 在 <code>main()</code> 硬编码 <code>standalone/private/advanced</code>，反而 AOT 友好。</li>
+  <li><code>@ConditionalOnProperty(.enabled 类)</code>：AOT 不支持「因属性改变而增减 bean」，需审计现有配置里是否有此类用法。</li>
+  <li>现状：<code>browser4-standalone/pom.xml</code> 的 <code>native</code> profile 已含 <code>process-aot</code>，但那是为 native 服务的。<strong>缺一个「只 process-aot、不 native-image」的 JVM AOT 构建 profile</strong>。</li>
+</ul>
+
+<h2>4. GraalVM Native Image —— 场景化，已铺路未启用</h2>
+
+<p>已有铺路资产（<strong>全部存在，无需从零做</strong>）：</p>
+<table>
+<tr><th>资产</th><th>位置</th></tr>
+<tr><td>RuntimeHints 注册（反射/资源 pattern）</td><td><code>Browser4NativeHints.kt</code></td></tr>
+<tr><td>native 构建 profile（process-aot + native-maven-plugin 0.11.5）</td><td><code>browser4-standalone/pom.xml</code></td></tr>
+<tr><td>native Docker 构建（graalvm-community:25）</td><td><code>Dockerfile.native</code></td></tr>
+<tr><td>本地构建脚本</td><td><code>build-native.ps1</code> / <code>build-native.sh</code></td></tr>
+<tr><td>反射/资源配置描述符</td><td><code>META-INF/native-image/.../reflect-config.json</code>、<code>resource-config.json</code></td></tr>
+</table>
+
+<p>收益是启动 <strong>0.1–0.5s</strong>、无 JVM 内存底座。代价：构建 10–20 分钟、8GB+ RAM；Kotlin <code>kotlin-reflect</code>、CDP、Netty/Jetty 的反射面需要持续维护 hints；插件模型彻底放弃（native 分支已跳过 <code>PluginClasspathEnhancer</code>，这是产品共识）。<strong>定位：Serverless / 容器冷启动敏感场景的独立发布物，而非默认形态。</strong></p>
+
+<h2>5. 组合矩阵</h2>
+<table>
+<tr><th>方案</th><th>预期端口就绪</th><th>插件</th><th>JDK</th><th>改造成本</th><th>建议</th></tr>
+<tr><td>现状（懒加载 + C1）</td><td>~2.0s</td><td class="risk-low">完整</td><td>21</td><td>—</td><td>基线</td></tr>
+<tr><td>+ AppCDS（JDK 17–21 回退）</td><td>~1.3–1.5s</td><td class="risk-low">完整</td><td>17–21</td><td>低</td><td>升 JDK 前的过渡</td></tr>
+<tr><td>+ JVM AOT cache（JEP 483/515）</td><td>~1.0–1.4s</td><td class="risk-low">完整</td><td>25</td><td>中（daemon.rs ~150–200 行）</td><td class="p0">P0 首选</td></tr>
+<tr><td>+ Spring AOT + AOT cache</td><td>~0.6–0.9s</td><td class="risk-high">无第三方插件</td><td>25</td><td>高</td><td class="p1">P1 无插件形态</td></tr>
+<tr><td>GraalVM native</td><td>~0.1–0.5s</td><td class="risk-high">无</td><td>GraalVM</td><td>高</td><td class="p2">P2 场景化</td></tr>
+</table>
+
+<h2>6. 关键发现（与既有《启动优化评估》的差异）</h2>
+<ul>
+  <li><strong>JDK 版本三轨并存，AOT cache 只在官方 bundle 直接可用</strong>：官方 runtime bundle 经 <code>release.yml</code> 的 <code>BUNDLE_JAVA_VERSION='25'</code> 用 jlink 打包 Temurin <strong>JDK 25</strong>（已解包验证），JEP 483/514/515 对官方 bundle 用户<strong>无需升级即可用</strong>。但 <code>Dockerfile</code> 运行时仍是 <code>temurin:21-jre-alpine</code>、本地依赖安装默认 Temurin 21——这两条路径上 AOT cache 不可用，只能回退 AppCDS（或升 25）。daemon.rs 需按「运行 JDK 版本」分叉：25+ 走 <code>-XX:AOTCache</code>，17–24 走 <code>-XX:SharedArchiveFile</code>。</li>
+  <li><strong>pom 里 <code>javaVersion=17</code> 是遗留值，隐藏了「21+ 才能跑」的事实</strong>：Spring Boot 4（Spring Framework 7）<strong>运行时基线是 Java 21+</strong>（其依赖 jar 是 21 字节码）。<code>release.yml</code> 用 <code>JAVA_VERSION='17'</code> 编译（产出 17 字节码）、<code>BUNDLE_JAVA_VERSION='25'</code> 打运行时，所以整体能跑。但 <code>javaVersion=17</code> 会把 Browser4 自己的源码锁在 17 语法，并误导「可在 JDK 17 运行」（实际不能）。建议把 <code>javaVersion</code> 提到 21，顺带同步 dokka 的 <code>jdkVersion</code>。</li>
+  <li><strong>classpath 通配符是 AOT cache/CDS 的隐性障碍</strong>：<code>daemon.rs</code> 的 <code>-cp {lib_dir}/*</code> 必须先改成显式 jar 枚举，CDS 与 AOT cache 都要求稳定有序的 classpath。</li>
+  <li><strong>懒加载削弱了「简单训练跑」的覆盖</strong>：<code>-Dspring.context.exit=onRefresh</code> 在懒加载下几乎不加载 bean，训练收益会打折，必须用仿真负载序列补。</li>
+</ul>
+
+<h2>7. 推荐路线（聚焦 AOT）</h2>
+
+<div class="card">
+<h3>Tier 0 —— 先决条件（半天）</h3>
+<ul>
+  <li>官方 bundle 已是 JDK 25（JEP 515 可用），无需动；把 <code>Dockerfile</code> 运行时从 <code>temurin:21-jre</code> 升到 <code>temurin:25-jre</code>，本地开发态保留 21 并走 AppCDS 回退。</li>
+  <li>把 <code>daemon.rs</code> 的 classpath 从目录通配符改为显式 <code>lib/*.jar</code> 有序枚举。</li>
+  <li>修 pom <code>javaVersion</code> 17 → 21（消除与 Boot 4 的隐性不一致）。</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Tier 1 —— JVM AOT cache（首选，约 1 周）</h3>
+<ul>
+  <li>daemon.rs 增加：仿真负载训练跑（启动 → StartupWarmer 完成 → 一轮轻量 MCP → 退出）+ <code>-XX:AOTCacheOutput</code> 产出 + 按「JDK 版本 + jar 内容 hash + JVM 参数集」失效 + <code>-XX:AOTCache</code> 生产加载，失配静默回退。</li>
+  <li>JDK 21 上回退 AppCDS（<code>-XX:ArchiveClassesAtExit</code> / <code>-XX:SharedArchiveFile</code>），保证开发态也有收益。</li>
+  <li>目标：端口就绪 ~2.0s → <strong>1.0–1.4s</strong>，JEP 515 同时压低首条 CLI 命令的 warmup 延迟。</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Tier 2 —— Spring AOT 无插件形态（按需，约 1–2 周）</h3>
+<ul>
+  <li>新增「JVM AOT」构建 profile（只 <code>process-aot</code>、不 native-image），产出 AOT-processed fat jar。</li>
+  <li>审计 <code>@ConditionalOnProperty</code> / <code>@Profile</code> 用法；重跑懒加载预热竞态回归。</li>
+  <li>与 Tier 1 叠加，向 <strong>0.6–0.9s</strong> 逼近。</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Tier 3 —— GraalVM native（场景化）</h3>
+<ul>
+  <li>已有铺路资产，仅在 Serverless/密度敏感场景作为独立发布物，持续维护 hints。</li>
+</ul>
+</div>
+
+<h2>8. 风险清单（AOT 专项）</h2>
+<ul>
+  <li><strong>AOT cache 失配静默降级</strong>：JDK/classpath/JVM 参数任一漂移都必须能回退普通启动，绝不能启动失败。缓存失效 hash 必须覆盖这三者。</li>
+  <li><strong>单步训练跑 2× 堆内存</strong>：<code>-XX:AOTCacheOutput</code> 组装阶段子 JVM 复用训练堆大小，小内存容器要用三步法。</li>
+  <li><strong>C1 限档与 JEP 515 的张力</strong>：<code>-XX:TieredStopAtLevel=1</code> 禁止 C2，而 JEP 515 缓存的是热点方法 profile 供 JIT 用——C1 限档下方法 profile 的价值打折。若启用 AOT cache，应重新评估是否放宽 C1 限档（JEP 515 本身已能缩短 warmup）。</li>
+  <li><strong>Spring AOT 条件装配审计</strong>：漏审一个 <code>@ConditionalOnProperty</code> 可能让某个 bean 在 AOT 形态下不出现，需靠现有测试兜底。</li>
+  <li><strong>懒加载 + 预热竞态回归</strong>：任何改 bean 初始化时序的方案（尤其 AOT）都必须重跑 <code>SwarmCrawlFixtureTest</code>。</li>
+</ul>
+
+<h2>9. 附录：证据文件索引</h2>
+<ul class="small">
+  <li><code>browser4-apps/browser4-standalone/pom.xml</code> — <code>native</code> profile 已含 <code>process-aot</code> + native-maven-plugin</li>
+  <li><code>browser4-apps/browser4-standalone/src/main/kotlin/.../Browser4StandaloneApplication.kt</code> — 插件加载与 native 分支跳过逻辑</li>
+  <li><code>browser4-apps/browser4-standalone/src/main/kotlin/.../native/Browser4NativeHints.kt</code> — RuntimeHints</li>
+  <li><code>browser4-rest/src/main/resources/application.properties</code> — 懒加载/自动装配排除</li>
+  <li><code>browser4-rest/src/main/kotlin/.../config/StartupWarmer.kt</code> — 预热链（训练跑负载依据）</li>
+  <li><code>cli/browser4-cli/src/daemon.rs</code> — JVM 参数拼装（<code>-cp lib/*</code>、<code>TieredStopAtLevel=1</code>）</li>
+  <li><code>Dockerfile</code>（temurin-21-jre）、<code>Dockerfile.native</code>（graalvm-community:25）</li>
+  <li><code>.github/workflows/release.yml</code>（<code>BUNDLE_JAVA_VERSION='25'</code>、<code>JAVA_VERSION='17'</code>）、<code>bin/tools/install-depends.ps1</code>、<code>browser4-apps/browser4-bundle/build-runtime-bundle.ps1</code> — JDK 版本三轨来源</li>
+  <li><code>pom.xml</code>（javaVersion=17）、<code>browser4-dependencies/pom.xml</code>（spring-boot.version=4.0.6）</li>
+</ul>
+
+</div>
+</body>
+</html>

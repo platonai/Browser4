@@ -12,6 +12,10 @@ import ai.platon.pulsar.skeleton.plugin.PluginManifest
  *                  a valid `META-INF/browser4-plugin.json`
  * @param loaded    whether any of the plugin's auto-configuration classes are
  *                  currently registered in the Spring application context
+ * @param defaultEnabled whether the plugin is in the default-loaded category
+ *                       (`manifest.defaultEnabled`, true when manifest is absent)
+ * @param enabled   effective activation state after applying [PluginLoadPolicy]
+ *                  overrides (`browser4.plugins.enable|disable|enable-all`)
  */
 data class PluginInfo(
     val fileName: String,
@@ -19,4 +23,6 @@ data class PluginInfo(
     val path: String,
     val manifest: PluginManifest?,
     val loaded: Boolean,
+    val defaultEnabled: Boolean = true,
+    val enabled: Boolean = true,
 )

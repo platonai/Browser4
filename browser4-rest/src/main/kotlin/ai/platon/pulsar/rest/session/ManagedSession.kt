@@ -20,7 +20,7 @@ data class ManagedSession(
     val agenticSession: AgenticSession,
     val capabilities: Map<String, String?>?,
     var url: String? = null,
-    var status: String = "active", // active, paused, stopped, disconnected, unhealthy
+    var status: SessionStatus = SessionStatus.ACTIVE,
     /** Explicit session kind — drives ownership and lifecycle decisions. */
     val kind: SessionKind = SessionKind.BROWSER4_LAUNCHED,
     val createdAt: Long = System.currentTimeMillis(),

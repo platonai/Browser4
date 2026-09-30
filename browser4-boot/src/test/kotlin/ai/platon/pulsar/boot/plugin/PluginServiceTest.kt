@@ -33,14 +33,18 @@ class PluginServiceTest {
         fileName: String = "test-plugin-1.0.0.jar",
         name: String = "test-plugin",
         version: String = "1.0.0",
+        defaultEnabled: Boolean = true,
+        sdkVersion: String? = null,
         autoConfigurationClasses: List<String> = listOf("java.lang.String"),
     ): Path {
+        val sdkField = sdkVersion?.let { "\n                \"sdkVersion\": \"$it\"," } ?: ""
         val manifestJson = """
             {
                 "name": "$name",
-                "version": "$version",
+                "version": "$version",$sdkField
                 "description": "Test plugin for unit tests",
                 "dependsOn": ["browser4-skeleton"],
+                "defaultEnabled": $defaultEnabled,
                 "autoConfigurationClasses": [${autoConfigurationClasses.joinToString(", ") { "\"$it\"" }}]
             }
         """.trimIndent()
@@ -158,6 +162,52 @@ class PluginServiceTest {
         }
     }
 
+    @Test
+    fun `listPlugins reports default-enabled and effective enabled state`() {
+        val dir = createTempPluginDir()
+        try {
+            createPluginJar(dir, "default-on-1.0.0.jar", name = "default-on")
+            createPluginJar(dir, "opt-in-1.0.0.jar", name = "opt-in", defaultEnabled = false)
+
+            val service = PluginService(mockAppContext(), dir)
+            val result = service.listPlugins()
+
+            val defaultOn = result.find { it.fileName == "default-on-1.0.0.jar" }
+            assertNotNull(defaultOn)
+            assertTrue(defaultOn!!.defaultEnabled)
+            assertTrue(defaultOn.enabled)
+
+            val optIn = result.find { it.fileName == "opt-in-1.0.0.jar" }
+            assertNotNull(optIn)
+            assertFalse(optIn!!.defaultEnabled, "opt-in plugin should report defaultEnabled=false")
+            assertFalse(optIn.enabled, "opt-in plugin should not be enabled without an explicit override")
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `listPlugins applies explicit enable override to opt-in plugin`() {
+        val dir = createTempPluginDir()
+        try {
+            createPluginJar(dir, "opt-in-1.0.0.jar", name = "opt-in", defaultEnabled = false)
+
+            val service = PluginService(
+                mockAppContext(),
+                dir,
+                PluginLoadPolicy(enableAll = false, enabledNames = setOf("opt-in"), disabledNames = emptySet())
+            )
+            val result = service.listPlugins()
+
+            val optIn = result.find { it.fileName == "opt-in-1.0.0.jar" }
+            assertNotNull(optIn)
+            assertFalse(optIn!!.defaultEnabled)
+            assertTrue(optIn.enabled, "explicit enable should activate the opt-in plugin")
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
     // ---- getPlugin() ----
 
     @Test
@@ -265,6 +315,62 @@ class PluginServiceTest {
             assertTrue(
                 ex.message!!.contains("browser4-plugin.json"),
                 "Error message should mention missing manifest"
+            )
+        } finally {
+            pluginDir.toFile().deleteRecursively()
+            stagingDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `installPlugin rejects plugins requiring a newer SDK than the host`() {
+        val pluginDir = createTempPluginDir()
+        val stagingDir = createTempPluginDir()
+        try {
+            val futureJar = createPluginJar(
+                stagingDir, "future-plugin-1.0.0.jar",
+                name = "future-plugin", sdkVersion = "9.0.0"
+            )
+            val service = PluginService(mockAppContext(), pluginDir)
+
+            val ex = assertThrows<IllegalArgumentException> {
+                service.installPlugin(futureJar)
+            }
+            assertTrue(
+                ex.message!!.contains("Cannot install"),
+                "Error message should explain the refusal"
+            )
+            assertTrue(
+                ex.message!!.contains("9.0.0"),
+                "Error message should name the required SDK version"
+            )
+            assertFalse(
+                Files.exists(pluginDir.resolve("future-plugin-1.0.0.jar")),
+                "Incompatible JAR must not be copied into the plugin dir"
+            )
+        } finally {
+            pluginDir.toFile().deleteRecursively()
+            stagingDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `installPlugin accepts plugins built with an older same-major SDK`() {
+        val pluginDir = createTempPluginDir()
+        val stagingDir = createTempPluginDir()
+        try {
+            val legacyJar = createPluginJar(
+                stagingDir, "legacy-plugin-1.0.0.jar",
+                name = "legacy-plugin", sdkVersion = "4.10.0"
+            )
+            val service = PluginService(mockAppContext(), pluginDir)
+
+            val info = service.installPlugin(legacyJar)
+
+            assertEquals("legacy-plugin", info.manifest?.name)
+            assertTrue(
+                Files.exists(pluginDir.resolve("legacy-plugin-1.0.0.jar")),
+                "Same-major-SDK plugin should install and load on a best-effort basis"
             )
         } finally {
             pluginDir.toFile().deleteRecursively()

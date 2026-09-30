@@ -170,9 +170,8 @@ pub fn unpack_skills_to(dest_dir: &std::path::Path) -> Result<usize, String> {
     for f in SKILL_FILES {
         let file_path = dest_dir.join(&f.rel_path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                format!("Failed to create directory {}: {e}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
         }
         // Skip files whose on-disk content already matches the bundled copy.
         match std::fs::read(&file_path) {

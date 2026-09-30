@@ -6,13 +6,18 @@ import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.api.service.ConversationService
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import java.nio.file.Path
 
 @Configuration
 class CommandServiceConfig {
 
     @Bean(destroyMethod = "close")
     fun sessionManager(agenticContext: AgenticContext): PulsarSessionManager {
-        return PulsarSessionManager(agenticContext)
+        // Persist the display-name → session-id mapping so named sessions
+        // keep their identity across backend restarts.  Lives next to the
+        // CLI state under ~/.browser4 (shared convention of this project).
+        val registryFile = Path.of(System.getProperty("user.home"), ".browser4", "session-registry.json")
+        return PulsarSessionManager(agenticContext, registryFile = registryFile)
     }
 
     @Bean

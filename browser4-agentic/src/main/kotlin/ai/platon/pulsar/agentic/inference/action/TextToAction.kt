@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.inference.action
 
 import ai.platon.pulsar.agentic.inference.AgentMessageList
+import ai.platon.pulsar.agentic.inference.forceLlmMaxInputTokenLength
 import ai.platon.pulsar.agentic.inference.PromptBuilder.Companion.SINGLE_WEB_DRIVER_ACTION_GENERATION_PROMPT
 import ai.platon.pulsar.agentic.inference.PromptBuilder.Companion.buildObserveResultSchema
 import ai.platon.pulsar.agentic.model.ActionDescription
@@ -22,6 +23,7 @@ import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
+import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.nio.file.Files
@@ -31,7 +33,11 @@ open class TextToAction(
 ) {
     private val logger = getLogger(this)
 
-    val chatModel: BrowserChatModel get() = ChatModelFactory.getOrCreate(conf)
+    /** Conf with the PulsarRPA input-length cap force-raised for deepseek-v4-flash's 1M context window. */
+    private val chatModelConf: ImmutableConfig by lazy { conf.forceLlmMaxInputTokenLength() }
+
+    val chatModel: BrowserChatModel
+        get() = TestChatModelFactory.getOrCreate(chatModelConf) ?: ChatModelFactory.getOrCreate(chatModelConf)
 
     /**
      * Generate EXACT ONE WebDriver action with interactive elements.
@@ -40,6 +46,7 @@ open class TextToAction(
      * @param driver The driver to use to collect the context, such as interactive elements
      * @return The action description
      * */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     open suspend fun generateActions(
         action: String, driver: WebDriver, screenshotB64: String? = null
     ): List<ActionDescription> {
@@ -91,6 +98,7 @@ open class TextToAction(
         return toActionDescription(action, elements, agentState, response).toActionDescriptions()
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     fun modelResponseToActionDescription(
         instruction: String, agentState: AgentState, modelResponse: ModelResponse
     ): ActionDescription {
@@ -108,6 +116,7 @@ open class TextToAction(
         }
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     private fun modelResponseToActionDescription0(
         instruction: String, agentState: AgentState, modelResponse: ModelResponse
     ): ActionDescription {
@@ -127,6 +136,9 @@ open class TextToAction(
                     summary = complete.summary,
                     keyFindings = complete.keyFindings,
                     nextSuggestions = complete.nextSuggestions,
+                    gates = complete.gates,
+                    filesChanged = complete.filesChanged,
+                    problems = complete.problems,
                     modelResponse = modelResponse
                 )
             }
@@ -257,6 +269,7 @@ open class TextToAction(
             Files.createDirectories(baseDir)
         }
 
+        @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
         fun toActionDescription(
             instruction: String,
             elements: ModelObserveResponseElements,
@@ -272,6 +285,7 @@ open class TextToAction(
             )
         }
 
+        @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
         fun toObserveElement(ele: ModelObserveResponseElement, response: ModelResponse): ObserveElement {
             val arguments = ele.arguments
                 ?.mapNotNull { arg -> arg?.get("name") to arg?.get("value") }

@@ -113,7 +113,7 @@ class ExperienceToolExecutorExtendedTest {
 
         @Test
         @DisplayName("save with null intent classifies as OTHER")
-        fun testSaveWithNullIntent() = runBlocking {
+        fun testSaveWithNullIntent(): Unit = runBlocking {
             val trace = ExecutionTrace(
                 url = "https://example.com/page",
                 taskType = "navigate",
@@ -136,7 +136,7 @@ class ExperienceToolExecutorExtendedTest {
 
         @Test
         @DisplayName("save throws on missing url")
-        fun testSaveMissingUrl() = runBlocking {
+        fun testSaveMissingUrl(): Unit = runBlocking {
             assertFailsWith<Exception> {
                 executor.callFunctionOn(
                     domain = "experience", functionName = "save",
@@ -150,7 +150,7 @@ class ExperienceToolExecutorExtendedTest {
 
         @Test
         @DisplayName("save throws on invalid trace JSON")
-        fun testSaveInvalidTraceJson() = runBlocking {
+        fun testSaveInvalidTraceJson(): Unit = runBlocking {
             assertFailsWith<IllegalArgumentException> {
                 executor.callFunctionOn(
                     domain = "experience", functionName = "save",
@@ -169,7 +169,7 @@ class ExperienceToolExecutorExtendedTest {
     inner class QueryEdgeCases {
         @Test
         @DisplayName("query with no intent still works")
-        fun testQueryNoIntent() = runBlocking {
+        fun testQueryNoIntent(): Unit = runBlocking {
             val result = executor.callFunctionOn(
                 domain = "experience", functionName = "query",
                 args = mapOf("url" to "https://amazon.com/dp/test"),
@@ -379,7 +379,7 @@ class ExperienceToolExecutorExtendedTest {
 
         @Test
         @DisplayName("deep_learn after all failures still creates hypothesis")
-        fun testDeepLearnAfterAllFailures() = runBlocking {
+        fun testDeepLearnAfterAllFailures(): Unit = runBlocking {
             // Save 3 failed traces only
             repeat(3) { i ->
                 val trace = ExecutionTrace(
@@ -594,7 +594,7 @@ class ExperienceToolExecutorExtendedTest {
     inner class UnsupportedMethod {
         @Test
         @DisplayName("throws on unknown function name")
-        fun testUnknownFunction() = runBlocking {
+        fun testUnknownFunction(): Unit = runBlocking {
             assertFailsWith<IllegalArgumentException> {
                 executor.callFunctionOn(
                     domain = "experience", functionName = "nonexistent_method",
@@ -605,7 +605,7 @@ class ExperienceToolExecutorExtendedTest {
 
         @Test
         @DisplayName("throws on wrong domain")
-        fun testWrongDomain() = runBlocking {
+        fun testWrongDomain(): Unit = runBlocking {
             assertFailsWith<IllegalArgumentException> {
                 executor.callFunctionOn(
                     domain = "wrong_domain", functionName = "save",

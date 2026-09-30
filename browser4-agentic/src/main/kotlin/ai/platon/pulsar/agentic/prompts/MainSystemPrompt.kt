@@ -10,6 +10,77 @@ import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecFormat
 
 /**
+ * Note appended to the system prompt for coding tasks: page-state response
+ * fields are irrelevant without a page — the model should fill "N/A" instead
+ * of describing a non-existent page (design §3.5 / P4.3).
+ */
+private const val CODING_NO_PAGE_FIELDS_NOTE = """
+
+**Coding task — no page context.** In your response, set `screenshotContentSummary`
+and `currentPageContentSummary` to `"N/A"` — no browser page is attached to this
+task. If you need web page information, explicitly call `tab.navigate` /
+`tab.ariaSnapshot` / `tab.textContent` / `tab.eval` first.
+"""
+
+private val FILE_HANDLING_BROWSER = """
+## File Handling
+
+- Use the file system to save your processing progress and final results.
+- Use `coding.*` tools for file operations (`coding.read`, `coding.write`, `coding.append`,
+  `coding.replace`, `coding.listDir`, `coding.glob`, `coding.grep`).
+- Use `plan.md` if you have a plan.
+- Use `results.md` to summarize final task results.
+- NEVER rename/delete a file to "move" content: write the new file first, verify it
+  exists and is correct, and only then delete the old one. Deleting an old file whose
+  content only exists under the old name destroys data irreversibly.
+""".trimIndent()
+
+private val FILE_HANDLING_CODING = """
+## File Handling
+
+- Operate on the repository workspace with `coding.*` tools, not `fs.*`.
+- Read before editing: use `coding.read`, `coding.listDir`, `coding.glob`, and `coding.grep`
+  to ground every change in the actual repository layout.
+- Use `plan.md` for a short implementation plan and `results.md` for final results.
+- Prefer `coding.replace`/`coding.write` for precise edits; never rewrite a whole file blindly.
+- NEVER rename/delete a file to "move" content: write the new file first, verify it
+  exists and is correct, and only then delete the old one. Deleting an old file whose
+  content only exists under the old name destroys data irreversibly.
+""".trimIndent()
+
+private val REASONING_PATTERN_BROWSER = """
+### Reasoning Pattern
+
+To complete `<user_request>`, follow this reasoning pattern:
+
+```
+<thinking>
+[1] Goal analysis: Relate the current sub-goal to the overall objective.
+[2] State check: Review the current page, screenshot, and previous result.
+[3] Evidence: Ground decisions in visible content, page structure, and prior observations.
+[4] Blockers: Identify what is preventing progress.
+[5] Plan: Choose the smallest effective next action.
+</thinking>
+```
+""".trimIndent()
+
+private val REASONING_PATTERN_CODING = """
+### Reasoning Pattern
+
+To complete `<user_request>`, follow this reasoning pattern:
+
+```
+<thinking>
+[1] Goal analysis: Relate the current sub-goal to the overall objective.
+[2] Code state check: Review the files, modules, tests, and latest tool output relevant to the change.
+[3] Evidence: Ground decisions in actual code, build output, test counts, and validator results.
+[4] Blockers: Identify compilation errors, test failures, or unknown APIs preventing progress.
+[5] Plan: Choose the smallest effective next coding action.
+</thinking>
+```
+""".trimIndent()
+
+/**
  * Skill tool type definitions for the system prompt.
  *
  * These type definitions help the LLM understand the data structures returned by skill-related tool calls.
@@ -81,11 +152,15 @@ $summaryLines
  */
 fun buildMainSystemPromptV1(): String = buildMainSystemPromptV1(ToolSpecFormat.KOTLIN)
 
-fun buildToolSpecContent(toolFormat: ToolSpecFormat): String {
+fun buildToolSpecContent(
+    toolFormat: ToolSpecFormat,
+    codingTask: Boolean? = null,
+    disclosure: String = "tiered",
+): String {
     val toolSpecContent = when (toolFormat) {
         ToolSpecFormat.KOTLIN -> """
 ```
-${ToolCallSpecificationRenderer.render(includeCustomDomains = true)}
+${ToolCallSpecificationRenderer.renderTiered(includeCustomDomains = true, codingTask = codingTask, disclosure = disclosure)}
 ```
 """.trimIndent()
 
@@ -102,6 +177,8 @@ ${ToolCallSpecificationRenderer.renderJson(includeCustomDomains = true)}
 fun buildToolUseSections(
     toolFormat: ToolSpecFormat = ToolSpecFormat.KOTLIN,
     includeToolList: Boolean = true,
+    codingTask: Boolean? = null,
+    disclosure: String = "tiered",
 ): String {
     return """
 ## Tool Usage
@@ -119,7 +196,7 @@ $EXTRACTION_TOOL_NOTE_CONTENT
 ${if (includeToolList) """
 ### Tool List
 
-${buildToolSpecContent(toolFormat)}
+${buildToolSpecContent(toolFormat, codingTask, disclosure)}
 """ else ""}
 ### Available Skills
 
@@ -141,6 +218,8 @@ ${buildSkillSummariesSection()}
 fun buildMainSystemPromptV1(
     toolFormat: ToolSpecFormat,
     includeToolList: Boolean = true,
+    codingTask: Boolean? = null,
+    disclosure: String = "tiered",
 ): String {
     return """
 # System Instructions
@@ -152,12 +231,7 @@ fun buildMainSystemPromptV1(
 
 ---
 
-## File Handling
-
-- Use the file system to save your processing progress and final results.
-- Prefer `fs.*` tools for file operations.
-- Use `plan.md` if you have a plan.
-- Use `results.md` to summarize final task results.
+${if (codingTask == true) FILE_HANDLING_CODING else FILE_HANDLING_BROWSER}
 
 ---
 
@@ -168,21 +242,21 @@ End the task only when one of the following is true, and output the `Task Comple
 - An unrecoverable error prevents further progress.
 - The user explicitly asks you to stop.
 
+When the task is complete and no further tool call is needed, output the
+`Task Completion Output` JSON **immediately** — never reply with plain text or
+explanations instead. Text-only responses without a completion marker waste
+steps and are indistinguishable from a stalled agent.
+
+**Anchor the completion summary to measured evidence.** If the task specifies
+quality gates (build, tests, validation, deploy), your `summary` MUST list each
+gate with its actual measured result — exit code, test counts, or validator
+output you actually observed. A gate you did not run must be reported as
+"not run", and a gate that failed must be reported as "failed" with the error
+— never claim success without the tool output in front of you.
+
 ---
 
-### Reasoning Pattern
-
-To complete `<user_request>`, follow this reasoning pattern:
-
-```
-<thinking>
-[1] Goal analysis: Relate the current sub-goal to the overall objective.
-[2] State check: Review the current page, screenshot, and previous result.
-[3] Evidence: Ground decisions in visible content, page structure, and prior observations.
-[4] Blockers: Identify what is preventing progress.
-[5] Plan: Choose the smallest effective next action.
-</thinking>
-```
+${if (codingTask == true) REASONING_PATTERN_CODING else REASONING_PATTERN_BROWSER}
 
 ---
 
@@ -204,9 +278,10 @@ ${buildResponseSchema()}
 Output format:
 $OBSERVE_RESPONSE_COMPLETE_SCHEMA
 
+${if (codingTask == true) CODING_NO_PAGE_FIELDS_NOTE else ""}
 ---
 
-${buildToolUseSections(toolFormat, includeToolList)}
+${buildToolUseSections(toolFormat, includeToolList, codingTask, disclosure)}
 
         """.trimIndent()
 }

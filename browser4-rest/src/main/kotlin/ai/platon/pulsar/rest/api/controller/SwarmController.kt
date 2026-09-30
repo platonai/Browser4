@@ -3,12 +3,14 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.agentic.tools.advanced.crawl.QueryRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacade
+import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacadeRegistry
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
+import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.rest.session.PulsarSessionManager
-import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import ai.platon.pulsar.rest.api.entities.SessionResponse
 import ai.platon.pulsar.rest.api.entities.toSessionResponse
-import ai.platon.pulsar.rest.api.service.SwarmService
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
@@ -23,9 +25,16 @@ import org.springframework.web.bind.annotation.*
 )
 class SwarmController(
     val sessionManager: PulsarSessionManager,
-    val swarmService: SwarmService
 ) {
     private val logger = LoggerFactory.getLogger(SwarmController::class.java)
+
+    /**
+     * The swarm backend is provided by the browser4-swarm plugin through
+     * [SwarmFacadeRegistry]. Without the plugin we respond with a clear
+     * "not installed" error instead of a partial implementation.
+     */
+    private fun facade(): SwarmFacade = SwarmFacadeRegistry.instance.get()
+        ?: throw SwarmNotInstalledException()
 
     /**
      * Create or get the swarm session. The swarm session is a special session that can be shared across multiple
@@ -53,7 +62,12 @@ class SwarmController(
      * */
     @DeleteMapping
     fun close(): Map<String, Any> {
-        val aborted = swarmService.closeSession()
+        // The swarm session is core infrastructure owned by the REST session
+        // manager; the facade only owns the task store, so abort its pending
+        // tasks here and release the session below.
+        val aborted = facade().abortPendingTasks("Swarm session was closed; task dropped")
+        runCatching { sessionManager.deleteSession(SWARM_SESSION_ID) }
+            .onFailure { logger.warn("Failed to close the swarm session: {}", it.message) }
         logger.info("Swarm session closed, {} pending task(s) aborted", aborted)
         return mapOf("closed" to true, "abortedPendingTasks" to aborted)
     }
@@ -93,7 +107,7 @@ class SwarmController(
 
         // Returns raw UUID string (not JSON-wrapped). CLI depends on this format.
         val normalizedBatchId = batchId?.trim()?.takeIf { it.isNotEmpty() }
-        return swarmService.submit(ScrapeRequest(sql, normalizedBatchId), normalizedBatchId)
+        return facade().submit(ScrapeRequest(sql, normalizedBatchId), normalizedBatchId)
     }
 
     /** Escape a value for use inside a single-quoted X-SQL string literal. */
@@ -116,7 +130,7 @@ class SwarmController(
     @PostMapping("query")
     fun query(@RequestBody query: QueryRequest): String {
         logger.info("Swarm query: batch='{}' url='{}' query='{}'", query.batchId, query.url, query.query.take(200))
-        return swarmService.submit(query)
+        return facade().submit(query)
     }
 
     /**
@@ -135,7 +149,7 @@ class SwarmController(
         if (batchId.isBlank()) {
             throw IllegalArgumentException("batchId must not be blank")
         }
-        return swarmService.batchStatus(batchId)
+        return facade().batchStatus(batchId)
     }
 
     /**
@@ -146,7 +160,7 @@ class SwarmController(
     fun count(
         @RequestParam(value = "status", required = false) status: Int = 0,
     ): Int {
-        return swarmService.count(status)
+        return facade().count(status)
     }
 
     /**
@@ -161,7 +175,7 @@ class SwarmController(
             throw IllegalArgumentException("uuid must not be blank")
         }
         val request = ScrapeStatusRequest(uuid)
-        return swarmService.getStatus(request)
+        return facade().getStatus(request)
     }
 
     @GetMapping("/{id}/status", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
@@ -172,7 +186,7 @@ class SwarmController(
             throw IllegalArgumentException("id must not be blank")
         }
         val request = ScrapeStatusRequest(uuid)
-        return swarmService.getStatus(request)
+        return facade().getStatus(request)
     }
 
     @GetMapping("/{id}/result", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
@@ -190,5 +204,12 @@ class SwarmController(
     fun handleBadRequest(e: IllegalArgumentException): Map<String, Any> {
         logger.warn("Bad request: {}", e.message)
         return mapOf("error" to "Bad Request", "message" to (e.message ?: ""))
+    }
+
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    @ExceptionHandler(SwarmNotInstalledException::class)
+    fun handleSwarmNotInstalled(e: SwarmNotInstalledException): Map<String, Any> {
+        logger.warn("Swarm backend unavailable: {}", e.message)
+        return mapOf("error" to "Swarm not installed", "message" to (e.message ?: ""))
     }
 }

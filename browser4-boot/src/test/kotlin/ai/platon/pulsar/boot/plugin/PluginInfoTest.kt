@@ -31,6 +31,8 @@ class PluginInfoTest {
         assertEquals(listOf("browser4-skeleton"), info.manifest?.dependsOn)
         assertEquals(listOf("com.example.TestAutoConfiguration"), info.manifest?.autoConfigurationClasses)
         assertTrue(info.loaded)
+        assertTrue(info.defaultEnabled)
+        assertTrue(info.enabled)
     }
 
     @Test
@@ -45,6 +47,8 @@ class PluginInfoTest {
 
         assertNull(info.manifest)
         assertFalse(info.loaded)
+        assertTrue(info.defaultEnabled)
+        assertTrue(info.enabled)
     }
 
     @Test

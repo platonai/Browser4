@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agentic.support
 
-import ai.platon.pulsar.agentic.common.SimpleKotlinParser
+import ai.platon.pulsar.coding.SimpleKotlinParser
 import ai.platon.pulsar.api.model.BrowserState
 import ai.platon.pulsar.api.model.ClientInfo
 import ai.platon.pulsar.api.model.ScrollState

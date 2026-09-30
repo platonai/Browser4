@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor
 import ai.platon.pulsar.agentic.tools.advanced.crawl.failed
+import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.Strings
@@ -73,15 +74,40 @@ class UserCommandExecutor(
      * */
     private val rejectedStatuses = ConcurrentHashMap<String, CommandStatus>()
 
-    fun ensurePageVisitor(sessionId: String): StatefulPageVisitor =
-        pageVisitors.getOrPut(sessionId) {
+    fun ensurePageVisitor(sessionId: String): StatefulPageVisitor {
+        val existing = pageVisitors[sessionId]
+        if (existing != null && existing.session.isActive) {
+            return existing
+        }
+        // The cached visitor may hold a session that was deleted/closed (e.g. by
+        // close_all_sessions) while this executor survived. Rebuild it against a
+        // fresh session instead of running page visits against a closed session.
+        if (existing != null) {
+            pageVisitors.remove(sessionId)
+            runCatching { existing.close() }
+        }
+        return pageVisitors.getOrPut(sessionId) {
             StatefulPageVisitor(sessionManager.getOrCreateSession(sessionId).agenticSession)
         }
+    }
 
-    fun ensureAgentRunner(sessionId: String): StatefulAgentRunner =
-        agentRunners.getOrPut(sessionId) {
+    fun ensureAgentRunner(sessionId: String): StatefulAgentRunner {
+        val existing = agentRunners[sessionId]
+        if (existing != null && existing.session.isActive) {
+            return existing
+        }
+        // The cached runner may hold a session whose agent was closed (e.g. by
+        // close_all_sessions) while this executor survived. Rebuild it against a
+        // fresh session — otherwise agent tasks run against a closed agent and
+        // finish in zero steps with no result.
+        if (existing != null) {
+            agentRunners.remove(sessionId)
+            runCatching { existing.close() }
+        }
+        return agentRunners.getOrPut(sessionId) {
             StatefulAgentRunner(sessionManager.getOrCreateSession(sessionId).agenticSession)
         }
+    }
 
     suspend fun executePageVisitCommand(
         sessionId: String,
@@ -113,18 +139,29 @@ class UserCommandExecutor(
      */
     suspend fun executePlainCommand(
         sessionId: String,
-        plainCommand: String
+        plainCommand: String,
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
     ): CommandStatus {
         if (plainCommand.isBlank()) {
             return CommandStatus.failed(ResourceStatus.SC_BAD_REQUEST)
         }
 
-        val request = commandNormalizer?.normalize(plainCommand)
+        // CLI engine (the default) executes everything as an agent task; only
+        // the explicit legacy OBSERVE_ACT engine keeps the URL/normalizer
+        // routing (URL-bearing tasks would otherwise hijack cli-engine runs).
+        val request = if (engine == RunEngine.OBSERVE_ACT) {
+            commandNormalizer?.normalize(plainCommand)
+        } else {
+            null
+        }
         return if (request != null) {
             val eventHandlers = PageEventHandlersFactory.create()
             ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
         } else {
-            ensureAgentRunner(sessionId).execute(plainCommand).toCommandStatus()
+            ensureAgentRunner(sessionId)
+                .execute(plainCommand, noopLimit = noopLimit, engine = engine)
+                .toCommandStatus()
         }
     }
 
@@ -140,7 +177,9 @@ class UserCommandExecutor(
      */
     suspend fun submitPlainCommand(
         sessionId: String,
-        plainCommand: String
+        plainCommand: String,
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
     ): String {
         val command = plainCommand.trim()
 
@@ -149,6 +188,12 @@ class UserCommandExecutor(
             val status = CommandStatus(statusCode = ResourceStatus.SC_BAD_REQUEST, processState = "done")
             rejectedStatuses[status.id] = status
             return status.id
+        }
+
+        // CLI engine (the default): always an agent task — no URL shortcut, no
+        // normalizer hijack. The agent decides how to reach the page via b4.run.
+        if (engine != RunEngine.OBSERVE_ACT) {
+            return submitAgentTask(sessionId, command, noopLimit, engine)
         }
 
         // 2. Single URL with optional parameters — use page visit directly
@@ -170,7 +215,7 @@ class UserCommandExecutor(
             submitPageVisitCommand(sessionId, request, eventHandlers)
         } else {
             // 4. Free-form agent command
-            submitAgentTask(sessionId, command)
+            submitAgentTask(sessionId, command, noopLimit, engine)
         }
     }
 
@@ -197,13 +242,35 @@ class UserCommandExecutor(
 
     fun submitAgentTask(
         sessionId: String,
-        plainCommand: String
+        plainCommand: String,
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
     ): String {
-        val status = ensureAgentRunner(sessionId).create()
+        val runner = ensureAgentRunner(sessionId)
+        val status = runner.create()
         taskOwner[status.id] = "agent"
-        logger.info("Submitting agent task {} (session={})", status.id, sessionId)
-        commanderScope.launch { ensureAgentRunner(sessionId).execute(plainCommand, status) }
+        logger.info("Submitting agent task {} (session={}, noopLimit={})", status.id, sessionId, noopLimit)
+        runner.submit(plainCommand, status, noopLimit, engine)
         return status.id
+    }
+
+    /**
+     * Cancel a running/queued agent task by id.
+     *
+     * Probes every session's agent runner — the [taskOwner] map may be stale
+     * after restarts, and the id itself is globally unique.
+     *
+     * @return true when a live job was found and cancelled
+     */
+    fun cancelAgentTask(id: String): Boolean {
+        val cancelled = agentRunners.values.any { it.cancel(id) }
+        if (cancelled) {
+            taskOwner.remove(id)
+            logger.info("Cancelled agent task {}", id)
+        } else {
+            logger.debug("Agent task {} not running — nothing to cancel", id)
+        }
+        return cancelled
     }
 
     /**
@@ -230,8 +297,19 @@ class UserCommandExecutor(
                 ?: fallbackAgentStatus(sessionId, id)
             "agent" -> ensureAgentRunner(sessionId).getStatus(id)?.toCommandStatus()
                 ?: fallbackPageStatus(sessionId, id)
-            else -> fallbackPageStatus(sessionId, id)
-                ?: fallbackAgentStatus(sessionId, id)
+            else -> {
+                // Unknown owner (stale taskOwner after a restart, or a task
+                // created by a previous instance): probe every existing runner
+                // and visitor first — each runner restores the global JSONL
+                // persistence into its status cache on construction. Only when
+                // no runner exists at all, construct one so restoreFromDisk can
+                // revive terminal statuses. Without this, a restarted backend
+                // answered "null" and the CLI overwrote its cached terminal
+                // statuses with "queued" (P2.5).
+                agentRunners.values.firstNotNullOfOrNull { it.getStatus(id)?.toCommandStatus() }
+                    ?: pageVisitors.values.firstNotNullOfOrNull { it.getStatus(id)?.toCommandStatus() }
+                    ?: ensureAgentRunner(sessionId).getStatus(id)?.toCommandStatus()
+            }
         }
 
         if (status == null && owner != null) {

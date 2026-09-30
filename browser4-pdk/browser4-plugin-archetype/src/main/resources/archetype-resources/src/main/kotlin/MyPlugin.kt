@@ -14,6 +14,7 @@ open class MyPlugin(
     override val manifest: PluginManifest = PluginManifest(
         name = "${pluginName}",
         version = "${version}",
+        sdkVersion = "${browser4-version}",
         description = "${pluginDescription}",
         dependsOn = listOf("browser4-skeleton", "browser4-browser"),
         autoConfigurationClasses = listOf(

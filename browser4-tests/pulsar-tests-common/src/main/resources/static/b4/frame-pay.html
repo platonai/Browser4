@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Payment Frame</title>
+  <style>
+    body { font-family: sans-serif; padding: 8px; }
+    label { display: block; margin: 4px 0; }
+    .state { font-family: monospace; margin-top: 8px; padding: 4px; background: #efe; }
+  </style>
+</head>
+<body>
+  <h3 id="pay-heading">Payment form</h3>
+  <label>Card number
+    <input id="card-number" name="cardNumber" type="text" />
+  </label>
+  <label>Card holder
+    <input id="card-name" name="cardName" type="text" />
+  </label>
+  <button id="pay-submit" type="button">Pay now</button>
+  <div class="state" id="pay-state">pay-initial</div>
+  <script>
+    window.__payState = { clicks: 0, cardNumber: '', cardName: '' };
+    document.getElementById('pay-submit').addEventListener('click', function () {
+      window.__payState.clicks += 1;
+      window.__payState.cardNumber = document.getElementById('card-number').value;
+      window.__payState.cardName = document.getElementById('card-name').value;
+      document.getElementById('pay-state').textContent =
+        'submitted:' + window.__payState.cardNumber + ':' + window.__payState.cardName;
+    });
+  </script>
+</body>
+</html>

@@ -1,5 +1,8 @@
 # Stage 1: Build stage
-FROM maven:3.9.9-eclipse-temurin-21-alpine AS builder
+# maven:3.9.9-eclipse-temurin-25-alpine does not exist on Docker Hub (3.9.x
+# gained temurin-25 tags starting at 3.9.11); 3.9.16 is the latest 3.9.x with
+# the temurin-25-alpine variant.
+FROM maven:3.9.16-eclipse-temurin-25-alpine AS builder
 
 # Set working directory
 WORKDIR /build
@@ -31,6 +34,18 @@ RUN --mount=type=cache,target=/root/.m2 \
 # (host filesystem), which does not have the freshly-built JAR.
 RUN cp ${STANDALONE_MODULE}/target/Browser4.jar /build/app.jar
 
+# Build the browser4-swarm plugin and collect it for the runtime plugins/
+# directory.  The asset-standalone reactor does not include plugin modules,
+# so build the plugin explicitly (its provided deps resolve against the
+# host classpath at runtime).  Browser4StandaloneApplication loads every
+# JAR in ./plugins/ via PluginClasspathEnhancer, which registers the swarm
+# facade (SwarmFacadeMount) and makes /api/swarm/* available.
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -q package -pl browser4-plugins/browser4-swarm -am -DskipTests -B && \
+    mkdir -p /build/plugins && \
+    cp browser4-plugins/browser4-swarm/target/browser4-swarm-*.jar /build/plugins/ && \
+    echo "Plugins collected:" && ls -la /build/plugins
+
 # Validate the JAR before proceeding to the runtime stage.
 RUN jar xf /build/app.jar META-INF/MANIFEST.MF && \
     grep -q 'Start-Class: ai.platon.pulsar.apps.Browser4StandaloneApplicationKt' META-INF/MANIFEST.MF || \
@@ -38,7 +53,7 @@ RUN jar xf /build/app.jar META-INF/MANIFEST.MF && \
     echo "JAR validated: Start-Class is Browser4StandaloneApplicationKt"
 
 # Stage 2: Run stage
-FROM eclipse-temurin:21-jre-alpine AS runner
+FROM eclipse-temurin:25-jre-alpine AS runner
 
 # Set working directory
 WORKDIR /app
@@ -47,11 +62,19 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Install Chromium and necessary dependencies with security updates
+# Install Chromium and necessary dependencies with security updates.
+# Pin the chromium version: the temurin alpine base image tracks a rolling
+# Alpine repo, and the unpinned `chromium` package silently jumped 149 → 151
+# between CI runs (2026-08-21 ok → 2026-08-24 E2E hangs: slow navigation,
+# blank pages, CDP evaluate timeouts). 149.0.7827.53-r0 is the last known-good
+# build (Alpine v3.23); the explicit --repository keeps the version resolvable
+# even when the base image points at a newer Alpine release.
 RUN apk update && apk upgrade && \
     apk add --no-cache \
+    --repository https://dl-cdn.alpinelinux.org/alpine/v3.23/main \
+    --repository https://dl-cdn.alpinelinux.org/alpine/v3.23/community \
     curl \
-    chromium \
+    chromium=149.0.7827.53-r0 \
     nss \
     freetype \
     freetype-dev \
@@ -73,6 +96,10 @@ ENV JAVA_OPTS="-Xms2G -Xmx10G -XX:+UseG1GC" \
 
 # Copy build artifact
 COPY --from=builder /build/app.jar app.jar
+
+# Runtime plugins (loaded from ./plugins/ relative to the working directory
+# by PluginClasspathEnhancer at startup)
+COPY --from=builder /build/plugins/ /app/plugins/
 
 # Expose port (documentation only)
 EXPOSE 18182

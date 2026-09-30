@@ -13,6 +13,22 @@ use crate::state::resolve_default_state_dir;
 /// Allowed keys for `config set` / `config get` / `config delete`.
 pub const VALID_CONFIG_KEYS: &[&str] = &["server", "timeout", "proxy", "session"];
 
+/// Server-side config keys recognized by `config get` / `set` / `delete`.
+///
+/// Unlike the local keys above, these are not stored in `config.json` —
+/// they are routed to the running server's unified REST config interface
+/// (`/api/config/{key}`) as runtime overrides: effective immediately,
+/// lost on server restart.
+pub const SERVER_CONFIG_KEYS: &[&str] = &[
+    "agent.llm.maxRequestTokens",
+    "agent.token.budget.total",
+];
+
+/// True when the key refers to server-side configuration routed to the REST API.
+pub fn is_server_config_key(key: &str) -> bool {
+    SERVER_CONFIG_KEYS.contains(&key)
+}
+
 /// Persistent CLI configuration stored in `~/.browser4/config.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigStore {
@@ -35,6 +51,11 @@ pub struct ConfigStore {
 }
 
 /// Resolve the path to the config file.
+///
+/// Lives in the *effective* state dir, so in development mode each checkout
+/// keeps its own `config.json` next to its own sessions and ports — a
+/// workspace-scoped `config set server …` cannot leak into a neighbour.  Set
+/// `BROWSER4_CLI_STATE_DIR` to share one config across checkouts.
 pub fn config_path() -> PathBuf {
     resolve_default_state_dir().join("config.json")
 }
@@ -62,6 +83,7 @@ pub fn write_config(config: &ConfigStore) -> std::io::Result<()> {
 pub fn config_unknown_key_error(key: &str) -> String {
     let valid = VALID_CONFIG_KEYS
         .iter()
+        .chain(SERVER_CONFIG_KEYS.iter())
         .map(|k| format!("'{}'", k))
         .collect::<Vec<_>>()
         .join(", ");
@@ -84,9 +106,12 @@ pub fn config_set_value(config: &mut ConfigStore, key: &str, value: &str) -> Res
     match key {
         "server" => config.server = Some(value.to_string()),
         "timeout" => {
-            let n: u64 = value
-                .parse()
-                .map_err(|_| format!("Invalid timeout value '{}': expected a positive integer (seconds)", value))?;
+            let n: u64 = value.parse().map_err(|_| {
+                format!(
+                    "Invalid timeout value '{}': expected a positive integer (seconds)",
+                    value
+                )
+            })?;
             if n == 0 {
                 return Err(format!(
                     "Invalid timeout value '{}': expected a positive integer (seconds)",
@@ -132,21 +157,30 @@ mod tests {
     fn test_config_set_and_get() {
         let mut c = ConfigStore::default();
         config_set_value(&mut c, "server", "http://localhost:9090").unwrap();
-        assert_eq!(config_value(&c, "server"), Some("http://localhost:9090".to_string()));
+        assert_eq!(
+            config_value(&c, "server"),
+            Some("http://localhost:9090".to_string())
+        );
     }
 
     #[test]
     fn test_config_set_timeout_rejects_non_numeric() {
         let mut c = ConfigStore::default();
         let err = config_set_value(&mut c, "timeout", "abc").unwrap_err();
-        assert!(err.contains("Invalid timeout"), "Expected 'Invalid timeout' in: {err}");
+        assert!(
+            err.contains("Invalid timeout"),
+            "Expected 'Invalid timeout' in: {err}"
+        );
     }
 
     #[test]
     fn test_config_set_timeout_rejects_zero() {
         let mut c = ConfigStore::default();
         let err = config_set_value(&mut c, "timeout", "0").unwrap_err();
-        assert!(err.contains("Invalid timeout"), "Expected 'Invalid timeout' in: {err}");
+        assert!(
+            err.contains("Invalid timeout"),
+            "Expected 'Invalid timeout' in: {err}"
+        );
     }
 
     #[test]
@@ -160,7 +194,10 @@ mod tests {
     fn test_config_set_rejects_unknown_key() {
         let mut c = ConfigStore::default();
         let err = config_set_value(&mut c, "unknown", "value").unwrap_err();
-        assert!(err.contains("Unknown config key"), "Expected 'Unknown config key' in: {err}");
+        assert!(
+            err.contains("Unknown config key"),
+            "Expected 'Unknown config key' in: {err}"
+        );
     }
 
     #[test]
@@ -176,7 +213,10 @@ mod tests {
     fn test_config_delete_rejects_unknown_key() {
         let mut c = ConfigStore::default();
         let err = config_delete_value(&mut c, "nope").unwrap_err();
-        assert!(err.contains("Unknown config key"), "Expected 'Unknown config key' in: {err}");
+        assert!(
+            err.contains("Unknown config key"),
+            "Expected 'Unknown config key' in: {err}"
+        );
     }
 
     #[test]
@@ -186,13 +226,22 @@ mod tests {
         let mut c = ConfigStore::default();
         for key in VALID_CONFIG_KEYS {
             // Set
-            config_set_value(&mut c, key, if *key == "timeout" { "10" } else { "testval" }).unwrap();
+            config_set_value(
+                &mut c,
+                key,
+                if *key == "timeout" { "10" } else { "testval" },
+            )
+            .unwrap();
             // Get
             let val = config_value(&c, key);
             assert!(val.is_some(), "Key '{}' should have a value after set", key);
             // Delete
             config_delete_value(&mut c, key).unwrap();
-            assert!(config_value(&c, key).is_none(), "Key '{}' should be None after delete", key);
+            assert!(
+                config_value(&c, key).is_none(),
+                "Key '{}' should be None after delete",
+                key
+            );
         }
     }
 

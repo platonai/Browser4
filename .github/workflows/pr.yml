@@ -30,7 +30,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  JAVA_VERSION: '17'
+  JAVA_VERSION: '25'
   MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
 
 jobs:
@@ -91,6 +91,10 @@ jobs:
           }
           Write-Host "`nAll $($scripts.Count) scripts parsed successfully." -ForegroundColor Green
 
+      - name: Skill document conformance (methodology M1-M8)
+        shell: pwsh
+        run: ./bin/skill-doc-lint.ps1
+
       - name: Run Fast Unit Tests (coverage gate)
         id: run-tests
         uses: ./.github/actions/run-tests
@@ -106,6 +110,14 @@ jobs:
           excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,Heavy,HeavyTest,Integration,IntegrationTest,RequiresServer,RequiresBrowser,RequiresDocker,TestInfraCheck'
           timeout_minutes: '25'
           # Keep the PR fast: skip the heavy Integration/E2E modules.
+          #
+          # NOTE: the MCP contract gate (`bin/test.ps1 mcp-contract`) needs no step
+          # of its own here. Its tests are the untagged/Unit+Fast classes of
+          # browser4-agentic and browser4-rest (ToolContractMatrixTest,
+          # ToolDocGeneratorTest, ToolSpecLintTest, the validator/limiter/cache/batch
+          # suites), so this run already executes them — including the
+          # `docs/mcp-tools.{md,json}` drift check. Adding the script as a second
+          # step would re-run the same classes for another ~4 minutes.
           run_pulsar_tests: 'false'
 
       - name: Check Test Status
@@ -113,6 +125,18 @@ jobs:
           if [ "${{ steps.run-tests.outputs.test_status }}" != "success" ]; then
             echo "❌ Tests failed with status: ${{ steps.run-tests.outputs.test_status }}"
             echo "📊 Total: ${{ steps.run-tests.outputs.test_count }} | Failed: ${{ steps.run-tests.outputs.failed_count }} | Passed: ${{ steps.run-tests.outputs.passed_count }}"
+            echo "Maven exit code: ${{ steps.run-tests.outputs.run_exit_code }}"
+            echo "Surefire reports produced: ${{ steps.run-tests.outputs.reports_found }}"
+            if [ "${{ steps.run-tests.outputs.failed_count }}" = "0" ]; then
+              echo ""
+              echo "ℹ️  No surefire test failure was parsed, so the reactor failed outside the tests."
+              echo "    In this gate that is most often the JaCoCo instruction floor"
+              echo "    (quality-gate profile, minimum 0.20 per module) — open"
+              echo "    'target/site/jacoco/index.html' from the test-reports artifact, or grep the"
+              echo "    'Run Tests' step for the JaCoCo rule violation. A module with no tests and"
+              echo "    no exec file fails the floor by design; a compile error or a dead test JVM"
+              echo "    shows up the same way."
+            fi
             FAILED_LIST="${{ steps.run-tests.outputs.failed_test_list }}"
             if [ -n "$FAILED_LIST" ]; then
               echo ""

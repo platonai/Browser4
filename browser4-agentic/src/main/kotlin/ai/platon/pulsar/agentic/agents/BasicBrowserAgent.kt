@@ -14,7 +14,7 @@ import ai.platon.pulsar.agentic.inference.detail.PageStateTracker
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
-import ai.platon.pulsar.common.AppPaths
+import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.common.alwaysTrue
 import ai.platon.pulsar.common.event.EventBus
 import ai.platon.pulsar.common.getLogger
@@ -28,9 +28,10 @@ import java.nio.file.Path
 import java.text.MessageFormat
 import java.time.Instant
 import java.util.*
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.milliseconds
 
-open class BasicBrowserAgent(
+open class BasicBrowserAgent constructor(
     override val session: AgenticSession,
     val config: AgentConfig
 ) : PerceptiveAgent {
@@ -46,17 +47,60 @@ open class BasicBrowserAgent(
     protected val promptBuilder = PromptBuilder()
 
     private val lazyAgentToolManager by lazy {
-        AgentToolManager(_baseDir, this)
+        toolManagerInitialized.set(true)
+        // Workspace isolation: CLI-engine (browser) tasks get a per-agent
+        // scratch workspace so helper files never pollute the repository root;
+        // coding tasks keep CodingWorkspace.workspaceRoot.
+        val workspace = (this as? RobustBrowserAgent)
+            ?.takeIf { it.effectiveRunEngine == RunEngine.CLI_TOOL_LOOP }
+            ?.agentWorkspaceDir
+            ?: CodingWorkspace.workspaceRoot
+        AgentToolManager(_baseDir, this, workspaceRoot = workspace).also {
+            // Inner (native tool-calling loop) executions don't produce outer
+            // AgentStates — record them so the finish-report guard can see them.
+            it.toolExecutionRecorder = ::recordInnerToolExecution
+        }
     }
+
+    private val toolManagerInitialized = AtomicBoolean(false)
 
     /** The [AgentToolManager] used by this agent for tool discovery and execution. */
     val agentToolManager: AgentToolManager get() = lazyAgentToolManager
     protected val fs get() = agentToolManager.fs
 
+    /** True once the tool manager was actually created (avoids costly lazy init on close). */
+    internal val isAgentToolManagerInitialized: Boolean get() = toolManagerInitialized.get()
+
+    /**
+     * Tools executed inside the native tool-calling loop (no outer AgentState
+     * is created for those) — tracked by domain.method, resets per run. Used by
+     * the finish-report guard (count) and the gate cross-check (names).
+     */
+    private val innerToolExecutions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    val innerToolExecutionCount: Int get() = innerToolExecutions.size
+    val innerToolExecutionNames: Set<String> get() = innerToolExecutions.toSet()
+
+    /** Record one inner-loop tool execution (called from [AgentToolManager.notifyToolExecuted]). */
+    fun recordInnerToolExecution(domain: String, method: String) {
+        innerToolExecutions.add("$domain.$method")
+    }
+
+    /** Reset the inner execution registry; invoked at the start of each run. */
+    fun resetInnerToolExecutions() {
+        innerToolExecutions.clear()
+    }
+
     val activeDriver get() = session.getOrCreateBoundDriver()
     val startTime get() = _startTime
     val baseDir: Path get() = _baseDir
     val logDir: Path get() = _logDir
+
+    /**
+     * Coding mode: the task operates on repository files/build with no browser page
+     * needed. Overridden by [RobustBrowserAgent]; when true, page navigation and
+     * screenshots are skipped so pure coding tasks don't pay browser overhead.
+     */
+    open val codingMode: Boolean get() = false
 
     protected val pageStateTracker = PageStateTracker(session, config)
     protected val stateManager by lazy { AgentStateManager(this, pageStateTracker) }
@@ -64,6 +108,14 @@ open class BasicBrowserAgent(
     override val uuid get() = _uuid
     override val stateHistory: AgentHistory get() = stateManager.stateHistory
     override val processTrace: List<ProcessTrace> get() = stateManager.processTrace
+
+    /**
+     * The execution session id of the most recent [run] call. Each run starts a new
+     * execution session; states collected during the run carry this id (see
+     * [AgentState.sessionId]), allowing task-scoped views of the shared history.
+     */
+    protected var _lastRunSessionId: String? = null
+    override val lastRunSessionId: String? get() = _lastRunSessionId
 
     init {
         Files.createDirectories(baseDir)
@@ -89,7 +141,12 @@ open class BasicBrowserAgent(
     }
 
     override suspend fun run(action: ActionOptions): AgentHistory {
+        _lastRunSessionId = null
         onWillRun(action)
+
+        // The first context created below starts this run's execution session; all
+        // contexts (and their agent states) of this run share that session id.
+        val contextCountBefore = stateManager.contexts.size
 
         var result = act(action)
 
@@ -100,7 +157,10 @@ open class BasicBrowserAgent(
 
         onDidRun(action, result)
 
-        return stateHistory
+        _lastRunSessionId = stateManager.contexts.getOrNull(contextCountBefore)?.sessionId
+        // Return a detached, task-scoped snapshot so callers never see other runs' states
+        // and later trims of the shared history cannot mutate this result.
+        return stateHistory.snapshotFor(_lastRunSessionId)
     }
 
     override suspend fun run(task: String): AgentHistory {
@@ -112,11 +172,13 @@ open class BasicBrowserAgent(
      * Observes the page given an instruction, returning zero or more ObserveResult objects describing
      * candidate elements and potential actions (if returnAction=true).
      */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     override suspend fun observe(instruction: String): List<ObserveResult> {
         val opts = ObserveOptions(instruction = instruction, returnAction = null)
         return observe(opts)
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     override suspend fun observe(options: ObserveOptions): List<ObserveResult> {
         onWillObserve(options)
 
@@ -127,6 +189,7 @@ open class BasicBrowserAgent(
         return result.observeResults
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     protected suspend fun doObserve(options: ObserveOptions): ObserveActResult {
         val context = stateManager.getOrCreateActiveContext(options, "observe")
 
@@ -177,6 +240,7 @@ open class BasicBrowserAgent(
         return result
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     override suspend fun act(observe: ObserveResult): ActResult {
         val instruction = observe.agentState.instruction
         val context = stateManager.getActiveContext()
@@ -321,11 +385,13 @@ open class BasicBrowserAgent(
         return result
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     data class ObserveActResult(
         val observeResults: List<ObserveResult>,
         val actionDescription: ActionDescription,
     )
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     protected fun onWillObserve(options: ObserveOptions) {
         val agentId = this.uuid.toString()
         // Emit AgentEventBus event for SSE streaming
@@ -344,6 +410,7 @@ open class BasicBrowserAgent(
         )
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     protected fun onDidObserve(options: ObserveOptions, result: ObserveActResult) {
         val agentId = this.uuid.toString()
 
@@ -549,6 +616,7 @@ open class BasicBrowserAgent(
         )
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     private suspend fun doObserveAct(options: ActionOptions): ActResult {
         val options = when {
             !options.fromRunLoop -> options.copy(action = promptBuilder.buildObserveActToolUsePrompt(options.action))
@@ -622,26 +690,30 @@ open class BasicBrowserAgent(
         return ActResultHelper.failed(IllegalStateException(msg), options.action)
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     private suspend fun doObserveActObserve(
         options: Any, context: ExecutionContext, multistep: Boolean
     ): ObserveActResult {
         val observeOptions = options as? ObserveOptions
-        val drawOverlay = alwaysTrue() || (observeOptions?.drawOverlay ?: false)
-
         val params = when (options) {
             is ObserveOptions -> context.createObserveParams(
                 options,
                 fromAct = false,
-                multistep = multistep
+                multistep = multistep,
+                codingMode = codingMode,
             )
 
-            is ActionOptions -> context.createObserveActParams(multistep)
+            is ActionOptions -> context.createObserveActParams(multistep, codingMode)
             else -> throw IllegalArgumentException("Not supported options | $options")
         }
 
-        // Sync browser state just before observe
+        // Sync browser state just before observe (coding mode short-circuits to
+        // DUMMY inside getBrowserUseState — no driver, no settle, no snapshot).
         stateManager.updateBrowserUseState(context)
         val interactiveElements = context.agentState.browserUseState.getAllInteractiveElements()
+        // P4.5: coding tasks never draw CDP highlights — doing so would bind a
+        // driver and launch a browser for a pure file/build task.
+        val drawOverlay = !codingMode && (observeOptions?.drawOverlay ?: false)
         try {
             if (drawOverlay) {
                 snapshotService.addHighlights(interactiveElements)
@@ -651,8 +723,15 @@ open class BasicBrowserAgent(
             // (or on the first step when no previous action exists), to reduce token usage.
             // Additionally, skip screenshots when the model is known to not support vision
             // (e.g., text-only models like DeepSeek) to avoid API errors.
-            val lastActionDomain = context.agentState.prevState?.actionDomain
-            val needsScreenshot = ToolSpecification.isBrowserInteraction(lastActionDomain)
+            // NOTE: the first step (step <= 1) is handled explicitly because a null previous
+            // domain now means "no tool call was attempted" — which is NOT a browser
+            // interaction — while the very first step still deserves an initial screenshot.
+            // Coding mode skips screenshots entirely: the task works on files, not pages.
+            val prevState = context.agentState.prevState
+            val lastActionDomain = prevState?.actionDomain
+            val needsScreenshot = !codingMode &&
+                (context.agentState.step <= 1 ||
+                ToolSpecification.isBrowserInteraction(lastActionDomain))
             val screenshotB64 = if (needsScreenshot && cta.isVisionSupported) activeDriver.screenshot() else null
             val context = context.copy(screenshotB64 = screenshotB64)
 
@@ -678,9 +757,5 @@ open class BasicBrowserAgent(
 
     }
 
-    private fun getAgentLogDir(): Path {
-        val agentId = uuid.toString()
-        val auxLogDir = AppPaths.detectAuxiliaryLogDir().resolve("agent")
-        return auxLogDir.resolve(AppPaths.fromTime(startTime)).resolve(agentId)
-    }
+    private fun getAgentLogDir(): Path = AgentPaths.resolveTraceRunDir(startTime, uuid)
 }

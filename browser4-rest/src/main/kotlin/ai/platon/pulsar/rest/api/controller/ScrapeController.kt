@@ -2,8 +2,8 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
-import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import ai.platon.pulsar.rest.api.service.ScrapeService
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.http.MediaType

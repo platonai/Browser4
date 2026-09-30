@@ -281,9 +281,15 @@ class ToolCallSpecificationRendererTest {
         assertTrue(rendered.contains(""""domain": "browser""""), "Should contain browser domain")
         assertTrue(rendered.contains(""""method": "switchTab""""), "Should contain switchTab method")
 
-        // Should include built-in fs tools
-        assertTrue(rendered.contains(""""domain": "fs""""), "Should contain fs domain")
-        assertTrue(rendered.contains(""""method": "writeString""""), "Should contain writeString method")
+        // Should include built-in agent tools
+        assertTrue(rendered.contains(""""domain": "agent""""), "Should contain agent domain")
+        assertTrue(rendered.contains(""""method": "extract""""), "Should contain extract method")
+
+        // The legacy fs domain was intentionally removed from the built-in spec
+        // (its executor is deprecated and unregistered; agents use coding.*
+        // instead) — it must NOT be advertised to the LLM.
+        assertFalse(rendered.contains(""""domain": "fs""""), "Should NOT contain legacy fs domain")
+        assertFalse(rendered.contains(""""method": "writeString""""), "Should NOT contain legacy fs.writeString")
     }
 
     @Test
@@ -362,9 +368,14 @@ class ToolCallSpecificationRendererTest {
         val browserTools = specs.filter { it.domain == "browser" }
         assertTrue(browserTools.isNotEmpty(), "Should include browser tools")
 
-        // Should include fs domain tools
+        // Should include agent domain tools
+        val agentTools = specs.filter { it.domain == "agent" }
+        assertTrue(agentTools.isNotEmpty(), "Should include agent tools")
+
+        // The legacy fs domain is intentionally not advertised (deprecated
+        // executor; agents use coding.* instead) — it must not parse either.
         val fsTools = specs.filter { it.domain == "fs" }
-        assertTrue(fsTools.isNotEmpty(), "Should include fs tools")
+        assertTrue(fsTools.isEmpty(), "Should NOT include legacy fs tools")
     }
 
     @Test
@@ -501,5 +512,57 @@ class ToolCallSpecificationRendererTest {
         override suspend fun execute(context: SkillContext, params: Map<String, Any>): SkillResult {
             return SkillResult.success(data = "Test result")
         }
+    }
+
+    // ── Tiered disclosure (design §1.2) ──────────────────────────────────────
+
+    @Test
+    @DisplayName("renderTiered for coding tasks collapses page domains into a summary line")
+    fun testRenderTieredCodingTaskCollapsesPageDomains() {
+        val rendered = ToolCallSpecificationRenderer.renderTiered(
+            includeCustomDomains = true, codingTask = true, disclosure = "tiered"
+        )
+
+        assertFalse(rendered.contains("tab.navigate"), "coding disclosure must not list tab tools: $rendered")
+        assertFalse(rendered.contains("browser.closeTab"), "coding disclosure must not list browser tools: $rendered")
+        assertTrue(rendered.contains("tab"), "summary line must mention the collapsed tab domain")
+        assertTrue(rendered.contains("system.help"), "summary line must point to system.help")
+    }
+
+    @Test
+    @DisplayName("renderTiered for browsing tasks collapses dev domains when registered")
+    fun testRenderTieredBrowsingTaskCollapsesDevDomains() {
+        ToolCallSpecificationRenderer.registerBuiltinDomainSpecs(
+            "coding",
+            listOf(
+                ToolSpec(
+                    domain = "coding", method = "read",
+                    arguments = listOf(ToolSpec.Arg("path", "String")),
+                    returnType = "String", description = "Read a file"
+                )
+            )
+        )
+        try {
+            val rendered = ToolCallSpecificationRenderer.renderTiered(
+                includeCustomDomains = true, codingTask = false, disclosure = "tiered"
+            )
+
+            assertTrue(rendered.contains("tab.navigate"), "browsing disclosure must list tab tools")
+            assertFalse(rendered.contains("coding.read"), "browsing disclosure must not list coding tools: $rendered")
+            assertTrue(rendered.contains("coding"), "summary line must mention the collapsed coding domain")
+        } finally {
+            // builtinDomainSpecs is process-global; restore isolation for other tests
+            ToolCallSpecificationRenderer.registerBuiltinDomainSpecs("coding", emptyList())
+        }
+    }
+
+    @Test
+    @DisplayName("renderTiered falls back to flat disclosure for full mode or unknown task")
+    fun testRenderTieredFullFallback() {
+        val full = ToolCallSpecificationRenderer.renderTiered(includeCustomDomains = true, codingTask = true, disclosure = "full")
+        assertTrue(full.contains("tab.navigate"), "full disclosure keeps page tools")
+
+        val unknown = ToolCallSpecificationRenderer.renderTiered(includeCustomDomains = true, codingTask = null, disclosure = "tiered")
+        assertTrue(unknown.contains("tab.navigate"), "unknown task type keeps flat disclosure")
     }
 }

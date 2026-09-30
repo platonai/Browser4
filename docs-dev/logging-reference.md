@@ -27,8 +27,6 @@ management tooling, debugging, or configuring observability.
 | `browser4-agentic/src/test/resources/logback-test.xml` | Agentic tests — console only, log.level overridable |
 | `browser4-tests/browser4-rest-tests/src/test/resources/logback-test.xml` | REST integration tests |
 | `browser4-tests/browser4-e2e-tests/src/test/resources/logback-test.xml` | E2E tests — DEBUG on `skeleton.ai.agent` |
-| `browser4-tests/pulsar-e2e-tests/src/test/resources/logback-test.xml` | Pulsar E2E — same structure |
-| `browser4-tests/pulsar-it-tests/src/test/resources/logback-test.xml` | Pulsar IT — `skeleton.ai.agent` DEBUG |
 | `browser4-tests/pulsar-tests-common/src/test/resources/logback-test.xml` | Test common — minimal console |
 | `examples/browser4-examples/src/main/resources/logback.xml` | Examples — writes to `logs/pulsar.exam.log` |
 
@@ -86,8 +84,9 @@ All files live under `${logging.dir}` (default: `logs/`) with
 
 ### 1.5 Programmatic Logger Configuration
 
-- `PulsarWebDriverCDPTests.kt:22-25` — manipulates Logback logger levels directly
-  via `(LoggerFactory.getLogger(name) as Logger).level = level`
+- Programmatic Logback level changes in tests use
+  `(LoggerFactory.getLogger(name) as Logger).level = level` (e.g. via the shared
+  test `logback-test.xml` resources under `browser4-tests/*/src/test/resources/`)
 - `CodahaleSlf4jReporter.kt` — custom SLF4J reporter for Codahale Metrics;
   maps to TRACE/DEBUG/INFO/WARN/ERROR levels via `LoggerFactory.getLogger("metrics")`
 - `Browser4NativeHints.kt` — registers `logback*.xml` resources for GraalVM
@@ -256,7 +255,7 @@ touches the `_legacy/` archive).
 | Workflow | Artifact Name | Content |
 |---|---|---|
 | `.github/workflows/release.yml` | `smoke-test-logs-${{ matrix.artifact_name }}` | `${{ runner.temp }}/browser4-server-logs/` |
-| `.github/workflows/cross-platform-smoke.yml` | `smoke-test-logs-*` | Same pattern |
+| ~~`.github/workflows/cross-platform-smoke.yml`~~ | ~~`smoke-test-logs-*`~~ | ~~Same pattern~~ *(workflow removed — release.yml is the single smoke owner)* |
 | `.github/workflows/weekly-production-test.yml` | `production-test-logs-${{ matrix.name }}` | `.browser4-acceptance/` + `b4cli-*.txt` |
 | `.github/actions/run-tests/action.yml` | test reports | Maven Surefire XML reports |
 

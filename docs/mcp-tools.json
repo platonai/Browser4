@@ -1,0 +1,3787 @@
+{
+  "tools" : [ {
+    "domain" : "batch",
+    "method" : "run",
+    "mcpNames" : [ "batch_run" ],
+    "signature" : "batch.run(steps: List<Map<String, Any>>, bail: Boolean = false, concurrency: Int = 1, sessionId: String? = null)",
+    "description" : "Run several tool calls as one batch and return a per-step result envelope.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "steps",
+      "type" : "List<Map<String, Any>>",
+      "required" : true,
+      "description" : "Steps to run in order: `[{id?, tool, args}]`. `tool` is any advertised tool name (e.g. `navigate`, `browser_click`, `crawl_submit`). A JSON string is accepted too."
+    }, {
+      "name" : "bail",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "false",
+      "description" : "Stop at the first failing step instead of running the rest."
+    }, {
+      "name" : "concurrency",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "Run steps in parallel. Only allowed when every step is a read-only tool (max 4); browser work stays serial."
+    }, {
+      "name" : "sessionId",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Session the steps act on; both channels fill this in when the request carries one."
+    } ],
+    "examples" : [ {
+      "title" : "Drive a form and read the result in one call",
+      "args" : {
+        "steps" : "[{\"tool\":\"navigate\",\"args\":{\"url\":\"https://example.com\"}},{\"tool\":\"click\",\"args\":{\"selector\":\"#submit\"}},{\"tool\":\"title\",\"args\":{}}]"
+      },
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Read four things in parallel",
+      "args" : {
+        "steps" : "[{\"tool\":\"title\",\"args\":{}},{\"tool\":\"current_url\",\"args\":{}}]",
+        "concurrency" : "2"
+      },
+      "notes" : "Allowed because every step is read-only",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"steps\",\"failureCount\",\"stoppedOnError\",\"cached\",\"cachedSteps\",\"durationMs\"],\"properties\":{\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"index\",\"id\",\"tool\",\"ok\",\"durationMs\"],\"properties\":{\"index\":{\"type\":\"integer\"},\"id\":{\"type\":\"string\"},\"tool\":{\"type\":\"string\"},\"ok\":{\"type\":\"boolean\"},\"durationMs\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"},\"errorCode\":{\"type\":\"string\"},\"error\":{\"type\":\"string\"},\"cached\":{\"type\":\"boolean\"}}}},\"failureCount\":{\"type\":\"integer\"},\"stoppedOnError\":{\"type\":\"boolean\"},\"cached\":{\"type\":\"boolean\"},\"cachedSteps\":{\"type\":\"integer\"},\"durationMs\":{\"type\":\"integer\"}}}",
+    "help" : "batch.run(steps: List<Map<String, Any>>, bail: Boolean = false, concurrency: Int = 1)\n\nSteps run serially by default, because browser work is stateful: a\nbatch that clicks and then reads must observe the click. Set\nconcurrency>1 only for batches made entirely of read-only tools, or\nthe call is refused instead of silently reordering your steps.\n\nEach step in the answer carries {index, id, tool, ok, durationMs,\ntext, errorCode?, cached?}; the batch carries failureCount,\nstoppedOnError, cached, cachedSteps and durationMs. A batch whose\nsteps are all cacheable reads is replayed from the result cache the\nsecond time it is sent (`cached=true` on the batch and on each step)."
+  }, {
+    "domain" : "browser",
+    "method" : "closeTab",
+    "mcpNames" : [ "browser_close_tab" ],
+    "signature" : "browser.closeTab(index: Int? = null, tabId: String? = null)",
+    "description" : "Close a tab by zero-based index or GUID, or the current tab when omitted",
+    "returnType" : "Boolean",
+    "arguments" : [ {
+      "name" : "index",
+      "type" : "Int?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Zero-based tab index."
+    }, {
+      "name" : "tabId",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Tab GUID; give either this or index."
+    } ],
+    "examples" : [ {
+      "title" : "Close the second tab",
+      "args" : {
+        "index" : "1"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "browser",
+    "method" : "listTabs",
+    "mcpNames" : [ "browser_list_tabs" ],
+    "signature" : "browser.listTabs()",
+    "description" : "List all tabs with index, guid, title, and url",
+    "returnType" : "List<Map<String, String>>",
+    "examples" : [ {
+      "title" : "List every tab",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "browser",
+    "method" : "newTab",
+    "mcpNames" : [ "browser_new_tab" ],
+    "signature" : "browser.newTab(url: String = about:blank)",
+    "description" : "Create a new tab. Returns guid and url",
+    "returnType" : "Map<String, String>",
+    "arguments" : [ {
+      "name" : "url",
+      "type" : "String",
+      "required" : false,
+      "default" : "about:blank",
+      "description" : "url: String = about:blank"
+    } ],
+    "examples" : [ {
+      "title" : "Open a new tab on a page",
+      "args" : {
+        "url" : "https://example.com"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "browser",
+    "method" : "switchTab",
+    "mcpNames" : [ "browser_switch_tab" ],
+    "signature" : "browser.switchTab(index: Int? = null, tabId: String? = null)",
+    "description" : "Switch to a specific browser tab by its zero-based index or GUID",
+    "returnType" : "WebDriver",
+    "arguments" : [ {
+      "name" : "index",
+      "type" : "Int?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Zero-based tab index."
+    }, {
+      "name" : "tabId",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Tab GUID; give either this or index."
+    } ],
+    "examples" : [ {
+      "title" : "Switch to the second tab",
+      "args" : {
+        "index" : "1"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "command",
+    "method" : "cancel",
+    "mcpNames" : [ "command_cancel" ],
+    "signature" : "command.cancel(id: String)",
+    "description" : "Cancel a running agent command task.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task id returned by `command.run`. Required."
+    } ],
+    "examples" : [ {
+      "title" : "Stop a running agent command",
+      "args" : {
+        "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "Stops the task's runner and reports the outcome as JSON\n(`cancelled=true|false`). A page-load command cannot be interrupted\nmid-navigation, so cancelling one after it finished reports\n`cancelled=false` instead of pretending otherwise."
+  }, {
+    "domain" : "command",
+    "method" : "result",
+    "mcpNames" : [ "command_result" ],
+    "signature" : "command.result(id: String)",
+    "description" : "Read a finished command task: its status envelope and payload.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task id returned by `command.run`. Required."
+    } ],
+    "examples" : [ {
+      "title" : "Read the finished command's output",
+      "args" : {
+        "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "command.result(id: String)\n\nThe status envelope plus a `result` field holding the command's own\npayload. Poll `command.status` until it is terminal before reading, or\ncall this directly and treat a non-terminal `status` as \"not ready\"."
+  }, {
+    "domain" : "command",
+    "method" : "run",
+    "mcpNames" : [ "command_run" ],
+    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, engine: String? = null)",
+    "description" : "Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; 'observe-act' is the DEPRECATED legacy engine.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "command",
+      "type" : "String",
+      "required" : true,
+      "description" : "What to run: a URL to load, a natural-language instruction, or an agent task. Required."
+    }, {
+      "name" : "async",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "true",
+      "description" : "`true` (default) returns a task id immediately; `false` blocks until the command finishes and returns the CommandStatus JSON."
+    }, {
+      "name" : "noopLimit",
+      "type" : "Int?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Consecutive no-op abort threshold for agent tasks; omit to use the server default."
+    }, {
+      "name" : "engine",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated."
+    } ],
+    "examples" : [ {
+      "title" : "Load a page asynchronously",
+      "args" : {
+        "command" : "https://example.com"
+      },
+      "notes" : "Returns a task id; poll it with command.status",
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Run an agent task and wait",
+      "args" : {
+        "command" : "collect the page title",
+        "async" : "false"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "task" : {
+      "statusTool" : "command_status",
+      "resultTool" : "command_result",
+      "cancelTool" : "command_cancel",
+      "pollAfterMs" : 1000
+    },
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"statusTool\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"pollAfterMs\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "command.run(command: String)\ncommand.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?)\n\n`command` is a URL to load, a natural-language instruction, or an agent\ntask. With async=true (the default) the call returns a task id and you\npoll it with `command.status` (JSON status envelope), read the payload\nwith `command.result`, and stop it with `command.cancel`. Pass\nasync=false when you would rather block for the finished status."
+  }, {
+    "domain" : "command",
+    "method" : "status",
+    "mcpNames" : [ "command_status" ],
+    "signature" : "command.status(id: String)",
+    "description" : "Poll a command task: the shared status envelope as JSON.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task id returned by `command.run`. Required."
+    } ],
+    "examples" : [ {
+      "title" : "Poll a running command",
+      "args" : {
+        "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "command.status(id: String)\n\nReturns the shared envelope — `taskId`, `status`\n(`queued|running|done|failed|cancelled`), `processed` when the agent\nhas recorded steps, and the tool names to poll, read and cancel with.\nAn unknown id reports `status=failed`, never a healthy-looking state."
+  }, {
+    "domain" : "crawl",
+    "method" : "cancel",
+    "mcpNames" : [ "crawl_cancel" ],
+    "signature" : "crawl.cancel(id: String)",
+    "description" : "Cancel a running crawl task; the task ends in status=cancelled.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task id returned by `crawl.submit`."
+    } ],
+    "examples" : [ {
+      "title" : "Stop a running crawl",
+      "args" : {
+        "id" : "8f14e45f-ea0b-4c1e-9d3a-2f6d5c4b1a09"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "Cancels the task's coroutine and finalizes its record, so a client can\nstop polling immediately. Cancelling an unknown or already finished\ntask is reported (cancelled=false) rather than treated as an error:\nthe desired end state already holds."
+  }, {
+    "domain" : "crawl",
+    "method" : "result",
+    "mcpNames" : [ "crawl_result" ],
+    "signature" : "crawl.result(id: String)",
+    "description" : "Read a finished crawl task: the status envelope plus the pages it collected.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task id returned by `crawl.submit`."
+    } ],
+    "examples" : [ {
+      "title" : "Read the collected pages",
+      "args" : {
+        "id" : "8f14e45f-ea0b-4c1e-9d3a-2f6d5c4b1a09"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "crawl.result(id: String)\n\nThe status envelope plus `pages` — one entry per crawled URL with its\ntitle, content length and any X-SQL extraction. Poll `crawl.status`\nuntil it is terminal before reading."
+  }, {
+    "domain" : "crawl",
+    "method" : "status",
+    "mcpNames" : [ "crawl_status" ],
+    "signature" : "crawl.status(id: String)",
+    "description" : "Poll a crawl task: the shared status envelope as JSON.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task id returned by `crawl.submit`."
+    } ],
+    "examples" : [ {
+      "title" : "Poll a submitted task",
+      "args" : {
+        "id" : "8f14e45f-ea0b-4c1e-9d3a-2f6d5c4b1a09"
+      },
+      "notes" : "An unknown id reports status=failed with an error rather than a 404",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "crawl.status(id: String)\n\nReturns the shared envelope — `taskId`, `status`\n(`queued|running|done|failed|cancelled`), `processed` (pages collected\nso far), `elapsedMs` once the task finished, and the tool names to\npoll, read and cancel with. An unknown id reports `status=failed`."
+  }, {
+    "domain" : "crawl",
+    "method" : "submit",
+    "mcpNames" : [ "crawl_submit" ],
+    "signature" : "crawl.submit(url: String, depth: Int = 1, args: String = \"\")",
+    "description" : "Submit a crawl task. Returns a task ID for status polling.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "url",
+      "type" : "String",
+      "required" : true,
+      "description" : "Seed URL to start from. Required unless the seed list is supplied through `args`."
+    }, {
+      "name" : "depth",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "How many link levels to follow from the seed. `0` processes the seed page only."
+    }, {
+      "name" : "args",
+      "type" : "String",
+      "required" : false,
+      "description" : "Extra crawl arguments as a CLI-style string, e.g. `-outLinkSelector=a[href]` or an X-SQL query."
+    } ],
+    "examples" : [ {
+      "title" : "Crawl one link level from a seed URL",
+      "args" : {
+        "url" : "https://example.com",
+        "depth" : "1"
+      },
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Seed page only, then poll",
+      "args" : {
+        "url" : "https://example.com",
+        "depth" : "0"
+      },
+      "notes" : "Feed the returned task id to crawl.status",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "task" : {
+      "statusTool" : "crawl_status",
+      "resultTool" : "crawl_result",
+      "cancelTool" : "crawl_cancel",
+      "pollAfterMs" : 1000
+    },
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"statusTool\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"pollAfterMs\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "Starts a recursive crawl in the background and returns the task id\nimmediately. Poll it with `crawl.status`, read the payload with\n`crawl.result`. Use `depth=0` for a single page, and prefer the\nswarm domain for high-throughput parallel extraction."
+  }, {
+    "domain" : "experience",
+    "method" : "deep_learn",
+    "mcpNames" : [ "experience_deep_learn" ],
+    "signature" : "experience.deep_learn(url: String, intent: String, force: Boolean = false)",
+    "description" : "Deep Learning: run analysis tools (htmlsnapshot summary, inspect) to build or update KnowledgeFacts. Creates hypothesis on first run, promotes to verified when confidence threshold met. Use force=true to bypass sampling checks.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "url",
+      "type" : "String",
+      "required" : true,
+      "description" : "url: String"
+    }, {
+      "name" : "intent",
+      "type" : "String",
+      "required" : true,
+      "description" : "intent: String"
+    }, {
+      "name" : "force",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "false",
+      "description" : "force: Boolean = false"
+    } ],
+    "examples" : [ {
+      "title" : "Analyse a page and promote what it teaches",
+      "args" : {
+        "url" : "https://example.com/product/1",
+        "intent" : "buy the product"
+      },
+      "notes" : "Runs analysis tools against the current page and takes seconds, not milliseconds.",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"completed\",\"domain\",\"intent\",\"status_after\",\"promoted\",\"new_confidence\",\"selectors_found\"],\"properties\":{\"completed\":{\"type\":\"boolean\"},\"domain\":{\"type\":\"string\"},\"intent\":{\"type\":\"string\"},\"status_after\":{\"type\":\"string\"},\"promoted\":{\"type\":\"boolean\"},\"new_confidence\":{\"type\":\"number\"},\"message\":{\"type\":\"string\"},\"selectors_found\":{\"type\":\"integer\"}}}"
+  }, {
+    "domain" : "experience",
+    "method" : "list",
+    "mcpNames" : [ "experience_list" ],
+    "signature" : "experience.list(filter: String? = null, intent_filter: String? = null, page: Int = 1, page_size: Int = 20)",
+    "description" : "List stored knowledge entries organized by domain + intent. Filter by domain (filter) or intent (intent_filter). Paginated.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "filter",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Only entries whose domain matches this value."
+    }, {
+      "name" : "intent_filter",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Only entries whose intent matches this value."
+    }, {
+      "name" : "page",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "Page number, starting at 1."
+    }, {
+      "name" : "page_size",
+      "type" : "Int",
+      "required" : false,
+      "default" : "20",
+      "description" : "Entries per page."
+    } ],
+    "examples" : [ {
+      "title" : "List what is known about one domain",
+      "args" : {
+        "filter" : "example.com",
+        "page_size" : "50"
+      },
+      "notes" : "Every argument is optional — `experience_list` with no arguments lists everything.",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"total\",\"page\",\"page_size\",\"total_pages\",\"entries\"],\"properties\":{\"total\":{\"type\":\"integer\"},\"page\":{\"type\":\"integer\"},\"page_size\":{\"type\":\"integer\"},\"total_pages\":{\"type\":\"integer\"},\"entries\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"domain\"],\"properties\":{\"domain\":{\"type\":\"string\"},\"intent\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"retrieval_tier\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\"},\"site_types\":{\"type\":\"array\"},\"page_patterns\":{\"type\":\"array\"},\"task_types\":{\"type\":\"array\"},\"success_count\":{\"type\":\"integer\"},\"failure_count\":{\"type\":\"integer\"}}}}}}"
+  }, {
+    "domain" : "experience",
+    "method" : "query",
+    "mcpNames" : [ "experience_query" ],
+    "signature" : "experience.query(url: String, intent: String? = null)",
+    "description" : "Query stored knowledge with intent-based resolution. Classifies intent, then resolves: (domain,intent) → (domain,url) → (family,intent) → (category,intent) → (universal,intent) → cold start. Returns tier, confidence, selectors, blockers, warnings, and status.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "url",
+      "type" : "String",
+      "required" : true,
+      "description" : "url: String"
+    }, {
+      "name" : "intent",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Free-text intent; omit to match on the URL alone."
+    } ],
+    "examples" : [ {
+      "title" : "Ask what is already known about a page",
+      "args" : {
+        "url" : "https://example.com/product/1",
+        "intent" : "buy the product"
+      },
+      "notes" : "Omit `intent` to let the stored (domain, url) facts answer.",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"tier\",\"confidence\"],\"properties\":{\"tier\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\"},\"domain\":{\"type\":\"string\"},\"intent\":{\"type\":\"string\"},\"url_pattern\":{\"type\":\"string\"},\"page_type\":{\"type\":\"string\"},\"task_type\":{\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"extraction_query\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"primary_selectors\":{\"type\":\"object\"},\"warnings\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"known_blockers\":{\"type\":\"array\"},\"steps\":{\"type\":\"array\"}}}"
+  }, {
+    "domain" : "experience",
+    "method" : "save",
+    "mcpNames" : [ "experience_save" ],
+    "signature" : "experience.save(url: String, trace: String, outcome: String = success, intent: String? = null, task_type: String? = null, facts: String? = null)",
+    "description" : "Fast Learning: save task trace and update experience stats. Runs in ~tens of ms. No analysis tools executed. Use experience_deep_learn for analysis and knowledge promotion. Optional `facts` (JSON string or object) merges retrospective knowledge (selectors/interaction_hints/known_blockers/anti_patterns) into the (domain, intent) facts entry — the writer path for lessons learned on a task. Refused when the entry is VERIFIED (immutable).",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "url",
+      "type" : "String",
+      "required" : true,
+      "description" : "url: String"
+    }, {
+      "name" : "trace",
+      "type" : "String",
+      "required" : true,
+      "description" : "trace: String"
+    }, {
+      "name" : "outcome",
+      "type" : "String",
+      "required" : false,
+      "default" : "success",
+      "description" : "outcome: String = success"
+    }, {
+      "name" : "intent",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Free-text intent of the task."
+    }, {
+      "name" : "task_type",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Task classification, when the caller knows it."
+    }, {
+      "name" : "facts",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Retrospective knowledge (JSON string or object)."
+    } ],
+    "examples" : [ {
+      "title" : "Record what a finished task learned",
+      "args" : {
+        "url" : "https://example.com/product/1",
+        "trace" : "{\"steps\":[{\"tool\":\"click\",\"selector\":\"#buy\"}],\"outcome\":\"success\"}",
+        "intent" : "buy the product"
+      },
+      "notes" : "`facts` is optional; pass it to merge selectors, blockers or anti-patterns.",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"saved\",\"domain\",\"outcome\",\"confidence\",\"retrieval_tier\"],\"properties\":{\"saved\":{\"type\":\"boolean\"},\"domain\":{\"type\":\"string\"},\"intent\":{\"type\":\"string\"},\"task_type\":{\"type\":\"string\"},\"outcome\":{\"type\":\"string\"},\"trace_path\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\"},\"retrieval_tier\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"},\"facts_merged\":{\"type\":\"boolean\"},\"facts_status\":{\"type\":\"string\"},\"facts_rejected\":{\"type\":\"boolean\"},\"facts_message\":{\"type\":\"string\"}}}"
+  }, {
+    "domain" : "html_snapshot",
+    "method" : "capture",
+    "mcpNames" : [ "html_snapshot_capture" ],
+    "signature" : "html_snapshot.capture(sessionId: String)",
+    "description" : "Capture the current page as an HTML snapshot with metadata, interactive elements, and link groups.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "sessionId",
+      "type" : "String",
+      "required" : true,
+      "description" : "sessionId: String"
+    } ],
+    "examples" : [ {
+      "title" : "Snapshot the page the session is on",
+      "args" : {
+        "sessionId" : "<session-id>"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "html_snapshot",
+    "method" : "export",
+    "mcpNames" : [ "html_snapshot_export" ],
+    "signature" : "html_snapshot.export(sessionId: String, clean: Boolean = false)",
+    "description" : "Export the full, pretty-printed HTML of the current page. Set clean=true to strip <script>, <style>, and non-standard attributes (keeps the vi attribute).",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "sessionId",
+      "type" : "String",
+      "required" : true,
+      "description" : "sessionId: String"
+    }, {
+      "name" : "clean",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "false",
+      "description" : "clean: Boolean = false"
+    } ],
+    "examples" : [ {
+      "title" : "Export the page HTML",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "clean" : "true"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "html_snapshot",
+    "method" : "inspect",
+    "mcpNames" : [ "html_snapshot_inspect" ],
+    "signature" : "html_snapshot.inspect(sessionId: String, selector: String = :root, max: Int = 20, depth: Int = 5)",
+    "description" : "Inspect the HTML snapshot and suggest CSS selectors for recurring patterns.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "sessionId",
+      "type" : "String",
+      "required" : true,
+      "description" : "sessionId: String"
+    }, {
+      "name" : "selector",
+      "type" : "String",
+      "required" : false,
+      "default" : ":root",
+      "description" : "selector: String = :root"
+    }, {
+      "name" : "max",
+      "type" : "Int",
+      "required" : false,
+      "default" : "20",
+      "description" : "max: Int = 20"
+    }, {
+      "name" : "depth",
+      "type" : "Int",
+      "required" : false,
+      "default" : "5",
+      "description" : "depth: Int = 5"
+    } ],
+    "examples" : [ {
+      "title" : "Find selectors for repeated cards",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "selector" : ".product",
+        "max" : "10"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"selector\",\"matchCount\",\"suggestions\"],\"properties\":{\"selector\":{\"type\":\"string\"},\"matchCount\":{\"type\":\"integer\"},\"suggestions\":{\"type\":\"array\"},\"autoDiscovered\":{\"type\":\"boolean\"},\"originalSelector\":{\"type\":\"string\"},\"analyzed\":{\"type\":\"integer\"},\"samples\":{\"type\":\"array\"},\"speculativeSuggestion\":{\"type\":\"string\"},\"speculativeMatchCount\":{\"type\":\"integer\"}}}"
+  }, {
+    "domain" : "html_snapshot",
+    "method" : "query",
+    "mcpNames" : [ "html_snapshot_query" ],
+    "signature" : "html_snapshot.query(sql: String, url: String? = null, sessionId: String)",
+    "description" : "Execute an X-SQL query against the current page or a specified URL.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "sql",
+      "type" : "String",
+      "required" : true,
+      "description" : "sql: String"
+    }, {
+      "name" : "url",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Page to query; defaults to the session's current page."
+    }, {
+      "name" : "sessionId",
+      "type" : "String",
+      "required" : true,
+      "description" : "sessionId: String"
+    } ],
+    "examples" : [ {
+      "title" : "Run X-SQL against the current page",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "sql" : "select dom_first_text(dom, 'h1') as title"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"statusCode\",\"pageStatusCode\",\"pageContentBytes\",\"isDone\",\"event\"],\"properties\":{\"statusCode\":{\"type\":\"integer\"},\"pageStatusCode\":{\"type\":\"integer\"},\"pageContentBytes\":{\"type\":\"integer\"},\"isDone\":{\"type\":\"boolean\"},\"event\":{\"type\":\"string\"}}}"
+  }, {
+    "domain" : "html_snapshot",
+    "method" : "readability",
+    "mcpNames" : [ "html_snapshot_readability" ],
+    "signature" : "html_snapshot.readability(sessionId: String, url: String? = null)",
+    "description" : "Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) from the stored HTML snapshot using a Readability-style heuristic. When url is given, the page is fetched independently; otherwise the current session page is used.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "sessionId",
+      "type" : "String",
+      "required" : true,
+      "description" : "sessionId: String"
+    }, {
+      "name" : "url",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Fetch this URL instead of using the current page."
+    } ],
+    "examples" : [ {
+      "title" : "Extract the article of the current page",
+      "args" : {
+        "sessionId" : "<session-id>"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"url\",\"title\",\"byline\",\"siteName\",\"excerpt\",\"length\",\"confidence\",\"textContent\",\"content\"],\"properties\":{\"url\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"},\"byline\":{\"type\":\"string\"},\"siteName\":{\"type\":\"string\"},\"excerpt\":{\"type\":\"string\"},\"textContent\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"},\"length\":{\"type\":\"integer\"},\"confidence\":{\"type\":\"number\"}}}"
+  }, {
+    "domain" : "html_snapshot",
+    "method" : "scrape",
+    "mcpNames" : [ "html_snapshot_scrape" ],
+    "signature" : "html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null)",
+    "description" : "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "sessionId",
+      "type" : "String",
+      "required" : true,
+      "description" : "sessionId: String"
+    }, {
+      "name" : "field",
+      "type" : "String",
+      "required" : true,
+      "description" : "field: String"
+    }, {
+      "name" : "selector",
+      "type" : "String",
+      "required" : false,
+      "default" : ":root",
+      "description" : "selector: String = :root"
+    }, {
+      "name" : "attrName",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Attribute to read when field=attr."
+    } ],
+    "examples" : [ {
+      "title" : "Read one field",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "field" : "title",
+        "selector" : "h1"
+      },
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Read a link target",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "field" : "attr",
+        "selector" : "a",
+        "attrName" : "href"
+      },
+      "notes" : "field=attr requires attrName",
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "html_snapshot",
+    "method" : "scrape_all",
+    "mcpNames" : [ "html_snapshot_scrape_all" ],
+    "signature" : "html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, offset: Int = 0, limit: Int = -1)",
+    "description" : "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "sessionId",
+      "type" : "String",
+      "required" : true,
+      "description" : "sessionId: String"
+    }, {
+      "name" : "field",
+      "type" : "String",
+      "required" : true,
+      "description" : "field: String"
+    }, {
+      "name" : "selector",
+      "type" : "String",
+      "required" : false,
+      "default" : ":root",
+      "description" : "selector: String = :root"
+    }, {
+      "name" : "attrName",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Attribute to read when field=attr."
+    }, {
+      "name" : "offset",
+      "type" : "Int",
+      "required" : false,
+      "default" : "0",
+      "description" : "offset: Int = 0"
+    }, {
+      "name" : "limit",
+      "type" : "Int",
+      "required" : false,
+      "default" : "-1",
+      "description" : "limit: Int = -1"
+    } ],
+    "examples" : [ {
+      "title" : "Read every product title",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "field" : "text",
+        "selector" : ".product > h2",
+        "limit" : "20"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"array\",\"items\":{\"type\":\"string\"}}"
+  }, {
+    "domain" : "html_snapshot",
+    "method" : "summary",
+    "mcpNames" : [ "html_snapshot_summary" ],
+    "signature" : "html_snapshot.summary(sessionId: String)",
+    "description" : "Generate a page summary including title, statistics, and detected link groups.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "sessionId",
+      "type" : "String",
+      "required" : true,
+      "description" : "sessionId: String"
+    } ],
+    "examples" : [ {
+      "title" : "Summarise the current page",
+      "args" : {
+        "sessionId" : "<session-id>"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "memory",
+    "method" : "forget",
+    "mcpNames" : [ "memory_forget" ],
+    "signature" : "memory.forget(taskId: String)",
+    "description" : "Explicitly forget one task from memory (privacy / correction). Removes its events from the log and the search index.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "taskId",
+      "type" : "String",
+      "required" : true,
+      "description" : "taskId: String"
+    } ],
+    "examples" : [ {
+      "title" : "Forget a task",
+      "args" : {
+        "taskId" : "<task-id>"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "memory",
+    "method" : "note",
+    "mcpNames" : [ "memory_note" ],
+    "signature" : "memory.note(key: String, value: String, taskId: String? = null)",
+    "description" : "Write one working-memory note. Notes are re-injected into the conversation every round and survive context compression — use them for stable cross-step conclusions, confirmed assumptions, and pending todos.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "key",
+      "type" : "String",
+      "required" : true,
+      "description" : "key: String"
+    }, {
+      "name" : "value",
+      "type" : "String",
+      "required" : true,
+      "description" : "value: String"
+    }, {
+      "name" : "taskId",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Task the note belongs to; defaults to the current task."
+    } ],
+    "examples" : [ {
+      "title" : "Remember a conclusion",
+      "args" : {
+        "key" : "price",
+        "value" : "the product costs 19.99"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "memory",
+    "method" : "read",
+    "mcpNames" : [ "memory_read" ],
+    "signature" : "memory.read(taskId: String, seq: Long? = null, before: Int = 0, after: Int = 0)",
+    "description" : "Read a bounded window of memory events of one task around the event seq (defaults to the whole task, newest last). Bounded by the configured read window.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "taskId",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task whose memory events to read."
+    }, {
+      "name" : "seq",
+      "type" : "Long?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Centre the window on this event seq."
+    }, {
+      "name" : "before",
+      "type" : "Int",
+      "required" : false,
+      "default" : "0",
+      "description" : "Events to include before seq."
+    }, {
+      "name" : "after",
+      "type" : "Int",
+      "required" : false,
+      "default" : "0",
+      "description" : "Events to include after seq."
+    } ],
+    "examples" : [ {
+      "title" : "Read a task's events",
+      "args" : {
+        "taskId" : "<task-id>"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"taskId\",\"events\"],\"properties\":{\"taskId\":{\"type\":\"string\"},\"events\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"seq\",\"ts\",\"agentUuid\",\"taskId\"],\"properties\":{\"seq\":{\"type\":\"integer\"},\"ts\":{\"type\":\"integer\"},\"agentUuid\":{\"type\":\"string\"},\"taskId\":{\"type\":\"string\"}}}}}}"
+  }, {
+    "domain" : "memory",
+    "method" : "search",
+    "mcpNames" : [ "memory_search" ],
+    "signature" : "memory.search(query: String, agent: String? = null, limit: Int = 10)",
+    "description" : "Search agent memory (past tasks and tool executions) by keywords. Returns hits with taskId, timestamp, tool and a snippet; use memory.read to fetch details. Optionally restrict to one agent uuid (agent).",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "query",
+      "type" : "String",
+      "required" : true,
+      "description" : "Keywords to search past tasks and tool executions for."
+    }, {
+      "name" : "agent",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Restrict the search to one agent uuid."
+    }, {
+      "name" : "limit",
+      "type" : "Int",
+      "required" : false,
+      "default" : "10",
+      "description" : "Maximum number of hits (1-50)."
+    } ],
+    "examples" : [ {
+      "title" : "Find past work on a topic",
+      "args" : {
+        "query" : "amazon price"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"hits\"],\"properties\":{\"hits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"taskId\",\"ts\",\"snippet\",\"tier\"],\"properties\":{\"taskId\":{\"type\":\"string\"},\"ts\":{\"type\":\"integer\"},\"snippet\":{\"type\":\"string\"},\"tier\":{\"type\":\"string\"}}}}}}"
+  }, {
+    "domain" : "skill",
+    "method" : "info",
+    "mcpNames" : [ "skill_info" ],
+    "signature" : "skill.info(id: String)",
+    "description" : "Get detailed information about a skill by ID.",
+    "returnType" : "SkillDetail",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Skill id as reported by `skill.list`. Required."
+    } ],
+    "examples" : [ {
+      "title" : "Inspect a bundled skill",
+      "args" : {
+        "id" : "browser4-cli"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"id\",\"name\",\"version\",\"description\",\"author\",\"tags\",\"dependencies\",\"skillMd\"],\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"version\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"},\"author\":{\"type\":\"string\"},\"skillMd\":{\"type\":\"string\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"dependencies\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}"
+  }, {
+    "domain" : "skill",
+    "method" : "install",
+    "mcpNames" : [ "skill_install" ],
+    "signature" : "skill.install(path: String, overwrite: Boolean = false)",
+    "description" : "Install a skill from a server-side directory path containing SKILL.md.",
+    "returnType" : "InstallResult",
+    "arguments" : [ {
+      "name" : "path",
+      "type" : "String",
+      "required" : true,
+      "description" : "Server-side directory containing SKILL.md. Required; the path resolves on the server."
+    }, {
+      "name" : "overwrite",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "false",
+      "description" : "Replace an existing skill with the same id."
+    } ],
+    "examples" : [ {
+      "title" : "Install a skill from a server directory",
+      "args" : {
+        "path" : "/opt/skills/my-skill"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "skill",
+    "method" : "list",
+    "mcpNames" : [ "skill_list" ],
+    "signature" : "skill.list()",
+    "description" : "List all registered skills with lightweight summaries.",
+    "returnType" : "List<SkillSummary>",
+    "examples" : [ {
+      "title" : "List the installed skills",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"id\",\"name\",\"description\",\"version\",\"tags\"],\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"},\"version\":{\"type\":\"string\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}}"
+  }, {
+    "domain" : "skill",
+    "method" : "reload",
+    "mcpNames" : [ "skill_reload" ],
+    "signature" : "skill.reload(id: String)",
+    "description" : "Reload a skill from its source directory.",
+    "returnType" : "Map",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Skill id to reload from its source directory. Required."
+    } ],
+    "examples" : [ {
+      "title" : "Reload after editing SKILL.md",
+      "args" : {
+        "id" : "browser4-cli"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "skill",
+    "method" : "uninstall",
+    "mcpNames" : [ "skill_uninstall" ],
+    "signature" : "skill.uninstall(id: String)",
+    "description" : "Uninstall a skill by ID.",
+    "returnType" : "InstallResult",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Skill id to remove. Required."
+    } ],
+    "examples" : [ {
+      "title" : "Remove a skill",
+      "args" : {
+        "id" : "my-skill"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "ariaSnapshot",
+    "mcpNames" : [ "aria_snapshot", "browser_snapshot" ],
+    "signature" : "tab.ariaSnapshot(viewports: String? = null, interactive: Boolean? = false, urls: Boolean? = false, compact: Boolean? = true, depth: Int? = -1, selector: String? = null, boxes: Boolean? = true, limit: Int? = -1)",
+    "description" : "Build an ARIA accessibility snapshot of the current page.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "viewports",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Viewport spec (e.g. \"0,1\") to capture."
+    }, {
+      "name" : "interactive",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "false",
+      "description" : "Keep only interactive nodes."
+    }, {
+      "name" : "urls",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "false",
+      "description" : "Include link URLs."
+    }, {
+      "name" : "compact",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "true",
+      "description" : "Drop empty structural nodes."
+    }, {
+      "name" : "depth",
+      "type" : "Int?",
+      "required" : false,
+      "default" : "-1",
+      "description" : "Maximum tree depth; -1 for unlimited."
+    }, {
+      "name" : "selector",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Root the snapshot at this selector."
+    }, {
+      "name" : "boxes",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "true",
+      "description" : "Include element bounding boxes."
+    }, {
+      "name" : "limit",
+      "type" : "Int?",
+      "required" : false,
+      "default" : "-1",
+      "description" : "Maximum number of nodes; -1 for unlimited."
+    } ],
+    "examples" : [ {
+      "title" : "Compact accessibility snapshot",
+      "args" : {
+        "compact" : "true"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.ariaSnapshot()\ntab.ariaSnapshot(selector: String, compact: Boolean, boxes: Boolean, …)\n\nThe upstream WebDriver method takes an AriaSnapshotOptions object; the\nexecutor flattens it into these options, which is what MCP clients send."
+  }, {
+    "domain" : "tab",
+    "method" : "baseURI",
+    "mcpNames" : [ "base_u_r_i" ],
+    "signature" : "tab.baseURI()",
+    "description" : "Returns the document's baseURI.",
+    "returnType" : "String",
+    "examples" : [ {
+      "title" : "Read the document base URI",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Returns the document's baseURI.\n\nThe baseURI is a property of Node, it's the absolute base URL of the document containing the node. A baseURI is used to resolve relative URLs.\n\nThe base URL is determined as follows: 1. By default, the base URL is the location of the document (as determined by window.location). 2. If the document has an `<base>` element, its href attribute is used."
+  }, {
+    "domain" : "tab",
+    "method" : "boundingBox",
+    "mcpNames" : [ "bounding_box" ],
+    "signature" : "tab.boundingBox(selector: String)",
+    "description" : "Return the bounding box of an element located by [selector].",
+    "returnType" : "RectD?",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. Used to calculate the bounding box."
+    } ],
+    "examples" : [ {
+      "title" : "Measure an element",
+      "args" : {
+        "selector" : "#hero"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Return the bounding box of an element located by [selector].\n\nIf the element does not exist, returns null."
+  }, {
+    "domain" : "tab",
+    "method" : "bringToFront",
+    "mcpNames" : [ "bring_to_front" ],
+    "signature" : "tab.bringToFront()",
+    "description" : "Brings the browser window to the front.",
+    "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Focus the tab",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Brings the browser window to the front.\n\n```kotlin driver.bringToFront() ```"
+  }, {
+    "domain" : "tab",
+    "method" : "check",
+    "mcpNames" : [ "check", "browser_check" ],
+    "signature" : "tab.check(selector: String)",
+    "description" : "This method check an element with [selector]. If there's no element matching [selector], nothing to do.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be checked."
+    } ],
+    "examples" : [ {
+      "title" : "Tick a checkbox",
+      "args" : {
+        "selector" : "#terms"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "This method check an element with [selector]. If there's no element matching [selector], nothing to do.\n\nelements, the first will be checked."
+  }, {
+    "domain" : "tab",
+    "method" : "clearBrowserCookies",
+    "mcpNames" : [ "clear_browser_cookies" ],
+    "signature" : "tab.clearBrowserCookies()",
+    "description" : "Clears browser cookies.",
+    "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Clear cookies",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Clears browser cookies.\n\n```kotlin driver.clearBrowserCookies() ```"
+  }, {
+    "domain" : "tab",
+    "method" : "click",
+    "mcpNames" : [ "click" ],
+    "signature" : "tab.click(selector: String, count: Int? = null, modifier: String? = null, button: String? = null, autoDismissDialogs: Boolean? = false)",
+    "description" : "Click the element matched by selector, optionally with a repeat count, modifier or mouse button.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "CSS or :expr(...) selector of the element to click."
+    }, {
+      "name" : "count",
+      "type" : "Int?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Click this many times (2 = double click)."
+    }, {
+      "name" : "modifier",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Modifier key held during the click (e.g. Control, Shift)."
+    }, {
+      "name" : "button",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Mouse button: left | right | middle."
+    }, {
+      "name" : "autoDismissDialogs",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "false",
+      "description" : "Accept any native dialog raised by the click."
+    } ],
+    "examples" : [ {
+      "title" : "Click a button",
+      "args" : {
+        "selector" : "#submit"
+      },
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Click a row twice",
+      "args" : {
+        "selector" : "#row-1",
+        "count" : "2"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.click(selector: String)\ntab.click(selector: String, count: Int)\ntab.click(selector: String, modifier: String)\n\ncount and modifier are mutually exclusive. The upstream WebDriver\noverloads declare modifier as required; the executor does not, so the\nadvertised contract keeps it optional (a client that only has a\nselector must not be rejected)."
+  }, {
+    "domain" : "tab",
+    "method" : "clickMatches",
+    "mcpNames" : [ "click_matches" ],
+    "signature" : "tab.clickMatches(selector: String, attrName: String, pattern: String, count: Int = 1)",
+    "description" : "This method clicks an element with [selector] whose attribute name is [attrName] and value matches [pattern], and then focuses it.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be focused."
+    }, {
+      "name" : "attrName",
+      "type" : "String",
+      "required" : true,
+      "description" : "The attribute name to match."
+    }, {
+      "name" : "pattern",
+      "type" : "String",
+      "required" : true,
+      "description" : "The pattern to match the attribute value."
+    }, {
+      "name" : "count",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "The number of times to click."
+    } ],
+    "examples" : [ {
+      "title" : "Click the first button whose class says buy",
+      "args" : {
+        "selector" : "button",
+        "attrName" : "class",
+        "pattern" : "buy"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "This method clicks an element with [selector] whose attribute name is [attrName] and value matches [pattern], and then focuses it.\n\nIf there's no element matching [selector], or the element has no attribute [attrName], or the element's attribute value doesn't match [pattern], nothing to do.\n\n```kotlin driver.clickMatches(\"button\", \"type\", \"submit\") ```\n\nelements, the first will be focused."
+  }, {
+    "domain" : "tab",
+    "method" : "clickTextMatches",
+    "mcpNames" : [ "click_text_matches" ],
+    "signature" : "tab.clickTextMatches(selector: String, pattern: String, count: Int = 1)",
+    "description" : "This method clicks an element with [selector] whose text content matches [pattern], and then focuses it.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be focused."
+    }, {
+      "name" : "pattern",
+      "type" : "String",
+      "required" : true,
+      "description" : "The pattern to match the text content."
+    }, {
+      "name" : "count",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "The number of times to click."
+    } ],
+    "examples" : [ {
+      "title" : "Click the first row whose text matches",
+      "args" : {
+        "selector" : "button",
+        "pattern" : "Buy now"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "This method clicks an element with [selector] whose text content matches [pattern], and then focuses it.\n\nIf there's no element matching [selector], or the element's text content doesn't match [pattern], nothing to do.\n\n```kotlin driver.clickTextMatches(\"button\", \"submit\") ```\n\nTODO: use playwright style selector which supports text matching, for example: `button:has-text(\"submit\")`\n\nelements, the first will be focused."
+  }, {
+    "domain" : "tab",
+    "method" : "clickablePoint",
+    "mcpNames" : [ "clickable_point" ],
+    "signature" : "tab.clickablePoint(selector: String)",
+    "description" : "Calculate the clickable point of an element located by [selector].",
+    "returnType" : "PointD?",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. Used to calculate the clickable point."
+    } ],
+    "examples" : [ {
+      "title" : "Find the clickable point",
+      "args" : {
+        "selector" : "#submit"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Calculate the clickable point of an element located by [selector].\n\nIf the element does not exist, or is not clickable, returns null."
+  }, {
+    "domain" : "tab",
+    "method" : "consoleClear",
+    "mcpNames" : [ "console_clear", "browser_console_clear" ],
+    "signature" : "tab.consoleClear()",
+    "description" : "Clear the buffered console message list.",
+    "returnType" : "String",
+    "examples" : [ {
+      "title" : "Clear the console buffer",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "tab.consoleClear()\n\nEmpties the in-browser console message buffer."
+  }, {
+    "domain" : "tab",
+    "method" : "consoleMessages",
+    "mcpNames" : [ "console_messages", "browser_console_messages" ],
+    "signature" : "tab.consoleMessages(level: String = info)",
+    "description" : "Retrieve buffered browser console messages (log/warn/error/info/debug).",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "level",
+      "type" : "String",
+      "required" : false,
+      "default" : "info",
+      "description" : "level: String = info"
+    } ],
+    "examples" : [ {
+      "title" : "Read console output",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "tab.consoleMessages()\ntab.consoleMessages(level: String = \"info\")\n\nReturns a JSON array of console messages filtered to the given minimum level.\nIntercepts console.log/warn/error/info/debug on first call and buffers subsequent messages."
+  }, {
+    "domain" : "tab",
+    "method" : "currentUrl",
+    "mcpNames" : [ "current_url" ],
+    "signature" : "tab.currentUrl()",
+    "description" : "Returns a string representing the current URL that the browser is looking at.",
+    "returnType" : "String",
+    "examples" : [ {
+      "title" : "Current URL",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Returns a string representing the current URL that the browser is looking at.\n\nThe current url is always the main frame's `document.documentURI` if the browser succeed to return it, and is displayed in the browser's address bar.\n\nIf the browser failed to return a proper url, returns the passed in url to navigate, just like a real user enter a url in the address bar but the browser failed to load the page.\n\nNOTE: the url can be non-standard, for example:\n\nabout:blank chrome://newtab chrome://settings\n\nsee [ai.platon.cdt.kt.protocol.types.page.NavigationEntry.userTypedURL]"
+  }, {
+    "domain" : "tab",
+    "method" : "dblclick",
+    "mcpNames" : [ "dblclick" ],
+    "signature" : "tab.dblclick(selector: String, modifier: String? = null, autoDismissDialogs: Boolean? = false)",
+    "description" : "Double click the element matched by selector.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "CSS or :expr(...) selector of the element to double click."
+    }, {
+      "name" : "modifier",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Modifier key held during the double click."
+    }, {
+      "name" : "autoDismissDialogs",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "false",
+      "description" : "Accept any native dialog raised by the click."
+    } ],
+    "examples" : [ {
+      "title" : "Double click a cell",
+      "args" : {
+        "selector" : "#cell-1"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.dblclick(selector: String)\ntab.dblclick(selector: String, modifier: String)\n\nThe upstream overload declares modifier as required; the executor does\nnot, so a selector-only call is valid here."
+  }, {
+    "domain" : "tab",
+    "method" : "delay",
+    "mcpNames" : [ "delay" ],
+    "signature" : "tab.delay(millis: Long = 1000)",
+    "description" : "Wait unconditionally for the given number of milliseconds.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "millis",
+      "type" : "Long",
+      "required" : false,
+      "default" : "1000",
+      "description" : "How long to wait, in milliseconds."
+    } ],
+    "examples" : [ {
+      "title" : "Wait half a second",
+      "args" : {
+        "millis" : "500"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.delay(millis: Long = 1000)"
+  }, {
+    "domain" : "tab",
+    "method" : "deleteCookies",
+    "mcpNames" : [ "delete_cookies" ],
+    "signature" : "tab.deleteCookies(name: String, url: String? = null, domain: String? = null, path: String? = null)",
+    "description" : "Deletes browser cookies with matching name and url or domain/path pair.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "name",
+      "type" : "String",
+      "required" : true,
+      "description" : "Name of the cookies to remove."
+    }, {
+      "name" : "url",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "If specified, deletes all the cookies with the given name where domain and path match provided URL."
+    }, {
+      "name" : "domain",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "If specified, deletes only cookies with the exact domain."
+    }, {
+      "name" : "path",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "If specified, deletes only cookies with the exact path."
+    } ],
+    "examples" : [ {
+      "title" : "Delete one cookie by name",
+      "args" : {
+        "name" : "session_id"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Deletes browser cookies with matching name and url or domain/path pair.\n\n```kotlin driver.deleteCookies(\"name\", \"https://www.example.com\") ```\n\n> NOTE: At least one of the url and domain needs to be specified\n\nmatch provided URL."
+  }, {
+    "domain" : "tab",
+    "method" : "dialogAccept",
+    "mcpNames" : [ "dialog_accept" ],
+    "signature" : "tab.dialogAccept(promptText: String? = null)",
+    "description" : "Accepts the dialog.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "promptText",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "promptText: String? = null"
+    } ],
+    "examples" : [ {
+      "title" : "Accept a pending dialog",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "dialogDismiss",
+    "mcpNames" : [ "dialog_dismiss" ],
+    "signature" : "tab.dialogDismiss()",
+    "description" : "Dismisses the dialog.",
+    "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Dismiss a pending dialog",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "dialogStatus",
+    "mcpNames" : [ "dialog_status", "browser_dialog_status" ],
+    "signature" : "tab.dialogStatus()",
+    "description" : "Report the pending JavaScript dialog, if any: `{pending, type, message}`. Read-only — it never dismisses the dialog.",
+    "returnType" : "Map",
+    "examples" : [ {
+      "title" : "Check for a pending dialog",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"pending\"],\"properties\":{\"pending\":{\"type\":\"boolean\"},\"type\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"}}}"
+  }, {
+    "domain" : "tab",
+    "method" : "documentURI",
+    "mcpNames" : [ "document_u_r_i" ],
+    "signature" : "tab.documentURI()",
+    "description" : "Returns the document location as a string.",
+    "returnType" : "String",
+    "examples" : [ {
+      "title" : "Read the document URI",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Returns the document location as a string.\n\nThis property equals to javascript `document.documentURI`.\n\nThe `document.URL` property which returns the same value. The `document.documentURI` property can be used on any document types, while the `document.URL` property can only be used on HTML documents."
+  }, {
+    "domain" : "tab",
+    "method" : "drag",
+    "mcpNames" : [ "drag", "browser_drag" ],
+    "signature" : "tab.drag(sourceSelector: String, targetSelector: String)",
+    "description" : "Drags the element identified by [sourceSelector] onto the element identified by [targetSelector].",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "sourceSelector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. Identifies the drag source."
+    }, {
+      "name" : "targetSelector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. Identifies the drop target."
+    } ],
+    "examples" : [ {
+      "title" : "Drag one element onto another",
+      "args" : {
+        "sourceSelector" : "#card-1",
+        "targetSelector" : "#done"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Drags the element identified by [sourceSelector] onto the element identified by [targetSelector].\n\nThe implementation dispatches an HTML5 drag sequence between the source and target elements using a shared `DataTransfer` payload so selector-to-selector drag flows can be asserted reliably by automation clients."
+  }, {
+    "domain" : "tab",
+    "method" : "dragAndDrop",
+    "mcpNames" : [ "drag_and_drop" ],
+    "signature" : "tab.dragAndDrop(selector: String, deltaX: Int, deltaY: Int = 0)",
+    "description" : "Performs a drag, dragenter, dragover, and drop in sequence.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. The matching element is dragged from."
+    }, {
+      "name" : "deltaX",
+      "type" : "Int",
+      "required" : true,
+      "description" : "The distance to drag horizontally."
+    }, {
+      "name" : "deltaY",
+      "type" : "Int",
+      "required" : false,
+      "default" : "0",
+      "description" : "The distance to drag vertically."
+    } ],
+    "examples" : [ {
+      "title" : "Drag a slider 50px to the right",
+      "args" : {
+        "selector" : "#slider",
+        "deltaX" : "50"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "eval",
+    "mcpNames" : [ "eval" ],
+    "signature" : "tab.eval(expression: String)",
+    "description" : "Alias of evaluateValue for page or element-scoped JavaScript evaluation.",
+    "returnType" : "Any?",
+    "arguments" : [ {
+      "name" : "expression",
+      "type" : "String",
+      "required" : true,
+      "description" : "expression: String"
+    } ],
+    "examples" : [ {
+      "title" : "Evaluate an expression",
+      "args" : {
+        "expression" : "document.title"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.eval(expression: String)\ntab.eval(expression: String, selector: String)\n\nAlias of tab.evaluateValue(...).\nWhen both selector and expression are provided, expression is forwarded as functionDeclaration."
+  }, {
+    "domain" : "tab",
+    "method" : "evaluate",
+    "mcpNames" : [ "evaluate" ],
+    "signature" : "tab.evaluate(expression: String)",
+    "description" : "Executes JavaScript in the context of the currently selected frame or window.",
+    "returnType" : "Any?",
+    "arguments" : [ {
+      "name" : "expression",
+      "type" : "String",
+      "required" : true,
+      "description" : "JavaScript expression to evaluate"
+    } ],
+    "examples" : [ {
+      "title" : "Read the document title",
+      "args" : {
+        "expression" : "document.title"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Executes JavaScript in the context of the currently selected frame or window.\n\nIf the result is not JavaScript object, it is not returned.\n\nIf you want to execute a function, convert it to IIFE (Immediately Invoked Function Expression).\n\n```kotlin val title = driver.evaluate(\"document.title\") ```\n\nMulti-line JavaScript code:\n\n```kotlin val code = \"\"\" () => { const a = 10; const b = 20; return a * b; } \"\"\".trimIndent()\n\nval result = driver.evaluate(code) ```\n\n### 🔍 Notes: * **Wrap the code in an IIFE (Immediately Invoked Function Expression)** to return a value. * **Escape line breaks** with `\\n`."
+  }, {
+    "domain" : "tab",
+    "method" : "evaluateDetail",
+    "mcpNames" : [ "evaluate_detail" ],
+    "signature" : "tab.evaluateDetail(expression: String)",
+    "description" : "returns detailed evaluation metadata (beta).",
+    "returnType" : "JsEvaluation?",
+    "arguments" : [ {
+      "name" : "expression",
+      "type" : "String",
+      "required" : true,
+      "description" : "The JavaScript expression to evaluate."
+    } ],
+    "examples" : [ {
+      "title" : "Evaluate and keep the failure detail",
+      "args" : {
+        "expression" : "document.querySelectorAll('a').length"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "evaluateValue",
+    "mcpNames" : [ "evaluate_value", "browser_evaluate" ],
+    "signature" : "tab.evaluateValue(expression: String? = null, selector: String? = null, functionDeclaration: String? = null, awaitPromise: Boolean? = false, waitSelector: String? = null, waitTimeout: Long? = null)",
+    "description" : "Evaluate JavaScript in the page, or against the element matched by selector.",
+    "returnType" : "Any?",
+    "arguments" : [ {
+      "name" : "expression",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "JavaScript expression, evaluated in the page."
+    }, {
+      "name" : "selector",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Scope the evaluation to this element."
+    }, {
+      "name" : "functionDeclaration",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Function body used with 'selector'."
+    }, {
+      "name" : "awaitPromise",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "false",
+      "description" : "Await a promise returned by the expression."
+    }, {
+      "name" : "waitSelector",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Wait for this selector before evaluating."
+    }, {
+      "name" : "waitTimeout",
+      "type" : "Long?",
+      "required" : false,
+      "default" : "null",
+      "description" : "How long to wait for 'waitSelector' (default 30000)."
+    } ],
+    "examples" : [ {
+      "title" : "Read the page title in JS",
+      "args" : {
+        "expression" : "document.title"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.evaluateValue(expression: String)\ntab.evaluateValue(selector: String, functionDeclaration: String)\n\n`expression` is the page-scoped form the CLI and MCP clients use;\n`selector` + `functionDeclaration` is the element-scoped overload the\nexecutor resolves through the driver. The upstream declaration lists\nthe second overload last and without defaults, which would make both\nof its arguments mandatory for every caller."
+  }, {
+    "domain" : "tab",
+    "method" : "evaluateValueDetail",
+    "mcpNames" : [ "evaluate_value_detail" ],
+    "signature" : "tab.evaluateValueDetail(selector: String, functionDeclaration: String)",
+    "description" : "Returns detailed value evaluation metadata for the element located by [selector].",
+    "returnType" : "JsEvaluation?",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    }, {
+      "name" : "functionDeclaration",
+      "type" : "String",
+      "required" : true,
+      "description" : "The JavaScript function declaration to execute against the matched element."
+    } ],
+    "examples" : [ {
+      "title" : "Read an element's text with a function declaration",
+      "args" : {
+        "selector" : "#price",
+        "functionDeclaration" : "function() { return this.textContent; }"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "executeCdpCommand",
+    "mcpNames" : [ "execute_cdp_command" ],
+    "signature" : "tab.executeCdpCommand(method: String, params: Map<String, Any?>? = null)",
+    "description" : "Execute a Chrome DevTools Protocol (CDP) command and return the deserialized result.",
+    "returnType" : "Any?",
+    "arguments" : [ {
+      "name" : "method",
+      "type" : "String",
+      "required" : true,
+      "description" : "The full CDP method name (e.g. \"Page.captureScreenshot\")."
+    }, {
+      "name" : "params",
+      "type" : "Map<String, Any?>?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Optional parameters for the CDP command."
+    } ],
+    "examples" : [ {
+      "title" : "Ask Chrome for the document root",
+      "args" : {
+        "method" : "DOM.getDocument"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Execute a Chrome DevTools Protocol (CDP) command and return the deserialized result.\n\nThis is an extension point for advanced scenarios that are not yet covered by the high-level WebDriver API. Use it to issue arbitrary CDP commands directly against the current page target.\n\nThe return value is the deserialized CDP response (Map, List, String, Number, Boolean, or null).\n\nExample: ```kotlin // Screenshot the page as JPEG val result = driver.executeCdpCommand(\"Page.captureScreenshot\", mapOf(\"format\" to \"jpeg\", \"quality\" to 80))\n\n// Get all cookies val cookies = driver.executeCdpCommand(\"Network.getCookies\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "exists",
+    "mcpNames" : [ "exists" ],
+    "signature" : "tab.exists(selector: String)",
+    "description" : "Returns whether the element exists.",
+    "returnType" : "Boolean",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. The element is checked for existence."
+    } ],
+    "examples" : [ {
+      "title" : "Check an element exists",
+      "args" : {
+        "selector" : "#cart"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns whether the element exists.\n\n```kotlin driver.exists(\"h2.title\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "fill",
+    "mcpNames" : [ "fill", "browser_type" ],
+    "signature" : "tab.fill(selector: String, text: String)",
+    "description" : "This method emulates inserting text that doesn't come from a key press.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. The matching element is focused and then filled with text. If there are multiple matching elements, the first will be focused."
+    }, {
+      "name" : "text",
+      "type" : "String",
+      "required" : true,
+      "description" : "The text to fill."
+    } ],
+    "examples" : [ {
+      "title" : "Fill a search box",
+      "args" : {
+        "selector" : "#q",
+        "text" : "browser4"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "This method emulates inserting text that doesn't come from a key press.\n\nUnlike [type], this method clears the existing value before typing.\n\n```kotlin driver.fill(\"input[name='q']\", \"Hello, World!\") ```\n\nthen filled with text. If there are multiple matching elements, the first will be focused."
+  }, {
+    "domain" : "tab",
+    "method" : "focus",
+    "mcpNames" : [ "focus", "browser_focus" ],
+    "signature" : "tab.focus(selector: String)",
+    "description" : "This method fetches an element with `selector` and focuses it.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be focused."
+    } ],
+    "examples" : [ {
+      "title" : "Focus an input",
+      "args" : {
+        "selector" : "#email"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "This method fetches an element with `selector` and focuses it.\n\nIf there's no element matching `selector`, nothing to do.\n\n```kotlin driver.focus(\"input[name='q']\") ```\n\nelements, the first will be focused."
+  }, {
+    "domain" : "tab",
+    "method" : "frameList",
+    "mcpNames" : [ "frame_list", "browser_frame_list" ],
+    "signature" : "tab.frameList()",
+    "description" : "List the frames of the current page (frame tree, depth-first, main frame first).",
+    "returnType" : "List<FrameInfo>",
+    "examples" : [ {
+      "title" : "List frames",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "tab.frameList()\n\nReturns the page's frames with their id, name, url, parent frame id, and depth.\nThe frame that element operations are currently scoped to is marked active."
+  }, {
+    "domain" : "tab",
+    "method" : "frameMain",
+    "mcpNames" : [ "frame_main", "browser_frame_main" ],
+    "signature" : "tab.frameMain()",
+    "description" : "Switch back to the main frame, undoing the scope set by frameSwitch.",
+    "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Return to the main frame",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "tab.frameMain()\n\nAll subsequent element operations resolve against the main document again."
+  }, {
+    "domain" : "tab",
+    "method" : "frameSwitch",
+    "mcpNames" : [ "frame_switch", "browser_frame_switch" ],
+    "signature" : "tab.frameSwitch(frame: String)",
+    "description" : "Switch the frame that subsequent CSS-selector element operations resolve against.",
+    "returnType" : "Map<String, Any?>",
+    "arguments" : [ {
+      "name" : "frame",
+      "type" : "String",
+      "required" : true,
+      "description" : "frame: String"
+    } ],
+    "examples" : [ {
+      "title" : "Enter an iframe",
+      "args" : {
+        "frame" : "#pay-frame"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.frameSwitch(frame: String)\n\nResolves the target in this order: a CSS selector matching an <iframe> in the\ncurrently scoped document (nested switching works), an exact frame id as printed\nby tab.frameList(), an exact frame name, or a case-insensitive url substring.\nAfter switching, click/fill/type/hover/focus/waitForSelector/isVisible and the\nelement-scoped reads resolve their CSS selectors inside the selected frame.\nReturn to the main frame with tab.frameMain(); the scope also resets on navigation."
+  }, {
+    "domain" : "tab",
+    "method" : "generateLocator",
+    "mcpNames" : [ "generate_locator", "browser_generate_locator" ],
+    "signature" : "tab.generateLocator(selector: String)",
+    "description" : "Generates a unique CSS selector path for the element located by [selector].",
+    "returnType" : "String?",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "CSS selector or element reference (e5, backend:15)."
+    } ],
+    "examples" : [ {
+      "title" : "Build a stable locator",
+      "args" : {
+        "selector" : "#submit"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Generates a unique CSS selector path for the element located by [selector].\n\nWalks up the DOM from the target element, building a CSS selector segment for each ancestor using the best available strategy: `#id`, `tag.stable-classes`, or `tag:nth-of-type(n)`. The resulting path is joined with `>` separators, producing a concise, human-readable selector suitable for use in other commands."
+  }, {
+    "domain" : "tab",
+    "method" : "getCookies",
+    "mcpNames" : [ "get_cookies" ],
+    "signature" : "tab.getCookies()",
+    "description" : "Returns the cookies of the current page.",
+    "returnType" : "List<Map<String, String>>",
+    "examples" : [ {
+      "title" : "List cookies",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Returns the cookies of the current page.\n\n```kotlin val cookies = driver.getCookies() ```"
+  }, {
+    "domain" : "tab",
+    "method" : "goBack",
+    "mcpNames" : [ "go_back", "browser_navigate_back" ],
+    "signature" : "tab.goBack()",
+    "description" : "Navigates the browser to the previous page in the navigation history.",
+    "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Go back",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Navigates the browser to the previous page in the navigation history.\n\nThis method is expected to use the browser's navigation history to move back to the previous page. It should handle any exceptions that may occur during the navigation process."
+  }, {
+    "domain" : "tab",
+    "method" : "goForward",
+    "mcpNames" : [ "go_forward", "browser_navigate_forward" ],
+    "signature" : "tab.goForward()",
+    "description" : "Navigates the browser to the next page in the navigation history.",
+    "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Go forward",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Navigates the browser to the next page in the navigation history.\n\nThis method is expected to use the browser's navigation history to move forward to the next page. It should handle any exceptions that may occur during the navigation process."
+  }, {
+    "domain" : "tab",
+    "method" : "harStart",
+    "mcpNames" : [ "har_start", "browser_har_start" ],
+    "signature" : "tab.harStart(contentMode: String? = none)",
+    "description" : "Start a HAR recording session on the current tab (bodies captured per content mode: none, text, or all).",
+    "returnType" : "Map<String, Any?>",
+    "arguments" : [ {
+      "name" : "contentMode",
+      "type" : "String?",
+      "required" : false,
+      "default" : "none",
+      "description" : "contentMode: String? = none"
+    } ],
+    "examples" : [ {
+      "title" : "Start recording network traffic",
+      "args" : {
+        "contentMode" : "embed"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.harStart(contentMode: String = \"none\")\n\nStarts recording network traffic into a HAR 1.2 document.\ncontentMode — which response bodies to embed: \"none\" (default), \"text\" (text-like MIME types), or \"all\" (binary base64).\nStop with tab.harStop() and write the returned \"har\" document to a .har file."
+  }, {
+    "domain" : "tab",
+    "method" : "harStop",
+    "mcpNames" : [ "har_stop", "browser_har_stop" ],
+    "signature" : "tab.harStop()",
+    "description" : "Stop the active HAR recording and return the complete HAR 1.2 document.",
+    "returnType" : "Map<String, Any?>",
+    "examples" : [ {
+      "title" : "Stop HAR recording",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "tab.harStop()\n\nStops recording and returns { recording, contentMode, entries, har } where har is the\nHAR 1.2 document. Serialize it to JSON to get a .har file."
+  }, {
+    "domain" : "tab",
+    "method" : "hover",
+    "mcpNames" : [ "hover", "browser_hover" ],
+    "signature" : "tab.hover(selector: String)",
+    "description" : "This method hovers over the element.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    } ],
+    "examples" : [ {
+      "title" : "Hover a menu",
+      "args" : {
+        "selector" : "#menu"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "This method hovers over the element.\n\n1. Scroll the element into view if needed. 2. Move mouse to hover over a random position near the center of the element.\n\n```kotlin driver.hover(\"h1\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "isChecked",
+    "mcpNames" : [ "is_checked", "browser_is_checked" ],
+    "signature" : "tab.isChecked(selector: String)",
+    "description" : "Returns whether the element is checked.",
+    "returnType" : "Boolean",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. The element is checked for checked state."
+    } ],
+    "examples" : [ {
+      "title" : "Is the terms checkbox ticked?",
+      "args" : {
+        "selector" : "#terms"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns whether the element is checked.\n\n```kotlin driver.isChecked(\"input[name='agree']\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "isEnabled",
+    "mcpNames" : [ "is_enabled", "browser_is_enabled" ],
+    "signature" : "tab.isEnabled(selector: String)",
+    "description" : "Whether the element matched by `selector` is enabled — not disabled and not read-only.",
+    "returnType" : "Boolean",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "Element to inspect."
+    } ],
+    "examples" : [ {
+      "title" : "Is the submit button enabled?",
+      "args" : {
+        "selector" : "#submit"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "isHidden",
+    "mcpNames" : [ "is_hidden" ],
+    "signature" : "tab.isHidden(selector: String)",
+    "description" : "Returns whether the element is hidden.",
+    "returnType" : "Boolean",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. The element is checked for visibility state."
+    } ],
+    "examples" : [ {
+      "title" : "Is the cookie banner hidden?",
+      "args" : {
+        "selector" : "#cookie-banner"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns whether the element is hidden.\n\n```kotlin driver.isHidden(\"input[name='q']\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "isVisible",
+    "mcpNames" : [ "is_visible", "browser_is_visible" ],
+    "signature" : "tab.isVisible(selector: String)",
+    "description" : "Returns whether the element is visible.",
+    "returnType" : "Boolean",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. The element is checked for visibility state."
+    } ],
+    "examples" : [ {
+      "title" : "Check an element is visible",
+      "args" : {
+        "selector" : "#banner"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns whether the element is visible.\n\n```kotlin driver.isVisible(\"input[name='q']\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "keyDown",
+    "mcpNames" : [ "key_down", "browser_keydown" ],
+    "signature" : "tab.keyDown(key: String)",
+    "description" : "Presses and holds a keyboard key on the currently focused element.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "key",
+      "type" : "String",
+      "required" : true,
+      "description" : "A key to press and hold. The key can be a single character, a key name, or a combination of both. See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)"
+    } ],
+    "examples" : [ {
+      "title" : "Hold Shift down",
+      "args" : {
+        "key" : "Shift"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Presses and holds a keyboard key on the currently focused element.\n\n```kotlin driver.keyDown(\"Shift\") driver.keyDown(\"Control\") ```\n\nSee [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)"
+  }, {
+    "domain" : "tab",
+    "method" : "keyUp",
+    "mcpNames" : [ "key_up", "browser_keyup" ],
+    "signature" : "tab.keyUp(key: String)",
+    "description" : "Releases a previously pressed keyboard key on the currently focused element.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "key",
+      "type" : "String",
+      "required" : true,
+      "description" : "A key to release. The key can be a single character, a key name, or a combination of both. See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)"
+    } ],
+    "examples" : [ {
+      "title" : "Release Shift",
+      "args" : {
+        "key" : "Shift"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Releases a previously pressed keyboard key on the currently focused element.\n\n```kotlin driver.keyUp(\"Shift\") driver.keyUp(\"Control\") ```\n\nSee [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)"
+  }, {
+    "domain" : "tab",
+    "method" : "loadJsoupResource",
+    "mcpNames" : [ "load_jsoup_resource" ],
+    "signature" : "tab.loadJsoupResource(url: String)",
+    "description" : "Load the url as a resource with Jsoup rather than browser rendering, with the last page's context.",
+    "returnType" : "Connection.Response",
+    "arguments" : [ {
+      "name" : "url",
+      "type" : "String",
+      "required" : true,
+      "description" : "The URL to load."
+    } ],
+    "examples" : [ {
+      "title" : "Fetch a page without a browser",
+      "args" : {
+        "url" : "https://example.com"
+      },
+      "notes" : "A plain HTTP fetch (Jsoup): no JavaScript runs, so SPAs return an empty shell.",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Load the url as a resource with Jsoup rather than browser rendering, with the last page's context.\n\nThis means, the same headers and cookies."
+  }, {
+    "domain" : "tab",
+    "method" : "loadResource",
+    "mcpNames" : [ "load_resource" ],
+    "signature" : "tab.loadResource(url: String)",
+    "description" : "Load the url as a resource without browser rendering, with the last page's context.",
+    "returnType" : "NetworkResourceResponse",
+    "arguments" : [ {
+      "name" : "url",
+      "type" : "String",
+      "required" : true,
+      "description" : "The URL to load."
+    } ],
+    "examples" : [ {
+      "title" : "Load a page with the browser's loader",
+      "args" : {
+        "url" : "https://example.com"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Load the url as a resource without browser rendering, with the last page's context.\n\nThis means, the same headers and cookies."
+  }, {
+    "domain" : "tab",
+    "method" : "loadStorageState",
+    "mcpNames" : [ "load_storage_state", "browser_load_storage_state" ],
+    "signature" : "tab.loadStorageState(state: String)",
+    "description" : "Load a JSON storage-state payload, restoring cookies and localStorage.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "state",
+      "type" : "String",
+      "required" : true,
+      "description" : "state: String"
+    } ],
+    "examples" : [ {
+      "title" : "Restore a saved session",
+      "args" : {
+        "state" : "{\"cookies\":[],\"origins\":[]}"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.loadStorageState(state: String)\n\nRestores cookies plus localStorage from a JSON string previously returned by tab.saveStorageState()."
+  }, {
+    "domain" : "tab",
+    "method" : "mouseDown",
+    "mcpNames" : [ "mouse_down", "browser_mouse_down" ],
+    "signature" : "tab.mouseDown(button: String = left, clickCount: Int = 1)",
+    "description" : "Presses a mouse button at the current mouse position.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "button",
+      "type" : "String",
+      "required" : false,
+      "default" : "left",
+      "description" : "The mouse button to press. Supported values are `left`, `middle`, and `right`."
+    }, {
+      "name" : "clickCount",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "The click count associated with the press event."
+    } ],
+    "examples" : [ {
+      "title" : "Press and hold the left button",
+      "args" : {
+        "button" : "left"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Presses a mouse button at the current mouse position.\n\n```kotlin driver.mouseDown() driver.mouseDown(\"right\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "mouseMove",
+    "mcpNames" : [ "mouse_move", "browser_mouse_move_xy" ],
+    "signature" : "tab.mouseMove(x: Double, y: Double)",
+    "description" : "Moves the mouse to the position specified by [x] and [y].",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "x",
+      "type" : "Double",
+      "required" : true,
+      "description" : "The x coordinate to move to."
+    }, {
+      "name" : "y",
+      "type" : "Double",
+      "required" : true,
+      "description" : "The y coordinate to move to."
+    } ],
+    "examples" : [ {
+      "title" : "Move the pointer",
+      "args" : {
+        "x" : "320",
+        "y" : "180"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Moves the mouse to the position specified by [x] and [y].\n\n```kotlin driver.mouseMove(100.0, 200.0) ```"
+  }, {
+    "domain" : "tab",
+    "method" : "mouseUp",
+    "mcpNames" : [ "mouse_up", "browser_mouse_up" ],
+    "signature" : "tab.mouseUp(button: String = left, clickCount: Int = 1)",
+    "description" : "Releases a mouse button at the current mouse position.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "button",
+      "type" : "String",
+      "required" : false,
+      "default" : "left",
+      "description" : "The mouse button to release. Supported values are `left`, `middle`, and `right`."
+    }, {
+      "name" : "clickCount",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "The click count associated with the release event."
+    } ],
+    "examples" : [ {
+      "title" : "Release the left button",
+      "args" : {
+        "button" : "left"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Releases a mouse button at the current mouse position.\n\n```kotlin driver.mouseUp() driver.mouseUp(\"right\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "mouseWheel",
+    "mcpNames" : [ "mouse_wheel", "browser_mouse_wheel" ],
+    "signature" : "tab.mouseWheel(selector: String, deltaX: Double = 0.0, deltaY: Double = 150.0)",
+    "description" : "Scrolls the mouse wheel on a specific element identified by [selector].",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element to wheel on."
+    }, {
+      "name" : "deltaX",
+      "type" : "Double",
+      "required" : false,
+      "default" : "0.0",
+      "description" : "The distance to wheel horizontally."
+    }, {
+      "name" : "deltaY",
+      "type" : "Double",
+      "required" : false,
+      "default" : "150.0",
+      "description" : "The distance to wheel vertically."
+    } ],
+    "examples" : [ {
+      "title" : "Wheel inside an element",
+      "args" : {
+        "selector" : "#list",
+        "deltaY" : "300"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Scrolls the mouse wheel on a specific element identified by [selector].\n\nThe element is scrolled into view if needed, the mouse is moved to a random position near the element's center, and then the wheel event is dispatched.\n\n```kotlin driver.mouseWheel(\".scrollable-panel\", 0.0, 200.0) ```"
+  }, {
+    "domain" : "tab",
+    "method" : "mouseWheelDown",
+    "mcpNames" : [ "mouse_wheel_down" ],
+    "signature" : "tab.mouseWheelDown(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = 150.0, delayMillis: Long = -1)",
+    "description" : "The mouse wheels down for [count] times.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "count",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "The times to wheel down."
+    }, {
+      "name" : "deltaX",
+      "type" : "Double",
+      "required" : false,
+      "default" : "0.0",
+      "description" : "The distance to wheel horizontally."
+    }, {
+      "name" : "deltaY",
+      "type" : "Double",
+      "required" : false,
+      "default" : "150.0",
+      "description" : "The distance to wheel vertically."
+    }, {
+      "name" : "delayMillis",
+      "type" : "Long",
+      "required" : false,
+      "default" : "-1",
+      "description" : "The delay time in milliseconds between ticks. Use 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay."
+    } ],
+    "examples" : [ {
+      "title" : "Scroll three wheel notches down",
+      "args" : {
+        "count" : "3"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "The mouse wheels down for [count] times.\n\n```kotlin driver.mouseWheelDown(3) ```\n\nUse 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay."
+  }, {
+    "domain" : "tab",
+    "method" : "mouseWheelUp",
+    "mcpNames" : [ "mouse_wheel_up" ],
+    "signature" : "tab.mouseWheelUp(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = -150.0, delayMillis: Long = -1)",
+    "description" : "The mouse wheels up for [count] times.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "count",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "The times to wheel up."
+    }, {
+      "name" : "deltaX",
+      "type" : "Double",
+      "required" : false,
+      "default" : "0.0",
+      "description" : "The distance to wheel horizontally."
+    }, {
+      "name" : "deltaY",
+      "type" : "Double",
+      "required" : false,
+      "default" : "-150.0",
+      "description" : "The distance to wheel vertically."
+    }, {
+      "name" : "delayMillis",
+      "type" : "Long",
+      "required" : false,
+      "default" : "-1",
+      "description" : "The delay time in milliseconds between ticks. Use 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay."
+    } ],
+    "examples" : [ {
+      "title" : "Scroll three wheel notches up",
+      "args" : {
+        "count" : "3"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "The mouse wheels up for [count] times.\n\n```kotlin driver.mouseWheelUp(3) ```\n\nUse 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay."
+  }, {
+    "domain" : "tab",
+    "method" : "moveMouseTo",
+    "mcpNames" : [ "move_mouse_to" ],
+    "signature" : "tab.moveMouseTo(selector: String, deltaX: Int, deltaY: Int = 0)",
+    "description" : "The mouse moves to the element with [selector].",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    }, {
+      "name" : "deltaX",
+      "type" : "Int",
+      "required" : true,
+      "description" : "The distance to the left of the element."
+    }, {
+      "name" : "deltaY",
+      "type" : "Int",
+      "required" : false,
+      "default" : "0",
+      "description" : "The distance to the top of the element."
+    } ],
+    "examples" : [ {
+      "title" : "Hover 10px right of the avatar",
+      "args" : {
+        "selector" : "#avatar",
+        "deltaX" : "10"
+      },
+      "notes" : "Coordinates are relative to the element's top-left corner.",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "The mouse moves to the element with [selector].\n\n```kotlin driver.moveMouseTo(\"h2.title\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "nanoDOMTree",
+    "mcpNames" : [ "nano_d_o_m_tree" ],
+    "signature" : "tab.nanoDOMTree()",
+    "description" : "Retrieves a lightweight version of the DOM tree (NanoDOMTree).",
+    "returnType" : "NanoDOMTree?",
+    "examples" : [ {
+      "title" : "Dump the DOM as YAML",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Retrieves a lightweight version of the DOM tree (NanoDOMTree).\n\nThe NanoDOMTree is based on the accessibility tree and enhanced with DOM and document snapshot information. It is designed to be a compact representation suitable for AI processing and analysis."
+  }, {
+    "domain" : "tab",
+    "method" : "navigate",
+    "mcpNames" : [ "navigate", "browser_navigate" ],
+    "signature" : "tab.navigate(url: String, rawUrl: String? = null, pageUrl: String? = null)",
+    "description" : "Navigate the current page to a URL and wait for the page to load.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "url",
+      "type" : "String",
+      "required" : true,
+      "description" : "URL to navigate to; the executor waits for the page to load."
+    }, {
+      "name" : "rawUrl",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Low-level alternative to 'url' — must be paired with 'pageUrl'."
+    }, {
+      "name" : "pageUrl",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Page URL paired with 'rawUrl'."
+    } ],
+    "examples" : [ {
+      "title" : "Open a page",
+      "args" : {
+        "url" : "https://example.com"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.navigate(url: String)\n\nNavigates the current page to `url` and then polls document.readyState\nuntil the page has loaded (covers SPA routes and same-URL navigations,\nwhich waitForNavigation() cannot observe).\nrawUrl/pageUrl are the low-level pair used by internal drivers; MCP\nclients should pass `url`."
+  }, {
+    "domain" : "tab",
+    "method" : "networkRequestDetail",
+    "mcpNames" : [ "network_request_detail", "browser_network_request" ],
+    "signature" : "tab.networkRequestDetail(requestId: String)",
+    "description" : "Fetch the full detail of one tracked network request, including headers, timing, and response body.",
+    "returnType" : "Map<String, Any?>",
+    "arguments" : [ {
+      "name" : "requestId",
+      "type" : "String",
+      "required" : true,
+      "description" : "requestId: String"
+    } ],
+    "examples" : [ {
+      "title" : "Inspect a captured request",
+      "args" : {
+        "requestId" : "<request-id>"
+      },
+      "notes" : "Take the id from `network_requests`; bodies are only kept when recording asked for them.",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.networkRequestDetail(requestId: String)\n\nReturns request/response metadata plus the response body (fetched on demand) for the\nrequest id shown by tab.networkRequests()."
+  }, {
+    "domain" : "tab",
+    "method" : "networkRequests",
+    "mcpNames" : [ "network_requests", "browser_network_requests" ],
+    "signature" : "tab.networkRequests(filter: String? = null, type: String? = null, method: String? = null, status: String? = null, clear: Boolean = false)",
+    "description" : "List network requests tracked for the current tab, optionally filtered.",
+    "returnType" : "List<TrackedNetworkRequest>",
+    "arguments" : [ {
+      "name" : "filter",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "filter: String? = null"
+    }, {
+      "name" : "type",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "type: String? = null"
+    }, {
+      "name" : "method",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "method: String? = null"
+    }, {
+      "name" : "status",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "status: String? = null"
+    }, {
+      "name" : "clear",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "false",
+      "description" : "clear: Boolean = false"
+    } ],
+    "examples" : [ {
+      "title" : "List network requests",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "tab.networkRequests()\ntab.networkRequests(filter: String? = null, type: String? = null, method: String? = null, status: String? = null, clear: Boolean = false)\n\nEnables Network tracking on first use, then returns the requests observed so far.\nfilter — only requests whose URL contains this text (case-insensitive).\ntype — comma-separated CDP resource types, e.g. \"xhr,fetch\".\nmethod — HTTP method, e.g. \"POST\".\nstatus — \"200\", \"2xx\", or a range like \"400-499\".\nclear — drop all tracked requests first."
+  }, {
+    "domain" : "tab",
+    "method" : "networkRoute",
+    "mcpNames" : [ "network_route", "browser_network_route" ],
+    "signature" : "tab.networkRoute(urlPattern: String, abort: Boolean = false, body: String? = null, contentType: String? = null, resourceType: String? = null)",
+    "description" : "Route matching requests to a mock response or abort them (CDP Fetch interception).",
+    "returnType" : "Map<String, Any?>",
+    "arguments" : [ {
+      "name" : "urlPattern",
+      "type" : "String",
+      "required" : true,
+      "description" : "urlPattern: String"
+    }, {
+      "name" : "abort",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "false",
+      "description" : "abort: Boolean = false"
+    }, {
+      "name" : "body",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "body: String? = null"
+    }, {
+      "name" : "contentType",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "contentType: String? = null"
+    }, {
+      "name" : "resourceType",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "resourceType: String? = null"
+    } ],
+    "examples" : [ {
+      "title" : "Stub an API response",
+      "args" : {
+        "urlPattern" : "**/api/ads",
+        "body" : "{}",
+        "contentType" : "application/json"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.networkRoute(urlPattern: String, abort: Boolean = false, body: String? = null, contentType: String? = null, resourceType: String? = null)\n\nIntercepts requests whose URL matches urlPattern (\"*\" matches all; plain text matches\nURLs containing it; \"*\" globs like \"**/api/users\" are supported).\nabort — fail matching requests instead of sending them.\nbody/contentType — answer matching requests with this mock response.\nresourceType — only intercept these CDP resource types (comma-separated, e.g. \"xhr,fetch\").\nRemove routes with tab.networkUnroute()."
+  }, {
+    "domain" : "tab",
+    "method" : "networkUnroute",
+    "mcpNames" : [ "network_unroute", "browser_network_unroute" ],
+    "signature" : "tab.networkUnroute(urlPattern: String? = null)",
+    "description" : "Remove request routes; without a pattern every route is removed and Fetch interception is disabled.",
+    "returnType" : "Map<String, Any?>",
+    "arguments" : [ {
+      "name" : "urlPattern",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "urlPattern: String? = null"
+    } ],
+    "examples" : [ {
+      "title" : "Remove an API stub",
+      "args" : {
+        "urlPattern" : "**/api/ads"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.networkUnroute(urlPattern: String? = null)\n\nRemoves the route registered with the exact urlPattern, or all routes (and disables\nFetch interception) when no pattern is given."
+  }, {
+    "domain" : "tab",
+    "method" : "newJsoupSession",
+    "mcpNames" : [ "new_jsoup_session" ],
+    "signature" : "tab.newJsoupSession()",
+    "description" : "Create a new Jsoup session with the last page's context, which means, the same headers and cookies.",
+    "returnType" : "Connection",
+    "examples" : [ {
+      "title" : "Open a browser-less Jsoup session",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "open",
+    "mcpNames" : [ "open" ],
+    "signature" : "tab.open(url: String)",
+    "description" : "Opens the specified URL in the web driver.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "url",
+      "type" : "String",
+      "required" : true,
+      "description" : "The URL to which the web driver should navigate. Must be a valid URL string."
+    } ],
+    "examples" : [ {
+      "title" : "Open a page in a new tab",
+      "args" : {
+        "url" : "https://example.com"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Opens the specified URL in the web driver.\n\nThis function navigates the web driver to the provided URL and waits for the navigation to complete. It is a suspend function, meaning it can be used within coroutines for asynchronous execution.\n\nExample usage: ```kotlin driver.open(\"https://www.example.com\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "outerHTML",
+    "mcpNames" : [ "outer_h_t_m_l" ],
+    "signature" : "tab.outerHTML(selector: String)",
+    "description" : "Returns the node's HTML markup, the node is located by [selector].",
+    "returnType" : "String?",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    } ],
+    "examples" : [ {
+      "title" : "Read the outer HTML of a node",
+      "args" : {
+        "selector" : "#price"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns the node's HTML markup, the node is located by [selector].\n\nIf the node does not exist, returns null.\n\n```kotlin val html = driver.outerHTML(\"h2.title\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "pageSource",
+    "mcpNames" : [ "page_source" ],
+    "signature" : "tab.pageSource()",
+    "description" : "Returns the source of the last loaded page.",
+    "returnType" : "String?",
+    "examples" : [ {
+      "title" : "Read the page HTML",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Returns the source of the last loaded page.\n\nIf the page has been modified after loading (for example, by JavaScript) there is no guarantee that the returned text is that of the modified page.\n\nPageSource and outerHTML:\n\n- pageSource: returns document HTML markup, will support non-HTML document - outerHTML: returns document HTML markup, for HTML document only\n\n```kotlin val pageSource = driver.pageSource() ```"
+  }, {
+    "domain" : "tab",
+    "method" : "pause",
+    "mcpNames" : [ "pause" ],
+    "signature" : "tab.pause()",
+    "description" : "Force the page pauses all navigations and PENDING resource fetches.",
+    "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Pause the driver",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Force the page pauses all navigations and PENDING resource fetches.\n\nIf the page loading pauses, the user can still interact with the page, and therefore resources can continue to load."
+  }, {
+    "domain" : "tab",
+    "method" : "pdf",
+    "mcpNames" : [ "pdf", "browser_pdf_save" ],
+    "signature" : "tab.pdf()",
+    "description" : "Print the current page as PDF.",
+    "returnType" : "String?",
+    "examples" : [ {
+      "title" : "Print the page to PDF",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Print the current page as PDF.\n\nReturns a Base64 encoded PDF document generated via Chrome DevTools Protocol Page.printToPDF. Uses A4 paper size, portrait orientation, and prints background graphics by default."
+  }, {
+    "domain" : "tab",
+    "method" : "press",
+    "mcpNames" : [ "press", "browser_press_key" ],
+    "signature" : "tab.press(key: String, selector: String? = null)",
+    "description" : "Press a key on the currently focused element or the element matched by selector.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "key",
+      "type" : "String",
+      "required" : true,
+      "description" : "key: String"
+    }, {
+      "name" : "selector",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "selector: String? = null"
+    } ],
+    "examples" : [ {
+      "title" : "Submit with Enter",
+      "args" : {
+        "key" : "Enter",
+        "selector" : "#q"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.press(key: String)\ntab.press(key: String, selector: String?)\n\nPresses the key on the currently focused element when selector is omitted.\nWhen selector is provided, the executor focuses the matched element first and then presses the key."
+  }, {
+    "domain" : "tab",
+    "method" : "referrer",
+    "mcpNames" : [ "referrer" ],
+    "signature" : "tab.referrer()",
+    "description" : "The referrer property returns the URI of the page that linked to this page.",
+    "returnType" : "String",
+    "examples" : [ {
+      "title" : "Read the referrer",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "The referrer property returns the URI of the page that linked to this page.\n\nThe value is an empty string if the user navigated to the page directly (not through a link, but, for example, by using a bookmark).\n\nInside an <iframe>, the referrer will initially be set to the same value as the href of the parent window's Window.location."
+  }, {
+    "domain" : "tab",
+    "method" : "reload",
+    "mcpNames" : [ "reload", "browser_reload" ],
+    "signature" : "tab.reload()",
+    "description" : "Reloads the current page.",
+    "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Reload the page",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Reloads the current page.\n\nThis method should trigger a reload of the current page, similar to how a user would refresh the page in a browser."
+  }, {
+    "domain" : "tab",
+    "method" : "resize",
+    "mcpNames" : [ "resize", "browser_resize" ],
+    "signature" : "tab.resize(width: Int, height: Int)",
+    "description" : "Resizes the viewport to the specified width and height.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "width",
+      "type" : "Int",
+      "required" : true,
+      "description" : "width: Int"
+    }, {
+      "name" : "height",
+      "type" : "Int",
+      "required" : true,
+      "description" : "height: Int"
+    } ],
+    "examples" : [ {
+      "title" : "Resize the viewport",
+      "args" : {
+        "width" : "1280",
+        "height" : "800"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "saveStorageState",
+    "mcpNames" : [ "save_storage_state", "browser_save_storage_state" ],
+    "signature" : "tab.saveStorageState()",
+    "description" : "Save cookies and the active origin's localStorage as a JSON storage-state payload.",
+    "returnType" : "String",
+    "examples" : [ {
+      "title" : "Save cookies and localStorage",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "tab.saveStorageState()\n\nReturns a JSON string containing the current browser cookies and the active origin's localStorage entries."
+  }, {
+    "domain" : "tab",
+    "method" : "screenshot",
+    "mcpNames" : [ "screenshot", "browser_take_screenshot" ],
+    "signature" : "tab.screenshot(selector: String? = null, fullPage: Boolean? = null, viewport: Int? = null)",
+    "description" : "Capture a screenshot; pass no argument for the visible viewport, or exactly one of selector/fullPage/viewport.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Capture only the element matching this selector."
+    }, {
+      "name" : "fullPage",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Capture the full scrollable page."
+    }, {
+      "name" : "viewport",
+      "type" : "Int?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Capture the Nth viewport (scroll-relative)."
+    } ],
+    "examples" : [ {
+      "title" : "Capture the full page",
+      "args" : {
+        "fullPage" : "true"
+      },
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Capture one element",
+      "args" : {
+        "selector" : "#chart"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.screenshot()\ntab.screenshot(selector: String)\ntab.screenshot(fullPage: Boolean)\ntab.screenshot(viewport: Int)\n\nExactly one of selector/fullPage/viewport may be given; anything else is\nrejected rather than silently capturing the wrong region."
+  }, {
+    "domain" : "tab",
+    "method" : "scrollBy",
+    "mcpNames" : [ "scroll_by" ],
+    "signature" : "tab.scrollBy(pixels: Double = 200.0, smooth: Boolean = true)",
+    "description" : "Scrolls the current page frame vertically by the given number of pixels.",
+    "returnType" : "Double",
+    "arguments" : [ {
+      "name" : "pixels",
+      "type" : "Double",
+      "required" : false,
+      "default" : "200.0",
+      "description" : "The delta in pixels to scroll; positive scrolls down, negative scrolls up. Default 200.0."
+    }, {
+      "name" : "smooth",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "true",
+      "description" : "Whether to perform a deterministic smooth scrolling sequence. If false a single `window.scrollTo()` is executed."
+    } ],
+    "examples" : [ {
+      "title" : "Scroll down one viewport",
+      "args" : {
+        "pixels" : "800"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Scrolls the current page frame vertically by the given number of pixels.\n\nPositive values scroll down, negative values scroll up. The target position is clamped to the scrollable range [0, scrollHeight - viewportHeight].\n\nWhen [smooth] is true a deterministic, step‑wise scrolling algorithm is used (instead of relying on the browser's native smooth scrolling) for higher stability: it issues incremental `window.scrollTo()` calls and waits for the viewport to settle after each step. This reduces race conditions with lazy‑loaded content or async layout changes and yields more predictable final positions.\n\nTypical usage: ```kotlin // Scroll down 200px smoothly (default) driver.scrollBy() // Scroll up 500px immediately driver.scrollBy(-500.0, smooth = false) // Scroll down one viewport height, smooth val y = driver.scrollBy(driver.viewportHeight(), smooth = true) ```\n\n`window.scrollTo()` is executed."
+  }, {
+    "domain" : "tab",
+    "method" : "scrollDown",
+    "mcpNames" : [ "scroll_down" ],
+    "signature" : "tab.scrollDown(count: Int = 1)",
+    "description" : "The current page frame scrolls down for [count] times.",
+    "returnType" : "Double",
+    "arguments" : [ {
+      "name" : "count",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "The times to scroll down."
+    } ],
+    "examples" : [ {
+      "title" : "Scroll down one viewport",
+      "args" : {
+        "count" : "1"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "The current page frame scrolls down for [count] times.\n\n```kotlin driver.scrollDown(3) ```\n\nNOTE: This uses JS scrollBy for fast, direct scroll control. For realistic user-like scrolling that triggers all event handlers, use [mouseWheelDown]."
+  }, {
+    "domain" : "tab",
+    "method" : "scrollTo",
+    "mcpNames" : [ "scroll_to" ],
+    "signature" : "tab.scrollTo(selector: String)",
+    "description" : "This method fetches an element with [selector], scrolls it into view if needed.",
+    "returnType" : "Double",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be scrolled into view."
+    } ],
+    "examples" : [ {
+      "title" : "Scroll an element into view",
+      "args" : {
+        "selector" : "#footer"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "This method fetches an element with [selector], scrolls it into view if needed.\n\nIf there's no element matching [selector], the method does nothing.\n\n```kotlin driver.scrollTo(\"h2.title\") ```\n\nelements, the first will be scrolled into view."
+  }, {
+    "domain" : "tab",
+    "method" : "scrollToBottom",
+    "mcpNames" : [ "scroll_to_bottom" ],
+    "signature" : "tab.scrollToBottom()",
+    "description" : "The current page frame scrolls to the bottom.",
+    "returnType" : "Double",
+    "examples" : [ {
+      "title" : "Scroll to the bottom",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "The current page frame scrolls to the bottom.\n\n```kotlin driver.scrollToBottom() ```"
+  }, {
+    "domain" : "tab",
+    "method" : "scrollToMiddle",
+    "mcpNames" : [ "scroll_to_middle" ],
+    "signature" : "tab.scrollToMiddle(ratio: Double)",
+    "description" : "The current page frame scrolls to the middle.",
+    "returnType" : "Double",
+    "arguments" : [ {
+      "name" : "ratio",
+      "type" : "Double",
+      "required" : true,
+      "description" : "The ratio of the page to scroll to, 0.0 means the top, 1.0 means the bottom."
+    } ],
+    "examples" : [ {
+      "title" : "Scroll to the middle of the page",
+      "args" : {
+        "ratio" : "0.5"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "The current page frame scrolls to the middle.\n\n```kotlin driver.scrollToMiddle(0.2) driver.scrollToMiddle(0.5) driver.scrollToMiddle(0.8) ```"
+  }, {
+    "domain" : "tab",
+    "method" : "scrollToTop",
+    "mcpNames" : [ "scroll_to_top" ],
+    "signature" : "tab.scrollToTop()",
+    "description" : "The current page frame scrolls to the top.",
+    "returnType" : "Double",
+    "examples" : [ {
+      "title" : "Scroll to the top",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "The current page frame scrolls to the top.\n\n```kotlin driver.scrollToTop() ```"
+  }, {
+    "domain" : "tab",
+    "method" : "scrollToViewport",
+    "mcpNames" : [ "scroll_to_viewport" ],
+    "signature" : "tab.scrollToViewport(n: Double, smooth: Boolean = true)",
+    "description" : "Scroll to the given 0-based viewport position.",
+    "returnType" : "Double",
+    "arguments" : [ {
+      "name" : "n",
+      "type" : "Double",
+      "required" : true,
+      "description" : "The viewport number of the page to scroll to (0-based). 0.00 means at the top of the first screen, 1.50 means halfway through the second screen."
+    }, {
+      "name" : "smooth",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "true",
+      "description" : "smooth: Boolean = true"
+    } ],
+    "examples" : [ {
+      "title" : "Jump to the third viewport",
+      "args" : {
+        "n" : "3"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Scroll to the given 0-based viewport position.\n\n```kotlin driver.scrollToViewport(0.0) driver.scrollToViewport(0.5) driver.scrollToViewport(1.5) driver.scrollToViewport(2.0) ```\n\n0.00 means at the top of the first screen, 1.50 means halfway through the second screen."
+  }, {
+    "domain" : "tab",
+    "method" : "scrollUp",
+    "mcpNames" : [ "scroll_up" ],
+    "signature" : "tab.scrollUp(count: Int = 1)",
+    "description" : "The current page frame scrolls up for [count] times.",
+    "returnType" : "Double",
+    "arguments" : [ {
+      "name" : "count",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "The times to scroll up."
+    } ],
+    "examples" : [ {
+      "title" : "Scroll up one viewport",
+      "args" : {
+        "count" : "1"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "The current page frame scrolls up for [count] times.\n\n```kotlin driver.scrollUp(3) ```\n\nNOTE: This uses JS scrollBy for fast, direct scroll control. For realistic user-like scrolling that triggers all event handlers, use [mouseWheelUp]."
+  }, {
+    "domain" : "tab",
+    "method" : "selectAttributeAll",
+    "mcpNames" : [ "select_attribute_all" ],
+    "signature" : "tab.selectAttributeAll(selector: String, attrName: String, start: Int = 0, limit: Int = 10000)",
+    "description" : "Returns the nodes' attribute values, the nodes are located by [selector], the attribute is [attrName].",
+    "returnType" : "List<String>",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    }, {
+      "name" : "attrName",
+      "type" : "String",
+      "required" : true,
+      "description" : "The attribute name to retrieve."
+    }, {
+      "name" : "start",
+      "type" : "Int",
+      "required" : false,
+      "default" : "0",
+      "description" : "The offset of the first node to select."
+    }, {
+      "name" : "limit",
+      "type" : "Int",
+      "required" : false,
+      "default" : "10000",
+      "description" : "The maximum number of nodes to select."
+    } ],
+    "examples" : [ {
+      "title" : "Collect every href on the page",
+      "args" : {
+        "selector" : "a",
+        "attrName" : "href"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns the nodes' attribute values, the nodes are located by [selector], the attribute is [attrName].\n\nIf the nodes do not exist, or the attribute does not exist, returns an empty list.\n\n```kotlin val classes = driver.selectAttributeAll(\"h2.title\", \"class\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "selectAttributes",
+    "mcpNames" : [ "select_attributes" ],
+    "signature" : "tab.selectAttributes(selector: String)",
+    "description" : "Returns the node's attribute values, the node is located by [selector].",
+    "returnType" : "Map<String, String>",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    } ],
+    "examples" : [ {
+      "title" : "Read the attributes of every link",
+      "args" : {
+        "selector" : "a"
+      },
+      "notes" : "Without `attrName` the whole attribute map per element is returned.",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns the node's attribute values, the node is located by [selector].\n\nIf the node do not exist, or the attribute does not exist, returns an empty list.\n\n```kotlin val classes = driver.selectAttributes(\"h2.title\", \"class\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "selectFirstAttributeOrNull",
+    "mcpNames" : [ "select_first_attribute_or_null" ],
+    "signature" : "tab.selectFirstAttributeOrNull(selector: String, attrName: String)",
+    "description" : "Returns the node's attribute value, the node is located by [selector], the attribute is [attrName].",
+    "returnType" : "String?",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    }, {
+      "name" : "attrName",
+      "type" : "String",
+      "required" : true,
+      "description" : "The attribute name to retrieve."
+    } ],
+    "examples" : [ {
+      "title" : "Read one link's target",
+      "args" : {
+        "selector" : "a",
+        "attrName" : "href"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns the node's attribute value, the node is located by [selector], the attribute is [attrName].\n\nIf the node does not exist, or the attribute does not exist, returns null.\n\n```kotlin val classes = driver.selectFirstAttributeOrNull(\"h2.title\", \"class\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "selectFirstPropertyValueOrNull",
+    "mcpNames" : [ "select_first_property_value_or_null" ],
+    "signature" : "tab.selectFirstPropertyValueOrNull(selector: String, propName: String)",
+    "description" : "Returns the node's property value, the node is located by [selector], the property is [propName].",
+    "returnType" : "String?",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    }, {
+      "name" : "propName",
+      "type" : "String",
+      "required" : true,
+      "description" : "The property name to retrieve."
+    } ],
+    "examples" : [ {
+      "title" : "Read an input's current value",
+      "args" : {
+        "selector" : "#email",
+        "propName" : "value"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns the node's property value, the node is located by [selector], the property is [propName].\n\nIf the node does not exist, or the property does not exist, returns null.\n\n```kotlin val classes = driver.selectFirstPropertyOrNull(\"input#input\", \"value\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "selectFirstTextOrNull",
+    "mcpNames" : [ "select_first_text_or_null" ],
+    "signature" : "tab.selectFirstTextOrNull(selector: String)",
+    "description" : "Returns the node's text content, the node is located by [selector].",
+    "returnType" : "String?",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    } ],
+    "examples" : [ {
+      "title" : "Read the first heading's text",
+      "args" : {
+        "selector" : "h1"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns the node's text content, the node is located by [selector].\n\nIf the node does not exist, returns null.\n\n```kotlin val text = driver.selectFirstTextOrNull(\"h2.title\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "selectOption",
+    "mcpNames" : [ "select_option", "browser_select_option" ],
+    "signature" : "tab.selectOption(selector: String, value: String)",
+    "description" : "Selects an option in a <select> element.",
+    "returnType" : "String?",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    }, {
+      "name" : "value",
+      "type" : "String",
+      "required" : true,
+      "description" : "The value or label of the option to select"
+    } ],
+    "examples" : [ {
+      "title" : "Pick a country",
+      "args" : {
+        "selector" : "#country",
+        "value" : "CN"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "selectPropertyValueAll",
+    "mcpNames" : [ "select_property_value_all" ],
+    "signature" : "tab.selectPropertyValueAll(selector: String, propName: String, start: Int = 0, limit: Int = 10000)",
+    "description" : "Returns the nodes' property values, the nodes are located by [selector], the property is [propName].",
+    "returnType" : "List<String>",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    }, {
+      "name" : "propName",
+      "type" : "String",
+      "required" : true,
+      "description" : "The property name to retrieve."
+    }, {
+      "name" : "start",
+      "type" : "Int",
+      "required" : false,
+      "default" : "0",
+      "description" : "The offset of the first node to select."
+    }, {
+      "name" : "limit",
+      "type" : "Int",
+      "required" : false,
+      "default" : "10000",
+      "description" : "The maximum number of nodes to select."
+    } ],
+    "examples" : [ {
+      "title" : "Read every row's id property",
+      "args" : {
+        "selector" : "tr",
+        "propName" : "id"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns the nodes' property values, the nodes are located by [selector], the property is [propName].\n\nIf the nodes do not exist, or the property does not exist, returns an empty list.\n\n```kotlin val classes = driver.selectPropertyAll(\"input#input\", \"value\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "selectTextAll",
+    "mcpNames" : [ "select_text_all" ],
+    "signature" : "tab.selectTextAll(selector: String)",
+    "description" : "Returns a list of text contents of all the elements matching the specified selector within the page.",
+    "returnType" : "List<String>",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    } ],
+    "examples" : [ {
+      "title" : "Read every price on the page",
+      "args" : {
+        "selector" : ".price"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns a list of text contents of all the elements matching the specified selector within the page.\n\nIf no elements match the selector, returns an empty list.\n\n```kotlin val texts = driver.selectTextAll(\"h2\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "setAttribute",
+    "mcpNames" : [ "set_attribute" ],
+    "signature" : "tab.setAttribute(selector: String, attrName: String, attrValue: String)",
+    "description" : "Set the attribute of an element located by [selector].",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    }, {
+      "name" : "attrName",
+      "type" : "String",
+      "required" : true,
+      "description" : "The attribute name to set."
+    }, {
+      "name" : "attrValue",
+      "type" : "String",
+      "required" : true,
+      "description" : "The attribute value to set."
+    } ],
+    "examples" : [ {
+      "title" : "Set an attribute before clicking",
+      "args" : {
+        "selector" : "#q",
+        "attrName" : "data-test",
+        "attrValue" : "1"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Set the attribute of an element located by [selector].\n\n```kotlin driver.setAttribute(\"h2.title\", \"class\", \"header\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "setAttributeAll",
+    "mcpNames" : [ "set_attribute_all" ],
+    "signature" : "tab.setAttributeAll(selector: String, attrName: String, attrValue: String)",
+    "description" : "Set the attribute of all elements matching [selector].",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    }, {
+      "name" : "attrName",
+      "type" : "String",
+      "required" : true,
+      "description" : "The attribute name to set."
+    }, {
+      "name" : "attrValue",
+      "type" : "String",
+      "required" : true,
+      "description" : "The attribute value to set."
+    } ],
+    "examples" : [ {
+      "title" : "Mark every card as audited",
+      "args" : {
+        "selector" : ".card",
+        "attrName" : "data-audited",
+        "attrValue" : "1"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Set the attribute of all elements matching [selector].\n\n```kotlin driver.setAttributeAll(\"h2.title\", \"class\", \"header\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "setProperty",
+    "mcpNames" : [ "set_property" ],
+    "signature" : "tab.setProperty(selector: String, propName: String, propValue: String)",
+    "description" : "Set the property of an element located by [selector].",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    }, {
+      "name" : "propName",
+      "type" : "String",
+      "required" : true,
+      "description" : "The property name to set."
+    }, {
+      "name" : "propValue",
+      "type" : "String",
+      "required" : true,
+      "description" : "The property value to set."
+    } ],
+    "examples" : [ {
+      "title" : "Set an input's value property",
+      "args" : {
+        "selector" : "#email",
+        "propName" : "value",
+        "propValue" : "a@b.c"
+      },
+      "notes" : "Prefer `fill` for human-like typing; `setProperty` writes the DOM directly.",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Set the property of an element located by [selector].\n\n```kotlin driver.setProperty(\"input#input\", \"value\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "setPropertyAll",
+    "mcpNames" : [ "set_property_all" ],
+    "signature" : "tab.setPropertyAll(selector: String, propName: String, propValue: String)",
+    "description" : "Set the property of all elements matching [selector].",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported."
+    }, {
+      "name" : "propName",
+      "type" : "String",
+      "required" : true,
+      "description" : "The property name to set."
+    }, {
+      "name" : "propValue",
+      "type" : "String",
+      "required" : true,
+      "description" : "The property value to set."
+    } ],
+    "examples" : [ {
+      "title" : "Clear every checkbox's checked property",
+      "args" : {
+        "selector" : "input[type=checkbox]",
+        "propName" : "checked",
+        "propValue" : "false"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Set the property of all elements matching [selector].\n\n```kotlin driver.setPropertyAll(\"input#input\", \"value\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "stop",
+    "mcpNames" : [ "stop" ],
+    "signature" : "tab.stop()",
+    "description" : "Force the page stop all navigations and RELEASES all resources.",
+    "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Stop the driver",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "Force the page stop all navigations and RELEASES all resources.\n\nInteraction with the stop page results in undefined behavior and the results should not be trusted.\n\nIf a web driver stops, it can later be used to visit other pages."
+  }, {
+    "domain" : "tab",
+    "method" : "textContent",
+    "mcpNames" : [ "text_content" ],
+    "signature" : "tab.textContent(selector: String? = null)",
+    "description" : "Returns the text content of the document or a specific element.",
+    "returnType" : "String?",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "The selector of the element, multiple formats supported. If null, targets the document body."
+    } ],
+    "examples" : [ {
+      "title" : "Read the text content of a node",
+      "args" : {
+        "selector" : "#price"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "Returns the text content of the document or a specific element.\n\nIf [selector] is null, returns the text content of the entire document (usually `document.body.innerText`). If [selector] is provided, returns the text content of the first matching element.\n\nIf the document or element does not exist, returns null.\n\n```kotlin val bodyText = driver.textContent() val titleText = driver.textContent(\"h1.title\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "title",
+    "mcpNames" : [ "title" ],
+    "signature" : "tab.title()",
+    "description" : "Returns the title of the current page.",
+    "returnType" : "String",
+    "examples" : [ {
+      "title" : "Page title",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "type",
+    "mcpNames" : [ "type", "browser_press_sequentially" ],
+    "signature" : "tab.type(text: String, selector: String? = null, method: String? = auto, verify: Boolean = false)",
+    "description" : "Insert text into the currently focused element or the element matched by selector. method=auto|chars|exec: auto (default) uses per-character typing for short text and one execCommand('insertText') bulk insert for long (>150 chars) or multi-line text; chars forces per-character typing; exec forces the bulk insert (selector required). verify=true reads the element back after typing and fails when the content does not match (never silently lose text).",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "text",
+      "type" : "String",
+      "required" : true,
+      "description" : "text: String"
+    }, {
+      "name" : "selector",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "selector: String? = null"
+    }, {
+      "name" : "method",
+      "type" : "String?",
+      "required" : false,
+      "default" : "auto",
+      "description" : "method: String? = auto"
+    }, {
+      "name" : "verify",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "false",
+      "description" : "verify: Boolean = false"
+    } ],
+    "examples" : [ {
+      "title" : "Type into a field",
+      "args" : {
+        "text" : "hello",
+        "selector" : "#comment"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.type(text: String)\ntab.type(text: String, selector: String?)\ntab.type(text: String, selector: String, method: String?, verify: Boolean?)\n\nTypes text into the currently focused element when selector is omitted.\nWhen selector is provided, the executor focuses the matched element first and then types text.\nmethod: auto|chars|exec — see the tool description. method/verify require a selector."
+  }, {
+    "domain" : "tab",
+    "method" : "uncheck",
+    "mcpNames" : [ "uncheck", "browser_uncheck" ],
+    "signature" : "tab.uncheck(selector: String)",
+    "description" : "This method uncheck an element with [selector]. If there's no element matching [selector], nothing to do.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be unchecked."
+    } ],
+    "examples" : [ {
+      "title" : "Clear a checkbox",
+      "args" : {
+        "selector" : "#newsletter"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "This method uncheck an element with [selector]. If there's no element matching [selector], nothing to do.\n\nelements, the first will be unchecked."
+  }, {
+    "domain" : "tab",
+    "method" : "upload",
+    "mcpNames" : [ "upload", "browser_file_upload" ],
+    "signature" : "tab.upload(selector: String, paths: List<String>)",
+    "description" : "Upload files to the element located by [selector].",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "The selector of the element, multiple formats supported. It should resolve to the file input element."
+    }, {
+      "name" : "paths",
+      "type" : "List<String>",
+      "required" : true,
+      "description" : "The list of file paths to upload."
+    } ],
+    "examples" : [ {
+      "title" : "Attach a file",
+      "args" : {
+        "selector" : "#file",
+        "paths" : "/tmp/a.pdf"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
+  }, {
+    "domain" : "tab",
+    "method" : "url",
+    "mcpNames" : [ "url" ],
+    "signature" : "tab.url()",
+    "description" : "The URL read-only property of the Document interface returns the document location as a string.",
+    "returnType" : "String",
+    "examples" : [ {
+      "title" : "Read the current URL (alias of current_url)",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "help" : "The URL read-only property of the Document interface returns the document location as a string.\n\nThis property equals to javascript `document.URL`. The `document.URL` property returns the same value. The `document.documentURI` property can be used on any document types, while the `document.URL` property can only be used on HTML documents."
+  }, {
+    "domain" : "tab",
+    "method" : "waitForFunction",
+    "mcpNames" : [ "wait_for_function" ],
+    "signature" : "tab.waitForFunction(pageFunction: String, timeoutMillis: Long? = null)",
+    "description" : "Wait until a JavaScript expression evaluates to a truthy value.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "pageFunction",
+      "type" : "String",
+      "required" : true,
+      "description" : "JavaScript expression returning a truthy value when done."
+    }, {
+      "name" : "timeoutMillis",
+      "type" : "Long?",
+      "required" : false,
+      "default" : "null",
+      "description" : "How long to wait before failing; 30000 when omitted."
+    } ],
+    "examples" : [ {
+      "title" : "Wait for a client-side condition",
+      "args" : {
+        "pageFunction" : "document.querySelectorAll('.row').length > 10"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.waitForFunction(pageFunction: String)\ntab.waitForFunction(pageFunction: String, timeoutMillis: Long)"
+  }, {
+    "domain" : "tab",
+    "method" : "waitForNavigation",
+    "mcpNames" : [ "wait_for_navigation" ],
+    "signature" : "tab.waitForNavigation(oldUrl: String? = null, timeoutMillis: Long? = null)",
+    "description" : "Wait for an in-flight navigation to finish.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "oldUrl",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "URL to navigate away from; omit to just wait for the page to settle."
+    }, {
+      "name" : "timeoutMillis",
+      "type" : "Long?",
+      "required" : false,
+      "default" : "null",
+      "description" : "How long to wait before failing."
+    } ],
+    "examples" : [ {
+      "title" : "Wait for the page after leaving a URL",
+      "args" : {
+        "oldUrl" : "https://example.com/login",
+        "timeoutMillis" : "10000"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.waitForNavigation()\ntab.waitForNavigation(oldUrl: String, timeoutMillis: Long?)\n\nPolls document.readyState instead of the upstream `oldUrl != currentUrl()`\npredicate, so same-URL navigations (SPA routes, fragment jumps) also\ncomplete instead of timing out."
+  }, {
+    "domain" : "tab",
+    "method" : "waitForPage",
+    "mcpNames" : [ "wait_for_page" ],
+    "signature" : "tab.waitForPage(url: String, timeoutMillis: Long? = null)",
+    "description" : "Wait until the browser has a page at the given URL.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "url",
+      "type" : "String",
+      "required" : true,
+      "description" : "URL to wait for."
+    }, {
+      "name" : "timeoutMillis",
+      "type" : "Long?",
+      "required" : false,
+      "default" : "null",
+      "description" : "How long to wait before failing; 30000 when omitted."
+    } ],
+    "examples" : [ {
+      "title" : "Wait for a URL to load",
+      "args" : {
+        "url" : "https://example.com/next",
+        "timeoutMillis" : "15000"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.waitForPage(url: String)\ntab.waitForPage(url: String, timeoutMillis: Long)"
+  }, {
+    "domain" : "tab",
+    "method" : "waitForSelector",
+    "mcpNames" : [ "wait_for_selector" ],
+    "signature" : "tab.waitForSelector(selector: String, timeoutMillis: Long? = null)",
+    "description" : "Wait until an element matching the selector exists in the DOM.",
+    "returnType" : "Unit",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "CSS selector or :expr(...) selector to wait for."
+    }, {
+      "name" : "timeoutMillis",
+      "type" : "Long?",
+      "required" : false,
+      "default" : "null",
+      "description" : "How long to wait before failing; driver default when omitted."
+    } ],
+    "examples" : [ {
+      "title" : "Wait for results to render",
+      "args" : {
+        "selector" : "#results",
+        "timeoutMillis" : "5000"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "help" : "tab.waitForSelector(selector: String)\ntab.waitForSelector(selector: String, timeoutMillis: Long)\n\nFails (TIMEOUT) instead of returning silently when the selector never appears."
+  }, {
+    "domain" : "webdb",
+    "method" : "export",
+    "mcpNames" : [ "webdb_export" ],
+    "signature" : "webdb.export(sessionId: String, urls: String, outputDir: String)",
+    "description" : "Export pages from the web database to a local directory. Provide a comma-separated list of URLs.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "sessionId",
+      "type" : "String",
+      "required" : true,
+      "description" : "Session whose web database is exported. Required."
+    }, {
+      "name" : "urls",
+      "type" : "String",
+      "required" : true,
+      "description" : "Comma-separated URL list to export. Required — the export fails without it."
+    }, {
+      "name" : "outputDir",
+      "type" : "String",
+      "required" : true,
+      "description" : "Target directory for the exported pages. Required; the directory is created when missing."
+    } ],
+    "examples" : [ {
+      "title" : "Export two pages",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "urls" : "https://example.com,https://example.org",
+        "outputDir" : "/tmp/webdb-export"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"total\",\"succeeded\",\"empty\",\"failed\",\"results\"],\"properties\":{\"total\":{\"type\":\"integer\"},\"succeeded\":{\"type\":\"integer\"},\"empty\":{\"type\":\"integer\"},\"failed\":{\"type\":\"integer\"},\"results\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"url\",\"status\"],\"properties\":{\"url\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"contentLength\":{\"type\":\"integer\"},\"error\":{\"type\":\"string\"}}}}}}"
+  }, {
+    "domain" : "webdb",
+    "method" : "normalize",
+    "mcpNames" : [ "webdb_normalize" ],
+    "signature" : "webdb.normalize(sessionId: String, url: String)",
+    "description" : "Normalize a URL for use as a web database key. Resolves redirects, normalizes paths, and validates the URL. Returns the canonical URL plus the storage key the page is filed under.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "sessionId",
+      "type" : "String",
+      "required" : true,
+      "description" : "Session used to resolve redirects. Required."
+    }, {
+      "name" : "url",
+      "type" : "String",
+      "required" : true,
+      "description" : "URL to normalize. Required."
+    } ],
+    "examples" : [ {
+      "title" : "Normalize a URL with query parameters",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "url" : "https://example.com/a?b=1"
+      },
+      "notes" : "Returns JSON: {\"url\":..., \"normalizedUrl\":..., \"storageKey\":...}",
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"url\",\"normalizedUrl\",\"storageKey\"],\"properties\":{\"url\":{\"type\":\"string\"},\"normalizedUrl\":{\"type\":\"string\"},\"storageKey\":{\"type\":\"string\"}}}"
+  } ]
+}

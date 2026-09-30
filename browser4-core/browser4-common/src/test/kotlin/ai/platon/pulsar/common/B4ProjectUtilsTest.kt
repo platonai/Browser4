@@ -68,4 +68,32 @@ class B4ProjectUtilsTest {
         // No VERSION file anywhere in this isolated tree.
         assertNull(B4ProjectUtils.findProjectRootDir(root))
     }
+
+    @Test
+    @DisplayName("parseJarVersionFromLocation extracts the version from a plain classpath jar")
+    fun parseJarVersionFromPlainClasspathJar() {
+        val location = "file:/home/user/.m2/repository/ai/platon/pulsar/pulsar-browser/4.11.6/pulsar-browser-4.11.6.jar"
+        assertEquals("4.11.6", B4ProjectUtils.parseJarVersionFromLocation("pulsar-browser", location))
+    }
+
+    @Test
+    @DisplayName("parseJarVersionFromLocation extracts the version from a jar nested in an uber jar")
+    fun parseJarVersionFromNestedUberJar() {
+        val location = "jar:file:/opt/browser4/Browser4.jar!/BOOT-INF/lib/pulsar-browser-4.11.6-SNAPSHOT.jar!/"
+        assertEquals("4.11.6-SNAPSHOT", B4ProjectUtils.parseJarVersionFromLocation("pulsar-browser", location))
+    }
+
+    @Test
+    @DisplayName("parseJarVersionFromLocation returns null for non-jar locations")
+    fun parseJarVersionFromNonJarLocation() {
+        val location = "file:/workspace/browser4-agentic/target/classes/"
+        assertNull(B4ProjectUtils.parseJarVersionFromLocation("pulsar-browser", location))
+    }
+
+    @Test
+    @DisplayName("parseJarVersionFromLocation returns null when the artifact id is absent")
+    fun parseJarVersionFromUnrelatedJar() {
+        val location = "file:/home/user/.m2/repository/org/jsoup/jsoup/1.17.2/jsoup-1.17.2.jar"
+        assertNull(B4ProjectUtils.parseJarVersionFromLocation("pulsar-browser", location))
+    }
 }

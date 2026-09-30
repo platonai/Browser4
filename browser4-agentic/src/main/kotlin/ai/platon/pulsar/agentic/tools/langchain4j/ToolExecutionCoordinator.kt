@@ -1,8 +1,8 @@
 package ai.platon.pulsar.agentic.tools.langchain4j
 
+import ai.platon.pulsar.agentic.model.ToolOutcome
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
-import ai.platon.pulsar.common.brief
 import dev.langchain4j.agent.tool.ToolExecutionRequest
 import dev.langchain4j.data.message.ToolExecutionResultMessage
 import kotlinx.coroutines.Dispatchers
@@ -39,20 +39,20 @@ class ToolExecutionCoordinator(
             val result = runBlocking(Dispatchers.IO) {
                 toolManager.execute(tc)
             }
-            val evaluate = result.evaluate
-            if (evaluate.success) {
-                val value = evaluate.value?.toString() ?: evaluate.description ?: "OK"
-                "[Succeeded] ${value.take(5000)}"
-            } else {
-                val cause = evaluate.exception?.cause?.brief()
-                    ?: evaluate.exception?.message ?: "unknown error"
-                val help = evaluate.exception?.help
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { "\nHelp: $it" } ?: ""
-                "[Error] $cause$help"
-            }
+            // Record inner-loop executions for the finish-report guard (they
+            // don't create outer AgentStates).
+            toolManager.notifyToolExecuted(tc.domain, tc.method)
+            // Bounded ToolOutcome envelope instead of raw output — native
+            // tool-calling results feed back into the conversation, so
+            // unbounded Maven/read outputs blow up the context (observed
+            // 90k-token requests). Header + truncated body + errors.
+            // The resolved (domain, method) is passed explicitly: the
+            // ToolCallResult from AgentToolManager.execute carries no
+            // ActionDescription, so without the override every envelope would
+            // render as "unknown.unknown [ok] ..." in the prompt and traces.
+            ToolOutcome.from(result, domain = tc.domain, method = tc.method).render().take(5000)
         } catch (e: Exception) {
-            "[Error] ${e.message ?: "tool execution failed"}"
+            "[fail] ${e.message?.take(300) ?: "tool execution failed"}"
         }
 
         return ToolExecutionResultMessage.from(

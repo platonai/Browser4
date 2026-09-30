@@ -1,7 +1,8 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
-import ai.platon.pulsar.agentic.common.CodingAgentFileSystem
-import ai.platon.pulsar.agentic.common.CodingAgentShell
+import ai.platon.pulsar.coding.CodingAgentFileSystem
+import ai.platon.pulsar.coding.CodingAgentShell
+import ai.platon.pulsar.coding.ShellResult
 import ai.platon.pulsar.agentic.model.ToolCall
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 
 class CodingToolExecutorTest {
 
@@ -233,6 +235,259 @@ class CodingToolExecutorTest {
             val result = executor.callFunctionOn(tc, target)
             coVerify { fs.readFileLines("log.txt", 5, 15) }
             assertEquals("lines 5-15", result.value)
+        }
+
+        @Test
+        @DisplayName("read with startLine/endLine routes to fs.readFileLines")
+        fun testReadWithLineRange() = runBlocking {
+            coEvery { fs.readFileLines(any(), any(), any()) } returns "lines 5-15"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "read",
+                arguments = mutableMapOf("path" to "src/main.kt", "startLine" to "5", "endLine" to "15")
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            coVerify { fs.readFileLines("src/main.kt", 5, 15) }
+            assertEquals("lines 5-15", result.value)
+        }
+
+        @Test
+        @DisplayName("scaffold plugin maps 'name' to pluginName")
+        fun testScaffoldPluginNameMapping() = runBlocking {
+            // Fixed, version-independent sample — tests must not track the
+            // repo's current project version.
+            coEvery { fs.readFile(any()) } returns "4.13.4-SNAPSHOT"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffold",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "name" to "browser4-pageinfo",
+                    "domain" to "pageinfo",
+                    "basePackage" to "ai.platon.pulsar.pageinfo",
+                    "toolMethod" to "extractPageInfo",
+                    "toolDescription" to "Extract page info"
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val output = result.value.toString()
+            assertTrue(output.contains("=== File: pom.xml ==="))
+            assertTrue(output.contains("<artifactId>browser4-pageinfo</artifactId>"))
+            assertTrue(output.contains("PageinfoAutoConfiguration"))
+        }
+
+        @Test
+        @DisplayName("scaffold plugin fails loudly when the repo VERSION file is unreadable")
+        fun testScaffoldPluginFailsLoudlyWithoutVersion() = runBlocking {
+            // No hardcoded fallback version: when the caller cannot determine the
+            // project version (VERSION unreadable), scaffolding must fail loudly
+            // instead of emitting a plugin pinned to a stale version.
+            coEvery { fs.readFile(any()) } returns ""
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffold",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "name" to "browser4-pageinfo",
+                    "domain" to "pageinfo",
+                    "basePackage" to "ai.platon.pulsar.pageinfo",
+                    "toolMethod" to "extractPageInfo",
+                    "toolDescription" to "Extract page info"
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val exception = result.exception
+            assertNotNull(exception, "scaffold must fail when VERSION is unreadable")
+            assertTrue(
+                exception!!.message.orEmpty().contains("pdkVersion"),
+                "error must point at the missing pdkVersion: ${exception.message}"
+            )
+        }
+
+        @Test
+        @DisplayName("scaffoldToDir writes scaffold files into the workspace dir")
+        fun testScaffoldToDirWritesFiles() = runBlocking {
+            coEvery { fs.readFile(any()) } returns "4.13.4-SNAPSHOT"
+            coEvery { fs.writeFile(any(), any()) } returns "written"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffoldToDir",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "dir" to "browser4-plugins/browser4-wordcount",
+                    "name" to "browser4-wordcount",
+                    "domain" to "wordcount",
+                    "basePackage" to "ai.platon.pulsar.wordcount",
+                    "toolMethod" to "countWords",
+                    "toolDescription" to "Count words"
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val output = result.value.toString()
+            assertTrue(output.contains("✓ Scaffolded plugin into browser4-plugins/browser4-wordcount"), output)
+            assertTrue(output.contains("browser4-plugins/browser4-wordcount/pom.xml"), output)
+            coVerify { fs.writeFile("browser4-plugins/browser4-wordcount/pom.xml", any()) }
+            coVerify { fs.writeFile(match { it.endsWith("META-INF/browser4-plugin.json") }, any()) }
+        }
+
+        @Test
+        @DisplayName("scaffoldToDir registers the module in the aggregator pom and verifies when asked")
+        fun testScaffoldToDirRegistersModuleAndVerifies() = runBlocking {
+            coEvery { fs.readFile(any()) } returnsMany listOf(
+                "4.13.4-SNAPSHOT", // VERSION
+                "<modules>\n    </modules>" // browser4-plugins/pom.xml
+            )
+            coEvery { fs.writeFile(any(), any()) } returns "✓ Wrote 10 chars"
+            coEvery { fs.resolvePathString(any()) } returns "/workspace/browser4-plugins/browser4-wordcount"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffoldToDir",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "dir" to "browser4-plugins/browser4-wordcount",
+                    "name" to "browser4-wordcount",
+                    "domain" to "wordcount",
+                    "basePackage" to "ai.platon.pulsar.wordcount",
+                    "toolMethod" to "countWords",
+                    "toolDescription" to "Count words",
+                    "verify" to "true"
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val output = result.value.toString()
+            assertTrue(output.contains("✓ Scaffolded plugin into browser4-plugins/browser4-wordcount"), output)
+            // The new module is appended to the browser4-plugins aggregator pom.
+            coVerify { fs.writeFile("browser4-plugins/pom.xml", match { it.contains("<module>browser4-wordcount</module>") }) }
+            assertTrue(output.contains("✓ Registered module browser4-wordcount in browser4-plugins/pom.xml"), output)
+            // verify=true runs the plugin validator and appends its report.
+            assertTrue(output.contains("--- Plugin validation ---"), output)
+        }
+
+        @Test
+        @DisplayName("scaffoldToDir copies the FIRST module line indent instead of creeping +4 per scaffold")
+        fun testScaffoldToDirUsesFirstModuleIndent() = runBlocking {
+            // P2.1 regression: taking the LAST module line made the indent creep
+            // 8 → 12 → 16 spaces on every scaffold.
+            coEvery { fs.readFile(any()) } returnsMany listOf(
+                "4.13.4-SNAPSHOT", // VERSION
+                "<modules>\n        <module>browser4-captcha</module>\n    </modules>", // aggregator (8-space base)
+                "Error: unreadable", // ModuleMap.kt
+            )
+            coEvery { fs.writeFile(any(), any()) } returns "✓ Wrote"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffoldToDir",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "dir" to "browser4-plugins/browser4-wordcount",
+                    "name" to "browser4-wordcount",
+                )
+            )
+
+            executor.callFunctionOn(tc, target)
+            coVerify {
+                fs.writeFile(
+                    "browser4-plugins/pom.xml",
+                    match {
+                        it.contains("\n        <module>browser4-wordcount</module>\n    </modules>") &&
+                            !it.contains("            <module>") &&
+                            !it.contains("                <module>")
+                    }
+                )
+            }
+        }
+
+        @Test
+        @DisplayName("scaffoldToDir auto-completes all four DEPENDENTS reverse edges in ModuleMap")
+        fun testScaffoldToDirCompletesDependentsEdges() = runBlocking {
+            // P2.4 regression: DEPENDENTS was left to the agent to hand-edit, so
+            // any -am build failed on ModuleMapDriftE2ETest in the window between
+            // aggregator registration and the manual edit.
+            val moduleMap = """
+                object ModuleMap {
+                    val MODULES = listOf(
+                        "browser4-agentic",
+                        "browser4-plugins",
+                    )
+                    val DEPENDENTS: Map<String, List<String>> = mapOf(
+                        "browser4-agentic" to listOf(
+                            "browser4-rest",
+                        ),
+                        "browser4-core/browser4-protocol" to listOf(
+                            "browser4-rest",
+                        ),
+                        "browser4-core/browser4-skeleton" to listOf(
+                            "browser4-rest",
+                        ),
+                        "browser4-pdk" to listOf(
+                            "browser4-pdk/browser4-pdk-test-plugin",
+                        ),
+                    )
+                }
+            """.trimIndent()
+            coEvery { fs.readFile(any()) } returnsMany listOf(
+                "4.13.4-SNAPSHOT", // VERSION
+                "<modules>\n    </modules>", // aggregator
+                moduleMap, // ModuleMap.kt
+            )
+            coEvery { fs.writeFile(any(), any()) } returns "✓ Wrote"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffoldToDir",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "dir" to "browser4-plugins/browser4-wordcount",
+                    "name" to "browser4-wordcount",
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val output = result.value.toString()
+            assertTrue(
+                output.contains("Added browser4-plugins/browser4-wordcount to 4 DEPENDENTS reverse edges"),
+                output
+            )
+            coVerify {
+                fs.writeFile(
+                    match { it.endsWith("ModuleMap.kt") },
+                    match { written ->
+                        Regex("\"browser4-plugins/browser4-wordcount\",").findAll(written).count() == 5
+                    }
+                )
+            }
+        }
+
+        @Test
+        @DisplayName("scaffold with verify does not treat verify as a template param")
+        fun testScaffoldAcceptsVerifyFlag() = runBlocking {
+            coEvery { fs.readFile(any()) } returns ""
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffold",
+                arguments = mutableMapOf(
+                    "type" to "skill",
+                    "name" to "demo",
+                    "verify" to "true"
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val output = result.value.toString()
+            // The skill scaffold is returned as single content, verify is ignored.
+            assertTrue(output.contains("name: demo"), output)
         }
 
         @Test
@@ -739,7 +994,8 @@ class CodingToolExecutorTest {
                 "toolsDetect", "projectType",
                 "read", "readLines", "write", "append", "replace", "delete", "mkdir",
                 "copy", "move", "listDir", "glob", "grep", "stat", "diff",
-                "changeSummary", "languages", "workspaceRoot"
+                "changeSummary", "languages", "workspaceRoot",
+                "scaffold", "scaffoldToDir",
             )
 
             methods.forEach { method ->
@@ -775,10 +1031,10 @@ class CodingToolExecutorTest {
         }
 
         @Test
-        @DisplayName("getToolSpecs returns 24 registered specs")
+        @DisplayName("getToolSpecs returns 51 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(24, specs.size)
+            assertEquals(51, specs.size)
         }
 
         @Test
@@ -790,7 +1046,14 @@ class CodingToolExecutorTest {
                 "toolsDetect", "projectType",
                 "read", "readLines", "write", "append", "replace", "delete", "mkdir",
                 "copy", "move", "listDir", "glob", "grep", "stat", "diff",
-                "changeSummary", "languages", "workspaceRoot"
+                "changeSummary", "languages", "workspaceRoot",
+                "scaffold", "scaffoldToDir", "validate",
+                "replaceRegex", "editLines", "insertAfter", "revert",
+                "diagnostics", "symbols", "references", "lspServers",
+                "runCode", "runCodeLanguages",
+                "mvnBuild", "scaffoldFromExample", "scaffoldFlow", "ktSymbols", "ktReferences", "ktInheritance",
+                "impact", "trapCheck", "devTask", "moduleGraph", "protect",
+                "tokenStats", "estimateTokens", "classInfo"
             )
             assertEquals(expectedMethods, specs.keys)
         }
@@ -804,4 +1067,420 @@ class CodingToolExecutorTest {
             }
         }
     }
+
+    // ==================== Governance tools (trapCheck, repo-consistency) ====================
+
+    @Nested
+    @DisplayName("Governance tools")
+    inner class GovernanceTools {
+
+        @TempDir
+        lateinit var tempDir: java.nio.file.Path
+
+        @Test
+        @DisplayName("trapCheck flags CDP pitfalls in driver code")
+        fun testTrapCheckFlags() = runBlocking {
+            coEvery { fs.readFile(any()) } returns
+                "session.send(Input.dispatchMouseEvent, mapOf(\"type\" to \"mouseWheel\"))"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "trapCheck",
+                arguments = mutableMapOf("path" to "PulsarWebDriver.kt")
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val value = result.value as String
+            assertTrue(value.contains("[crbug-444929150]"), value)
+            coVerify { fs.readFile("PulsarWebDriver.kt") }
+        }
+
+        @Test
+        @DisplayName("trapCheck passes through file read errors")
+        fun testTrapCheckReadError() = runBlocking {
+            coEvery { fs.readFile(any()) } returns "Error: File not found: missing.kt"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "trapCheck",
+                arguments = mutableMapOf("path" to "missing.kt")
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            assertEquals("Error: File not found: missing.kt", result.value)
+        }
+
+        @Test
+        @DisplayName("validate repo-consistency passes for a consistent workspace")
+        fun testValidateRepoConsistencyPass() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("VERSION"), "4.13.4-SNAPSHOT\n")
+            java.nio.file.Files.writeString(root.resolve("pom.xml"), rootPomXml)
+            java.nio.file.Files.createDirectories(root.resolve("browser4-dependencies"))
+            java.nio.file.Files.writeString(root.resolve("browser4-dependencies/pom.xml"), bomPomXml)
+            for (m in listOf("browser4-core", "browser4-rest")) {
+                java.nio.file.Files.createDirectories(root.resolve(m))
+                java.nio.file.Files.writeString(root.resolve("$m/pom.xml"), "<project/>\n")
+            }
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "validate",
+                arguments = mutableMapOf("type" to "repo-consistency")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("All checks passed"), value)
+        }
+
+        @Test
+        @DisplayName("validate repo-consistency reports version drift")
+        fun testValidateRepoConsistencyDrift() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("VERSION"), "4.13.4-SNAPSHOT\n")
+            java.nio.file.Files.writeString(
+                root.resolve("pom.xml"), rootPomXml.replace("4.13.4-SNAPSHOT", "4.99.0"))
+            java.nio.file.Files.createDirectories(root.resolve("browser4-dependencies"))
+            java.nio.file.Files.writeString(root.resolve("browser4-dependencies/pom.xml"), bomPomXml)
+            for (m in listOf("browser4-core", "browser4-rest")) {
+                java.nio.file.Files.createDirectories(root.resolve(m))
+                java.nio.file.Files.writeString(root.resolve("$m/pom.xml"), "<project/>\n")
+            }
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "validate",
+                arguments = mutableMapOf("type" to "repo-consistency")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Root pom version"), value)
+            assertTrue(value.contains("does not match VERSION"), value)
+        }
+
+        @Test
+        @DisplayName("devTask renders an executable plan from a task description")
+        fun testDevTaskPlan() = runBlocking {
+            val tc = ToolCall(
+                domain = "coding",
+                method = "devTask",
+                arguments = mutableMapOf(
+                    "task" to "fix the mouseWheel race in PulsarWebDriver.kt " +
+                        "under browser4-core/browser4-browser/src/main/kotlin")
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val value = result.value as String
+            assertTrue(value.contains("Dev task plan"), value)
+            assertTrue(value.contains("coding.trapCheck"), value)
+            assertTrue(value.contains("coding.mvnBuild"), value)
+            assertTrue(value.contains("repo-consistency"), value)
+            assertFalse(value.contains("Verification"), "verify=false must not run checks")
+        }
+
+        @Test
+        @DisplayName("devTask with verify runs compile and repo-consistency checks")
+        fun testDevTaskVerify() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("VERSION"), "4.13.4-SNAPSHOT\n")
+            java.nio.file.Files.writeString(root.resolve("pom.xml"), rootPomXml)
+            java.nio.file.Files.createDirectories(root.resolve("browser4-dependencies"))
+            java.nio.file.Files.writeString(root.resolve("browser4-dependencies/pom.xml"), bomPomXml)
+            for (m in listOf("browser4-core", "browser4-rest")) {
+                java.nio.file.Files.createDirectories(root.resolve(m))
+                java.nio.file.Files.writeString(root.resolve("$m/pom.xml"), "<project/>\n")
+            }
+            coEvery { shell.executeRaw(any(), any(), any()) } returns
+                ShellResult("s1", "mvn -pl browser4-rest -am compile -DskipTests -q", 0, "compiled", "", 100)
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "devTask",
+                arguments = mutableMapOf(
+                    "task" to "change the controller in browser4-rest/src/main/kotlin/XController.kt",
+                    "verify" to "true")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Verification"), value)
+            assertTrue(value.contains("mvnBuild compile of browser4-rest"), value)
+            assertTrue(value.contains("All checks passed"), value)
+            assertFalse(value.contains("tests on"), "runTests=false must not run tests")
+        }
+
+        @Test
+        @DisplayName("devTask verify builds the new plugin module, not a same-depth DEPENDENTS key")
+        fun testDevTaskVerifyTargetsNewPluginModule() = runBlocking {
+            // P1.1 execution-phase regression: verify previously compiled
+            // browser4-core/browser4-protocol (a DEPENDENTS key) and reported a
+            // false-positive "Build succeeded" for a plugin that did not exist yet.
+            // The workspace is an EMPTY temp dir, so the live pom scan finds
+            // nothing and planning falls back to the static ModuleMap snapshot.
+            coEvery { shell.executeRaw(any(), any(), any()) } returns
+                ShellResult("s1", "compile", 0, "compiled", "", 100)
+
+            val realFs = CodingAgentFileSystem(tempDir)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "devTask",
+                arguments = mutableMapOf(
+                    "task" to "在 browser4-agentic、browser4-core/browser4-protocol、browser4-core/browser4-skeleton、" +
+                        "browser4-pdk 的 DEPENDENTS 补 browser4-plugins/browser4-testprobe，并补 TestprobeConfigTest",
+                    "verify" to "true",
+                    "runTests" to "true",
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("mvnBuild compile of browser4-plugins/browser4-testprobe"), value)
+            assertFalse(
+                value.contains("mvnBuild compile of browser4-core/browser4-protocol"),
+                "verification must not compile a DEPENDENTS key: $value"
+            )
+            // runTests captures the actual command line.
+            coVerify {
+                shell.executeRaw(
+                    match { it.contains("-pl browser4-plugins/browser4-testprobe") &&
+                        !it.contains("browser4-core/browser4-protocol") },
+                    any(), any()
+                )
+            }
+        }
+
+        @Test
+        @DisplayName("devTask with runTests executes the module test suite")
+        fun testDevTaskRunTests() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("VERSION"), "4.13.4-SNAPSHOT\n")
+            java.nio.file.Files.writeString(root.resolve("pom.xml"), rootPomXml)
+            java.nio.file.Files.createDirectories(root.resolve("browser4-dependencies"))
+            java.nio.file.Files.writeString(root.resolve("browser4-dependencies/pom.xml"), bomPomXml)
+            for (m in listOf("browser4-core", "browser4-rest")) {
+                java.nio.file.Files.createDirectories(root.resolve(m))
+                java.nio.file.Files.writeString(root.resolve("$m/pom.xml"), "<project/>\n")
+            }
+            coEvery { shell.executeRaw(any(), any(), any()) } answers {
+                val cmd = firstArg<String>()
+                ShellResult("s1", cmd, 0,
+                    if (cmd.contains("mvn test")) "Tests run: 12, Failures: 0" else "compiled", "", 100)
+            }
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "devTask",
+                arguments = mutableMapOf(
+                    "task" to "change the controller in browser4-rest/src/main/kotlin/XController.kt " +
+                        "and add a regression test XControllerTest",
+                    "verify" to "true",
+                    "runTests" to "true")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("tests on browser4-rest"), value)
+            assertTrue(value.contains("-Dtest=XControllerTest"),
+                "test run must scope to the named test class: $value")
+            assertTrue(value.contains("Tests run: 12"), value)
+        }
+
+        @Test
+        @DisplayName("scaffoldFromExample with a directory extracts a multi-file skeleton")
+        fun testScaffoldFromExampleDir() = runBlocking {
+            val root = tempDir
+            val pluginDir = root.resolve("browser4-plugins/browser4-seo")
+            java.nio.file.Files.createDirectories(pluginDir.resolve("src/main/kotlin/a/b/tools"))
+            java.nio.file.Files.createDirectories(pluginDir.resolve("src/main/kotlin/a/b/config"))
+            java.nio.file.Files.writeString(pluginDir.resolve("pom.xml"),
+                "<project>\n  <artifactId>browser4-seo</artifactId>\n</project>\n")
+            java.nio.file.Files.writeString(
+                pluginDir.resolve("src/main/kotlin/a/b/tools/SeoToolExecutor.kt"),
+                "package a.b.tools\n\nopen class SeoToolExecutor {\n    override val domain = \"seo\"\n}\n")
+            java.nio.file.Files.writeString(
+                pluginDir.resolve("src/main/kotlin/a/b/config/SeoAutoConfiguration.kt"),
+                "package a.b.config\n\nimport a.b.tools.SeoToolExecutor\n\n" +
+                    "open class SeoAutoConfiguration {\n    fun executors() = listOf(SeoToolExecutor())\n}\n")
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffoldFromExample",
+                arguments = mutableMapOf(
+                    "path" to "browser4-plugins/browser4-seo",
+                    "className" to "WeatherToolExecutor",
+                    "basePackage" to "a.b")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Multi-file skeleton generated"), value)
+            assertTrue(value.contains("=== File: pom.xml ==="), value)
+            assertTrue(value.contains("<artifactId>"), value)
+            assertTrue(value.contains("open class WeatherToolExecutor"), value)
+            assertTrue(value.contains("listOf(WeatherToolExecutor())"),
+                "cross-file reference must follow the rename: $value")
+        }
+
+        @Test
+        @DisplayName("moduleGraph reports the live pom graph and drift")
+        fun testModuleGraph() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("pom.xml"),
+                "<project>\n  <artifactId>browser4</artifactId>\n  <packaging>pom</packaging>\n</project>\n")
+            java.nio.file.Files.createDirectories(root.resolve("browser4-coding"))
+            java.nio.file.Files.writeString(root.resolve("browser4-coding/pom.xml"),
+                "<project>\n  <artifactId>browser4-coding</artifactId>\n</project>\n")
+            java.nio.file.Files.createDirectories(root.resolve("browser4-agentic"))
+            java.nio.file.Files.writeString(root.resolve("browser4-agentic/pom.xml"),
+                "<project>\n  <artifactId>browser4-agentic</artifactId>\n  <dependencies>\n" +
+                    "    <dependency>\n      <groupId>ai.platon.pulsar</groupId>\n      <artifactId>browser4-coding</artifactId>\n" +
+                    "    </dependency>\n  </dependencies>\n</project>\n")
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "moduleGraph",
+                arguments = mutableMapOf("module" to "browser4-coding")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Module: browser4-coding"), value)
+            assertTrue(value.contains("browser4-agentic"), "dependent must be reported: $value")
+            assertTrue(value.contains("affects (transitively)"), value)
+        }
+
+        @Test
+        @DisplayName("moduleGraph without module lists the whole graph")
+        fun testModuleGraphAll() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.createDirectories(root.resolve("browser4-coding"))
+            java.nio.file.Files.writeString(root.resolve("browser4-coding/pom.xml"),
+                "<project>\n  <artifactId>browser4-coding</artifactId>\n</project>\n")
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "moduleGraph",
+                arguments = mutableMapOf()
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Module graph: 1 modules"), value)
+            assertTrue(value.contains("browser4-coding"), value)
+        }
+
+        @Test
+        @DisplayName("protect toggles session protection through the executor")
+        fun testProtect() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("secret.txt"), "hidden\n")
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+
+            val on = ToolCall("coding", "protect", mutableMapOf("path" to "secret.txt", "on" to "true"))
+            val onResult = executor.callFunctionOn(on, realTarget)
+            assertTrue((onResult.value as String).contains("Protected"), "result: ${onResult.value}")
+            assertTrue(realFs.replaceInFile("secret.txt", "hidden", "x").contains("protected"))
+
+            val list = ToolCall("coding", "protect", mutableMapOf())
+            val listResult = executor.callFunctionOn(list, realTarget)
+            assertTrue((listResult.value as String).contains("secret.txt"), "result: ${listResult.value}")
+
+            val off = ToolCall("coding", "protect", mutableMapOf("path" to "secret.txt", "on" to "false"))
+            executor.callFunctionOn(off, realTarget)
+            assertTrue(realFs.replaceInFile("secret.txt", "hidden", "ok").contains("Replaced"))
+        }
+
+        @Test
+        @DisplayName("ktReferences scope=module scans cross-file usages")
+        fun testKtReferencesModuleScope() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.createDirectories(root.resolve("src/main/kotlin/a/b"))
+            java.nio.file.Files.writeString(root.resolve("src/main/kotlin/a/b/Executor.kt"),
+                "package a.b\n\nopen class Executor {\n    fun doWork() { }\n}\n")
+            java.nio.file.Files.writeString(root.resolve("src/main/kotlin/a/b/Caller.kt"),
+                "package a.b\n\nclass Caller {\n    fun run() {\n        Executor().doWork()\n    }\n}\n")
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "ktReferences",
+                arguments = mutableMapOf(
+                    "path" to "src/main/kotlin/a/b/Executor.kt",
+                    "symbol" to "doWork",
+                    "scope" to "module")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Caller.kt"), value)
+            assertTrue(value.contains("doWork()"), value)
+            assertFalse(value.contains("Executor.kt:"), "declaring file must be excluded: $value")
+        }
+
+        @Test
+        @DisplayName("ktInheritance walks the chain across the module")
+        fun testKtInheritance() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.createDirectories(root.resolve("src/main/kotlin/a/b"))
+            java.nio.file.Files.writeString(root.resolve("src/main/kotlin/a/b/Base.kt"),
+                "package a.b\n\nopen class Base { }\n")
+            java.nio.file.Files.writeString(root.resolve("src/main/kotlin/a/b/Child.kt"),
+                "package a.b\n\nopen class Child : Base() {\n    override val domain = \"x\"\n}\n")
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "ktInheritance",
+                arguments = mutableMapOf("path" to "src/main/kotlin/a/b/Child.kt")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Child → Base"), value)
+        }
+
+        private val rootPomXml = """
+            <project>
+                <artifactId>browser4</artifactId>
+                <version>4.13.4-SNAPSHOT</version>
+                <packaging>pom</packaging>
+                <modules>
+                    <module>browser4-dependencies</module>
+                    <module>browser4-core</module>
+                    <module>browser4-rest</module>
+                </modules>
+            </project>
+        """.trimIndent()
+
+        private val bomPomXml = """
+            <project>
+                <artifactId>browser4-dependencies</artifactId>
+                <version>4.13.4-SNAPSHOT</version>
+                <packaging>pom</packaging>
+            </project>
+        """.trimIndent()
+    }
 }
+
+
+

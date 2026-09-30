@@ -122,6 +122,7 @@ param(
     [string]$JdkHome = '',
     [int]$JdkVersion = 0,
     [switch]$SkipMavenInstall = $false,
+    [switch]$SkipCli = $false,
     [switch]$ShowMavenOutput = $false,
     [switch]$Help = $false
 )
@@ -545,13 +546,12 @@ function Ensure-CleanDirectory([string]$path) {
     New-Item -ItemType Directory -Force -Path $path | Out-Null
 }
 
-function Remove-CleanDirectory([string]$path, [string]$label = $path) {
-    # Rename-then-delete removal of a directory (without recreating it).
-    # On Windows, renaming a directory that holds open/locked files (e.g. a
-    # backend daemon auto-started from this bundle) fails atomically —
-    # nothing is deleted, so a failed reset never corrupts a previously
-    # working bundle.  A plain Remove-Item -Recurse can delete half the
-    # tree before hitting a locked file (e.g. deleting jvm.cfg while
+function Reset-CleanDirectory([string]$path, [string]$label = $path, [bool]$Recreate = $true) {
+    # Rename-then-delete reset.  On Windows, renaming a directory that holds
+    # open/locked files (e.g. a backend daemon auto-started from this bundle)
+    # fails atomically — nothing is deleted, so a failed reset never corrupts
+    # a previously working bundle.  A plain Remove-Item -Recurse can delete
+    # half the tree before hitting a locked file (e.g. deleting jvm.cfg while
     # java.exe stays locked), which is exactly how a re-run used to leave a
     # broken runtime behind ("java.exe: could not open jvm.cfg").
     if (Test-Path $path) {
@@ -563,15 +563,12 @@ function Remove-CleanDirectory([string]$path, [string]$label = $path) {
         }
         Remove-Item -LiteralPath $trash -Recurse -Force -ErrorAction SilentlyContinue
     }
-}
-
-function Reset-CleanDirectory([string]$path, [string]$label = $path) {
-    # Rename-then-delete reset followed by a fresh empty directory.  Only
-    # use this for directories that must exist *before* a later tool writes
-    # into them (Maven output, extracted classes, logs).  Never use it to
-    # prepare a directory a tool creates itself — see the jlink phase.
-    Remove-CleanDirectory -path $path -label $label
-    New-Item -ItemType Directory -Force -Path $path | Out-Null
+    # Most callers need the directory back (empty) for the next phase, but
+    # jlink refuses to write into an output directory that exists at all —
+    # even an empty one — so the jlink pre-reset passes -Recreate:$false.
+    if ($Recreate) {
+        New-Item -ItemType Directory -Force -Path $path | Out-Null
+    }
 }
 
 function Get-PathSeparator {
@@ -774,6 +771,46 @@ set "MAIN_CLASS=$mainClass"
     Set-Content -LiteralPath $startBatPath -Value $startBatContent -Encoding ASCII
 }
 
+<#
+.SYNOPSIS
+Bundle the browser4-cli binary into the runtime bundle's bin/ directory.
+
+.DESCRIPTION
+Uses a prebuilt release binary when present, otherwise builds one with cargo
+(best effort).  When neither is possible the bundle is still produced — the
+CliBinaryResolver falls back to PATH / auto-install.  This guarantees the
+SKILL.md tool surface is available on a fresh machine that only has the
+bundle (design §4.2/§4.3).
+#>
+function Install-Browser4Cli([string]$bundleDirectory) {
+    $binDirectory = Join-Path $bundleDirectory 'bin'
+    $cliExeName = if (Get-IsWindows) { 'browser4-cli.exe' } else { 'browser4-cli' }
+    $cliSourceDir = Join-Path $PSScriptRoot (Join-Path '..' (Join-Path '..' (Join-Path 'cli' 'browser4-cli')))
+    $releaseBinary = Join-Path $cliSourceDir (Join-Path 'target' (Join-Path 'release' $cliExeName))
+
+    if (-not (Test-Path -LiteralPath $releaseBinary -PathType Leaf)) {
+        $cargo = Get-Command cargo -ErrorAction SilentlyContinue
+        if (-not $cargo) {
+            Write-Warning "No browser4-cli release binary and no cargo found; the bundle will not ship a CLI binary."
+            return
+        }
+        Write-Host "Building browser4-cli release binary (first bundle build may take a while)..." -ForegroundColor Cyan
+        Push-Location $cliSourceDir
+        try {
+            & $cargo.Source build --release
+        } finally {
+            Pop-Location
+        }
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $releaseBinary -PathType Leaf)) {
+            Write-Warning "cargo build for browser4-cli failed; the bundle will not ship a CLI binary."
+            return
+        }
+    }
+
+    Copy-Item -LiteralPath $releaseBinary -Destination (Join-Path $binDirectory $cliExeName) -Force
+    Write-Host "Bundled browser4-cli -> bin/$cliExeName" -ForegroundColor Green
+}
+
 # ============================================================================
 # Main script
 # ============================================================================
@@ -796,6 +833,10 @@ $mvnCmd = Resolve-MavenCommand -repositoryRoot $repoRoot
 # runs `mvn install` before invoking this script and passes -SkipMavenInstall).
 if (-not $SkipMavenInstall) {
     Write-Host "Ensuring main modules are installed to ~/.m2 ..."
+    # GraalVM (JDK 25) defaults UseJVMCICompiler=true, which breaks the Kotlin
+    # compile/kapt daemon's RMI handshake ("Failed connecting to the daemon in
+    # 4 retries"). Fall back to in-process compilation in that case.
+    $mavenJdkIsGraalVm = (Get-JavaVersionText) -match 'GraalVM'
     # -Dmaven.jar.forceCreation=true is load-bearing, not belt-and-braces: the jar
     # plugin skips repackaging when it believes nothing changed, and it compares
     # the output jar against the *classes directory* mtime, which does not move
@@ -806,6 +847,10 @@ if (-not $SkipMavenInstall) {
         'install', '-Pall-main-modules,asset-bundle', '-DskipTests',
         '-Dmaven.jar.forceCreation=true'
     )
+    if ($mavenJdkIsGraalVm) {
+        Write-Host "GraalVM detected - disabling the Kotlin compiler daemon (in-process compilation)." -ForegroundColor Yellow
+        $installArgs += '-Dkotlin.compiler.daemon=false'
+    }
     if (-not $ShowMavenOutput) {
         $installArgs += '-q'
     }
@@ -844,11 +889,10 @@ if ((Test-Path $assetPath) -and (-not $Force)) {
 
 New-Item -ItemType Directory -Force -Path $resolvedOutputDirectory | Out-Null
 # Reset (not just ensure) the working directories so a re-run over an existing
-# build always starts from a clean slate — stale leftovers (jars, jdeps logs,
-# an old runtime image) would otherwise leak into the new build and, in
-# jlink's case, make it refuse to run at all.  Reset-CleanDirectory renames
-# before deleting so a bundle that is locked by a running daemon fails fast
-# instead of being half-deleted (see Remove-CleanDirectory).
+# build always starts from a clean slate — jlink refuses to write into a
+# non-empty output directory.  Reset-CleanDirectory renames before deleting so
+# a bundle that is locked by a running daemon fails fast instead of being
+# half-deleted (see Reset-CleanDirectory).
 Reset-CleanDirectory $workDirectory 'working directory'
 Reset-CleanDirectory $bundleDirectory 'bundle directory'
 Reset-CleanDirectory $libDirectory 'lib directory'
@@ -926,6 +970,28 @@ Copy-Item -LiteralPath $resolvedJarPath -Destination (Join-Path $libDirectory $a
 
 $libJarCount = (Get-ChildItem -Path $libDirectory -File -Filter '*.jar' | Measure-Object).Count
 Write-Host "Collected $libJarCount jars in lib/" -ForegroundColor Green
+
+# --------------------------------------------------------------------------
+# Bundle the browser4-swarm plugin (the swarm REST facade is a thin shell that
+# delegates to this plugin; without it /api/swarm/** returns 503).
+# --------------------------------------------------------------------------
+$localRepo = if ($env:MAVEN_REPO_LOCAL) {
+    $env:MAVEN_REPO_LOCAL
+} else {
+    $homeDir = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
+    [System.IO.Path]::Combine($homeDir, '.m2', 'repository')
+}
+$swarmGroupDir = [System.IO.Path]::Combine($localRepo, 'ai', 'platon', 'pulsar', 'browser4-swarm')
+$swarmJar = Get-ChildItem -Path $swarmGroupDir -Recurse -File -Filter 'browser4-swarm-*.jar' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notmatch 'sources|javadoc' } |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+if ($swarmJar) {
+    Copy-Item -LiteralPath $swarmJar.FullName -Destination (Join-Path $pluginsDirectory $swarmJar.Name) -Force
+    Write-Host "  + Plugin: $($swarmJar.Name)" -ForegroundColor Green
+} else {
+    Write-Warning "browser4-swarm plugin JAR not found in the local Maven repo ($swarmGroupDir). Swarm REST endpoints will return 503 until the plugin is installed."
+}
 
 # --------------------------------------------------------------------------
 # Clean up unnecessary JARs from the runtime bundle.
@@ -1427,15 +1493,13 @@ if ($modules.Count -eq 0) {
 $phaseIndex = 4
 Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
 
-# jlink refuses to write into an output directory that already exists —
-# even an empty one ("Error: directory already exists: <path>") — and
-# creates the directory itself when it is absent.  So remove any leftover
-# runtime image from a previous build but do NOT recreate the directory;
-# recreating it here is what made every jlink invocation fail after the
-# rename-then-delete reset was introduced.  Remove-CleanDirectory renames
-# before deleting, so a runtime locked by a running daemon fails fast
-# instead of being half-deleted.
-Remove-CleanDirectory $runtimeDirectory 'runtime (jlink output) directory'
+# jlink refuses to write into an output directory that exists — even an
+# empty one — so remove the runtime directory entirely (rename-then-delete
+# for lock safety) WITHOUT recreating it; jlink creates it itself.  This
+# makes the script idempotent over an existing build: a plain re-run after
+# a source change must not fail with 'directory already exists' or leave a
+# broken runtime behind.
+Reset-CleanDirectory $runtimeDirectory 'runtime (jlink output) directory' -Recreate:$false
 
 Write-Host "Running jlink with modules: $($modules -join ',')" -ForegroundColor Cyan
 Write-Host "Using jlink compression mode: $jlinkCompressValue" -ForegroundColor Cyan
@@ -1468,6 +1532,11 @@ Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
 
 Write-Host "Writing launch scripts..." -ForegroundColor Cyan
 Write-LaunchScripts -bundleDirectory $bundleDirectory -mainClass $MainClass
+if (-not $SkipCli) {
+    Install-Browser4Cli -bundleDirectory $bundleDirectory
+} else {
+    Write-Host "Skipping browser4-cli bundling (-SkipCli)." -ForegroundColor DarkGray
+}
 
 Set-Content -LiteralPath (Join-Path $bundleDirectory 'runtime-bundle.json') `
     -Value (Get-BundleMetadataJson -assetName $AssetName -modules $modules -mainClass $MainClass) `

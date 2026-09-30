@@ -16,7 +16,7 @@ JVM options passed to the Maven launcher (applied to the JVM running Maven itsel
 - `-Djdk.net.URLClassPath.disableClassPathURLCheck=true` — Java 25 surefire workaround: the surefire-booter JAR manifest contains absolute paths that Java 25's `URLClassPath` rejects. It must be set on the Maven JVM itself (a pom `argLine` only applies to the forked test JVM and does not reach the booter), which is why it lives in `jvm.config`.
 
 ### `maven.config`
-Default Maven CLI options applied to every `mvnw` invocation. Currently contains commented-out settings for parallel builds (`-T 1C`) and Kotlin incremental compilation. These are disabled because kapt (Spring/JPA annotation processing) forces non-incremental mode and some plugins (kapt, remote-resources) are not marked thread-safe.
+Default Maven CLI options applied to every `mvnw` invocation (Maven 4 default options). Currently contains commented-out settings for parallel builds (`-T 1C`) and Kotlin incremental compilation. These are disabled because kapt (Spring/JPA annotation processing) forces non-incremental mode — the Kotlin daemon ignores `-Dkotlin.incremental=true` while kapt is active — and some plugins (kapt, remote-resources) are not marked thread-safe. The commented entries are kept for the day kapt is removed or incremental-kapt (`kapt.use.k2=true`) becomes stable.
 
 See: https://maven.apache.org/configure.html#maven-config-file
 

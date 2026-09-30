@@ -6,10 +6,17 @@ import ai.platon.cdt.kt.protocol.types.page.CaptureScreenshotFormat
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.api.model.BrowserTab
+import ai.platon.pulsar.api.model.BrowserUseState
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.api.model.NavigateEntry
+import ai.platon.pulsar.api.model.PageTarget
+import ai.platon.pulsar.api.model.SnapshotOptions
 import ai.platon.pulsar.api.model.WebDriverException
+import ai.platon.pulsar.chrome.network.HarContentMode
+import ai.platon.pulsar.chrome.network.NetworkObserver
 import ai.platon.pulsar.chrome.network.RobustRPC
+import ai.platon.pulsar.chrome.network.RouteManager
+import ai.platon.pulsar.chrome.network.TrackedNetworkRequest
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
@@ -19,6 +26,8 @@ import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.URLUtils
 import com.fasterxml.jackson.annotation.JsonInclude
+import com.fasterxml.jackson.core.type.TypeReference
+import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -75,6 +84,17 @@ open class Browser4WebDriver(
     browserProtocol: BrowserProtocol,
     browser: PulsarBrowser
 ) : PulsarWebDriver(uniqueID, chromeTab, browserProtocol, browser) {
+
+    init {
+        // Claim the CDP event-listener slots before the base library's
+        // NetworkManager registers them on first navigation: its event
+        // dispatcher keeps only one listener per event key, so a listener
+        // registered later would silently never fire. Per-protocol sharing
+        // (see NetworkObserver.forProtocol) makes this a single registration
+        // per tab no matter how many drivers wrap it.
+        NetworkObserver.forProtocol(browserProtocol).preRegister()
+        RouteManager.forProtocol(browserProtocol).preRegister()
+    }
 
     /**
      * Viewport center of a drag element, plus the stable CSS path used to
@@ -519,6 +539,47 @@ open class Browser4WebDriver(
               return entries.length;
             })()
             """.trimIndent()
+
+        /**
+         * JavaScript returning the active origin's `localStorage` as a JSON
+         * object (`{"name": "value"}`), the capture counterpart of
+         * [restoreLocalStorageScript].  Used by `saveStorageState()`.
+         */
+        fun captureLocalStorageScript(): String =
+            "JSON.stringify(Object.fromEntries(Object.entries(window.localStorage)))"
+
+        /** Target type for one raw CDP cookie object. */
+        private val COOKIE_MAP_TYPE = object : TypeReference<Map<String, Any?>>() {}
+
+        /**
+         * Extract the cookie list from a raw `Network.getAllCookies` CDP result.
+         *
+         * The command answers `{"cookies": [...]}`, but the runtime shape depends
+         * on the transport: a direct CDP connection deserializes into typed CDP
+         * objects, while the extension relay hands back generic JSON maps/nodes.
+         * Nothing here is cast to
+         * `ai.platon.cdt.kt.protocol.types.network.Cookie` — that cast is what
+         * makes cookie reads fail on `attach --extension` sessions.
+         *
+         * @param result The raw value returned by `executeCdpCommand`.
+         * @return One map per cookie; empty when [result] carries no cookie array.
+         */
+        fun extractCookiesFromCdpResult(result: Any?): List<Map<String, Any?>> {
+            if (result == null) return emptyList()
+
+            val root = runCatching { pulsarObjectMapper().valueToTree<JsonNode>(result) }.getOrNull()
+                ?: return emptyList()
+            val cookies = when {
+                root.isArray -> root
+                root.isObject -> root.get("cookies") ?: return emptyList()
+                else -> return emptyList()
+            }
+            if (!cookies.isArray) return emptyList()
+
+            return cookies.mapNotNull { node ->
+                runCatching { pulsarObjectMapper().convertValue(node, COOKIE_MAP_TYPE) }.getOrNull()
+            }
+        }
 
         /**
          * True once the evaluated `location.origin` has committed to exactly
@@ -1144,12 +1205,165 @@ internal enum class DragDropPosition(val key: String) {
     private val rpc = RobustRPC(this)
 
     /**
+     * Network observer for this tab, shared by every driver wrapping the same
+     * tab protocol (see [NetworkObserver.forProtocol]).
+     *
+     * Network tracking and HAR recording are opt-in: the CDP `Network` domain
+     * is enabled on the first `network*`/`har*` call, so tabs that never use
+     * the feature pay no overhead. The event listeners themselves are
+     * registered eagerly at construction so they claim the dispatcher slot
+     * before the base library's `NetworkManager` does on first navigation.
+     */
+    private val networkObserver: NetworkObserver by lazy {
+        NetworkObserver.forProtocol(browserProtocol)
+    }
+
+    /**
+     * Request router for this tab (CDP `Fetch` interception), shared per tab
+     * protocol like the network observer; the `Fetch.requestPaused` listener
+     * is registered eagerly at construction for the same reason.
+     */
+    private val routeManager: RouteManager by lazy {
+        RouteManager.forProtocol(browserProtocol)
+    }
+
+    /**
+     * List network requests tracked for this tab, optionally filtered.
+     *
+     * The CDP `Network` domain is enabled on first use; requests observed
+     * afterwards are retained in a bounded in-memory store (oldest evicted).
+     *
+     * @param filter Only requests whose URL contains this text (case-insensitive).
+     * @param type Only requests whose CDP resource type is in this comma-separated list (e.g. `xhr,fetch`).
+     * @param method Only requests with this HTTP method (case-insensitive).
+     * @param status Status filter: exact code (`200`), wildcard (`2xx`), or range (`400-499`).
+     * @param clear When true, drop all tracked requests first.
+     * @return The matching requests in observation order.
+     */
+    suspend fun networkRequests(
+        filter: String? = null,
+        type: String? = null,
+        method: String? = null,
+        status: String? = null,
+        clear: Boolean = false,
+    ): List<TrackedNetworkRequest> {
+        networkObserver.ensureEnabled()
+        // Strip captured bodies: list results carry metadata only; bodies are
+        // retrieved through networkRequestDetail.
+        return networkObserver.networkRequests(filter, type, method, status, clear).map { it.withoutBody() }
+    }
+
+    /**
+     * Full detail of one tracked network request, including headers, timing,
+     * and the response body (fetched on demand when available).
+     *
+     * @param requestId The CDP network request id, as shown by [networkRequests].
+     * @throws IllegalArgumentException when the request id is unknown.
+     */
+    suspend fun networkRequestDetail(requestId: String): Map<String, Any?> {
+        networkObserver.ensureEnabled()
+        return networkObserver.networkRequestDetail(requestId)
+    }
+
+    /**
+     * Start a HAR recording session on this tab.
+     *
+     * @param contentMode Which response bodies to embed in the HAR: `none`,
+     * `text` (text-like MIME types only), or `all` (binary base64-encoded).
+     * @return Recording metadata.
+     */
+    suspend fun harStart(contentMode: String = "none"): Map<String, Any?> {
+        val mode = HarContentMode.parse(contentMode)
+        return networkObserver.harStart(mode)
+    }
+
+    /**
+     * Stop the active HAR recording and build the HAR 1.2 document from all
+     * requests observed so far.
+     *
+     * @return `{ recording, contentMode, entries, har }` where `har` is the
+     * HAR document (serialize to JSON to get a `.har` file).
+     */
+    suspend fun harStop(): Map<String, Any?> {
+        return networkObserver.harStop()
+    }
+
+    /**
+     * Route matching requests to a mock response or abort them, via the CDP
+     * `Fetch` domain (agent-browser compatible).
+     *
+     * @param urlPattern URL pattern: `*` matches all; plain text matches URLs
+     * containing it; `*` globs are supported (e.g. `**` + `/api/users`).
+     * @param abort When true, matching requests fail instead of being sent.
+     * @param body Mock response body (plain text; JSON strings work as-is).
+     * @param contentType Content-Type for the mock response (e.g. `application/json`).
+     * @param resourceType Only intercept requests of these CDP resource types
+     * (comma-separated, e.g. `xhr,fetch`); empty matches all.
+     * @return `{ "routed": urlPattern }`.
+     */
+    suspend fun networkRoute(
+        urlPattern: String,
+        abort: Boolean = false,
+        body: String? = null,
+        contentType: String? = null,
+        resourceType: String? = null,
+    ): Map<String, Any?> {
+        require(urlPattern.isNotBlank()) { "networkRoute requires a non-blank urlPattern" }
+        require(abort || body != null) {
+            "networkRoute requires at least one action: --abort or --body"
+        }
+        val response = if (body != null) {
+            RouteManager.RouteResponse(body = body, contentType = contentType)
+        } else {
+            null
+        }
+        val types = resourceType?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+        return routeManager.route(urlPattern, response, abort, types)
+    }
+
+    /**
+     * Remove routes. Without [urlPattern] every route is removed and Fetch
+     * interception is disabled.
+     *
+     * @return `{ "unrouted": urlPattern | "all" }`.
+     */
+    suspend fun networkUnroute(urlPattern: String? = null): Map<String, Any?> {
+        return routeManager.unroute(urlPattern)
+    }
+
+    /**
+     * Capture the browser/page state, degrading gracefully when the page is unusable.
+     *
+     * The upstream [PulsarWebDriver.browserUseState] can throw a `NullPointerException`
+     * when it is invoked on a driver whose browser/page has been torn down.  Agent
+     * sessions reuse the same bound driver across tasks, so a task that closed the
+     * browser leaves the next task's driver pointing at a dead page — and the NPE
+     * would otherwise crash the whole agent run.  Return the dummy state instead so
+     * the agent can still proceed (and typically recover by navigating).
+     *
+     * @param pageTarget Optional page target (defaults to the active page).
+     * @param snapshotOptions Options controlling the depth/verbosity of the snapshot.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun browserUseState(
+        pageTarget: PageTarget,
+        snapshotOptions: SnapshotOptions
+    ): BrowserUseState {
+        return try {
+            super.browserUseState(pageTarget, snapshotOptions)
+        } catch (e: Exception) {
+            logger.warn("browserUseState degraded ({}); returning dummy state", e.message)
+            BrowserUseState.DUMMY
+        }
+    }
+
+    /**
      * Click on an element identified by [selector] with optional [button] and [count].
      *
      * Extends [PulsarWebDriver.click] with a [button] parameter for right-click,
      * middle-click, and other mouse buttons.  When [button] is `null` or `"left"`,
-     * this delegates directly to the parent implementation for standard left-click
-     * behaviour (focus → scroll-into-view → click at computed point).
+     * this delegates to [click] for standard left-click behaviour (best-effort
+     * focus → parent click, which scrolls into view and dispatches the click).
      *
      * For non-left buttons the element is focused and scrolled into view before
      * dispatching [mouseDown] / [mouseUp] at the element's clickable point, matching
@@ -1164,6 +1378,12 @@ internal enum class DragDropPosition(val key: String) {
     @Throws(WebDriverException::class)
     suspend fun click(selector: String, count: Int = 1, button: String? = null) {
         if (button == null || button == "left") {
+            // Route through the two-argument override (see `click(selector, count)` below) rather
+            // than straight to `super`: that override is where a left click is dispatched as
+            // trusted CDP input, falling back to the parent's synthetic DOM click.  Calling
+            // `super.click` here would bypass the trusted path for every `--count`/`--button left`
+            // request, so those clicks would be detectable even though a plain click is not.
+            focusElementBeforeClick(selector)
             click(selector, count)
             return
         }
@@ -1198,6 +1418,20 @@ internal enum class DragDropPosition(val key: String) {
             }
         } finally {
             dialogHandler.drainAutoDismiss()
+        }
+    }
+
+    /**
+     * Best-effort focus of [selector] before a left-click.  The parent Windows
+     * click implementation dispatches a synthetic DOM click, which — unlike a
+     * real mouse click — never transfers focus.  Non-focusable targets
+     * (e.g. a `<div>` without `tabindex`) are unaffected.
+     */
+    private suspend fun focusElementBeforeClick(selector: String) {
+        try {
+            page.focusOnSelector(selector)
+        } catch (e: Exception) {
+            // Element is not focusable — that's fine for the click itself.
         }
     }
 
@@ -2664,6 +2898,81 @@ internal enum class DragDropPosition(val key: String) {
                 localStorageEntries = restoredLocalStorageEntries,
             )
         )
+    }
+
+    /**
+     * Saves the browser's cookies plus the active origin's localStorage as the
+     * storage-state JSON consumed by [loadStorageState].
+     *
+     * Overrides the upstream pulsar-browser implementation, which reads cookies
+     * through the typed CDP layer: it casts every element of the
+     * `Network.getAllCookies` result to
+     * `ai.platon.cdt.kt.protocol.types.network.Cookie`.  Over the extension
+     * relay that response arrives as generic JSON maps, so the cast throws
+     * `ClassCastException: LinkedHashMap cannot be cast to Cookie` and every
+     * cookie-reading tool (`state-save`, `cookie-list`, `cookie-get`) fails on
+     * `attach --extension` sessions — the documented "reuse your logged-in
+     * browser" path.  Reading the raw result and normalizing the fields here
+     * works over both transports.
+     *
+     * @return A JSON storage-state payload:
+     *   `{"cookies": [...], "origins": [{"origin": "...", "localStorage": [...]}]}`.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun saveStorageState(): String {
+        val payload = linkedMapOf<String, Any?>(
+            "cookies" to readAllCookiesViaCdp(),
+            "origins" to captureCurrentOriginLocalStorage(),
+        )
+        return storageStateMapper.writeValueAsString(payload)
+    }
+
+    /**
+     * Every cookie in the browser cookie jar, as `name -> value` maps.
+     *
+     * Uses the same raw-CDP read as [saveStorageState] — see there for why the
+     * typed upstream implementation cannot be used on extension-attached
+     * sessions.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun getCookies(): List<Map<String, String>> =
+        readAllCookiesViaCdp().map { cookie ->
+            cookie.entries.associate { (key, value) -> key to (value?.toString() ?: "") }
+        }
+
+    /**
+     * Read the whole cookie jar through `Network.getAllCookies` and normalize
+     * every entry into the canonical storage-state field set
+     * ([normalizeStorageStateCookie]).
+     */
+    private suspend fun readAllCookiesViaCdp(): List<Map<String, Any?>> {
+        val raw = executeCdpCommand("Network.getAllCookies", emptyMap())
+        return extractCookiesFromCdpResult(raw).map(::normalizeStorageStateCookie)
+    }
+
+    /**
+     * Capture the active origin and its localStorage entries as the `origins`
+     * section of the storage-state payload.
+     *
+     * Only the origin of the document that is currently open is captured:
+     * localStorage is origin-scoped and the browser exposes no API to enumerate
+     * every origin's store.  Returns an empty list when the active document has
+     * no standard origin (e.g. `about:blank`).
+     */
+    private suspend fun captureCurrentOriginLocalStorage(): List<Map<String, Any?>> {
+        val origin = runCatching { evaluateValue("location.origin")?.toString()?.trim() }.getOrNull()
+        if (origin.isNullOrEmpty() || !URLUtils.isStandard(origin)) {
+            return emptyList()
+        }
+
+        val json = runCatching { evaluateValue(captureLocalStorageScript())?.toString() }.getOrNull()
+        if (json.isNullOrBlank()) {
+            return emptyList()
+        }
+
+        val entries: Map<String, String> = storageStateMapper.readValue(json)
+        val localStorage = entries.map { (name, value) -> mapOf("name" to name, "value" to value) }
+        return listOf(mapOf("origin" to origin, "localStorage" to localStorage))
     }
 
     /**

@@ -70,11 +70,14 @@ data class AgentTaskStatus(
     val summary get() = agentState?.summary
 
     /**
-     * The agent's state history reference for tracking agent execution progress.
+     * The agent's state history for tracking agent execution progress.
      * This is set when executing agent commands and provides access to the latest agent state.
-     * It is excluded from JSON serialization as it's only used for internal tracking.
+     *
+     * It is serialized to the task persistence JSONL so task histories survive server
+     * restarts (restored via [ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence]).
+     * [AgentState] only serializes lightweight fields — browser snapshots, action
+     * descriptions and tool call results are JsonIgnore'd.
      */
-    @get:JsonIgnore
     var agentHistory: AgentHistory? = null
 
     /**
@@ -147,6 +150,7 @@ fun AgentTaskStatus.emitEvent(event: String) {
         "onWillRun" in event -> "Agent starting up"
         "onWillAct" in event -> "Agent planning next action"
         "onDidAct" in event -> "Agent completed an action"
+        "onToolExecuted" in event -> "Agent is working"
         "onWillGenerate" in event -> "Agent generating response"
         "onDidGenerate" in event -> "Agent response generated"
         "onError" in event -> "Agent encountered an error"

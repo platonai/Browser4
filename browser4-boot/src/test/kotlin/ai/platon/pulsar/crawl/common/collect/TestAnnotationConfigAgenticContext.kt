@@ -8,9 +8,12 @@ import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextMan
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
 import kotlinx.coroutines.delay
 import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import kotlin.time.Duration.Companion.milliseconds
 
+@Tag("Slow")
+@Tag("RequiresBrowser")
 class TestAnnotationConfigAgenticContext {
 
     val context = DefaultAnnotationConfigAgenticContext(Browser4AutoConfiguration::class.java)

@@ -38,6 +38,7 @@
   - [🚀 从源码构建](#-从源码构建)
   - [架构](#架构)
   - [📦 模块概览](#-模块概览)
+  - [🧩 编程内核（browser4-coding）](#-编程内核browser4-coding)
   - [🧪 测试夹具服务器（MockSite）](#-测试夹具服务器mocksite)
   - [🤝 支持与社区](#-支持与社区)
   - [📜 文档](#-文档)
@@ -51,11 +52,12 @@
 
 ### ✨ 核心能力
 
-* 🤖 **Agent Browser** — 为 AI Agent 提供自主浏览、网页操作和自动化执行能力。
-* 🧠 **ML 智能提取** — 通过机器学习理解网页结构，无需消耗 LLM Token，即可从复杂页面提取结构化数据。
-* ⚡ **高性能架构** — 协程安全设计，支持单机每天 10 万～20 万复杂网页访问。
-* 🧬 **智能数据管线** — 融合 LLM、ML、X-SQL 与选择器，实现复杂网页的数据提取、清洗与经验复用。
-* 📦 **企业级自动化平台** — 支持大规模爬取、CDP 原生控制、批处理、有状态浏览、插件扩展等能力。
+* 🤖 **Agent Browser** — 通过 Rust CLI、MCP 与 Agent 后端，让 AI Agent 和人类都能驱动真实浏览器：导航、点击、填写、快照、批处理与循环。
+* 🧬 **零 Token 提取** — 用 X-SQL + CSS 选择器从实时页面或存储的 HTML 快照中确定性提取；WebMiner 机器学习聚类把 HTML 语料整理成电子表格与报告视图，全程不消耗 LLM Token。
+* 🧠 **混合智能** — 融合 LLM 提取、ML 聚类、X-SQL 与渐进式经验库，复用已习得的选择器与障碍处理经验。
+* ⚡ **高性能架构** — 协程安全、CDP 原生，面向单机每天 10 万～20 万复杂网页访问设计，可经 swarm/crawl 横向扩展。
+* 📦 **企业级自动化平台** — 大规模爬取（swarm/crawl）、批处理/循环任务、有状态会话、插件、运行时 skills、浏览器扩展与 MCP-over-HTTP。
+* 🛠️ **编程 Agent 内核** — 50+ 个 `coding.*` 工具（沙箱 shell/文件系统、脚手架、校验、自开发），让 Agent 既能构建 Browser4 工件，也能开发 Browser4 本身。
 
 ## 快速开始
 
@@ -104,6 +106,8 @@ dsh plugin --profile web add github:platonai/dsh-browser4  # GitHub
 └─ 需要高效重复很多 UI 步骤？→ batch "goto ..." "click ..." "fill ..."
 ```
 
+页面内容嵌在 `<iframe>` 中（支付表单、编辑器、小组件）时，使用内置的 frame 切换：`frames` 列出 frame 树，`frame "<iframe 选择器>"` 把后续元素命令的作用域切到该 iframe（同源 iframe 完整支持），`frame main` 回到主文档——无需手写 `contentDocument` eval。
+
 典型交互流程：
 
 ```bash
@@ -113,6 +117,10 @@ browser4-cli fill e3 "user@example.com"
 browser4-cli fill e4 "secret" --submit
 browser4-cli wait --load networkidle
 browser4-cli snapshot -i
+# iframe 较多的页面：
+browser4-cli frame "#pay-frame"
+browser4-cli fill "#card-number" "4111 1111 1111 1111"
+browser4-cli frame main
 ```
 
 ### 如何提取数据
@@ -285,7 +293,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 
 | 命令 | 说明 |
 |---|---|
-| `open [url]` | 打开浏览器会话，或重新连接已有会话。**默认为无头模式。** 支持 `--headed`（可视窗口）、`--headless`、`--profile <path>`、`--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`、`--interact-level <FASTEST\|FAST\|DEFAULT>`。 |
+| `open [url]` | 打开浏览器会话，或重新连接已有会话。**默认为无头模式。** 支持 `--headed`（可视窗口）、`--headless`、`--profile <path>`、`--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`、`--interact-level <FASTEST\|FAST\|DEFAULT>`。**注意：** `SYSTEM_DEFAULT` 已废弃，Chrome ≥ 143 不支持——复用系统浏览器状态请用 `attach` + `state-save`/`state-load`（见 [browser-state-import.md](skills/browser4-cli/references/browser-state-import.md)）。 |
 | `attach` | 通过 CDP 或 Browser4 扩展附加到现有浏览器。支持 `--cdp <url\|port\|channel>` 与远程 endpoint 选项。成功附加后 CLI 会打印实际连接的浏览器（`Connected browser: …` / `Attached to … at …`），当实际浏览器与请求的 channel 不符（如请求 msedge 却连到 Chrome）时会输出 ⚠ 告警——请在驱动会话前核对。 |
 | `close` | 关闭当前活动浏览器会话。 |
 | `list` | 列出浏览器会话及其状态和下次打开行为。Connection 列优先显示后端上报的真实浏览器，并在 channel 冲突时标注（如 `requested msedge · actual Google Chrome`）。支持 `--all`。 |
@@ -297,6 +305,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `doctor` | 运行诊断：构建信息、LLM 状态、陈旧 daemon 清理、可选修复。支持 `--verbose` 与 `--fix`。 |
 | `doctor log [name]` | 列出、查看、tail 或 grep 后端日志文件。支持 `--tail`、grep 风格参数，以及 `doctor log <name> grep <pattern>`。 |
 | `doctor metrics [filter]` | 列出、过滤或 grep 后端指标。支持 `doctor metrics grep <pattern>`。 |
+| `doctor status [--section <name>] [--verbose]` | 在终端分层显示状态面板聚合报告：默认显示概要层，`--verbose` 显示完整明细，`--section` 钻取单个报告（health、build、runtime、llm、sessions、pulsar-sessions、swarm、url-pool、browsers、drivers、privacy、plugins、skills、metrics、logs），`--json` 输出机器可读 JSON。 |
 | `delete-data` | 删除会话数据。 |
 | `install` | 安装 Browser4 运行时 bundle。支持 `--tag <version>` 与 `--force`。 |
 | `upgrade` | 升级 CLI / 运行时 bundle。支持 `--tag <version>` 与 `--force`。 |
@@ -308,7 +317,26 @@ browser4-cli attach --cdp chrome
 browser4-cli doctor --verbose
 browser4-cli doctor log server.log --tail
 browser4-cli doctor metrics grep request
+browser4-cli doctor status --section skills --verbose
 ```
+
+**Web 状态面板：** 在浏览器打开 `http://127.0.0.1:8182/status` 即可查看实时仪表盘
+（健康状态、版本、JVM/运行时、LLM 配置、会话、**Pulsar 会话**——SDK 身份、上下文与主循环
+状态、**swarm**——swarm 会话及任务汇总、**URL 池**——按优先级缓存的排队/实时/延迟数量、
+浏览器与打开的标签页——每个会话的浏览器/驱动绑定与标签页数量，可点击按需加载实时标签页
+明细，数据来自 `GET /api/system/tabs`——驱动池、插件（加载/启用状态与 SDK 兼容性）、
+指标、日志文件；自动刷新，可用 `?refresh=<ms>` 调整间隔）。面板数据来自聚合端点
+`GET /api/system/status`；原有单个端点（`/api/system/health`、`/api/system/build`、
+`/api/doctor/llm-status`、`/api/doctor/metrics`、`/api/doctor/log-files`、`/api/plugins`、
+`/api/skills`）继续可用。`browser4-cli plugin-list` 也会报告每个已安装插件的加载/启用状态与
+SDK 版本；同样的报告也可以在终端中通过 `browser4-cli doctor status` 分层查看。
+
+**页面截图：** 打开 `http://127.0.0.1:8182/pages.html` 可以网格形式查看所有会话中打开的网页。
+每个会话的活动页自动截图（点击截图可重新截取）；非活动页显示占位图，点击后截取展示；
+SWARM 会话的所有页面仅显示占位图。截图采用**异步加载**——后端在后台截取（截取中返回
+`202 Accepted` + `Retry-After`，完成后返回缓存的 `image/png`），面板不会阻塞等待截图。
+由 `GET /api/pages` 与 `GET /api/pages/{sessionId}/{guid}/screenshot.png` 提供数据
+（`?refresh=1` 强制重新截取）。
 
 #### 导航
 
@@ -412,6 +440,7 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 | `htmlsnapshot summary` | 基于实时页面生成压缩版 Web Page Summary Index（WPSI）。 |
 | `htmlsnapshot grep <pattern>` | 用 grep 风格参数搜索实时页面 HTML。 |
 | `htmlsnapshot inspect [selector]` | 发现重复 DOM 模式和候选选择器。支持 `--max`、`--depth`、`--stdin`、`--selector-base64`。 |
+| `htmlsnapshot readability [url]` | 用 Readability 式启发式算法一步提取正文——无需 LLM、零 token。支持 `--text-only` 与分页。 |
 
 重要规则：
 
@@ -419,6 +448,7 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 - 需要重复 DOM 提取时用 `htmlsnapshot`
 - 推荐使用 `htmlsnapshot query --sql @query.sql`，避免 shell 转义问题
 - 需要关联型列表提取时，优先使用 `htmlsnapshot query`，而不是多次 `get all`
+- 需要一步提取正文（无需手写选择器）时，用 `htmlsnapshot readability`
 
 ```bash
 browser4-cli htmlsnapshot
@@ -427,6 +457,7 @@ browser4-cli htmlsnapshot get all text ".result-title" --offset 10 --limit 5
 browser4-cli htmlsnapshot inspect ".s-result-item" --depth 6 --max 20
 browser4-cli htmlsnapshot export --file page.html --clean
 browser4-cli htmlsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot readability --text-only --all
 ```
 
 深入了解 X-SQL 可参见 [skills/browser4-cli/references/htmlsnapshot.md](skills/browser4-cli/references/htmlsnapshot.md) 与 [skills/browser4-cli/references/x-sql-dom-load-select.md](skills/browser4-cli/references/x-sql-dom-load-select.md)。
@@ -481,7 +512,7 @@ browser4-cli htmlsnapshot query --sql @query.sql
 | `summarize [instruction]` | 总结当前页面内容。支持 `--selector`、`--filename`、`--raw`、`--stdout`。 |
 | `chat <message>` | 发送纯 AI chat 请求，不自动追加浏览器上下文。 |
 | `chat-result <id>` | 获取异步 chat 任务结果。 |
-| `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。 |
+| `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。 |
 | `agent status <id>` | 查询运行中的任务状态。 |
 | `agent result <id>` | 获取已完成任务的结果。 |
 | `agent list` | 列出已跟踪的 agent 任务及其状态。 |
@@ -516,6 +547,29 @@ browser4-cli batch --bail "goto https://example.com" "snapshot" "screenshot"
 browser4-cli loop "load https://example.com and extract the title" -i 300 -n 10
 browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60
 browser4-cli loop --list
+```
+
+#### 网络检查、HAR 录制与请求路由
+
+查看页面实际加载了哪些网络请求（XHR/fetch、状态码、请求头、响应体），
+录制可被 Chrome DevTools 导入的 HAR 1.2 归档，并对匹配的请求做路由
+（mock 响应或中止）。完整指南见
+[`skills/browser4-cli/references/network.md`](skills/browser4-cli/references/network.md)。
+
+| 命令 | 说明 |
+|---|---|
+| `network requests` | 列出已跟踪的请求。支持 `--filter`、`--type`、`--method`、`--status`（`200`、`2xx`、`400-499`）、`--clear`。 |
+| `network request <id>` | 单个请求的完整详情：请求/响应头、时序与响应体（按需拉取）。 |
+| `network har start [--content <mode>]` | 开始 HAR 录制。内容模式：`none`、`text` 或 `all`（二进制 base64）。 |
+| `network har stop [path]` | 停止录制并输出 HAR JSON；给出路径时写入 `.har` 文件。 |
+| `network route <pattern> --body <text>\|--abort` | 拦截匹配的请求（mock 响应或让其失败），基于 CDP Fetch。支持 `--content-type`、`--resource-type`。 |
+| `network unroute [pattern]` | 移除路由；不带 pattern 时完全关闭拦截。 |
+
+```bash
+browser4-cli network requests --filter api --status 2xx
+browser4-cli network har start --content text
+browser4-cli network har stop ./capture.har
+browser4-cli network route "**/api/users" --body '{"users":[]}' --content-type application/json
 ```
 
 #### 用于规模化处理的 Swarm 与 Crawl
@@ -631,7 +685,7 @@ export BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS=300
 
 ## 🚀 从源码构建
 
-**前置要求：** Git、JDK 17+（推荐 21+）、Chrome/Chromium，以及 PowerShell 7（Linux/macOS 需要）。完整前置条件表、平台差异工具和 Chrome 自动探测路径请见 [Build from Source](docs/build-from-source.md)。
+**前置要求：** Git、JDK 25+（Eclipse Temurin）、Chrome/Chromium，以及 PowerShell 7（Linux/macOS 需要）。完整前置条件表、平台差异工具和 Chrome 自动探测路径请见 [Build from Source](docs/build-from-source.md)。
 
 1. **克隆仓库**
    ```shell
@@ -687,6 +741,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 - **Backend**（`browser4-rest`）— Spring Boot 服务，负责把 MCP 工具请求分发给浏览器驱动
 - **Browser driver**（`browser4-core/browser4-browser`）— 对 Chrome DevTools Protocol 的封装
 - **Agent tools**（`browser4-agentic`）— 把 MCP 工具名映射到浏览器自动化方法
+- **编程内核**（`browser4-coding`）— 轻依赖 agent 工具箱（沙箱 shell/文件系统、脚手架、校验、自身开发工具），见[下文](#-编程内核browser4-coding)
 
 ## 📦 模块概览
 
@@ -698,6 +753,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 | `browser4-dependencies` | BOM 与依赖版本对齐 |
 | `browser4-tools` | 运维工具与启动辅助 |
 | `browser4-agentic` | AI agent、MCP 集成、skill 注册 |
+| `browser4-coding` | 编程内核——沙箱 shell/fs、工件脚手架与校验、自身开发工具（47 个 `coding.*` 工具） |
 | `browser4-agent-tools` | 高层 agent 工具：抓取、爬取、有状态页面交互 |
 | `browser4-rest` | Spring Boot REST 层与命令端点 |
 | `browser4-apps/browser4-standalone` | 产品打包——统一启动器（`target/Browser4.jar`） |
@@ -705,6 +761,28 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 | `browser4-tests` | E2E、集成与场景测试套件 |
 | `cdp-protocol` | Chrome DevTools Protocol JSON 定义 |
 | `coworker/` | 内置 AI 协作助手 |
+
+---
+
+## 🧩 编程内核（browser4-coding）
+
+`browser4-coding` 是轻依赖的编程内核：让 AI agent 既能创建 Browser4 工件，也能**开发 Browser4 自身**。它独立于 `browser4-agentic` 与 `pulsar-common`（仅依赖 SLF4J + Jackson + 协程），可供非 agent 宿主复用；重后端（LSP 服务器、kotlin-compiler-embeddable）仅在运行时探测，默认不加载不下载。
+
+`coding` 域共 **47 个工具**，分四组：
+
+| 分组 | 数量 | 要点 |
+|---|---|---|
+| Shell 与文件系统 | 28 | 沙箱 `coding.shell`（命令白名单）、快照编辑原语 + `revert`、`diff`（Myers/Patience）、仓库治理保护（`coding.protect`） |
+| 工件创作与校验 | 6 | `scaffold`（plugin/skill/js/script）、`scaffoldFlow`（多文件开发流）、`scaffoldFromExample`（反陈旧活模板，目录模式 + 词干派生改名）、`validate`（含 `repo-consistency`） |
+| 自身开发 | 7 | `mvnBuild`（结构化诊断）、`ktSymbols`/`ktReferences`/`ktInheritance`（零依赖 Kotlin 分析）、`impact` + `moduleGraph`（实时 pom 图谱）、`devTask`（AGENTS.md 流程 + 执行）、`trapCheck`（CDP 陷阱） |
+| LSP | 4 | 按需 `diagnostics`/`symbols`/`references`（ts/js/py/rs，服务器缺失时优雅降级） |
+
+**通用能力 vs 项目专用**：内核按"机制 vs 数据"分层——diff、沙箱、LSP 客户端、Kotlin 分析、Maven 通道与 pom 图谱扫描均为通用可移植；脚手架、校验器、`ModuleMap`、`CdpTrapCheck` 与治理默认清单编码了 Browser4 约定，复用到其他项目时需重写这一层。
+
+- 工具全量参考与工作流：`skills/browser4-coding/SKILL.md`
+- 开发 Browser4 自身：`skills/browser4-dev/SKILL.md`
+- 四类工件对照示例（真实实现 vs 脚手架输出）：`docs-dev/copilot/examples/`
+- 评估总结（P1–P7）：`docs-dev/copilot/browser4-programming-support-eval.md`
 
 ---
 

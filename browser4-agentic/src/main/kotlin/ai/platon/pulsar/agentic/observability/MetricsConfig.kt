@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.observability
 
+import ai.platon.pulsar.common.getLogger
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.binder.jvm.ClassLoaderMetrics
 import io.micrometer.core.instrument.binder.jvm.JvmGcMetrics
@@ -42,6 +43,8 @@ import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
  */
 object MetricsConfig {
 
+    private val logger = getLogger(MetricsConfig::class)
+
     private val isMetricsEnabled: Boolean =
         System.getenv("METRICS_ENABLED")?.toBoolean() ?: true
 
@@ -76,48 +79,67 @@ object MetricsConfig {
             return@lazy SimpleMeterRegistry()
         }
 
-        val prometheusRegistry = PrometheusMeterRegistry(PrometheusConfig.DEFAULT)
+        // The Prometheus registry classes are an optional dependency and may be
+        // absent from slim bundles (e.g. the runtime bundle lib). Fall back to
+        // the in-memory SimpleMeterRegistry so metrics collection can never
+        // break agent execution.
+        try {
+            val prometheusRegistry = PrometheusMeterRegistry(PrometheusConfig.DEFAULT)
 
-        // Add common tags
-        commonTags.forEach { (key, value) ->
-            prometheusRegistry.config().commonTags(key, value)
+            // Add common tags
+            commonTags.forEach { (key, value) ->
+                prometheusRegistry.config().commonTags(key, value)
+            }
+
+            // Add metrics prefix if configured
+            if (metricsPrefix.isNotBlank()) {
+                prometheusRegistry.config().commonTags("prefix", metricsPrefix)
+            }
+
+            // Register JVM metrics
+            JvmMemoryMetrics().bindTo(prometheusRegistry)
+            JvmGcMetrics().bindTo(prometheusRegistry)
+            JvmThreadMetrics().bindTo(prometheusRegistry)
+            ClassLoaderMetrics().bindTo(prometheusRegistry)
+            ProcessorMetrics().bindTo(prometheusRegistry)
+
+            prometheusRegistry
+        } catch (e: Throwable) {
+            logger.warn("Prometheus metrics registry unavailable, falling back to SimpleMeterRegistry: {}", e.message)
+            SimpleMeterRegistry()
         }
-
-        // Add metrics prefix if configured
-        if (metricsPrefix.isNotBlank()) {
-            prometheusRegistry.config().commonTags("prefix", metricsPrefix)
-        }
-
-        // Register JVM metrics
-        JvmMemoryMetrics().bindTo(prometheusRegistry)
-        JvmGcMetrics().bindTo(prometheusRegistry)
-        JvmThreadMetrics().bindTo(prometheusRegistry)
-        ClassLoaderMetrics().bindTo(prometheusRegistry)
-        ProcessorMetrics().bindTo(prometheusRegistry)
-
-        prometheusRegistry
     }
 
     /**
      * Get Prometheus scrape data in text format.
      * This is the data that Prometheus will scrape from /metrics endpoint.
      *
+     * Returns an empty string when the Prometheus registry is not on the
+     * classpath (it is an optional dependency) — the `is` check itself would
+     * otherwise throw `NoClassDefFoundError` and take the caller down with it.
+     *
      * @return Prometheus text format metrics data
      */
-    fun scrape(): String {
-        return if (registry is PrometheusMeterRegistry) {
-            (registry as PrometheusMeterRegistry).scrape()
-        } else {
-            ""
-        }
-    }
+    fun scrape(): String = scrapeOf(registry) ?: ""
+
+    /**
+     * Prometheus text exposition of [meterRegistry], or `null` when that
+     * registry cannot be scraped (wrong registry type, or the optional
+     * `micrometer-registry-prometheus` classes are absent from the bundle).
+     */
+    fun scrapeOf(meterRegistry: MeterRegistry): String? = runCatching {
+        (meterRegistry as? PrometheusMeterRegistry)?.scrape()
+    }.getOrNull()
+
+    /** Whether [meterRegistry] can be scraped by a Prometheus server. */
+    fun isPrometheus(meterRegistry: MeterRegistry): Boolean = runCatching {
+        meterRegistry is PrometheusMeterRegistry
+    }.getOrDefault(false)
 
     /**
      * Close the meter registry and cleanup resources.
      */
     fun close() {
-        if (registry is PrometheusMeterRegistry) {
-            (registry as PrometheusMeterRegistry).close()
-        }
+        runCatching { (registry as? PrometheusMeterRegistry)?.close() }
     }
 }

@@ -1,7 +1,10 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.api.model.FrameInfo
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.chrome.protocol.DialogEvent
@@ -10,8 +13,10 @@ import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.mockito.Mockito.verify
@@ -200,6 +205,65 @@ class BrowserTabToolExecutorTest {
             assertTrue(js.contains("isContentEditable"), "JS must handle contenteditable: $js")
             // maxlength guard still present
             assertTrue(js.contains("maxLength"), "JS must guard maxlength: $js")
+        }
+    }
+
+    @Test
+    fun `isEnabled routes selector through evaluateValue`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            val expectedFn = "function() { return !(this.disabled || this.readOnly); }"
+            `when`(driver.evaluateValue("#submit", expectedFn)).thenReturn(true)
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "isEnabled", mutableMapOf<String, Any?>("selector" to "#submit")),
+                driver
+            )
+
+            assertEquals(true, result.value)
+            verify(driver).evaluateValue("#submit", expectedFn)
+        }
+    }
+
+    @Test
+    fun `dialogStatus reports pending dialog with type and message`() {
+        runBlocking {
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val handler = Mockito.mock(DialogHandler::class.java)
+            `when`(driver.dialogHandler).thenReturn(handler)
+            `when`(handler.hasPendingDialog()).thenReturn(true)
+            `when`(handler.peekPendingDialog())
+                .thenReturn(DialogEvent(message = "Please confirm", type = "confirm"))
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "dialogStatus", mutableMapOf()),
+                driver
+            )
+
+            @Suppress("UNCHECKED_CAST")
+            val map = result.value as Map<String, Any?>
+            assertEquals(true, map["pending"])
+            assertEquals("confirm", map["type"])
+            assertEquals("Please confirm", map["message"])
+        }
+    }
+
+    @Test
+    fun `dialogStatus reports no pending dialog`() {
+        runBlocking {
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val handler = Mockito.mock(DialogHandler::class.java)
+            `when`(driver.dialogHandler).thenReturn(handler)
+            `when`(handler.hasPendingDialog()).thenReturn(false)
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "dialogStatus", mutableMapOf()),
+                driver
+            )
+
+            @Suppress("UNCHECKED_CAST")
+            val map = result.value as Map<String, Any?>
+            assertEquals(false, map["pending"])
         }
     }
 
@@ -754,6 +818,95 @@ class BrowserTabToolExecutorTest {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Frame scope tools
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `frameSwitch delegates to the driver with the frame argument`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        `when`(driver.frameSwitch("#pay-frame")).thenReturn(
+            FrameInfo(id = "f1", name = "payframe", url = "http://x/pay", parentId = "main", active = true)
+        )
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameSwitch", mutableMapOf("frame" to "#pay-frame")),
+            driver
+        )
+
+        assertTrue(result.success)
+        val value = result.value as Map<*, *>
+        assertEquals("f1", value["id"])
+        assertEquals("payframe", value["name"])
+        assertEquals(true, value["active"])
+        Mockito.verify(driver).frameSwitch("#pay-frame")
+        // `verify` returns the mock, so without this the method would have a return
+        // value and JUnit 5 would silently skip the test.
+        Unit
+    }
+
+    @Test
+    fun `frameMain delegates to the driver`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameMain", mutableMapOf<String, Any?>()),
+            driver
+        )
+
+        assertTrue(result.success)
+        Mockito.verify(driver).frameMain()
+    }
+
+    @Test
+    fun `frameList delegates to the driver`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        `when`(driver.frameList()).thenReturn(
+            listOf(
+                FrameInfo(id = "main", url = "http://x/", active = true),
+                FrameInfo(id = "f1", name = "payframe", url = "http://x/pay", parentId = "main"),
+            )
+        )
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameList", mutableMapOf<String, Any?>()),
+            driver
+        )
+
+        assertTrue(result.success)
+        val frames = result.value as List<*>
+        assertEquals(2, frames.size)
+        Mockito.verify(driver).frameList()
+        Unit
+    }
+
+    @Test
+    fun `frameSwitch requires the frame argument`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameSwitch", mutableMapOf<String, Any?>()),
+            driver
+        )
+
+        assertTrue(!result.success)
+        val cause = result.exception?.cause
+        assertTrue(
+            cause?.message?.contains("frame") == true,
+            "the failure must name the missing argument, was: ${cause?.message}",
+        )
+        assertEquals(
+            ToolErrorCode.MISSING_REQUIRED_ARG,
+            ToolErrorMapper.classify(cause),
+            "a missing argument must carry the stable code, not INTERNAL",
+        )
+        Mockito.verify(driver, Mockito.never()).frameSwitch(Mockito.anyString())
+        // `verify` returns the mock: without this the method would have a return
+        // value and JUnit 5 would silently skip the test (which is how this
+        // assertion could sit stale for so long).
+        Unit
+    }
+
     // ── eval element-scope resolution: unresolvable targets must fail loudly ──
 
     @Test
@@ -1047,5 +1200,44 @@ class BrowserTabToolExecutorTest {
             val message = result.exception?.cause?.message ?: ""
             assertTrue(message.contains("Element not found for ref e1265"), message)
         }
+    }
+
+    @Test
+    @DisplayName("every written tab example reaches the advertised spec")
+    fun everyWrittenTabExampleReachesTheSpec() {
+        val specs = executor.getToolSpecs()
+
+        val dead = TabToolExamples.EXECUTABLE.filterKeys { it !in specs }
+        assertTrue(
+            dead.isEmpty(),
+            "these examples were written for methods the executor does not advertise, " +
+                "so no client can ever see them: ${dead.keys}"
+        )
+
+        val dropped = TabToolExamples.EXECUTABLE.filter { (method, examples) ->
+            specs[method]?.examples != examples
+        }
+        assertTrue(
+            dropped.isEmpty(),
+            "these examples never reached their spec — most likely a spec declared after " +
+                "the `replaceExamples` call in the constructor overwrote it: ${dropped.keys}"
+        )
+    }
+
+    @Test
+    @DisplayName("the state readers the executor dispatches are advertised with their contract")
+    fun dispatchedStateReadersAreAdvertised() {
+        val specs = executor.getToolSpecs()
+        for (method in listOf("isEnabled", "dialogStatus")) {
+            assertNotNull(specs[method], "tab.$method is dispatched but not advertised")
+        }
+
+        assertTrue(specs["dialogStatus"]!!.arguments.isEmpty(), "dialogStatus takes no arguments")
+        val schema = specs["dialogStatus"]!!.outputSchema
+        assertNotNull(schema, "dialogStatus returns JSON, so it must declare its result schema")
+        assertTrue(
+            schema!!.contains("\"pending\"") && schema.contains("\"type\":\"object\""),
+            "the declared result schema must describe the {pending, type, message} map, was: $schema"
+        )
     }
 }

@@ -58,11 +58,19 @@
     copilot). Without it, the raw commit list is used.
 
 .PARAMETER SkipVersionBump
-    Skip the automatic post-release version bump (next patch). By default, after
-    a successful release the script bumps VERSION (and all pom.xml / Cargo.toml /
-    Cargo.lock / package.json) to X.Y.(Z+1)-SNAPSHOT and commits + pushes it as
-    "Auto-bump version to X.Y.(Z+1)-SNAPSHOT", so the next release starts from
-    the next patch. Pass this switch to leave the version untouched.
+    Skip the automatic post-release version bump. By default, after a successful
+    release the script bumps the version — an rc release advances to the next
+    rc candidate (rc.N -> rc.N+1), a patch release to the next patch SNAPSHOT
+    (X.Y.Z-SNAPSHOT -> X.Y.(Z+1)-SNAPSHOT) — across VERSION, all pom.xml,
+    Cargo.toml, Cargo.lock and package.json, then commits and pushes the bump
+    as "Auto-bump version to …". The bump rules are computed by
+    `node bin/version.mjs next`. Pass this switch to leave the version untouched.
+
+.PARAMETER NoSyncMain
+    By default the release trigger fast-forwards origin/main to the current
+    branch before tagging (release.yml requires the tag on the latest main).
+    Pass this switch to disable the automatic sync; the trigger script then
+    warns and asks for confirmation instead.
 
 .PARAMETER MaxMonitorMinutes
     Upper bound (in minutes) for the -NoWatch monitor loop. Default 0 = no limit.
@@ -91,6 +99,7 @@ param(
     [switch]$Apply,
     [switch]$DryRun,
     [switch]$SkipVersionBump,
+    [switch]$NoSyncMain,
     [int]$MaxMonitorMinutes = 0,
     [ValidateSet('auto', 'claude', 'kimi', 'codex', 'dsh', 'copilot')]
     [string]$Agent = ""
@@ -220,10 +229,69 @@ function Extract-MinimalErrors {
         return "(No log output to analyze.)"
     }
 
+    # ── Helper: extract the message from a log line and strip ANSI escapes ──
+    function Get-CleanMessage {
+        param([string]$RawLine)
+        $parsed = Parse-GitHubLogLine -Line $RawLine
+        if ($parsed -and $parsed.Message) {
+            return ($parsed.Message -replace '\x1b\[[0-9;]*m', '').Trim()
+        }
+        return ($RawLine -replace '\x1b\[[0-9;]*m', '').Trim()
+    }
+
+    # ── Helper: test whether a cleaned message is shell script boilerplate ──
+    # These are structural shell / GHA workflow lines that happen to contain
+    # error-like words ("failed", "error") but are not themselves errors.
+    $boilerplatePatterns = @(
+        '^##\[(group|endgroup|debug|warning|notice)\]',   # GHA workflow commands
+        '^\s*if\s+\[',           # if [ condition ]
+        '^\s*if\s+\[\[',         # if [[ condition ]]
+        '^\s*then\b',            # then
+        '^\s*else\b',            # else
+        '^\s*elif\s',            # elif
+        '^\s*\bfi\b\s*$',        # fi
+        '^\s*\bdo\b\s*$',        # do
+        '^\s*\bdone\b\s*$',      # done
+        '^\s*\besac\b\s*$',      # esac
+        '^\s*echo\s',            # echo statements (reporting, not the error itself)
+        '^\s*printf\s',          # printf statements
+        '^\s*\w+=\S',            # variable assignments (VAR=value)
+        '^\s*export\s',          # export VAR=...
+        '^\s*\#\s'               # shell comments
+    )
+
+    function Test-IsBoilerplate {
+        param([string]$CleanMessage)
+        if ([string]::IsNullOrWhiteSpace($CleanMessage)) { return $true }
+        foreach ($bp in $boilerplatePatterns) {
+            if ($CleanMessage -match $bp) { return $true }
+        }
+        return $false
+    }
+
     # ── Pass 1: Extract specific failing test names ──────────────────────
     $testFailures = [System.Collections.Generic.List[string]]::new()
-    foreach ($tn in (Get-FailingTestNames -LogLines $lines)) {
-        $testFailures.Add($tn)
+    $seenTests    = @{}
+
+    # Rust test: "test test_e2e_session_lifecycle ... FAILED"
+    # Kotlin:    "Tests failed: 3, passed: 100"
+    # Go:        "--- FAIL: TestName"
+    # Generic:   "test_e2e_foo => FAILED"
+    foreach ($ln in $lines) {
+        $msg = Get-CleanMessage $ln
+
+        if ($msg -match 'test\s+(\S+)\s+\.\.\.\s+FAILED') {
+            $tn = $Matches[1]
+            if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
+        }
+        if ($msg -match '(test_e2e_\S+)\s.*=>\s*FAILED') {
+            $tn = $Matches[1]
+            if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
+        }
+        if ($msg -match '---\s+FAIL:\s+(\S+)') {
+            $tn = $Matches[1]
+            if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
+        }
     }
 
     # ── Pass 2: Extract error blocks with context ────────────────────────
@@ -265,9 +333,16 @@ function Extract-MinimalErrors {
     try {
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $line = $lines[$i]
+            $msg = Get-CleanMessage $line
+
+            # Skip shell boilerplate: lines that contain error-indicator words
+            # but are really just workflow script code (if/fi/echo/##[group]/…).
+            if (Test-IsBoilerplate $msg) { continue }
+
+            # Match error patterns against the cleaned message (not the raw line).
             $matched = $false
             foreach ($pat in $errorPatterns) {
-                if ($line -match [regex]::Escape($pat)) {
+                if ($msg -match [regex]::Escape($pat)) {
                     $matched = $true
                     break
                 }
@@ -279,14 +354,17 @@ function Extract-MinimalErrors {
                 $start = [Math]::Max(0, $i - $ctxBefore)
                 $end   = [Math]::Min($lines.Count - 1, $i + $ctxAfter)
 
-                # Render block: for GH-format lines, strip the timestamp and show [Job/Step] prefix
+                # Render block: for GH-format lines, strip the timestamp and show [Job/Step] prefix.
+                # ANSI escapes must be stripped here too — matching already runs on cleaned
+                # messages, so the rendered diagnostics stay clean (raw ESC sequences would
+                # otherwise leak into the output and coworker task files).
                 $blockLines = foreach ($j in $start..$end) {
                     $ln = $lines[$j]
                     $p = Parse-GitHubLogLine -Line $ln
                     if ($p -and $p.Message -and $p.Message.Trim().Length -gt 0) {
-                        "[$($p.Job) / $($p.Step)] $($p.Message)"
+                        "[$($p.Job) / $($p.Step)] $($p.Message -replace '\x1b\[[0-9;]*m', '')"
                     } else {
-                        $ln
+                        $ln -replace '\x1b\[[0-9;]*m', ''
                     }
                 }
                 $block = ($blockLines -join "`n").Trim()
@@ -344,7 +422,10 @@ function Extract-MinimalErrors {
     if ($testFailures.Count -eq 0 -and $errorBlocks.Count -eq 0) {
         $output.Add("(No specific error patterns or test failures matched — last 40 log lines)")
         $tail = $lines | Select-Object -Last 40
-        foreach ($t in $tail) { $output.Add([string]$t) }
+        foreach ($t in $tail) {
+            $cleanLine = ([string]$t) -replace '\x1b\[[0-9;]*m', ''
+            $output.Add($cleanLine)
+        }
     }
 
     return $output -join "`n"
@@ -845,19 +926,37 @@ function Invoke-PostReleaseVersionBump {
     }
 
     $current = (Get-Content $versionFile -Raw).Trim()
-    if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)(-SNAPSHOT)?$') {
-        Write-Host "  [bump] VERSION '$current' is not X.Y.Z(-SNAPSHOT) — skipping version bump." -ForegroundColor Yellow
+    if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)(-(SNAPSHOT|rc\.\d+))?$') {
+        Write-Host "  [bump] VERSION '$current' is not X.Y.Z, X.Y.Z-SNAPSHOT or X.Y.Z-rc.N — skipping version bump." -ForegroundColor Yellow
         return
     }
 
-    $base = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
-    $nextPatch = [int]$Matches[3] + 1
-    $nextBase = "$($Matches[1]).$($Matches[2]).$nextPatch"
-    $nextSnapshot = "${nextBase}-SNAPSHOT"
+    # ── Compute the next version ──────────────────────────────────────────
+    # The bump rules live in version.mjs (`next`), the single source of
+    # truth: an rc release advances rc.N -> rc.N+1, a patch/SNAPSHOT release
+    # advances to the next patch SNAPSHOT. Fall back to the built-in rules
+    # (mirroring `version.mjs next`) only when node is unavailable.
+    $bumpKind = if ($current -match '-rc\.\d+$') { 'rc' } else { 'patch' }
+    $nextVer = $null
+    try {
+        $nextVer = (node (Join-Path $RepoRoot 'bin' 'version.mjs') next $bumpKind 2>$null | Select-Object -Last 1)
+        if ($nextVer) { $nextVer = $nextVer.Trim() }
+    } catch { $nextVer = $null }
+    if ([string]::IsNullOrWhiteSpace($nextVer)) {
+        if ($bumpKind -eq 'rc' -and $current -match '^(?<base>\d+\.\d+\.\d+)-rc\.(?<n>\d+)$') {
+            $nextVer = "$($Matches['base'])-rc.$([int]$Matches['n'] + 1)"
+        } elseif ($current -match '^(?<maj>\d+)\.(?<min>\d+)\.(?<pat>\d+)') {
+            $nextVer = "$($Matches['maj']).$($Matches['min']).$([int]$Matches['pat'] + 1)-SNAPSHOT"
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($nextVer)) {
+        Write-Host "  [bump] Could not compute the next version from '$current' — skipping version bump." -ForegroundColor Yellow
+        return
+    }
 
     Write-Host ""
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-    Write-Host "  Post-release version bump: $current -> $nextSnapshot" -ForegroundColor Cyan
+    Write-Host "  Post-release version bump: $current -> $nextVer" -ForegroundColor Cyan
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 
     # ── Guard: working tree must be clean (except files we are about to touch) ──
@@ -883,7 +982,13 @@ function Invoke-PostReleaseVersionBump {
     }
 
     # ── Apply replacements ────────────────────────────────────────────────
-    $oldSnapshot = "$base-SNAPSHOT"
+    # Version-bearing strings differ per bump shape:
+    #   SNAPSHOT:  pom <version>X.Y.Z-SNAPSHOT</version>, <tag>vX.Y.Z</tag>,     CLI "X.Y.Z"
+    #   rc:        pom <version>X.Y.Z-rc.N</version>,   <tag>vX.Y.Z-rc.N</tag>, CLI "X.Y.Z-rc.N"
+    $oldCli = $current -replace '-SNAPSHOT$', ''
+    $newCli = $nextVer -replace '-SNAPSHOT$', ''
+    $oldTag = 'v' + $oldCli
+    $newTag = 'v' + $newCli
     $changed = [System.Collections.Generic.List[string]]::new()
 
     foreach ($rel in $targets) {
@@ -895,15 +1000,15 @@ function Invoke-PostReleaseVersionBump {
 
         $updated = $content
         if ($rel -eq 'VERSION') {
-            $updated = $nextSnapshot + "`n"
+            $updated = $nextVer + "`n"
         } elseif ($rel -match 'pom\.xml$') {
-            # pom.xml carries <version>X.Y.Z-SNAPSHOT</version> plus the root
-            # <scm><tag>vX.Y.Z</tag></scm> — replace both forms.
-            $updated = $updated.Replace($oldSnapshot, $nextSnapshot)
-            $updated = $updated.Replace("v$base", "v$nextBase")
+            # Replace the tag first ("vX.Y.Z…") so the version replacement
+            # cannot corrupt it ("X.Y.Z" is a substring of "vX.Y.Z").
+            if ($oldTag -ne $newTag) { $updated = $updated.Replace($oldTag, $newTag) }
+            if ($current -ne $nextVer) { $updated = $updated.Replace($current, $nextVer) }
         } else {
-            # Cargo.toml / Cargo.lock / package.json carry the bare "X.Y.Z"
-            $updated = $updated.Replace('"' + $base + '"', '"' + $nextBase + '"')
+            # Cargo.toml / Cargo.lock / package.json carry the bare "X.Y.Z" (or "X.Y.Z-rc.N")
+            if ($oldCli -ne $newCli) { $updated = $updated.Replace('"' + $oldCli + '"', '"' + $newCli + '"') }
         }
 
         if ($updated -ne $content) {
@@ -918,12 +1023,12 @@ function Invoke-PostReleaseVersionBump {
     }
 
     if ($changed.Count -eq 0) {
-        Write-Host "  [bump] No version files needed updating (already at $nextSnapshot?)." -ForegroundColor Green
+        Write-Host "  [bump] No version files needed updating (already at $nextVer?)." -ForegroundColor Green
         return
     }
 
     # ── Commit & push ─────────────────────────────────────────────────────
-    $commitMsg = "Auto-bump version to $nextSnapshot"
+    $commitMsg = "Auto-bump version to $nextVer"
     Push-Location $RepoRoot
     try {
         git add -- $changed
@@ -1113,6 +1218,9 @@ if ($remote)      { $triggerArgs['remote'] = $remote }
 if ($message)     { $triggerArgs['message'] = $message }
 if (-not $isDryRun) { $triggerArgs['Apply'] = $true }
 if ($Agent)       { $triggerArgs['Agent'] = $Agent }
+# Sync main to the current branch by default so releasing from a dev branch
+# is a single command (trigger-release.ps1 fast-forwards main when possible).
+if (-not $NoSyncMain) { $triggerArgs['SyncMain'] = $true }
 
 # Remember what already exists (and when we pushed) so Step 2 can only ever
 # pick the run this push triggers.  Skipped in dry-run mode, which must stay

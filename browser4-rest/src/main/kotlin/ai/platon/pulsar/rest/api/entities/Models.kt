@@ -33,10 +33,6 @@ data class PromptRequest constructor(
     var actions: List<String>? = null
 )
 
-data class ScrapeStatusRequest(
-    val id: String,
-)
-
 data class SessionResponse(
     var sessionId: String,
     var status: String? = null,
@@ -51,7 +47,7 @@ fun ManagedSession.toSessionResponse(): SessionResponse {
     val safeCapabilities = capabilities?.toMap()
     return SessionResponse(
         sessionId = sessionId,
-        status = status,
+        status = status.wire,
         profileMode = safeCapabilities?.get(PROFILE_MODE_CAPABILITY),
         capabilities = safeCapabilities,
         url = url,

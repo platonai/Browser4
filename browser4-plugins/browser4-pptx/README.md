@@ -23,12 +23,15 @@ The module is a Browser4 plugin. Place `browser4-pptx-<version>.jar` on the appl
 ```json
 {
   "name": "browser4-pptx",
-  "version": "4.13.14-SNAPSHOT",
+  "version": "4.12.1-SNAPSHOT",
+  "sdkVersion": "4.14.0-rc.1",
   "description": "Convert web pages to PowerPoint (PPTX) files",
   "dependsOn": ["browser4-protocol", "browser4-agentic"],
   "autoConfigurationClasses": ["ai.platon.pulsar.pptx.config.PptxAutoConfiguration"]
 }
 ```
+
+`version` is the plugin's own release version; `sdkVersion` (required since 4.14) declares the Browser4 SDK the plugin was built against. A plugin whose `sdkVersion` has a newer major than the host is refused; an older same-major one loads with a warning.
 
 No additional setup is required — Spring Boot auto-configuration registers the handler and tool executor automatically.
 

@@ -16,7 +16,7 @@ import java.nio.file.Path
  */
 class DefinitionBackedSkill(
     val definition: SkillDefinition,
-    private val origin: Origin
+    val origin: Origin
 ) : AbstractSkill() {
 
     private val logger = getLogger(this)

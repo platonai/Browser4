@@ -69,6 +69,7 @@ Need to process multiple pages?
 │  → htmlsnapshot query with DOM_LOAD_AND_SELECT
 ├─ Multiple known URLs (list in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
+├─ Need higher crawl throughput? → add --parallel 8 (crawl already collects on several tabs by default; each unit gets its own tab)
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
 ├─ Repeated monitoring (check every hour)? → loop -i 3600 -- eval "..."
 └─ Just a few URLs in a shell script?
@@ -87,6 +88,7 @@ Have HTML files and want structured data — without tokens?
 └─ Need to acquire pages first?
    ├─ Single pages: browser4-cli open --headless → htmlsnapshot → htmlsnapshot export
    ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0
+   │  (add --parallel 8 for more overlap; each unit collects on its own tab)
    └─ High throughput: browser4-cli swarm create → swarm query --seed-file ...
        Then feed the HTML directory to WebMiner
 ```
@@ -123,9 +125,9 @@ Have HTML files and want structured data — without tokens?
 | `webminer all <html-dir>` | Full pipeline: encode → cluster → views (`--max-files`, `--output`, `--resume`) |
 | `webminer views <result-dir>` | Rebuild the interactive views from an existing run |
 
-Requires JDK 17+ (auto-detected from `JAVA_HOME`, common paths, or `PATH`). Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`).
+Requires JDK 17+ (auto-detected: JAVA_HOME → Browser4 runtime bundle JRE → common paths → PATH). Any other command is forwarded verbatim to scent-miner.jar (e.g. webminer encode <dir>).
 
-> **Install:** `browser4-cli webminer install` (or the legacy launcher `.\webminer.ps1 install` from the [web-miner](https://github.com/platonai/web-miner) project). The JAR is also downloadable from [web-miner releases](https://github.com/platonai/web-miner/releases).
+> **Install:** rowser4-cli webminer install (or the legacy launcher .\webminer.ps1 install from the [web-miner](https://github.com/platonai/web-miner) project). The JAR is also downloadable from [web-miner releases](https://github.com/platonai/web-miner/releases).
 
 See **[web-miner/SKILL.md](../../browser4-web-miner/SKILL.md)** for the full reference.
 

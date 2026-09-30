@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agentic.inference
 
-import ai.platon.pulsar.common.AppPaths
+import ai.platon.pulsar.agentic.common.AgentPaths
 import ai.platon.pulsar.common.MultiSinkMessageWriter
 import java.nio.file.Path
 import java.time.Instant
@@ -17,8 +17,7 @@ class InferenceLogger(
     private val agentStartTime: Instant,
 ) {
     private val auxRunLogDir: Path by lazy {
-        val auxLogDir = AppPaths.detectAuxiliaryLogDir().resolve("agent")
-        auxLogDir.resolve(AppPaths.fromTime(agentStartTime)).resolve(agentUuid.toString())
+        AgentPaths.resolveTraceRunDir(agentStartTime, agentUuid)
     }
     private val auxLogger by lazy { MultiSinkMessageWriter(auxRunLogDir) }
 

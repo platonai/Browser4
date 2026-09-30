@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browser4 — Page Screenshots</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a2129;
+    --panel2: #202a35;
+    --border: #2c3a48;
+    --text: #d7e1ea;
+    --muted: #8ba0b0;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --blue: #58a6ff;
+    --mono: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 600; }
+  .pill {
+    display: inline-block; padding: 3px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; border: 1px solid var(--border);
+  }
+  .pill.ok { color: var(--green); border-color: var(--green); }
+  .sub { color: var(--muted); font-size: 12px; }
+  .linkbar { margin-left: auto; display: flex; gap: 14px; font-size: 12px; }
+  .linkbar a { color: var(--blue); text-decoration: none; }
+  .linkbar a:hover { text-decoration: underline; }
+  #banner { display: none; margin: 12px 0; padding: 10px 14px; border-radius: 8px;
+    background: #3a1d1d; border: 1px solid var(--red); color: #ffb3b0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .chip { font-family: var(--mono); font-size: 12px; padding: 2px 10px; border-radius: 6px;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-top: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 8px; }
+  .card h2 { margin: 0; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+    font-weight: 600; border: 1px solid var(--border); color: var(--muted); }
+  .badge.on { color: var(--green); border-color: var(--green); }
+  .badge.off { color: var(--yellow); border-color: var(--yellow); }
+  .badge.swarm { color: var(--red); border-color: var(--red); }
+  .meta { font-size: 12px; color: var(--muted); word-break: break-all; }
+  .shot { position: relative; width: 100%; aspect-ratio: 4 / 3; border-radius: 8px; overflow: hidden;
+    background: var(--panel2); border: 1px solid var(--border); cursor: pointer; }
+  .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .shot .ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 6px; color: var(--muted); font-size: 12px; text-align: center; padding: 12px; }
+  .shot .ph svg { width: 48px; height: 48px; opacity: 0.5; }
+  .shot .overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.55); color: var(--text); font-size: 12px; font-weight: 600; }
+  .shot.loading .overlay { display: flex; }
+  .hint { font-size: 11px; color: var(--muted); }
+  .empty { color: var(--muted); font-size: 13px; padding: 24px 0; }
+  footer { margin-top: 18px; color: var(--muted); font-size: 11.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Browser4 — Page Screenshots</h1>
+  <span id="statusPill" class="pill">…</span>
+  <span id="serverTime" class="sub"></span>
+  <div class="linkbar">
+    <a href="/api/pages" target="_blank">Raw JSON</a>
+    <a href="/status.html" target="_blank">Status panel</a>
+  </div>
+</header>
+<div class="sub" id="refreshNote">Auto-refresh: 5s</div>
+
+<div id="banner"></div>
+
+<div class="chips" id="summaryChips"></div>
+
+<div class="grid" id="pagesGrid"></div>
+<div class="empty" id="empty" style="display:none;">No open pages. Open a page with <code>open &lt;url&gt;</code> or <code>goto &lt;url&gt;</code> first.</div>
+
+<footer>
+  Screenshots load asynchronously: the backend captures in the background and the panel polls until
+  the PNG is ready. Every active tab of a normal session is captured automatically; click a screenshot
+  to re-capture it. Inactive tabs show a placeholder — click it to capture (click again to refresh).
+  Swarm sessions only show placeholders. Backed by <code>GET /api/pages</code> and
+  <code>GET /api/pages/{sessionId}/{guid}/screenshot.png</code> (200 PNG / 202 capturing / 403 swarm / 504 failed).
+</footer>
+
+<script>
+"use strict";
+
+const REFRESH_MS = clampRefresh(new URLSearchParams(location.search).get("refresh"));
+const el = (id) => document.getElementById(id);
+
+/** Max polls of the 202/in-progress loop before giving up (~45s at 1.5s). */
+const MAX_POLLS = 30;
+
+/**
+ * Per-tab capture cache: guid -> {url, objectUrl}. Kept across grid rebuilds
+ * so the auto-refresh does not re-fetch (or re-capture) screenshots.
+ */
+const shots = new Map();
+
+function clampRefresh(raw) {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1000) return 5000;
+  return Math.min(n, 60000);
+}
+
+function shortId(id) {
+  if (!id) return "—";
+  return id.length > 14 ? id.slice(0, 14) + "…" : id;
+}
+
+function fmtLocal(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleTimeString() + " " + d.toLocaleDateString();
+}
+
+// Placeholder image: an inline SVG data URI so no backend round trip is needed.
+function placeholderSvg(label) {
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240">' +
+    '<rect width="100%" height="100%" fill="#151c24"/>' +
+    '<g fill="none" stroke="#2c3a48" stroke-width="2">' +
+    '<rect x="90" y="70" width="140" height="95" rx="6"/>' +
+    '<circle cx="110" cy="95" r="8"/><circle cx="150" cy="95" r="8"/><circle cx="190" cy="95" r="8"/>' +
+    '<line x1="90" y1="150" x2="150" y2="105"/><line x1="150" y1="105" x2="210" y2="150"/>' +
+    '</g>' +
+    '<text x="160" y="190" text-anchor="middle" fill="#8ba0b0" font-size="13" font-family="monospace">' +
+    label + '</text>' +
+    '</svg>';
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+const PH_INACTIVE = placeholderSvg("inactive tab — click to capture");
+const PH_SWARM = placeholderSvg("swarm tab — placeholder only");
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Screenshot captures are asynchronous on the backend: a fresh cached PNG
+ * returns 200, an in-flight capture returns 202 with Retry-After. Poll the
+ * same URL (no cache-busting timestamp — the backend keys the cache per tab)
+ * until the PNG is ready, then hand back a blob.
+ */
+async function fetchShot(item, force) {
+  const baseUrl = item.screenshotUrl;
+  let attempts = 0;
+  while (attempts < MAX_POLLS) {
+    attempts++;
+    // The forced refresh only applies to the first request: every poll must
+    // use the plain URL, otherwise each poll would drop the cache and the
+    // capture would never finish.
+    const url = (attempts === 1 && force) ? baseUrl + "?refresh=1" : baseUrl;
+    let resp;
+    try {
+      resp = await fetch(url, { cache: "no-store" });
+    } catch (e) {
+      // Transient network error — a few quick retries.
+      if (attempts >= 3) return { error: "network" };
+      await sleep(1000);
+      continue;
+    }
+    if (resp.ok) return { blob: await resp.blob() };
+    if (resp.status === 202) {
+      const retryAfter = parseInt(resp.headers.get("Retry-After") || "1", 10);
+      await sleep(Math.min(3000, retryAfter * 1000));
+      continue;
+    }
+    return { status: resp.status };
+  }
+  return { error: "timeout" };
+}
+
+/**
+ * Build the image area of a page card.
+ * - swarm tabs: placeholder only, click is a no-op (hint via title)
+ * - active tabs: screenshot loaded asynchronously; click re-captures
+ * - inactive tabs: placeholder; click captures once (becomes live), click again refreshes
+ *
+ * Captures are cached per tab (`shots`), so the auto-refresh rebuild of the
+ * grid reuses the last object URL instead of re-fetching — unless the tab
+ * navigated to a different URL or the user clicked to refresh.
+ */
+function buildShot(item) {
+  const box = document.createElement("div");
+  box.className = "shot";
+
+  if (item.placeholder) {
+    const ph = document.createElement("div");
+    ph.className = "ph";
+    ph.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">' +
+      '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/>' +
+      '<path d="M3 17l5-4 4 3 4-4 5 5"/></svg>' +
+      '<div>' + (item.kind === "SWARM" ? "SWARM — placeholder only" : "Placeholder") + "</div>";
+    box.appendChild(ph);
+    box.style.cursor = item.kind === "SWARM" ? "not-allowed" : "pointer";
+    box.title = item.kind === "SWARM"
+      ? "Swarm sessions only show placeholder pages — screenshots are not available."
+      : "Click to capture this tab";
+    return box;
+  }
+
+  const overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.textContent = "capturing…";
+  box.appendChild(overlay);
+
+  let live = false;
+  const img = document.createElement("img");
+  img.alt = "screenshot of " + (item.title || item.guid);
+
+  function showPlaceholder(ph, title) {
+    live = false;
+    box.innerHTML = "";
+    const p = document.createElement("div");
+    p.className = "ph";
+    p.innerHTML = ph;
+    box.appendChild(p);
+    box.appendChild(overlay);
+    box.title = title;
+  }
+
+  function adoptBlob(blob) {
+    const prev = shots.get(item.guid);
+    if (prev) URL.revokeObjectURL(prev.objectUrl);
+    const objectUrl = URL.createObjectURL(blob);
+    shots.set(item.guid, { url: item.url, objectUrl });
+    img.onload = () => box.classList.remove("loading");
+    img.src = objectUrl;
+    if (!img.parentNode) box.insertBefore(img, overlay);
+  }
+
+  async function load(force) {
+    const existingPh = box.querySelector(".ph");
+    if (existingPh) existingPh.remove();
+    box.classList.add("loading");
+    const result = await fetchShot(item, force);
+    // The grid may have been rebuilt (auto-refresh) while polling — drop the
+    // result instead of mutating a detached card.
+    if (!box.isConnected) return;
+    box.classList.remove("loading");
+    if (result.blob) {
+      adoptBlob(result.blob);
+      live = true;
+      box.title = "Click to re-capture";
+    } else {
+      live = false;
+      showPlaceholder(PH_INACTIVE, "Capture failed — click to retry");
+    }
+  }
+
+  // Reuse the last capture when the tab is still on the same URL — the list
+  // auto-refresh rebuilds cards every few seconds and must not re-fetch (or
+  // re-capture) screenshots each time.
+  const prev = shots.get(item.guid);
+  if (item.active && prev && prev.url === item.url) {
+    live = true;
+    img.src = prev.objectUrl;
+    if (!img.parentNode) box.insertBefore(img, overlay);
+    box.title = "Active tab — click to re-capture";
+  } else if (item.active) {
+    live = true;
+    box.title = "Active tab — click to re-capture";
+    load(false);
+  } else {
+    showPlaceholder(PH_INACTIVE, "Click to capture this tab");
+  }
+
+  box.addEventListener("click", () => {
+    load(true); // first capture or refresh — either way force a new capture
+  });
+
+  return box;
+}
+
+function render(items) {
+  const grid = el("pagesGrid");
+  grid.textContent = "";
+  el("empty").style.display = items.length === 0 ? "" : "none";
+
+  for (const it of items) {
+    const card = document.createElement("div");
+    card.className = "card";
+
+    const h = document.createElement("h2");
+    h.appendChild(document.createTextNode(shortId(it.sessionId)));
+    const kind = document.createElement("span");
+    kind.className = "badge " + (it.kind === "SWARM" ? "swarm" : "");
+    kind.textContent = it.kind;
+    h.appendChild(kind);
+    if (it.placeholder) {
+      const ph = document.createElement("span");
+      ph.className = "badge off";
+      ph.textContent = "placeholder";
+      h.appendChild(ph);
+    } else if (it.active) {
+      const act = document.createElement("span");
+      act.className = "badge on";
+      act.textContent = "active";
+      h.appendChild(act);
+    } else {
+      const inact = document.createElement("span");
+      inact.className = "badge";
+      inact.textContent = "tab #" + (it.tabIndex + 1);
+      h.appendChild(inact);
+    }
+    card.appendChild(h);
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = (it.title || "(untitled)") + (it.url ? " — " + it.url : "");
+    meta.title = it.url || it.title || "";
+    card.appendChild(meta);
+
+    card.appendChild(buildShot(it));
+
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.textContent = it.placeholder
+      ? (it.kind === "SWARM" ? "swarm pages never capture screenshots" : "inactive tab — click placeholder to capture")
+      : (it.active ? "active tab — auto-captured, click to refresh" : "click screenshot to refresh");
+    card.appendChild(hint);
+
+    grid.appendChild(card);
+  }
+}
+
+function renderChips(data) {
+  const chips = el("summaryChips");
+  chips.textContent = "";
+  for (const [label, n] of [["pages", data.total], ["live", data.live], ["placeholder", data.placeholder], ["sessions", data.sessions]]) {
+    if (n === undefined) continue;
+    const c = document.createElement("span");
+    c.className = "chip";
+    c.textContent = label + ": " + n;
+    chips.appendChild(c);
+  }
+}
+
+function setBanner(text) {
+  const b = el("banner");
+  if (text) {
+    b.textContent = text;
+    b.style.display = "block";
+  } else {
+    b.style.display = "none";
+  }
+}
+
+async function refresh() {
+  try {
+    const resp = await fetch("/api/pages", { cache: "no-store" });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    setBanner(null);
+    el("statusPill").textContent = data.total + " pages";
+    el("statusPill").className = "pill " + (data.total > 0 ? "ok" : "");
+    el("serverTime").textContent = "server time: " + fmtLocal(new Date().toISOString());
+    renderChips(data);
+    render(data.items || []);
+  } catch (e) {
+    el("statusPill").textContent = "UNREACHABLE";
+    el("statusPill").className = "pill";
+    setBanner("Cannot reach /api/pages (" + e.message + "). Is the Browser4 backend running?");
+  }
+}
+
+el("refreshNote").textContent = "Auto-refresh: " + (REFRESH_MS / 1000) + "s (set ?refresh=<ms> to change)";
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

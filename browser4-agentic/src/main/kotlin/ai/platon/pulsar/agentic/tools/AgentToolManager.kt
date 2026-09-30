@@ -4,8 +4,9 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.common.AgentShell
-import ai.platon.pulsar.agentic.common.CodingAgentFileSystem
-import ai.platon.pulsar.agentic.common.CodingAgentShell
+import ai.platon.pulsar.coding.CodingAgentFileSystem
+import ai.platon.pulsar.coding.CodingAgentShell
+import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.skills.SkillContext
 import ai.platon.pulsar.agentic.skills.SkillRegistry
@@ -27,6 +28,7 @@ import kotlin.time.Duration.Companion.milliseconds
 class AgentToolManager constructor(
     val baseDir: Path,
     val agent: BasicBrowserAgent,
+    val workspaceRoot: Path = CodingWorkspace.workspaceRoot,
 ) {
     private val logger = getLogger(AgentToolManager::class)
 
@@ -55,15 +57,32 @@ class AgentToolManager constructor(
     val shell: AgentShell = AgentShell(baseDir)
 
     /** Enhanced coding shell for dev tools (git, cargo, mvn, npm, etc.) */
-    val codingShell: CodingAgentShell = CodingAgentShell(baseDir)
+    val codingShell: CodingAgentShell = CodingAgentShell(
+        baseDir = workspaceRoot,
+        // Independent/multi-tenant deployments can tighten defaults via system property:
+        // -Dbrowser4.agent.allowDestructive=false denies rm/del/mv/cp/kill etc.
+        allowDestructive = CodingWorkspace.allowDestructive,
+    )
     /** Enhanced coding file system for full filesystem access */
-    val codingFs: CodingAgentFileSystem = CodingAgentFileSystem(baseDir)
+    val codingFs: CodingAgentFileSystem = CodingAgentFileSystem(
+        workspaceRoot = workspaceRoot,
+        // Same tightening switch; note delete() additionally hard-protects the
+        // workspace root and VCS directories regardless of this flag.
+        allowExternalAccess = CodingWorkspace.allowExternalAccess,
+        allowDestructive = CodingWorkspace.allowDestructive,
+    )
     /** Composite target for the coding domain */
     val codingTarget: CodingToolExecutor.Target by lazy {
         CodingToolExecutor.Target(codingShell, codingFs)
     }
-    /** CLI tool executor for browser4-cli integration */
-    val cliExecutor: CliToolExecutor = CliToolExecutor()
+    /** CLI tool executor for browser4-cli integration (domain `b4`) */
+    val b4CliExecutor: B4CliToolExecutor = B4CliToolExecutor(
+        // M0: force CLI subprocesses onto THIS backend (BROWSER4_CLI_SERVER) so
+        // the CLI can never auto-start/restart a server. Set by the hosting app
+        // via `browser4.server.url` (system property or configuration).
+        backendBaseUrl = session.sessionConfig.get("browser4.server.url"),
+        defaultWorkingDir = workspaceRoot,
+    )
 
     val system: SystemToolExecutor = SystemToolExecutor(this)
 
@@ -104,9 +123,10 @@ class AgentToolManager constructor(
         "Coding" to "coding",
         "dev" to "coding",
 
-        "cli" to "cli",
-        "Cli" to "cli",
-        "browser4-cli" to "cli",
+        "cli" to "b4",
+        "Cli" to "b4",
+        "browser4-cli" to "b4",
+        "b4" to "b4",
     )
 
     private val _concreteExecutors: MutableMap<String, ToolExecutor> by lazy {
@@ -115,7 +135,7 @@ class AgentToolManager constructor(
             BrowserToolExecutor(),
             AgentToolExecutor(),
             CodingToolExecutor(),
-            cliExecutor,
+            b4CliExecutor,
             system,
             skills
         ).associateBy { it.domain }.toMutableMap()
@@ -127,8 +147,26 @@ class AgentToolManager constructor(
 
     val customTargets: Map<String, Any> get() = _customTargets
 
+    /**
+     * Callback invoked after every successful tool execution (including tools
+     * executed inside the native tool-calling loop). The owning agent uses it
+     * to count inner-loop executions for the finish-report false-completion
+     * guard (design §3.2).
+     */
+    var toolExecutionRecorder: ((domain: String, method: String) -> Unit)? = null
+
+    /** Notify the recorder (if wired) about one executed tool call. */
+    fun notifyToolExecuted(domain: String, method: String) {
+        toolExecutionRecorder?.invoke(domain, method)
+    }
+
+    /** Cancel all tracked CLI background jobs (agent close). */
+    fun closeCliJobs() {
+        b4CliExecutor.closeJobs()
+    }
+
     init {
-        // Register coding and cli tool specs so they appear in the LLM prompt.
+        // Register coding and b4 (browser4-cli) tool specs so they appear in the LLM prompt.
         // The ToolCallSpecificationRenderer merges these dynamically-registered
         // specs alongside the hardcoded ToolSpecification.TOOL_CALL_SPECIFICATION.
         ToolCallSpecificationRenderer.registerBuiltinDomainSpecs(
@@ -136,8 +174,8 @@ class AgentToolManager constructor(
             CodingToolExecutor().getToolSpecs().values.toList()
         )
         ToolCallSpecificationRenderer.registerBuiltinDomainSpecs(
-            "cli",
-            cliExecutor.getToolSpecs().values.toList()
+            "b4",
+            b4CliExecutor.getToolSpecs().values.toList()
         )
     }
 
@@ -289,18 +327,31 @@ class AgentToolManager constructor(
             "tab" -> executor.callFunctionOn(normalized, driver)
             "browser" -> {
                 // A closeTab without index/tabId means "close the current tab".
-                // Resolve it against the session-bound driver: browser.frontDriver
-                // is not reliably maintained (it dangles after the previously
-                // active tab is destroyed and depends on the bringToFront CDP
-                // round-trip), so a stale frontDriver makes closeTab silently
-                // destroy nothing.  The bound driver is what every other tool
-                // operates on, so it defines "current" here.
+                // The user-visible current tab is browser.frontDriver (tab-list
+                // marks it active); browser.frontDriver is not reliably
+                // maintained (it dangles after the previously active tab is
+                // destroyed and depends on the bringToFront CDP round-trip),
+                // so fall back to the session-bound driver and finally to the
+                // first live driver.  Each candidate is validated against the
+                // driver map — closing a dangling driver is a silent no-op
+                // that leaves every tab open.
                 val resolved = if (normalized.method == "closeTab" && !targetsSpecificTab(normalized.arguments)) {
-                    (driver as? AbstractWebDriver)?.let { current ->
+                    val browser = (driver as? AbstractWebDriver)?.browser
+                        ?: session.boundBrowser
+                    val target = (browser as? AbstractBrowser)?.let { b ->
+                        (b.frontDriver as? AbstractWebDriver)
+                            ?.takeIf { b.drivers.containsKey(it.guid) }
+                            ?: (driver as? AbstractWebDriver)
+                            ?.takeIf { b.drivers.containsKey(it.guid) }
+                            ?: b.listDrivers().firstOrNull()
+                    }
+                    if (target != null) {
                         normalized.copy(
-                            arguments = (normalized.arguments + ("tabId" to current.guid)).toMutableMap()
+                            arguments = (normalized.arguments + ("tabId" to target.guid)).toMutableMap()
                         )
-                    } ?: normalized
+                    } else {
+                        throw IllegalArgumentException("No browser tabs are currently open")
+                    }
                 } else normalized
                 executor.callFunctionOn(resolved, driver.browser)
             }
@@ -308,7 +359,7 @@ class AgentToolManager constructor(
             "shell" -> executor.callFunctionOn(normalized, shell)
             "agent" -> executor.callFunctionOn(normalized, agent)
             "coding" -> executor.callFunctionOn(normalized, codingTarget)
-            "cli" -> executor.callFunctionOn(normalized, codingShell)
+            "b4" -> executor.callFunctionOn(normalized, codingShell)
             "command" -> {
                 // TODO: the commandTarget is ai.platon.pulsar.agentic.tools.advanced.CommandRunner, consider make it built-in
                 //      and is registered in browser4-rest module
@@ -316,7 +367,17 @@ class AgentToolManager constructor(
                     ?: throw UnsupportedOperationException(
                         "Command domain '${normalized.domain}' requires a registered CommandRunner target."
                     )
-                executor.callFunctionOn(normalized, commandTarget)
+                // The command executor lives in CustomToolRegistry (browser4-rest), not
+                // among the built-in executors, so it must be dispatched directly —
+                // routing the target through the composite executor only produced
+                // "Unsupported receiver class UserCommandExecutor". Same pattern as
+                // the captcha branch below.
+                val commandExecutor = CustomToolRegistry.instance.get(normalized.domain)
+                if (commandExecutor != null) {
+                    commandExecutor.callFunctionOn(normalized, commandTarget)
+                } else {
+                    executor.callFunctionOn(normalized, commandTarget)
+                }
             }
             "system" -> executor.callFunctionOn(normalized, system)
             "skill" -> executor.callFunctionOn(normalized, skillTarget)
@@ -328,10 +389,30 @@ class AgentToolManager constructor(
             else -> {
                 val customExecutor = CustomToolRegistry.instance.get(normalized.domain)
                 if (customExecutor != null) {
-                    val target = _customTargets[normalized.domain]
-                        ?: throw UnsupportedOperationException(
-                            "Custom domain '${normalized.domain}' is registered but no target object is available.")
-                    customExecutor.callFunctionOn(normalized, target)
+                    // Resolve the receiver by the executor's declared receiverClass:
+                    // plugin tools operating on the current page (WebDriver receiver)
+                    // get the session-bound driver — the same receiver the captcha
+                    // branch passes. Domains with an explicitly registered target
+                    // (e.g. "command") fall back to the custom-target registry.
+                    val target = when {
+                        customExecutor.receiverClass == WebDriver::class -> driver
+                        else -> _customTargets[normalized.domain]
+                    }
+                    when {
+                        target != null -> customExecutor.callFunctionOn(normalized, target)
+                        // Service-backed executors resolve their own collaborators, so
+                        // a missing target is not a failure for them.
+                        !customExecutor.requiresReceiver -> {
+                            logger.debug(
+                                "Custom domain '{}' has no registered target; {} does not consume a receiver",
+                                normalized.domain, customExecutor::class.simpleName
+                            )
+                            customExecutor.callFunctionOn(normalized, Any())
+                        }
+                        else -> throw UnsupportedOperationException(
+                            "Custom domain '${normalized.domain}' is registered but no target object is available."
+                        )
+                    }
                 } else {
                     throw UnsupportedOperationException("Unsupported domain: ${normalized.domain}")
                 }
@@ -380,6 +461,22 @@ class AgentToolManager constructor(
         if (browser == null) {
             logger.warn("! switchTab did not return a WebDriver and no browser is bound")
             return
+        }
+
+        // BrowserToolExecutor.switchTab returns the resolved tab's GUID so the
+        // session binds the exact driver the executor brought to front.  The
+        // driver itself is not serializable, and re-resolving from `index`
+        // would hit listDrivers() again — whose iteration order is unstable
+        // (ConcurrentHashMap) and can differ from the resolver's earlier call,
+        // silently binding a different tab than the one that was switched to.
+        val returnedGuid = (evaluate.value as? Map<*, *>)?.get("guid")?.toString()
+        if (!returnedGuid.isNullOrBlank()) {
+            val resolved = browser.drivers[returnedGuid]
+            if (resolved != null) {
+                bindSwappedDriver(resolved)
+                return
+            }
+            logger.warn("! switchTab returned guid {} but no driver with that guid is registered", returnedGuid)
         }
 
         // Resolve from tabId (GUID) or index — the same arguments that

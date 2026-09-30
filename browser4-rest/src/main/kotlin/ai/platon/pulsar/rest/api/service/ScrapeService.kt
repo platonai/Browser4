@@ -6,12 +6,13 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlinkFactory
 import ai.platon.pulsar.agentic.tools.advanced.crawl.refreshed
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
-import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -247,6 +248,20 @@ class ScrapeService(
             0 -> responseCache.size
             else -> responseStatusIndex[statusCode]?.size ?: 0
         }
+    }
+
+    /**
+     * A lightweight swarm task summary for status reporting.
+     *
+     * @return total/done/running counts of all tracked swarm responses.
+     */
+    fun summary(): Map<String, Int> {
+        val all = responseCache.values
+        return mapOf(
+            "total" to all.size,
+            "done" to all.count { it.isDone },
+            "running" to all.count { !it.isDone },
+        )
     }
 
     private fun createScrapeHyperlink(

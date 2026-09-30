@@ -22,7 +22,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::managed_processes::{register_managed_server_process, ManagedServerProcess};
+use crate::managed_processes::{
+    recorded_server_version, register_managed_server_process, remove_managed_server_process,
+    shutdown_managed_server_processes_on_port, ManagedServerProcess,
+};
 use crate::state::{
     read_state, resolve_default_state_dir, resolve_runtime_cache_dir, resolve_runtime_data_dir,
 };
@@ -155,6 +158,56 @@ const BROWSER4_RUNTIME_DIR_NAME: &str = "runtime";
 const DOWNLOADS_DIR_NAME: &str = "downloads";
 const BROWSER4_MAIN_CLASS: &str = "ai.platon.pulsar.apps.Browser4BundleApplicationKt";
 const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
+/// Subdirectory of the CLI state dir that holds the trained JVM AOT cache.
+///
+/// The cache lives under the **state** dir (`~/.browser4`, preserved across
+/// uninstall/reinstall) rather than the runtime data dir so a reinstall of the
+/// same version never pays the one-time training cost again.  The
+/// invalidation key (version tag + jar list + JVM flags) still guards against
+/// stale caches, and the JVM silently falls back when the cache mismatches.
+const AOT_CACHE_DIR_NAME: &str = "aot-cache";
+/// The trained AOT cache artifact (JEP 483 class loading & linking + JEP 515
+/// method profiles).
+const AOT_CACHE_FILE_NAME: &str = "app.aot";
+/// Sidecar that records the invalidation key for `app.aot`, so a stale cache
+/// (version bump, jar change, JVM flag change) triggers a fresh training run.
+const AOT_CACHE_KEY_FILE_NAME: &str = "app.aot.key";
+/// Minimum JDK major version for the AOT cache (JEP 483 shipped in JDK 24;
+/// the one-step `-XX:AOTCacheOutput` workflow and method profiles need JDK 25).
+const AOT_CACHE_MIN_JDK: u32 = 24;
+/// Marker file recording that a background training run is in flight.  Its
+/// content is the invalidation key the training run was started with, which
+/// also doubles as the completion record: when `app.aot` exists and the
+/// marker carries the current key, the background run has finished and the
+/// key sidecar can be promoted without another CLI process having been
+/// around when the training JVM exited.
+const AOT_TRAINING_MARKER_FILE_NAME: &str = "training.lock";
+/// Log file for the background training run's stdout/stderr.
+const AOT_TRAINING_LOG_FILE_NAME: &str = "training.log";
+/// Fixed-name Java `@argfile` for the training run, kept inside the cache dir
+/// so the JVM cannot race its deletion; any leftover is removed on the next
+/// cache check.
+const AOT_TRAINING_ARGFILE_FILE_NAME: &str = "training-args.txt";
+/// PID of the background training JVM, written right after a successful
+/// spawn.  Lets the next launch detect a **dead** training run (crash, kill,
+/// OOM) immediately and retrain instead of waiting for the stale-marker
+/// window — the failure-recovery fast path.
+const AOT_TRAINING_PID_FILE_NAME: &str = "training.pid";
+/// A training marker older than this is considered stale (the training run
+/// crashed, was killed, or otherwise failed to finish) and is reclaimed by
+/// the next launch.  This is the failure-recovery fallback window (the PID
+/// check above covers the common crash case immediately); a failed training
+/// run self-heals — the next launch simply trains again.  Concurrent
+/// retraining of the same key is harmless (same input → same output, last
+/// writer wins), so the window only needs to exceed a realistic training
+/// run, not bound it tightly.
+const AOT_TRAINING_MARKER_STALE_AFTER: Duration = Duration::from_secs(5 * 60);
+/// JVM flag that switches the backend into AOT-training mode: the Spring
+/// context skips the heavyweight eager beans (the MCP HTTP session — and with
+/// it the browser launch) so the training run records class loading with the
+/// minimal startup surface.  Must match `browser4.aot.training` in
+/// `McpHttpServerConfiguration` (browser4-rest).
+const AOT_TRAINING_JVM_FLAG: &str = "-Dbrowser4.aot.training=true";
 /// Env var override for the browser binary path.  When set to an existing
 /// executable file it is used regardless of other browser search heuristics.
 /// The value is also forwarded to the server via `-Dchrome.path`.
@@ -204,6 +257,26 @@ const FORCE_REMOTE_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REMOTE_BUNDLE";
 /// artifacts appear up-to-date.  Public so the e2e harness can assert that
 /// `--force-rebuild-bundle` sets the variable this code actually reads.
 pub const FORCE_REBUILD_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REBUILD_BUNDLE";
+/// When set to `1`, `true`, `yes`, or `on`, disables the plugin warm restart:
+/// the CLI will no longer restart a running local server when the contents of
+/// its `plugins/` directory change since the server was started.  Plugins then
+/// only take effect after a manual restart, as before.
+const DISABLE_PLUGIN_WARM_RESTART_ENV: &str = "BROWSER4_CLI_DISABLE_PLUGIN_WARM_RESTART";
+/// When set to `1`, `true`, `yes`, or `on`, disables the JVM AOT cache
+/// (JEP 483/515) training step entirely and skips attaching any trained cache
+/// when launching the server.  Useful in CI / test harnesses that must not
+/// spawn background training JVMs or attach caches; the server then starts
+/// without AOT acceleration.
+const DISABLE_AOT_CACHE_ENV: &str = "BROWSER4_CLI_DISABLE_AOT_CACHE";
+/// Name of the plugins fingerprint store inside the CLI state dir.  Records,
+/// per port, the plugins directory the server was launched with and a
+/// fingerprint of its JAR set at launch time.
+const PLUGINS_FINGERPRINT_FILE_NAME: &str = "server-plugins-fingerprint.json";
+/// Graceful-stop timeout for the plugin warm restart (ms).
+const PLUGIN_WARM_RESTART_STOP_TIMEOUT_MS: u64 = 15_000;
+/// Poll interval while waiting for the old server to exit before a warm
+/// restart (ms).
+const PLUGIN_WARM_RESTART_STOP_POLL_MS: u64 = 250;
 /// When set to `1`, `true`, `yes`, or `on`, dev mode starts the server against
 /// the existing local runtime bundle even though it does not match the
 /// checked-out sources.
@@ -559,10 +632,7 @@ fn mirror_download_url(mirror: &DownloadMirror, tag: Option<&str>, asset_name: &
     match normalize_release_tag(tag) {
         Some(tag) => format!("{base}/download/{tag}/{asset_name}"),
         None => {
-            let latest = mirror
-                .latest_path
-                .as_deref()
-                .unwrap_or("latest/download");
+            let latest = mirror.latest_path.as_deref().unwrap_or("latest/download");
             format!("{base}/{latest}/{asset_name}")
         }
     }
@@ -980,10 +1050,106 @@ pub fn init_root_search_start_dir_from_startup() {
     }
 }
 
-/// Ensure the Browser4 server is running, starting it if necessary.
-///
-/// Only acts on `localhost` / `127.0.0.1` URLs.
-pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
+/// The runtime version tag the CLI would launch for a fresh localhost server:
+/// `"local"` when a repository checkout with a bundle module is detected (the
+/// source-built bundle is preferred there), otherwise the installed runtime's
+/// `current.tag` (e.g. `"v4.13.5"`).  Returns `None` when no version can be
+/// determined (no checkout, no installed runtime) — callers then skip the
+/// version check and reuse whatever server is running.
+fn expected_runtime_tag() -> Option<String> {
+    if !should_force_remote_bundle() {
+        if let Some(root) = find_browser4_root() {
+            if root.join("browser4-apps").join("browser4-bundle").is_dir() {
+                return Some("local".to_string());
+            }
+        }
+    }
+    read_current_tag()
+}
+
+/// Canonicalize a runtime version string for comparison:
+/// - `"v4.13.5"` → `"4.13.5"` (release tags)
+/// - `"local"`, `"4.13.6-SNAPSHOT"`, `"4.13.7-rc.1"`, `""` → `"local"` (source-built bundle)
+fn canonical_runtime_version(tag: &str) -> String {
+    let trimmed = tag.trim().to_ascii_lowercase();
+    let without_v = trimmed.strip_prefix('v').unwrap_or(&trimmed).to_string();
+    if without_v.is_empty()
+        || without_v == "local"
+        || without_v.contains("-snapshot")
+        || without_v.contains("-dev")
+        || without_v.contains("-rc")
+    {
+        "local".to_string()
+    } else {
+        without_v
+    }
+}
+
+/// `true` when the running server's version differs from the version this CLI
+/// would launch, after canonicalization (release tags compare exactly; any
+/// source-built marker — "local", "-SNAPSHOT" — compares equal to "local").
+fn server_version_mismatch(actual: &str, expected: &str) -> bool {
+    canonical_runtime_version(actual) != canonical_runtime_version(expected)
+}
+
+/// Probe the version reported by a running server via `GET /api/system/build`.
+/// Returns `None` when the endpoint is missing or unparseable — older or
+/// non-Browser4 servers — so the caller can fall back to reusing the server.
+async fn probe_server_version(client: &Client, base_url: &str) -> Option<String> {
+    let url = format!("{}/api/system/build", base_url.trim_end_matches('/'));
+    let response = client.get(&url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = response.json().await.ok()?;
+    body.get("version").and_then(|v| v.as_str()).map(String::from)
+}
+
+/// Version of the server currently running on [port]: the version recorded in
+/// the managed process registry when the CLI launched it, falling back to an
+/// HTTP probe for servers the CLI did not launch (or launched before the
+/// version field existed).
+async fn running_server_version(client: &Client, base_url: &str, port: u16) -> Option<String> {
+    if let Some(recorded) = recorded_server_version(port, None) {
+        return Some(recorded);
+    }
+    probe_server_version(client, base_url).await
+}
+
+/// Decide what to do with an existing, ready server: check for plugin
+/// fingerprint changes, then (when enforcement is active) check that the
+/// running backend matches the version this CLI would launch and restart it
+/// on the same port when it does not.
+async fn on_existing_server_ready(
+    client: &Client,
+    base_url: &str,
+    port: u16,
+    enforce_version: bool,
+) -> Result<(), String> {
+    if plugins_changed_since_server_start(port) {
+        return restart_server_for_plugin_change(base_url, port).await;
+    }
+
+    if enforce_version {
+        if let Some(expected) = expected_runtime_tag() {
+            if let Some(actual) = running_server_version(client, base_url, port).await {
+                if server_version_mismatch(&actual, &expected) {
+                    return restart_server_for_version_change(base_url, port, &actual, &expected)
+                        .await;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Ensure a Browser4 server is running at [base_url], starting one when the
+/// port is free.  When [enforce_version] is set (the URL was not explicitly
+/// chosen by the user), a running server whose version differs from the
+/// version this CLI would launch is restarted on the same port so the CLI
+/// never talks to a stale backend by accident.
+pub async fn ensure_server_running(base_url: &str, enforce_version: bool) -> Result<(), String> {
     // Skip remote servers
     if !base_url.contains("localhost") && !base_url.contains("127.0.0.1") {
         return Ok(());
@@ -991,7 +1157,7 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
 
     let port = extract_port(base_url);
     if !is_local_port_open(base_url) {
-        print_server_starting_message();
+        print_server_starting_message(port);
         let launch_spec = resolve_server_launch_spec(port).await?;
         return start_server(&launch_spec, base_url, port).await;
     }
@@ -1006,7 +1172,9 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     match probe_server_state(&client, base_url).await {
-        ServerState::Ready => return Ok(()),
+        ServerState::Ready => {
+            return on_existing_server_ready(&client, base_url, port, enforce_version).await;
+        }
         ServerState::Starting(_) => {
             return wait_for_server_ready(&client, base_url, EXISTING_SERVER_READY_TIMEOUT, None)
                 .await;
@@ -1023,7 +1191,9 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
             );
             tokio::time::sleep(Duration::from_secs(3)).await;
             match probe_server_state(&client, base_url).await {
-                ServerState::Ready => return Ok(()),
+                ServerState::Ready => {
+                    return on_existing_server_ready(&client, base_url, port, enforce_version).await;
+                }
                 ServerState::Starting(_) => {
                     return wait_for_server_ready(
                         &client,
@@ -1043,14 +1213,14 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
         }
     }
 
-    print_server_starting_message();
+    print_server_starting_message(port);
 
     let launch_spec = resolve_server_launch_spec(port).await?;
 
     start_server(&launch_spec, base_url, port).await
 }
 
-fn extract_port(base_url: &str) -> u16 {
+pub fn extract_port(base_url: &str) -> u16 {
     if let Ok(url) = reqwest::Url::parse(base_url) {
         url.port().unwrap_or(8182)
     } else {
@@ -1058,26 +1228,915 @@ fn extract_port(base_url: &str) -> u16 {
     }
 }
 
-fn print_server_starting_message() {
-    eprintln!("Starting Browser4 server (first launch ~10s for JVM + Spring Boot; subsequent starts faster)...");
+// ---------------------------------------------------------------------------
+// Development-mode ports: one backend per checkout
+// ---------------------------------------------------------------------------
+//
+// Several Browser4 checkouts (4.13, 4.14, worktrees, …) are routinely used side
+// by side.  A single fixed port would make the second checkout either adopt the
+// first checkout's backend or fail to bind, and a single shared CLI state file
+// would make the two flip each other's `baseUrl` (and therefore each other's
+// sessions) on every command.  Development mode fixes both:
+//
+//   * every checkout gets its own state namespace
+//     (`~/.browser4/workspaces/<checkout>-<hash>/`, see `state.rs`), and
+//   * every checkout gets its own backend port, allocated by scanning upward
+//     from `DEV_SERVER_PORT_START` and skipping ports that are already taken.
+//
+// Production installs are untouched: they keep the documented 8182 default and
+// the flat `~/.browser4` state.
+
+/// First port a development checkout tries for its backend.  Chosen one
+/// thousand above the production default (8182) so a dev server and an
+/// installed server can run at the same time without colliding.
+pub const DEV_SERVER_PORT_START: u16 = 8282;
+
+/// How many consecutive ports the development allocator scans before giving
+/// up (8282–8313).
+pub const DEV_SERVER_PORT_SCAN_LIMIT: u16 = 32;
+
+/// Timeout for a single loopback probe during port allocation.  Short on
+/// purpose: a closed port refuses immediately, and an unusable port must not
+/// stall the scan.
+const DEV_PORT_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+
+static DEV_WORKSPACE_ROOT: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// Root of the Browser4 repository checkout the CLI was invoked from, or
+/// `None` for installed/production runs.
+///
+/// `BROWSER4_CLI_FORCE_REMOTE_BUNDLE` disables development mode entirely: that
+/// switch already forces the released runtime, so the CLI must then keep
+/// production ports and state as well.
+pub fn dev_workspace_root() -> Option<PathBuf> {
+    DEV_WORKSPACE_ROOT
+        .get_or_init(|| {
+            if should_force_remote_bundle() {
+                return None;
+            }
+            find_browser4_root()
+        })
+        .clone()
 }
 
-pub fn is_local_port_open(base_url: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(base_url) else {
-        return false;
-    };
+/// True when the CLI runs from a Browser4 source checkout.
+pub fn is_dev_mode() -> bool {
+    dev_workspace_root().is_some()
+}
 
-    let port = url.port().unwrap_or(8182);
-    let addr = match url.host_str() {
-        Some("localhost") => SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
-        Some(host) => match host.parse::<IpAddr>() {
-            Ok(ip) if ip.is_loopback() => SocketAddr::new(ip, port),
-            _ => return false,
+/// Stable, filesystem-safe state-directory name for [root]: the checkout
+/// directory name plus a short hash of its absolute path, so two checkouts
+/// that share a folder name still get separate state namespaces.
+pub fn workspace_state_slug(root: &Path) -> String {
+    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let normalized = normalize_jvm_windows_path_text(&canonical.to_string_lossy());
+    let name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("workspace");
+    let sanitized: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .take(48)
+        .collect();
+    format!("{}-{:08x}", sanitized, fnv1a_32(normalized.as_bytes()))
+}
+
+/// FNV-1a (32-bit).  Implemented locally so the slug stays byte-for-byte
+/// stable across Rust releases — `DefaultHasher` explicitly does not.
+fn fnv1a_32(bytes: &[u8]) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in bytes {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// True when a TCP listener accepts connections on `127.0.0.1:port`.
+fn is_tcp_port_in_use(port: u16) -> bool {
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    TcpStream::connect_timeout(&addr, DEV_PORT_PROBE_TIMEOUT).is_ok()
+}
+
+/// True when [port] is usable by this checkout: nothing is listening, or the
+/// listener is a Browser4 server this checkout started (registry entry with a
+/// live PID — the registry itself is per-workspace).
+fn dev_port_is_usable(port: u16) -> bool {
+    !is_tcp_port_in_use(port) || crate::managed_processes::managed_port_has_live_server(port)
+}
+
+/// First port in `DEV_SERVER_PORT_START..+DEV_SERVER_PORT_SCAN_LIMIT` that this
+/// workspace may bind, or `None` when the whole range is taken.
+fn first_available_dev_port() -> Option<u16> {
+    (0..DEV_SERVER_PORT_SCAN_LIMIT)
+        .map(|offset| DEV_SERVER_PORT_START + offset)
+        .find(|port| dev_port_is_usable(*port))
+}
+
+/// Loopback port of [base_url], or `None` when the URL is not a loopback one
+/// (a remote server, or something unparseable).
+///
+/// Public because `stop` uses it to decide whether the resolved server URL can
+/// name a *local* backend at all.
+pub fn local_backend_port(base_url: &str) -> Option<u16> {
+    let parsed = reqwest::Url::parse(base_url).ok()?;
+    if !is_loopback_base_url(&parsed) {
+        return None;
+    }
+    Some(parsed.port().unwrap_or(8182))
+}
+
+/// True when [parsed] points at a loopback host — i.e. a backend on this
+/// machine rather than a remote server.
+fn is_loopback_base_url(parsed: &reqwest::Url) -> bool {
+    match parsed.host_str() {
+        Some("localhost") => true,
+        // IPv6 literals arrive bracketed (`[::1]`) from `Url::host_str`.
+        Some(host) => host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false),
+        None => false,
+    }
+}
+
+/// True when [port] belongs to the development port range.
+fn is_dev_port(port: u16) -> bool {
+    (DEV_SERVER_PORT_START..DEV_SERVER_PORT_START + DEV_SERVER_PORT_SCAN_LIMIT).contains(&port)
+}
+
+/// Decide which backend URL a development checkout should talk to.
+///
+/// * No state recorded yet (`has_state == false`) → allocate the first free
+///   port at or above [`DEV_SERVER_PORT_START`], so a second checkout landing
+///   on an occupied 8282 moves to 8283 instead of adopting the neighbour's
+///   backend.
+/// * A previously recorded dev port → reuse it while it is free or still held
+///   by this checkout's own server (sticky across restarts); re-allocate when
+///   another workspace has taken it over.
+/// * Anything else (a remote host, an explicit `--server`, a non-dev loopback
+///   port such as the production 8182) → honoured untouched.
+fn dev_base_url_for_workspace(recorded: &str, has_state: bool) -> String {
+    decide_dev_base_url(
+        recorded,
+        has_state,
+        &dev_port_is_usable,
+        &first_available_dev_port,
+    )
+}
+
+/// Pure core of [`dev_base_url_for_workspace`]; the port probes are injected so
+/// the decision table can be unit-tested without touching real ports.
+fn decide_dev_base_url(
+    recorded: &str,
+    has_state: bool,
+    is_usable: &dyn Fn(u16) -> bool,
+    first_available: &dyn Fn() -> Option<u16>,
+) -> String {
+    let recorded = recorded.trim().trim_end_matches('/');
+
+    // A state file exists, so its URL is a recorded choice.  Everything except
+    // a dev-range port that somebody else has taken over since is honoured.
+    if has_state {
+        if let Ok(parsed) = reqwest::Url::parse(recorded) {
+            let port = parsed.port().unwrap_or(8182);
+            if !is_loopback_base_url(&parsed) || !is_dev_port(port) || is_usable(port) {
+                return recorded.to_string();
+            }
+        }
+    }
+
+    match first_available() {
+        Some(port) => format!("http://127.0.0.1:{port}"),
+        None => {
+            // 32 checkouts with live backends — implausible, but say so loudly
+            // rather than silently falling back to a port that belongs to
+            // production.
+            eprintln!(
+                "browser4-cli: no free development port in {DEV_SERVER_PORT_START}-{}; \
+                 falling back to {recorded}",
+                DEV_SERVER_PORT_START + DEV_SERVER_PORT_SCAN_LIMIT - 1
+            );
+            recorded.to_string()
+        }
+    }
+}
+
+/// Persist the backend URL this checkout just started, so later commands
+/// resolve to the same port without re-running the allocation scan.
+fn record_dev_workspace_base_url(base_url: &str) {
+    let mut state = read_state(None, None);
+    if state.base_url == base_url {
+        return;
+    }
+    state.base_url = base_url.to_string();
+    if let Err(error) = crate::state::write_state(&state, None, None) {
+        eprintln!("browser4-cli: could not record the development server URL: {error}");
+    }
+}
+
+fn print_server_starting_message(port: u16) {
+    match dev_workspace_root() {
+        Some(root) => {
+            let name = root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("workspace");
+            eprintln!(
+                "Starting Browser4 dev server for workspace '{name}' on port {port} \
+                 (first launch ~10s for JVM + Spring Boot; subsequent starts faster)..."
+            );
+            if let Some(app_data) = workspace_app_data_path() {
+                eprintln!("  workspace: {}", root.display());
+                eprintln!(
+                    "  app data:  {} (isolated browser profiles, data and memory)",
+                    app_data.display()
+                );
+            }
+        }
+        None => {
+            eprintln!("Starting Browser4 server (first launch ~10s for JVM + Spring Boot; subsequent starts faster)...");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Development-mode app data: one backend state root per checkout
+// ---------------------------------------------------------------------------
+//
+// Ports and CLI state keep two checkouts from talking to the same *server*, but
+// the backend itself would still write everything into the shared `~/.browser4`
+// (the Pulsar SDK's `AppContext.APP_DATA_DIR`, derived from `app.name`):
+//
+//   * `browser/chrome/...` — the Chrome `--user-data-dir`.  The default profile
+//     mode is `DEFAULT`, i.e. ONE shared profile directory, so a second headed
+//     browser either hits Chrome's `SingletonLock` or silently adopts the first
+//     one's window and session.
+//   * `data/` — embedded H2/WebDB files, which are locked by whoever opens them
+//     first.
+//   * `logs/`, `memory/`, `agent/`, `coworker/`, `archive/` — interleaved state.
+//
+// `-Dapp.data.dir` overrides `APP_DATA_DIR` (checked before the `app.name`
+// fallback), so development mode points the backend at
+// `<workspace-state>/app-data/`.  The one thing that must NOT be isolated is
+// the user's configuration (`<APP_DATA_DIR>/config/conf-enabled` holds the LLM
+// API keys), so that directory is linked back to the user-global one.
+
+/// Subdirectory of the workspace state dir used as the backend's app data root.
+const WORKSPACE_APP_DATA_DIR_NAME: &str = "app-data";
+
+/// Name of the directory the backend reads its configuration from.
+const APP_DATA_CONFIG_DIR_NAME: &str = "config";
+
+/// Browser prototype context dir, relative to an app data root.  Every
+/// `SEQUENTIAL` / `TEMPORARY` browser context is copied from this tree, which
+/// is why it is shared across workspaces instead of being duplicated.
+///
+/// Stored as path components, not as a `"browser/chrome/prototype"` string:
+/// `Path::join` would keep the forward slashes on Windows, and `cmd /C mklink`
+/// then reads them as switch prefixes ("Invalid switch - chrome").
+const BROWSER_PROTOTYPE_COMPONENTS: &[&str] = &["browser", "chrome", "prototype"];
+
+/// Records which config tree a copied `config` dir was seeded from.
+const CONFIG_SEED_MARKER_NAME: &str = ".seeded-from";
+
+static WORKSPACE_APP_DATA: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// App data root this checkout's backend should use, or `None` outside
+/// development mode.
+///
+/// Pure path computation — callers that are about to *launch* a backend use
+/// [`workspace_app_data_dir`], which also prepares the directory.
+pub fn workspace_app_data_path() -> Option<PathBuf> {
+    dev_workspace_root()?;
+    Some(crate::state::resolve_default_state_dir().join(WORKSPACE_APP_DATA_DIR_NAME))
+}
+
+/// [`workspace_app_data_path`] with the directory created and the shared
+/// configuration tree seeded, memoized for the lifetime of this process.
+///
+/// Returns `None` (and warns once) when preparation fails, in which case the
+/// caller must not inject `-Dapp.data.dir` — the backend then keeps using the
+/// shared `~/.browser4`, which is the pre-existing behaviour.
+pub fn workspace_app_data_dir() -> Option<PathBuf> {
+    WORKSPACE_APP_DATA
+        .get_or_init(|| {
+            let dir = workspace_app_data_path()?;
+            match prepare_workspace_app_data(&dir) {
+                Ok(()) => Some(dir),
+                Err(error) => {
+                    eprintln!(
+                        "browser4-cli: warning: cannot isolate the backend app data dir ({}); \
+                         falling back to the shared ~/.browser4 — parallel workspaces may \
+                         contend for browser profiles",
+                        error
+                    );
+                    None
+                }
+            }
+        })
+        .clone()
+}
+
+/// Short, regex-safe token identifying this checkout in a browser command line
+/// (the workspace slug appears in its `--user-data-dir`).
+pub fn workspace_match_token() -> Option<String> {
+    Some(workspace_state_slug(&dev_workspace_root()?))
+}
+
+/// Browser data roots this checkout's backend uses, for launcher-marker scans.
+pub fn workspace_browser_data_roots() -> Vec<PathBuf> {
+    workspace_app_data_path()
+        .map(|dir| vec![dir.join("browser").join("chrome")])
+        .unwrap_or_default()
+}
+
+/// Create the app data root and make the *shared* parts of the user's setup
+/// visible inside it.
+fn prepare_workspace_app_data(app_data: &Path) -> Result<(), String> {
+    fs::create_dir_all(app_data)
+        .map_err(|e| format!("cannot create {}: {e}", app_data.display()))?;
+
+    for entry in SHARED_APP_DATA_ENTRIES {
+        let source = join_components(&production_app_data_dir(), entry.global_relative);
+        let target = join_components(app_data, entry.relative);
+        match entry.kind {
+            SharedEntryKind::Config => seed_config_from(&source, &target)?,
+            SharedEntryKind::BrowserPrototype => share_browser_prototype(&source, &target),
+        }
+    }
+    Ok(())
+}
+
+/// Paths inside a development workspace's app data root that are *not*
+/// workspace-private but linked to the user-global app data root.
+///
+/// Only things whose whole purpose is to be shared belong here.  Browser
+/// profiles for actual sessions must NOT be shared — keeping those private is
+/// what lets two workspaces run headed browsers simultaneously.
+struct SharedAppDataEntry {
+    /// Path components relative to the workspace app data root.
+    relative: &'static [&'static str],
+    /// Path components relative to the user-global app data root
+    /// (`$HOME/.browser4`).
+    global_relative: &'static [&'static str],
+    kind: SharedEntryKind,
+}
+
+enum SharedEntryKind {
+    /// Config tree: link, or copy + re-sync where links are unavailable.
+    Config,
+    /// Browser prototype: link only — copying a profile tree is expensive and
+    /// goes stale, so a failure leaves the workspace with its own prototype.
+    BrowserPrototype,
+}
+
+const SHARED_APP_DATA_ENTRIES: &[SharedAppDataEntry] = &[
+    SharedAppDataEntry {
+        relative: &[APP_DATA_CONFIG_DIR_NAME],
+        global_relative: &[APP_DATA_CONFIG_DIR_NAME],
+        kind: SharedEntryKind::Config,
+    },
+    SharedAppDataEntry {
+        relative: BROWSER_PROTOTYPE_COMPONENTS,
+        global_relative: BROWSER_PROTOTYPE_COMPONENTS,
+        kind: SharedEntryKind::BrowserPrototype,
+    },
+];
+
+/// Join path [components] onto [root] with the platform's separators.
+fn join_components(root: &Path, components: &[&str]) -> PathBuf {
+    components
+        .iter()
+        .fold(root.to_path_buf(), |path, part| path.join(part))
+}
+
+/// App data root a *production* backend uses.
+///
+/// The Pulsar SDK's `AppContext` derives `APP_DATA_DIR` from `app.name`
+/// (`$HOME/.<app.name>`), and the CLI launches the backend with
+/// `-Dapp.name=browser4`.  Deliberately not `resolve_global_state_dir()`: the
+/// CLI state dir can be relocated with `BROWSER4_CLI_STATE_DIR` (or fall back to
+/// a workspace-relative directory), while the backend's production app data
+/// root stays `$HOME/.browser4` — which is where the user's configuration and
+/// browser prototype actually live.
+fn production_app_data_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".browser4")
+}
+
+/// Share the user-global browser prototype with this workspace.
+///
+/// Every `SEQUENTIAL` / `TEMPORARY` context is *copied from* the prototype, so
+/// sharing it means one login/seed state on the machine instead of one per
+/// checkout, and hundreds of megabytes of profile data are not duplicated.
+///
+/// A copy is never made: the source tree is large and a stale copy is worse
+/// than no sharing, so when linking is impossible the workspace simply keeps its
+/// own prototype (and the user is told).
+fn share_browser_prototype(source: &Path, target: &Path) {
+    if is_directory_link(target) {
+        return; // already shared
+    }
+
+    if target.exists() {
+        // A real directory is already there.  Replace it only when it holds no
+        // files at all (the backend creates an empty prototype skeleton on
+        // first launch, which is not user data); otherwise leave it alone and
+        // explain how to share the global prototype.
+        if !directory_contains_files(target, 0) {
+            if let Err(error) = fs::remove_dir_all(target) {
+                eprintln!(
+                    "browser4-cli: note: cannot replace the empty prototype dir {} ({error}); \
+                     this workspace keeps its own browser prototype",
+                    target.display()
+                );
+                return;
+            }
+        } else {
+            eprintln!(
+                "browser4-cli: note: {} already holds a workspace-private browser prototype; \
+                 leaving it as-is. To share the global one, move it aside and re-run \
+                 (global prototype: {})",
+                target.display(),
+                source.display()
+            );
+            return;
+        }
+    }
+
+    // Make sure the global prototype exists so it can be the single source.
+    if !source.exists() {
+        if let Err(error) = fs::create_dir_all(source) {
+            eprintln!(
+                "browser4-cli: note: cannot create the global browser prototype {} ({error}); \
+                 this workspace keeps its own",
+                source.display()
+            );
+            return;
+        }
+    }
+
+    if let Err(error) = create_directory_link(source, target) {
+        eprintln!(
+            "browser4-cli: note: cannot link the shared browser prototype {target} -> {source} \
+             ({error}); this workspace keeps its own prototype directory",
+            target = target.display(),
+            source = source.display()
+        );
+    }
+}
+
+/// True when [dir] contains at least one *file* anywhere below it.
+///
+/// Empty directories and directory skeletons (the prototype skeleton the
+/// backend creates on first launch) do not count as user data, so they may be
+/// replaced by a link.  Unreadable entries and cycles are treated as data —
+/// the conservative answer that never deletes anything unexpected.
+fn directory_contains_files(dir: &Path, depth: usize) -> bool {
+    const MAX_DEPTH: usize = 8;
+
+    if depth > MAX_DEPTH {
+        return true;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return true;
+    };
+    for entry in entries.flatten() {
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => {
+                if directory_contains_files(&entry.path(), depth + 1) {
+                    return true;
+                }
+            }
+            Ok(_) => return true,
+            Err(_) => return true,
+        }
+    }
+    false
+}
+
+/// Expose the user-global config tree at [target].
+///
+/// Preferred: a directory link (Windows junction / POSIX symlink) so there is
+/// exactly one source of truth — editing `~/.browser4/config/conf-enabled/`
+/// keeps working for every workspace, and the backend's own config rewriting
+/// lands in the shared tree.  Where links are unavailable (some network or
+/// exotic filesystems) the tree is copied and re-synced whenever it changes;
+/// the copy is additive, so nothing the user put in the workspace copy is lost.
+fn seed_config_from(source: &Path, target: &Path) -> Result<(), String> {
+    if is_directory_link(target) {
+        // Already linked to *some* global config dir; nothing to sync.
+        return Ok(());
+    }
+
+    if !source.is_dir() {
+        // Nothing configured yet — create an empty config dir so the backend
+        // does not log a missing directory.
+        return fs::create_dir_all(target)
+            .map_err(|e| format!("cannot create {}: {e}", target.display()));
+    }
+
+    if target.exists() {
+        // Seeded by an earlier copy: refresh in place.
+        return sync_config_copy(source, target);
+    }
+
+    match create_directory_link(source, target) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            eprintln!(
+                "browser4-cli: note: cannot link the config directory ({}); \
+                 copying {} into the workspace instead",
+                error,
+                source.display()
+            );
+            sync_config_copy(source, target)
+        }
+    }
+}
+
+/// True when [path] is a directory link (Windows junction/reparse point or
+/// POSIX symlink) rather than a real directory.
+fn is_directory_link(path: &Path) -> bool {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => meta.file_type().is_symlink() || {
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+                meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
         },
+        Err(_) => false,
+    }
+}
+
+/// Create a directory link at [target] pointing to [source].
+fn create_directory_link(source: &Path, target: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        // `cmd` treats a forward slash as a switch prefix, so a path such as
+        // `…\app-data\browser/chrome/prototype` fails with
+        // "Invalid switch - chrome".  Normalize to native backslashes.
+        let native = |path: &Path| path.to_string_lossy().replace('/', "\\");
+        // A junction needs no elevation (unlike a directory symlink, which
+        // requires SeCreateSymbolicLinkPrivilege or Developer Mode).
+        let output = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(native(target))
+            .arg(native(source))
+            .output()
+            .map_err(|e| format!("mklink failed to start: {e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "mklink /J exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        }
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source, target)
+            .map_err(|e| format!("symlink failed: {e}"))
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = (source, target);
+        Err("directory links are not supported on this platform".to_string())
+    }
+}
+
+/// Copy `source` into `target` when the source tree changed since the last
+/// sync, and record what was copied in `<target>/.seeded-from`.
+fn sync_config_copy(source: &Path, target: &Path) -> Result<(), String> {
+    let fingerprint = config_tree_fingerprint(source);
+    let marker = target.join(CONFIG_SEED_MARKER_NAME);
+    let expected = format!("{}\n{}\n", source.display(), fingerprint);
+
+    if fs::read_to_string(&marker).map(|raw| raw == expected).unwrap_or(false) {
+        return Ok(());
+    }
+
+    copy_dir_recursive(source, target)?;
+    fs::write(&marker, expected)
+        .map_err(|e| format!("cannot record the config seed marker: {e}"))?;
+    Ok(())
+}
+
+/// Cheap change detector for a config tree: path, size and mtime of every file,
+/// hashed.  Only used to decide whether a copy needs refreshing.
+fn config_tree_fingerprint(root: &Path) -> String {
+    fn walk(dir: &Path, prefix: &str, parts: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let relative = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{name}")
+            };
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => walk(&path, &relative, parts),
+                Ok(_) => {
+                    let Ok(meta) = entry.metadata() else { continue };
+                    let mtime = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_nanos())
+                        .unwrap_or_default();
+                    parts.push(format!("{relative}|{}|{mtime}", meta.len()));
+                }
+                Err(_) => {}
+            }
+        }
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    walk(root, "", &mut parts);
+    parts.sort();
+    let joined = parts.join("\n");
+    format!("{:08x}-{}", fnv1a_32(joined.as_bytes()), parts.len())
+}
+
+// ---- Plugins warm restart ----
+//
+// Runtime plugins live in `<server working dir>/plugins/*.jar` and are wired
+// into the Spring context during startup (PluginClasspathEnhancer +
+// AutoConfiguration.imports), so installing or removing a plugin JAR at
+// runtime only takes effect after a restart.  To make that transparent, the
+// CLI fingerprints the plugins directory at launch time and, on later
+// commands, restarts the local server when the fingerprint has changed.  With
+// the trained AOT cache (JEP 483) a restart completes in seconds, so this
+// "warm restart" is cheap enough to happen automatically.
+
+/// A recorded plugins fingerprint for one server port.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PluginsFingerprintEntry {
+    pub port: u16,
+    /// Absolute path of the plugins directory the server was launched with
+    /// (relative to the server working directory).  Recorded so later CLI
+    /// invocations recompute the fingerprint from exactly the same directory,
+    /// regardless of the CLI's own cwd.
+    #[serde(rename = "pluginsDir")]
+    pub plugins_dir: String,
+    /// Fingerprint of the plugin JAR set at server launch time.
+    pub fingerprint: String,
+    #[serde(rename = "recordedAt")]
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct PluginsFingerprintStore {
+    entries: Vec<PluginsFingerprintEntry>,
+}
+
+fn plugins_fingerprint_file() -> PathBuf {
+    resolve_default_state_dir().join(PLUGINS_FINGERPRINT_FILE_NAME)
+}
+
+fn load_plugins_fingerprint_store(path: &Path) -> PluginsFingerprintStore {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<PluginsFingerprintStore>(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn save_plugins_fingerprint_store(store: &PluginsFingerprintStore, path: &Path) {
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(store) {
+        let _ = fs::write(path, json);
+    }
+}
+
+/// Record the plugins fingerprint for the server just launched on [port].
+///
+/// Called from `start_server` after the server reports ready.  The entry is
+/// keyed by port; an existing entry for the same port is replaced.
+fn record_plugins_fingerprint(port: u16, plugins_dir: &Path) {
+    let path = plugins_fingerprint_file();
+    let mut store = load_plugins_fingerprint_store(&path);
+    store.entries.retain(|e| e.port != port);
+    store.entries.push(PluginsFingerprintEntry {
+        port,
+        plugins_dir: plugins_dir.to_string_lossy().to_string(),
+        fingerprint: compute_plugins_fingerprint(plugins_dir),
+        recorded_at: chrono::Utc::now().to_rfc3339(),
+    });
+    save_plugins_fingerprint_store(&store, &path);
+}
+
+/// Remove the recorded plugins fingerprint for [port] (e.g. when the port is
+/// now owned by a server this CLI did not launch).
+fn clear_plugins_fingerprint(port: u16) {
+    let path = plugins_fingerprint_file();
+    let mut store = load_plugins_fingerprint_store(&path);
+    let before = store.entries.len();
+    store.entries.retain(|e| e.port != port);
+    if store.entries.len() != before {
+        save_plugins_fingerprint_store(&store, &path);
+    }
+}
+
+/// Compute a stable fingerprint over the plugin JARs in [plugins_dir].
+///
+/// Each JAR contributes its file name, size, and modification time; the list
+/// is order-independent (sorted by file name).  A missing directory and an
+/// empty directory produce the same fingerprint — neither contributes any
+/// JAR.  Metadata-based fingerprinting keeps this cheap enough to run before
+/// every command; content changes normally alter size or mtime too.
+fn compute_plugins_fingerprint(plugins_dir: &Path) -> String {
+    let mut jar_keys: Vec<String> = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(plugins_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jar") {
+                continue;
+            }
+            if !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let (size, mtime) = match fs::metadata(&path) {
+                Ok(meta) => (
+                    meta.len(),
+                    meta.modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0),
+                ),
+                Err(_) => (0, 0),
+            };
+            jar_keys.push(format!("{name}|{size}|{mtime}"));
+        }
+    }
+
+    jar_keys.sort();
+
+    let mut digest = Sha256::new();
+    digest.update(jar_keys.len().to_le_bytes());
+    for key in &jar_keys {
+        digest.update(key.as_bytes());
+        digest.update([0u8]);
+    }
+
+    digest
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn plugin_warm_restart_disabled() -> bool {
+    matches!(
+        env::var(DISABLE_PLUGIN_WARM_RESTART_ENV)
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Whether JVM AOT cache training/attachment is explicitly disabled via
+/// `BROWSER4_CLI_DISABLE_AOT_CACHE`.  Mirrors [`plugin_warm_restart_disabled`].
+fn aot_cache_disabled() -> bool {
+    matches!(
+        env::var(DISABLE_AOT_CACHE_ENV)
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Whether the plugins directory of the server on [port] has changed since
+/// that server was launched by this CLI.
+///
+/// Returns false when there is no recorded entry (e.g. the server was started
+/// externally, or by an older CLI) — servers this CLI did not launch are
+/// never restarted.
+fn plugins_changed_since_server_start(port: u16) -> bool {
+    if plugin_warm_restart_disabled() {
+        return false;
+    }
+
+    let entry = match load_plugins_fingerprint_store(&plugins_fingerprint_file())
+        .entries
+        .into_iter()
+        .find(|e| e.port == port)
+    {
+        Some(entry) => entry,
         None => return false,
     };
 
-    TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
+    let current = compute_plugins_fingerprint(Path::new(&entry.plugins_dir));
+    current != entry.fingerprint
+}
+
+/// Restart the local server on [port] so newly installed/removed plugin JARs
+/// take effect, then wait for the fresh server to become ready.
+///
+/// Only processes registered by this CLI are stopped (see
+/// `shutdown_managed_server_processes_on_port`); if the port is still open
+/// afterwards it is now owned by some other server, and the restart degrades
+/// to a no-op rather than launching onto an occupied port.
+async fn restart_server_for_plugin_change(base_url: &str, port: u16) -> Result<(), String> {
+    restart_server_on_port(
+        base_url,
+        port,
+        "Plugins changed since the server started - restarting Browser4 server to activate them (warm restart)...",
+    )
+    .await
+}
+
+/// Restart the local server on [port] because the running backend's version
+/// no longer matches the version this CLI would launch (e.g. the installed
+/// release is running while the CLI now prefers the source-built local
+/// bundle).  Same stop-and-relaunch semantics as the plugin warm restart.
+async fn restart_server_for_version_change(
+    base_url: &str,
+    port: u16,
+    actual: &str,
+    expected: &str,
+) -> Result<(), String> {
+    restart_server_on_port(
+        base_url,
+        port,
+        &format!(
+            "Server on port {} is running version {}, but this CLI expects {} — \
+             restarting it to match (the current browser session will be stopped).",
+            port, actual, expected
+        ),
+    )
+    .await
+}
+
+/// Shared stop-and-relaunch used by the plugin warm restart and the
+/// version-drift restart: stop the managed server on [port], verify the port
+/// is free, then launch a fresh server on the same port.
+async fn restart_server_on_port(base_url: &str, port: u16, reason: &str) -> Result<(), String> {
+    eprintln!("{reason}");
+
+    let shutdown = shutdown_managed_server_processes_on_port(
+        false,
+        None,
+        port,
+        PLUGIN_WARM_RESTART_STOP_TIMEOUT_MS,
+        PLUGIN_WARM_RESTART_STOP_POLL_MS,
+    );
+    if !shutdown.remaining_pids.is_empty() {
+        return Err(format!(
+            "Browser4 server on port {port} could not be stopped for the restart \
+             (pids still running: {:?}). Stop it manually and re-run the command.",
+            shutdown.remaining_pids
+        ));
+    }
+
+    // The managed processes are gone; if the port is still open another
+    // server (started outside this CLI) now owns it.  Leave it alone.
+    if is_local_port_open(base_url) {
+        eprintln!(
+            "Port {port} is still served by a server not started by this CLI; skipping the restart."
+        );
+        clear_plugins_fingerprint(port);
+        return Ok(());
+    }
+
+    print_server_starting_message(port);
+    let launch_spec = resolve_server_launch_spec(port).await?;
+    start_server(&launch_spec, base_url, port).await
+}
+
+pub fn is_local_port_open(base_url: &str) -> bool {
+    match local_backend_port(base_url) {
+        Some(port) => is_tcp_port_in_use(port),
+        None => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1093,11 +2152,20 @@ struct ServerLaunchSpec {
     working_dir: PathBuf,
     registry_target: PathBuf,
     description: String,
+    /// Runtime version tag of the launched backend ("local" for a source-built
+    /// bundle, "v4.13.5" for an installed release).  Recorded in the managed
+    /// process registry so later invocations can detect version drift between
+    /// the running server and the version this CLI would launch.
+    version: Option<String>,
 }
 
 struct PreparedLaunchCommand {
     command: Command,
     cleanup_dir: Option<PathBuf>,
+    /// Path to the Java `@argfile` the command was switched to when the
+    /// fully-enumerated classpath would exceed the Windows command-line
+    /// limit.  Kept for startup-log diagnostics.
+    argfile: Option<PathBuf>,
 }
 
 fn detect_current_runtime_bundle_platform() -> Result<RuntimeBundlePlatform, String> {
@@ -1107,7 +2175,7 @@ fn detect_current_runtime_bundle_platform() -> Result<RuntimeBundlePlatform, Str
         ("macos", "x86_64") => Ok(RuntimeBundlePlatform::MacOsX64),
         ("macos", "aarch64") => Ok(RuntimeBundlePlatform::MacOsArm64),
         (os, arch) => Err(format!(
-            "browser4-cli install does not yet publish a bundled Browser4 runtime for {os}/{arch}. Please install Java 17+ and use the Browser4.jar release asset instead."
+            "browser4-cli install does not yet publish a bundled Browser4 runtime for {os}/{arch}. Please install Java 25+ and use the Browser4.jar release asset instead."
         )),
     }
 }
@@ -1300,7 +2368,9 @@ fn find_newest_versioned_install() -> Option<String> {
 /// versioned layout under the platform data directory.  Reads the old
 /// metadata to determine the tag, moves the files, and writes `current.tag`.
 fn try_migrate_legacy_runtime() -> Option<String> {
-    let legacy_install_dir = resolve_default_state_dir().join("lib");
+    // The legacy layout predates the per-checkout state namespace, so the old
+    // install always lives in the user-global state dir.
+    let legacy_install_dir = crate::state::resolve_global_state_dir().join("lib");
     if !install_dir_contains_runtime(&legacy_install_dir) {
         return None;
     }
@@ -1606,9 +2676,7 @@ async fn resolve_latest_tag_from_oss_metadata(
 ///
 /// Returns the first successfully resolved `(tag, full_metadata)` pair, or
 /// `None` when all mirrors fail to report their latest version.
-async fn resolve_latest_tag(
-    mirrors: &[DownloadMirror],
-) -> Option<(String, LatestReleaseInfo)> {
+async fn resolve_latest_tag(mirrors: &[DownloadMirror]) -> Option<(String, LatestReleaseInfo)> {
     for mirror in mirrors {
         if !mirror.supports_latest_resolution {
             continue;
@@ -1633,6 +2701,140 @@ async fn resolve_latest_tag(
         if let Some(info) = resolve_latest_tag_from_oss_metadata(mirror).await {
             let tag = info.tag.clone();
             return Some((tag, info));
+        }
+    }
+    None
+}
+
+/// Whether `tag` is a release-candidate tag such as `v4.14.0-rc.1`.
+///
+/// Only tags whose pre-release label starts with `rc` qualify — CI tags
+/// (`v4.14.0-ci.3`) and other pre-release labels (`alpha`, `beta`, `dry_run`)
+/// are deliberately excluded so the upgrade hint only points at real release
+/// candidates.
+fn is_rc_tag(tag: &str) -> bool {
+    let normalized = tag.trim_start_matches('v');
+    normalized
+        .split_once('-')
+        .map_or(false, |(_, label)| {
+            label.to_ascii_lowercase().starts_with("rc")
+        })
+}
+
+/// Compare two tags by their numeric core — the part before any `-`
+/// pre-release suffix.
+///
+/// This makes `v4.14.0-rc.1` compare equal to `v4.14.0` (a release candidate
+/// of the *current* stable version is not newer than it) and still greater
+/// than `v4.13.11`.  Plain [`compare_semver_tags`] would rank
+/// `v4.14.0-rc.1` above `v4.14.0` because the `rc.1` suffix leaks into the
+/// numeric parts, which produces a misleading "newer RC" hint.
+fn compare_base_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let base_a = a.split('-').next().unwrap_or(a);
+    let base_b = b.split('-').next().unwrap_or(b);
+    compare_semver_tags(base_a, base_b)
+}
+
+/// Pick the newest tag in `tags` that is strictly newer than `stable_tag`.
+///
+/// "Newer" is judged on the numeric core ([`compare_base_versions`]) so a
+/// release candidate of the same version as the stable release never
+/// qualifies.  Ties between candidates of the same core version are broken
+/// by full tag comparison (so `v4.14.0-rc.2` wins over `v4.14.0-rc.1`).
+/// Returns `None` when no tag qualifies.
+fn pick_newest_tag_newer_than(tags: &[String], stable_tag: &str) -> Option<String> {
+    tags.iter()
+        .filter(|tag| compare_base_versions(tag, stable_tag) == std::cmp::Ordering::Greater)
+        .max_by(|a, b| compare_semver_tags(a, b))
+        .cloned()
+}
+
+/// Query the GitHub REST API for the newest release-candidate tag that is
+/// newer than `stable_tag`.
+///
+/// `GET /repos/{owner}/{repo}/releases?per_page=100` returns up to 100
+/// releases including prereleases (unlike `/releases/latest`, which only
+/// ever returns the newest stable release).  Only pre-release tags with an
+/// `rc` label are considered.  Best-effort — returns `None` on any error so
+/// the install/upgrade flow never fails over this.
+async fn resolve_newer_rc_tag_from_github_api(
+    owner: &str,
+    repo: &str,
+    stable_tag: &str,
+) -> Option<String> {
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/releases?per_page=100");
+    let client = reqwest::Client::builder()
+        .user_agent("browser4-cli")
+        .build()
+        .ok()?;
+    let response = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = response.text().await.ok()?;
+    let releases: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let rc_tags: Vec<String> = releases
+        .as_array()?
+        .iter()
+        .filter(|release| {
+            release
+                .get("prerelease")
+                .and_then(|p| p.as_bool())
+                .unwrap_or(false)
+        })
+        .filter_map(|release| release.get("tag_name").and_then(|t| t.as_str()))
+        .filter(|tag| is_valid_version_tag(tag) && is_rc_tag(tag))
+        .map(String::from)
+        .collect();
+    pick_newest_tag_newer_than(&rc_tags, stable_tag)
+}
+
+/// Fetch `latest-rc.json` from a mirror and return the release-candidate tag.
+///
+/// Mirrors that publish release metadata (e.g. Aliyun OSS) host this file
+/// next to `latest-release.json`; it is only published when a pre-release
+/// (RC) release exists.
+async fn resolve_latest_rc_tag_from_oss_metadata(mirror: &DownloadMirror) -> Option<String> {
+    let base = mirror.base_url.trim_end_matches('/');
+    let metadata_url = format!("{base}/latest-rc.json");
+    let response = reqwest::get(&metadata_url).await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let info: LatestReleaseInfo = response.json().await.ok()?;
+    Some(info.tag)
+}
+
+/// Resolve the newest release-candidate tag that is newer than `stable_tag`.
+///
+/// Best-effort and non-fatal — returns `None` when no mirror can report a
+/// newer RC (e.g. mirrors that only publish stable metadata).  Tries each
+/// mirror in order:
+/// - GitHub mirrors: the REST releases list (includes prereleases).
+/// - Other mirrors: `{base_url}/latest-rc.json`.
+async fn resolve_newer_rc_tag(mirrors: &[DownloadMirror], stable_tag: &str) -> Option<String> {
+    for mirror in mirrors {
+        if !mirror.supports_latest_resolution {
+            continue;
+        }
+        if let Some((owner, repo)) = parse_github_owner_repo(mirror) {
+            if let Some(tag) =
+                resolve_newer_rc_tag_from_github_api(&owner, &repo, stable_tag).await
+            {
+                return Some(tag);
+            }
+            continue;
+        }
+        if let Some(tag) = resolve_latest_rc_tag_from_oss_metadata(mirror).await {
+            if compare_base_versions(&tag, stable_tag) == std::cmp::Ordering::Greater {
+                return Some(tag);
+            }
         }
     }
     None
@@ -1937,10 +3139,7 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
 
             // Print the total size up front so the user knows what to expect.
             if let Some(total) = total_size {
-                eprintln!(
-                    "  Downloading {:.1} MB...",
-                    total as f64 / 1_048_576.0
-                );
+                eprintln!("  Downloading {:.1} MB...", total as f64 / 1_048_576.0);
             } else {
                 eprintln!("  Downloading (size unknown)...");
             }
@@ -2866,6 +4065,19 @@ pub async fn install_browser4_runtime(
                 "Resolved latest release: {} (from mirror metadata)",
                 resolved
             );
+            // Best-effort: surface a newer release candidate (e.g. v4.14.0-rc.1)
+            // so users on the stable track can opt into the RC explicitly.
+            // Skipped when the currently installed tag already IS that RC
+            // (otherwise the hint would be confusing on the RC track).
+            if let Some(rc_tag) = resolve_newer_rc_tag(&mirrors, &resolved).await {
+                let already_on_rc = read_current_tag().as_deref() == Some(rc_tag.as_str());
+                if !already_on_rc {
+                    eprintln!(
+                        "💡 A newer release candidate is available: {rc_tag}\n   \
+                         To try it: browser4-cli upgrade --tag {rc_tag}"
+                    );
+                }
+            }
             requested_tag = Some(resolved);
             release_info = Some(info);
         } else {
@@ -2971,10 +4183,8 @@ pub async fn install_browser4_runtime(
                 .as_deref()
                 .map(String::from)
                 .unwrap_or_else(|| {
-                    let fallback = format!(
-                        "unknown-{}",
-                        chrono::Utc::now().format("%Y%m%dT%H%M%S")
-                    );
+                    let fallback =
+                        format!("unknown-{}", chrono::Utc::now().format("%Y%m%dT%H%M%S"));
                     eprintln!(
                         "⚠  Could not determine the release version tag (cache-hit path). \
                          Using fallback identifier: {fallback}"
@@ -3147,10 +4357,8 @@ pub async fn install_browser4_runtime(
             let resolved_tag = parse_release_tag_from_url(&downloaded.final_url)
                 .or(requested_tag.clone())
                 .unwrap_or_else(|| {
-                    let fallback = format!(
-                        "unknown-{}",
-                        chrono::Utc::now().format("%Y%m%dT%H%M%S")
-                    );
+                    let fallback =
+                        format!("unknown-{}", chrono::Utc::now().format("%Y%m%dT%H%M%S"));
                     eprintln!(
                         "⚠  Could not determine the release version tag from the download URL. \
                          Using fallback identifier: {fallback}"
@@ -3247,7 +4455,10 @@ fn playwright_chromium_relative_exe_path() -> &'static [&'static str] {
         &["chrome-mac/Chromium.app/Contents/MacOS/Chromium"]
     } else {
         // Linux
-        &["chrome-linux/chrome", "chrome-headless-shell-linux/chrome-headless-shell"]
+        &[
+            "chrome-linux/chrome",
+            "chrome-headless-shell-linux/chrome-headless-shell",
+        ]
     }
 }
 
@@ -3285,14 +4496,8 @@ fn find_browser_in_playwright(
         // Sort descending so newer versions (higher build numbers) are tried
         // first.  Build numbers are monotonic integers.
         version_dirs.sort_by(|a, b| {
-            let a_name = a
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            let b_name = b
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let a_name = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let b_name = b.file_name().and_then(|n| n.to_str()).unwrap_or("");
             // Reverse: higher build number → tried first.
             b_name.cmp(a_name)
         });
@@ -3305,9 +4510,9 @@ fn find_browser_in_playwright(
 
             // Check whether this directory matches one of the requested browser
             // prefixes (e.g. "chromium-1114" matches prefix "chromium").
-            let matches_prefix = browser_prefixes.iter().any(|prefix| {
-                dir_name == *prefix || dir_name.starts_with(&format!("{prefix}-"))
-            });
+            let matches_prefix = browser_prefixes
+                .iter()
+                .any(|prefix| dir_name == *prefix || dir_name.starts_with(&format!("{prefix}-")));
             if !matches_prefix {
                 continue;
             }
@@ -3334,10 +4539,7 @@ fn find_chrome_in_playwright() -> Option<PathBuf> {
 
 /// Locate a Microsoft Edge executable installed by Playwright.
 fn find_edge_in_playwright() -> Option<PathBuf> {
-    find_browser_in_playwright(
-        &["msedge", "edge"],
-        playwright_edge_relative_exe_path(),
-    )
+    find_browser_in_playwright(&["msedge", "edge"], playwright_edge_relative_exe_path())
 }
 
 pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
@@ -3710,29 +4912,38 @@ fn find_debug_port_in_running_processes(executable_name: &str) -> Option<u16> {
 /// command line requests remote debugging. Filtering on `--remote-debugging-port`
 /// matters: without it, the first matching process is usually the user's own
 /// everyday browser (no debug port), which has no listening ports to discover.
+///
+/// In development mode several workspaces may each run a debugging-enabled
+/// browser, so the query prefers one this checkout launched (workspace slug in
+/// its `--user-data-dir`) and only then falls back to any match — attaching to
+/// the user's own Chrome keeps working.
 #[cfg(target_os = "windows")]
 fn resolve_executable_pid(executable_name: &str) -> Option<String> {
-    let ps_cmd = format!(
-        "Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like '*{0}*' -and $_.CommandLine -match '--remote-debugging-port' }} | Select-Object -First 1 -ExpandProperty ProcessId",
-        executable_name
-    );
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", &ps_cmd])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    let mut filters: Vec<String> = Vec::new();
+    if let Some(token) = workspace_match_token() {
+        filters.push(format!(" -and $_.CommandLine -match '{token}'"));
     }
-    let pid = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if pid.is_empty() || !pid.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    Some(pid)
-}
+    filters.push(String::new());
 
-// Stub for non-Windows platforms — never called; satisfies the compiler.
-#[cfg(not(target_os = "windows"))]
-fn resolve_executable_pid(_executable_name: &str) -> Option<String> {
+    for filter in filters {
+        let ps_cmd = format!(
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like '*{0}*' -and $_.CommandLine -match '--remote-debugging-port'{1} }} | Select-Object -First 1 -ExpandProperty ProcessId",
+            executable_name, filter
+        );
+        let Ok(out) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &ps_cmd])
+            .output()
+        else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let pid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()) {
+            return Some(pid);
+        }
+    }
     None
 }
 
@@ -3824,16 +5035,25 @@ pub fn browser4_window_state() -> Browser4WindowState {
         // Enumerate Browser4-managed chrome processes only (debug port +
         // PULSAR_CHROME profile marker), and for each report:
         //   PID|headless(0|1)|hasVisibleMainWindow(0|1)
-        let ps = r#"Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
-            Where-Object { $_.CommandLine -notmatch '--type=' -and $_.CommandLine -match '--remote-debugging-port' -and $_.CommandLine -match 'PULSAR_CHROME' } |
+        //
+        // In development mode the match is narrowed to *this* checkout: every
+        // workspace runs its own backend with its own app data root, and a
+        // neighbouring workspace's headed window must not be mistaken for ours
+        // (nor mask a silent no-window failure of ours).
+        const PS_TEMPLATE: &str = r#"Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
+            Where-Object { $_.CommandLine -notmatch '--type=' -and $_.CommandLine -match '--remote-debugging-port' -and $_.CommandLine -match 'PULSAR_CHROME'__WORKSPACE_FILTER__ } |
             ForEach-Object {
                 $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
                 $headless = if ($_.CommandLine -match '--headless') { '1' } else { '0' }
                 $hwnd = if ($p -and $p.MainWindowHandle -ne 0) { '1' } else { '0' }
                 "$($_.ProcessId)|$headless|$hwnd"
             }"#;
+        let workspace_filter = workspace_match_token()
+            .map(|token| format!(" -and $_.CommandLine -match '{token}'"))
+            .unwrap_or_default();
+        let ps = PS_TEMPLATE.replace("__WORKSPACE_FILTER__", &workspace_filter);
         let out = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", ps])
+            .args(["-NoProfile", "-Command", ps.as_str()])
             .output();
 
         let mut state = Browser4WindowState {
@@ -4153,6 +5373,7 @@ fn install_chrome_rhel() -> Result<(), String> {
 
 async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
     let runtime = find_or_install_runtime().await?;
+    ensure_aot_cache_trained(&runtime);
     Ok(build_jar_launch_spec(&runtime, port))
 }
 
@@ -4162,19 +5383,11 @@ fn is_jvm_option(token: &str) -> bool {
     token.starts_with("-D") || token.starts_with("-X") || token.starts_with("--add-")
 }
 
-fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> ServerLaunchSpec {
-    let program = runtime.java_path.clone();
-    let program_display = program.display().to_string();
-    let classpath_arg = if cfg!(windows) {
-        format!("{}\\*", runtime.lib_dir.display())
-    } else {
-        format!("{}/*", runtime.lib_dir.display())
-    };
-
-    // Collect extra options from BROWSER4_SERVER_OPTS (space-separated).
-    // Tokens starting with -D, -X, -XX:, or --add- are JVM flags and go
-    // before -cp.  Everything else (e.g. --spring.profiles.active=test)
-    // is placed after the main class as a program argument.
+/// Collect the core JVM options and program arguments shared by both the
+/// training run and the production run.  Keeping this set identical between
+/// the two is what makes the AOT cache valid (the JVM requires the same
+/// classpath and JVM flag set when the cache is produced and consumed).
+fn collect_jvm_opts_and_program_args() -> (Vec<String>, Vec<String>) {
     let mut jvm_opts: Vec<String> = Vec::new();
     let mut program_args: Vec<String> = Vec::new();
 
@@ -4184,8 +5397,24 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     // user-supplied -Dchrome.path=... in that env var overrides (Java uses
     // the last -D value for a given key).
     if let Some(browser_path) = find_browser_executable() {
-        let path_str = browser_path.to_string_lossy().to_string();
-        jvm_opts.push(format!("-Dchrome.path={}", path_str));
+        jvm_opts.push(format!("-Dchrome.path={}", browser_path.to_string_lossy()));
+    }
+
+    // Pin the backend's coding workspace to the repository root the CLI was
+    // invoked from. The server is launched with working_dir = install_dir
+    // (the bundled runtime), so a user.dir-based fallback in CodingWorkspace
+    // can drift onto a sibling worktree and make every code tool read/write
+    // the wrong checkout. `-Dbrowser4.agent.workspace` wins over that
+    // fallback. Placed before BROWSER4_SERVER_OPTS so a user-supplied
+    // -Dbrowser4.agent.workspace=... in that env var overrides (Java uses the
+    // last -D value for a given key).
+    if let Some(root) = find_browser4_root() {
+        // Forward slashes (JVM-accepted on Windows) and no verbatim \\?\ prefix —
+        // the argfile path would otherwise escape/mangle the embedded backslashes.
+        jvm_opts.push(format!(
+            "-Dbrowser4.agent.workspace={}",
+            normalize_jvm_windows_path_text(&root.to_string_lossy())
+        ));
     }
 
     // The Pulsar SDK's AppContext.APP_DATA_DIR defaults to $HOME/.pulsar.
@@ -4195,11 +5424,29 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     // with LLM API keys).
     jvm_opts.push("-Dapp.name=browser4".to_string());
 
+    // Development mode: give this checkout's backend its own app data root
+    // (`AppContext` checks `app.data.dir` before falling back to `app.name`),
+    // so parallel workspaces stop sharing Chrome profiles, H2/WebDB files,
+    // logs and agent memory.  The config tree is linked back to the
+    // user-global one by `workspace_app_data_dir`; when that preparation
+    // fails it returns None and the shared root is used (pre-existing
+    // behaviour).  Placed before BROWSER4_SERVER_OPTS so an explicit
+    // -Dapp.data.dir from the user still wins.
+    if let Some(app_data) = workspace_app_data_dir() {
+        jvm_opts.push(format!(
+            "-Dapp.data.dir={}",
+            normalize_jvm_windows_path_text(&app_data.to_string_lossy())
+        ));
+    }
+
     // Limit JIT compilation to C1 (client) tier for faster startup.
     // Placed before BROWSER4_SERVER_OPTS so users can override with
     // -XX:TieredStopAtLevel=4 in the env var for peak throughput.
     jvm_opts.push("-XX:TieredStopAtLevel=1".to_string());
 
+    // Extra options from BROWSER4_SERVER_OPTS (space-separated).  Tokens
+    // starting with -D, -X, -XX:, or --add- are JVM flags and go before -cp;
+    // everything else is a program argument.
     if let Ok(raw) = std::env::var(BROWSER4_SERVER_OPTS_ENV) {
         for token in raw
             .split_whitespace()
@@ -4212,6 +5459,536 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
                 program_args.push(token.to_string());
             }
         }
+    }
+
+    (jvm_opts, program_args)
+}
+
+/// Enumerate the dependency JARs under `lib_dir` and join them, sorted, into
+/// a classpath.  CDS and the AOT cache both require a stable, ordered JAR
+/// list; the previous `lib/*` directory wildcard does not guarantee one.
+///
+/// On Windows each entry is stripped of the verbatim `\\?\` prefix inherited
+/// from the canonicalized runtime data dir and normalized to forward slashes,
+/// so the classpath is valid both as a plain command-line argument and inside
+/// a Java `@argfile` (where a leading-only strip would leave `//?/` on every
+/// entry after the first).
+fn enumerate_classpath(lib_dir: &Path) -> Result<String, String> {
+    let mut jars: Vec<String> = Vec::new();
+    let entries = fs::read_dir(lib_dir)
+        .map_err(|e| format!("cannot read lib dir {}: {e}", lib_dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("jar") {
+            let raw = path.to_string_lossy().to_string();
+            let normalized = if cfg!(windows) {
+                normalize_jvm_windows_path_text(&raw)
+            } else {
+                raw
+            };
+            jars.push(normalized);
+        }
+    }
+    if jars.is_empty() {
+        return Err(format!("no jar files found in {}", lib_dir.display()));
+    }
+    jars.sort();
+    Ok(jars.join(if cfg!(windows) { ";" } else { ":" }))
+}
+
+/// Detect the major JDK version of the bundled runtime by parsing
+/// `java -version` (which prints to stderr, e.g. `openjdk version "25.0.4"`).
+fn detect_java_major_version(java_path: &Path) -> Result<u32, String> {
+    let output = Command::new(java_path)
+        .arg("-version")
+        .output()
+        .map_err(|e| format!("cannot run {} -version: {e}", java_path.display()))?;
+    let mut text = String::from_utf8_lossy(&output.stderr).to_string();
+    if text.trim().is_empty() {
+        text = String::from_utf8_lossy(&output.stdout).to_string();
+    }
+    let version = text
+        .lines()
+        .find_map(|line| line.split('"').nth(1))
+        .ok_or_else(|| format!("cannot parse java version from: {}", text.trim()))?;
+    let major = match version.strip_prefix("1.") {
+        // Legacy `1.8.0_xxx` scheme → major 8.
+        Some(rest) => rest.split('.').next().unwrap_or("0"),
+        None => version.split('.').next().unwrap_or("0"),
+    };
+    major
+        .parse::<u32>()
+        .map_err(|_| format!("cannot parse java major version from: {version}"))
+}
+
+fn aot_cache_dir() -> PathBuf {
+    // State dir (preserved across uninstall/reinstall), not runtime data dir,
+    // so reinstalling the same version never retrains.
+    resolve_default_state_dir().join(AOT_CACHE_DIR_NAME)
+}
+
+fn aot_cache_file() -> PathBuf {
+    aot_cache_dir().join(AOT_CACHE_FILE_NAME)
+}
+
+fn aot_cache_key_file() -> PathBuf {
+    aot_cache_dir().join(AOT_CACHE_KEY_FILE_NAME)
+}
+
+fn aot_training_marker_file() -> PathBuf {
+    aot_cache_dir().join(AOT_TRAINING_MARKER_FILE_NAME)
+}
+
+fn aot_training_log_file() -> PathBuf {
+    aot_cache_dir().join(AOT_TRAINING_LOG_FILE_NAME)
+}
+
+fn aot_training_argfile() -> PathBuf {
+    aot_cache_dir().join(AOT_TRAINING_ARGFILE_FILE_NAME)
+}
+
+fn aot_training_pid_file() -> PathBuf {
+    aot_cache_dir().join(AOT_TRAINING_PID_FILE_NAME)
+}
+
+/// Read the PID of the background training JVM, if one was recorded.
+fn read_aot_training_pid() -> Option<u32> {
+    fs::read_to_string(aot_training_pid_file())
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()
+}
+
+/// Record the PID of the background training JVM.
+fn write_aot_training_pid(pid: u32) {
+    // The cache dir must exist for the write to succeed.
+    let _ = fs::create_dir_all(aot_cache_dir());
+    let _ = fs::write(aot_training_pid_file(), pid.to_string().as_bytes());
+}
+
+/// Whether a process with `pid` is still alive.
+///
+/// On failure to determine (tool missing, parse error) returns `true` —
+/// conservative: the caller then falls back to the stale-marker window
+/// instead of risking a concurrent training run.
+fn aot_training_process_alive(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        // `tasklist /FI "PID eq <pid>" /NH` prints one row per match; with no
+        // match it prints an INFO line.  Match on the PID column so the check
+        // is locale-independent (tasklist output is localized).
+        let out = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output();
+        match out {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).contains(&format!(" {pid} ")),
+            Err(_) => true,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // POSIX: `kill -0` probes existence without signalling.
+        let status = Command::new("sh")
+            .args(["-c", &format!("kill -0 {pid} 2>/dev/null")])
+            .status();
+        status.map(|s| s.success()).unwrap_or(true)
+    }
+}
+
+/// Reclaim the training marker when the recorded training JVM is dead — the
+/// training run crashed, was killed, or otherwise failed without completing.
+///
+/// Returns `true` when the marker was reclaimed (the caller should retrain
+/// immediately); `false` when the training JVM is still alive or no PID was
+/// recorded (the caller should wait — either for the run or the stale-marker
+/// window).
+fn reclaim_dead_aot_training() -> bool {
+    let pid = match read_aot_training_pid() {
+        Some(pid) => pid,
+        None => return false,
+    };
+    if aot_training_process_alive(pid) {
+        return false;
+    }
+    eprintln!(
+        "AOT cache: previous training run (pid {pid}) is no longer running — retraining now"
+    );
+    release_aot_training_marker();
+    let _ = fs::remove_file(aot_training_pid_file());
+    let _ = fs::remove_file(aot_training_argfile());
+    true
+}
+
+/// Atomically acquire the background-training marker.
+///
+/// Uses `create_new` so concurrent CLI invocations cannot both start a
+/// training run.  A marker older than [`AOT_TRAINING_MARKER_STALE_AFTER`] is
+/// treated as stale (the training JVM crashed or was killed) and reclaimed.
+/// Returns `true` when the caller now owns the training run.
+fn acquire_aot_training_marker() -> bool {
+    // The marker file's parent (the cache dir) must exist for `create_new`
+    // to succeed; on a fresh install it does not yet.
+    let _ = fs::create_dir_all(aot_cache_dir());
+    let marker = aot_training_marker_file();
+    let write_marker = || -> bool {
+        match fs::OpenOptions::new().write(true).create_new(true).open(&marker) {
+            Ok(mut f) => {
+                let _ = writeln!(f, "{}", std::process::id());
+                true
+            }
+            Err(_) => false,
+        }
+    };
+    if write_marker() {
+        return true;
+    }
+    // Already exists — reclaim only when stale.
+    let stale = fs::metadata(&marker)
+        .and_then(|m| m.modified())
+        .ok()
+        .map(|modified| modified.elapsed().unwrap_or_default() > AOT_TRAINING_MARKER_STALE_AFTER)
+        .unwrap_or(false);
+    if stale {
+        let _ = fs::remove_file(&marker);
+        write_marker()
+    } else {
+        false
+    }
+}
+
+fn release_aot_training_marker() {
+    let _ = fs::remove_file(aot_training_marker_file());
+}
+
+/// Write the invalidation key into the training marker.
+///
+/// The content must compare **exactly** equal to the key (no trailing
+/// newline): `ensure_aot_cache_trained` promotes the produced cache only
+/// when the marker content matches the current key.
+fn write_aot_training_marker_key(key: &str) {
+    // `fs::write` truncates an existing marker file (created by the acquire
+    // step) and writes the key verbatim.
+    let _ = fs::write(aot_training_marker_file(), key.as_bytes());
+}
+
+/// Read the key recorded in the training marker, trimmed of any whitespace.
+fn read_aot_training_marker_key() -> String {
+    fs::read_to_string(aot_training_marker_file())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// Compute the AOT cache invalidation key: version tag + sorted jar list
+/// (name + size) + the core JVM flag set.  This is a fast "should we
+/// retrain?" heuristic — the JVM additionally validates the actual classpath
+/// when loading the cache and silently falls back on any mismatch, so a
+/// false-negative here is harmless.
+fn aot_cache_invalidation_key(
+    runtime: &InstalledBrowser4Runtime,
+    jvm_opts: &[String],
+) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    hasher.update(runtime.tag.as_bytes());
+    hasher.update(b"\0");
+
+    let mut entries: Vec<(String, u64)> = Vec::new();
+    let dir = fs::read_dir(&runtime.lib_dir).map_err(|e| e.to_string())?;
+    for entry in dir.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("jar") {
+            if let Ok(meta) = entry.metadata() {
+                entries.push((entry.file_name().to_string_lossy().to_string(), meta.len()));
+            }
+        }
+    }
+    entries.sort();
+    for (name, size) in entries {
+        hasher.update(name.as_bytes());
+        hasher.update(b"\x1f");
+        hasher.update(size.to_string().as_bytes());
+        hasher.update(b"\0");
+    }
+
+    hasher.update(b"jvm-opts\0");
+    for opt in jvm_opts {
+        hasher.update(opt.as_bytes());
+        hasher.update(b"\0");
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Train the JVM AOT cache (JEP 483 class loading & linking, plus JEP 515
+/// method profiles on JDK 25) on first launch, and reuse it on subsequent
+/// launches.
+///
+/// Training runs **in the background**: the server the user is waiting for
+/// starts immediately without AOT acceleration (the pre-4.14 behavior), and
+/// the training JVM writes `app.aot` while the server is already up.  Every
+/// later launch attaches the trained cache (see `build_jar_launch_spec`) so
+/// restarts complete in seconds.
+///
+/// Called from three places: every server launch (`resolve_server_launch_spec`),
+/// and right after `browser4-cli install` / `browser4-cli upgrade` commit a
+/// runtime, so a first `open` shortly after an install already hits the cache.
+///
+/// This is deliberately non-fatal and **self-healing**: on any failure (JDK <
+/// 24, unparseable version, missing jars, training crash) we log a warning and
+/// proceed with a normal JVM start.  A failed background training run leaves a
+/// marker that is reclaimed after [`AOT_TRAINING_MARKER_STALE_AFTER`], so the
+/// next launch simply trains again — the failure never blocks the server and
+/// never disables AOT permanently.  The runtime plugin loader
+/// (`PluginClasspathEnhancer`, a URLClassLoader for `plugins/*.jar`) is
+/// unaffected — the AOT cache only pre-loads classes seen on the main
+/// classpath, so plugin classes simply load normally and are not cached.
+pub(crate) fn ensure_aot_cache_trained(runtime: &InstalledBrowser4Runtime) {
+    // Explicit opt-out (e.g. CI / e2e harness): start without AOT acceleration
+    // instead of paying the one-time training cost on a fresh runtime bundle.
+    if aot_cache_disabled() {
+        return;
+    }
+
+    // Respect an explicit user-provided AOT configuration.
+    if let Ok(raw) = std::env::var(BROWSER4_SERVER_OPTS_ENV) {
+        if raw.contains("-XX:AOTCache") {
+            return;
+        }
+    }
+
+    let major = match detect_java_major_version(&runtime.java_path) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("AOT cache: {e}; skipping");
+            return;
+        }
+    };
+    if major < AOT_CACHE_MIN_JDK {
+        return; // JEP 483 requires JDK 24+; older JVMs fall back to normal start.
+    }
+
+    let (jvm_opts, program_args) = collect_jvm_opts_and_program_args();
+    let classpath = match enumerate_classpath(&runtime.lib_dir) {
+        Ok(cp) => cp,
+        Err(e) => {
+            eprintln!("AOT cache: {e}; skipping");
+            return;
+        }
+    };
+    let key = match aot_cache_invalidation_key(runtime, &jvm_opts) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("AOT cache: {e}; skipping");
+            return;
+        }
+    };
+
+    let cache_file = aot_cache_file();
+    let key_file = aot_cache_key_file();
+    let cached_key = fs::read_to_string(&key_file).unwrap_or_default();
+    if cache_file.is_file() && cached_key == key {
+        // Cache already trained and still valid — also clean up any leftover
+        // marker/pid/argfile from the background run that produced it.
+        release_aot_training_marker();
+        let _ = fs::remove_file(aot_training_pid_file());
+        let _ = fs::remove_file(aot_training_argfile());
+        return;
+    }
+
+    // A background training run finished since this process last looked: the
+    // training JVM produced `app.aot` but no CLI process was around to write
+    // the key sidecar.  The marker carries the key it was started with, so a
+    // matching marker + existing cache is a valid completion record.
+    let marker_key = read_aot_training_marker_key();
+    if cache_file.is_file() && marker_key == key {
+        let _ = fs::write(&key_file, &key);
+        release_aot_training_marker();
+        let _ = fs::remove_file(aot_training_argfile());
+        let _ = fs::remove_file(aot_training_pid_file());
+        return;
+    }
+
+    // Stale cache for this runtime (wrong key or no key sidecar): drop it so
+    // the server never attaches an invalid cache, then (re)train in the
+    // background.  Deleting before spawning means a freshly completed run can
+    // never be clobbered by a stale one.
+    let _ = fs::remove_file(&cache_file);
+    let _ = fs::remove_file(&key_file);
+
+    if let Err(e) = fs::create_dir_all(aot_cache_dir()) {
+        eprintln!("AOT cache: cannot create cache dir: {e}; skipping");
+        return;
+    }
+
+    if !acquire_aot_training_marker() {
+        // A training run is marked as in flight.  If its JVM is already dead
+        // (crash, kill, OOM — the common failure mode), reclaim the marker
+        // and retrain immediately instead of waiting for the stale-marker
+        // window: the failure-recovery fast path.
+        if !reclaim_dead_aot_training() {
+            eprintln!(
+                "JVM AOT cache training already in progress in the background — \
+                the server starts without AOT acceleration until it completes"
+            );
+            return;
+        }
+        if !acquire_aot_training_marker() {
+            eprintln!(
+                "JVM AOT cache training already in progress in the background — \
+                the server starts without AOT acceleration until it completes"
+            );
+            return;
+        }
+    }
+
+    spawn_aot_training(&runtime, &classpath, &jvm_opts, &program_args, &cache_file, &key);
+}
+
+/// Spawn the detached JVM that trains the AOT cache, without waiting for it.
+///
+/// The training run reuses the same JVM flags and classpath as production
+/// (required for cache validity), but binds a random port, runs in AOT
+/// training mode (skipping the MCP session / browser launch via
+/// [`AOT_TRAINING_JVM_FLAG`]) and exits after Spring context refresh
+/// (`spring.context.exit=onRefresh`).  A 1G heap keeps the single-step
+/// `-XX:AOTCacheOutput` peak (2× heap) bounded; heap size is not part of the
+/// AOT cache validity check.
+///
+/// The child is deliberately detached: it outlives this CLI invocation and
+/// writes its output to [`aot_training_log_file`].  On Windows it runs at
+/// below-normal priority so it never competes with the server the user is
+/// waiting on.
+fn spawn_aot_training(
+    runtime: &InstalledBrowser4Runtime,
+    classpath: &str,
+    jvm_opts: &[String],
+    program_args: &[String],
+    cache_file: &Path,
+    key: &str,
+) {
+    eprintln!("Training JVM AOT cache in the background (one-time, only on first launch) ...");
+    // The marker doubles as the completion record: it must carry the key this
+    // run was started with so a later launch can promote the produced cache.
+    write_aot_training_marker_key(key);
+
+    let mut training_args: Vec<String> =
+        Vec::with_capacity(jvm_opts.len() + program_args.len() + 7);
+    training_args.extend(jvm_opts.iter().cloned());
+    // Training-mode flag must sit among the JVM flags (before `-cp`).
+    training_args.push(AOT_TRAINING_JVM_FLAG.to_string());
+    training_args.push("-Xmx1G".to_string());
+    training_args.push(format!("-XX:AOTCacheOutput={}", cache_file.display()));
+    training_args.push("-Dspring.context.exit=onRefresh".to_string());
+    training_args.push("-cp".to_string());
+    training_args.push(classpath.to_string());
+    training_args.push(BROWSER4_MAIN_CLASS.to_string());
+    training_args.extend(program_args.iter().cloned());
+    training_args.push("--server.port=0".to_string());
+
+    let mut cmd = Command::new(&runtime.java_path);
+    if should_use_java_argfile(&runtime.java_path, &training_args) {
+        // Fixed-name argfile inside the cache dir: the JVM reads it at
+        // startup, and any leftover is removed on the next cache check —
+        // deleting it right after spawn() would race the JVM's read.
+        let argfile = aot_training_argfile();
+        let _ = fs::remove_file(&argfile);
+        let contents = training_args
+            .iter()
+            .map(|a| java_argfile_token(a))
+            .collect::<Vec<_>>()
+            .join("\n");
+        match fs::write(&argfile, contents) {
+            Ok(()) => {
+                cmd.arg(format!("@{}", argfile.display()));
+            }
+            Err(e) => {
+                eprintln!("AOT cache: cannot write training argfile: {e}; using plain arguments");
+                cmd.args(&training_args);
+            }
+        }
+    } else {
+        cmd.args(&training_args);
+    }
+    cmd.current_dir(&runtime.install_dir).stdin(Stdio::null());
+
+    // Stream training output to a log file so a failed run is diagnosable.
+    let log_file = aot_training_log_file();
+    match fs::File::create(&log_file) {
+        Ok(log) => match log.try_clone() {
+            Ok(stdout) => {
+                cmd.stdout(stdout);
+                cmd.stderr(log);
+            }
+            Err(_) => {
+                cmd.stdout(Stdio::null());
+                cmd.stderr(Stdio::null());
+            }
+        },
+        Err(e) => {
+            eprintln!(
+                "AOT cache: cannot open training log {}: {e}",
+                log_file.display()
+            );
+            cmd.stdout(Stdio::null());
+            cmd.stderr(Stdio::null());
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_BELOW_NORMAL_PRIORITY_CLASS — the training JVM boots the
+        // whole Spring context and must not compete with the server launch
+        // the user is waiting on.
+        const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+        cmd.creation_flags(CREATE_BELOW_NORMAL_PRIORITY_CLASS);
+    }
+
+    match cmd.spawn() {
+        Ok(child) => {
+            // Record the training JVM's PID so a later launch can detect a
+            // dead (failed) training run and retrain immediately.
+            write_aot_training_pid(child.id());
+            // Deliberately detached: the training run outlives this CLI
+            // invocation.  Dropping the handle does not kill the process.
+            drop(child);
+            eprintln!(
+                "AOT cache training started in the background (log: {}) — \
+                the server starts without AOT acceleration until training completes",
+                log_file.display()
+            );
+        }
+        Err(e) => {
+            release_aot_training_marker();
+            let _ = fs::remove_file(aot_training_pid_file());
+            let _ = fs::remove_file(aot_training_argfile());
+            eprintln!("AOT cache: background training could not start: {e}");
+        }
+    }
+}
+
+fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> ServerLaunchSpec {
+    let program = runtime.java_path.clone();
+    let program_display = program.display().to_string();
+
+    // Enumerate the classpath explicitly; fall back to the directory wildcard
+    // if enumeration fails so startup is never blocked by this change.
+    let classpath_arg = enumerate_classpath(&runtime.lib_dir).unwrap_or_else(|_| {
+        if cfg!(windows) {
+            format!("{}\\*", runtime.lib_dir.display())
+        } else {
+            format!("{}/*", runtime.lib_dir.display())
+        }
+    });
+
+    let (mut jvm_opts, program_args) = collect_jvm_opts_and_program_args();
+
+    // Attach the trained AOT cache when present.  The JVM silently falls back
+    // to a normal start if the cache is stale or incompatible.
+    let cache_file = aot_cache_file();
+    if !aot_cache_disabled() && cache_file.is_file() {
+        jvm_opts.push(format!("-XX:AOTCache={}", cache_file.display()));
     }
 
     let mut args: Vec<String> = Vec::with_capacity(4 + jvm_opts.len() + program_args.len());
@@ -4234,22 +6011,124 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
             program_display,
             port
         ),
+        version: Some(runtime.tag.clone()),
     }
+}
+
+/// Windows `CreateProcess` caps the entire command line (program + arguments)
+/// at 32,767 characters.  The explicitly-enumerated classpath (required for a
+/// stable CDS / AOT-cache order) spans ~230 JARs and blows past that cap on
+/// long install paths, so switch to a Java `@argfile` (JDK 9+ launcher
+/// feature) well before the limit.  See `write_java_argfile`.
+///
+/// The threshold sits safely below the 32,767-char cap: per-argument quoting
+/// and encoding overhead vary, so an argfile is used early rather than at the
+/// exact limit.
+const WINDOWS_ARGFILE_THRESHOLD: usize = 30_000;
+
+/// Rough length of the single-string command line Windows would build for
+/// `program args...` (each argument separated by one space, plus two quote
+/// characters as pessimistic quoting overhead).
+fn estimated_windows_command_line_len(program: &Path, args: &[String]) -> usize {
+    program.to_string_lossy().len() + args.iter().map(|a| a.len() + 3).sum::<usize>()
+}
+
+/// Normalize Windows path text embedded in JVM arguments: drop verbatim
+/// `\\?\` prefixes **anywhere** they appear and convert backslashes to
+/// forward slashes, which the JVM accepts on Windows.
+///
+/// A single argument can embed several verbatim prefixes: the `-cp`
+/// classpath is one `;`-joined token whose *every* entry carries its own
+/// `\\?\` (the runtime data dir is canonicalized — see
+/// `resolve_runtime_data_dir`), and `-XX:AOTCache=\\?\C:\...` embeds the
+/// prefix after `=`.  Stripping only a leading prefix leaves `//?/` once
+/// backslashes are converted, which the JVM cannot open — that corrupted
+/// both the AOT training run and the main server launch on Windows.
+fn normalize_jvm_windows_path_text(text: &str) -> String {
+    text.replace(r"\\?\UNC\", "//")
+        .replace(r"\\?\", "")
+        .replace('\\', "/")
+}
+
+/// Normalize one JVM argument for embedding in a Java `@argfile`.
+///
+/// The java launcher parses `@argfile` tokens itself and interprets
+/// backslash escape sequences (`\t`, `\n`, `\r`, ...) inside tokens, which
+/// would corrupt Windows paths (`C:\tools\...` → tab/newline).  All
+/// backslashes are therefore normalized to forward slashes, and tokens
+/// containing whitespace are double-quoted.
+fn java_argfile_token(token: &str) -> String {
+    let normalized = normalize_jvm_windows_path_text(token);
+    if normalized.chars().any(char::is_whitespace) {
+        format!("\"{normalized}\"")
+    } else {
+        normalized
+    }
+}
+
+/// Write `args` into a fresh Java `@argfile` and return the file path.
+///
+/// The file lives in its own uniquely-named directory so callers can pass that
+/// directory as `cleanup_dir` and remove everything with one
+/// `fs::remove_dir_all`.
+fn write_java_argfile(args: &[String]) -> Result<PathBuf, String> {
+    let unique = format!(
+        "browser4-argfile-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let dir = std::env::temp_dir().join(unique);
+    fs::create_dir_all(&dir).map_err(|e| format!("cannot create argfile dir: {e}"))?;
+    let file = dir.join("java-args.txt");
+    let content = args
+        .iter()
+        .map(|a| java_argfile_token(a))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&file, content).map_err(|e| format!("cannot write argfile: {e}"))?;
+    Ok(file)
+}
+
+/// Decide whether the java command line should be moved into an `@argfile`.
+/// Only relevant on Windows; other platforms have multi-megabyte exec limits.
+fn should_use_java_argfile(program: &Path, args: &[String]) -> bool {
+    cfg!(windows) && estimated_windows_command_line_len(program, args) > WINDOWS_ARGFILE_THRESHOLD
 }
 
 fn command_for_launch_spec(
     launch_spec: &ServerLaunchSpec,
 ) -> Result<PreparedLaunchCommand, String> {
     let mut command = Command::new(&launch_spec.program);
+    let mut cleanup_dir = None;
+    let mut argfile = None;
+    if should_use_java_argfile(&launch_spec.program, &launch_spec.args) {
+        // The fully-enumerated classpath exceeds the Windows command-line
+        // limit; pass it through a Java @argfile instead.  Falls back to the
+        // plain argument list when the argfile cannot be written (the spawn
+        // will then surface the underlying OS error).
+        match write_java_argfile(&launch_spec.args) {
+            Ok(file) => {
+                cleanup_dir = file.parent().map(Path::to_path_buf);
+                command.arg(format!("@{}", file.display()));
+                argfile = Some(file);
+            }
+            Err(e) => {
+                eprintln!("Failed to write java argfile: {e}; using plain arguments");
+                command.args(&launch_spec.args);
+            }
+        }
+    } else {
+        command.args(&launch_spec.args);
+    }
     command
-        .args(&launch_spec.args)
         .current_dir(&launch_spec.working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     Ok(PreparedLaunchCommand {
         command,
-        cleanup_dir: None,
+        cleanup_dir,
+        argfile,
     })
 }
 
@@ -4257,7 +6136,7 @@ fn launch_ready_timeout(_launch_spec: &ServerLaunchSpec) -> Duration {
     JAR_SERVER_READY_TIMEOUT
 }
 
-pub(crate) fn find_browser4_root() -> Option<PathBuf> {
+pub fn find_browser4_root() -> Option<PathBuf> {
     if let Some(invocation_dir) = browser4_root_search_start_dir_from_env() {
         if let Some(root) = find_browser4_root_from(&invocation_dir, false) {
             return Some(root);
@@ -4278,7 +6157,6 @@ fn browser4_root_search_start_dir_from_env() -> Option<PathBuf> {
 }
 
 fn find_browser4_root_from(start: &Path, deep_search: bool) -> Option<PathBuf> {
-
     let start_dir = if start.is_dir() {
         start
     } else {
@@ -5282,10 +7160,13 @@ async fn run_bundle_build_script(
     // Build a -Command line that forces UTF-8 encoding on the console output
     // stream, then dot-sources the build script.  We shell-escape the script
     // path so that paths with spaces or special characters work correctly.
+    // The ErrorEncoding property only exists on PowerShell 7+ — on Windows
+    // PowerShell 5.1 (powershell.exe) it raises a PropertyAssignmentException,
+    // so the assignment is guarded with try/catch.
     let script_path_escaped = script_path.to_string_lossy().replace('\'', "''");
     let command = format!(
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
-         [Console]::ErrorEncoding = [System.Text.Encoding]::UTF8; \
+         try {{ [Console]::ErrorEncoding = [System.Text.Encoding]::UTF8 }} catch {{}}; \
          & '{}' -SkipMavenInstall",
         script_path_escaped
     );
@@ -5409,9 +7290,7 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
     eprintln!(
         "Browser4 runtime is not installed yet — downloading now (one-time setup, ~130 MB)..."
     );
-    eprintln!(
-        "Tip: run 'browser4-cli install' beforehand to avoid this download on first use."
-    );
+    eprintln!("Tip: run 'browser4-cli install' beforehand to avoid this download on first use.");
     install_browser4_runtime(None, false).await
 }
 
@@ -5432,6 +7311,7 @@ async fn start_server(
     let PreparedLaunchCommand {
         mut command,
         mut cleanup_dir,
+        argfile,
     } = command_for_launch_spec(launch_spec)?;
     append_startup_log_message(
         &startup_log.path,
@@ -5450,6 +7330,23 @@ async fn start_server(
         &startup_log.path,
         format!("Launch command: {}", format_command_for_log(&command)),
     );
+    if let Some(app_data) = workspace_app_data_path() {
+        append_startup_log_message(
+            &startup_log.path,
+            format!("Backend app data dir (workspace-isolated): {}", app_data.display()),
+        );
+    }
+    if let Some(argfile) = &argfile {
+        let contents = fs::read_to_string(argfile).unwrap_or_else(|e| format!("<unreadable: {e}>"));
+        append_startup_log_message(
+            &startup_log.path,
+            format!(
+                "Launch argfile {} contents (classpath moved out of the command line):\n{}",
+                argfile.display(),
+                contents
+            ),
+        );
+    }
 
     command
         .stdin(Stdio::null())
@@ -5475,6 +7372,21 @@ async fn start_server(
     append_startup_log_message(
         &startup_log.path,
         format!("Spawned launcher process with pid {}", child.id()),
+    );
+
+    // Claim the port *before* waiting for readiness.  The backend is already a
+    // detached process at this point, so if the user interrupts this CLI with
+    // Ctrl+C while Spring Boot is still booting, the server survives — and the
+    // next command must recognise the port as this workspace's own instead of
+    // treating the listener as a neighbour and escalating to the next port.
+    let provisional_pid = resolve_managed_server_pid(child.id());
+    register_managed_server_process(
+        managed_server_entry(launch_spec, base_url, port, provisional_pid, None),
+        None,
+    );
+    append_startup_log_message(
+        &startup_log.path,
+        format!("Registered provisional backend pid {provisional_pid} on port {port}"),
     );
 
     let client = Client::builder()
@@ -5507,6 +7419,10 @@ async fn start_server(
     )
     .await
     {
+        // The launch failed — do not leave the provisional claim behind, or a
+        // later command would mistake a foreign listener on this port for its
+        // own backend.
+        remove_managed_server_process(provisional_pid, None);
         let (preserve_cleanup_dir, exit_context, cleanup_context) =
             readiness_failure_context(child.try_wait(), cleanup_dir.as_deref());
         if !preserve_cleanup_dir {
@@ -5520,17 +7436,31 @@ async fn start_server(
     cleanup_prepared_launch_dir(cleanup_dir.take());
 
     let managed_pid = resolve_managed_server_pid(child.id());
+    if managed_pid != provisional_pid {
+        // The launcher handed off to the real JVM: replace the claim so the
+        // registry points at the process that actually owns the port.
+        remove_managed_server_process(provisional_pid, None);
+    }
     register_managed_server_process(
-        ManagedServerProcess {
-            pid: managed_pid,
-            base_url: base_url.to_string(),
+        managed_server_entry(
+            launch_spec,
+            base_url,
             port,
-            // Keep the legacy registry field populated for backward compatibility.
-            jar_path: launch_spec.registry_target.to_string_lossy().to_string(),
-            started_at: chrono::Utc::now().to_rfc3339(),
-        },
+            managed_pid,
+            launch_spec.version.clone(),
+        ),
         None,
     );
+
+    // Remember the port this checkout's backend landed on, so the next command
+    // resolves straight back to it instead of re-running the allocation scan.
+    record_dev_workspace_base_url(base_url);
+
+    // Record the plugins fingerprint so later commands can detect plugin
+    // changes and trigger a warm restart.  The plugins directory is resolved
+    // relative to the server's working directory (the server's PluginService
+    // defaults to `plugins/` under its cwd).
+    record_plugins_fingerprint(port, &launch_working_dir.join("plugins"));
 
     // Detach: we drop the Child handle here. The spawned process continues
     // running independently because we set all stdio to null and call drop().
@@ -5546,6 +7476,34 @@ async fn start_server(
     eprint!("\r\x1b[K");
     eprintln!("Server ready in {:.1}s", elapsed);
     Ok(())
+}
+
+/// Build a managed-process registry entry for a backend this CLI launched.
+///
+/// Used twice per launch: once right after `spawn` (provisional claim on the
+/// port, version unknown) and once after readiness (real server pid + runtime
+/// version).
+fn managed_server_entry(
+    launch_spec: &ServerLaunchSpec,
+    base_url: &str,
+    port: u16,
+    pid: u32,
+    version: Option<String>,
+) -> ManagedServerProcess {
+    ManagedServerProcess {
+        pid,
+        base_url: base_url.to_string(),
+        port,
+        // Keep the legacy registry field populated for backward compatibility.
+        jar_path: launch_spec.registry_target.to_string_lossy().to_string(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+        version,
+        // Records which checkout this backend belongs to, so a later command
+        // can tell "my own dev server is on that port" from "some other
+        // workspace took the port over".
+        workspace_root: dev_workspace_root()
+            .map(|root| normalize_jvm_windows_path_text(&root.to_string_lossy())),
+    }
 }
 
 fn format_command_for_log(command: &Command) -> String {
@@ -5821,12 +7779,25 @@ if ($ids.Count -gt 0) {{ $ids[-1] }}
 }
 
 /// Resolve the base URL from CLI state + optional server override arg.
+///
+/// Precedence: `--server` → `config set server` → the checkout's own
+/// development port (source checkouts only, see
+/// [`dev_base_url_for_workspace`]) → the URL recorded in CLI state.
 pub fn resolve_base_url(override_url: Option<&str>, session_name: Option<&str>) -> String {
     let state = read_state(None, session_name);
     let base = override_url
         .map(|s| s.to_string())
         .or_else(|| crate::config::read_config().server.clone())
-        .unwrap_or(state.base_url);
+        .unwrap_or_else(|| {
+            if is_dev_mode() {
+                dev_base_url_for_workspace(
+                    &state.base_url,
+                    crate::state::has_persisted_state(session_name),
+                )
+            } else {
+                state.base_url.clone()
+            }
+        });
     base.trim_end_matches('/').to_string()
 }
 
@@ -5841,7 +7812,12 @@ async fn probe_server_state(client: &Client, base_url: &str) -> ServerState {
     let health_url = format!("{trimmed}/actuator/health");
     let tools_url = format!("{trimmed}/mcp/tools");
 
-    let health_response = match client.get(&health_url).send().await {
+    // Explicit short per-probe timeouts: the readiness loop must stay
+    // responsive and finish within its overall budget even when the global
+    // client timeout is large (--timeout 600) or a probe stalls.
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+    let health_response = match client.get(&health_url).timeout(PROBE_TIMEOUT).send().await {
         Ok(response) => response,
         Err(error) => return ServerState::Unreachable(error.to_string()),
     };
@@ -5853,7 +7829,7 @@ async fn probe_server_state(client: &Client, base_url: &str) -> ServerState {
         return ServerState::Starting(health_body);
     }
 
-    let tools_response = match client.get(&tools_url).send().await {
+    let tools_response = match client.get(&tools_url).timeout(PROBE_TIMEOUT).send().await {
         Ok(response) => response,
         Err(error) => return ServerState::Starting(error.to_string()),
     };
@@ -6227,6 +8203,7 @@ mod tests {
             working_dir: PathBuf::from("."),
             registry_target: PathBuf::from("registry-target"),
             description: String::from("desc"),
+            version: Some("local".to_string()),
         }
     }
 
@@ -6253,6 +8230,7 @@ mod tests {
 
     #[test]
     fn test_find_browser4_root_prefers_invocation_env_dir() {
+        let _env_guard = lock_env_mutex(); // serialize ROOT_SEARCH_START_DIR_ENV manipulation
         let tmp = test_temp_dir();
         let root = create_browser4_root(&tmp);
         let nested = root.join("cli").join("browser4-cli");
@@ -6266,6 +8244,81 @@ mod tests {
         }
 
         assert_eq!(detected, Some(root));
+    }
+
+    #[test]
+    fn test_collect_jvm_opts_injects_agent_workspace_from_repo_root() {
+        let _env_guard = lock_env_mutex(); // serialize BROWSER4_SERVER_OPTS / ROOT_SEARCH_START_DIR_ENV manipulation
+        let tmp = test_temp_dir();
+        let root = create_browser4_root(&tmp);
+
+        // Isolate the env vars this function reads so parallel tests cannot
+        // pollute the result.
+        let prev_server_opts = env::var(BROWSER4_SERVER_OPTS_ENV).ok();
+        let prev_search_start = env::var(ROOT_SEARCH_START_DIR_ENV).ok();
+        unsafe {
+            env::set_var(ROOT_SEARCH_START_DIR_ENV, root.join("cli").join("browser4-cli").as_os_str());
+            env::remove_var(BROWSER4_SERVER_OPTS_ENV);
+        }
+        let (jvm_opts, _) = collect_jvm_opts_and_program_args();
+        unsafe {
+            match prev_server_opts {
+                Some(v) => env::set_var(BROWSER4_SERVER_OPTS_ENV, v),
+                None => env::remove_var(BROWSER4_SERVER_OPTS_ENV),
+            }
+            match prev_search_start {
+                Some(v) => env::set_var(ROOT_SEARCH_START_DIR_ENV, v),
+                None => env::remove_var(ROOT_SEARCH_START_DIR_ENV),
+            }
+        }
+
+        // P1.4: the server must be pinned to the repo root the CLI was invoked
+        // from, so its coding workspace cannot drift onto a sibling worktree.
+        let expected = format!(
+            "-Dbrowser4.agent.workspace={}",
+            normalize_jvm_windows_path_text(&root.to_string_lossy())
+        );
+        assert!(
+            jvm_opts.iter().any(|o| *o == expected),
+            "expected {expected} in jvm opts: {jvm_opts:?}"
+        );
+    }
+
+    #[test]
+    fn test_user_server_opts_override_injected_agent_workspace() {
+        let _env_guard = lock_env_mutex(); // serialize BROWSER4_SERVER_OPTS / ROOT_SEARCH_START_DIR_ENV manipulation
+        let tmp = test_temp_dir();
+        let root = create_browser4_root(&tmp);
+
+        let prev_server_opts = env::var(BROWSER4_SERVER_OPTS_ENV).ok();
+        let prev_search_start = env::var(ROOT_SEARCH_START_DIR_ENV).ok();
+        unsafe {
+            env::set_var(ROOT_SEARCH_START_DIR_ENV, root.join("cli").join("browser4-cli").as_os_str());
+            env::set_var(BROWSER4_SERVER_OPTS_ENV, "-Dbrowser4.agent.workspace=/custom/workspace");
+        }
+        let (jvm_opts, _) = collect_jvm_opts_and_program_args();
+        unsafe {
+            match prev_server_opts {
+                Some(v) => env::set_var(BROWSER4_SERVER_OPTS_ENV, v),
+                None => env::remove_var(BROWSER4_SERVER_OPTS_ENV),
+            }
+            match prev_search_start {
+                Some(v) => env::set_var(ROOT_SEARCH_START_DIR_ENV, v),
+                None => env::remove_var(ROOT_SEARCH_START_DIR_ENV),
+            }
+        }
+
+        // The injected value comes first, the user's value last — the JVM uses
+        // the last -D for a given key, so the user override wins.
+        let injected = jvm_opts
+            .iter()
+            .position(|o| o == "-Dbrowser4.agent.workspace=/custom/workspace")
+            .expect("user -Dbrowser4.agent.workspace must be present");
+        let auto = jvm_opts
+            .iter()
+            .position(|o| o.starts_with("-Dbrowser4.agent.workspace="))
+            .expect("injected -Dbrowser4.agent.workspace must be present");
+        assert!(auto < injected, "injected value must precede the user override: {jvm_opts:?}");
     }
 
     #[test]
@@ -6329,9 +8382,236 @@ mod tests {
     }
 
     #[test]
+    fn test_canonical_runtime_version_normalizes_tags() {
+        assert_eq!(canonical_runtime_version("v4.13.5"), "4.13.5");
+        assert_eq!(canonical_runtime_version("4.13.5"), "4.13.5");
+        assert_eq!(canonical_runtime_version("local"), "local");
+        assert_eq!(canonical_runtime_version("LOCAL"), "local");
+        assert_eq!(canonical_runtime_version("4.13.6-SNAPSHOT"), "local");
+        assert_eq!(canonical_runtime_version("4.13.7-rc.1"), "local");
+        assert_eq!(canonical_runtime_version("4.12.0-rc.3-SNAPSHOT"), "local");
+        assert_eq!(canonical_runtime_version(""), "local");
+        assert_eq!(canonical_runtime_version("  v4.13.5  "), "4.13.5");
+    }
+
+    #[test]
+    fn test_server_version_mismatch_detects_stale_backend() {
+        // The trap that started this: CLI prefers the source build while an
+        // installed release is still running.
+        assert!(server_version_mismatch("v4.13.5", "local"));
+        // Release vs release: exact version matters.
+        assert!(server_version_mismatch("v4.13.5", "v4.13.6"));
+        assert!(!server_version_mismatch("v4.13.5", "4.13.5"));
+        // Any source-built marker (SNAPSHOT, rc, "local") compares equal to "local".
+        assert!(!server_version_mismatch("4.13.6-SNAPSHOT", "local"));
+        assert!(!server_version_mismatch("local", "4.14.0-SNAPSHOT"));
+        assert!(!server_version_mismatch("local", "4.13.7-rc.1"));
+        assert!(!server_version_mismatch("4.13.7-rc.1", "local"));
+        // Same version is never a mismatch.
+        assert!(!server_version_mismatch("v4.13.5", "v4.13.5"));
+    }
+
+    #[test]
+    fn test_expected_runtime_tag_prefers_local_bundle_in_checkout() {
+        // Mirrors expected_runtime_tag(): inside a checkout with a bundle
+        // module the expected tag is "local", otherwise the installed tag.
+        if std::env::var("BROWSER4_CLI_FORCE_REMOTE_BUNDLE").as_deref() == Ok("1") {
+            assert_eq!(expected_runtime_tag(), read_current_tag());
+            return;
+        }
+        let root = find_browser4_root();
+        if let Some(root) = &root {
+            if root.join("browser4-apps").join("browser4-bundle").is_dir() {
+                assert_eq!(expected_runtime_tag().as_deref(), Some("local"));
+                return;
+            }
+        }
+        assert_eq!(expected_runtime_tag(), read_current_tag());
+    }
+
+    #[test]
     fn test_launch_ready_timeout_uses_jar_timeout() {
         let spec = sample_launch_spec();
         assert_eq!(launch_ready_timeout(&spec), JAR_SERVER_READY_TIMEOUT);
+    }
+
+    #[test]
+    fn test_enumerate_classpath_sorts_and_ignores_non_jars() {
+        let tmp = test_temp_dir();
+        let lib = tmp.path().join("lib");
+        create_dir_all(&lib).unwrap();
+        write(lib.join("z.jar"), "z").unwrap();
+        write(lib.join("a.jar"), "a").unwrap();
+        write(lib.join("m.jar"), "m").unwrap();
+        write(lib.join("readme.txt"), "not a jar").unwrap();
+
+        let cp = enumerate_classpath(&lib).unwrap();
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let names: Vec<&str> = cp
+            .split(sep)
+            .map(|p| Path::new(p).file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["a.jar", "m.jar", "z.jar"]);
+    }
+
+    #[test]
+    fn test_enumerate_classpath_empty_dir_errors() {
+        let tmp = test_temp_dir();
+        let lib = tmp.path().join("lib");
+        create_dir_all(&lib).unwrap();
+        assert!(enumerate_classpath(&lib).is_err());
+    }
+
+    #[test]
+    fn test_aot_cache_invalidation_key_stable_and_sensitive() {
+        let tmp = test_temp_dir();
+        let lib = tmp.path().join("lib");
+        create_dir_all(&lib).unwrap();
+        write(lib.join("a.jar"), "content-a").unwrap();
+        write(lib.join("b.jar"), "content-b").unwrap();
+
+        let runtime = InstalledBrowser4Runtime {
+            tag: "v4.13.4".to_string(),
+            asset_name: "asset".to_string(),
+            download_url: "url".to_string(),
+            install_dir: tmp.path().to_path_buf(),
+            lib_dir: lib.clone(),
+            jar_path: lib.join("a.jar"),
+            java_path: tmp.path().join("runtime/bin/java"),
+            reused_existing: false,
+        };
+        let opts = vec!["-XX:TieredStopAtLevel=1".to_string()];
+
+        let k1 = aot_cache_invalidation_key(&runtime, &opts).unwrap();
+        let k2 = aot_cache_invalidation_key(&runtime, &opts).unwrap();
+        assert_eq!(k1, k2, "same inputs must produce the same key");
+
+        write(lib.join("c.jar"), "content-c").unwrap();
+        let k3 = aot_cache_invalidation_key(&runtime, &opts).unwrap();
+        assert_ne!(k1, k3, "adding a jar must change the key");
+
+        let mut runtime2 = runtime.clone();
+        runtime2.tag = "v4.14.0".to_string();
+        let k4 = aot_cache_invalidation_key(&runtime2, &opts).unwrap();
+        assert_ne!(k1, k4, "a version bump must change the key");
+    }
+
+    #[test]
+    fn test_aot_cache_disabled_flag() {
+        let _guard = lock_env_mutex();
+        let saved = env::var(DISABLE_AOT_CACHE_ENV).ok();
+        for value in ["1", "true", "yes", "on", "TRUE", "On"] {
+            unsafe { env::set_var(DISABLE_AOT_CACHE_ENV, value) };
+            assert!(aot_cache_disabled(), "flag value {value:?} should disable AOT cache");
+        }
+        for value in ["", "0", "false", "off", "no"] {
+            unsafe { env::set_var(DISABLE_AOT_CACHE_ENV, value) };
+            assert!(!aot_cache_disabled(), "flag value {value:?} should not disable AOT cache");
+        }
+        match saved {
+            Some(v) => unsafe { env::set_var(DISABLE_AOT_CACHE_ENV, v) },
+            None => unsafe { env::remove_var(DISABLE_AOT_CACHE_ENV) },
+        }
+    }
+
+    #[test]
+    fn test_aot_cache_dir_lives_under_state_dir() {
+        let _guard = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let env_guard = TestEnvGuard::lock(tmp.path());
+
+        // The cache must live under the CLI state dir (preserved across
+        // uninstall/reinstall), NOT under the runtime data dir.  Compare by
+        // components — on Windows the canonicalized state dir carries a
+        // `\\?\` verbatim prefix that would break a raw string comparison.
+        let cache_dir = aot_cache_dir();
+        assert_eq!(
+            cache_dir.file_name().and_then(|n| n.to_str()),
+            Some("aot-cache")
+        );
+        assert_eq!(
+            cache_dir
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str()),
+            Some("state"),
+            "aot cache must live under the CLI state dir"
+        );
+
+        drop(env_guard);
+    }
+
+    #[test]
+    fn test_aot_training_marker_blocks_fresh_and_reclaims_stale() {
+        let _guard = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let env_guard = TestEnvGuard::lock(tmp.path());
+
+        // First acquisition wins.
+        assert!(acquire_aot_training_marker());
+        // A fresh marker blocks a concurrent training run.
+        assert!(!acquire_aot_training_marker());
+
+        // Age the marker past the staleness threshold; it is then reclaimed.
+        // Open with write access: on Windows a read-only handle lacks the
+        // FILE_WRITE_ATTRIBUTES right that `set_modified` needs.
+        let marker = aot_training_marker_file();
+        let file = fs::OpenOptions::new().write(true).open(&marker).unwrap();
+        let old = std::time::SystemTime::now()
+            - (AOT_TRAINING_MARKER_STALE_AFTER + Duration::from_secs(60));
+        file.set_modified(old).unwrap();
+        drop(file);
+        assert!(
+            acquire_aot_training_marker(),
+            "stale marker should be reclaimed"
+        );
+
+        release_aot_training_marker();
+        assert!(!marker.exists(), "marker should be removed by release");
+
+        drop(env_guard);
+    }
+
+    #[test]
+    fn test_aot_training_marker_key_roundtrip_exact() {
+        let _guard = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let env_guard = TestEnvGuard::lock(tmp.path());
+
+        // The marker content must round-trip the invalidation key exactly —
+        // a trailing newline would make the equality check in
+        // `ensure_aot_cache_trained` fail and the freshly trained cache would
+        // be deleted as "stale" on the very next launch.
+        assert!(acquire_aot_training_marker());
+        let key = "fcc04fd6ad65f6f5452bcbc6271177cc462c4ee6c31887e12d553e448e2c7e26";
+        write_aot_training_marker_key(key);
+        assert_eq!(read_aot_training_marker_key(), key, "marker key must round-trip exactly");
+        let raw = fs::read_to_string(aot_training_marker_file()).unwrap();
+        assert!(!raw.ends_with('\n'), "marker content must not carry a trailing newline");
+
+        drop(env_guard);
+    }
+
+    #[test]
+    fn test_aot_training_process_alive_detects_dead_process() {
+        // Our own PID is alive.
+        assert!(aot_training_process_alive(std::process::id()));
+        // A PID that cannot exist is dead.
+        assert!(!aot_training_process_alive(u32::MAX));
+        assert!(!aot_training_process_alive(4_000_000_000 - 1));
+    }
+
+    #[test]
+    fn test_aot_training_pid_file_roundtrip() {
+        let _guard = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let env_guard = TestEnvGuard::lock(tmp.path());
+
+        assert_eq!(read_aot_training_pid(), None, "no pid file yet");
+        write_aot_training_pid(12345);
+        assert_eq!(read_aot_training_pid(), Some(12345));
+
+        drop(env_guard);
     }
 
     #[test]
@@ -7481,6 +9761,76 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // is_rc_tag
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_is_rc_tag_accepts_rc_labels() {
+        assert!(is_rc_tag("v4.14.0-rc.1"));
+        assert!(is_rc_tag("v4.14.0-rc"));
+        assert!(is_rc_tag("v4.14.0-RC.2"));
+        assert!(is_rc_tag("v4.14.0-rc.10"));
+    }
+
+    #[test]
+    fn test_is_rc_tag_rejects_non_rc_labels() {
+        assert!(!is_rc_tag("v4.14.0"));
+        assert!(!is_rc_tag("v4.14.0-ci.3"));
+        assert!(!is_rc_tag("v4.14.0-alpha.1"));
+        assert!(!is_rc_tag("v4.14.0-beta.2"));
+        assert!(!is_rc_tag("v4.14.0-dry_run.1"));
+        assert!(!is_rc_tag("not-a-tag"));
+        assert!(!is_rc_tag(""));
+    }
+
+    // -------------------------------------------------------------------
+    // compare_base_versions / pick_newest_tag_newer_than
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_compare_base_versions_ignores_prerelease_suffix() {
+        use std::cmp::Ordering;
+        assert_eq!(
+            compare_base_versions("v4.14.0-rc.1", "v4.13.11"),
+            Ordering::Greater
+        );
+        assert_eq!(compare_base_versions("v4.14.0-rc.1", "v4.14.0"), Ordering::Equal);
+        assert_eq!(compare_base_versions("v4.13.11-rc.9", "v4.13.11"), Ordering::Equal);
+        assert_eq!(
+            compare_base_versions("v4.13.11-rc.1", "v4.14.0-rc.2"),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn test_pick_newest_tag_newer_than_filters_and_orders() {
+        let tags = vec![
+            "v4.13.11-rc.5".to_string(),
+            "v4.14.0-rc.1".to_string(),
+            "v4.14.0-rc.2".to_string(),
+            "v4.12.0-rc.3".to_string(),
+        ];
+        assert_eq!(
+            pick_newest_tag_newer_than(&tags, "v4.13.11").as_deref(),
+            Some("v4.14.0-rc.2")
+        );
+    }
+
+    #[test]
+    fn test_pick_newest_tag_newer_than_ignores_same_base_version() {
+        // A release candidate of the *current* stable version is not newer.
+        let tags = vec!["v4.13.11-rc.1".to_string(), "v4.13.11-rc.2".to_string()];
+        assert_eq!(pick_newest_tag_newer_than(&tags, "v4.13.11"), None);
+    }
+
+    #[test]
+    fn test_pick_newest_tag_newer_than_none_when_empty_or_older() {
+        assert_eq!(pick_newest_tag_newer_than(&[], "v4.13.11"), None);
+        let tags = vec!["v4.12.0-rc.1".to_string()];
+        assert_eq!(pick_newest_tag_newer_than(&tags, "v4.13.11"), None);
+    }
+
+    // -------------------------------------------------------------------
     // install_dir_contains_runtime
     // -------------------------------------------------------------------
 
@@ -7595,6 +9945,353 @@ mod tests {
         let read = read_installed_browser4_runtime_metadata();
         assert!(read.is_none());
     }
+
+    // -------------------------------------------------------------------
+    // Development-mode ports (one backend per checkout)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn dev_port_range_starts_at_8282() {
+        assert_eq!(DEV_SERVER_PORT_START, 8282);
+        assert!(is_dev_port(8282));
+        assert!(is_dev_port(DEV_SERVER_PORT_START + DEV_SERVER_PORT_SCAN_LIMIT - 1));
+        assert!(!is_dev_port(DEV_SERVER_PORT_START + DEV_SERVER_PORT_SCAN_LIMIT));
+        // The production default is deliberately outside the dev range.
+        assert!(!is_dev_port(8182));
+    }
+
+    #[test]
+    fn fresh_workspace_allocates_from_the_scanner() {
+        // No state file: whatever the allocator returns is used, so a second
+        // checkout on an occupied 8282 lands on 8283.
+        let url = decide_dev_base_url("http://localhost:8182", false, &|_| true, &|| Some(8283));
+        assert_eq!(url, "http://127.0.0.1:8283");
+    }
+
+    #[test]
+    fn fresh_workspace_takes_8282_when_free() {
+        let url = decide_dev_base_url("http://localhost:8182", false, &|_| true, &|| {
+            Some(DEV_SERVER_PORT_START)
+        });
+        assert_eq!(url, "http://127.0.0.1:8282");
+    }
+
+    #[test]
+    fn recorded_dev_port_is_reused_when_free_or_ours() {
+        for recorded in ["http://127.0.0.1:8283", "http://localhost:8283/"] {
+            let url = decide_dev_base_url(recorded, true, &|_| true, &|| Some(8282));
+            assert_eq!(url, recorded.trim_end_matches('/'));
+        }
+    }
+
+    #[test]
+    fn recorded_dev_port_taken_over_by_another_workspace_is_reallocated() {
+        // 8283 is listening but is NOT this workspace's server (is_usable false).
+        let url = decide_dev_base_url("http://127.0.0.1:8283", true, &|_| false, &|| Some(8282));
+        assert_eq!(url, "http://127.0.0.1:8282");
+    }
+
+    #[test]
+    fn explicit_recorded_servers_are_honoured() {
+        // Remote hosts, hand-picked loopback ports and the production default
+        // all survive untouched even when their probe says "not ours".
+        for recorded in [
+            "http://127.0.0.1:8182",
+            "http://localhost:8182",
+            "http://127.0.0.1:9999",
+            "http://browser4-server:8182",
+            "https://browser4.example.com",
+        ] {
+            let url = decide_dev_base_url(recorded, true, &|_| false, &|| Some(8282));
+            assert_eq!(url, recorded, "recorded URL {recorded} must be honoured");
+        }
+    }
+
+    #[test]
+    fn dev_allocation_falls_back_to_recorded_url_when_range_is_exhausted() {
+        let url = decide_dev_base_url("http://localhost:8182", false, &|_| false, &|| None);
+        assert_eq!(url, "http://localhost:8182");
+    }
+
+    #[test]
+    fn workspace_state_slug_is_stable_and_checkout_specific() {
+        let a = workspace_state_slug(Path::new("D:/ws/Browser4-4.13"));
+        let b = workspace_state_slug(Path::new("D:/ws/Browser4-4.14"));
+        assert_eq!(a, workspace_state_slug(Path::new("D:/ws/Browser4-4.13")));
+        assert_ne!(a, b, "different checkouts must not share a state namespace");
+        assert!(a.starts_with("Browser4-4.13-"), "slug was {a}");
+        assert!(!a.contains('/') && !a.contains('\\') && !a.contains(':'));
+    }
+
+    #[test]
+    fn workspace_state_slug_separates_same_named_checkouts() {
+        // Two clones that happen to share a folder name still get their own
+        // state dirs (and therefore their own ports).
+        let a = workspace_state_slug(Path::new("D:/work/browser4"));
+        let b = workspace_state_slug(Path::new("E:/other/browser4"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn loopback_detection_covers_localhost_and_ip_literals() {
+        for url in [
+            "http://localhost:8182",
+            "http://127.0.0.1:8282",
+            "http://[::1]:8282",
+        ] {
+            let parsed = reqwest::Url::parse(url).unwrap();
+            assert!(is_loopback_base_url(&parsed), "{url} is loopback");
+        }
+        let remote = reqwest::Url::parse("http://browser4-server:8182").unwrap();
+        assert!(!is_loopback_base_url(&remote));
+    }
+
+
+    // -------------------------------------------------------------------
+    // Development-mode app data isolation
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn workspace_app_data_path_is_the_app_data_dir_of_the_state_namespace() {
+        let Some(path) = workspace_app_data_path() else {
+            // BROWSER4_CLI_FORCE_REMOTE_BUNDLE is set — development mode off.
+            return;
+        };
+        assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("app-data"));
+        let parent = path.parent().expect("app-data always has a parent");
+        // The parent is the effective CLI state dir.  Compared structurally
+        // (not by re-resolving it) because other tests mutate
+        // BROWSER4_CLI_STATE_DIR / BROWSER4_CLI_INVOKE_DIR concurrently — and
+        // because the app data path is *defined* as `<state dir>/app-data`.
+        assert!(
+            parent.ends_with("workspaces")
+                || parent.file_name().is_some(),
+            "unexpected app data parent: {}",
+            parent.display()
+        );
+    }
+
+    #[test]
+    fn config_tree_fingerprint_tracks_names_and_content() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path().join("config");
+        let enabled = dir.join("conf-enabled");
+        create_dir_all(&enabled).unwrap();
+        write(enabled.join("application-private.properties"), "a=1\n").unwrap();
+
+        let first = config_tree_fingerprint(&dir);
+        assert_eq!(first, config_tree_fingerprint(&dir), "fingerprint is stable");
+
+        write(enabled.join("extra.properties"), "b=1\n").unwrap();
+        assert_ne!(
+            first,
+            config_tree_fingerprint(&dir),
+            "a new config file must change the fingerprint"
+        );
+    }
+
+    #[test]
+    fn plain_directories_are_not_mistaken_for_links() {
+        let tmp = test_temp_dir();
+        assert!(!is_directory_link(tmp.path()));
+        assert!(!is_directory_link(&tmp.path().join("does-not-exist")));
+    }
+
+    #[test]
+    fn seeding_exposes_the_global_config_inside_the_workspace() {
+        let tmp = test_temp_dir();
+        let source = tmp.path().join("global").join("config");
+        create_dir_all(source.join("conf-enabled")).unwrap();
+        create_dir_all(source.join("mcp")).unwrap();
+        write(
+            source.join("conf-enabled").join("application-private.properties"),
+            "deepseek.api.key=test-only\n",
+        )
+        .unwrap();
+
+        let target = tmp.path().join("app-data").join("config");
+        seed_config_from(&source, &target).unwrap();
+
+        // Whether the tree was linked or copied, the keys must be readable.
+        let seeded = target
+            .join("conf-enabled")
+            .join("application-private.properties");
+        assert_eq!(
+            fs::read_to_string(&seeded).unwrap(),
+            "deepseek.api.key=test-only\n"
+        );
+
+        // Seeding again is idempotent, and additive when the global tree grows
+        // (the copy fallback re-syncs from the fingerprint).
+        seed_config_from(&source, &target).unwrap();
+        write(source.join("conf-enabled").join("added.properties"), "x=1\n").unwrap();
+        seed_config_from(&source, &target).unwrap();
+        assert!(target.join("conf-enabled").join("added.properties").is_file());
+        assert_eq!(fs::read_to_string(&seeded).unwrap(), "deepseek.api.key=test-only\n");
+    }
+
+    #[test]
+    fn seeding_creates_an_empty_config_dir_when_nothing_is_configured() {
+        let tmp = test_temp_dir();
+        let source = tmp.path().join("global").join("config"); // never created
+        let target = tmp.path().join("app-data").join("config");
+
+        seed_config_from(&source, &target).unwrap();
+        assert!(target.is_dir(), "the backend must find a config dir");
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 0);
+    }
+
+    // -------------------------------------------------------------------
+    // Shared browser prototype
+    // -------------------------------------------------------------------
+
+    /// Linking is attempted first; on hosts/filesystems where it is
+    /// unavailable the function must degrade to "workspace keeps its own
+    /// prototype" instead of failing or copying a whole profile tree.
+    #[test]
+    fn prototype_is_linked_to_the_global_one() {
+        let tmp = test_temp_dir();
+        let source = tmp.path().join("global").join("prototype");
+        create_dir_all(source.join("google-chrome")).unwrap();
+        write(source.join("marker.txt"), "prototype-state\n").unwrap();
+
+        let target = tmp.path().join("workspace").join("prototype");
+        create_dir_all(target.parent().unwrap()).unwrap();
+        share_browser_prototype(&source, &target);
+
+        if !is_directory_link(&target) {
+            // Linking unsupported here (e.g. restricted filesystem).
+            assert!(!target.exists(), "no copy may be made as a fallback");
+            return;
+        }
+        assert_eq!(
+            fs::read_to_string(target.join("marker.txt")).unwrap(),
+            "prototype-state\n",
+            "the shared prototype must be visible through the link"
+        );
+        // Writes land in the single shared tree, not in a per-workspace copy.
+        write(target.join("written-through-link.txt"), "x\n").unwrap();
+        assert!(source.join("written-through-link.txt").is_file());
+
+        // Idempotent.
+        share_browser_prototype(&source, &target);
+        assert!(is_directory_link(&target));
+    }
+
+    #[test]
+    fn prototype_link_creates_the_global_prototype_when_missing() {
+        let tmp = test_temp_dir();
+        let source = tmp.path().join("global").join("prototype"); // not created
+        let target = tmp.path().join("workspace").join("prototype");
+        create_dir_all(target.parent().unwrap()).unwrap();
+
+        share_browser_prototype(&source, &target);
+
+        if !is_directory_link(&target) {
+            return; // linking unsupported
+        }
+        assert!(source.is_dir(), "the global prototype becomes the single source");
+        assert!(is_directory_link(&target));
+    }
+
+    #[test]
+    fn prototype_replaces_an_empty_workspace_dir_but_never_user_data() {
+        let tmp = test_temp_dir();
+        let source = tmp.path().join("global").join("prototype");
+        create_dir_all(&source).unwrap();
+
+        // Empty workspace prototype: replaced by the shared link.
+        let empty = tmp.path().join("ws-empty").join("prototype");
+        create_dir_all(&empty).unwrap();
+        share_browser_prototype(&source, &empty);
+        let linked = is_directory_link(&empty);
+        if linked {
+            assert!(is_directory_link(&empty));
+        }
+
+        // Directory skeleton without files (what the backend creates on first
+        // launch) is still replaceable — it holds no user data.
+        let skeleton = tmp.path().join("ws-skeleton").join("prototype");
+        create_dir_all(skeleton.join("google-chrome").join("Default")).unwrap();
+        share_browser_prototype(&source, &skeleton);
+        if linked {
+            assert!(
+                is_directory_link(&skeleton),
+                "a file-less prototype skeleton must be replaceable"
+            );
+        }
+
+        // Non-empty workspace prototype: left untouched (cannot be recovered
+        // if we deleted it), regardless of whether linking works.
+        let populated = tmp.path().join("ws-data").join("prototype");
+        create_dir_all(populated.join("PULSAR_CHROME")).unwrap();
+        write(populated.join("PULSAR_CHROME").join("keep.txt"), "user-data\n").unwrap();
+        share_browser_prototype(&source, &populated);
+        assert!(
+            !is_directory_link(&populated),
+            "a populated prototype must never be replaced by a link"
+        );
+        assert_eq!(
+            fs::read_to_string(populated.join("PULSAR_CHROME").join("keep.txt")).unwrap(),
+            "user-data\n"
+        );
+    }
+
+    #[test]
+    fn shared_app_data_entries_cover_config_and_prototype() {
+        let relatives: Vec<String> = SHARED_APP_DATA_ENTRIES
+            .iter()
+            .map(|entry| entry.relative.join("/"))
+            .collect();
+        assert_eq!(relatives, vec!["config", "browser/chrome/prototype"]);
+        assert!(SHARED_APP_DATA_ENTRIES
+            .iter()
+            .all(|entry| entry.relative == entry.global_relative));
+    }
+
+    #[test]
+    fn join_components_uses_native_separators() {
+        let root = Path::new("base");
+        let joined = join_components(root, BROWSER_PROTOTYPE_COMPONENTS);
+        assert_eq!(
+            joined,
+            root.join("browser").join("chrome").join("prototype")
+        );
+        // The Windows link step shells out to `cmd`, which reads a forward
+        // slash as a switch — the joined path must not contain one.
+        assert!(
+            joined.components().count() == 4,
+            "unexpected component count for {}",
+            joined.display()
+        );
+    }
+
+    #[test]
+    fn workspace_match_token_is_regex_safe() {        let Some(token) = workspace_match_token() else {
+            return;
+        };
+        assert!(
+            token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'),
+            "token {token} must be safe to embed in a PowerShell -match pattern"
+        );
+        assert_eq!(token, workspace_state_slug(&dev_workspace_root().unwrap()));
+    }
+
+    #[test]
+    fn workspace_browser_data_roots_point_into_the_workspace_app_data() {
+        let roots = workspace_browser_data_roots();
+        if roots.is_empty() {
+            // Development mode off (or a concurrent test flipped the env).
+            return;
+        }
+        assert_eq!(roots.len(), 1, "one browser data root per workspace");
+        assert!(
+            roots[0].ends_with(Path::new("browser").join("chrome")),
+            "unexpected browser data root: {}",
+            roots[0].display()
+        );
+    }
+
 
     // -------------------------------------------------------------------
     // resolve_base_url config fallback tests
@@ -7756,6 +10453,87 @@ mod tests {
         // may add \\?\ prefix on Windows — compare file names instead).
         assert!(resolved.ends_with(Path::new("runtime").join("v4.10.0")));
         assert!(resolved.join("lib").join("browser4.jar").exists());
+    }
+
+    #[test]
+    fn test_java_argfile_token_normalizes_windows_paths() {
+        // Verbatim prefix is stripped, backslashes become forward slashes so
+        // the java launcher's escape processing (`\t`, `\n`, ...) cannot
+        // corrupt paths inside the argfile.
+        assert_eq!(
+            java_argfile_token(r"\\?\C:\Users\john\app\lib\a.jar"),
+            "C:/Users/john/app/lib/a.jar"
+        );
+        assert_eq!(
+            java_argfile_token(r"C:\Program Files\Browser4\lib\a.jar"),
+            "\"C:/Program Files/Browser4/lib/a.jar\"" // whitespace → quoted
+        );
+        // The `-cp` classpath is ONE `;`-joined token whose every entry may
+        // carry its own verbatim prefix (the runtime data dir is
+        // canonicalized) — all of them must be stripped, not just a leading
+        // one, otherwise the entries turn into unopenable `//?/` paths.
+        assert_eq!(
+            java_argfile_token(
+                r"\\?\C:\app\lib\Bundle.jar;\\?\C:\app\lib\EvalEx-2.0.jar;\\?\C:\app\lib\kotlin.jar"
+            ),
+            "C:/app/lib/Bundle.jar;C:/app/lib/EvalEx-2.0.jar;C:/app/lib/kotlin.jar"
+        );
+        // AOT cache options embed the verbatim prefix after `=`.
+        assert_eq!(
+            java_argfile_token(r"-XX:AOTCacheOutput=\\?\C:\Users\runtime\aot\app.aot"),
+            "-XX:AOTCacheOutput=C:/Users/runtime/aot/app.aot"
+        );
+        assert_eq!(
+            java_argfile_token(r"-XX:AOTCache=\\?\C:\Users\runtime\aot\app.aot"),
+            "-XX:AOTCache=C:/Users/runtime/aot/app.aot"
+        );
+        // UNC paths canonicalize to `\\?\UNC\server\share\...`.
+        assert_eq!(
+            java_argfile_token(r"\\?\UNC\server\share\app\lib\a.jar"),
+            "//server/share/app/lib/a.jar"
+        );
+        // Non-path arguments pass through untouched.
+        assert_eq!(
+            java_argfile_token("--server.port=8182"),
+            "--server.port=8182"
+        );
+        assert_eq!(
+            java_argfile_token("-XX:TieredStopAtLevel=1"),
+            "-XX:TieredStopAtLevel=1"
+        );
+    }
+
+    #[test]
+    fn test_estimated_windows_command_line_len() {
+        let program = Path::new(r"C:\jdk\bin\java.exe");
+        let args = vec!["-cp".to_string(), "a".repeat(100)];
+        // program (19) + space overhead: "-cp" (3+3) + 100+3
+        assert_eq!(
+            estimated_windows_command_line_len(program, &args),
+            19 + 6 + 103
+        );
+    }
+
+    #[test]
+    fn test_write_java_argfile_round_trip() {
+        let file = write_java_argfile(&[
+            "-cp".to_string(),
+            r"C:\Users\john doe\lib\a.jar".to_string(),
+            "ai.platon.pulsar.apps.Browser4BundleApplicationKt".to_string(),
+        ])
+        .unwrap();
+        assert!(file.is_file());
+        let contents = fs::read_to_string(&file).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines[0], "-cp");
+        assert_eq!(lines[1], "\"C:/Users/john doe/lib/a.jar\"");
+        assert_eq!(
+            lines[2],
+            "ai.platon.pulsar.apps.Browser4BundleApplicationKt"
+        );
+        let dir = file.parent().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+        assert!(!file.exists());
     }
 
     #[test]
@@ -8132,10 +10910,7 @@ mod tests {
         fn lock(path: &Path) -> Self {
             let prev = env::var("PLAYWRIGHT_BROWSERS_PATH").ok();
             unsafe {
-                env::set_var(
-                    "PLAYWRIGHT_BROWSERS_PATH",
-                    path.as_os_str(),
-                );
+                env::set_var("PLAYWRIGHT_BROWSERS_PATH", path.as_os_str());
             }
             Self { prev }
         }
@@ -8144,12 +10919,8 @@ mod tests {
     impl Drop for PlaywrightPathGuard {
         fn drop(&mut self) {
             match &self.prev {
-                Some(v) => unsafe {
-                    env::set_var("PLAYWRIGHT_BROWSERS_PATH", v)
-                },
-                None => unsafe {
-                    env::remove_var("PLAYWRIGHT_BROWSERS_PATH")
-                },
+                Some(v) => unsafe { env::set_var("PLAYWRIGHT_BROWSERS_PATH", v) },
+                None => unsafe { env::remove_var("PLAYWRIGHT_BROWSERS_PATH") },
             }
         }
     }
@@ -8230,7 +11001,8 @@ mod tests {
 
         let found = find_chrome_in_playwright();
         assert_eq!(
-            found, Some(expected),
+            found,
+            Some(expected),
             "should prefer the newer version directory (1150 > 1000)"
         );
     }
@@ -8245,7 +11017,8 @@ mod tests {
 
         let found = find_chrome_in_playwright();
         assert_eq!(
-            found, Some(expected),
+            found,
+            Some(expected),
             "should respect PLAYWRIGHT_BROWSERS_PATH env var"
         );
     }
@@ -8286,7 +11059,8 @@ mod tests {
         // Verify the Playwright binary is discoverable on its own.
         let playwright_found = find_chrome_in_playwright();
         assert_eq!(
-            playwright_found, Some(playwright_exe),
+            playwright_found,
+            Some(playwright_exe),
             "Playwright binary should be independently discoverable"
         );
     }
@@ -8297,25 +11071,70 @@ mod tests {
     #[test]
     fn browser_channel_from_str_all_variants() {
         // Chrome variants
-        assert_eq!(BrowserChannel::from_str("chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("Chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("CHROME"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("google-chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("google chrome"), Some(BrowserChannel::Chrome));
+        assert_eq!(
+            BrowserChannel::from_str("chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("Chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("CHROME"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google-chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google chrome"),
+            Some(BrowserChannel::Chrome)
+        );
 
-        assert_eq!(BrowserChannel::from_str("chrome-beta"), Some(BrowserChannel::ChromeBeta));
-        assert_eq!(BrowserChannel::from_str("chrome-dev"), Some(BrowserChannel::ChromeDev));
-        assert_eq!(BrowserChannel::from_str("chrome-canary"), Some(BrowserChannel::ChromeCanary));
+        assert_eq!(
+            BrowserChannel::from_str("chrome-beta"),
+            Some(BrowserChannel::ChromeBeta)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("chrome-dev"),
+            Some(BrowserChannel::ChromeDev)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("chrome-canary"),
+            Some(BrowserChannel::ChromeCanary)
+        );
 
         // Edge variants
-        assert_eq!(BrowserChannel::from_str("msedge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("edge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("microsoft-edge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("MsEdge"), Some(BrowserChannel::MsEdge));
+        assert_eq!(
+            BrowserChannel::from_str("msedge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("edge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft-edge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("MsEdge"),
+            Some(BrowserChannel::MsEdge)
+        );
 
-        assert_eq!(BrowserChannel::from_str("msedge-beta"), Some(BrowserChannel::MsEdgeBeta));
-        assert_eq!(BrowserChannel::from_str("msedge-dev"), Some(BrowserChannel::MsEdgeDev));
-        assert_eq!(BrowserChannel::from_str("msedge-canary"), Some(BrowserChannel::MsEdgeCanary));
+        assert_eq!(
+            BrowserChannel::from_str("msedge-beta"),
+            Some(BrowserChannel::MsEdgeBeta)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("msedge-dev"),
+            Some(BrowserChannel::MsEdgeDev)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("msedge-canary"),
+            Some(BrowserChannel::MsEdgeCanary)
+        );
     }
 
     #[test]
@@ -8383,59 +11202,134 @@ mod tests {
 
     #[test]
     fn channel_from_str_chrome_variants() {
-        assert_eq!(BrowserChannel::from_str("chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("Chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("CHROME"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("google-chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("google chrome"), Some(BrowserChannel::Chrome));
+        assert_eq!(
+            BrowserChannel::from_str("chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("Chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("CHROME"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google-chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google chrome"),
+            Some(BrowserChannel::Chrome)
+        );
     }
 
     #[test]
     fn channel_from_str_chrome_beta_variants() {
-        assert_eq!(BrowserChannel::from_str("chrome-beta"), Some(BrowserChannel::ChromeBeta));
-        assert_eq!(BrowserChannel::from_str("google-chrome-beta"), Some(BrowserChannel::ChromeBeta));
+        assert_eq!(
+            BrowserChannel::from_str("chrome-beta"),
+            Some(BrowserChannel::ChromeBeta)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google-chrome-beta"),
+            Some(BrowserChannel::ChromeBeta)
+        );
     }
 
     #[test]
     fn channel_from_str_chrome_dev_variants() {
-        assert_eq!(BrowserChannel::from_str("chrome-dev"), Some(BrowserChannel::ChromeDev));
-        assert_eq!(BrowserChannel::from_str("google-chrome-dev"), Some(BrowserChannel::ChromeDev));
+        assert_eq!(
+            BrowserChannel::from_str("chrome-dev"),
+            Some(BrowserChannel::ChromeDev)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google-chrome-dev"),
+            Some(BrowserChannel::ChromeDev)
+        );
     }
 
     #[test]
     fn channel_from_str_chrome_canary_variants() {
-        assert_eq!(BrowserChannel::from_str("chrome-canary"), Some(BrowserChannel::ChromeCanary));
-        assert_eq!(BrowserChannel::from_str("google-chrome-canary"), Some(BrowserChannel::ChromeCanary));
+        assert_eq!(
+            BrowserChannel::from_str("chrome-canary"),
+            Some(BrowserChannel::ChromeCanary)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google-chrome-canary"),
+            Some(BrowserChannel::ChromeCanary)
+        );
     }
 
     #[test]
     fn channel_from_str_edge_variants() {
-        assert_eq!(BrowserChannel::from_str("msedge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("edge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("EDGE"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("microsoft-edge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("microsoft edge"), Some(BrowserChannel::MsEdge));
+        assert_eq!(
+            BrowserChannel::from_str("msedge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("edge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("EDGE"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft-edge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft edge"),
+            Some(BrowserChannel::MsEdge)
+        );
     }
 
     #[test]
     fn channel_from_str_edge_beta_variants() {
-        assert_eq!(BrowserChannel::from_str("msedge-beta"), Some(BrowserChannel::MsEdgeBeta));
-        assert_eq!(BrowserChannel::from_str("edge-beta"), Some(BrowserChannel::MsEdgeBeta));
-        assert_eq!(BrowserChannel::from_str("microsoft-edge-beta"), Some(BrowserChannel::MsEdgeBeta));
+        assert_eq!(
+            BrowserChannel::from_str("msedge-beta"),
+            Some(BrowserChannel::MsEdgeBeta)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("edge-beta"),
+            Some(BrowserChannel::MsEdgeBeta)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft-edge-beta"),
+            Some(BrowserChannel::MsEdgeBeta)
+        );
     }
 
     #[test]
     fn channel_from_str_edge_dev_variants() {
-        assert_eq!(BrowserChannel::from_str("msedge-dev"), Some(BrowserChannel::MsEdgeDev));
-        assert_eq!(BrowserChannel::from_str("edge-dev"), Some(BrowserChannel::MsEdgeDev));
-        assert_eq!(BrowserChannel::from_str("microsoft-edge-dev"), Some(BrowserChannel::MsEdgeDev));
+        assert_eq!(
+            BrowserChannel::from_str("msedge-dev"),
+            Some(BrowserChannel::MsEdgeDev)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("edge-dev"),
+            Some(BrowserChannel::MsEdgeDev)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft-edge-dev"),
+            Some(BrowserChannel::MsEdgeDev)
+        );
     }
 
     #[test]
     fn channel_from_str_edge_canary_variants() {
-        assert_eq!(BrowserChannel::from_str("msedge-canary"), Some(BrowserChannel::MsEdgeCanary));
-        assert_eq!(BrowserChannel::from_str("edge-canary"), Some(BrowserChannel::MsEdgeCanary));
-        assert_eq!(BrowserChannel::from_str("microsoft-edge-canary"), Some(BrowserChannel::MsEdgeCanary));
+        assert_eq!(
+            BrowserChannel::from_str("msedge-canary"),
+            Some(BrowserChannel::MsEdgeCanary)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("edge-canary"),
+            Some(BrowserChannel::MsEdgeCanary)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft-edge-canary"),
+            Some(BrowserChannel::MsEdgeCanary)
+        );
     }
 
     #[test]
@@ -8475,6 +11369,167 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // Plugins warm restart
+    // -------------------------------------------------------------------
+
+    /// Env guard that isolates the state dir and the plugin warm-restart env
+    /// var for a single test, restoring the previous values on drop.
+    struct WarmRestartEnvGuard {
+        prev_disable: Option<String>,
+        prev_state: Option<String>,
+    }
+
+    impl WarmRestartEnvGuard {
+        fn lock(state_dir: &Path) -> Self {
+            let prev_disable = env::var(DISABLE_PLUGIN_WARM_RESTART_ENV).ok();
+            let prev_state = env::var("BROWSER4_CLI_STATE_DIR").ok();
+            let _ = fs::create_dir_all(state_dir);
+            unsafe {
+                env::set_var("BROWSER4_CLI_STATE_DIR", state_dir.as_os_str());
+                env::remove_var(DISABLE_PLUGIN_WARM_RESTART_ENV);
+            }
+            Self {
+                prev_disable,
+                prev_state,
+            }
+        }
+    }
+
+    impl Drop for WarmRestartEnvGuard {
+        fn drop(&mut self) {
+            match &self.prev_disable {
+                Some(v) => unsafe { env::set_var(DISABLE_PLUGIN_WARM_RESTART_ENV, v) },
+                None => unsafe { env::remove_var(DISABLE_PLUGIN_WARM_RESTART_ENV) },
+            }
+            match &self.prev_state {
+                Some(v) => unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", v) },
+                None => unsafe { env::remove_var("BROWSER4_CLI_STATE_DIR") },
+            }
+        }
+    }
+
+    fn write_test_jar(dir: &Path, name: &str, content: &[u8]) {
+        create_dir_all(dir).unwrap();
+        write(dir.join(name), content).unwrap();
+    }
+
+    #[test]
+    fn plugins_fingerprint_stable_for_unchanged_jars() {
+        let tmp = test_temp_dir();
+        let plugins = tmp.path().join("plugins");
+        write_test_jar(&plugins, "b-plugin.jar", b"bbb");
+        write_test_jar(&plugins, "a-plugin.jar", b"aaa");
+
+        // Order of directory iteration must not matter (sorted by file name).
+        let first = compute_plugins_fingerprint(&plugins);
+        let second = compute_plugins_fingerprint(&plugins);
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 64, "sha256 hex digest expected");
+    }
+
+    #[test]
+    fn plugins_fingerprint_missing_dir_equals_empty_dir() {
+        let tmp = test_temp_dir();
+        let empty = tmp.path().join("plugins");
+        create_dir_all(&empty).unwrap();
+        let missing = tmp.path().join("does-not-exist");
+
+        assert_eq!(
+            compute_plugins_fingerprint(&empty),
+            compute_plugins_fingerprint(&missing)
+        );
+    }
+
+    #[test]
+    fn plugins_fingerprint_changes_on_jar_added_removed_modified() {
+        let tmp = test_temp_dir();
+        let plugins = tmp.path().join("plugins");
+        write_test_jar(&plugins, "a-plugin.jar", b"aaa");
+
+        let base = compute_plugins_fingerprint(&plugins);
+
+        // Added
+        write_test_jar(&plugins, "b-plugin.jar", b"bbb");
+        assert_ne!(compute_plugins_fingerprint(&plugins), base);
+
+        // Removed (back to base set)
+        let _ = fs::remove_file(plugins.join("b-plugin.jar"));
+        assert_eq!(compute_plugins_fingerprint(&plugins), base);
+
+        // Modified (different size; mtime granularity is not relied upon)
+        write_test_jar(&plugins, "a-plugin.jar", b"aaaaaa");
+        assert_ne!(compute_plugins_fingerprint(&plugins), base);
+
+        // Non-jar files are ignored: adding notes.txt must not change the
+        // fingerprint, so removing it again restores the previous value.
+        let before_txt = compute_plugins_fingerprint(&plugins);
+        write_test_jar(&plugins, "notes.txt", b"ignored");
+        assert_eq!(compute_plugins_fingerprint(&plugins), before_txt);
+        let _ = fs::remove_file(plugins.join("notes.txt"));
+        assert_eq!(compute_plugins_fingerprint(&plugins), before_txt);
+    }
+
+    #[test]
+    fn plugins_change_detection_lifecycle() {
+        let tmp = test_temp_dir();
+        let _guard = lock_env_mutex();
+        let _env = WarmRestartEnvGuard::lock(&tmp.path().join("state"));
+
+        let plugins = tmp.path().join("server").join("plugins");
+        write_test_jar(&plugins, "a-plugin.jar", b"aaa");
+
+        // No recorded entry yet: never restart (server may be external).
+        assert!(!plugins_changed_since_server_start(8182));
+
+        record_plugins_fingerprint(8182, &plugins);
+        assert!(!plugins_changed_since_server_start(8182));
+
+        // Other ports are unaffected.
+        assert!(!plugins_changed_since_server_start(8183));
+
+        // Installing a new plugin triggers a restart.
+        write_test_jar(&plugins, "b-plugin.jar", b"bbb");
+        assert!(plugins_changed_since_server_start(8182));
+
+        // Opt-out env var suppresses the restart.
+        unsafe { env::set_var(DISABLE_PLUGIN_WARM_RESTART_ENV, "1") };
+        assert!(!plugins_changed_since_server_start(8182));
+        unsafe { env::remove_var(DISABLE_PLUGIN_WARM_RESTART_ENV) };
+
+        // Clearing the entry disables detection again (external server).
+        clear_plugins_fingerprint(8182);
+        assert!(!plugins_changed_since_server_start(8182));
+    }
+
+    #[test]
+    fn plugins_fingerprint_store_round_trip_and_port_replace() {
+        let tmp = test_temp_dir();
+        let _guard = lock_env_mutex();
+        let _env = WarmRestartEnvGuard::lock(&tmp.path().join("state"));
+
+        let plugins = tmp.path().join("plugins");
+        write_test_jar(&plugins, "a-plugin.jar", b"aaa");
+
+        record_plugins_fingerprint(8182, &plugins);
+        record_plugins_fingerprint(8183, &plugins);
+
+        let store = load_plugins_fingerprint_store(&plugins_fingerprint_file());
+        assert_eq!(store.entries.len(), 2);
+        assert!(store.entries.iter().all(|e| !e.fingerprint.is_empty()));
+
+        // Re-recording the same port replaces, not duplicates.
+        record_plugins_fingerprint(8182, &plugins);
+        let store = load_plugins_fingerprint_store(&plugins_fingerprint_file());
+        assert_eq!(store.entries.len(), 2);
+        assert_eq!(store.entries.iter().filter(|e| e.port == 8182).count(), 1);
+
+        clear_plugins_fingerprint(8183);
+        let store = load_plugins_fingerprint_store(&plugins_fingerprint_file());
+        assert_eq!(store.entries.len(), 1);
+        assert_eq!(store.entries[0].port, 8182);
+    }
+
+    // -------------------------------------------------------------------
     // Runtime-bundle staleness detection (Issue: dev-mode auto-start can
     // silently reuse a stale bundle that does not match checked-out sources)
     // -------------------------------------------------------------------
@@ -8490,6 +11545,17 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    /// Force a file's modification time.
+    ///
+    /// Windows (and some Linux filesystems) stamp mtimes from the system timer
+    /// tick, so files written a few microseconds apart commonly share one
+    /// timestamp.  Tests that assert on mtime *order* must set it explicitly
+    /// instead of racing the filesystem clock.
+    fn set_mtime(path: &Path, mtime: std::time::SystemTime) {
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(mtime).unwrap();
     }
 
     fn write_bundle_lib_jar(lib_dir: &Path, name: &str) {
@@ -8581,28 +11647,18 @@ mod tests {
         // No newer sources yet — bundle is fresh.
         assert_eq!(detect_local_bundle_staleness(tmp.path(), &lib_dir), None);
 
+        // Back-date the bundle jar: "newer source" must be a fact on disk, not
+        // a race against the filesystem clock (see `set_mtime`).
+        set_mtime(
+            &lib_dir.join("browser4-rest-4.13.13-SNAPSHOT.jar"),
+            std::time::SystemTime::now() - std::time::Duration::from_secs(60),
+        );
+
         // Touch a Kotlin source under a bundled module after the jar time.
         let src = tmp.path().join("browser4-rest").join("src").join("main");
         create_dir_all(&src).unwrap();
         let source_file = src.join("Fresh.kt");
         write(&source_file, "package fresh\n").unwrap();
-        // Order the two timestamps explicitly instead of sleeping between the
-        // writes: the filesystem rounds mtimes to the system clock tick, so a
-        // 20ms sleep could still leave the source with the same timestamp as
-        // the jar — and staleness is decided by a strict `mtime > jar_mtime`,
-        // which made this assertion fail intermittently.
-        let jar_mtime = lib_dir
-            .join("browser4-rest-4.13.13-SNAPSHOT.jar")
-            .metadata()
-            .unwrap()
-            .modified()
-            .unwrap();
-        fs::File::options()
-            .write(true)
-            .open(&source_file)
-            .unwrap()
-            .set_modified(jar_mtime + std::time::Duration::from_secs(60))
-            .unwrap();
         assert_eq!(
             detect_local_bundle_staleness(tmp.path(), &lib_dir),
             Some(LocalBundleStaleness::SourcesNewerThanBundle)

@@ -1,15 +1,19 @@
 package ai.platon.pulsar.apps
 
+import ai.platon.pulsar.agentic.llm.LlmConfigNormalizer
+import ai.platon.pulsar.agentic.mcp.server.runMcpAppIfRequested
 import ai.platon.pulsar.boot.autoconfigure.PulsarContextInitializer
 import ai.platon.pulsar.boot.plugin.PluginClasspathEnhancer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.ApiApplication
+import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import kotlin.concurrent.thread
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.boot.context.metrics.buffering.BufferingApplicationStartup
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Import
 import org.springframework.context.event.EventListener
@@ -57,6 +61,9 @@ class Browser4BundleApplication(
 
     private fun getLLMStatusMessage(): String {
         return try {
+            if (TestChatModelFactory.isEnabled()) {
+                return "LLM is configured (file-backed test mock)."
+            }
             val hasLLM = ChatModelFactory.isModelConfigured(session.configuration, verbose = false)
             if (hasLLM) {
                 "LLM is configured, you can use LLM commands."
@@ -80,7 +87,19 @@ class Browser4BundleApplication(
 
 fun runBrowser4BundleApplication(args: Array<String>) {
     PluginClasspathEnhancer.enhance(Path.of("plugins"))
+    // Rewrite env-style LLM keys (DEEPSEEK_API_KEY=...) in conf-enabled
+    // properties files to dotted keys before any session is created, so the
+    // engine's `deepseek.api.key` lookups actually bind.
+    LlmConfigNormalizer.normalize()
+    // `--app mcp` starts the standalone MCP server (stdio or HTTP/SSE) instead of
+    // the web application; it owns its agentic context and never boots Spring.
+    if (runMcpAppIfRequested(args)) {
+        return
+    }
     runApplication<Browser4BundleApplication>(*args) {
+        // Buffer startup steps so /actuator/startup can report per-phase
+        // timing (bean init, auto-configuration evaluation, etc.).
+        setApplicationStartup(BufferingApplicationStartup(4096))
         setAdditionalProfiles("bundle", "private", "advanced")
         addInitializers(PulsarContextInitializer())
         setLogStartupInfo(true)

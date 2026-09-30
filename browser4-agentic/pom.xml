@@ -14,7 +14,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.13.22-SNAPSHOT</version>
+        <version>4.14.0-rc.6</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -22,6 +22,10 @@
     <name>Browser4 Agentic</name>
 
     <dependencies>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-coding</artifactId>
+        </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-common</artifactId>
@@ -92,24 +96,25 @@
             <artifactId>kotlin-sdk-server-jvm</artifactId>
             <version>${mcp-sdk.version}</version>
         </dependency>
+        <!-- MCP client: external memory bridge (M4) + MCP HTTP E2E tests -->
         <dependency>
             <groupId>io.modelcontextprotocol</groupId>
             <artifactId>kotlin-sdk-client-jvm</artifactId>
             <version>${mcp-sdk.version}</version>
-            <scope>test</scope>
         </dependency>
-        <!-- Ktor CIO engine for embedded MCP HTTP server (lightweight, pure Kotlin) -->
+        <!-- Ktor CIO engine for embedded MCP HTTP server (lightweight, pure Kotlin).
+             The version must match the Ktor the MCP SDK is built against — see
+             ktor.version in browser4-dependencies. -->
         <dependency>
             <groupId>io.ktor</groupId>
             <artifactId>ktor-server-cio-jvm</artifactId>
-            <version>3.2.3</version>
+            <version>${ktor.version}</version>
         </dependency>
-        <!-- Ktor client CIO engine for MCP HTTP E2E tests -->
+        <!-- Ktor client CIO engine: MCP HTTP transports (external memory bridge) + MCP HTTP E2E tests -->
         <dependency>
             <groupId>io.ktor</groupId>
             <artifactId>ktor-client-cio-jvm</artifactId>
-            <version>3.2.3</version>
-            <scope>test</scope>
+            <version>${ktor.version}</version>
         </dependency>
         <!-- Observability: OpenTelemetry for distributed tracing (optional) -->
         <dependency>
@@ -170,5 +175,31 @@
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
         </dependency>
+
+        <!-- Agent memory system: SQLite FTS derived index (memory-index.sqlite).
+             Version managed by browser4-dependencies BOM (sqlite-jdbc.version). -->
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+        </dependency>
     </dependencies>
+
+    <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- Bundle the repo-level browser4-cli skill (SKILL.md + reference
+                 docs) into the agentic jar at classpath `skills/browser4-cli/**`,
+                 so SkillBootstrap and system.skillDoc can serve it without a
+                 source tree (design §4.3 — new-machine guarantee). -->
+            <resource>
+                <directory>${maven.multiModuleProjectDirectory}/skills</directory>
+                <targetPath>skills</targetPath>
+                <includes>
+                    <include>browser4-cli/**</include>
+                </includes>
+            </resource>
+        </resources>
+    </build>
 </project>

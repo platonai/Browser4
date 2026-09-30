@@ -553,4 +553,103 @@ class HtmlSnapshotMockController {
     </div>
 </body>
 </html>"""
+
+    // =========================================================================
+    // Readability fixture — high-noise article page
+    //
+    // Navigation, ad slots, a share widget, a newsletter box, and a footer all
+    // wrap a single article. Used to verify html_snapshot_readability /
+    // markdown.read extract exactly the article region and nothing else.
+    // =========================================================================
+
+    @GetMapping("/htmlsnapshot-test/readability-article", produces = [MediaType.TEXT_HTML_VALUE])
+    fun readabilityArticlePage(): String = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>The Long Road to Memory Safety</title>
+    <meta name="author" content="Grace Hopper">
+    <meta property="og:site_name" content="Systems Weekly">
+    <meta name="description" content="How the industry finally started taking memory safety seriously.">
+</head>
+<body>
+    <header class="site-header">
+        <div class="logo">Systems Weekly</div>
+        <nav class="main-nav">
+            <a href="/news">News</a> <a href="/opinion">Opinion</a>
+            <a href="/technology">Technology</a> <a href="/culture">Culture</a>
+            <a href="/video">Video</a> <a href="/podcasts">Podcasts</a>
+            <a href="/newsletters">Newsletters</a> <a href="/jobs">Jobs</a>
+        </nav>
+        <div class="search-box">
+            <form action="/search"><input name="q" placeholder="Search Systems Weekly"></form>
+        </div>
+    </header>
+
+    <div class="ad-slot ad-slot-top">
+        <p>Advertisement — Upgrade to Premium for an ad-free reading experience today.</p>
+    </div>
+
+    <main class="page-layout">
+        <article class="post-content">
+            <h1>The Long Road to Memory Safety</h1>
+            <p class="byline">By Grace Hopper · 12 min read</p>
+            <p>Memory safety bugs have accounted for the majority of security vulnerabilities
+               in systems software for over three decades, and the industry has finally begun
+               to treat the problem with the seriousness it deserves.</p>
+            <p>The story starts in the 1990s, when buffer overflows were routinely exploited to
+               take over entire machines, and defensive programming meant manually auditing
+               every array access in a codebase measured in millions of lines.</p>
+            <h2>The Rise of Safe Languages</h2>
+            <p>Languages like Java and Go eliminated whole classes of errors by design, but they
+               paid for that safety with garbage collection pauses and runtime overhead that
+               kept them out of the most performance-critical layers of the system stack.</p>
+            <p>Rust took a different path: compile-time ownership and borrowing rules that give
+               the developer the guarantees of a managed language with the performance of
+               hand-written C, enforced entirely without a garbage collector.</p>
+            <h2>What the Kernel Taught Us</h2>
+            <p>When the Linux kernel began accepting Rust code in 2022, it sent a signal that
+               even the most conservative software project on earth was willing to reconsider
+               its foundational assumptions about how systems code should be written.</p>
+            <p>Device drivers were the first beneficiaries, and the pattern has since spread to
+               filesystems, networking stacks, and hypervisors across the open source ecosystem
+               and beyond into commercial operating systems.</p>
+            <h2>Conclusion</h2>
+            <p>The transition will take years, and legacy C code will remain with us for
+               decades, but the direction is clear: memory safety is no longer a nice-to-have
+               property but a baseline requirement for new systems software.</p>
+            <div class="share-widget">
+                <a href="/share/twitter">Share on Twitter</a>
+                <a href="/share/facebook">Share on Facebook</a>
+                <a href="/share/linkedin">Share on LinkedIn</a>
+            </div>
+        </article>
+
+        <aside class="sidebar">
+            <div class="newsletter-box">
+                <p>Sign up for our weekly newsletter and get the best of Systems Weekly
+                   delivered to your inbox every Tuesday morning, free of charge.</p>
+            </div>
+            <div class="sponsored">
+                <p>Sponsored: The most reliable hosting platform for mission critical
+                   workloads, trusted by engineering teams at hundreds of companies.</p>
+            </div>
+            <div class="trending">
+                <p>Trending: Why every team should adopt observability tooling before
+                   their next incident, according to industry surveys conducted in 2026.</p>
+            </div>
+        </aside>
+    </main>
+
+    <footer class="site-footer">
+        <p>Copyright 2026 Systems Weekly. All rights reserved worldwide for all content
+           published on this website and its affiliated properties.</p>
+        <nav class="footer-nav">
+            <a href="/about">About</a> <a href="/contact">Contact</a>
+            <a href="/terms">Terms</a> <a href="/privacy">Privacy</a>
+            <a href="/advertise">Advertise</a> <a href="/careers">Careers</a>
+        </nav>
+    </footer>
+</body>
+</html>"""
 }

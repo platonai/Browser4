@@ -15,7 +15,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.13.22-SNAPSHOT</version>
+        <version>4.14.0-rc.6</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -50,6 +50,14 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-rest</artifactId>
+        </dependency>
+        <!-- The swarm backend moved to a plugin; E2E tests need it on the
+             test classpath so its auto-configuration registers the facade. -->
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-swarm</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>

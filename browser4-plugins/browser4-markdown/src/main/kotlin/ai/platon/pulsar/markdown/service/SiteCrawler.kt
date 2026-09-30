@@ -383,7 +383,7 @@ open class SiteCrawler(
      * This is a simplified converter for static HTML. For full JS-rendered content,
      * use [MarkdownConverter.convert] with a WebDriver instead.
      */
-    private fun htmlToMarkdown(html: String, pageUrl: String): String {
+    open fun htmlToMarkdown(html: String, pageUrl: String): String {
         val doc = Jsoup.parse(html, pageUrl)
         val sb = StringBuilder()
 

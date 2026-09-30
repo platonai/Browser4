@@ -1,8 +1,10 @@
 package ai.platon.pulsar.agent.tool
 
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
+import ai.platon.pulsar.agentic.tools.specs.ToolResultSchemas
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.sql.SQLTemplate
@@ -11,8 +13,11 @@ import ai.platon.pulsar.rest.api.service.ScrapeService
 import ai.platon.pulsar.rest.mcp.controller.*
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
+import ai.platon.pulsar.skeleton.workflow.parse.html.ReadabilityExtractor
+import ai.platon.pulsar.skeleton.workflow.parse.html.ReadabilityResult
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.node.ArrayNode
+import com.fasterxml.jackson.databind.node.ObjectNode
 import ai.platon.pulsar.rest.session.ManagedSession
 import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
@@ -48,7 +53,7 @@ class HTMLSnapshotToolExecutor(
     private fun resolveSession(args: Map<String, Any?>, receiver: Any): ManagedSession {
         if (receiver is ManagedSession) return receiver
         val sessionId = requireSessionId(args)
-        return sessionManager.getSession(sessionId)
+        return sessionManager.getOrRecoverSession(sessionId)
             ?: throw IllegalArgumentException("Session not found: $sessionId")
     }
 
@@ -63,7 +68,13 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("sessionId", "String", null),
             ),
             returnType = "String",
-            description = "Capture the current page as an HTML snapshot with metadata, interactive elements, and link groups."
+            description = "Capture the current page as an HTML snapshot with metadata, interactive elements, and link groups.",
+            examples = listOf(
+                ToolExample(
+                    title = "Snapshot the page the session is on",
+                    args = mapOf("sessionId" to "<session-id>"),
+                ),
+            ),
         )
 
         toolSpec["scrape"] = ToolSpec(
@@ -73,10 +84,26 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("sessionId", "String", null),
                 ToolSpec.Arg("field", "String", null),
                 ToolSpec.Arg("selector", "String", ":root"),
-                ToolSpec.Arg("attrName", "String", null),
+                ToolSpec.Arg("attrName", "String?", "null", "Attribute to read when field=attr."),
             ),
             returnType = "String",
-            description = "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector."
+            description = "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector.",
+            examples = listOf(
+                ToolExample(
+                    title = "Read one field",
+                    args = mapOf("sessionId" to "<session-id>", "field" to "title", "selector" to "h1"),
+                ),
+                ToolExample(
+                    title = "Read a link target",
+                    args = mapOf(
+                        "sessionId" to "<session-id>",
+                        "field" to "attr",
+                        "selector" to "a",
+                        "attrName" to "href",
+                    ),
+                    notes = "field=attr requires attrName",
+                ),
+            ),
         )
 
         toolSpec["scrape_all"] = ToolSpec(
@@ -86,12 +113,24 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("sessionId", "String", null),
                 ToolSpec.Arg("field", "String", null),
                 ToolSpec.Arg("selector", "String", ":root"),
-                ToolSpec.Arg("attrName", "String", null),
+                ToolSpec.Arg("attrName", "String?", "null", "Attribute to read when field=attr."),
                 ToolSpec.Arg("offset", "Int", "0"),
                 ToolSpec.Arg("limit", "Int", "-1"),
             ),
             returnType = "String",
-            description = "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector."
+            outputSchema = ToolResultSchemas.HTML_SNAPSHOT_SCRAPE_ALL,
+            description = "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector.",
+            examples = listOf(
+                ToolExample(
+                    title = "Read every product title",
+                    args = mapOf(
+                        "sessionId" to "<session-id>",
+                        "field" to "text",
+                        "selector" to ".product > h2",
+                        "limit" to "20",
+                    ),
+                ),
+            ),
         )
 
         toolSpec["query"] = ToolSpec(
@@ -99,11 +138,21 @@ class HTMLSnapshotToolExecutor(
             method = "query",
             arguments = listOf(
                 ToolSpec.Arg("sql", "String", null),
-                ToolSpec.Arg("url", "String", null),
+                ToolSpec.Arg("url", "String?", "null", "Page to query; defaults to the session's current page."),
                 ToolSpec.Arg("sessionId", "String", null),
             ),
             returnType = "String",
-            description = "Execute an X-SQL query against the current page or a specified URL."
+            outputSchema = ToolResultSchemas.HTML_SNAPSHOT_QUERY,
+            description = "Execute an X-SQL query against the current page or a specified URL.",
+            examples = listOf(
+                ToolExample(
+                    title = "Run X-SQL against the current page",
+                    args = mapOf(
+                        "sessionId" to "<session-id>",
+                        "sql" to "select dom_first_text(dom, 'h1') as title",
+                    ),
+                ),
+            ),
         )
 
         toolSpec["export"] = ToolSpec(
@@ -114,7 +163,13 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("clean", "Boolean", "false"),
             ),
             returnType = "String",
-            description = "Export the full, pretty-printed HTML of the current page. Set clean=true to strip <script>, <style>, and non-standard attributes (keeps the vi attribute)."
+            description = "Export the full, pretty-printed HTML of the current page. Set clean=true to strip <script>, <style>, and non-standard attributes (keeps the vi attribute).",
+            examples = listOf(
+                ToolExample(
+                    title = "Export the page HTML",
+                    args = mapOf("sessionId" to "<session-id>", "clean" to "true"),
+                ),
+            ),
         )
 
         toolSpec["summary"] = ToolSpec(
@@ -124,7 +179,10 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("sessionId", "String", null),
             ),
             returnType = "String",
-            description = "Generate a page summary including title, statistics, and detected link groups."
+            description = "Generate a page summary including title, statistics, and detected link groups.",
+            examples = listOf(
+                ToolExample(title = "Summarise the current page", args = mapOf("sessionId" to "<session-id>")),
+            ),
         )
 
         toolSpec["inspect"] = ToolSpec(
@@ -137,7 +195,32 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("depth", "Int", "5"),
             ),
             returnType = "String",
-            description = "Inspect the HTML snapshot and suggest CSS selectors for recurring patterns."
+            outputSchema = ToolResultSchemas.HTML_SNAPSHOT_INSPECT,
+            description = "Inspect the HTML snapshot and suggest CSS selectors for recurring patterns.",
+            examples = listOf(
+                ToolExample(
+                    title = "Find selectors for repeated cards",
+                    args = mapOf("sessionId" to "<session-id>", "selector" to ".product", "max" to "10"),
+                ),
+            ),
+        )
+
+        toolSpec["readability"] = ToolSpec(
+            domain = domain,
+            method = "readability",
+            arguments = listOf(
+                ToolSpec.Arg("sessionId", "String", null),
+                ToolSpec.Arg("url", "String?", "null", "Fetch this URL instead of using the current page."),
+            ),
+            returnType = "String",
+            outputSchema = ToolResultSchemas.HTML_SNAPSHOT_READABILITY,
+            description = "Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) from the stored HTML snapshot using a Readability-style heuristic. When url is given, the page is fetched independently; otherwise the current session page is used.",
+            examples = listOf(
+                ToolExample(
+                    title = "Extract the article of the current page",
+                    args = mapOf("sessionId" to "<session-id>"),
+                ),
+            ),
         )
     }
 
@@ -154,6 +237,7 @@ class HTMLSnapshotToolExecutor(
             "export" -> export(args, receiver)
             "summary" -> summary(args, receiver)
             "inspect" -> inspect(args, receiver)
+            "readability" -> readability(args, receiver)
             else -> throw IllegalArgumentException("Unsupported html_snapshot method: $functionName")
         }
     }
@@ -683,6 +767,66 @@ class HTMLSnapshotToolExecutor(
             inspectDocument(document, selector, maxMatches, maxDepth)
         }
     }
+
+    /**
+     * Extract the main article content from the stored HTML snapshot using a
+     * Readability-style heuristic (deterministic, no LLM).
+     *
+     * @param args `url` (optional) — fetch a specific page independently, like
+     *   `html_snapshot_query`'s `@url` mode. Without it, the current session
+     *   page is used (stored snapshot, or a fresh capture when absent).
+     * @return JSON with title, byline, siteName, excerpt, length, confidence,
+     *   textContent and cleaned article content HTML.
+     */
+    private suspend fun readability(args: Map<String, Any?>, receiver: Any = Any()): String {
+        val managed = resolveSession(args, receiver)
+
+        return managed.withLock {
+            val pulsarSession = managed.agenticSession
+            val requestedUrl = paramString(args, "url", "readability", required = false)
+                ?.takeIf { it.isNotBlank() }
+
+            val page = if (requestedUrl != null) {
+                val normUrl = pulsarSession.normalize(requestedUrl)
+                pulsarSession.getOrNull(normUrl.urlString) ?: pulsarSession.capture(managed.driver, normUrl.urlString)
+            } else {
+                val current = pulsarSession.normalize(driver.currentUrl())
+                pulsarSession.getOrNull(current.urlString) ?: pulsarSession.capture(managed.driver)
+            }
+
+            val document = pulsarSession.parse(page)
+
+            val result = ReadabilityExtractor().extract(document.document)
+                ?: throw IllegalArgumentException(
+                    "No readable article content found on this page (text below threshold or no article-like structure). " +
+                        "Try a page with substantial text, or use `htmlsnapshot get text \"<selector>\"` for explicit extraction."
+                )
+
+            readabilityPayload(result, page.url).toString()
+        }
+    }
+
+    /**
+     * The `html_snapshot readability` payload: the nine fields of [ReadabilityResult]
+     * plus the page URL the extractor could not know.
+     *
+     * Extracted from the `withLock` block so the shape the contract promises can be
+     * tested without a session — [ToolResultSchemas.HTML_SNAPSHOT_READABILITY]
+     * describes exactly this, and `HTMLSnapshotResultSchemaTest` drives it with a
+     * real `ReadabilityExtractor` result.
+     */
+    internal fun readabilityPayload(result: ReadabilityResult, fallbackUrl: String): ObjectNode =
+        pulsarObjectMapper().createObjectNode().apply {
+            put("url", result.url.ifBlank { fallbackUrl })
+            put("title", result.title)
+            put("byline", result.byline)
+            put("siteName", result.siteName)
+            put("excerpt", result.excerpt)
+            put("length", result.length)
+            put("confidence", result.confidence)
+            put("textContent", result.textContent)
+            put("content", result.content)
+        }
 
     // =========================================================================
     // Helpers

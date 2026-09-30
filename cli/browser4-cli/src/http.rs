@@ -12,12 +12,14 @@ const AGENT_REQUEST_TIMEOUT_SECS: u64 = 180;
 const SNAPSHOT_REQUEST_TIMEOUT_SECS: u64 = 60;
 const BATCH_REQUEST_TIMEOUT_SECS: u64 = 120;
 const CRAWL_REQUEST_TIMEOUT_SECS: u64 = 600;
+const CODING_REQUEST_TIMEOUT_SECS: u64 = 600;
 const CRAWL_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_CRAWL_TIMEOUT_SECS";
 const DEFAULT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_HTTP_TIMEOUT_SECS";
 const NAVIGATION_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS";
 const TEXT_INPUT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_INPUT_TIMEOUT_SECS";
 const SNAPSHOT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_SNAPSHOT_TIMEOUT_SECS";
 const AGENT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_AGENT_TIMEOUT_SECS";
+const CODING_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_CODING_TIMEOUT_SECS";
 const ACT_REQUEST_TIMEOUT_SECS: u64 = 60;
 const ACT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_ACT_TIMEOUT_SECS";
 /// Env var set by the CLI when the user passes `--timeout <seconds>`.
@@ -85,6 +87,21 @@ fn snapshot_request_timeout() -> std::time::Duration {
         SNAPSHOT_REQUEST_TIMEOUT_ENV,
         SNAPSHOT_REQUEST_TIMEOUT_SECS,
     ))
+}
+
+/// Long-running self-development coding tools (Maven builds, dev tasks).
+/// Maven reactor builds (`mvn -pl X -am`) routinely take minutes, so the
+/// HTTP budget must match the server-side build timeout, not the 30s
+/// default request timeout.
+fn coding_request_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(timeout_secs_from_env(
+        CODING_REQUEST_TIMEOUT_ENV,
+        CODING_REQUEST_TIMEOUT_SECS,
+    ))
+}
+
+fn is_coding_tool(tool: &str) -> bool {
+    matches!(tool, "coding_mvnBuild" | "coding_devTask" | "coding_runCode")
 }
 
 fn is_navigation_tool(tool: &str) -> bool {
@@ -164,6 +181,8 @@ fn timeout_for_tool(tool: &str) -> std::time::Duration {
         agent_request_timeout()
     } else if is_snapshot_tool(tool) {
         snapshot_request_timeout()
+    } else if is_coding_tool(tool) {
+        coding_request_timeout()
     } else {
         default_request_timeout()
     }
@@ -299,6 +318,70 @@ pub struct ServerPaginationMeta {
     pub truncated: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Structured failure metadata
+// ---------------------------------------------------------------------------
+
+/// The structured failure fields of a rejected MCP call.
+///
+/// A failure travels as text (`ERROR: [RATE_LIMITED] …`) *and* as fields next to
+/// it (`errorCode`, `retryAfterMs`).  The tool-call helpers return the text and
+/// therefore drop the fields; callers that need them for a user-facing hint
+/// (`tips::show_failure_tip`) read them from here instead of re-parsing prose.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolErrorMeta {
+    /// Stable failure code (`ToolErrorCode.wire`), e.g. `RATE_LIMITED`.
+    pub error_code: Option<String>,
+    /// Milliseconds the client should wait before retrying, when reported.
+    pub retry_after_ms: Option<u64>,
+}
+
+thread_local! {
+    /// Failure metadata of the most recent MCP tool call.  Cleared when a new
+    /// call starts, so it can never outlive the call that produced it.
+    static LAST_TOOL_ERROR: std::cell::RefCell<Option<ToolErrorMeta>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn clear_tool_error_meta() {
+    LAST_TOOL_ERROR.with(|cell| *cell.borrow_mut() = None);
+}
+
+fn record_tool_error(meta: ToolErrorMeta) {
+    LAST_TOOL_ERROR.with(|cell| *cell.borrow_mut() = Some(meta));
+}
+
+/// Take the structured failure metadata of the most recent failing tool call.
+///
+/// Returns `None` when the call succeeded, when it failed without structured
+/// fields (transport errors), or when the metadata has already been taken.
+pub fn take_tool_error_meta() -> Option<ToolErrorMeta> {
+    LAST_TOOL_ERROR.with(|cell| cell.borrow_mut().take())
+}
+
+/// Read the structured failure fields out of a tool-call response body.
+///
+/// The private dispatcher puts them at the top level; the standard MCP server
+/// mirrors them under `_meta`.  Both spellings of the retry delay are accepted.
+fn tool_error_meta_from_response(data: &Value) -> ToolErrorMeta {
+    let meta = data.get("_meta");
+    let pick_str = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_str)
+            .or_else(|| meta.and_then(|m| m.get(key)).and_then(Value::as_str))
+            .map(str::to_string)
+    };
+    let pick_u64 = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_u64)
+            .or_else(|| meta.and_then(|m| m.get(key)).and_then(Value::as_u64))
+    };
+    ToolErrorMeta {
+        error_code: pick_str("errorCode"),
+        retry_after_ms: pick_u64("retryAfterMs").or_else(|| pick_u64("retry_after_ms")),
+    }
+}
+
 impl ServerPaginationMeta {
     fn from_json(v: &Value) -> Option<Self> {
         Some(Self {
@@ -387,6 +470,9 @@ async fn call_tool_with_timeout(
     mut args: Value,
     timeout: Option<std::time::Duration>,
 ) -> Result<CallToolResult, String> {
+    // Each call owns the recorded failure metadata: it is cleared up front and
+    // only set again by this call's own failure path.
+    clear_tool_error_meta();
     normalize_refs(&mut args);
 
     let url = format!("{}/mcp/call-tool", base_url.trim_end_matches('/'));
@@ -414,6 +500,11 @@ async fn call_tool_with_timeout(
         .map_err(|e| format!("Failed to read response body: {e}"))?;
 
     if !status.is_success() {
+        // A rejected REST call can still carry the structured failure fields
+        // (e.g. 429 with `errorCode`/`retryAfterMs`) in its JSON body.
+        if let Ok(data) = serde_json::from_str::<Value>(&response_text) {
+            record_tool_error(tool_error_meta_from_response(&data));
+        }
         let message = response_text.trim();
         if message.is_empty() {
             return Err(format!(
@@ -442,6 +533,7 @@ async fn call_tool_with_timeout(
             .and_then(|item| item.get("text"))
             .and_then(|t| t.as_str())
             .unwrap_or("Unknown MCP error");
+        record_tool_error(tool_error_meta_from_response(&data));
         return Err(msg.to_string());
     }
 
@@ -453,6 +545,7 @@ async fn call_tool_with_timeout(
     // a leading "ERROR:" prefix as a hard error so the CLI exits non-zero and
     // scripts can detect failure reliably.
     if text.starts_with("ERROR:") {
+        record_tool_error(tool_error_meta_from_response(&data));
         return Err(text.trim_start_matches("ERROR: ").to_string());
     }
 
@@ -484,22 +577,39 @@ pub async fn submit_plain_command(
     command: &str,
     async_mode: bool,
 ) -> Result<String, String> {
-    call_tool(
-        client,
-        base_url,
-        "command_run",
-        serde_json::json!({ "command": command, "async": async_mode }),
-    )
-    .await
+    submit_plain_command_with_options(client, base_url, command, async_mode, serde_json::json!({}))
+        .await
+}
+
+/// Like [submit_plain_command], but merges `extra` fields into the `command_run`
+/// tool payload (e.g. `noopLimit` for `agent run --noop-limit`).
+pub async fn submit_plain_command_with_options(
+    client: &Client,
+    base_url: &str,
+    command: &str,
+    async_mode: bool,
+    extra: serde_json::Value,
+) -> Result<String, String> {
+    let mut payload = serde_json::json!({ "command": command, "async": async_mode });
+    if let Some(obj) = extra.as_object() {
+        for (k, v) in obj {
+            payload[k] = v.clone();
+        }
+    }
+    // Async agent submission (`agent run`) creates the session's companion
+    // agent on first use, which can exceed the default 30s HTTP timeout —
+    // the server returns the task ID only after that warm-up. Use a longer
+    // override so valid submissions are not reported as HTTP timeouts.
+    if async_mode {
+        call_tool_with_timeout_override(client, base_url, "command_run", payload, Some(180)).await
+    } else {
+        call_tool(client, base_url, "command_run", payload).await
+    }
 }
 
 /// Send a chat message to the AI via the conversations API.
 /// Returns the AI's text response.
-pub async fn chat_with_ai(
-    client: &Client,
-    base_url: &str,
-    prompt: &str,
-) -> Result<String, String> {
+pub async fn chat_with_ai(client: &Client, base_url: &str, prompt: &str) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/conversations");
     let timeout = std::time::Duration::from_secs(timeout_secs_from_env(
         "BROWSER4_CLI_CHAT_TIMEOUT_SECS",
@@ -544,10 +654,8 @@ pub async fn chat_with_ai_async(
     prompt: &str,
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/conversations/async");
-    let timeout = std::time::Duration::from_secs(timeout_secs_from_env(
-        "BROWSER4_CLI_CHAT_TIMEOUT_SECS",
-        30,
-    ));
+    let timeout =
+        std::time::Duration::from_secs(timeout_secs_from_env("BROWSER4_CLI_CHAT_TIMEOUT_SECS", 30));
     let response = client
         .post(&url)
         .header("Content-Type", "text/plain")
@@ -598,7 +706,10 @@ pub async fn get_chat_result(
         .await
         .map_err(|e| {
             if e.is_timeout() {
-                format!("Chat result request timed out after {}s.", timeout.as_secs())
+                format!(
+                    "Chat result request timed out after {}s.",
+                    timeout.as_secs()
+                )
             } else {
                 format!("Failed to get chat result: {e}")
             }
@@ -781,12 +892,7 @@ pub async fn get_swarm_status(
     task_id: &str,
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/status"));
-    send_rest_request(
-        client
-            .get(url)
-            .timeout(std::time::Duration::from_secs(5)),
-    )
-    .await
+    send_rest_request(client.get(url).timeout(std::time::Duration::from_secs(5))).await
 }
 
 /// Read swarm task result through `SwarmController.getResult(id)`.
@@ -798,7 +904,6 @@ pub async fn get_swarm_result(
     let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/result"));
     send_rest_request(client.get(url)).await
 }
-
 
 fn build_endpoint_url(base_url: &str, path: &str) -> String {
     format!("{}{}", base_url.trim_end_matches('/'), path)
@@ -816,9 +921,7 @@ fn format_http_error(status: reqwest::StatusCode, response_text: &str) -> String
     }
 }
 
-async fn send_rest_request(
-    request: reqwest::RequestBuilder,
-) -> Result<String, String> {
+async fn send_rest_request(request: reqwest::RequestBuilder) -> Result<String, String> {
     let response = request
         .send()
         .await
@@ -881,11 +984,7 @@ pub async fn install_plugin(
 }
 
 /// Remove a plugin by name via `DELETE /api/plugins/{name}`.
-pub async fn remove_plugin(
-    client: &Client,
-    base_url: &str,
-    name: &str,
-) -> Result<String, String> {
+pub async fn remove_plugin(client: &Client, base_url: &str, name: &str) -> Result<String, String> {
     let url = build_endpoint_url(base_url, &format!("/api/plugins/{}", name));
     send_rest_request(client.delete(url)).await
 }
@@ -951,19 +1050,13 @@ pub async fn resume_crawl(
 }
 
 /// Clear all terminal-state crawl tasks via `CrawlController.clearCrawls()`.
-pub async fn clear_crawls(
-    client: &Client,
-    base_url: &str,
-) -> Result<String, String> {
+pub async fn clear_crawls(client: &Client, base_url: &str) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/crawl/clear");
     send_rest_request(client.post(url)).await
 }
 
 /// Clear ALL crawl tasks (including active ones) via `CrawlController.clearAllCrawls()`.
-pub async fn clear_all_crawls(
-    client: &Client,
-    base_url: &str,
-) -> Result<String, String> {
+pub async fn clear_all_crawls(client: &Client, base_url: &str) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/crawl/clear-all");
     send_rest_request(client.post(url)).await
 }
@@ -1267,6 +1360,24 @@ mod tests {
         // Agent tools use their own 180s default when the env var is not set
         assert_eq!(timeout_for_tool("agent_extract").as_secs(), 180);
         assert_eq!(timeout_for_tool("agent_summarize").as_secs(), 180);
+    }
+
+    #[test]
+    fn test_coding_tools_get_long_request_timeout() {
+        let _env_lock = TIMEOUT_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _env_guard = TimeoutEnvGuard::set_all("3", "7", "11");
+
+        // Maven builds / dev tasks routinely take minutes — the HTTP budget
+        // must not be the 30s default (regression: `code mvn` timed out at 30s).
+        assert_eq!(timeout_for_tool("coding_mvnBuild").as_secs(), 600);
+        assert_eq!(timeout_for_tool("coding_devTask").as_secs(), 600);
+        assert_eq!(timeout_for_tool("coding_runCode").as_secs(), 600);
+        // Other coding tools (fast file ops) keep the default budget.
+        assert_eq!(timeout_for_tool("coding_read").as_secs(), 3);
+        assert_eq!(timeout_for_tool("coding_scaffoldToDir").as_secs(), 3);
+        assert_eq!(timeout_for_tool("coding_validate").as_secs(), 3);
     }
 
     #[test]
@@ -1602,7 +1713,10 @@ mod tests {
         let status = reqwest::StatusCode::NOT_FOUND;
         let msg = format_http_error(status, "");
         assert!(msg.contains("404"), "should contain status code");
-        assert!(msg.contains("empty response body"), "should mention empty body");
+        assert!(
+            msg.contains("empty response body"),
+            "should mention empty body"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -1696,7 +1810,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn test_get_swarm_status_returns_status_json() {
-        let status_json = r#"{"id":"swarm-task-1","statusCode":102,"isDone":false,"status":"Processing"}"#;
+        let status_json =
+            r#"{"id":"swarm-task-1","statusCode":102,"isDone":false,"status":"Processing"}"#;
         let base_url = spawn_swarm_mock_server("/api/swarm/swarm-task-1/status", status_json);
         let client = make_client();
 
@@ -1772,5 +1887,89 @@ mod tests {
 
         // Cleanup
         std::env::remove_var(GLOBAL_TIMEOUT_OVERRIDE_ENV);
+    }
+
+    // -------------------------------------------------------------------
+    // Structured failure metadata
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_tool_error_meta_from_response_reads_top_level_and_meta() {
+        let top_level = json!({
+            "isError": true,
+            "errorCode": "RATE_LIMITED",
+            "retryAfterMs": 45,
+        });
+        assert_eq!(
+            tool_error_meta_from_response(&top_level),
+            ToolErrorMeta {
+                error_code: Some("RATE_LIMITED".to_string()),
+                retry_after_ms: Some(45),
+            }
+        );
+
+        // The standard server mirrors both fields under `_meta`.
+        let mirrored = json!({ "_meta": { "errorCode": "RATE_LIMITED", "retryAfterMs": 7 } });
+        assert_eq!(
+            tool_error_meta_from_response(&mirrored),
+            ToolErrorMeta {
+                error_code: Some("RATE_LIMITED".to_string()),
+                retry_after_ms: Some(7),
+            }
+        );
+
+        // A success body carries neither field.
+        assert_eq!(
+            tool_error_meta_from_response(&json!({ "content": [] })),
+            ToolErrorMeta::default()
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_rejected_call_records_structured_error_meta() {
+        let body = r#"{"content":[{"type":"text","text":"ERROR: [RATE_LIMITED] rate limit exceeded for browser_click (limit 10); retry after 45 ms"}],"isError":true,"errorCode":"RATE_LIMITED","retryAfterMs":45}"#;
+        let base_url = spawn_swarm_mock_server("/mcp/call-tool", body);
+        let client = make_client();
+
+        let error = call_tool(&client, &base_url, "browser_click", json!({ "ref": "#a" }))
+            .await
+            .expect_err("an isError response must fail the call");
+        assert!(error.contains("[RATE_LIMITED]"), "error: {error}");
+
+        let meta = take_tool_error_meta().expect("structured failure meta must be recorded");
+        assert_eq!(meta.error_code.as_deref(), Some("RATE_LIMITED"));
+        assert_eq!(meta.retry_after_ms, Some(45));
+        assert!(
+            take_tool_error_meta().is_none(),
+            "the metadata is taken once, so it cannot be reported twice"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_successful_call_records_no_error_meta() {
+        let client = make_client();
+
+        // A failure first: the backend reports the code in the text only (the
+        // defensive path, no `isError` flag).
+        let failure = spawn_swarm_mock_server(
+            "/mcp/call-tool",
+            r#"{"content":[{"type":"text","text":"ERROR: [RATE_LIMITED] slow down"}],"errorCode":"RATE_LIMITED","retryAfterMs":10}"#,
+        );
+        let _ = call_tool(&client, &failure, "browser_click", json!({})).await;
+        assert!(take_tool_error_meta().is_some());
+
+        // Then a success: it must not re-record (or leave behind) a failure.
+        let success = spawn_swarm_mock_server(
+            "/mcp/call-tool",
+            r#"{"content":[{"type":"text","text":"Clicked element e5"}]}"#,
+        );
+        let text = call_tool(&client, &success, "browser_click", json!({}))
+            .await
+            .expect("a successful call must succeed");
+        assert_eq!(text, "Clicked element e5");
+        assert!(
+            take_tool_error_meta().is_none(),
+            "a successful call must not expose failure metadata"
+        );
     }
 }

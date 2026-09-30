@@ -31,10 +31,13 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 - `rest`: Run REST module tests
 - `skills`: Run skills module tests
 - `mcp`: Run MCP module tests
+- `mcp-contract`: Contract gate — tool matrix, docs, lint and validators (agentic + rest)
+- `ps`: Run all PowerShell `*.tests.ps1` files in the project
 - `main`: Run all Browser4 main tests (`fast`, `rest`, `it`, `e2e`)
 - `cli` / `browser4-cli`: Run Rust Browser4 CLI tests from `cli/browser4-cli`
 - `server`: Launch the standalone mock site server from `browser4-tests/browser4-rest-tests` via `spring-boot:run` (`mock-site` and `mocksiteboot` are accepted as legacy aliases)
 - `rws`: Run real-world-scenario unit tests (`common.tests.ps1`). With `--scenarios`, run all agent-scenario tasks via `run-tests.ps1`. With `--task <file>`, run a single task via `run-task.ps1`.
+- `session`: Inspect persisted test sessions (`list`, `view`, `prune`)
 - `resume`: Resume from the last failed module (`-rf`)
 
 **RWS flags** (accepted after `rws`):
@@ -119,8 +122,9 @@ Browser4 uses a single VERSION file as the source of truth across all modules.
 - `node bin/version.mjs show -v`: Print version + git hash, branch, date.
 
 **Version changes:**
-- `node bin/version.mjs release`: Strip `-SNAPSHOT` for release deployment.
+- `node bin/version.mjs release`: Strip `-SNAPSHOT` / `-rc.N` to finalize a release.
 - `node bin/version.mjs bump <part>`: Bump version (major/minor/patch) with precheck.
+- `node bin/version.mjs bump rc`: Create or increment an `-rc.N` candidate (`-rc.1`, `-rc.2`, ...). Skips the publish-status precheck (an rc candidate precedes release).
 - `node bin/version.mjs auto`: Bump to next patch if changes detected. Shows release info, change summary, and asks for confirmation.
 - `node bin/version.mjs auto --dry-run`: Preview the bump plan without applying.
 - `node bin/version.mjs auto --commit`: Apply and commit+push.
@@ -177,9 +181,9 @@ Build scripts with extended functionality.
 
 CI/CD helper scripts for triggering and managing CI workflows.
 
-- **`trigger-ci.ps1`**: Create and push a CI pre-release tag (`vX.Y.Z-ci.N`) to trigger the CI workflow. Auto-increments the pre-release number. Branch-aware — creates tags from the current branch context.
+- **`trigger-ci.ps1`**: Create and push a CI pre-release tag (`vX.Y.Z-ci.N`) to trigger the CI workflow. Auto-increments the pre-release number. Branch-aware — creates tags from the current branch context, and hard-fails when the VERSION file's major.minor does not match the branch (the tag base version must always equal the VERSION file).
 - **`ci-tags-rm.ps1`**: Remove CI release tags.
-- **`monitor-ci.ps1`**: Monitor CI workflow runs with a 5-stage diagnostic pipeline. Tracks run status, extracts errors, and reports failures.
+- **`monitor-ci.ps1`**: Monitor CI workflow runs with a 5-stage diagnostic pipeline. Tracks run status, extracts errors, and reports failures. On failure it prints error diagnostics; by default it does NOT call an AI agent — pass `-Agent auto` (or a backend name) to dispatch a coworker fix task.
 - **`tests/monitor-ci.tests.ps1`**: Unit tests for `monitor-ci.ps1`.
 
 ### `common/`

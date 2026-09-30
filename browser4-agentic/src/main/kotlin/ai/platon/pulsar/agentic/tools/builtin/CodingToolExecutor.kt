@@ -1,8 +1,33 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
-import ai.platon.pulsar.agentic.common.CodingAgentFileSystem
-import ai.platon.pulsar.agentic.common.CodingAgentShell
+import ai.platon.pulsar.coding.ArtifactScaffolds
+import ai.platon.pulsar.coding.ArtifactValidator
+import ai.platon.pulsar.coding.CdpTrapCheck
+import ai.platon.pulsar.coding.CodeRunner
+import ai.platon.pulsar.coding.CodingAgentFileSystem
+import ai.platon.pulsar.coding.CodingAgentShell
+import ai.platon.pulsar.coding.DevFlowScaffolds
+import ai.platon.pulsar.coding.DevTaskPlanner
+import ai.platon.pulsar.coding.LanguageServerManager
+import ai.platon.pulsar.coding.KotlinSemanticIndexer
+import ai.platon.pulsar.coding.MavenBuildSupport
+import ai.platon.pulsar.coding.ModuleGraph
+import ai.platon.pulsar.coding.ModuleMap
+import ai.platon.pulsar.coding.ModuleMapSource
+import ai.platon.pulsar.coding.RepoConsistencyCheck
+import ai.platon.pulsar.coding.SkeletonExtractor
+import ai.platon.pulsar.coding.TokenEstimator
+import ai.platon.pulsar.coding.CodingTokenStats
+import ai.platon.pulsar.coding.ValidationResult
+import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.model.TcEvaluate
+import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.reflect.KClass
 
 /**
@@ -43,12 +68,73 @@ import kotlin.reflect.KClass
  * - `diff(path)` — Show changes since snapshot
  * - `changeSummary()` — Show all tracked changes
  * - `languages()` — Detect programming languages in workspace
+ *
+ * ### Artifact Scaffolding & Validation
+ * - `scaffold(type, ...)` — Generate template for plugin/skill/js/script
+ * - `validate(type, path)` — Validate a plugin dir, skill file, JS file, or script file
+ *
+ * ### Token Statistics
+ * - `tokenStats(reset?)` — Report token usage of coding tool calls (per method)
+ * - `estimateTokens(text)` — Estimate the token count of a text
  */
 class CodingToolExecutor : AbstractToolExecutor() {
 
     override val domain = "coding"
 
     override val receiverClass: KClass<*> = CodingToolExecutor.Target::class
+
+    /**
+     * Lazily-created LSP client bound to the workspace root of the first fs
+     * target it sees. Servers are started on demand and idle-reaped.
+     */
+    @Volatile
+    private var languageServer: LanguageServerManager? = null
+
+    private fun lsp(fs: CodingAgentFileSystem): LanguageServerManager {
+        return languageServer ?: synchronized(this) {
+            languageServer ?: LanguageServerManager(fs.workspaceRoot).also { languageServer = it }
+        }
+    }
+
+    /** Sandboxed code runner for `coding.runCode`. Stateless, safe to share. */
+    private val codeRunner = CodeRunner()
+
+    /** Maven build wrapper for Browser4 self-development (`coding.mvnBuild`). */
+    private val mavenBuild = MavenBuildSupport()
+
+    /** Zero-dependency Kotlin symbol/reference extraction (`coding.ktSymbols`/`ktReferences`). */
+    private val kotlinIndexer = KotlinSemanticIndexer()
+
+    /**
+     * Token statistics for all coding tool calls executed by this executor
+     * (input = serialized arguments, output = result text). Exposed to the
+     * agent via `coding.tokenStats`.
+     */
+    val tokenStats = CodingTokenStats()
+
+    /** Meta tools that must not be recorded (they exist to report on the rest). */
+    private val metaMethods = setOf("tokenStats", "estimateTokens")
+
+    /**
+     * Record token usage around every tool call, then delegate to the
+     * abstract executor. Failed calls (exception carried in [TcEvaluate])
+     * are counted with their error text as output.
+     */
+    override suspend fun callFunctionOn(tc: ToolCall, receiver: Any): TcEvaluate {
+        if (tc.domain != domain || tc.method in metaMethods) {
+            return super.callFunctionOn(tc, receiver)
+        }
+        val start = System.currentTimeMillis()
+        val result = super.callFunctionOn(tc, receiver)
+        tokenStats.record(
+            method = tc.method,
+            input = tc.arguments.toString(),
+            output = result.value?.toString() ?: result.exception?.toString(),
+            error = !result.success,
+            millis = System.currentTimeMillis() - start,
+        )
+        return result
+    }
 
     /**
      * Composite target that bundles the enhanced shell and filesystem.
@@ -157,6 +243,46 @@ class CodingToolExecutor : AbstractToolExecutor() {
             returnType = "String",
             description = "Replace text occurrences in a file. Use count to limit replacements (-1 = replace all)."
         )
+        toolSpec["replaceRegex"] = ToolSpec(
+            domain = domain, method = "replaceRegex",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("regex", "String"),
+                ToolSpec.Arg("replacement", "String"),
+                ToolSpec.Arg("count", "Int", "-1"),
+            ),
+            returnType = "String",
+            description = "Replace all matches of a regular expression in a file. Supports capture groups via \$1/\${name} in replacement. Use count to limit (-1 = replace all)."
+        )
+        toolSpec["editLines"] = ToolSpec(
+            domain = domain, method = "editLines",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("startLine", "Int"),
+                ToolSpec.Arg("endLine", "Int"),
+                ToolSpec.Arg("content", "String"),
+            ),
+            returnType = "String",
+            description = "Replace lines startLine..endLine (1-based, inclusive) with new content. Preferred over replace for whole-block edits."
+        )
+        toolSpec["insertAfter"] = ToolSpec(
+            domain = domain, method = "insertAfter",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("anchor", "String"),
+                ToolSpec.Arg("content", "String"),
+            ),
+            returnType = "String",
+            description = "Insert content after the first line containing anchor (substring match)."
+        )
+        toolSpec["revert"] = ToolSpec(
+            domain = domain, method = "revert",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+            ),
+            returnType = "String",
+            description = "Restore a file to its snapshot (state before the first tracked write in this session)."
+        )
         toolSpec["delete"] = ToolSpec(
             domain = domain, method = "delete",
             arguments = listOf(
@@ -224,9 +350,13 @@ class CodingToolExecutor : AbstractToolExecutor() {
         )
         toolSpec["diff"] = ToolSpec(
             domain = domain, method = "diff",
-            arguments = listOf(ToolSpec.Arg("path", "String")),
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("algorithm", "String", "myers"),
+            ),
             returnType = "String",
-            description = "Show diff between snapshot and current content of a file"
+            description = "Show unified diff between snapshot and current content of a file. " +
+                "algorithm: 'myers' (default, fastest) or 'patience' (better for code moves)."
         )
         toolSpec["changeSummary"] = ToolSpec(
             domain = domain, method = "changeSummary",
@@ -245,6 +375,325 @@ class CodingToolExecutor : AbstractToolExecutor() {
             arguments = emptyList(),
             returnType = "String",
             description = "Get the workspace root directory path"
+        )
+
+        // --- Language server (LSP) tools ---
+        toolSpec["diagnostics"] = ToolSpec(
+            domain = domain, method = "diagnostics",
+            arguments = listOf(ToolSpec.Arg("path", "String")),
+            returnType = "String",
+            description = "Get compiler/linter diagnostics for a file via its language server (ts, js, py, rs). " +
+                "Returns structured errors/warnings with line numbers. Requires the language server to be installed."
+        )
+        toolSpec["symbols"] = ToolSpec(
+            domain = domain, method = "symbols",
+            arguments = listOf(
+                ToolSpec.Arg("pattern", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Search for symbol definitions (classes, functions, variables) across open documents " +
+                "via language servers. pattern filters by name substring."
+        )
+        toolSpec["references"] = ToolSpec(
+            domain = domain, method = "references",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("symbol", "String"),
+            ),
+            returnType = "String",
+            description = "Find all references to a symbol in a file via its language server. " +
+                "Use before refactoring to assess impact."
+        )
+        toolSpec["lspServers"] = ToolSpec(
+            domain = domain, method = "lspServers",
+            arguments = emptyList(),
+            returnType = "String",
+            description = "Report which language servers are installed/available for diagnostics, symbols, and references."
+        )
+
+        // --- Browser4 self-development: Maven build with structured diagnostics ---
+        toolSpec["mvnBuild"] = ToolSpec(
+            domain = domain, method = "mvnBuild",
+            arguments = listOf(
+                ToolSpec.Arg("module", "String"),
+                ToolSpec.Arg("goals", "String", "compile"),
+                ToolSpec.Arg("skipTests", "Boolean", "true"),
+                ToolSpec.Arg("timeoutSeconds", "Long", "300"),
+            ),
+            returnType = "String",
+            description = "Build a Browser4 Maven module (-pl <module> -am <goals>) and return structured " +
+                "Kotlin/Java compiler diagnostics (file:line:col — message) instead of raw logs. " +
+                "module e.g. 'browser4-rest' or 'browser4-plugins/browser4-seo'; goals default 'compile'. " +
+                "Use this to check Kotlin code before/after edits — the fast alternative to a JDTLS server."
+        )
+
+        // --- Kotlin semantic layer (zero-dependency symbol/reference extraction) ---
+        toolSpec["ktSymbols"] = ToolSpec(
+            domain = domain, method = "ktSymbols",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("pattern", "String", "null"),
+            ),
+            returnType = "String",
+            description = "List Kotlin symbol definitions (classes, objects, interfaces, functions, properties) " +
+                "in a .kt file via lightweight language-structure analysis (zero dependencies). " +
+                "pattern filters by name substring. For Browser4 self-development."
+        )
+        toolSpec["ktReferences"] = ToolSpec(
+            domain = domain, method = "ktReferences",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("symbol", "String"),
+                ToolSpec.Arg("scope", "String", "file"),
+            ),
+            returnType = "String",
+            description = "Find references to a Kotlin symbol in a .kt file — call sites and property usages — " +
+                "via lightweight language-structure analysis (zero dependencies). scope='file' (default) scans " +
+                "the given file; scope='module' scans all .kt files under the owning module for cross-file " +
+                "impact (excludes the declaring file). Use before refactoring Browser4 code to assess impact."
+        )
+        toolSpec["ktInheritance"] = ToolSpec(
+            domain = domain, method = "ktInheritance",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("className", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Walk the inheritance chain of a Kotlin class across the owning module's files " +
+                "(class X : AbstractToolExecutor → AbstractToolExecutor → ...). className defaults to the " +
+                "file's main class. Zero-dependency text analysis; generic/interface noise is ignored. " +
+                "Use to understand a class hierarchy before editing."
+        )
+
+        // --- Extract skeleton from real code (anti-staleness scaffold) ---
+        toolSpec["scaffoldFromExample"] = ToolSpec(
+            domain = domain, method = "scaffoldFromExample",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("basePackage", "String", "null"),
+                ToolSpec.Arg("className", "String", "null"),
+                ToolSpec.Arg("domain", "String", "null"),
+                ToolSpec.Arg("toolMethod", "String", "null"),
+                ToolSpec.Arg("stem", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Generate a skeleton from EXISTING real code — a single file OR a whole directory " +
+                "(plugin/module). For a file: parameterizes package/class/domain/tool method into placeholders. " +
+                "For a directory: extracts a MULTI-FILE skeleton set and parameterizes volatile identifiers " +
+                "consistently ACROSS files (className renames the executor AND its references in the " +
+                "AutoConfiguration/Service files; sibling classes sharing the detected STEM follow the rename — " +
+                "renaming SeoToolExecutor → WeatherToolExecutor also derives WeatherAutoConfiguration/WeatherService; " +
+                "pass stem=<new-stem> to override; explicit per-class keys always win). " +
+                "artifactId from pom.xml, pluginName from plugin.json. " +
+                "Provide path (file or directory) plus any of basePackage/className/domain/toolMethod/stem to rename; " +
+                "omit to see the discovered parameters."
+        )
+
+        // --- Browser4 development-flow scaffolds (multi-file) ---
+        toolSpec["scaffoldFlow"] = ToolSpec(
+            domain = domain, method = "scaffoldFlow",
+            arguments = listOf(
+                ToolSpec.Arg("type", "String"),
+                ToolSpec.Arg("name", "String"),
+                ToolSpec.Arg("description", "String", "null"),
+                ToolSpec.Arg("category", "String", "null"),
+                ToolSpec.Arg("toolName", "String", "null"),
+                ToolSpec.Arg("domain", "String", "null"),
+                ToolSpec.Arg("basePackage", "String", "null"),
+                ToolSpec.Arg("toolMethod", "String", "null"),
+                ToolSpec.Arg("verify", "Boolean", "false"),
+            ),
+            returnType = "String",
+            description = "Generate a multi-file development-flow skeleton for Browser4 self-development. " +
+                "type: 'b4-cli-command' (new CLI command → commands.rs CommandDef + MCPToolController alias + " +
+                "backend method + test) or 'agent-tool' (new tool domain → ToolExecutor + ToolMount auto-config). " +
+                "Identifiers derive from name; cross-file consistency is automatic. " +
+                "For b4-cli-command: name=kebab-case, description, category (e.g. Extract/Swarm), toolName (snake). " +
+                "For agent-tool: name=plugin name, domain, basePackage, toolMethod, description."
+        )
+
+        // --- Impact analysis for Browser4 self-development ---
+        toolSpec["impact"] = ToolSpec(
+            domain = domain, method = "impact",
+            arguments = listOf(ToolSpec.Arg("path", "String")),
+            returnType = "String",
+            description = "Analyze the impact of changing a file in the Browser4 repo: which Maven module owns " +
+                "it, which modules depend on it (transitively, from the LIVE pom graph), and the suggested test " +
+                "commands (Rust CLI: cargo test --bin browser4-cli; Kotlin: mvn test -pl <module> -am). " +
+                "Use before modifying Browser4's own code."
+        )
+
+        // --- Live module graph (anti-staleness: rebuilt from real poms) ---
+        toolSpec["moduleGraph"] = ToolSpec(
+            domain = domain, method = "moduleGraph",
+            arguments = listOf(ToolSpec.Arg("module", "String", "null")),
+            returnType = "String",
+            description = "Scan the repository's real pom.xml files and report the LIVE module graph: module " +
+                "path, artifactId, parent, and internal dependencies. Warns when the graph drifted from the " +
+                "static ModuleMap snapshot (new modules the snapshot missed). " +
+                "With module=<path> (e.g. browser4-coding): reports its transitive dependents and suggested " +
+                "test commands. The same graph powers coding.impact."
+        )
+
+        // --- Sandboxed code execution ---
+        toolSpec["runCode"] = ToolSpec(
+            domain = domain, method = "runCode",
+            arguments = listOf(
+                ToolSpec.Arg("language", "String"),
+                ToolSpec.Arg("code", "String"),
+                ToolSpec.Arg("timeoutSeconds", "Long", "30"),
+            ),
+            returnType = "String",
+            description = "Run code in a sandboxed subprocess (private temp dir, hard timeout, output truncation). " +
+                "languages: kotlin, js/javascript, ts, python/python3, bash/sh. " +
+                "Use for quick snippets; for workspace builds/tests use coding.shell."
+        )
+        toolSpec["runCodeLanguages"] = ToolSpec(
+            domain = domain, method = "runCodeLanguages",
+            arguments = emptyList(),
+            returnType = "String",
+            description = "List languages supported by coding.runCode."
+        )
+
+        // --- Artifact scaffolding & validation ---
+        toolSpec["scaffold"] = ToolSpec(
+            domain = domain, method = "scaffold",
+            arguments = listOf(
+                ToolSpec.Arg("type", "String"),
+                ToolSpec.Arg("pluginName", "String", "null"),
+                ToolSpec.Arg("domain", "String", "null"),
+                ToolSpec.Arg("basePackage", "String", "null"),
+                ToolSpec.Arg("toolMethod", "String", "null"),
+                ToolSpec.Arg("toolDescription", "String", "null"),
+                ToolSpec.Arg("pdkVersion", "String", "null"),
+                ToolSpec.Arg("name", "String", "null"),
+                ToolSpec.Arg("description", "String", "null"),
+                ToolSpec.Arg("triggers", "String", "null"),
+                ToolSpec.Arg("tools", "String", "null"),
+                ToolSpec.Arg("purpose", "String", "null"),
+                ToolSpec.Arg("scriptType", "String", "null"),
+                ToolSpec.Arg("shell", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Generate a scaffold template for a Browser4 plugin, skill, JS script, or shell script. " +
+                "type: 'plugin' | 'skill' | 'js' | 'script'. " +
+                "For plugin: provide pluginName, domain, basePackage, toolMethod, toolDescription (pdkVersion optional, defaults to current project version). " +
+                "For skill: provide name (must match the directory name), description (1-1024 chars), triggers (comma-separated), tools (comma-separated). " +
+                "For js: provide name, purpose ('extract'|'inject'|'interact'). " +
+                "For script: provide name, scriptType ('build'|'deploy'|'run'), shell ('ps1'|'bash')."
+        )
+        toolSpec["scaffoldToDir"] = ToolSpec(
+            domain = domain, method = "scaffoldToDir",
+            arguments = listOf(
+                ToolSpec.Arg("type", "String"),
+                ToolSpec.Arg("dir", "String"),
+                ToolSpec.Arg("pluginName", "String", "null"),
+                ToolSpec.Arg("name", "String", "null"),
+                ToolSpec.Arg("domain", "String", "null"),
+                ToolSpec.Arg("basePackage", "String", "null"),
+                ToolSpec.Arg("toolMethod", "String", "null"),
+                ToolSpec.Arg("toolDescription", "String", "null"),
+                ToolSpec.Arg("description", "String", "null"),
+                ToolSpec.Arg("triggers", "String", "null"),
+                ToolSpec.Arg("tools", "String", "null"),
+                ToolSpec.Arg("purpose", "String", "null"),
+                ToolSpec.Arg("scriptType", "String", "null"),
+                ToolSpec.Arg("shell", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Generate a scaffold (see scaffold) AND write every generated file directly into the " +
+                "workspace under the given dir (relative to the workspace root, e.g. dir=\"browser4-plugins/" +
+                "browser4-images\"). Multi-file types (plugin) are fully supported; for single-content types " +
+                "use scaffold. This is the reliable way for agents to materialize a new plugin without " +
+                "copy-pasting scaffold output."
+        )
+        toolSpec["validate"] = ToolSpec(
+            domain = domain, method = "validate",
+            arguments = listOf(
+                ToolSpec.Arg("type", "String"),
+                ToolSpec.Arg("path", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Validate a Browser4 plugin directory, skill file, JS file, script file, or repo governance. " +
+                "type: 'plugin' (path=plugin dir) | 'skill' | 'js' | 'script' (path=file path) | " +
+                "'repo-consistency' (no path — checks VERSION vs root pom vs BOM vs module registration). " +
+                "Returns a list of issues with severity (error/warning/info)."
+        )
+
+        // --- Browser4 self-development: CDP pitfall awareness ---
+        toolSpec["trapCheck"] = ToolSpec(
+            domain = domain, method = "trapCheck",
+            arguments = listOf(ToolSpec.Arg("path", "String")),
+            returnType = "String",
+            description = "Scan a file for known Browser4 CDP pitfalls (AGENTS.md): mouseWheel race " +
+                "(crbug.com/444929150), cursor positioning after focus+click, and Input.insertText " +
+                "racing. Reminds the agent of the documented fix for each trap. Use before editing " +
+                "browser-driver code (PulsarWebDriver.kt and friends)."
+        )
+
+        // --- Session-level dynamic file protection ---
+        toolSpec["protect"] = ToolSpec(
+            domain = domain, method = "protect",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String", "null"),
+                ToolSpec.Arg("on", "Boolean", "true"),
+            ),
+            returnType = "String",
+            description = "Manage session-level file protections: coding.protect(path=\"src/Foo.kt\", on=true) " +
+                "blocks delete/replace/editLines/insertAfter on that exact file; on=false removes it. " +
+                "Without path: lists the dynamic protections. Repo-governance files (VERSION/AGENTS.md/CLAUDE.md/" +
+                "root pom/BOM/CI) are always protected and cannot be unprotected."
+        )
+
+        // --- Browser4 self-development: high-level dev task entry ---
+        toolSpec["devTask"] = ToolSpec(
+            domain = domain, method = "devTask",
+            arguments = listOf(
+                ToolSpec.Arg("task", "String"),
+                ToolSpec.Arg("verify", "Boolean", "false"),
+                ToolSpec.Arg("runTests", "Boolean", "false"),
+                ToolSpec.Arg("execute", "Boolean", "false"),
+                ToolSpec.Arg("module", "String", "null"),
+            ),
+            returnType = "String",
+            description = "High-level entry for a Browser4 self-development task: parse a natural-language task " +
+                "into an executable plan following the AGENTS.md dev flow — locate the affected files, impact " +
+                "analysis, compile the owning module, smallest-scope tests, CDP trap check for driver code, " +
+                "repo-consistency validation, commit guidance. Module mentions resolve against the LIVE pom " +
+                "graph (coding.moduleGraph) when available. verify=true additionally RUNS the fast checks " +
+                "(mvnBuild compile of the affected module, trapCheck, repo-consistency); runTests=true (with " +
+                "verify) also runs the module's test suite (mvn test -pl <module> -am / cargo test). " +
+                "execute=true runs the generated plan steps in order (scaffold, build, tests, validation) and " +
+                "stops at the first failure. " +
+                "module overrides the inferred module."
+        )
+
+        // --- Token usage statistics ---
+        toolSpec["tokenStats"] = ToolSpec(
+            domain = domain, method = "tokenStats",
+            arguments = listOf(
+                ToolSpec.Arg("reset", "Boolean", "false"),
+            ),
+            returnType = "String",
+            description = "Report token usage of coding tool calls so far (per method: calls, errors, " +
+                "input/output tokens, avg/max output). reset=true clears the counters after reporting. " +
+                "Use to audit which coding tools consume the most context window."
+        )
+        toolSpec["estimateTokens"] = ToolSpec(
+            domain = domain, method = "estimateTokens",
+            arguments = listOf(ToolSpec.Arg("text", "String")),
+            returnType = "String",
+            description = "Estimate the LLM token count of a text (heuristic, ±25%). Use to check a message " +
+                "or file chunk before sending it to the model."
+        )
+        toolSpec["classInfo"] = ToolSpec(
+            domain = domain, method = "classInfo",
+            arguments = listOf(ToolSpec.Arg("class", "String")),
+            returnType = "String",
+            description = "Inspect a class on the BACKEND classpath: superclass chain and public method " +
+                "signatures (via reflection, no javap needed). Use to learn the real API of external " +
+                "library types (e.g. ai.platon.pulsar.common.config.ImmutableConfig) that live outside " +
+                "the workspace and cannot be grepped — prevents guessing accessor names like getString."
         )
     }
 
@@ -298,8 +747,19 @@ class CodingToolExecutor : AbstractToolExecutor() {
 
             // --- File System ---
             "read" -> {
-                validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
-                fs.readFile(paramString(args, "path", functionName)!!)
+                validateArgs(args, allowed = setOf("path", "startLine", "endLine"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val startLine = paramInt(args, "startLine", functionName, required = false, default = null)
+                val endLine = paramInt(args, "endLine", functionName, required = false, default = null)
+                if (startLine != null || endLine != null) {
+                    fs.readFileLines(
+                        path = path,
+                        startLine = startLine ?: 1,
+                        endLine = endLine ?: -1,
+                    )
+                } else {
+                    fs.readFile(path)
+                }
             }
             "readLines" -> {
                 validateArgs(args, allowed = setOf("path", "startLine", "endLine"), required = setOf("path"), functionName)
@@ -331,6 +791,36 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     newStr = paramString(args, "newStr", functionName)!!,
                     count = paramInt(args, "count", functionName, required = false, default = -1) ?: -1,
                 )
+            }
+            "replaceRegex" -> {
+                validateArgs(args, allowed = setOf("path", "regex", "replacement", "count"), required = setOf("path", "regex", "replacement"), functionName)
+                fs.replaceRegexInFile(
+                    path = paramString(args, "path", functionName)!!,
+                    regex = paramString(args, "regex", functionName)!!,
+                    replacement = paramString(args, "replacement", functionName)!!,
+                    count = paramInt(args, "count", functionName, required = false, default = -1) ?: -1,
+                )
+            }
+            "editLines" -> {
+                validateArgs(args, allowed = setOf("path", "startLine", "endLine", "content"), required = setOf("path", "startLine", "endLine", "content"), functionName)
+                fs.editLinesInFile(
+                    path = paramString(args, "path", functionName)!!,
+                    startLine = paramInt(args, "startLine", functionName)!!,
+                    endLine = paramInt(args, "endLine", functionName)!!,
+                    content = paramString(args, "content", functionName)!!,
+                )
+            }
+            "insertAfter" -> {
+                validateArgs(args, allowed = setOf("path", "anchor", "content"), required = setOf("path", "anchor", "content"), functionName)
+                fs.insertAfterInFile(
+                    path = paramString(args, "path", functionName)!!,
+                    anchor = paramString(args, "anchor", functionName)!!,
+                    content = paramString(args, "content", functionName)!!,
+                )
+            }
+            "revert" -> {
+                validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
+                fs.revert(paramString(args, "path", functionName)!!)
             }
             "delete" -> {
                 validateArgs(args, allowed = setOf("path", "recursive"), required = setOf("path"), functionName)
@@ -383,7 +873,10 @@ class CodingToolExecutor : AbstractToolExecutor() {
             }
             "diff" -> {
                 validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
-                fs.diff(paramString(args, "path", functionName)!!)
+                fs.diff(
+                    path = paramString(args, "path", functionName)!!,
+                    algorithm = paramString(args, "algorithm", functionName, required = false, default = "myers") ?: "myers",
+                )
             }
             "changeSummary" -> {
                 validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
@@ -399,7 +892,896 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 fs.getWorkspaceRoot()
             }
 
+            // --- Language server (LSP) tools ---
+            "diagnostics" -> {
+                validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                // Kotlin/Java have no lightweight LSP server configured — route to the
+                // Maven compiler passthrough so the agent still gets file:line:col
+                // diagnostics (Browser4 self-development path).
+                val ext = path.substringAfterLast('.', "").lowercase()
+                if (ext in setOf("kt", "kts", "java")) {
+                    val module = inferModule(resolved)
+                    "Kotlin/Java diagnostics via compiler passthrough: run " +
+                        "coding.mvnBuild(module=\"$module\", goals=\"compile\") — no JDTLS server is " +
+                        "configured for lightweight diagnostics. (inferred module from path: $module)"
+                } else {
+                    val diags = lsp(fs).diagnostics(resolved)
+                    if (diags.isEmpty()) "✓ No diagnostics reported for $path (or no language server available)"
+                    else diags.joinToString("\n") { "[${it.severity}] ${it.file}:${it.line} — ${it.message}" }
+                }
+            }
+            "symbols" -> {
+                validateArgs(args, allowed = setOf("pattern"), required = emptySet(), functionName)
+                val pattern = paramString(args, "pattern", functionName, required = false, default = "") ?: ""
+                val symbols = lsp(fs).symbols(pattern)
+                if (symbols.isEmpty()) "No symbols found${if (pattern.isNotBlank()) " for '$pattern'" else ""} (or no language server available)"
+                else symbols.joinToString("\n") { "${it.kind} ${it.name} — ${it.file}:${it.line}" }
+            }
+            "references" -> {
+                validateArgs(args, allowed = setOf("path", "symbol"), required = setOf("path", "symbol"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val symbol = paramString(args, "symbol", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val refs = lsp(fs).references(resolved, symbol)
+                if (refs.isEmpty()) "No references to '$symbol' found in $path"
+                else refs.joinToString("\n") { "${it.file}:${it.line}" }
+            }
+            "lspServers" -> {
+                validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
+                val servers = lsp(fs).availableServers()
+                servers.entries.joinToString("\n") { "${it.key}: ${if (it.value) "available" else "NOT installed"}" }
+            }
+            "mvnBuild" -> {
+                validateArgs(args, allowed = setOf("module", "goals", "skipTests", "timeoutSeconds"),
+                    required = setOf("module"), functionName)
+                val module = paramString(args, "module", functionName)!!
+                val goals = paramString(args, "goals", functionName, required = false, default = "compile") ?: "compile"
+                val skipTests = paramBool(args, "skipTests", functionName, required = false, default = true) ?: true
+                val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
+                val result = mavenBuild.build(
+                    shell = shell,
+                    module = module,
+                    goals = goals,
+                    skipTests = skipTests,
+                    timeoutSeconds = timeout,
+                )
+                mavenBuild.format(result)
+            }
+            "ktSymbols" -> {
+                validateArgs(args, allowed = setOf("path", "pattern"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val content = fs.readFile(resolved)
+                val pattern = paramString(args, "pattern", functionName, required = false, default = "") ?: ""
+                val symbols = kotlinIndexer.symbols(content, resolved.substringAfterLast('/').substringAfterLast('\\'))
+                    .filter { pattern.isBlank() || it.name.contains(pattern, ignoreCase = true) }
+                if (symbols.isEmpty()) "No Kotlin symbols found${if (pattern.isNotBlank()) " for '$pattern'" else ""} in $path"
+                else symbols.joinToString("\n") { "${it.kind} ${it.name} — line ${it.line}" }
+            }
+            "ktReferences" -> {
+                validateArgs(args, allowed = setOf("path", "symbol", "scope"), required = setOf("path", "symbol"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val symbol = paramString(args, "symbol", functionName)!!
+                val scope = paramString(args, "scope", functionName, required = false, default = "file") ?: "file"
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+
+                if (scope == "module") {
+                    // Cross-file scan: all .kt files under the owning module
+                    // (fall back to the whole workspace when the module dir
+                    // cannot be resolved, e.g. non-Browser4 layouts).
+                    val module = inferModule(resolved)
+                    val files = fs.collectTextFiles(if (module.isBlank()) "." else module)
+                        .filterKeys { it.endsWith(".kt") }
+                        .takeIf { it.isNotEmpty() }
+                        ?: fs.collectTextFiles(".").filterKeys { it.endsWith(".kt") }
+                    if (files.isEmpty()) return "No Kotlin files found${if (module.isBlank()) "" else " under module $module"}"
+                    val refs = kotlinIndexer.referencesInFiles(files, symbol)
+                    if (refs.isEmpty()) "No references to '$symbol' outside its declaring file${if (module.isBlank()) "" else " in module $module"}"
+                    else refs.joinToString("\n") { "${it.path}:${it.line}: ${it.snippet}" }
+                } else {
+                    val content = fs.readFile(resolved)
+                    val refs = kotlinIndexer.references(content, symbol, resolved.substringAfterLast('/').substringAfterLast('\\'))
+                    if (refs.isEmpty()) "No references to '$symbol' found in $path"
+                    else refs.joinToString("\n") { "line ${it.line}: ${it.snippet}" }
+                }
+            }
+            "ktInheritance" -> {
+                validateArgs(args, allowed = setOf("path", "className"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val module = inferModule(resolved)
+                val fileName = resolved.substringAfterLast('/').substringAfterLast('\\')
+                val fileContent = fs.readFile(resolved)
+                val files = if (module.isBlank()) mapOf(fileName to fileContent)
+                else fs.collectTextFiles(module).filterKeys { it.endsWith(".kt") }
+                    .takeIf { it.isNotEmpty() }
+                    ?: fs.collectTextFiles(".").filterKeys { it.endsWith(".kt") }
+                if (files.isEmpty()) return "No Kotlin files found for $path"
+
+                val className = paramString(args, "className", functionName, required = false, default = null)
+                    ?: kotlinIndexer.symbols(fileContent, fileName)
+                        .firstOrNull { it.kind == "class" || it.kind == "interface" }?.name
+                    ?: return "Cannot infer the class of $path — pass className explicitly"
+
+                val chain = kotlinIndexer.inheritanceChain(files, className)
+                chain.joinToString(" → ")
+            }
+            "scaffoldFromExample" -> {
+                validateArgs(args, allowed = setOf("path", "basePackage", "className", "domain", "toolMethod", "stem"),
+                    required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val renameParams: Map<String, String> = mapOf(
+                    "basePackage" to paramString(args, "basePackage", functionName, required = false, default = null),
+                    "className" to paramString(args, "className", functionName, required = false, default = null),
+                    "domain" to paramString(args, "domain", functionName, required = false, default = null),
+                    "toolMethod" to paramString(args, "toolMethod", functionName, required = false, default = null),
+                    "stem" to paramString(args, "stem", functionName, required = false, default = null),
+                ).filterValues { !it.isNullOrBlank() }.mapValues { it.value!! }
+
+                // Directory path → multi-file live template (cross-file consistent).
+                if (Files.isDirectory(Path.of(resolved))) {
+                    val files = fs.collectTextFiles(resolved)
+                    if (files.isEmpty()) return "No text files found under $path"
+                    val set = SkeletonExtractor.extractDir(files)
+
+                    if (renameParams.isEmpty()) {
+                        // Discovery mode: report parameters found across the directory.
+                        buildString {
+                            appendLine("Multi-file skeleton extracted from $path (${files.size} files) — " +
+                                "discovered parameters:")
+                            set.parameters.forEach { (k, v) -> appendLine("  $k = $v") }
+                            appendLine("Re-instantiate with: coding.scaffoldFromExample(path=..., " +
+                                set.parameters.keys.joinToString(", ") { "$it=<new-value>" } + ")")
+                        }
+                    } else {
+                        val generated = SkeletonExtractor.instantiate(set, renameParams)
+                        buildString {
+                            appendLine("=== Multi-file skeleton generated from $path (${generated.size} files) ===")
+                            generated.forEach { (relPath, content) ->
+                                appendLine("\n=== File: $relPath ===")
+                                append(content)
+                            }
+                        }
+                    }
+                } else {
+                    val content = fs.readFile(resolved)
+                    val skeleton = SkeletonExtractor.extract(content, resolved.substringAfterLast('/').substringAfterLast('\\'))
+
+                    if (renameParams.isEmpty()) {
+                        // Discovery mode: report the parameters found in the reference file.
+                        buildString {
+                            appendLine("Skeleton extracted from $path — discovered parameters:")
+                            skeleton.parameters.forEach { (k, v) -> appendLine("  $k = $v") }
+                            appendLine("Re-instantiate with: coding.scaffoldFromExample(path=..., " +
+                                skeleton.parameters.keys.joinToString(", ") { "$it=<new-value>" } + ")")
+                        }
+                    } else {
+                        val generated = SkeletonExtractor.instantiate(skeleton, renameParams)
+                        buildString {
+                            appendLine("=== Generated from $path (skeleton) ===")
+                            append(generated)
+                        }
+                    }
+                }
+            }
+            "scaffoldFlow" -> {
+                validateArgs(args, allowed = setOf("type", "name", "description", "category",
+                    "toolName", "domain", "basePackage", "toolMethod", "verify"),
+                    required = setOf("type", "name"), functionName)
+                val type = paramString(args, "type", functionName)!!
+                val name = paramString(args, "name", functionName)!!
+                val description = paramString(args, "description", functionName, required = false, default = "") ?: ""
+                val category = paramString(args, "category", functionName, required = false, default = null)
+                val toolName = paramString(args, "toolName", functionName, required = false, default = null)
+                val domain = paramString(args, "domain", functionName, required = false, default = null)
+                val basePackage = paramString(args, "basePackage", functionName, required = false, default = null)
+                val toolMethod = paramString(args, "toolMethod", functionName, required = false, default = null)
+                val verify = paramBool(args, "verify", functionName, required = false, default = false) ?: false
+
+                val files: Map<String, String> = when (type) {
+                    "b4-cli-command" -> DevFlowScaffolds.b4CliCommand(
+                        name = name,
+                        description = description,
+                        category = category ?: "Extract",
+                        toolName = toolName ?: name.replace('-', '_'),
+                    )
+                    "agent-tool" -> DevFlowScaffolds.agentTool(
+                        pluginName = name,
+                        domain = domain ?: name.removePrefix("browser4-").replace("-", "_"),
+                        basePackage = basePackage ?: "ai.platon.pulsar.${name.removePrefix("browser4-").replace("-", "")}",
+                        toolMethod = toolMethod ?: "doAction",
+                        toolDescription = description,
+                    )
+                    "rest-endpoint" -> DevFlowScaffolds.restEndpoint(
+                        resource = name,
+                        description = description,
+                    )
+                    "test-class" -> DevFlowScaffolds.testClass(
+                        packageName = basePackage ?: "ai.platon.pulsar.agentic.tools",
+                        testClass = toolName ?: "${toTestClassName(name)}Test",
+                        targetClass = toolName ?: toTestClassName(name),
+                        description = description,
+                    )
+                    "skill" -> DevFlowScaffolds.skill(
+                        name = name,
+                        description = description,
+                        triggers = if (category.isNullOrBlank()) emptyList() else listOf(category),
+                        tools = if (toolName.isNullOrBlank()) emptyList() else listOf(toolName),
+                    )
+                    else -> throw IllegalArgumentException(
+                        "Unknown scaffoldFlow type: $type. Supported: b4-cli-command, agent-tool, rest-endpoint, test-class, skill")
+                }
+                val generated = files.entries.joinToString("\n\n") { (path, content) ->
+                    "=== File: $path ===\n$content"
+                }
+                if (!verify) return generated
+
+                // verify=true: run the type-appropriate build/test check after generating.
+                val verification: String = when (type) {
+                    "b4-cli-command" -> {
+                        // Rust CLI side first (fast), then the Kotlin backend compiles.
+                        val cargo = shell.executeRaw("cargo test --bin browser4-cli", timeoutSeconds = 300)
+                        val cargoLine = if (cargo.exitCode == 0) "✓ cargo test --bin browser4-cli" else
+                            "✗ cargo test failed (exit ${cargo.exitCode})"
+                        "$cargoLine\n${mavenBuild.format(mavenBuild.build(shell, "browser4-rest", "compile", true, 300))}"
+                    }
+                    "agent-tool" -> {
+                        val module = name.removePrefix("browser4-").let { "browser4-plugins/browser4-$it" }
+                        val pluginDir = if (name.startsWith("browser4-")) "browser4-plugins/$name" else ""
+                        val buildLine = mavenBuild.format(mavenBuild.build(shell, module, "compile", true, 300))
+                        val validateLine = if (pluginDir.isNotEmpty()) {
+                            ArtifactValidator.validatePlugin(pluginDir).format()
+                        } else "plugin dir not resolved"
+                        "$buildLine\n$validateLine"
+                    }
+                    "rest-endpoint" -> mavenBuild.format(mavenBuild.build(shell, "browser4-rest", "compile", true, 300))
+                    else -> "No automated verification for type '$type' — verify manually."
+                }
+                generated + "\n\n--- Verification ---\n$verification"
+            }
+            "impact" -> {
+                validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val module = inferModule(resolved)
+                if (module.isBlank()) return "Cannot determine module for $path"
+
+                buildString {
+                    appendLine("Impact analysis for $path")
+                    appendLine("  module: $module")
+                    if (module == ModuleMap.CLI_CRATE || path.contains("/cli/")) {
+                        appendLine("  Rust CLI: ${ModuleMap.cargoTestCommand()}")
+                        appendLine("  Note: CLI changes may require the Kotlin backend to accept new tools — " +
+                            "also run coding.mvnBuild(module=\"browser4-rest\")")
+                    } else {
+                        // Prefer the LIVE pom graph (anti-staleness); fall back to the static snapshot.
+                        val graph = scanModuleGraph(fs)
+                        val affected = if (module in graph.nodes) {
+                            ModuleGraph.transitiveDependents(graph, module)
+                        } else {
+                            ModuleMap.transitiveDependents(module)
+                        }
+                        appendLine("  affects (transitively): ${affected.joinToString(", ")}")
+                        appendLine("  test: ${ModuleMap.mavenTestCommand(module)}")
+                        appendLine("  also run for dependents: ${affected.drop(1).joinToString(", ")}")
+                        if (module !in graph.nodes) {
+                            appendLine("  ⚠ module not found in the live pom graph — static snapshot used; " +
+                                "run coding.moduleGraph() to check for drift")
+                        }
+                    }
+                }.trimEnd()
+            }
+            "moduleGraph" -> {
+                validateArgs(args, allowed = setOf("module"), required = emptySet(), functionName)
+                val module = paramString(args, "module", functionName, required = false, default = null)
+                val graph = scanModuleGraph(fs)
+                if (module.isNullOrBlank()) {
+                    ModuleGraph.format(graph, ModuleMap.MODULES)
+                } else {
+                    if (module !in graph.nodes) {
+                        "Module '$module' not found in the live pom graph. Known: ${graph.nodes.keys.sorted().joinToString(", ")}"
+                    } else {
+                        val affected = ModuleGraph.transitiveDependents(graph, module)
+                        buildString {
+                            appendLine("Module: $module [${graph.nodes[module]!!.artifactId}]")
+                            appendLine("  directly depends on: ${graph.nodes[module]!!.dependencies.joinToString(", ")}")
+                            appendLine("  affects (transitively): ${affected.joinToString(", ")}")
+                            appendLine("  test: ${ModuleMap.mavenTestCommand(module)}")
+                            val missing = ModuleGraph.drift(graph, ModuleMap.MODULES)
+                            if (missing.isNotEmpty()) {
+                                appendLine("⚠ static ModuleMap snapshot is missing these real modules: ${missing.joinToString(", ")}")
+                            }
+                        }.trimEnd()
+                    }
+                }
+            }
+            "runCode" -> {
+                validateArgs(args, allowed = setOf("language", "code", "timeoutSeconds"), required = setOf("language", "code"), functionName)
+                val language = paramString(args, "language", functionName)!!
+                val code = paramString(args, "code", functionName)!!
+                val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 30L) ?: 30L
+                val result = codeRunner.run(language, code, timeoutSeconds = timeout.coerceIn(1, 120))
+                buildString {
+                    if (result.timedOut) appendLine("⏱ Timed out after ${timeout}s — process killed")
+                    if (result.stdout.isNotBlank()) appendLine(result.stdout.trimEnd())
+                    if (result.stderr.isNotBlank()) appendLine("stderr: ${result.stderr.trimEnd()}")
+                    appendLine("exit code: ${result.exitCode}")
+                }.trimEnd()
+            }
+            "runCodeLanguages" -> {
+                validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
+                "Supported: ${codeRunner.supportedLanguages().joinToString(", ")}"
+            }
+
+            // --- Artifact scaffolding & validation ---
+            "scaffold" -> {
+                val allowed = setOf("type", "pluginName", "domain", "basePackage",
+                    "toolMethod", "toolDescription", "pdkVersion", "name", "description",
+                    "triggers", "tools", "purpose", "scriptType", "shell", "verify")
+                validateArgs(args, allowed = allowed, required = setOf("type"), functionName)
+                val type = paramString(args, "type", functionName)!!
+                val params = args.filterKeys { it !in setOf("type", "verify") }
+                    .mapValues { it.value?.toString() ?: "" }
+                    .filterValues { it.isNotEmpty() }
+                    .toMutableMap()
+                // Default the plugin's pdk parent version from the repo VERSION file when available
+                if (type == "plugin" && !params.containsKey("pdkVersion")) {
+                    val versionFile = fs.readFile("VERSION")
+                    if (!versionFile.startsWith("Error:") && versionFile.isNotBlank()) {
+                        params["pdkVersion"] = versionFile.trim()
+                    }
+                }
+                // The CLI (and the LLM prompt) use "name"; the plugin template reads
+                // "pluginName". Map it so `code scaffold plugin --name X` names the plugin.
+                if (type == "plugin" && !params.containsKey("pluginName") && params.containsKey("name")) {
+                    params["pluginName"] = params["name"]!!
+                }
+                val result = ArtifactScaffolds.scaffold(type, params)
+                if (result.size == 1 && result.containsKey("_content")) {
+                    result["_content"]!!
+                } else {
+                    result.entries.joinToString("\n\n") { (path, content) ->
+                        "=== File: $path ===\n$content"
+                    }
+                }
+            }
+            "scaffoldToDir" -> {
+                val allowed = setOf("type", "dir", "pluginName", "name", "domain", "basePackage",
+                    "toolMethod", "toolDescription", "description",
+                    "triggers", "tools", "purpose", "scriptType", "shell", "verify")
+                validateArgs(args, allowed = allowed, required = setOf("type", "dir"), functionName)
+                val type = paramString(args, "type", functionName)!!
+                val dir = paramString(args, "dir", functionName)!!
+                val verify = paramBool(args, "verify", functionName, required = false, default = false) ?: false
+                val params = args.filterKeys { it !in setOf("type", "dir", "verify") }
+                    .mapValues { it.value?.toString() ?: "" }
+                    .filterValues { it.isNotEmpty() }
+                    .toMutableMap()
+                // Same as scaffold: pdk version comes from VERSION (required for
+                // plugins — no hardcoded fallback), name → pluginName.
+                if (type == "plugin" && !params.containsKey("pdkVersion")) {
+                    val versionFile = fs.readFile("VERSION")
+                    if (!versionFile.startsWith("Error:") && versionFile.isNotBlank()) {
+                        params["pdkVersion"] = versionFile.trim()
+                    }
+                }
+                if (type == "plugin" && !params.containsKey("pluginName") && params.containsKey("name")) {
+                    params["pluginName"] = params["name"]!!
+                }
+                val files = ArtifactScaffolds.scaffold(type, params)
+                if (files.size == 1 && files.containsKey("_content")) {
+                    "scaffoldToDir materializes multi-file artifacts only (plugin). " +
+                        "For type '$type' use scaffold to get the content."
+                } else {
+                    val written = mutableListOf<String>()
+                    for ((relPath, content) in files) {
+                        val target = "$dir/${relPath.removePrefix("/")}"
+                        fs.writeFile(target, content)
+                        written += target
+                    }
+                    val sb = StringBuilder(
+                        "✓ Scaffolded $type into $dir (${written.size} files):\n${written.joinToString("\n")}"
+                    )
+                    if (type == "plugin") {
+                        // Register the new module in the browser4-plugins aggregator
+                        // pom so `mvn -pl browser4-plugins/<name> ...` resolves it.
+                        val normalizedDir = dir.replace('\\', '/').trimEnd('/')
+                        val module = normalizedDir.substringAfterLast('/')
+                        if (normalizedDir.startsWith("browser4-plugins/") && module.isNotBlank()) {
+                            val aggregator = fs.readFile("browser4-plugins/pom.xml")
+                            if (!aggregator.startsWith("Error:") && !aggregator.contains("<module>$module</module>")) {
+                                // Match the indentation of the FIRST existing <module>
+                                // line so the new entry does not drift the block's style.
+                                // The closing-tag line carries its own 4-space indent:
+                                // replacing the whole tail (instead of just
+                                // "</modules>") keeps the new module line at exactly
+                                // `indent` spaces — the old form left those 4 spaces
+                                // in place and crept the indent +4 per scaffold
+                                // (8 → 12 → 16).
+                                val moduleLine = Regex("""(?m)^(\s*)<module>[^<]+</module>\s*$""")
+                                val indent = moduleLine.findAll(aggregator).firstOrNull()
+                                    ?.groupValues?.get(1) ?: "        "
+                                val closing = "    </modules>"
+                                val updated = if (aggregator.contains(closing)) {
+                                    aggregator.replace(closing, "$indent<module>$module</module>\n$closing")
+                                } else {
+                                    aggregator.replace("</modules>", "$indent<module>$module</module>\n    </modules>")
+                                }
+                                if (updated != aggregator) {
+                                    val writeResult = fs.writeFile("browser4-plugins/pom.xml", updated)
+                                    if (writeResult.startsWith("✓")) {
+                                        sb.append("\n✓ Registered module $module in browser4-plugins/pom.xml")
+                                    }
+                                }
+                            }
+                        }
+                        if (verify) {
+                            val resolved = fs.resolvePathString(dir)
+                                ?: throw IllegalArgumentException("Path not allowed: $dir")
+                            sb.append("\n\n--- Plugin validation ---\n")
+                            sb.append(ArtifactValidator.validatePlugin(resolved).format())
+                        }
+                        // Keep the static ModuleMap snapshot in sync so ModuleMapDriftE2ETest
+                        // and `validate repo-consistency` stay green for the new module.
+                        syncModuleMapForNewPlugin(fs, module, sb)
+                    }
+                    sb.toString()
+                }
+            }
+            "validate" -> {
+                validateArgs(args, allowed = setOf("type", "path"), required = setOf("type"), functionName)
+                val type = paramString(args, "type", functionName)!!
+                val path = paramString(args, "path", functionName, required = false, default = null)
+                when (type) {
+                    "plugin" -> {
+                        // Resolve through the fs sandbox before handing the raw path to the validator
+                        val resolved = fs.resolvePathString(path ?: throw IllegalArgumentException("path is required for type 'plugin'"))
+                            ?: throw IllegalArgumentException("Path not allowed: $path")
+                        ArtifactValidator.validatePlugin(resolved).format()
+                    }
+                    "skill" -> {
+                        val content = fs.readFile(path ?: throw IllegalArgumentException("path is required for type 'skill'"))
+                        val result = ArtifactValidator.validateSkill(content, path)
+                        // Cross-check every domain.method( reference in the skill body
+                        // against the tools the agent can actually see/call.
+                        val refIssues = ArtifactValidator.validateToolReferences(content, knownTools(), path)
+                        ValidationResult.of(result.issues + refIssues).format()
+                    }
+                    "js" -> {
+                        val content = fs.readFile(path ?: throw IllegalArgumentException("path is required for type 'js'"))
+                        ArtifactValidator.validateJs(content, path).format()
+                    }
+                    "script" -> {
+                        val content = fs.readFile(path ?: throw IllegalArgumentException("path is required for type 'script'"))
+                        ArtifactValidator.validateScript(content, path).format()
+                    }
+                    "repo-consistency" -> repoConsistencyReport(fs)
+                    else -> throw IllegalArgumentException(
+                        "Unknown validate type: $type. Supported: plugin, skill, js, script, repo-consistency")
+                }
+            }
+            "trapCheck" -> {
+                validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val content = fs.readFile(path)
+                if (content.startsWith("Error:")) return content
+                CdpTrapCheck.format(content)
+            }
+            "protect" -> {
+                validateArgs(args, allowed = setOf("path", "on"), required = emptySet(), functionName)
+                val path = paramString(args, "path", functionName, required = false, default = null)
+                if (path.isNullOrBlank()) return fs.protectedList()
+                val on = paramBool(args, "on", functionName, required = false, default = true) ?: true
+                fs.protect(path, on)
+            }
+            "devTask" -> {
+                validateArgs(args, allowed = setOf("task", "verify", "runTests", "execute", "module"), required = setOf("task"), functionName)
+                val task = paramString(args, "task", functionName)!!
+                val verify = paramBool(args, "verify", functionName, required = false, default = false) ?: false
+                val runTests = paramBool(args, "runTests", functionName, required = false, default = false) ?: false
+                val execute = paramBool(args, "execute", functionName, required = false, default = false) ?: false
+                val moduleOverride = paramString(args, "module", functionName, required = false, default = null)
+
+                // Resolve module mentions against the LIVE pom graph when possible.
+                val graph = runCatching { scanModuleGraph(fs) }.getOrNull()
+                val knownModules = graph?.nodes?.keys?.toList()?.takeIf { it.isNotEmpty() }
+                    ?: ModuleMap.MODULES
+                val plan = DevTaskPlanner.plan(task, knownModules)
+                val planModules = if (!moduleOverride.isNullOrBlank()) {
+                    listOf(moduleOverride)
+                } else {
+                    plan.modules + plan.newPluginModules
+                }
+                val planText = buildString {
+                    appendLine("Dev task plan (${plan.steps.size} steps):")
+                    plan.steps.forEach { s ->
+                        appendLine("  ${s.order}. [${s.tool}] ${s.purpose}")
+                        appendLine("      ${s.command}")
+                    }
+                    appendLine("Signals: ${plan.summary}")
+                    if (planModules.isNotEmpty() && moduleOverride.isNullOrBlank()) {
+                        appendLine("Inferred modules: ${planModules.joinToString(", ")}")
+                    }
+                    if (moduleOverride != null) {
+                        appendLine("Module override: $moduleOverride")
+                    }
+                    if (graph == null) {
+                        appendLine("⚠ live pom graph unavailable — static ModuleMap used for normalization")
+                    }
+                }.trimEnd()
+
+                if (execute) {
+                    return executeDevTaskPlan(planText, plan, receiver as Target)
+                }
+
+                if (!verify) return planText
+
+                // verify=true: run the fast checks against the live workspace.
+                val results = mutableListOf<String>()
+                // Same tie-break rule as DevTaskPlanner.buildSteps: a freshly
+                // scaffolded plugin module wins over same-depth DEPENDENTS-key
+                // mentions, so verify/runTests never compile the wrong module.
+                val verifyCandidates = if (moduleOverride.isNullOrBlank()) {
+                    plan.newPluginModules + plan.modules
+                } else {
+                    planModules
+                }
+                val mavenModule = verifyCandidates.filter { it != ModuleMap.CLI_CRATE }
+                    .maxByOrNull { it.count { c -> c == '/' } }
+                if (mavenModule != null) {
+                    results += "mvnBuild compile of $mavenModule:\n" +
+                        mavenBuild.format(mavenBuild.build(shell, mavenModule, "compile", true, 300))
+                }
+                plan.driverFiles.take(1).forEach { file ->
+                    val content = fs.readFile(file)
+                    if (!content.startsWith("Error:")) {
+                        results += "trapCheck on $file:\n${CdpTrapCheck.format(content)}"
+                    }
+                }
+                results += "repo-consistency:\n${repoConsistencyReport(fs)}"
+
+                // runTests=true: execute the module's test suite (the AGENTS.md
+                // "smallest scope" step) after the compile check passed. When the
+                // task named test classes, scope with -Dtest=... (smallest scope).
+                if (runTests) {
+                    if (mavenModule != null) {
+                        val testArg = plan.testClasses.joinToString(",").ifBlank { null }
+                        val cmd = ModuleMap.mavenTestCommand(mavenModule, testArg)
+                        val r = shell.executeRaw(cmd, timeoutSeconds = 600)
+                        results += "tests on $mavenModule${testArg?.let { " [-Dtest=$it]" } ?: ""} (exit ${r.exitCode}):\n" +
+                            listOf(r.stdout, r.stderr).filter { it.isNotBlank() }.joinToString("\n").takeLast(3000)
+                    }
+                    if (ModuleMap.CLI_CRATE in planModules) {
+                        val cmd = ModuleMap.cargoTestCommand()
+                        val r = shell.executeRaw(cmd, timeoutSeconds = 600)
+                        results += "cargo tests (exit ${r.exitCode}):\n" +
+                            listOf(r.stdout, r.stderr).filter { it.isNotBlank() }.joinToString("\n").takeLast(3000)
+                    }
+                }
+
+                planText + "\n\n--- Verification ---\n" + results.joinToString("\n\n")
+            }
+
+            "tokenStats" -> {
+                validateArgs(args, allowed = setOf("reset"), required = emptySet(), functionName)
+                val report = tokenStats.report()
+                if (paramBool(args, "reset", functionName, required = false, default = false) == true) {
+                    tokenStats.reset()
+                }
+                report
+            }
+            "estimateTokens" -> {
+                validateArgs(args, allowed = setOf("text"), required = setOf("text"), functionName)
+                val text = paramString(args, "text", functionName)!!
+                "≈ ${TokenEstimator.estimateTokens(text)} tokens (${text.length} chars)"
+            }
+            "classInfo" -> {
+                validateArgs(args, allowed = setOf("class"), required = setOf("class"), functionName)
+                val className = paramString(args, "class", functionName)!!
+                classInfoReport(className)
+            }
+
             else -> throw IllegalArgumentException("Unsupported coding method: $functionName(${args.keys})")
         }
     }
+
+    /**
+     * Execute a [DevTaskPlanner.DevPlan] step by step using the same coding
+     * methods exposed to LLM agents. Execution is fail-fast: the first failing
+     * step stops the run and reports which step failed.
+     */
+    private suspend fun executeDevTaskPlan(
+        planText: String,
+        plan: DevTaskPlanner.DevPlan,
+        receiver: Target,
+    ): String {
+        val lines = mutableListOf<String>()
+        var failed = false
+
+        for (step in plan.steps) {
+            lines += "Step ${step.order}. [${step.tool}] ${step.purpose}"
+            try {
+                val method = step.tool.removePrefix("coding.")
+                val stepArgs: Map<String, Any?> = HashMap<String, Any?>().apply {
+                    step.args.forEach { (key, value) -> put(key, value) }
+                }
+                val result = callFunctionOn(domain, method, stepArgs, receiver)
+                val text = when (result) {
+                    null -> "(no output)"
+                    is String -> result
+                    else -> result.toString()
+                }
+                lines += text.trimEnd()
+            } catch (e: Exception) {
+                lines += "FAILED: ${e.message}"
+                failed = true
+                break
+            }
+        }
+
+        return buildString {
+            appendLine(planText)
+            appendLine()
+            appendLine("--- Execution ---")
+            append(lines.joinToString("\n\n"))
+            if (failed) {
+                appendLine()
+                appendLine("Stopped at first failure.")
+            }
+        }.trimEnd()
+    }
+
+    /**
+     * `validate(type="repo-consistency")`: check the repo-governance invariants
+     * against the live workspace — VERSION vs root pom vs BOM versions, module
+     * registration (registered modules exist; on-disk module dirs are
+     * registered), and plugin SDK versions (every in-repo plugin manifest
+     * declares sdkVersion == VERSION). Zero dependencies; reads a few files +
+     * directory listings.
+     */
+    /**
+     * Keep the static [ModuleMap] snapshot consistent when a new plugin module is
+     * scaffolded: insert the module into MODULES (unique anchor line) AND complete
+     * the DEPENDENTS reverse edges automatically (the scaffolded plugin's pom
+     * depends on skeleton/protocol/agentic and parent pdk). Completing them here —
+     * instead of instructing the agent to hand-edit — closes the drift window that
+     * made ModuleMapDriftE2ETest fail any `-am` build between aggregator
+     * registration and the agent's manual DEPENDENTS edit (P2.4).
+     */
+    private suspend fun syncModuleMapForNewPlugin(fs: CodingAgentFileSystem, module: String, sb: StringBuilder) {
+        val mapPath = "browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/ModuleMap.kt"
+        val content = fs.readFile(mapPath)
+        if (content.startsWith("Error:") || content.isBlank()) {
+            sb.append("\n⚠ Could not auto-sync ModuleMap.kt (unreadable) — run `validate repo-consistency` after adding the module manually.")
+            return
+        }
+        val entry = "browser4-plugins/$module"
+        if (content.contains("\"$entry\"")) {
+            sb.append("\n✓ ModuleMap.MODULES already contains $entry")
+            return
+        }
+        val anchor = "\"browser4-plugins\",\n"
+        if (!content.contains(anchor)) {
+            sb.append("\n⚠ ModuleMap.kt anchor not found — add $entry to ModuleMap.MODULES manually.")
+            return
+        }
+        // The four DEPENDENTS keys the scaffolded plugin depends on: agentic,
+        // protocol, skeleton and pdk. Each entry is one line, 8-space indented,
+        // so it stays ≤120 columns and carries no trailing whitespace.
+        val dependentsAnchors = listOf(
+            "\"browser4-agentic\" to listOf(",
+            "\"browser4-core/browser4-protocol\" to listOf(",
+            "\"browser4-core/browser4-skeleton\" to listOf(",
+            "\"browser4-pdk\" to listOf(",
+        )
+        val dependentsEntry = "        \"$entry\","
+        var updated = content.replace(anchor, anchor + "        \"$entry\",\n")
+        var insertedEdges = 0
+        dependentsAnchors.forEach { dependentsAnchor ->
+            if (updated.contains(dependentsAnchor)) {
+                updated = updated.replace(dependentsAnchor, dependentsAnchor + "\n" + dependentsEntry)
+                insertedEdges++
+            }
+        }
+        val writeResult = fs.writeFile(mapPath, updated)
+        if (writeResult.startsWith("✓")) {
+            sb.append("\n✓ Synced ModuleMap.MODULES with $entry")
+            if (insertedEdges > 0) {
+                sb.append("\n✓ Added $entry to $insertedEdges DEPENDENTS reverse edges (agentic/protocol/skeleton/pdk)")
+            } else {
+                sb.append("\n⚠ DEPENDENTS anchors not found — add \"$entry\" to the DEPENDENTS lists of browser4-agentic, " +
+                    "browser4-core/browser4-protocol, browser4-core/browser4-skeleton, browser4-pdk manually " +
+                    "(`validate repo-consistency` flags any drift).")
+            }
+        } else {
+            sb.append("\n⚠ ModuleMap sync failed: $writeResult")
+        }
+    }
+
+    private suspend fun repoConsistencyReport(fs: CodingAgentFileSystem): String {
+        val versionContent = fs.readFile("VERSION").takeUnless { it.startsWith("Error:") }
+        val rootPom = fs.readFile("pom.xml").takeUnless { it.startsWith("Error:") }
+        val bomPom = fs.readFile("browser4-dependencies/pom.xml").takeUnless { it.startsWith("Error:") }
+
+        val root = fs.workspaceRoot
+        val (onDiskModuleDirs, pluginManifestContents) = withContext(Dispatchers.IO) {
+            val moduleDirs = Files.list(root).use { stream ->
+                stream.filter { Files.isDirectory(it) }
+                    .filter { !it.fileName.toString().startsWith(".") }
+                    .filter { Files.isRegularFile(it.resolve("pom.xml")) }
+                    .map { root.relativize(it).toString().replace('\\', '/') }
+                    .sorted()
+                    .toList()
+            }
+            // Every in-repo plugin manifest outside build output (target/) and
+            // hidden dirs (.git, .worktrees, .claude, ...) — other branches'
+            // checkouts must not be scanned.
+            val manifests = runCatching {
+                Files.walk(root).use { stream ->
+                    stream.filter { RepoConsistencyCheck.isPluginManifestPath(it) }
+                        .map { Files.readString(it) }
+                        .toList()
+                }
+            }.getOrDefault(emptyList())
+            moduleDirs to manifests
+        }
+
+        // Live module topology from the real poms — cross-checked against the
+        // static ModuleMap snapshot (MODULES + DEPENDENTS) so module drift fails
+        // validation instead of silently corrupting devTask planning.
+        val liveGraph = runCatching {
+            ModuleGraph.build(ModuleGraph.scanPoms(root))
+        }.getOrNull()
+        val liveModules = liveGraph?.nodes?.keys?.sorted() ?: emptyList()
+        val liveDependentsOf: (String) -> Set<String> = { m ->
+            liveGraph?.nodes?.filterValues { it.dependencies.contains(m) }?.keys?.toSet() ?: emptySet()
+        }
+
+        // Prefer the ON-DISK ModuleMap.kt as the static snapshot. The loaded
+        // ModuleMap class comes from the running backend's build and can be
+        // stale (e.g. right after scaffoldToDir synced a new module) — comparing
+        // against it reports false drift. Parse the source file so the check
+        // reflects what the next build will actually compile.
+        val moduleMapSource = fs.readFile(
+            "browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/ModuleMap.kt"
+        ).takeUnless { it.startsWith("Error:") }
+        val parsedModuleMap = moduleMapSource?.let { ModuleMapSource.parse(it) }
+        // When the disk snapshot cannot be parsed (mock/foreign workspace), the
+        // loaded-class comparison is meaningless (it produces massive false
+        // drift) — skip the drift checks and surface a warning instead.
+        val staticModules = parsedModuleMap?.modules ?: emptyList()
+        val staticDependents = parsedModuleMap?.dependents ?: emptyMap()
+        val staleFallbackNote = if (parsedModuleMap == null) {
+            "\n⚠ ModuleMap.kt could not be read from disk — ModuleMap drift checks are skipped; " +
+                "sync browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/ModuleMap.kt if you expect them."
+        } else ""
+
+        val result = RepoConsistencyCheck.check(
+            versionContent = versionContent,
+            rootPom = rootPom,
+            bomPom = bomPom,
+            moduleExists = { m -> fs.exists(m) },
+            onDiskModuleDirs = onDiskModuleDirs,
+            pluginManifestContents = pluginManifestContents,
+            staticModuleMap = staticModules,
+            liveModuleDirs = liveModules,
+            staticDependents = staticDependents,
+            liveDependentsOf = liveDependentsOf,
+            moduleMapSource = moduleMapSource,
+        )
+        return result.format() + staleFallbackNote
+    }
+
+    /**
+     * Scan the live module graph from the workspace's real pom.xml files.
+     * Powers `coding.moduleGraph` and `coding.impact` — anti-staleness: the
+     * graph is rebuilt from the poms instead of a hand-maintained snapshot.
+     */
+    private suspend fun scanModuleGraph(fs: CodingAgentFileSystem): ModuleGraph.Graph {
+        return ModuleGraph.build(ModuleGraph.scanPoms(fs.workspaceRoot))
+    }
+
+    /**
+     * Assemble the map of tools the LLM agent can actually see/call, used for
+     * cross-referencing tool names inside skills and other artifacts.
+     *
+     * Sources:
+     * - [ToolCallSpecificationRenderer.collectAllToolSpecs] — hardcoded builtin
+     *   domains (tab/browser/fs/agent/system) + dynamically registered builtin
+     *   domains (coding/cli).
+     * - [CustomToolRegistry] — executors registered by plugins/mounts (seo,
+     *   captcha, image, markdown, media, pptx, command, crawl, html_snapshot,
+     *   skill, swarm, webdb, ...).
+     */
+    private fun knownTools(): Map<String, Set<String>> {
+        val tools = mutableMapOf<String, MutableSet<String>>()
+
+        ToolCallSpecificationRenderer.collectAllToolSpecs().forEach { spec ->
+            tools.getOrPut(spec.domain) { mutableSetOf() }.add(spec.method)
+        }
+
+        CustomToolRegistry.instance.getAllExecutors().forEach { executor ->
+            val methods = executor.getToolSpecs().keys
+            tools.getOrPut(executor.domain) { mutableSetOf() }.addAll(methods)
+        }
+
+        return tools.mapValues { it.value.toSet() }
+    }
+
+    /**
+     * Reflectively inspect a class on the backend classpath: superclass chain
+     * plus public method signatures. Lets agents learn the REAL API of types
+     * that live outside the workspace (e.g. external-library config classes)
+     * instead of guessing accessor names.
+     */
+    private fun classInfoReport(className: String): String {
+        val clazz = runCatching { Class.forName(className) }.getOrNull()
+            ?: return "Class not found on the backend classpath: $className " +
+                "(plugin classes in isolated loaders are not visible — use this for host/external API types)"
+
+        return buildString {
+            var current: Class<*>? = clazz
+            var depth = 0
+            while (current != null && depth < 4) {
+                if (depth == 0) {
+                    appendLine("class ${current.name}" + (current.superclass?.let { " : ${it.name}" } ?: ""))
+                } else {
+                    appendLine("  ^ superclass ${current.name}")
+                }
+                val interfaces = current.interfaces.map { it.name }
+                if (interfaces.isNotEmpty()) {
+                    appendLine("    implements ${interfaces.joinToString(", ")}")
+                }
+                current.methods
+                    .filter { java.lang.reflect.Modifier.isPublic(it.modifiers) }
+                    .sortedWith(compareBy({ it.name }, { it.parameterCount }))
+                    .forEach { m ->
+                        appendLine(
+                            "    ${m.name}(${m.parameterTypes.joinToString(", ") { it.simpleName }}): " +
+                                m.returnType.simpleName
+                        )
+                    }
+                current = current.superclass
+                depth++
+            }
+        }.trimEnd()
+    }
+
+    /**
+     * Infer the Maven module that owns a file path, for `coding.mvnBuild`.
+     *
+     * Browser4 layout: `<module>/src/...` for top-level modules (browser4-rest,
+     * browser4-coding, browser4-boot, ...) and `<parent>/<module>/src/...` for
+     * nested ones (browser4-core/browser4-common, browser4-plugins/browser4-seo,
+     * browser4-apps/browser4-standalone). Best-effort: returns a module path the
+     * agent can pass to `-pl`.
+     */
+    private fun inferModule(absolutePath: String): String {
+        val norm = absolutePath.replace('\\', '/')
+        val idx = norm.indexOf("/src/")
+        if (idx <= 0) return norm.substringAfterLast('/')
+        val before = norm.substring(0, idx)
+        val segments = before.split('/').filter { it.isNotEmpty() }
+        // Top-level module dir (browser4-rest) OR nested (browser4-core/browser4-common)
+        return when {
+            segments.size >= 2 && segments[segments.size - 2].startsWith("browser4-") ->
+                segments.takeLast(2).joinToString("/")
+            else -> segments.lastOrNull() ?: ""
+        }
+    }
+
+    /** kebab/snake → PascalCase (my-tool → MyTool), for test-class names. */
+    private fun toTestClassName(name: String): String =
+        name.split('-', '_').filter { it.isNotEmpty() }
+            .joinToString("") { it.replaceFirstChar { c -> c.uppercase() } }
 }

@@ -1847,10 +1847,362 @@ crawl 排的。
   而请求字段的绑定形状与 `parallelTabs` 完全相同（后者在 CLI e2e 里已经跑通）。要把它变成"真浏览器 +
   真后端"的证据，得往 `crawl` 的 e2e 场景里加一条，留给下一次 CLI e2e 批次。
 
+## 28. §19 的收尾：根因是"先建新 tab、再取空闲驱动"（4.14.x，已修）
 
+4.13.x 合并进 4.14.x 后，主 CI 在 commit `5435a7d10e` 上仍红，红点从 1 个变成 3 个，全部是
+`Crawl … did not reach a terminal state within N minutes, last: PROCESSING`
+（run [35139513535](https://github.com/platonai/Browser4/actions/runs/35139513535)：3043 条测试，
+3030 通过、10 跳过、3 报错）：
 
+| 用例 | 上限 | 实际 | 结局 |
+|---|---|---|---|
+| `CrawlFixtureMetadataTest#testReadonlyCrawlSurfacesServedOrFresh` | 6 min | 361 s 触顶 | crawl 在 19:37:23 以 `status OK, 10 pages, 0 lost` **正常完成**（测试 19:37:01 已放弃） |
+| `CrawlParallelTabsTest#testSequentialControlRunDoesNotOverlap` | 4 min | 240 s 触顶 | crawl 在 19:43:44 以 `status OK, 4 pages, 0 lost` **正常完成** |
+| `CrawlParallelTabsTest#testParallelLinkDiscoveryRoundsLoseNoPages` | 4 min | 240 s 触顶 | 同一 JVM 内，前一条把池耗住之后 |
 
-## 28. `release.yml` `v4.13.21`：导航探针与 `fill` 的拒绝让 7 个 CLI e2e 场景变红（4.13.x，2026-09-23）
+两次"失败"的 crawl 都是正常终态 —— 所以问题不在 crawl 语义，而在**单次抓取越来越慢**。
+
+### 28.1 现象：单次抓取从 2.6 s 涨到 80–103 s，然后稳定在平台
+
+把 run 里 74 次 `L.Task … got 200 … in Xs` 拉成曲线：
+
+| 时刻 | 单次抓取 |
+|---|---|
+| 19:24:31 – 19:27:07 | **2.6 – 4.1 s** |
+| 19:27:18 – 19:27:37 | 7.2 – 9.4 s |
+| 19:28:24 | 21.0 s |
+| 19:29:34 – 19:30:59 | 41.8 – 52.9 s |
+| 19:32:46 – 19:53:11 | **77 – 103 s（平台，直到 run 结束都没恢复）** |
+
+停顿期间**应用一行日志都没有**：`processing seed URL 1/4` 与 `fetched seed URL` 之间是纯空白，
+INFO 级别完全看不到"卡在哪"。
+
+### 28.2 根因：等待方**先建一个新 tab，再去取空闲驱动**
+
+`LoadingWebDriverPool.pollDriverInSlices` 的循环原本是：
+
+```kotlin
+while (driver == null) {
+    resourceSafeCreateDriverIfNecessary(priority, conf)      // ← 先建
+    ...
+    driver = statefulDriverPool.poll(sliceMillis, MILLISECONDS)  // ← 再取
+}
+```
+
+而 `shouldCreateWebDriver()` 只判断容量（`resourceConsumingDriversInPool < capacity`）与资源守卫，
+**不看 standby 队列里是否已经有空闲驱动**。于是每次取驱动都新建一个 tab：
+
+```
+WARN Waited 9769ms  for a driver | active: 43, standby: 41, waiting: 1, working: 2, slots: 7
+WARN Waited 15803ms for a driver | active: 44, standby: 41, waiting: 0, working: 3, slots: 6
+WARN Waited 9278ms  for a driver | active: 46, standby: 43, waiting: 2, working: 3, slots: 4
+WARN Waited 10830ms for a driver | active: 47, standby: 44, waiting: 3, working: 3, slots: 3
+WARN Waited 16377ms for a driver | active: 48, standby: 44, waiting: 2, working: 4, slots: 2
+WARN Waited 14352ms for a driver | active: 49, standby: 44, waiting: 1, working: 5, slots: 1
+WARN Waited 18882ms for a driver | active: 50, standby: 44, waiting: 0, working: 6, slots: 0
+```
+
+`standby` 一直有 **41–44 个空闲驱动**，`working` 只有 2–6，可是每次取驱动仍然新建一个 tab，
+把 `active` 从 43 推到容量上限 50（`slots` 7→0），等待时间 9–19 s 就是**新建 tab 的耗时**。
+浏览器 tab 越多，建 tab 与页面加载越慢 —— 这正是曲线爬升并最终平台化（80–103 s）的原因，
+CI 与本地是同一个签名（本地复现见 §28.4）。
+
+### 28.3 附带机制：CPU 负载守卫会把一次等待放大到 60 s
+
+驱动创建还受 `AppSystemInfo.isSystemOverCriticalLoad`（`systemCpuLoad > CRITICAL_CPU_THRESHOLD`，
+默认 **0.85**）约束；被拒绝时等待方按 500 ms 切片轮询，最多烧掉 `POLLING_TIMEOUT = 60 s`，
+再转成 crawl retry（`Retry(1601)`）。用 `-DjacocoArgLine=-Dcritical.cpu.threshold=0.0` 强制守卫
+永远拒绝，其余完全相同（同一条用例）：
+
+| 变体 | 结果 | 关键日志 |
+|---|---|---|
+| A：默认阈值 | **1/0/0，52.6 s** | — |
+| B：`threshold=0.0` | **1/0/0，111.3 s（2.1×）** | `The system is over the critical load, will not create a new driver` → `Driver pool is exhausted after 66948ms … [Critical CPU] \| active: 1, standby: 1` → `WARN … [Exhausted] Retry task 1 in browser scope` → `L.Task … fc:1 Retry(1601)` |
+
+CI runner 上"3000 条测试 + Chrome"的 CPU 负载长期高于 0.85，这条路径随时会把单次抓取再叠加 ~60 s，
+所以它虽然**不是**主因，也必须一起处理。
+
+### 28.4 修复与验证
+
+| 改动 | 位置 | 说明 |
+|---|---|---|
+| **先取 standby，再建新 tab**（主修复） | `LoadingWebDriverPool.pollDriverInSlices` | 循环开头先 `statefulDriverPool.poll(0, MILLISECONDS)` 非阻塞取空闲驱动，取不到才走创建路径；冷启动行为不变（无空闲时立刻建） |
+| 慢等待可观测 | `LoadingWebDriverPool.poll` | 等到 driver 但等待 ≥ `SLOW_POLL_MILLIS`（5 s）时按 1 分钟节流 WARN，带等待毫秒数与 `Snapshot`（`[Critical CPU]`/容量/各计数）；池耗尽那条 INFO 也带上等待时长 |
+| 测试 JVM 关闭 CPU 守卫 | 根 `pom.xml` | `<critical.cpu.threshold>1.0</critical.cpu.threshold>` + surefire `argLine`；生产仍是 0.85，内存/磁盘守卫对测试仍生效。要复现守卫行为传 `-Dcritical.cpu.threshold=0.85` |
+| 超时改为"卡住"判定 | `CrawlParallelTabsTest` / `CrawlFixtureMetadataTest` 的 `waitForTerminal` | 墙钟上限只作挂死兜底（12/20 min），真正判据是**进度**：`pagesFound/linksDiscovered/seedStatuses` 连续 3/5 分钟不变才失败；失败信息带上 `last status` 与 `progress: pagesFound=…, linksDiscovered=…, seedsSettled=…`（§19.5 第 1 条） |
+| 回归测试 | `LoadingWebDriverPoolTest#testPollReusesAStandbyDriver` | 对旧代码失败（`expected: <1> but was: <2>`：standby 存在却仍新建），修复后通过 |
+
+同一条本地命令（`-Pall-test-modules -pl browser4-tests/browser4-rest-tests -am -DrunITs=true
+-Dtest=CrawlParallelTabsTest,CrawlFixtureMetadataTest`）修复前后：
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| `CrawlFixtureMetadataTest` | 657.4 s（5/0/0） | **243.4 s**（5/0/0） |
+| `CrawlParallelTabsTest` | 765.4 s（5/0/**1**） | **51.0 s**（5/0/0） |
+| 单次抓取 | 1m24 – 1m51（持续退化） | **2.7 – 5.0 s（全程平稳）** |
+| 池等待 WARN | 7 次，9–19 s，`active` 43→50 | 1 次，5.6 s（冷启动 `standby: 0`） |
+
+CI 修复后的数字应与 §19.3 的"健康 run"（`CrawlFixtureMetadataTest` 321 s、`CrawlParallelTabsTest` 72.7 s）
+同一量级。
+
+### 28.5 附带发现：合并后在本地 `mvn install` 会留下孤儿 class
+
+`browser4-rest/.../service/CrawlService.kt` 被 4.13.x 拆到 `service/crawl/` 之后，增量构建**不会删除**
+被删源文件产生的 class：`target/classes/ai/platon/pulsar/rest/api/service/CrawlService.class`（连同
+`CrawlRequest/CrawlResponse/CrawlPageResult/CrawlSeedStatus`）会留在产物里，并被 `install` 打进 jar。
+于是 classpath 上同时存在 `service.CrawlService` 与 `service.crawl.CrawlService`，Spring 启动即：
+
+```
+ConflictingBeanDefinitionException: Annotation-specified bean name 'crawlService' for bean class
+[ai.platon.pulsar.rest.api.service.crawl.CrawlService] conflicts with existing, non-compatible bean
+definition of same name and class [ai.platon.pulsar.rest.api.service.CrawlService]
+```
+
+CI 不受影响（每次从干净检出构建，没有 `target/`）；**本地**遇到就 `./mvnw clean install`。
+排查时注意签名：这类失败发生在 Spring 上下文启动阶段（约 1.5 s 内整类 error），与本文的抓取停顿
+（`PROCESSING` 直到上限）完全不同。
+
+### 28.6 还没做
+
+* **守卫的产品语义**：池已达容量且有人排队时，"按 500 ms 切片轮询 + 60 s 超时 + 上层重试"在负载下会把
+  延迟放大到分钟级；是否在"已经有等待者"时允许再建一个 driver（受 capacity 约束）需要单独评估。
+* **空闲 tab 的回收**：主修复让池不再堆积空闲 tab，但 `idleTimeout`（20 分钟）之外仍没有更积极的回收策略；
+  长时间运行的服务会保留 `capacity` 上限内的 tab，值得单独测量内存占用。
+* **CI 上的复测**：`Waited {}ms for a driver` 这条 WARN 是新的观测点，若 CI 仍出现平台化，
+  先看这条（等 driver）与 `L.Task` 的耗时对比，再决定是池侧还是浏览器侧。
+
+## 29. v4.14.0-rc.6 的唯一红点：GitHub 发布接口的一次瞬时 5xx 毁掉了整个 release（4.14.x，已修）
+
+release.yml 在 tag `v4.14.0-rc.6`（run [35265014949](https://github.com/platonai/Browser4/actions/runs/35265014949)）上唯一红的是
+`Publish GitHub release` 的 `Create or update GitHub Release` 步骤：
+
+```
+2026-09-17T20:13:37.7091673Z ##[error]Error creating asset temp dir
+```
+
+该步骤 20:13:33 开始，11 个资产并行上传：日志里只有 6 个 `Uploaded`（Browser4.jar + 5 个 CLI 二进制），
+3 个 bundle（142/148/144 MB）与 2 个 CLI 二进制从未上传成功，20:15:27 步骤进程被杀、job 以 failure 结束。
+下游 4 步全部 skipped：`Generate Artifact Attestation`、`Verify Release`、`Release Summary`、
+`Sync to Aliyun OSS CDN` —— 一次服务端抖动，换来一个只挂了 6/11 个资产的 release，加上没触发的 CDN 同步。
+
+### 29.1 这不是我们的代码，也不是 action 的 bug
+
+* 报错文本**不在**所 pin 的 `softprops/action-gh-release@3d0d9888…`（v3.0.2）里：该 commit 树里
+  `dist/index.js` 的 blob 与本地取到的文件哈希一致（`git hash-object` = 树里的 sha），全文没有
+  `temp dir`、也没有 `Error creating`；v3.0.3 同样没有。
+* 它是 **GitHub release 上传端点的瞬时 5xx**，与公开记录里的 `Unicorn!`、`Error saving asset` 同类。
+  `forwardemail/mail.forwardemail.net` 的 `docs/RELEASES.md` 写得最直白：
+  "GitHub's release upload endpoint returns transient 5xx responses a few times a month
+  ('Unicorn!', 'Error saving asset', 'Error creating asset temp dir')"。
+* 推论有两条：重试是唯一有效的对策；**失败不是原子的** —— 失败的资产可能在 release 上留下一个比本地小的
+  截断版本，所以"按名字 + 字节数核对"才算验证，光看资产名在不在会漏。
+
+### 29.2 改动
+
+1. `cli/scripts/reconcile-release-assets.sh`（新）：以 release 为真值收敛 —— 列出资产 → 只上传
+   "缺失或大小不符"的文件（`gh release upload --clobber`，顺带覆盖截断资产）→ 复查，直到一致或
+   预算（默认 600 s，`--interval` 30 s）用完。已经一致时只花一次 API 调用、零上传。
+2. `cli/scripts/tests/reconcile-release-assets.tests.sh`（新，16 例，stub `gh`、无网络）：完整 release /
+   只补缺失 / 截断资产按大小补 / 上传瞬时失败后重试成功 / 列出瞬时失败 / release 不存在 /
+   永远不成功（点名资产 + 建议重跑）/ 不超预算 / 读 manifest（容忍空行与 CRLF）/ 参数校验。
+   变异验证确认套件有区分度：去掉大小核对 → `repairs a partial asset by size` 红；去掉重试 →
+   `survives the transient upload error that failed v4.14.0-rc.6` 红。
+3. `release.yml`：`Create or update GitHub Release` 加 `id: gh_release` + `continue-on-error: true`
+   （上传不再充当判据），其后新增 `Reconcile release assets` 步骤（调上面的脚本，`--files-from` 用
+   已有的 `steps.asset_manifest.outputs.files`），由它决定这一步的成败；该 job 原先**没有检出仓库**，
+   所以补了一次 `actions/checkout`（`ref: needs.prepare.outputs.tag`，与其它 job 一致）。
+4. 两个 workflow 都跑新套件：`release.yml` 的 `test-install-scripts`、`ci.yml` 的
+   `Validate install script tests`（后者每轮都跑，避免"只在 release 时跑、坏了几个月没人发现"）。
+
+### 29.3 还没做
+
+* **发布创建路径**：release 不存在时脚本直接报错退出 —— 用 title / notes / prerelease 创建 release 是
+  action 的职责（它自己有 3 次重试）。若创建本身持续 5xx，job 仍会红，只是错误信息点明"release 不存在"。
+* **上传端点整体不可用**：预算用尽后 job 仍然红，只是会点名"哪些资产还不对 + 建议 `Re-run failed jobs`"。
+* **没有真机验证**：本轮只有 stub + 变异验证，真实 5xx 无法本地复现；下一个 release tag 是首个真实检验点。
+  若那时仍红，先看 `Reconcile release assets` 步骤里的 WARN（它保留了每次失败的 GitHub 应答）。
+
+---
+
+## 30. nightly 的"绿灯 ≠ 全覆盖"：假绿协调、被跳过的 CLI e2e、没人跑的 1395 个 Rust 单测（4.14.x，已修）
+
+### 30.1 现象：四个机制让门禁看起来比实际覆盖得多
+
+对 `.github/workflows/nightly.yml` 做覆盖盘点（静态清点 `src/test` 356 个类 / 3727 个 `@Test`，
+harness `--list` 实测 e2e 选中 204 例）时，发现 nightly 的**选择面**没问题
+（JVM 约 97%，CLI e2e 100%），但**结论可信度**有四个口子：
+
+1. **假绿协调**：`.github/actions/run-tests/action.yml` 的 `reconcile-status` 在
+   `failed_count == 0` 时把 Maven 的非零退出码改写成 `success`（只对 exit 124/timeout 例外）。
+   配合 `--fail-at-end`，一个测试模块编译失败 → 该模块 0 个 surefire XML → 门禁全绿。
+   同一机制也让 **pr.yml 的 JaCoCo 0.20 覆盖下限形同不存在**：`jacoco:check` 失败 → Maven 退出 1 →
+   0 个测试失败 → 被协调成 success。
+   **但真正去验证时发现更糟**：这个下限其实**从未被评估过** —— JaCoCo agent 根本没挂到测试 JVM 上，
+   `jacoco.exec` 从来不生成，`report` 和 `check` 每次都打印
+   `Skipping JaCoCo execution due to missing execution data file`。也就是说这条下限被两道
+   互不相干的故障同时废掉了（详见 §30.2 第 9 条）。
+2. **CLI e2e 容忍 5 个场景失败**（`MAX_ALLOWED_FAILED_SCENARIOS = 5`），失败 ≤5 时打印
+   `ok (tolerated)` 并 exit 0，日志里只有一行文本，没有通过率。
+3. **nightly 的 e2e 只有 15 分钟预算**，而凌晨 3 点的 `nightly-cli.yml` 给同一套 204 例 30 分钟；
+   超时即 cargo 被杀，后半段场景没有任何结果。
+4. **`Check Test Status` 先 `exit 1` + `if: success()` 串联**：任一 JVM 用例失败 → Docker 构建、
+   启动、健康检查、204 个 CLI 场景全部跳过。一夜只能得到一个结论。
+5. 附带发现：**1395 个 Rust 单元测试（`cli/browser4-cli/src`）在任何 workflow 里都没跑过** ——
+   所有 workflow（含 `bin/test.ps1 cli`）只构建 `e2e` 测试目标。
+
+### 30.2 改动
+
+1. **`run-tests/action.yml`：退出码成为唯一真值。** `reconcile-status` 现在按
+   顺序判定：timeout/124 → 失败；退出码 ≠ 0 → 失败（且当 `failed_count == 0` 时打印
+   "reactor failed outside the tests" 的诊断）；退出码 0 但没有任何 surefire XML → 失败；
+   否则成功。新增 `reports_found` 输出与上述判断配套。**副作用是有意的**：JaCoCo 覆盖下限、
+   编译错误、fork 崩溃从此真的能让门禁变红。
+2. **action 新增 `maven_args` 输入**（追加到测试命令末尾），并用它给 nightly 传
+   `-Djacoco.check.skip=true`；`pom.xml` 的 `quality-gate` profile 的 `check` 执行新增
+   `<skip>${jacoco.check.skip}</skip>`（默认 `false`，pr.yml 行为不变）。nightly 因此
+   **测量覆盖率但不设下限**：下限属于控制了子集的 PR 门禁，不属于范围更宽的夜间跑。
+3. **nightly 新增 `Coverage Summary (observe-only)` 步骤**：解析每个模块的
+   `target/site/jacoco/jacoco.csv`，打印 模块 × instruction/branch/line 覆盖率表 + TOTAL，
+   并写入 `$GITHUB_STEP_SUMMARY`。此前 nightly 没有任何覆盖率数字（上传路径里的
+   `**/target/site/jacoco/**` 恒为空）。
+4. **nightly 的判定收口到最后一个 `Enforce Nightly Gate` 步骤**：`Check Test Status` 不再
+   `exit 1`，改为写 `MAVEN_TESTS_FAILED` 到 `$GITHUB_ENV`；Docker/启动/健康检查/e2e 照常执行；
+   最后由 gate 汇总 JVM 阶段、CLI 单测、CLI e2e 三者决定 job 成败。Rust 相关步骤用
+   `!cancelled()`（只需要检出仓库，不该被 Docker 阶段拖累）。
+5. **nightly 新增 `cargo test --bin browser4-cli --lib`**（10 分钟预算），并新增
+   `Enforce Nightly Gate` 中的对应判定。
+6. **e2e harness 新增 `--max-failures=<count>`**（默认仍是 5）：nightly 传 `0`，被容忍的失败会
+   打印通过率并在 GitHub Actions 上产生 `::warning::` 注解。help 文本、模块文档同步更新。
+7. **nightly 的 e2e 预算 15 → 30 分钟**（与 `nightly-cli.yml` 对齐），Maven 预算 60 → 75 分钟
+   （它现在是 ci.yml 的严格超集 + JaCoCo agent 开销）。
+8. 文档：`docs/TESTING.md` 新增"CI 门禁实际覆盖"（门禁矩阵、通过/失败语义、已知缺口），
+   修掉 `-DrunSDKTests=true` 这个不存在的 property；`nightly.yml` 头注释里的
+   "Python SDK tests" 与不存在的 `cli-e2e-tests.yml` 一并删除；`AGENTS.md`、
+   `cli/browser4-cli/README.md`（顺带修掉已被 `--enable-all` 取代的 `--enable-batch-scenario`
+   等旧示例）同步。
+9. **`pom.xml`：修掉让 JaCoCo 彻底失效的 `${...}` 早绑定。** surefire 的 `argLine` 原本写
+   `${jacocoArgLine}`，而该属性在 `<properties>` 里被**声明为空**（为了让不带 JaCoCo 的构建不至于把
+   字面量塞给 JVM）。Maven 在构建 effective model 时就把 `${jacocoArgLine}` 替换成了声明值 `""`，
+   早于 `prepare-agent` 在运行期写入真实值 —— 于是测试 JVM 的命令行上从来没有 `-javaagent`，
+   从未产生 `jacoco.exec`，`report`/`check` 一路 "Skipping JaCoCo execution"。
+   改成 Maven 的**晚绑定**语法 `@{jacocoArgLine}`（插件执行时才解析）后：
+   带 `-Pquality-gate` 时 agent 正常注入，不带该 profile 时属性解析为空、JVM 命令行干净，
+   与 `-Djacoco.check.skip=true`（只观测不设限）也各自验证通过。原因已写进 pom 注释，避免被"顺手改回"。
+10. **`browser4-tests/pulsar-tests-common` 做模块级覆盖率豁免**（只跳过 `check`，保留 agent + report）：
+    该模块是共享测试支撑库，它自己的 main 类是在**别的模块**的测试 JVM 里被执行的，因此它自己
+    bundle 的 instruction ratio 恒为 0.00（实测；它的自测又全是 `TestInfraCheck`，快档里被排除）。
+    bundle 级下限对它没有意义，而代价极高：它是 17 个模块的依赖，`--fail-at-end` 下一红就有
+    **17/31 模块被 SKIPPED**，等于用一种"静默截断"去换另一种。豁免写在模块自己的 pom 里
+    （按 execution id `check` 合并配置），作用域天然只限该模块。
+11. **给 `browser4-parse` 补上它的第一个真正测试**（`TikaParserTest`，2 例，带 `Unit`/`Fast` tag）：
+    该模块唯一的 main 类 `TikaParser`（Apache Tika 的 `Parser` 适配器）原本是 0.00 instruction
+    覆盖 —— 模块里仅有的那个 `@Test` 测的是 `browser4-skeleton` 的 HTML parser，与它无关。
+    补测后 `jacoco:check` 通过，实测 instruction **90.5%**（86/95）、line 93%（14/15）。
+    分界很清楚：**bundle 级规则本身无意义的共享支撑库 → 显式豁免（第 10 条）；
+    有真实生产代码、只是没人测的模块 → 补测试**，而不是把下限调到"能过"。
+
+### 30.3 验证
+
+* `cargo test --bin browser4-cli --lib`：**1395 passed / 0 failed / 2 ignored，9.1 s** ——
+  加这一步的代价约 10 秒，换回 1395 个此前无人执行的用例。
+* `cargo build --test e2e` 通过；`--help` 显示新 flag；`--list --max-failures=0` 回显
+  `tolerated failing scenarios: 0` 且仍选中 204 例；非法值（`--max-failures=abc`）给出明确 panic。
+* 4 个改动的 YAML（nightly.yml / pr.yml / ci.yml / run-tests action）通过 `yaml.safe_load` 解析，
+  并核对 nightly 的步骤顺序与 `if:` 条件。新增的 `Coverage Summary` 步骤脚本用 Git Bash 对着
+  真实 `jacoco.csv` 跑过：输出模块表 + TOTAL（`browser4-common` 46.3 / 36.5 / 48.1），
+  `GITHUB_STEP_SUMMARY` 的 markdown 表格也正确生成。
+* **JaCoCo 接线的证据链**：修复前 `mvn -X -Pquality-gate -pl :browser4-common test` 的
+  surefire fork 命令行只有 `-XX:+EnableDynamicAgentLoading -Djdk.net...=true -Dcritical.cpu.threshold=1.0`，
+  **没有 `-javaagent`**，`jacoco.exec` 不生成，`report` 与 `check` 都打印
+  `Skipping JaCoCo execution due to missing execution data file`；改成 `@{jacocoArgLine}` 后同一命令出现
+  `-javaagent:.../org.jacoco.agent-0.8.15-runtime.jar=destfile=.../target/jacoco.exec`，
+  并产出 `jacoco.exec`(40 KB) + `target/site/jacoco/{jacoco.csv,jacoco.xml,index.html}`。
+  不带 `-Pquality-gate` 时 fork 命令行干净（无 `@{...}` 字面量残留，BUILD SUCCESS）；
+  `-Djacoco.check.skip=true` 时 report 正常、check 跳过（BUILD SUCCESS）。
+* **覆盖下限在真实快档上的实测（三轮）**：本地以 pr.yml 等价命令跑全 reactor（外加 `--fail-at-end`
+  看全貌），测试全程 0 失败。
+  1. 第一轮：`pulsar-tests-common` instruction ratio **0.00** < 0.20。它是 17 个模块的依赖，该违例让
+     **17/31 模块变成 SKIPPED**（browser/skeleton/protocol/parse/agentic/plugins/agent-tools/boot/
+     rest/standalone/bundle … 全部没跑）——"覆盖被静默截断"的又一个实例。→ §30.2 第 10 条豁免。
+  2. 第二轮：豁免生效，`pulsar-tests-common` 转绿，唯一剩下的违规模块是 `browser4-parse`（0.00），
+     又连带 6 个模块 SKIPPED。→ §30.2 第 11 条补测，`jacoco:check` 通过（instruction 90.5%）。
+  3. 第三轮（最终态）：把"豁免 + 补测"一起放回全 reactor 复跑 —— **31/31 模块 SUCCESS、BUILD SUCCESS、
+     0 违例、0 测试失败**（2977 个用例）。有覆盖率数据的 11 个模块合计：
+     instruction **54.1%**（182,017/336,639）、branch 43.6%、line 57.0% —— 已经高于 0.20 下限，
+     也高于 0.50 的下一档目标，说明"修好接线"之后下限不是摆设，而是真的在守着一条线。
+  附注：6 个 `browser4-plugins/browser4-*` 模块不产出覆盖率数据 —— 它们的父 POM 是独立发布的
+  `browser4-pdk`（直接继承 Central 上的 `pulsar-parent`），因此看不到根 pom 的 `quality-gate` profile。
+  这是 PDK 的公开契约取舍，本轮不动它，只记录在 docs/TESTING.md 的"已知覆盖缺口"里。
+* `cargo build --test e2e` 通过；`--help` 显示新 flag；`--list --max-failures=0` 回显
+  `tolerated failing scenarios: 0` 且仍选中 204 例；非法值（`--max-failures=abc`）给出明确 panic。
+
+### 30.4 还没做（需要决策）
+
+* **`E2E`/`E2ETest` 标记的 10 个类 / 82 个方法仍然无人执行**（含 `HtmlSnapshotScenariosE2ETest` 32、
+  `MCPToolControllerE2ETest` 18、`Browser4MCPServerE2ETest` 14），整个
+  `browser4-tests/browser4-e2e-tests` 模块（5 个方法）同样是死代码。要不要让 nightly 接管
+  （去掉 `E2E,E2ETest` 两个排除项，或新增 `-DrunE2ETests=true` 的独立 job）需要先评估这些用例
+  在 Docker 后端上的稳定性 —— 直接放开很可能让 nightly 长期变红。
+* **tag 标注稀疏**：356 个含 `@Test` 的类只有 52 个带 tag，`Heavy`/`HeavyTest`/`Integration`/
+  `RequiresDocker`/`SDK` 五个 tag 零标注，排除清单里它们目前不产生任何效果。补齐标注是
+  "tag 门禁"名实相符的前提。
+* **`ci.yml` 仍是早退结构**（测试失败 → 跳过 Docker/e2e）：与 nightly 同样的问题，只是它只在
+  release tag 上跑，信息损失没夜间那么频繁。若要统一，照 §30.2 第 4 条同样处理即可。
+* **覆盖率下限仍只有 0.20，且是"每模块 bundle"粒度**：nightly 现在有数据了，下一步是据此把它抬向
+  0.50 → 0.70（docs/TESTING.md 的目标值：Global ≥70%、Core ≥80%、Utilities ≥90%、Controllers ≥85%）。
+  抬之前先处理粒度问题：bundle 级规则对"共享测试支撑库 / 聚合器 / 打包模块"没有意义（本轮已给
+  `pulsar-tests-common` 手工豁免，同类模块若出现应同样显式豁免并写明理由，而不是把下限调低到能过）。
+* **`run_pulsar_tests: false` 的 PR 门禁里，`browser4-tests/*` 层不参与**：`-DrunITs=true` 只在
+  ci/nightly 打开；PR 快档下的 650 个用例是"最小可信集"，不是全量。
+* **6 个插件模块的覆盖率是盲区**（media/images/pptx/markdown/swarm/profile-import）：父 POM 是独立发布的
+  `browser4-pdk`，看不到根 pom 的 `quality-gate` profile，所以既不测覆盖率也不受下限约束。要覆盖需要
+  在 PDK 里引入 JaCoCo（会影响第三方插件项目继承到的父 POM），属于设计决策。
+
+---
+
+## 31. `ci.yml` 不再早退 + tag 按实测补齐（4.14.x，已改）
+
+### 31.1 `ci.yml` 与 nightly 对齐
+
+`ci.yml` 原来和 §30.1 第 4 条一样：`Check Test Status` 直接 `exit 1`，而它后面的
+Docker 构建 / 启动应用 / 健康检查 / CLI e2e 都是默认 `success()` 门控 —— 一个 JVM 用例失败就让
+整个 release 门禁只剩"JVM 挂了"这一条信息。改动与 nightly 完全对称：
+
+1. `Check Test Status` 只把 `MAVEN_TESTS_FAILED` 写进 `$GITHUB_ENV`（并补上 Maven 退出码、
+   `reports_found` 与"无测试失败但 reactor 失败"的解释），不再 `exit 1`。
+2. 新增最后的 `Enforce CI Gate`：JVM 阶段（`skip_tests=true` 时视为"按请求跳过"）与 CLI e2e 阶段
+   一起判定 job 成败。早退结构消失，一轮同时拿到两侧结论。
+3. e2e 步骤加 `--max-failures=0`（门禁不该容忍静默失败），预算 15 → 25 分钟
+   —— 与 nightly 给同一套 harness 的 30 分钟（204 例）成比例（ci 跑 148 例）。
+   两个 flag 都是"更严"，若 CI 上出现已知 flaky 场景，回退只需删掉 `--max-failures=0`。
+
+### 31.2 tag 按实测补齐（数据来源：surefire `<testcase time>` + 被测进程是否真的拉起 Chrome）
+
+规则：单方法实测 **≥30 s → `Heavy`**、**5–30 s → `Slow`**、真的启动 Chrome **→ `RequiresBrowser`**；
+只在少数方法慢的类上做方法级标注（类级标注会把同类的快方法一起剔出门禁 ——
+`BrowserTabToolExecutorTest` 52 个方法 / 11 s 全是上下文启动开销，类级标 Slow 等于白丢 52 个方法）。
+
+结果：`Slow` 8 → 18 类（39 → 81 方法）、`Heavy` 0 → 2 类（8 方法）、`RequiresBrowser` 1 → 6 类（23 方法），
+共 12 个文件。实测影响：PR 门禁不再执行这 10 个类，快档实测总时长 691 s 中的约 493 s（71%）被移出 PR；
+`Slow` 的方法在 ci 也不再执行（其清单本就排除 `Slow`，属既定设计）；nightly 不受影响。
+
+验证：一次带 `-Dsurefire.excludedGroups=Slow,Heavy` 的定向运行逐个核对了过滤结果，全部符合预期
+（`TestAppSystemInfo` 4→3、`CodeRunnerTest` 9→8、`CliProcessManagerTest` 7→4、`StatefulAgentRunnerTest` 4→3、
+`B4CliToolExecutorJobTest` 2→1、`RobustBrowserAgentMemoryWiringTest` 2→1、`PulsarBrowserFactoryTest` 6→5(+1 跳过)、
+`PrivacyContextManagerTests` 6→5(+1 跳过)、`CrawlXSqlE2ETest` 2→1；类级标注的
+`TestAnnotationConfigAgenticContext`/`CrawlFixtureMetadataTest`/`CrawlParallelTabsTest` 被整体过滤掉），
+且 `BUILD SUCCESS`、0 失败。
+
+### 31.3 `E2E`/`E2ETest` 那 10 个类：只做评估，未改 tag
+
+两轮本地采样（`HtmlSnapshotScenariosE2ETest` 33 例 / 481 s、388 s；`StorageStateCookiePathE2ETest`
+4 例 / 41 s；`SwarmControllerE2ETest` 5 例 / 3 s；`Browser4MCPServerE2ETest` 14 例 / 2.8 s，
+合计 **56 例 0 失败**）得出的结论是**不要**在 nightly 里直接放开这两个 tag（放开只多跑 4 个类，
+其中 3 个是 Spring + 真 Chrome 的重测试），处置建议见
+[E2E tag 稳定性评估](e2e-tag-stability-assessment.md)；其中 `Browser4MCPServerE2ETest`
+（mockk、无浏览器、2.8 s）建议改标 `Unit`+`Fast` 回到 PR 门禁 —— 该改名属于行为变更，等决策后执行。
+
+## 32. `release.yml` `v4.13.21`：导航探针与 `fill` 的拒绝让 7 个 CLI e2e 场景变红（4.13.x，2026-09-23）
 
 `release.yml` run 35853681478（tag `v4.13.21`）的 `Build core artifacts and Docker image` 挂在
 `Run browser4-cli E2E Tests`：`153 passed; 7 failed; ... (7 failure entries; allowed <= 5)`——场景本身没有
@@ -1859,7 +2211,7 @@ crawl 排的。
 7 个失败分成三组，都不是 flake，而是**当天两笔产品改动改了行为、断言还停在旧行为**，外加一条早已修在
 `main` 上、4.13.x 没有的旧帐：
 
-### 28.1 五条：`open`/`goto` 多了一次导航探针
+### 32.1 五条：`open`/`goto` 多了一次导航探针
 
 `41a5007982`（bot-stealth 报告）给每次成功导航加了一次**建议性**的 `browser_evaluate`
 （`BLOCK_PROBE_JS`）：把落地页的 URL 与可见正文一次取回，按 SKILL §2 的封禁/挑战签名打分，命中就写一条
@@ -1885,7 +2237,7 @@ stderr 提示、`--json` 里报 `challenge_detected`。它不改退出码、不�
 立刻记下偏移，之后用 `&tool_calls[after_open..]` 切片。导航路径以后再加调用，也不会再动这些断言；
 反过来，被测命令自己多出一次 `browser_evaluate` 仍然会被抓到（切片是从导航之后算起的）。
 
-### 28.2 一条：`fill` 对"收不了输入的目标"改成拒绝
+### 32.2 一条：`fill` 对"收不了输入的目标"改成拒绝
 
 `571bd10693` 让 `fillSafe()` 先探目标再写：定位不到、或 `disabled`/`readonly`，直接抛
 `fill: target [#x] is disabled|read-only — user input is blocked.`。此前这条路径是**静默成功**——`fill` 的 JS
@@ -1896,7 +2248,7 @@ stderr 提示、`--json` 里报 `challenge_detected`。它不改退出码、不�
 `run_command_expecting_failure(..., "target [#readonly-target] is read-only")`：既钉住"被拒绝"，也钉住
 **是哪个目标**被拒绝（只写 `"is read-only"` 的话，CLI 认错元素也会过），随后保留原来的"值未被改写"断言。
 
-### 28.3 一条：`--sql` 的载荷独占 stdout（早就有的旧帐）
+### 32.3 一条：`--sql` 的载荷独占 stdout（早就有的旧帐）
 
 `test_e2e_crawl_foreground_with_sql` 把 `Crawl task submitted:` / `X-SQL extraction: enabled` 断言在 **stdout**
 上，但带 `--sql` 且没有 `--output` 时，抽取出来的载荷独占 stdout，`crawl_status_println!` 会把这些状态行
@@ -1904,16 +2256,16 @@ stderr 提示、`--json` 里报 `challenge_detected`。它不改退出码、不�
 靠 5 个失败的额度活着；`main` 上 `befd1f1c74`（2026-09-17）已经修过——本轮把那一半**回移**到 4.13.x：状态
 断言读两路合并（`stdout + stderr`），载荷断言仍然只看 stdout。
 
-### 28.4 验证
+### 32.4 验证
 
 | 层 | 证据 | 结果 |
 |---|---|---|
 | mock 组（本地，`--level=EXTENDED`） | `--scenario='test_e2e_mock_*'` | **8 / 0 / 0** |
 | crawl 组（本地，`--level=EXTENDED`） | `--scenario='test_e2e_crawl*'` | **16 / 0 / 0** |
 | 真后端（本地） | `--scenario='test_e2e_keyboard_edge_inputs'`（自启后端 + 真浏览器）：`cli (expect failure) fill #readonly-target` / `#disabled-target` 各一步，随后两次取值断言 | **1 / 0 / 0** |
-| 全量门禁（本地） | `cargo test --test e2e -- --nocapture --level=EXTENDED --enable-batch-scenario`（与 CI 同一命令行，`running 160 tests` / 159 个场景） | **159 / 1 / 0**，见 §28.6 |
+| 全量门禁（本地） | `cargo test --test e2e -- --nocapture --level=EXTENDED --enable-batch-scenario`（与 CI 同一命令行，`running 160 tests` / 159 个场景） | **159 / 1 / 0**，见 §32.6 |
 
-### 28.6 全量门禁的那 1 个失败：与本轮无关的 Windows-only 断言
+### 32.6 全量门禁的那 1 个失败：与本轮无关的 Windows-only 断言
 
 全量跑下来只剩 `test_e2e_session_lifecycle` 一条红，且**只在 Windows 上红**：`browser.rs:41` 断言引导语里
 写着 ``run `browser4-cli open <url>` to start a new session.``，而 CLI 在 Windows 上打印的是可执行文件的
@@ -1926,7 +2278,7 @@ stderr 提示、`--json` 里报 `challenge_detected`。它不改退出码、不�
 `test_e2e_mock_eval_await_command` / `test_e2e_mock_eval_without_await_omits_flag` /
 `test_e2e_mock_press_command_uses_direct_tool_dispatch` / `test_e2e_crawl_foreground_with_sql`。
 
-### 28.5 留下的判断
+### 32.5 留下的判断
 
 * **没有动产品代码**：三组失败都是"行为改了、断言没改"。探针与 `fill` 的拒绝都是同一天**有意**加的行为，
   Kotlin 单测（`Browser4WebDriverTest#inputTargetErrorRefusesADisabledTarget` / `...ReadOnlyTarget`）已经把
@@ -1937,7 +2289,7 @@ stderr 提示、`--json` 里报 `challenge_detected`。它不改退出码、不�
 * **5 个失败的容忍额度仍然偏松**：7 个失败里有 4 个是"每次都红"的确定性失败，却因为额度只报了 exit 101 而
   没有更早暴露。额度本身是 §12 定的，本轮没动。
 
-## 29. `release.yml` `v4.13.21`：OSS CDN 同步挂住，发布任务被自己的 15 分钟上限判红（4.13.x，2026-09-23）
+## 33. `release.yml` `v4.13.21`：OSS CDN 同步挂住，发布任务被自己的 15 分钟上限判红（4.13.x，2026-09-23）
 
 `release.yml` run 35860129386（tag `v4.13.21`）的 `Publish GitHub release` 只有一个失败步骤：
 
@@ -1949,7 +2301,7 @@ stderr 提示、`--json` 里报 `challenge_detected`。它不改退出码、不�
 `Release Summary` 都成功，11 个资产（551 MB）已经带在这个 release 上，npm 与容器镜像也都已经发布。**红的是
 CDN 镜像那一步，不是发布本身**；而这一步之所以红，是因为它**等的东西自己挂住了**。
 
-### 29.1 根因：被等的 run 卡在 `Upload to OSS`，越过了等待方的 15 分钟上限
+### 33.1 根因：被等的 run 卡在 `Upload to OSS`，越过了等待方的 15 分钟上限
 
 该步骤只做三件事：`gh workflow run sync-to-oss.yml` → 找到刚触发的 run → `gh run watch` 等它结束。
 它触发的 run 35864655616 的步骤时序：
@@ -1975,7 +2327,7 @@ CDN 镜像那一步，不是发布本身**；而这一步之所以红，是因�
 的 job 返回 `HTTP 404`，所以事故当下既看不到 `ossutil` 的进度，也说不清它卡在哪个资产上。这决定了本轮的做法
 是"把边界和诊断放在能被看到的地方"，而不是"等它自己好"。
 
-### 29.2 三处修法
+### 33.2 三处修法
 
 **1. `sync-to-oss.yml` 的每条执行路径都必须有结论**（这是等待方唯一能拿到的东西）：
 
@@ -2001,7 +2353,7 @@ CDN 镜像那一步，不是发布本身**；而这一步之所以红，是因�
 此前**没有 checkout**，脚本不会出现在 runner 上；按 4.14.x `41c012aaf5` 的做法把 checkout 加为该 job 的
 **第一个**步骤（checkout 会清理工作区，必须排在下载产物之前）。
 
-### 29.3 顺带修掉的一个假绿：等待方可能等在"上一次发布"的 run 上
+### 33.3 顺带修掉的一个假绿：等待方可能等在"上一次发布"的 run 上
 
 旧写法是"`gh run list` 的第一个非空答案就是它"：
 
@@ -2024,7 +2376,7 @@ run id，之后只接受不在该集合里的 run；id 基线列不出来时，�
 在派发时刻之前的 run 一律不接受，并且**继续轮询**而不是把旧 run 当答案返回）。id 集合的比较不涉及时钟，
 所以正常路径连时钟偏差都不可能影响判定。
 
-### 29.4 验证
+### 33.4 验证
 
 | 层 | 证据 | 结果 |
 |---|---|---|
@@ -2038,7 +2390,7 @@ run id，之后只接受不在该集合里的 run；id 基线列不出来时，�
 | 调用方清点 | `grep -rn "sync-to-oss.yml" .github/` | 只有 `release.yml` 与 `release-cli.yml` 调用，两者都已换成脚本调用；没有第三处内联副本 |
 | 事故的线上证据（只读 HTTP） | `curl -sI .../releases/download/{v4.13.20,v4.13.21}/Browser4.jar` | v4.13.20 **200**、v4.13.21 **404**——本轮同步一个资产都没落地，与"卡在第一个资产"一致 |
 
-### 29.5 留下的判断
+### 33.5 留下的判断
 
 * **没有把 OSS 同步降级为"建议性"**：`00aafa902c` 是**有意**让同步不成功就红（否则 CDN 会静默落后，而
   `latest` 符号链接是安装脚本的入口）。本轮保留这条闸门，只把"它失败了"和"我们放弃了"分开——超时会明确
@@ -2056,11 +2408,11 @@ run id，之后只接受不在该集合里的 run；id 基线列不出来时，�
 
 ---
 
-## 30. `sync-to-oss.yml` `v4.13.21` 重试：`ossutil cp` 在等交互式确认，且回传链路退化（4.13.x，2026-09-23）
+## 34. `sync-to-oss.yml` `v4.13.21` 重试：`ossutil cp` 在等交互式确认，且回传链路退化（4.13.x，2026-09-23）
 
-§29.5 留下了一句"第一次挂住的原因未知"。补跑 v4.13.21 的镜像同步后，日志把两个原因都摊开了。
+§33.5 留下了一句"第一次挂住的原因未知"。补跑 v4.13.21 的镜像同步后，日志把两个原因都摊开了。
 
-### 30.1 重试确定性地卡在 `cp: overwrite ... (y or N)?`
+### 34.1 重试确定性地卡在 `cp: overwrite ... (y or N)?`
 
 第二次和第三次重试的日志里都有这一行：
 
@@ -2075,7 +2427,7 @@ run id，之后只接受不在该集合里的 run；id 基线列不出来时，�
 
 `sync-to-oss.yml` 里三处 `cp` 因此补上了 `--force`（发布资产、版本化安装脚本、校验和文件；`latest` 符号链接和 metadata 那几处本来就有）。`--force` 不是"顺手加的整洁"，而是这条重试路径能成立的前提。
 
-### 30.2 另一半原因：GitHub runner → 阿里云的回传速率退化
+### 34.2 另一半原因：GitHub runner → 阿里云的回传速率退化
 
 第一次运行的日志（目标为空，因此没有覆盖提示）：
 
@@ -2087,7 +2439,7 @@ run id，之后只接受不在该集合里的 run；id 基线列不出来时，�
 
 13 MB / 33 分钟 ≈ 6.7 KB/s；而首发的历史值是 551 MB / 2 分钟 ≈ 4.4 MB/s。重试期间回升到约 200-400 KB/s，仍比首发慢一个数量级。这一半**不在仓库里**，只能在预算上认账。
 
-### 30.3 因此调整的预算
+### 34.3 因此调整的预算
 
 | 位置 | 旧 | 新 | 依据 |
 |---|---|---|---|
@@ -2098,7 +2450,7 @@ run id，之后只接受不在该集合里的 run；id 基线列不出来时，�
 
 顺序是关键：**步骤上限 < job 上限 < 等待方上限**，这样超时永远指向真正卡住的那一层。
 
-### 30.4 镜像现状与验证
+### 34.4 镜像现状与验证
 
 同步过（部分）资产之后，`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/v4.13.21/` 的
 `Browser4.jar`、三个 runtime bundle、`browser4-cli-darwin-arm64` 均已返回 200；本轮重试补齐其余资产。
@@ -2108,7 +2460,7 @@ run id，之后只接受不在该集合里的 run；id 基线列不出来时，�
 验证：`yaml.safe_load` 解析三个 workflow 通过；`cli/scripts/tests/wait-for-oss-sync.tests.sh` 19/19 通过
 （预算改动未触碰其断言，测试只用 `--timeout 4` 跑）。
 
-### 30.5 结果：镜像补齐，`latest` 已切到 v4.13.21
+### 34.5 结果：镜像补齐，`latest` 已切到 v4.13.21
 
 把 `--force` + `--update` + 发布时刻戳送上去之后，重跑变成了**单调收敛**：每一轮跳过镜像已有的对象，只传缺的。
 

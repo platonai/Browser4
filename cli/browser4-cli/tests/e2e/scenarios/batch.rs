@@ -51,9 +51,7 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
             ctx,
             |s| s["typeValue"].as_str() == Some(expected_value),
             5_000,
-            &format!(
-                "Expected JSON batch press to append '{key}' to produce '{expected_value}'"
-            ),
+            &format!("Expected JSON batch press to append '{key}' to produce '{expected_value}'"),
         );
     }
 

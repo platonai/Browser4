@@ -23,4 +23,9 @@ class DefaultController(
             mapOf("status" to "unhealthy")
         }
     }
+
+    @GetMapping("status")
+    fun statusPanel(): String {
+        return "redirect:/status.html"
+    }
 }

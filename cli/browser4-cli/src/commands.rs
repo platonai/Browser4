@@ -27,6 +27,7 @@ pub enum Category {
     Act,
     Skills,
     Plugins,
+    Code,
 }
 
 impl Category {
@@ -52,6 +53,7 @@ impl Category {
             Category::Act => "act",
             Category::Skills => "skills",
             Category::Plugins => "plugins",
+            Category::Code => "code",
         }
     }
 }
@@ -340,6 +342,35 @@ return x
 return document.readyState==='complete'&&s.p===0&&(Date.now()-s.t)>=500
 })()"#;
 
+/// JavaScript expression that injects the `web-vitals` library from the CDN
+/// and reports the Core Web Vitals (LCP, CLS, INP, FCP, TTFB).  Evaluated
+/// with `--await` (awaitPromise).  A 3 s cap avoids hanging on INP, which
+/// only settles after user interaction.
+const VITALS_JS: &str = r#"(async () => {
+    const load = () => new Promise((resolve, reject) => {
+        if (window.webVitals) { resolve(); return; }
+        const s = document.createElement('script');
+        s.src = 'https://unpkg.com/web-vitals@3.5.2/dist/web-vitals.iife.js';
+        s.onload = resolve;
+        s.onerror = () => reject(new Error('Failed to load web-vitals from CDN (network required)'));
+        document.head.appendChild(s);
+    });
+    await load();
+    const { onLCP, onCLS, onINP, onFCP, onTTFB } = window.webVitals;
+    const results = {};
+    await new Promise((resolve) => {
+        let pending = 5;
+        const done = () => { if (--pending === 0) resolve(); };
+        onLCP((m) => { results.LCP = m.value; done(); }, { reportAllChanges: true });
+        onFCP((m) => { results.FCP = m.value; done(); }, { reportAllChanges: true });
+        onCLS((m) => { results.CLS = m.value; done(); }, { reportAllChanges: true });
+        onTTFB((m) => { results.TTFB = m.value; done(); });
+        onINP((m) => { results.INP = m.value; done(); }, { reportAllChanges: true });
+        setTimeout(resolve, 3000);
+    });
+    return JSON.stringify(results);
+})()"#;
+
 // ---------------------------------------------------------------------------
 // Command definitions (static)
 // ---------------------------------------------------------------------------
@@ -399,6 +430,38 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(interact_level) = get_opt_str(args, "interact-level") {
                     params["interactLevel"] = json!(interact_level);
                 }
+                params
+            },
+        },
+        CommandDef {
+            name: "profile-import",
+            description: "Import browser personal data (bookmarks, history, passwords, cookies, extensions) from system Chrome/Edge/Safari into a Browser4-managed profile snapshot. Requires the browser4-profile-import plugin on the backend. Use --list-sources to discover installed browsers first.",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "list-sources", description: "List installed browsers (chrome, edge, safari) and their profiles", is_bool: true, short: None },
+                OptionDef { name: "source", description: "Source browser: chrome, edge or safari", is_bool: false, short: None },
+                OptionDef { name: "profile", description: "Source Chrome/Edge profile name or directory name (default: first profile); ignored for safari", is_bool: false, short: None },
+                OptionDef { name: "data", description: "Comma-separated subset of bookmarks,history,passwords,cookies,extensions (default: all; passwords excluded unless profileimport.allow.passwords=true)", is_bool: false, short: None },
+                OptionDef { name: "into", description: "Import landing: temp (snapshot dir, default), prototype (seed the prototype profile), default (replace the default profile dir)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Print the raw JSON result", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |args| {
+                if get_bool(args, "list-sources").unwrap_or(false) {
+                    "profile_import_list_sources".to_string()
+                } else {
+                    "profile_import_import".to_string()
+                }
+            },
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(v) = get_opt_str(args, "source") { params["source"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "profile") { params["profile"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "data") { params["data"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "into") { params["into"] = json!(v); }
                 params
             },
         },
@@ -716,7 +779,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Excluded, // uninstall targets real ~/.scent via WinAPI home — not redirectable in e2e
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -784,7 +847,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "webminer-views",
-            description: "Rebuild the interactive views (index.html, xlsx, json) from an existing clustering result directory",
+            description: "Rebuild the interactive views (<project>.html, xlsx, json) from an existing clustering result directory",
             category: Category::WebMiner,
             hidden: false,
             batch_supported: false,
@@ -1020,6 +1083,58 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "press",
             description: "Press a key on the focused element or an optional target ref, `a`, `ArrowLeft`",
+            category: Category::Keyboard,
+            hidden: false,
+            batch_supported: true,
+            args: &[
+                ArgDef { name: "key", description: "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`", optional: false },
+                ArgDef { name: "ref", description: "Optional CSS selector or element reference to receive the key press", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "verify", description: "Verify the key press was applied by reading the element value", is_bool: true, short: None },
+                OptionDef { name: "follow", description: "After pressing, detect and follow navigation to new tabs", is_bool: true, short: None },
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_press_key".to_string(),
+            tool_params_fn: |args| {
+                let (key, reference) = resolve_key_and_ref(args);
+                let mut params = json!({ "key": key });
+                if let Some(reference) = reference {
+                    params["ref"] = json!(reference);
+                }
+                params
+            },
+        },
+        CommandDef {
+            name: "key",
+            description: "Press a key on the focused element or an optional target ref (alias of press), `a`, `ArrowLeft`",
+            category: Category::Keyboard,
+            hidden: false,
+            batch_supported: true,
+            args: &[
+                ArgDef { name: "key", description: "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`", optional: false },
+                ArgDef { name: "ref", description: "Optional CSS selector or element reference to receive the key press", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "verify", description: "Verify the key press was applied by reading the element value", is_bool: true, short: None },
+                OptionDef { name: "follow", description: "After pressing, detect and follow navigation to new tabs", is_bool: true, short: None },
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_press_key".to_string(),
+            tool_params_fn: |args| {
+                let (key, reference) = resolve_key_and_ref(args);
+                let mut params = json!({ "key": key });
+                if let Some(reference) = reference {
+                    params["ref"] = json!(reference);
+                }
+                params
+            },
+        },
+        CommandDef {
+            name: "keyboard",
+            description: "Press a key on the focused element or an optional target ref (alias of press), `a`, `ArrowLeft`",
             category: Category::Keyboard,
             hidden: false,
             batch_supported: true,
@@ -1440,11 +1555,15 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "url", description: "Wait until the URL matches this glob pattern", is_bool: false, short: None },
                 OptionDef { name: "load", description: "Wait for page load state: networkidle, domcontentloaded, or load (networkidle only settles the network — poll `wait <result-selector>` for late-rendered results)", is_bool: false, short: None },
                 OptionDef { name: "fn", description: "Wait until this JavaScript expression returns true", is_bool: false, short: None },
+                OptionDef { name: "download", description: "Wait until a download in the given directory completes (polls for .crdownload files)", is_bool: true, short: None },
+                OptionDef { name: "dir", description: "Download directory to watch (with --download; default: ./downloads)", is_bool: false, short: None },
                 OptionDef { name: "timeout", description: "Maximum time to wait in milliseconds (default: 30000)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| {
-                if get_opt_str(args, "text").is_some() || get_opt_str(args, "fn").is_some() || get_opt_str(args, "load").is_some() {
+                if get_bool(args, "download").unwrap_or(false) {
+                    String::new() // local poll — handled in main.rs
+                } else if get_opt_str(args, "text").is_some() || get_opt_str(args, "fn").is_some() || get_opt_str(args, "load").is_some() {
                     "wait_for_function".to_string()
                 } else if get_opt_str(args, "url").is_some() {
                     "wait_for_page".to_string()
@@ -1455,6 +1574,14 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
             },
             tool_params_fn: |args| {
+                // --download is a local poll handled in main.rs — pass through
+                // dir/timeout verbatim so the handler can read them.
+                if get_bool(args, "download").unwrap_or(false) {
+                    let mut p = json!({ "download": true });
+                    if let Some(d) = get_opt_str(args, "dir") { p["dir"] = json!(d); }
+                    if let Some(t) = get_opt_str(args, "timeout") { p["timeout"] = json!(t); }
+                    return p;
+                }
                 // Resolve --timeout, defaulting to 30 000 ms
                 let timeout_millis: i64 = get_opt_str(args, "timeout")
                     .and_then(|v| v.parse().ok())
@@ -1665,6 +1792,27 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "diff-snapshot",
+            description: "Diff two saved accessibility-tree snapshot files. With one path, diffs it against the previous snapshot; with none, diffs the two most recent snapshots.",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "before", description: "First snapshot file path (optional — defaults to the previous snapshot)", optional: true },
+                ArgDef { name: "after", description: "Second snapshot file path (optional — defaults to the most recent snapshot)", optional: true },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // filesystem-only, covered by mock scenario
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                for (k, v) in args {
+                    if k != "_" { p[k] = v.clone(); }
+                }
+                p
+            },
+        },
+        CommandDef {
             name: "eval",
             description: "Evaluate JavaScript expression on page or element. Prefer --file or --stdin on Windows to avoid shell quoting issues. Use --await for async code (fetch, Promises). Use --wait-selector for pages that render content asynchronously (React/SPA). Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
             category: Category::Core,
@@ -1735,6 +1883,32 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "errors",
+            description: "List console error messages (alias of `console --min-level error`)",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "clear", description: "Whether to clear the console list", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |args| {
+                if get_bool(args, "clear").unwrap_or(false) {
+                    "browser_console_clear".to_string()
+                } else {
+                    "browser_console_messages".to_string()
+                }
+            },
+            tool_params_fn: |args| {
+                if get_bool(args, "clear").unwrap_or(false) {
+                    json!({})
+                } else {
+                    json!({ "level": "error" })
+                }
+            },
+        },
+        CommandDef {
             name: "cdp",
             description: "Send an arbitrary Chrome DevTools Protocol (CDP) command and print the JSON result. For advanced browser interactions not covered by standard WebDriver commands. CDP method names use dot notation (e.g. \"Page.captureScreenshot\", \"Runtime.evaluate\", \"DOM.getDocument\"). Optional params can be passed as a JSON object via --json.",
             category: Category::DevTools,
@@ -1755,6 +1929,186 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(js) = get_opt_str(args, "json") { p["json"] = json!(js); }
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
                 if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "profiler-start",
+            description: "Start the V8 CPU profiler (CDP Profiler domain) so the next page interactions are recorded",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // live profiler session scenario
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "profiler-stop",
+            description: "Stop the V8 CPU profiler and save the profile as a .cpuprofile file (Chrome DevTools / speedscope compatible)",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "file", description: "Output .cpuprofile file path (default: profiler-<timestamp>.cpuprofile in the current directory)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // live profiler session scenario
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                p
+            },
+        },
+        CommandDef {
+            name: "download",
+            description: "Configure the browser to allow downloads into a directory (CDP Browser.setDownloadBehavior). Downloads then land in the given folder instead of the browser default.",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "dir", description: "Download directory (default: ./downloads)", is_bool: false, short: None },
+                OptionDef { name: "behavior", description: "Download behavior: allow (default) or deny", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // real download flow via download fixture
+            tool_name_fn: |_| "execute_cdp_command".to_string(),
+            tool_params_fn: |args| {
+                let dir = get_opt_str(args, "dir").unwrap_or("downloads");
+                let behavior = get_opt_str(args, "behavior").unwrap_or("allow");
+                json!({
+                    "method": "Browser.setDownloadBehavior",
+                    "params": { "behavior": behavior, "downloadPath": dir },
+                })
+            },
+        },
+        CommandDef {
+            name: "network-requests",
+            description: "List network requests tracked for the current tab, with optional filters (URL substring, resource type, HTTP method, status). Network tracking is enabled on first use; requests are kept in a bounded in-memory buffer.",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "filter", description: "Only requests whose URL contains this text (case-insensitive)", is_bool: false, short: None },
+                OptionDef { name: "type", description: "Comma-separated resource types, e.g. xhr,fetch", is_bool: false, short: None },
+                OptionDef { name: "method", description: "HTTP method, e.g. POST", is_bool: false, short: None },
+                OptionDef { name: "status", description: "Status filter: 200, 2xx, or a range like 400-499", is_bool: false, short: None },
+                OptionDef { name: "clear", description: "Drop all tracked requests first", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_network_requests".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(f) = get_opt_str(args, "filter") { p["filter"] = json!(f); }
+                if let Some(t) = get_opt_str(args, "type") { p["type"] = json!(t); }
+                if let Some(m) = get_opt_str(args, "method") { p["method"] = json!(m); }
+                if let Some(s) = get_opt_str(args, "status") { p["status"] = json!(s); }
+                if get_bool(args, "clear").unwrap_or(false) { p["clear"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "network-request",
+            description: "Fetch the full detail of one tracked network request: request/response headers, timing, and the response body (fetched on demand).",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "requestId", description: "The network request id shown by `network requests`", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_network_request".to_string(),
+            tool_params_fn: |args| {
+                // Request ids can look numeric (CDP ids are strings but some
+                // sources emit plain digits); get_string_value keeps them as
+                // text instead of dropping them like as_str does.
+                json!({ "requestId": get_string_value(args, "requestId").unwrap_or_default() })
+            },
+        },
+        CommandDef {
+            name: "network-route",
+            description: "Route matching requests to a mock response or abort them (CDP Fetch interception). URL patterns: \"*\" matches all; plain text matches URLs containing it; \"*\" globs are supported (e.g. **/api/users). Provide exactly one action: --abort or --body.",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "urlPattern", description: "URL pattern to intercept (e.g. **/api/users, or * for every request)", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "abort", description: "Fail matching requests instead of sending them", is_bool: true, short: None },
+                OptionDef { name: "body", description: "Mock response body (e.g. a JSON string)", is_bool: false, short: None },
+                OptionDef { name: "content-type", description: "Content-Type for the mock response (e.g. application/json)", is_bool: false, short: None },
+                OptionDef { name: "resource-type", description: "Only intercept these CDP resource types (comma-separated, e.g. xhr,fetch)", is_bool: false, short: None },
+                OptionDef { name: "type", description: "Alias of --resource-type", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_network_route".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({ "urlPattern": get_str(args, "urlPattern").unwrap_or_default() });
+                if get_bool(args, "abort").unwrap_or(false) { p["abort"] = json!(true); }
+                if let Some(b) = get_opt_str(args, "body") { p["body"] = json!(b); }
+                if let Some(c) = get_opt_str(args, "content-type") { p["contentType"] = json!(c); }
+                if let Some(t) = get_opt_str(args, "resource-type").or_else(|| get_opt_str(args, "type")) { p["resourceType"] = json!(t); }
+                p
+            },
+        },
+        CommandDef {
+            name: "network-unroute",
+            description: "Remove request routes; without a URL pattern every route is removed and Fetch interception is disabled.",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "urlPattern", description: "The exact URL pattern to unroute (omit to remove all routes)", optional: true },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_network_unroute".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(u) = get_opt_str(args, "urlPattern") { p["urlPattern"] = json!(u); }
+                p
+            },
+        },
+        CommandDef {
+            name: "har-start",
+            description: "Start a HAR recording session on the current tab. Response bodies are captured per --content mode once recording is active; stop with `network har stop [path]`.",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "content", description: "Which response bodies to embed: none (default), text (text-like MIME types), or all (binary base64)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_har_start".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(c) = get_opt_str(args, "content") { p["contentMode"] = json!(c); }
+                p
+            },
+        },
+        CommandDef {
+            name: "har-stop",
+            description: "Stop the active HAR recording and print the HAR 1.2 document to stdout, or save it to a .har file when a path is given.",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Output .har file path (agent-browser compatible positional); omit to print the HAR JSON to stdout", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "path", description: "Output .har file path (alias of the positional path); omit to print the HAR JSON to stdout", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_har_stop".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(f) = get_opt_str(args, "path") { p["path"] = json!(f); }
                 p
             },
         },
@@ -1785,6 +2139,245 @@ pub fn all_commands() -> Vec<CommandDef> {
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_handle_dialog".to_string(),
             tool_params_fn: |_| json!({ "accept": false }),
+        },
+        CommandDef {
+            name: "dialog-status",
+            description: "Query whether a native JavaScript dialog (alert/confirm/prompt) is pending and, if so, its type and message",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_dialog_status".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "focus",
+            description: "Focus the element identified by a CSS selector or element reference",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: true,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #search, input[name=q])", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_focus".to_string(),
+            tool_params_fn: |args| json!({ "selector": get_str(args, "selector").unwrap_or_default() }),
+        },
+        CommandDef {
+            name: "is-visible",
+            description: "Check whether the element matched by a selector is visible",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #search)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_is_visible".to_string(),
+            tool_params_fn: |args| json!({ "selector": get_str(args, "selector").unwrap_or_default() }),
+        },
+        CommandDef {
+            name: "is-enabled",
+            description: "Check whether the element matched by a selector is enabled (not disabled and not read-only)",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #submit)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_is_enabled".to_string(),
+            tool_params_fn: |args| json!({ "selector": get_str(args, "selector").unwrap_or_default() }),
+        },
+        CommandDef {
+            name: "is-checked",
+            description: "Check whether the checkbox or radio matched by a selector is checked",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #agree)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_is_checked".to_string(),
+            tool_params_fn: |args| json!({ "selector": get_str(args, "selector").unwrap_or_default() }),
+        },
+        CommandDef {
+            name: "scrollintoview",
+            description: "Scroll the element matched by a selector into the center of the viewport",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #results)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                let selector = get_str(args, "selector").unwrap_or_default();
+                json!({
+                    "expression": "element => { element.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' }); return 'scrolled'; }",
+                    "ref": selector,
+                })
+            },
+        },
+        CommandDef {
+            name: "pushstate",
+            description: "Push a new history entry via history.pushState without reloading the page",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "url", description: "The URL to push onto the history stack (relative or absolute)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                let url = get_str(args, "url").unwrap_or_default();
+                let url_literal = serde_json::to_string(url).unwrap_or_else(|_| format!("\"{}\"", url));
+                json!({
+                    "expression": format!("() => {{ history.pushState({{}}, '', {}); return location.href; }}", url_literal),
+                })
+            },
+        },
+        CommandDef {
+            name: "highlight",
+            description: "Visually highlight the element matched by a selector with an outline overlay and scroll it into view",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #price)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                let selector = get_str(args, "selector").unwrap_or_default();
+                json!({
+                    "expression": "element => { element.scrollIntoView({ behavior: 'smooth', block: 'center' }); element.style.outline = '3px solid #ff5722'; element.style.outlineOffset = '2px'; return 'highlighted'; }",
+                    "ref": selector,
+                })
+            },
+        },
+        CommandDef {
+            name: "vitals",
+            description: "Measure Core Web Vitals (LCP, CLS, INP, FCP, TTFB) by injecting the web-vitals library. Requires network access to load the library from the CDN.",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // dispatch covered by mock scenario (metrics need CDN)
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| {
+                json!({
+                    "expression": VITALS_JS,
+                    "awaitPromise": true,
+                })
+            },
+        },
+        CommandDef {
+            name: "web-vitals",
+            description: "Measure Core Web Vitals (alias of `vitals`): LCP, CLS, INP, FCP, TTFB",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // alias of vitals, covered by mock scenario
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| {
+                json!({
+                    "expression": VITALS_JS,
+                    "awaitPromise": true,
+                })
+            },
+        },
+        CommandDef {
+            name: "set",
+            description: "Emulate browser capabilities via Chrome DevTools Protocol: `set geo`, `set offline`, `set headers`, `set media`, or `set device`",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "mode", description: "What to emulate: geo, offline, headers, media, or device", optional: false },
+                ArgDef { name: "state", description: "For offline: on or off (default: on)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "lat", description: "Latitude (geo)", is_bool: false, short: None },
+                OptionDef { name: "lon", description: "Longitude (geo)", is_bool: false, short: None },
+                OptionDef { name: "accuracy", description: "Position accuracy in meters (geo, default: 1)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Headers as a JSON object string, e.g. '{\"X-Api-Key\": \"abc\"}' (headers)", is_bool: false, short: None },
+                OptionDef { name: "color-scheme", description: "Emulated prefers-color-scheme: light, dark, or no-preference (media)", is_bool: false, short: None },
+                OptionDef { name: "width", description: "Viewport width in px (device)", is_bool: false, short: None },
+                OptionDef { name: "height", description: "Viewport height in px (device)", is_bool: false, short: None },
+                OptionDef { name: "dpr", description: "Device scale factor (device, default: 1)", is_bool: false, short: None },
+                OptionDef { name: "mobile", description: "Enable mobile (touch) emulation (device)", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "execute_cdp_command".to_string(),
+            tool_params_fn: |args| {
+                let mode = get_str(args, "mode").unwrap_or_default().to_ascii_lowercase();
+                match mode.as_str() {
+                    "geo" => {
+                        let lat = get_opt_str(args, "lat").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                        let lon = get_opt_str(args, "lon").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                        let accuracy = get_opt_str(args, "accuracy").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
+                        json!({
+                            "method": "Emulation.setGeolocationOverride",
+                            "params": { "latitude": lat, "longitude": lon, "accuracy": accuracy },
+                        })
+                    }
+                    "offline" => {
+                        let state = get_str(args, "state").unwrap_or("on").to_ascii_lowercase();
+                        let offline = !matches!(state.as_str(), "off" | "false" | "0");
+                        json!({
+                            "method": "Network.emulateNetworkConditions",
+                            "params": { "offline": offline, "latency": 0, "downloadThroughput": -1, "uploadThroughput": -1 },
+                        })
+                    }
+                    "headers" => {
+                        let headers_json = get_opt_str(args, "json").unwrap_or("{}");
+                        let headers = serde_json::from_str::<Value>(headers_json)
+                            .map(|v| v)
+                            .unwrap_or_else(|_| json!({}));
+                        json!({
+                            "method": "Network.setExtraHTTPHeaders",
+                            "params": { "headers": headers },
+                        })
+                    }
+                    "media" => {
+                        let scheme = get_opt_str(args, "color-scheme").unwrap_or("no-preference");
+                        json!({
+                            "method": "Emulation.setEmulatedMedia",
+                            "params": { "features": [ { "name": "prefers-color-scheme", "value": scheme } ] },
+                        })
+                    }
+                    "device" => {
+                        let width = get_opt_str(args, "width").and_then(|v| v.parse::<i64>().ok()).unwrap_or(390);
+                        let height = get_opt_str(args, "height").and_then(|v| v.parse::<i64>().ok()).unwrap_or(844);
+                        let dpr = get_opt_str(args, "dpr").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
+                        let mobile = get_bool(args, "mobile").unwrap_or(false);
+                        json!({
+                            "method": "Emulation.setDeviceMetricsOverride",
+                            "params": { "width": width, "height": height, "deviceScaleFactor": dpr, "mobile": mobile },
+                        })
+                    }
+                    other => {
+                        // Unknown mode — emit an unusable call so the CLI errors early.
+                        json!({ "method": "", "params": { "mode": other } })
+                    }
+                }
+            },
         },
         CommandDef {
             name: "resize",
@@ -2327,6 +2920,23 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "window-new",
+            description: "Create a new browser window (equivalent to opening a new tab)",
+            category: Category::Tabs,
+            hidden: false,
+            batch_supported: true,
+            args: &[ArgDef { name: "url", description: "The URL to navigate to in the new window", optional: true }],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_tabs".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({ "action": "new" });
+                let url = get_opt_str(args, "url").unwrap_or("about:blank");
+                p["url"] = json!(url);
+                p
+            },
+        },
+        CommandDef {
             name: "tab-close",
             description: "Close a browser tab",
             category: Category::Tabs,
@@ -2370,6 +2980,46 @@ pub fn all_commands() -> Vec<CommandDef> {
                 p
             },
         },
+        // ---- Frames ----
+        CommandDef {
+            name: "frames",
+            description: "List the frames of the current page (frame tree with names and URLs; the active frame is marked)",
+            category: Category::Tabs,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "frame_list".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "frame",
+            description: "Switch the frame that subsequent element commands (click/fill/type/isVisible/...) resolve against. Use 'frame main' to return to the main frame. Target forms: an element ref from a snapshot (e.g. e12 or backend:123), a CSS selector of an <iframe> (e.g. #pay-frame), frame name, frame id, or URL fragment (from 'frames' output). The scope resets automatically on navigation.",
+            category: Category::Tabs,
+            hidden: false,
+            batch_supported: true,
+            args: &[
+                ArgDef { name: "target", description: "'main', or the frame target: element ref (e12/backend:123), CSS selector (#pay-frame), frame name, frame id, or URL fragment", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |args| {
+                if get_str(args, "target").unwrap_or_default().trim() == "main" {
+                    "frame_main".to_string()
+                } else {
+                    "frame_switch".to_string()
+                }
+            },
+            tool_params_fn: |args| {
+                let target = get_str(args, "target").unwrap_or_default();
+                if target.trim() == "main" {
+                    json!({})
+                } else {
+                    json!({ "frame": target })
+                }
+            },
+        },
         // ---- Page Info ----
         CommandDef {
             name: "page-info",
@@ -2396,6 +3046,18 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "verbose", description: "Show full session IDs without truncation", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "profiles-list",
+            description: "List browser profile (context) directories under the Browser4 data dir (~/.browser4/browser/chrome)",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // filesystem-only, covered by mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -2501,7 +3163,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef {
                     name: "server",
-                    description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)",
+                    description: "Server URL to check (defaults to the saved server, or this checkout's dev port)",
                     is_bool: false,
                     short: None,
                 },
@@ -2538,7 +3200,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "server",
-                    description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)",
+                    description: "Server URL to check (defaults to the saved server, or this checkout's dev port)",
                     is_bool: false,
                     short: None,
                 },
@@ -2687,6 +3349,29 @@ pub fn all_commands() -> Vec<CommandDef> {
                 params
             },
         },
+        // ---- doctor-status ----
+        CommandDef {
+            name: "doctor-status",
+            description: "Show the aggregated status panel report from the running backend (health, build, runtime, LLM, sessions, browsers, plugins, skills, metrics, logs). Default shows the summary layer; --verbose adds full detail, --section <name> drills into one report, --json emits machine-readable JSON.",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "section", short: None, is_bool: false, description: "Show only one report section in full detail. One of: health, build, runtime, llm, sessions, pulsar-sessions, swarm, url-pool, browsers, drivers, privacy, plugins, skills, metrics, logs" },
+                OptionDef { name: "verbose", short: Some("v"), is_bool: true, description: "Show the full detail layer of every report section (default: summary layer only)" },
+                OptionDef { name: "server", short: None, is_bool: false, description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)" },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // mock /api/system/status scenario
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(section) = get_opt_str(args, "section") { params["section"] = json!(section); }
+                if let Some(true) = get_bool(args, "verbose") { params["verbose"] = json!(true); }
+                if let Some(server) = get_opt_str(args, "server") { params["server"] = json!(server); }
+                params
+            },
+        },
         // ---- Agent ----
         CommandDef {
             name: "extract",
@@ -2784,11 +3469,31 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
-            options: &[],
+            options: &[
+                OptionDef { name: "wait", description: "Block until the agent task completes (default timeout: 600s)", is_bool: true, short: None },
+                OptionDef { name: "wait-timeout", description: "Max seconds to block with --wait before giving up (default: 600; the task keeps running server-side after a timeout)", is_bool: false, short: None },
+                OptionDef { name: "noop-limit", description: "Override the consecutive no-op abort threshold (default: 5; long coding tasks benefit from 8-10)", is_bool: false, short: None },
+                OptionDef { name: "engine", description: "Agent execution engine (default: cli; observe-act is the DEPRECATED legacy engine)", is_bool: false, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_run".to_string(),
             tool_params_fn: |args| {
-                json!({ "task": get_str(args, "task").unwrap_or_default() })
+                let mut p = json!({ "task": get_str(args, "task").unwrap_or_default() });
+                if get_bool(args, "wait").unwrap_or(false) {
+                    p["wait"] = json!(true);
+                }
+                if let Some(v) = get_opt_str(args, "wait-timeout") {
+                    if let Ok(secs) = v.parse::<u64>() {
+                        p["waitTimeout"] = json!(secs);
+                    }
+                }
+                if let Some(n) = get_opt_str(args, "noop-limit") {
+                    if let Ok(limit) = n.parse::<i64>() {
+                        p["noopLimit"] = json!(limit);
+                    }
+                }
+                p["engine"] = json!(get_opt_str(args, "engine").unwrap_or("cli"));
+                p
             },
         },
         CommandDef {
@@ -2839,6 +3544,22 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_str(args, "limit").and_then(|s| s.parse::<usize>().ok()) { p["limit"] = json!(v); }
                 if let Some(v) = get_str(args, "offset").and_then(|s| s.parse::<usize>().ok()) { p["offset"] = json!(v); }
                 p
+            },
+        },
+        CommandDef {
+            name: "agent-cancel",
+            description: "Cancel a running or queued agent task (interrupts the agent loop and marks the task failed)",
+            category: Category::Agent,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID returned by agent run", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // mock cancel endpoint scenario
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
         },
         CommandDef {
@@ -3711,6 +4432,29 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "htmlsnapshot-readability",
+            description: "Readability: extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) from the stored HTML snapshot using a Readability-style heuristic. Use `htmlsnapshot` first to capture the page into storage. Supports an optional URL to fetch independently.",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "url", description: "URL to extract from. Defaults to the current session's page URL (stored snapshot or fresh capture)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "text-only", short: None, is_bool: true, description: "Print only the extracted plain text, without the metadata header" },
+                OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "html_snapshot_readability".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(url) = get_opt_str(args, "url") { p["url"] = json!(url); }
+                p
+            },
+        },
+        CommandDef {
             name: "generate-locator",
             description: "Generate the best CSS selector (id, class, or nth-of-type path) for a snapshot ref or CSS selector",
             category: Category::Core,
@@ -3850,7 +4594,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // config command family mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -3862,7 +4606,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // config command family mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -3876,11 +4620,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to get (server, timeout, proxy, session)",
+                    description: "The config key to get (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
                 },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // config command family mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
@@ -3897,7 +4641,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to set (server, timeout, proxy, session)",
+                    description: "The config key to set (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
                 },
                 ArgDef {
                     name: "value",
@@ -3906,7 +4650,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // config command family mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
@@ -3924,15 +4668,536 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to delete (server, timeout, proxy, session)",
+                    description: "The config key to delete (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
                 },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // config command family mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
                 json!({ "key": key })
+            },
+        },
+        // ---- Code (session-independent coding tools) ----
+        CommandDef {
+            name: "code-read",
+            description: "Read a file's content. Binary files show metadata only.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file to read", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "start-line", description: "Start line (1-based, default: 1)", is_bool: false, short: None },
+                OptionDef { name: "end-line", description: "End line (1-based, default: last line)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_read".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let mut p = json!({ "path": path });
+                if let Some(s) = get_opt_str(args, "start-line") {
+                    if let Ok(n) = s.parse::<i32>() { p["startLine"] = json!(n); }
+                }
+                if let Some(e) = get_opt_str(args, "end-line") {
+                    if let Ok(n) = e.parse::<i32>() { p["endLine"] = json!(n); }
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-write",
+            description: "Write content to a file (creates parent directories, overwrites existing). Use --stdin or --file on Windows to avoid shell quoting issues.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file to write", optional: false },
+                ArgDef { name: "content", description: "Content to write (use --stdin or --file for multi-line)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "file", description: "Read content from a file instead of the command line argument", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read content from stdin", is_bool: true, short: None },
+                OptionDef { name: "base64", description: "Decode the content argument as base64 before writing", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_write".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let content = get_str(args, "content").unwrap_or_default();
+                let mut p = json!({ "path": path, "content": content });
+                if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                if get_bool(args, "base64").unwrap_or(false) { p["base64"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-append",
+            description: "Append content to a file. Use --stdin or --file for multi-line content.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file to append to", optional: false },
+                ArgDef { name: "content", description: "Content to append", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "file", description: "Read content from a file", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read content from stdin", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_append".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let content = get_str(args, "content").unwrap_or_default();
+                let mut p = json!({ "path": path, "content": content });
+                if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-replace",
+            description: "Replace text occurrences in a file. Use --stdin for newStr to avoid quoting issues.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file", optional: false },
+                ArgDef { name: "old", description: "Text to find (old string)", optional: false },
+                ArgDef { name: "new", description: "Replacement text (new string)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "count", description: "Max replacements (-1 = replace all, default: -1)", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read newStr from stdin (useful for multi-line replacements)", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_replace".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let old_str = get_str(args, "old").unwrap_or_default();
+                let new_str = get_str(args, "new").unwrap_or_default();
+                let mut p = json!({ "path": path, "oldStr": old_str, "newStr": new_str });
+                if let Some(c) = get_opt_str(args, "count") {
+                    if let Ok(n) = c.parse::<i32>() { p["count"] = json!(n); }
+                }
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-delete",
+            description: "Delete a file or directory",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file or directory to delete", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "recursive", description: "Delete directories recursively", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_delete".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let mut p = json!({ "path": path });
+                if get_bool(args, "recursive").unwrap_or(false) { p["recursive"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-copy",
+            description: "Copy a file or directory",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "source", description: "Source path", optional: false },
+                ArgDef { name: "dest", description: "Destination path", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_copy".to_string(),
+            tool_params_fn: |args| {
+                let source = get_str(args, "source").unwrap_or_default();
+                let dest = get_str(args, "dest").unwrap_or_default();
+                json!({ "source": source, "dest": dest })
+            },
+        },
+        CommandDef {
+            name: "code-move",
+            description: "Move or rename a file or directory",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "source", description: "Source path", optional: false },
+                ArgDef { name: "dest", description: "Destination path", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_move".to_string(),
+            tool_params_fn: |args| {
+                let source = get_str(args, "source").unwrap_or_default();
+                let dest = get_str(args, "dest").unwrap_or_default();
+                json!({ "source": source, "dest": dest })
+            },
+        },
+        CommandDef {
+            name: "code-list",
+            description: "List directory contents",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Directory path (default: workspace root)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "depth", description: "Max depth (default: 1)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_listDir".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(path) = get_opt_str(args, "path") { p["path"] = json!(path); }
+                if let Some(d) = get_opt_str(args, "depth") {
+                    if let Ok(n) = d.parse::<i32>() { p["maxDepth"] = json!(n); }
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-stat",
+            description: "Get file or directory metadata",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file or directory", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_stat".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                json!({ "path": path })
+            },
+        },
+        CommandDef {
+            name: "code-glob",
+            description: "Find files matching a glob pattern (e.g., 'src/**/*.kt')",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "pattern", description: "Glob pattern", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_glob".to_string(),
+            tool_params_fn: |args| {
+                let pattern = get_str(args, "pattern").unwrap_or_default();
+                json!({ "pattern": pattern })
+            },
+        },
+        CommandDef {
+            name: "code-grep",
+            description: "Search file contents for a regex pattern (like grep -r)",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "pattern", description: "Regex pattern to search for", optional: false },
+                ArgDef { name: "path", description: "Directory to search in (default: workspace root)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "file-pattern", description: "File name glob filter (default: *)", is_bool: false, short: None },
+                OptionDef { name: "ignore-case", description: "Case-insensitive search", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_grep".to_string(),
+            tool_params_fn: |args| {
+                let pattern = get_str(args, "pattern").unwrap_or_default();
+                let mut p = json!({ "pattern": pattern });
+                if let Some(path) = get_opt_str(args, "path") { p["path"] = json!(path); }
+                if let Some(fp) = get_opt_str(args, "file-pattern") { p["filePattern"] = json!(fp); }
+                if get_bool(args, "ignore-case").unwrap_or(false) { p["ignoreCase"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-mkdir",
+            description: "Create a directory and any missing parents",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Directory path to create", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_mkdir".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                json!({ "path": path })
+            },
+        },
+        CommandDef {
+            name: "code-diff",
+            description: "Show unified diff between snapshot and current content of a file",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "algorithm", description: "Diff algorithm: 'myers' (default) or 'patience'", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_diff".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let mut p = json!({ "path": path });
+                if let Some(a) = get_opt_str(args, "algorithm") { p["algorithm"] = json!(a); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-changes",
+            description: "Show summary of all file changes since tracking started",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_changeSummary".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "code-shell",
+            description: "Execute a shell command (git, cargo, mvn, npm, python, node, etc.). Use --stdin for complex commands.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "command", description: "Shell command to execute", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "timeout", description: "Timeout in seconds (default: 120)", is_bool: false, short: None },
+                OptionDef { name: "cwd", description: "Working directory for the command", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read command from stdin (for complex multi-line commands)", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_shell".to_string(),
+            tool_params_fn: |args| {
+                let command = get_str(args, "command").unwrap_or_default();
+                let mut p = json!({ "command": command });
+                if let Some(t) = get_opt_str(args, "timeout") {
+                    if let Ok(n) = t.parse::<i64>() { p["timeoutSeconds"] = json!(n); }
+                }
+                if let Some(wd) = get_opt_str(args, "cwd") { p["workingDir"] = json!(wd); }
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-scaffold",
+            description: "Generate a scaffold template for a Browser4 plugin, skill, JS script, or shell script. type: 'plugin' | 'skill' | 'js' | 'script'. Use --dir to materialize the files into a directory (plugin type).",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "type", description: "Scaffold type: 'plugin' | 'skill' | 'js' | 'script'", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "dir", description: "Materialize the scaffold into this directory (plugin type only; e.g. browser4-plugins/browser4-myplugin)", is_bool: false, short: None },
+                OptionDef { name: "name", description: "Plugin name (for plugin), skill name (for skill), or script name (for js/script)", is_bool: false, short: None },
+                OptionDef { name: "domain", description: "Tool domain (for plugin)", is_bool: false, short: None },
+                OptionDef { name: "package", description: "Base package (for plugin)", is_bool: false, short: None },
+                OptionDef { name: "method", description: "Tool method name (for plugin)", is_bool: false, short: None },
+                OptionDef { name: "desc", description: "Tool description (for plugin) or skill description", is_bool: false, short: None },
+                OptionDef { name: "triggers", description: "Comma-separated triggers (for skill)", is_bool: false, short: None },
+                OptionDef { name: "tools", description: "Comma-separated tools (for skill)", is_bool: false, short: None },
+                OptionDef { name: "purpose", description: "JS script purpose: 'extract' | 'inject' | 'interact'", is_bool: false, short: None },
+                OptionDef { name: "script-type", description: "Script type: 'build' | 'deploy' | 'run'", is_bool: false, short: None },
+                OptionDef { name: "shell", description: "Shell type for scripts: 'ps1' | 'bash'", is_bool: false, short: None },
+                OptionDef { name: "verify", description: "Run validation after scaffolding (with --dir)", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |args| {
+                if get_opt_str(args, "dir").is_some() {
+                    "coding_scaffoldToDir".to_string()
+                } else {
+                    "coding_scaffold".to_string()
+                }
+            },
+            tool_params_fn: |args| {
+                let scaffold_type = get_str(args, "type").unwrap_or_default();
+                let mut p = json!({ "type": scaffold_type });
+                if let Some(v) = get_opt_str(args, "dir") { p["dir"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "name") { p["name"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "domain") { p["domain"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "package") { p["basePackage"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "method") { p["toolMethod"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "desc") { p["toolDescription"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "triggers") { p["triggers"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "tools") { p["tools"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "purpose") { p["purpose"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "script-type") { p["scriptType"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "shell") { p["shell"] = json!(v); }
+                if get_bool(args, "verify").unwrap_or(false) { p["verify"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-validate",
+            description: "Validate a Browser4 plugin, skill, JS file, script, or repo consistency. type: 'plugin' | 'skill' | 'js' | 'script' | 'repo-consistency'.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "type", description: "Validation type: 'plugin' | 'skill' | 'js' | 'script' | 'repo-consistency'", optional: false },
+                ArgDef { name: "path", description: "Path to plugin dir or file (not needed for repo-consistency)", optional: true },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_validate".to_string(),
+            tool_params_fn: |args| {
+                let vtype = get_str(args, "type").unwrap_or_default();
+                let mut p = json!({ "type": vtype });
+                if let Some(path) = get_opt_str(args, "path") { p["path"] = json!(path); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-mvn",
+            description: "Build a Browser4 Maven module and return structured Kotlin/Java compiler diagnostics.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "module", description: "Maven module path (e.g. 'browser4-rest' or 'browser4-plugins/browser4-seo')", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "goals", description: "Maven goals (default: 'compile')", is_bool: false, short: None },
+                OptionDef { name: "skip-tests", description: "Skip tests (default: true)", is_bool: true, short: None },
+                OptionDef { name: "timeout", description: "Timeout in seconds (default: 300)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_mvnBuild".to_string(),
+            tool_params_fn: |args| {
+                let module = get_str(args, "module").unwrap_or_default();
+                let mut p = json!({ "module": module });
+                if let Some(g) = get_opt_str(args, "goals") { p["goals"] = json!(g); }
+                if get_bool(args, "skip-tests").unwrap_or(true) { p["skipTests"] = json!(true); }
+                if let Some(t) = get_opt_str(args, "timeout") {
+                    if let Ok(n) = t.parse::<i64>() { p["timeoutSeconds"] = json!(n); }
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-run",
+            description: "Run code in a sandboxed subprocess. Languages: kotlin, js, ts, python, bash.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "language", description: "Language: 'kotlin' | 'js' | 'ts' | 'python' | 'bash'", optional: false },
+                ArgDef { name: "code", description: "Code to execute (use --stdin for multi-line)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "timeout", description: "Timeout in seconds (default: 30)", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read code from stdin", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_runCode".to_string(),
+            tool_params_fn: |args| {
+                let language = get_str(args, "language").unwrap_or_default();
+                let code = get_str(args, "code").unwrap_or_default();
+                let mut p = json!({ "language": language, "code": code });
+                if let Some(t) = get_opt_str(args, "timeout") {
+                    if let Ok(n) = t.parse::<i64>() { p["timeoutSeconds"] = json!(n); }
+                }
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-devtask",
+            description: "High-level development task entry point for Browser4 self-development.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "task", description: "Development task description", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "verify", description: "Run validation after task", is_bool: true, short: None },
+                OptionDef { name: "run-tests", description: "Run tests after task", is_bool: true, short: None },
+                OptionDef { name: "execute", description: "Execute the generated dev-task plan steps (writes files and runs builds/tests)", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_devTask".to_string(),
+            tool_params_fn: |args| {
+                let task = get_str(args, "task").unwrap_or_default();
+                let mut p = json!({ "task": task });
+                if get_bool(args, "verify").unwrap_or(false) { p["verify"] = json!(true); }
+                if get_bool(args, "run-tests").unwrap_or(false) { p["runTests"] = json!(true); }
+                if get_bool(args, "execute").unwrap_or(false) { p["execute"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-impact",
+            description: "Analyze the impact of changing a file in the Browser4 repo: owning module, dependents, and suggested test commands.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file to analyze", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_impact".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                json!({ "path": path })
+            },
+        },
+        CommandDef {
+            name: "code-workspace",
+            description: "Get the workspace root directory path",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_workspaceRoot".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "code-javap",
+            description: "Inspect a class on the backend classpath: superclass chain and public method signatures (reflection-based; for external library APIs like ImmutableConfig)",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "class", description: "Fully-qualified class name (e.g. ai.platon.pulsar.common.config.ImmutableConfig)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
+            tool_name_fn: |_| "coding_classInfo".to_string(),
+            tool_params_fn: |args| {
+                let class_name = get_str(args, "class").unwrap_or_default();
+                json!({ "class": class_name })
             },
         },
     ]
@@ -3995,6 +5260,77 @@ mod tests {
                 cmd.name
             );
         }
+    }
+
+    #[test]
+    fn test_code_scaffold_prints_template_without_dir() {
+        let map = commands_map();
+        let cmd = map.get("code-scaffold").unwrap();
+        let mut args = HashMap::new();
+        args.insert("type".to_string(), json!("plugin"));
+        args.insert("name".to_string(), json!("browser4-demo"));
+        args.insert("domain".to_string(), json!("demo"));
+
+        // Without --dir the scaffold is printed to stdout (coding_scaffold).
+        assert_eq!((cmd.tool_name_fn)(&args), "coding_scaffold");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["type"], "plugin");
+        assert_eq!(params["name"], "browser4-demo");
+        assert_eq!(params["domain"], "demo");
+        assert!(params.get("dir").is_none());
+    }
+
+    #[test]
+    fn test_code_scaffold_materializes_to_dir_with_verify() {
+        let map = commands_map();
+        let cmd = map.get("code-scaffold").unwrap();
+        let mut args = HashMap::new();
+        args.insert("type".to_string(), json!("plugin"));
+        args.insert("name".to_string(), json!("browser4-demo"));
+        args.insert("dir".to_string(), json!("browser4-plugins/browser4-demo"));
+        args.insert("package".to_string(), json!("ai.platon.pulsar.demo"));
+        args.insert("method".to_string(), json!("doAction"));
+        args.insert("desc".to_string(), json!("Demo plugin"));
+        args.insert("verify".to_string(), json!(true));
+
+        // With --dir the CLI materializes files via coding_scaffoldToDir.
+        assert_eq!((cmd.tool_name_fn)(&args), "coding_scaffoldToDir");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["type"], "plugin");
+        assert_eq!(params["dir"], "browser4-plugins/browser4-demo");
+        assert_eq!(params["basePackage"], "ai.platon.pulsar.demo");
+        assert_eq!(params["toolMethod"], "doAction");
+        assert_eq!(params["toolDescription"], "Demo plugin");
+        assert_eq!(params["verify"], true);
+    }
+
+    #[test]
+    fn test_code_scaffold_skill_uses_scaffold_tool() {
+        let map = commands_map();
+        let cmd = map.get("code-scaffold").unwrap();
+        let mut args = HashMap::new();
+        args.insert("type".to_string(), json!("skill"));
+        args.insert("name".to_string(), json!("my-skill"));
+        args.insert("triggers".to_string(), json!("hello,world"));
+
+        assert_eq!((cmd.tool_name_fn)(&args), "coding_scaffold");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["type"], "skill");
+        assert_eq!(params["triggers"], "hello,world");
+    }
+
+    #[test]
+    fn test_code_devtask_maps_execute_flag() {
+        let map = commands_map();
+        let cmd = map.get("code-devtask").unwrap();
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("scaffold a plugin"));
+        args.insert("execute".to_string(), json!(true));
+
+        assert_eq!((cmd.tool_name_fn)(&args), "coding_devTask");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["task"], "scaffold a plugin");
+        assert_eq!(params["execute"], true);
     }
 
     #[test]
@@ -4067,6 +5403,26 @@ mod tests {
             "experience-query",
             "experience-list",
             "experience-deep-learn",
+            "focus",
+            "is-visible",
+            "is-enabled",
+            "is-checked",
+            "errors",
+            "key",
+            "keyboard",
+            "scrollintoview",
+            "pushstate",
+            "highlight",
+            "vitals",
+            "web-vitals",
+            "set",
+            "window-new",
+            "diff-snapshot",
+            "dialog-status",
+            "profiles-list",
+            "profiler-start",
+            "profiler-stop",
+            "download",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -4096,6 +5452,49 @@ mod tests {
         let args = HashMap::new();
         assert!((cmd.tool_name_fn)(&args).is_empty());
         assert_eq!((cmd.tool_params_fn)(&args), json!({}));
+    }
+
+    #[test]
+    fn test_profile_import_tool_name_for_import() {
+        let map = commands_map();
+        let cmd = map.get("profile-import").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "profile_import_import");
+    }
+
+    #[test]
+    fn test_profile_import_tool_name_for_list_sources() {
+        let map = commands_map();
+        let cmd = map.get("profile-import").unwrap();
+        let mut args = HashMap::new();
+        args.insert("list-sources".to_string(), json!(true));
+        assert_eq!((cmd.tool_name_fn)(&args), "profile_import_list_sources");
+    }
+
+    #[test]
+    fn test_profile_import_params_map_to_camel_case() {
+        let map = commands_map();
+        let cmd = map.get("profile-import").unwrap();
+        let mut args = HashMap::new();
+        args.insert("source".to_string(), json!("chrome"));
+        args.insert("profile".to_string(), json!("Work"));
+        args.insert("data".to_string(), json!("bookmarks,cookies"));
+        args.insert("into".to_string(), json!("prototype"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["source"], "chrome");
+        assert_eq!(params["profile"], "Work");
+        assert_eq!(params["data"], "bookmarks,cookies");
+        assert_eq!(params["into"], "prototype");
+        // CLI-only flags are not forwarded as tool params
+        assert!(params.get("json").is_none());
+    }
+
+    #[test]
+    fn test_profile_import_is_not_batch_supported() {
+        let map = commands_map();
+        let cmd = map.get("profile-import").unwrap();
+        assert!(!cmd.batch_supported);
     }
 
     #[test]
@@ -4159,6 +5558,381 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["text"], "hello world");
         assert_eq!(params["ref"], "#search");
+    }
+
+    #[test]
+    fn test_focus_params_and_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("focus").unwrap();
+        let mut args = HashMap::new();
+        args.insert("selector".to_string(), json!("#search"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_focus");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "#search");
+        assert!(cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_is_commands_tool_names_and_params() {
+        let map = commands_map();
+        let mut args = HashMap::new();
+        args.insert("selector".to_string(), json!("#submit"));
+
+        let cmd = map.get("is-visible").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_is_visible");
+        assert_eq!((cmd.tool_params_fn)(&args)["selector"], "#submit");
+
+        let cmd = map.get("is-enabled").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_is_enabled");
+        assert_eq!((cmd.tool_params_fn)(&args)["selector"], "#submit");
+
+        let cmd = map.get("is-checked").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_is_checked");
+        assert_eq!((cmd.tool_params_fn)(&args)["selector"], "#submit");
+    }
+
+    #[test]
+    fn test_errors_aliases_console_error_level() {
+        let map = commands_map();
+        let cmd = map.get("errors").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_console_messages");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["level"], "error");
+    }
+
+    #[test]
+    fn test_key_keyboard_alias_press() {
+        let map = commands_map();
+        let mut args = HashMap::new();
+        args.insert("_".to_string(), json!(["key", "Enter", "#search"]));
+
+        let cmd = map.get("key").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_press_key");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "Enter");
+        assert_eq!(params["ref"], "#search");
+
+        let cmd = map.get("keyboard").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_press_key");
+        assert_eq!((cmd.tool_params_fn)(&args)["key"], "Enter");
+    }
+
+    #[test]
+    fn test_scrollintoview_and_highlight_use_evaluate() {
+        let map = commands_map();
+        let mut args = HashMap::new();
+        args.insert("selector".to_string(), json!("#results"));
+
+        let cmd = map.get("scrollintoview").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#results");
+        assert!(params["expression"].as_str().unwrap().contains("scrollIntoView"));
+
+        let cmd = map.get("highlight").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params["expression"].as_str().unwrap().contains("outline"));
+    }
+
+    #[test]
+    fn test_pushstate_params_embed_url() {
+        let map = commands_map();
+        let cmd = map.get("pushstate").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("/products?page=2"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        let expr = params["expression"].as_str().unwrap();
+        assert!(expr.contains("history.pushState"));
+        assert!(expr.contains("/products?page=2"));
+    }
+
+    #[test]
+    fn test_vitals_and_web_vitals_await_promise() {
+        let map = commands_map();
+        let args = HashMap::new();
+        for name in ["vitals", "web-vitals"] {
+            let cmd = map.get(name).unwrap();
+            assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+            let params = (cmd.tool_params_fn)(&args);
+            assert_eq!(params["awaitPromise"], true);
+            assert!(params["expression"].as_str().unwrap().contains("web-vitals"));
+        }
+    }
+
+    #[test]
+    fn test_set_geo_params_build_cdp_override() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("geo"));
+        args.insert("lat".to_string(), json!("39.9042"));
+        args.insert("lon".to_string(), json!("116.4074"));
+        args.insert("accuracy".to_string(), json!("5"));
+        assert_eq!((cmd.tool_name_fn)(&args), "execute_cdp_command");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], "Emulation.setGeolocationOverride");
+        assert_eq!(params["params"]["latitude"], 39.9042);
+        assert_eq!(params["params"]["longitude"], 116.4074);
+        assert_eq!(params["params"]["accuracy"], 5.0);
+    }
+
+    #[test]
+    fn test_set_offline_params() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("offline"));
+        args.insert("state".to_string(), json!("off"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], "Network.emulateNetworkConditions");
+        assert_eq!(params["params"]["offline"], false);
+    }
+
+    #[test]
+    fn test_set_headers_params() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("headers"));
+        args.insert("json".to_string(), json!(r#"{"X-Api-Key": "abc"}"#));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], "Network.setExtraHTTPHeaders");
+        assert_eq!(params["params"]["headers"]["X-Api-Key"], "abc");
+    }
+
+    #[test]
+    fn test_set_media_and_device_params() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+
+        let mut media = HashMap::new();
+        media.insert("mode".to_string(), json!("media"));
+        media.insert("color-scheme".to_string(), json!("dark"));
+        let params = (cmd.tool_params_fn)(&media);
+        assert_eq!(params["method"], "Emulation.setEmulatedMedia");
+        assert_eq!(params["params"]["features"][0]["value"], "dark");
+
+        let mut device = HashMap::new();
+        device.insert("mode".to_string(), json!("device"));
+        device.insert("width".to_string(), json!("390"));
+        device.insert("height".to_string(), json!("844"));
+        device.insert("dpr".to_string(), json!("3"));
+        device.insert("mobile".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&device);
+        assert_eq!(params["method"], "Emulation.setDeviceMetricsOverride");
+        assert_eq!(params["params"]["width"], 390);
+        assert_eq!(params["params"]["deviceScaleFactor"], 3.0);
+        assert_eq!(params["params"]["mobile"], true);
+    }
+
+    #[test]
+    fn test_window_new_mirrors_tab_new() {
+        let map = commands_map();
+        let cmd = map.get("window-new").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_tabs");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["action"], "new");
+        assert_eq!(params["url"], "https://example.com");
+    }
+
+    #[test]
+    fn test_dialog_status_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("dialog-status").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_dialog_status");
+        assert!((cmd.tool_params_fn)(&args).as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_download_params_build_browser_set_download_behavior() {
+        let map = commands_map();
+        let cmd = map.get("download").unwrap();
+        let mut args = HashMap::new();
+        args.insert("dir".to_string(), json!("C:/tmp/dl"));
+        assert_eq!((cmd.tool_name_fn)(&args), "execute_cdp_command");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], "Browser.setDownloadBehavior");
+        assert_eq!(params["params"]["behavior"], "allow");
+        assert_eq!(params["params"]["downloadPath"], "C:/tmp/dl");
+    }
+
+    #[test]
+    fn test_local_only_commands_have_empty_tool_name() {
+        let map = commands_map();
+        let args = HashMap::new();
+        for name in ["diff-snapshot", "profiles-list", "profiler-start"] {
+            let cmd = map.get(name).unwrap();
+            assert!(
+                (cmd.tool_name_fn)(&args).is_empty(),
+                "{} should be a local-only command",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_profiler_stop_params_capture_file() {
+        let map = commands_map();
+        let cmd = map.get("profiler-stop").unwrap();
+        let mut args = HashMap::new();
+        args.insert("file".to_string(), json!("out.cpuprofile"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["file"], "out.cpuprofile");
+    }
+
+    #[test]
+    fn test_network_requests_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("network-requests").unwrap();
+        let mut args = HashMap::new();
+        args.insert("filter".to_string(), json!("api"));
+        args.insert("type".to_string(), json!("xhr,fetch"));
+        args.insert("method".to_string(), json!("POST"));
+        args.insert("status".to_string(), json!("2xx"));
+        args.insert("clear".to_string(), json!(true));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_network_requests");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["filter"], "api");
+        assert_eq!(params["type"], "xhr,fetch");
+        assert_eq!(params["method"], "POST");
+        assert_eq!(params["status"], "2xx");
+        assert_eq!(params["clear"], true);
+    }
+
+    #[test]
+    fn test_network_requests_params_empty_by_default() {
+        let map = commands_map();
+        let cmd = map.get("network-requests").unwrap();
+        let args = HashMap::new();
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_network_request_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("network-request").unwrap();
+        let mut args = HashMap::new();
+        args.insert("requestId".to_string(), json!("1234.5"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_network_request");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["requestId"], "1234.5");
+    }
+
+    #[test]
+    fn test_network_request_numeric_id_stays_string() {
+        // CDP request ids that look numeric are stored as JSON numbers by the
+        // arg parser; the tool params must still carry them as text.
+        let map = commands_map();
+        let cmd = map.get("network-request").unwrap();
+        let mut args = HashMap::new();
+        args.insert("requestId".to_string(), json!(42238));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["requestId"], "42238");
+    }
+
+    #[test]
+    fn test_har_start_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("har-start").unwrap();
+        let mut args = HashMap::new();
+        args.insert("content".to_string(), json!("all"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_har_start");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["contentMode"], "all");
+
+        // Default content mode: none
+        let empty = HashMap::new();
+        let params = (cmd.tool_params_fn)(&empty);
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_har_stop_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("har-stop").unwrap();
+        let mut args = HashMap::new();
+        args.insert("path".to_string(), json!("capture.har"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_har_stop");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["path"], "capture.har");
+
+        // The path is also available as an optional positional argument
+        // (agent-browser compatible `har stop [path]`), not only via --path.
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "path");
+        assert!(cmd.args[0].optional);
+    }
+
+    #[test]
+    fn test_network_route_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("network-route").unwrap();
+        let mut args = HashMap::new();
+        args.insert("urlPattern".to_string(), json!("**/api/users"));
+        args.insert("body".to_string(), json!("{\"users\":[]}"));
+        args.insert("content-type".to_string(), json!("application/json"));
+        args.insert("resource-type".to_string(), json!("xhr,fetch"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_network_route");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["urlPattern"], "**/api/users");
+        assert_eq!(params["body"], "{\"users\":[]}");
+        assert_eq!(params["contentType"], "application/json");
+        assert_eq!(params["resourceType"], "xhr,fetch");
+        assert!(!params.as_object().unwrap().contains_key("abort"));
+
+        // --abort flag and --type alias.
+        let mut args = HashMap::new();
+        args.insert("urlPattern".to_string(), json!("*"));
+        args.insert("abort".to_string(), json!(true));
+        args.insert("type".to_string(), json!("script"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["abort"], true);
+        assert_eq!(params["resourceType"], "script");
+    }
+
+    #[test]
+    fn test_network_unroute_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("network-unroute").unwrap();
+        let mut args = HashMap::new();
+        args.insert("urlPattern".to_string(), json!("**/api/users"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_network_unroute");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["urlPattern"], "**/api/users");
+
+        // Bare `network unroute` removes all routes.
+        let empty = HashMap::new();
+        let params = (cmd.tool_params_fn)(&empty);
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_network_commands_are_network_category() {
+        let map = commands_map();
+        for name in [
+            "download",
+            "network-requests",
+            "network-request",
+            "network-route",
+            "network-unroute",
+            "har-start",
+            "har-stop",
+        ] {
+            let cmd = map.get(name).unwrap();
+            assert_eq!(
+                cmd.category.as_str(),
+                "network",
+                "{} should be in the Network category",
+                name
+            );
+        }
     }
 
     #[test]
@@ -4378,6 +6152,31 @@ mod tests {
         assert_eq!((cmd.tool_name_fn)(&args), "command_run");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["task"], "go to amazon.com");
+        assert!(params.get("waitTimeout").is_none());
+    }
+
+    #[test]
+    fn test_agent_run_forwards_wait_timeout() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("go to amazon.com"));
+        args.insert("wait".to_string(), json!(true));
+        args.insert("wait-timeout".to_string(), json!("90"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["wait"], true);
+        assert_eq!(params["waitTimeout"], 90);
+    }
+
+    #[test]
+    fn test_agent_run_ignores_non_numeric_wait_timeout() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("go to amazon.com"));
+        args.insert("wait-timeout".to_string(), json!("soon"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("waitTimeout").is_none());
     }
 
     #[test]
@@ -4738,7 +6537,7 @@ mod tests {
         let cmd = map.get("swarm-list").unwrap();
         let args: HashMap<String, Value> = HashMap::new();
         assert_eq!((cmd.tool_name_fn)(&args), ""); // handled locally, no MCP tool
-        // With --clear flag
+                                                   // With --clear flag
         let mut args = HashMap::new();
         args.insert("clear".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
@@ -4959,7 +6758,11 @@ mod tests {
         args.insert("expression".to_string(), json!("ZG9jdW1lbnQudGl0bGU="));
         args.insert("base64".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["base64"], json!(true), "base64 flag should pass through to dispatch");
+        assert_eq!(
+            params["base64"],
+            json!(true),
+            "base64 flag should pass through to dispatch"
+        );
         assert_eq!(params["expression"], json!("ZG9jdW1lbnQudGl0bGU="));
     }
 
@@ -4970,7 +6773,10 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("expression".to_string(), json!("document.title"));
         let params = (cmd.tool_params_fn)(&args);
-        assert!(params.get("base64").is_none(), "base64 should not be set when flag is absent");
+        assert!(
+            params.get("base64").is_none(),
+            "base64 should not be set when flag is absent"
+        );
     }
 
     #[test]
@@ -5034,6 +6840,56 @@ mod tests {
     }
 
     #[test]
+    fn test_frames_lists_frames_with_frame_list_tool() {
+        let map = commands_map();
+        let cmd = map.get("frames").unwrap();
+        let args: HashMap<String, Value> = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "frame_list");
+        assert!((cmd.tool_params_fn)(&args).as_object().unwrap().is_empty());
+        assert!(!cmd.hidden, "frames should not be hidden from help");
+        assert_eq!(cmd.category, Category::Tabs);
+    }
+
+    #[test]
+    fn test_frame_switch_uses_frame_switch_tool() {
+        let map = commands_map();
+        let cmd = map.get("frame").unwrap();
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!("#pay-frame"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!((cmd.tool_name_fn)(&args), "frame_switch");
+        assert_eq!(params["frame"], json!("#pay-frame"));
+    }
+
+    #[test]
+    fn test_frame_main_uses_frame_main_tool() {
+        let map = commands_map();
+        let cmd = map.get("frame").unwrap();
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!("main"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!((cmd.tool_name_fn)(&args), "frame_main");
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_frame_switch_supports_name_url_and_id_targets() {
+        let map = commands_map();
+        let cmd = map.get("frame").unwrap();
+        for target in ["payframe", "frame-pay.html", "ABCD1234"] {
+            let mut args = HashMap::new();
+            args.insert("target".to_string(), json!(target));
+            assert_eq!(
+                (cmd.tool_name_fn)(&args),
+                "frame_switch",
+                "'{target}' must map to frame_switch, not frame_main"
+            );
+            let params = (cmd.tool_params_fn)(&args);
+            assert_eq!(params["frame"], json!(target));
+        }
+    }
+
+    #[test]
     fn test_swarm_commands_in_swarm_category() {
         let cmds = all_commands();
         let swarm_cmds: Vec<&str> = cmds
@@ -5061,7 +6917,10 @@ mod tests {
             "summarize",
             "pdf",
         ] {
-            assert!(!map.get(name).unwrap().hidden, "{name} should be visible in global help");
+            assert!(
+                !map.get(name).unwrap().hidden,
+                "{name} should be visible in global help"
+            );
         }
     }
 
@@ -5144,6 +7003,29 @@ mod tests {
         assert!(option_names.contains(&"log-filter"));
         assert!(option_names.contains(&"metric-filter"));
         let args: HashMap<String, Value> = HashMap::new();
+        assert!((cmd.tool_name_fn)(&args).is_empty());
+    }
+
+    #[test]
+    fn test_doctor_status_command_defined() {
+        let map = commands_map();
+        let cmd = map
+            .get("doctor-status")
+            .expect("doctor-status command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.category, Category::Browsers);
+        assert!(!cmd.batch_supported);
+        assert_eq!(cmd.args.len(), 0);
+        let option_names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
+        assert!(option_names.contains(&"section"));
+        assert!(option_names.contains(&"verbose"));
+        assert!(option_names.contains(&"server"));
+        let mut args = HashMap::new();
+        args.insert("section".to_string(), json!("skills"));
+        args.insert("verbose".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["section"], "skills");
+        assert_eq!(params["verbose"], true);
         assert!((cmd.tool_name_fn)(&args).is_empty());
     }
 
@@ -5646,9 +7528,33 @@ mod tests {
             "htmlsnapshot-summary",
             "htmlsnapshot-grep",
             "htmlsnapshot-inspect",
+            "htmlsnapshot-readability",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
+    }
+
+    #[test]
+    fn test_html_snapshot_readability_params() {
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-readability").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_readability");
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(
+            params.as_object().unwrap().is_empty(),
+            "readability params should be empty without a url"
+        );
+    }
+
+    #[test]
+    fn test_html_snapshot_readability_url_param() {
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-readability").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com/article"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com/article");
     }
 
     #[test]
@@ -5788,6 +7694,7 @@ mod tests {
             "htmlsnapshot-summary",
             "htmlsnapshot-grep",
             "htmlsnapshot-inspect",
+            "htmlsnapshot-readability",
         ] {
             let cmd = map.get(*name).unwrap();
             assert_eq!(cmd.category, Category::Snapshot);
@@ -5859,7 +7766,10 @@ mod tests {
         args.insert("field".to_string(), json!("text"));
         args.insert("offset".to_string(), json!("abc"));
         let params = (cmd.tool_params_fn)(&args);
-        assert!(params.get("offset").is_none(), "non-numeric offset should be ignored");
+        assert!(
+            params.get("offset").is_none(),
+            "non-numeric offset should be ignored"
+        );
     }
 
     #[test]
@@ -5870,7 +7780,10 @@ mod tests {
         args.insert("field".to_string(), json!("text"));
         args.insert("limit".to_string(), json!("xyz"));
         let params = (cmd.tool_params_fn)(&args);
-        assert!(params.get("limit").is_none(), "non-numeric limit should be ignored");
+        assert!(
+            params.get("limit").is_none(),
+            "non-numeric limit should be ignored"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -5884,7 +7797,10 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("no-compact".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["compact"], false, "--no-compact should send compact=false");
+        assert_eq!(
+            params["compact"], false,
+            "--no-compact should send compact=false"
+        );
     }
 
     #[test]
@@ -5895,8 +7811,10 @@ mod tests {
         args.insert("no-compact".to_string(), json!(true));
         args.insert("compact".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["compact"], false,
-            "--no-compact should take precedence over --compact");
+        assert_eq!(
+            params["compact"], false,
+            "--no-compact should take precedence over --compact"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -5907,8 +7825,14 @@ mod tests {
     fn test_generate_locator_exists_and_not_hidden() {
         let map = commands_map();
         let cmd = map.get("generate-locator").unwrap();
-        assert!(!cmd.hidden, "generate-locator should not be hidden from help");
-        assert!(!cmd.batch_supported, "generate-locator should not support batch mode");
+        assert!(
+            !cmd.hidden,
+            "generate-locator should not be hidden from help"
+        );
+        assert!(
+            !cmd.batch_supported,
+            "generate-locator should not support batch mode"
+        );
     }
 
     #[test]
@@ -5931,7 +7855,10 @@ mod tests {
     fn test_generate_locator_uses_browser_generate_locator_tool() {
         let map = commands_map();
         let cmd = map.get("generate-locator").unwrap();
-        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "browser_generate_locator");
+        assert_eq!(
+            (cmd.tool_name_fn)(&HashMap::new()),
+            "browser_generate_locator"
+        );
     }
 
     #[test]
@@ -6203,8 +8130,14 @@ mod tests {
         let cmd = map.get("screenshot").unwrap();
         let has_viewport_opt = cmd.options.iter().any(|o| o.name == "viewport");
         assert!(has_viewport_opt, "screenshot should have --viewport option");
-        let has_v_short = cmd.options.iter().any(|o| o.name == "viewport" && o.short == Some("v"));
-        assert!(has_v_short, "screenshot --viewport should have -v short form");
+        let has_v_short = cmd
+            .options
+            .iter()
+            .any(|o| o.name == "viewport" && o.short == Some("v"));
+        assert!(
+            has_v_short,
+            "screenshot --viewport should have -v short form"
+        );
     }
 
     // ---- crawl command tests ----
@@ -6216,7 +8149,10 @@ mod tests {
         assert!(!cmd.hidden);
         assert_eq!(cmd.args.len(), 1);
         assert_eq!(cmd.args[0].name, "url");
-        assert!(cmd.args[0].optional, "url should be optional when --seed-file is used");
+        assert!(
+            cmd.args[0].optional,
+            "url should be optional when --seed-file is used"
+        );
         assert_eq!(cmd.category, Category::Swarm);
     }
 
@@ -6274,7 +8210,10 @@ mod tests {
         let cmd = map.get("crawl").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
-        args.insert("args".to_string(), json!("-nMaxRetry 5 -lazyFlush -interactLevel FAST"));
+        args.insert(
+            "args".to_string(),
+            json!("-nMaxRetry 5 -lazyFlush -interactLevel FAST"),
+        );
         let params = (cmd.tool_params_fn)(&args);
         let args_str = params["args"].as_str().unwrap_or("");
         assert!(args_str.contains("-nMaxRetry 5 -lazyFlush -interactLevel FAST"));
@@ -6369,7 +8308,10 @@ mod tests {
         let cmd = map.get("crawl").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
-        args.insert("sql".to_string(), json!("SELECT DOM_FIRST_TEXT(DOM, 'h1') FROM DOM_LOAD_AND_SELECT(@url, ':root')"));
+        args.insert(
+            "sql".to_string(),
+            json!("SELECT DOM_FIRST_TEXT(DOM, 'h1') FROM DOM_LOAD_AND_SELECT(@url, ':root')"),
+        );
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(
             params["sql"].as_str().unwrap(),
@@ -6438,7 +8380,9 @@ mod tests {
     #[test]
     fn test_crawl_status_command_exists() {
         let map = commands_map();
-        let cmd = map.get("crawl-status").expect("crawl-status command should exist");
+        let cmd = map
+            .get("crawl-status")
+            .expect("crawl-status command should exist");
         assert!(!cmd.hidden);
         assert_eq!(cmd.args.len(), 1);
         assert_eq!(cmd.args[0].name, "id");
@@ -6449,7 +8393,9 @@ mod tests {
     #[test]
     fn test_crawl_result_command_exists() {
         let map = commands_map();
-        let cmd = map.get("crawl-result").expect("crawl-result command should exist");
+        let cmd = map
+            .get("crawl-result")
+            .expect("crawl-result command should exist");
         assert!(!cmd.hidden);
         assert_eq!(cmd.args.len(), 1);
         assert_eq!(cmd.args[0].name, "id");
@@ -6460,7 +8406,9 @@ mod tests {
     #[test]
     fn test_crawl_cancel_command_exists() {
         let map = commands_map();
-        let cmd = map.get("crawl-cancel").expect("crawl-cancel command should exist");
+        let cmd = map
+            .get("crawl-cancel")
+            .expect("crawl-cancel command should exist");
         assert!(!cmd.hidden);
         assert_eq!(cmd.args.len(), 1);
         assert_eq!(cmd.args[0].name, "id");
@@ -6471,7 +8419,9 @@ mod tests {
     #[test]
     fn test_crawl_clear_command_exists() {
         let map = commands_map();
-        let cmd = map.get("crawl-clear").expect("crawl-clear command should exist");
+        let cmd = map
+            .get("crawl-clear")
+            .expect("crawl-clear command should exist");
         assert!(!cmd.hidden);
         assert!(cmd.args.is_empty());
         assert_eq!(cmd.options.len(), 1);
@@ -6482,7 +8432,9 @@ mod tests {
     #[test]
     fn test_crawl_list_command_exists() {
         let map = commands_map();
-        let cmd = map.get("crawl-list").expect("crawl-list command should exist");
+        let cmd = map
+            .get("crawl-list")
+            .expect("crawl-list command should exist");
         assert!(!cmd.hidden);
         assert!(cmd.args.is_empty());
         assert_eq!(cmd.category, Category::Swarm);
@@ -6784,7 +8736,10 @@ mod tests {
         let map = commands_map();
         let cmd = map.get("wait").unwrap();
         let mut args = HashMap::new();
-        args.insert("fn".to_string(), json!("document.querySelector('.loaded') !== null"));
+        args.insert(
+            "fn".to_string(),
+            json!("document.querySelector('.loaded') !== null"),
+        );
         args.insert("timeout".to_string(), json!("20000"));
 
         let params = (cmd.tool_params_fn)(&args);
@@ -6842,7 +8797,10 @@ mod tests {
         let cmds = commands_map();
         let cmd = cmds.get("attach").unwrap();
         let has_extension = cmd.options.iter().any(|o| o.name == "extension");
-        assert!(has_extension, "attach command should have --extension option");
+        assert!(
+            has_extension,
+            "attach command should have --extension option"
+        );
     }
 
     // ---- CDP command tests ----
@@ -7022,7 +8980,13 @@ mod tests {
     #[test]
     fn test_skill_commands_all_have_skill_category() {
         let cmds = commands_map();
-        for name in &["skill-list", "skill-info", "skill-install", "skill-uninstall", "skill-reload"] {
+        for name in &[
+            "skill-list",
+            "skill-info",
+            "skill-install",
+            "skill-uninstall",
+            "skill-reload",
+        ] {
             let cmd = cmds.get(*name).unwrap();
             assert_eq!(
                 cmd.category.as_str(),
@@ -7073,7 +9037,10 @@ mod tests {
             }
         }
         assert!(tested_count > 0, "Expected some commands to be e2e tested");
-        assert!(excluded_count > 0, "Expected some commands to be e2e excluded");
+        assert!(
+            excluded_count > 0,
+            "Expected some commands to be e2e excluded"
+        );
         assert_eq!(
             tested_count + excluded_count,
             cmds.len(),
@@ -7227,7 +9194,10 @@ mod tests {
         args.insert("text".to_string(), json!("batch fill text"));
 
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["ref"], "#my-input", "fill tool_params must keep 'ref' key for batch normalisation");
+        assert_eq!(
+            params["ref"], "#my-input",
+            "fill tool_params must keep 'ref' key for batch normalisation"
+        );
         assert_eq!(params["text"], "batch fill text");
     }
 
@@ -7357,7 +9327,10 @@ mod tests {
         let cmd = map.get("experience-save").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://amazon.com/dp/test"));
-        args.insert("trace".to_string(), json!(r#"{"steps":[],"outcome":"success"}"#));
+        args.insert(
+            "trace".to_string(),
+            json!(r#"{"steps":[],"outcome":"success"}"#),
+        );
         args.insert("outcome".to_string(), json!("failure"));
         args.insert("intent".to_string(), json!("buy product"));
         args.insert("task-type".to_string(), json!("extract_product_detail"));

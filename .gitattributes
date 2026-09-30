@@ -73,6 +73,7 @@ b4w       text eol=lf
 *.htm linguist-detectable=false
 *.xml linguist-detectable=false
 *.js linguist-detectable=false
+*.ps1 linguist-detectable=false
 docs/* linguist-detectable=false
 static/* linguist-detectable=false
 

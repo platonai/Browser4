@@ -28,22 +28,28 @@ class StartupWarmer(
     private val logger = LoggerFactory.getLogger(StartupWarmer::class.java)
 
     /**
-     * Bean names that cover the critical path from HTTP request →
-     * MCP dispatch → session → browser → fetch → swarm.
+     * Bean names covering the critical path from HTTP request →
+     * MCP dispatch → session → browser.
      *
      * Order matters: beans are touched in sequence so Spring resolves
      * each dependency chain before moving to the next.
      *
      * With [spring.main.lazy-initialization=true] the first request that
-     * touches a lazy bean pays the full creation cost — including browser pool
-     * creation (SwarmService) and crawl infrastructure (CrawlService).  By
-     * warming these eagerly in the background, the first real request finds
-     * them already initialized and avoids stuck swarm worker pools.
+     * touches a lazy bean pays the full creation cost.  Warming these
+     * eagerly in the background keeps the primary scenario (CLI browser
+     * automation via MCP dispatch) fast on the first command after boot.
      *
-     * Note: `protocolFactory` / `fetchComponent` are deliberately NOT warmed
-     * here — their "Protocol not found (1600)" race under lazy initialization
-     * is fixed inside [ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory]
-     * via idempotent, thread-safe lazy registration, so they can stay lazy.
+     * The fetch/protocol layer is intentionally NOT warmed: the
+     * "Protocol not found (1600)" race it used to guard against is fixed
+     * inside [ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory]
+     * via idempotent, thread-safe lazy registration, so those beans can
+     * stay lazy.
+     *
+     * Crawl ([crawlService]) and swarm ([swarmService]) infrastructure are
+     * also NOT warmed: they are non-primary scenarios with heavy
+     * initialization (browser pools, worker pools), and their first request
+     * can tolerate the lazy-creation cost.  They fall back to plain lazy
+     * initialization on first use.
      */
     private val warmupBeanNames = listOf(
         // REST layer
@@ -52,13 +58,6 @@ class StartupWarmer(
         "sessionManager",
         // Agentic context (H2 DB init, etc.)
         "agenticContext",
-        // Crawl infrastructure
-        "crawlService",
-        // Swarm infrastructure — forces the swarm browser pool and worker
-        // pool to initialize eagerly so that swarm-submit jobs transition
-        // from "queued" → "processing" immediately instead of timing out
-        // because the browser session was never created.
-        "swarmService",
     )
 
     @EventListener(ApplicationReadyEvent::class)

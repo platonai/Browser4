@@ -15,6 +15,43 @@ cd cli/browser4-cli && cargo run --quiet -- <command>
 
 The backend server starts automatically in dev mode. Build the CLI with `cargo build` (debug) or `cargo build --release` (optimized). Add `--quiet` to `cargo run` to suppress "Finished" / "Running" build-status lines.
 
+### Several checkouts at once (development mode)
+
+Running the CLI from inside a Browser4 checkout (a directory with `ROOT.md` +
+`pom.xml`) puts it in **development mode**, which keeps parallel checkouts —
+`Browser4-4.13`, `Browser4-4.14`, git worktrees — from fighting over one port
+and one state directory:
+
+| | Installed / production | Development (source checkout) |
+|---|---|---|
+| Backend port | `8182` | first free port from **`8282`** upward (8282, 8283, …) |
+| CLI state, sessions, config | `~/.browser4/` | `~/.browser4/workspaces/<checkout>-<hash>/` |
+| Backend app data | `~/.browser4` | `…/app-data/` — browser profiles (`--user-data-dir`), H2/WebDB data, agent memory |
+| Browser prototype | `~/.browser4/browser/chrome/prototype` | linked (junction/symlink) to the global prototype — shared seed state for `SEQUENTIAL`/`TEMPORARY` contexts |
+| LLM config (`config/conf-enabled`) | `~/.browser4/config` | linked (junction/symlink) into the workspace app data — still one source of truth |
+| AOT cache | shared | per checkout (no cross-checkout invalidation) |
+| `browser4-cli stop` | stops every managed backend | stops **only this checkout's** backends (`kill-all` stays global) |
+
+So with 4.13 already serving on 8282, a command in 4.14 picks 8283
+automatically; each checkout remembers its own port, and both can run and be
+tested side by side — including **two headed browsers at once**, because each
+backend owns its app data root and therefore its own Chrome profile directory
+(the default `browser.profile.mode=DEFAULT` profile is per workspace in
+development mode). Precedence for the server URL is unchanged:
+
+```
+--server / BROWSER4_CLI_SERVER  >  config set server  >  this checkout's dev port
+```
+
+Escape hatches: `--server <url>` (or `config set server <url>`) targets a
+specific backend, `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1` disables development mode
+entirely (production ports and the flat `~/.browser4` state), and
+`BROWSER4_CLI_STATE_DIR=<dir>` pins one shared state directory. `browser4-cli
+status` prints the workspace app data root in use; the backend keeps using the
+shared `~/.browser4` if that root cannot be prepared (the CLI warns and says so).
+
+### Dev mode only serves the checked-out code
+
 Dev mode only ever serves the checked-out code: an already assembled runtime bundle
 is reused as-is while it matches the checkout. A bundle built from a different
 project version makes the command **refuse to start** with a non-zero exit —
@@ -55,6 +92,8 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 | Command | Description |
 |---|---|
 | `press <key> [ref]` | Press a key on the focused element or an optional target ref. `--verify`, `--follow` (detect new tabs) |
+| `key <key> [ref]` | Alias of `press` (agent-browser compatibility) |
+| `keyboard <key> [ref]` | Alias of `press` (agent-browser compatibility) |
 | `type <text> [ref]` | Type text into the focused element or an optional target ref. `--method auto\|chars\|exec` (needs a target ref): `auto` (default) per-character for short text, one `execCommand('insertText')` bulk insert for long/multi-line text; `chars`/`exec` force either mode |
 | `keydown <key>` | Press a key down on the keyboard |
 | `keyup <key>` | Press a key up on the keyboard |
@@ -85,8 +124,15 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 | `select <ref> <val>` | Select an option in a dropdown |
 | `check <ref>` | Check a checkbox or radio button |
 | `uncheck <ref>` | Uncheck a checkbox or radio button |
+| `focus <selector>` | Focus an element (CSS selector or ref) |
+| `is visible\|enabled\|checked <selector>` | Assert element visibility, enabled-ness, or checked state (`is visible #submit`) |
+| `scrollintoview <selector>` | Scroll an element into the center of the viewport |
+| `pushstate <url>` | Push a history entry via `history.pushState` without reloading |
+| `highlight <selector>` | Outline an element and scroll it into view (debug aid) |
 | `dialog-accept [prompt]` | Accept a dialog |
 | `dialog-dismiss` | Dismiss a dialog |
+| `dialog-status` | Report whether a native JS dialog is pending (type + message) |
+| `errors` | List console errors only (alias of `console --min-level error`) |
 | `resize <w> <h>` | Resize the browser window |
 | `delete-data` | Delete session data |
 | `upload <ref> <file> [file...]` | Upload one or more local files to a page file input (target must be an `<input type="file">`; paths must be readable by the browser process — remote backend: resolved on the backend host; supports multi-file and `--no-snapshot`) |
@@ -105,8 +151,62 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 |---|---|
 | `tab-list` | List all tabs with index, GUID, title, and URL |
 | `tab-new [url]` | Create a new tab |
+| `window new [url]` | Create a new browser window (equivalent to a new tab) |
 | `tab-close [index]` | Close a browser tab. Use `--guid <guid>` for GUID-based close |
 | `tab-select <index>` | Select a browser tab. Use `--guid <guid>` for GUID-based select |
+
+### Frames (iframes)
+
+| Command | Description |
+|---|---|
+| `frames` | List the page's frame tree: names, urls, depth, and the active frame |
+| `frame <target>` | Scope subsequent element commands (`click`, `fill`, `type`, `is visible`, …) into an iframe. Target forms: snapshot element ref of the iframe (`e12`, `backend:123`), iframe CSS selector (`#pay-frame`), frame name, frame id, or URL fragment from `frames` |
+| `frame main` | Return to the main document (also automatic after navigation) |
+
+Same-origin iframes are fully supported; cross-origin iframes (out-of-process
+frames) are not supported in this version — `frames` cannot see them and
+`frame` on one fails with an actionable error. See
+[`skills/browser4-cli/references/frames.md`](../../skills/browser4-cli/references/frames.md).
+
+### DevTools
+
+| Command | Description |
+|---|---|
+| `cdp <method> [--json <params>]` | Send an arbitrary CDP command |
+| `set geo --lat <lat> --lon <lon> [--accuracy <m>]` | Emulate geolocation (`Emulation.setGeolocationOverride`) |
+| `set offline [on\|off]` | Emulate offline mode (`Network.emulateNetworkConditions`) |
+| `set headers --json '<json>'` | Set extra HTTP headers (`Network.setExtraHTTPHeaders`) |
+| `set media --color-scheme <light\|dark\|no-preference>` | Emulate `prefers-color-scheme` (`Emulation.setEmulatedMedia`) |
+| `set device --width <px> --height <px> [--dpr <n>] [--mobile]` | Emulate device metrics (`Emulation.setDeviceMetricsOverride`) |
+| `vitals`, `web-vitals` | Measure Core Web Vitals (LCP, CLS, INP, FCP, TTFB) via injected web-vitals lib |
+| `profiler start` | Start the V8 CPU profiler (`Profiler.enable` + `Profiler.start`) |
+| `profiler stop [--file out.cpuprofile]` | Stop the profiler and save the `.cpuprofile` file |
+
+### Download
+
+| Command | Description |
+|---|---|
+| `download [--dir <path>] [--behavior allow\|deny]` | Configure the browser download folder (`Browser.setDownloadBehavior`) |
+| `wait --download [--dir <path>] [--timeout <ms>]` | Poll the download directory until a download completes |
+
+### Network inspection, HAR & routing
+
+| Command | Description |
+|---|---|
+| `network requests [--filter <text>] [--type <csv>] [--method <m>] [--status <s>] [--clear]` | List tracked requests of the active tab (CDP `Network` domain, enabled lazily) |
+| `network request <id>` | Full detail of one request, including the response body (fetched on demand) |
+| `network har start [--content none\|text\|all]` | Start a HAR recording session; capture response bodies per content mode |
+| `network har stop [path]` | Stop recording; print the HAR JSON or write it to a `.har` file |
+| `network route <pattern> --body <text>\|--abort [--content-type <mime>] [--resource-type <csv>]` | Intercept matching requests via CDP `Fetch` (mock or fail them) |
+| `network unroute [pattern]` | Remove routes; without a pattern, disable Fetch interception |
+
+Full guide: [`skills/browser4-cli/references/network.md`](../../skills/browser4-cli/references/network.md).
+
+### Browsers
+
+| Command | Description |
+|---|---|
+| `profiles list` | List browser profile (context) directories under `~/.browser4/browser/chrome` |
 
 ### Storage
 
@@ -130,12 +230,18 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 | `sessionstorage-delete <key>` | Delete a sessionStorage entry |
 | `sessionstorage-clear` | Clear sessionStorage |
 
+To reuse your **system browser's** logged-in state in a Browser4-managed
+session: `attach --extension` (or `attach --cdp`) → `state-save <file>` →
+`open --fresh` → `state-load <file>`. Full-profile copies (history, passwords,
+extensions) are also possible via `open --profile` or PROTOTYPE mode. See
+[browser-state-import.md](../../skills/browser4-cli/references/browser-state-import.md).
+
 ### Agent
 
 | Command | Description |
 |---|---|
 | `extract <instruction>` | Extract structured data from the current page |
-| `agent run <task>` | Run an autonomous agent task (async, returns task ID) |
+| `agent run <task>` | Run an autonomous agent task (async, returns task ID). `--wait` blocks for the result; `--wait-timeout <seconds>` tunes the wait window (default 600). |
 | `agent status <id>` | Check the status of a running agent task |
 | `agent result <id>` | Get the result of a completed agent task |
 
@@ -198,7 +304,9 @@ Details: [Crawl checkpoint & resume](../../docs/crawl-checkpoint-resume.md).
 | `htmlsnapshot export` | Export the live page's HTML to a local file (--clean strips scripts/styles/non-standard attrs) |
 | `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the live page |
 | `htmlsnapshot grep [OPTIONS] <pattern>` | Search the live page's HTML with regex patterns and grep-style output |
+| `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic (no LLM) |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |
+| `diff snapshot [before] [after]` | Diff two saved accessibility snapshots (defaults to the two most recent) |
 
 ### Skills
 
@@ -215,7 +323,7 @@ Skills are AI agent instruction files bundled into the CLI binary at compile tim
 
 ### webminer (WebMiner)
 
-`webminer` runs the [WebMiner](https://github.com/platonai/web-miner) ML clustering tool on local HTML files — no Browser4 server and no PowerShell needed. It installs, updates, and launches `scent-miner.jar` natively (Java 17+ is auto-detected from `JAVA_HOME`, common paths, or `PATH`).
+`webminer` runs the [WebMiner](https://github.com/platonai/web-miner) ML clustering tool on local HTML files — no Browser4 server and no PowerShell needed. It installs, updates, and launches `scent-miner.jar` natively (Java 17+ is auto-detected: `JAVA_HOME` → Browser4 runtime bundle JRE → common paths → `PATH`).
 
 | Command | Description |
 |---|---|
@@ -228,7 +336,7 @@ Skills are AI agent instruction files bundled into the CLI binary at compile tim
 | `webminer all <html-dir>` | Full pipeline (encode → cluster → views) with `--max-files`, `--output`, `--resume` |
 | `webminer views <result-dir>` | Rebuild interactive views from an existing clustering result |
 
-Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`). The same `~/.scent/webminer` installation is shared with the `webminer.ps1` launcher from the [web-miner skill](../../skills/browser4-web-miner/SKILL.md).
+Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`). The same `~/.scent/webminer` installation is used by the [web-miner skill](../../skills/browser4-web-miner/SKILL.md).
 
 ### Install / Admin
 
@@ -254,6 +362,7 @@ Keys: `server` (default Browser4 URL), `timeout` (seconds, positive integer), `p
 | Option | Description |
 |---|---|
 | `--help [command]` | Print help (all commands, or detailed help for a specific command) |
+| `--help --examples` | Print the runnable tool examples for a command, fetched from the backend's tool specs (falls back to a one-line notice when the backend is unreachable) |
 | `--version` | Print version |
 | `--json` | Emit machine-parseable JSON to stdout |
 | `-q, --quiet` | Suppress normal output, only show errors |
@@ -413,12 +522,14 @@ cargo test --test e2e -- --nocapture --scenario test_e2e_swarm_*
 # Re-run scenarios that failed last time
 cargo test --test e2e -- --nocapture --failed
 
-# Enable batch / swarm scenarios (skipped by default)
-cargo test --test e2e -- --nocapture --enable-batch-scenario
-cargo test --test e2e -- --nocapture --enable-swarm-scenario
+# Fail on every failing scenario (default tolerates up to 5)
+cargo test --test e2e -- --nocapture --max-failures 0
+
+# Enable scenarios excluded by default (batch, install/upgrade, mock-LLM agent)
+cargo test --test e2e -- --nocapture --enable-all
 
 # Combine flags
-cargo test --test e2e -- --nocapture --failed --enable-batch-scenario
+cargo test --test e2e -- --nocapture --failed --enable-all
 
 # List all available scenarios without running them
 cargo test --test e2e -- --list
@@ -427,9 +538,9 @@ cargo test --test e2e -- --list
 cargo test --test e2e -- --nocapture
 cargo test --test e2e -- --nocapture --level Basic
 cargo test --test e2e -- --nocapture --scenario-limit 1
-cargo test --test e2e -- --nocapture --enable-batch-scenario
-cargo test --test e2e -- --nocapture --enable-install-scenario
+cargo test --test e2e -- --nocapture --enable-all
 cargo test --test e2e -- --nocapture --batch-only
+cargo test --test e2e -- --nocapture --max-failures 0
 cargo test --test e2e -- --nocapture --scenario *open*
 cargo test --test e2e -- --nocapture --scenario test_e2e_batch_*
 cargo test --test e2e -- --nocapture --scenario test_e2e_swarm_*
@@ -441,9 +552,42 @@ cargo test --test e2e -- --nocapture --failed
 cargo test --test e2e -- --nocapture --scenario test_e2e_eval_command --fail-fast
 cargo test --test e2e -- --nocapture --force-remote-bundle
 
-# Nightly regression testing (runs all scenarios)
-cargo test --test e2e -- --nocapture --level All --force-remote-bundle --enable-batch-scenario --enable-install-scenario
+# Nightly regression testing (runs all scenarios, no failure tolerance)
+cargo test --test e2e -- --nocapture --level All --enable-all --max-failures 0
 ```
+
+### File-backed mock LLM scenarios (`agent run`)
+
+The multi-step `agent run` e2e scenarios use a real Browser4 backend with
+`FileBackedChatModel`: the test harness prepares numbered response files under
+`BROWSER4_TEST_LLM_RESPONSE_DIR` and the backend reads those files instead of
+calling a real LLM. The scenarios are excluded by default; pass `--enable-all`
+to include them in a full run, or use an explicit `--scenario` filter:
+
+```bash
+# Run all four file-backed mock-LLM scenarios
+cargo test --test e2e -- --nocapture --scenario test_e2e_agent_run_mock_llm_* --level EXTENDED
+
+# Run a single scenario
+cargo test --test e2e -- --nocapture --scenario test_e2e_agent_run_mock_llm_multi_step_cli_tools --level EXTENDED
+
+# Include them in a full Extended run
+cargo test --test e2e -- --nocapture --level EXTENDED --enable-all
+```
+
+Scenario names:
+
+- `test_e2e_agent_run_mock_llm_multi_step_cli_tools`
+- `test_e2e_agent_run_mock_llm_task_complete_protocol`
+- `test_e2e_agent_run_mock_llm_async_then_result`
+- `test_e2e_agent_run_mock_llm_failure_then_recovery`
+
+The first mock-LLM scenario restarts the backend with the mock configuration;
+later scenarios reuse that backend. Before executing, the harness asks the
+backend's `/api/doctor/llm-status` endpoint whether `detectedVia` is
+`test_file_backed`. If the backend does not support the file-backed mock LLM,
+the scenario prints `SKIPPED` and continues with the rest of the suite instead
+of failing.
 
 ## License
 

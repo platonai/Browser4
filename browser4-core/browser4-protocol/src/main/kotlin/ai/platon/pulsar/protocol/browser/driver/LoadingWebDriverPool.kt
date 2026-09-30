@@ -53,6 +53,7 @@ class LoadingWebDriverPool constructor(
          * waiting. It also bounds how long the stateful driver pool is locked while waiting.
          * */
         var POLLING_SLICE = Duration.ofMillis(500)
+
         private val ID_SUPPLIER = AtomicInteger()
 
         /**
@@ -256,15 +257,18 @@ class LoadingWebDriverPool constructor(
      * */
     @Throws(BrowserLaunchException::class, WebDriverPoolExhaustedException::class, InterruptedException::class)
     private fun poll(priority: Int, conf: MutableConfig, timeout: Long, unit: TimeUnit, waiter: String?): WebDriver {
+        val start = System.nanoTime()
         val driver = pollWebDriver(priority, conf, timeout, unit, waiter)
+        val waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
+
         if (driver == null) {
             val snapshot = takeSnapshot()
             val message = String.format("%s", snapshot.format(true))
             if (AppContext.isActive) {
                 // log only when the application is active
                 logger.info(
-                    "Driver pool is exhausted, rethrow WebDriverPoolExhaustedException | {} | {} | {}",
-                    message, driverWaitReason(), describeDriverHolders()
+                    "Driver pool is exhausted after {}ms, rethrow WebDriverPoolExhaustedException | {} | {} | {}",
+                    waitedMillis, message, driverWaitReason(), describeDriverHolders()
                 )
             }
             throw WebDriverPoolExhaustedException(browserId.toString(), exhaustionMessage(snapshot))
@@ -508,6 +512,13 @@ class LoadingWebDriverPool constructor(
     /**
      * Wait for a driver for at most [timeoutMillis].
      *
+     * An idle driver is always taken before a new one is created: taking one off the standby queue is
+     * free, while creating one launches a tab that the pool then keeps for the rest of its life, so
+     * creating first spends the pool's capacity on idle tabs.  A pool that has served a few crawls
+     * ends up holding dozens of standby drivers while its callers still pay for a tab launch, and the
+     * browser gets slower with every tab it accumulates (measured on CI: 44 idle drivers, capacity
+     * exhausted at 50 tabs, and a fetch that takes 80-100 s against 2.6 s on an idle pool).
+     *
      * A driver can be created only when the resource guard in [shouldCreateWebDriver] allows it, and the
      * guard refuses while the system is over the critical load - a CPU spike caused by another browser
      * launching is enough. Trying to create a driver only once and then blocking for the whole timeout
@@ -522,6 +533,12 @@ class LoadingWebDriverPool constructor(
         var driver: WebDriver? = null
 
         while (driver == null) {
+            // A standby driver costs nothing to reuse, so it is taken before anything is created.
+            driver = statefulDriverPool.poll(0, TimeUnit.MILLISECONDS)
+            if (driver != null) {
+                break
+            }
+
             resourceSafeCreateDriverIfNecessary(priority, conf)
 
             // The pool can not serve tasks anymore, e.g. it is retired or closed, do not wait for it

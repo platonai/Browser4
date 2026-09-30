@@ -38,6 +38,7 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
   - [🚀 Build from Source](#-build-from-source)
   - [Architecture](#architecture)
   - [📦 Modules Overview](#-modules-overview)
+  - [🧩 Programming-Agent Kernel (browser4-coding)](#-programming-agent-kernel-browser4-coding)
   - [🧪 Test Fixture Server (MockSite)](#-test-fixture-server-mocksite)
   - [🤝 Support & Community](#-support--community)
   - [📜 Documentation](#-documentation)
@@ -51,11 +52,12 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 
 ### ✨ Key Capabilities
 
-* 🤖 **Agent Browser** — Enable AI agents to browse, interact, and automate real-world websites.
-* 🧠 **ML-Powered Extraction** — Learn page structures and extract structured data without LLM token costs.
-* ⚡ **High-Performance Runtime** — Coroutine-safe architecture supporting 100k–200k complex page visits per machine per day.
-* 🧬 **Hybrid Intelligence** — Combine LLM, ML, X-SQL, and selectors for robust extraction and experience reuse.
-* 📦 **Enterprise-Scale Automation** — Swarm crawling, CDP-native control, batch jobs, stateful sessions, plugins, extensions, and more.
+* 🤖 **Agent Browser** — AI agents and humans drive real browsers via a Rust CLI, MCP, and an agentic backend: navigate, click, fill, snapshot, batch, and loop.
+* 🧬 **Zero-Token Extraction** — X-SQL + CSS selectors for deterministic extraction from live pages or stored HTML snapshots; WebMiner ML clustering turns HTML corpora into spreadsheet and report views with no LLM tokens.
+* 🧠 **Hybrid Intelligence** — Combine LLM extraction, ML clustering, X-SQL, and a progressive experience store that reuses learned selectors and blockers.
+* ⚡ **High-Performance Runtime** — Coroutine-safe, CDP-native engine designed for 100k–200k complex page visits per machine per day via swarm/crawl scale-out.
+* 📦 **Enterprise-Scale Automation** — Swarm crawling, batch/loop jobs, stateful sessions, plugins, runtime skills, browser extension, and MCP-over-HTTP.
+* 🛠️ **Programming-Agent Kernel** — 50+ `coding.*` tools (sandboxed shell/fs, scaffolding, validation, self-development) for agents building Browser4 artifacts — or Browser4 itself.
 
 ## Quick Start
 
@@ -88,6 +90,8 @@ Choosing the right tool for your task:
 
 Use `snapshot -i --boxes` to see clickable/typeable elements with refs like `e15`, then `click <ref>`, `fill <ref> "<text>"`, `type`/`press`, `select`, `hover`/`drag`/`scroll`, and `wait` to drive the page. All interaction commands accept CSS selectors too. Chain multiple steps efficiently with `batch`.
 
+Content embedded in `<iframe>`s (payment forms, editors, widgets) is reached with the built-in frame switching: `frames` lists the frame tree, `frame "<iframe selector>"` scopes subsequent element commands into that frame (same-origin iframes fully supported), and `frame main` returns to the main document — no manual `contentDocument` eval needed.
+
 Typical interactive flow:
 
 ```bash
@@ -98,6 +102,10 @@ browser4-cli fill e3 "user@example.com"
 browser4-cli fill e4 "secret" --submit
 browser4-cli wait --load networkidle
 browser4-cli snapshot -i
+# iframe-heavy page:
+browser4-cli frame "#pay-frame"
+browser4-cli fill "#card-number" "4111 1111 1111 1111"
+browser4-cli frame main
 ```
 
 ### How to Extract Data
@@ -273,7 +281,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 
 | Command | Description |
 |---|---|
-| `open [url]` | Open a browser session or reconnect to an existing one. **Headless by default.** Supports `--headed` (visible window), `--headless`, `--profile <path>`, `--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`, `--interact-level <FASTEST\|FAST\|DEFAULT>`. |
+| `open [url]` | Open a browser session or reconnect to an existing one. **Headless by default.** Supports `--headed` (visible window), `--headless`, `--profile <path>`, `--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`, `--interact-level <FASTEST\|FAST\|DEFAULT>`. **Note:** `SYSTEM_DEFAULT` is deprecated and unsupported on Chrome ≥ 143 — use `attach` + `state-save`/`state-load` to reuse system browser state (see [browser-state-import.md](skills/browser4-cli/references/browser-state-import.md)). |
 | `attach` | Attach to an existing browser via CDP or the Browser4 extension. Supports `--cdp <url\|port\|channel>` and remote endpoint options. After a successful attach the CLI prints the browser that actually connected (`Connected browser: …` / `Attached to … at …`) and shows a ⚠ warning when it conflicts with the requested channel (e.g. requested msedge but Chrome connected) — verify it before driving the session. |
 | `close` | Close the active browser session. |
 | `list` | List browser sessions with their status and next-open behavior. The Connection column prefers the backend-reported actual browser and annotates channel conflicts (e.g. `requested msedge · actual Google Chrome`). Supports `--all`. |
@@ -285,6 +293,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `doctor` | Run diagnostics: build info, LLM status, stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`. |
 | `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
 | `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
+| `doctor status [--section <name>] [--verbose]` | Print the aggregated status panel report in the terminal: summary layer by default, full detail with `--verbose`, one report with `--section` (health, build, runtime, llm, sessions, pulsar-sessions, swarm, url-pool, browsers, drivers, privacy, plugins, skills, metrics, logs), machine-readable JSON with `--json`. |
 | `delete-data` | Delete session data. |
 | `install` | Install the Browser4 runtime bundle. Supports `--tag <version>` and `--force`. |
 | `upgrade` | Upgrade the CLI/runtime bundle. Supports `--tag <version>` and `--force`. |
@@ -296,7 +305,30 @@ browser4-cli attach --cdp chrome
 browser4-cli doctor --verbose
 browser4-cli doctor log server.log --tail
 browser4-cli doctor metrics grep request
+browser4-cli doctor status --section skills --verbose
 ```
+
+**Web status panel:** open `http://127.0.0.1:8182/status` in a browser for a live dashboard
+(health, version, JVM/runtime, LLM config, sessions, **Pulsar sessions** — SDK identity,
+context and main-loop state, **swarm** — swarm session plus task summary, **URL pool** —
+queued/real-time/delay counts per priority cache, browsers & open tabs — per-session
+browser/driver binding and tab counts, with on-demand live tab details via
+`GET /api/system/tabs` — driver pools, plugins: load/enable state and SDK compatibility,
+**skills**: registered skills with origin (classpath/filesystem/programmatic),
+metrics, log files; auto-refreshes, set `?refresh=<ms>` to change the interval). The panel
+is backed by the aggregated `GET /api/system/status` endpoint; the individual endpoints
+(`/api/system/health`, `/api/system/build`, `/api/doctor/llm-status`, `/api/doctor/metrics`,
+`/api/doctor/log-files`, `/api/plugins`, `/api/skills`) remain available. `browser4-cli plugin-list` also
+reports load/enable state and SDK version for every installed plugin; the same reports can be
+read from the terminal with `browser4-cli doctor status`.
+
+**Page screenshots:** open `http://127.0.0.1:8182/pages.html` for a grid of every open page
+across sessions. The active tab of each session is captured automatically (click a screenshot
+to re-capture it); inactive tabs show a placeholder that captures on click. Swarm sessions only
+show placeholders. Screenshots load **asynchronously** — the backend captures in the background
+(`202 Accepted` with `Retry-After` while capturing, cached `image/png` when ready), so the panel
+never blocks on a capture. Backed by `GET /api/pages` and
+`GET /api/pages/{sessionId}/{guid}/screenshot.png` (`?refresh=1` forces a new capture).
 
 #### Navigation
 
@@ -400,6 +432,7 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 | `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI). |
 | `htmlsnapshot grep <pattern>` | Search stored HTML with grep-style flags. |
 | `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`. |
+| `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic — no LLM, no tokens. Supports `--text-only` and pagination. |
 
 Important rules:
 
@@ -407,6 +440,7 @@ Important rules:
 - use `htmlsnapshot` when you need repeated DOM extraction
 - `htmlsnapshot query --sql @query.sql` is the recommended way to avoid shell quoting issues
 - for correlated list extraction, prefer `htmlsnapshot query` over repeated `get all`
+- for one-step article extraction (no selectors needed), use `htmlsnapshot readability`
 
 ```bash
 browser4-cli htmlsnapshot
@@ -415,6 +449,7 @@ browser4-cli htmlsnapshot get all text ".result-title" --offset 10 --limit 5
 browser4-cli htmlsnapshot inspect ".s-result-item" --depth 6 --max 20
 browser4-cli htmlsnapshot export --file page.html --clean
 browser4-cli htmlsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot readability --text-only --all
 ```
 
 For deep X-SQL usage, see [skills/browser4-cli/references/htmlsnapshot.md](skills/browser4-cli/references/htmlsnapshot.md) and [skills/browser4-cli/references/x-sql-dom-load-select.md](skills/browser4-cli/references/x-sql-dom-load-select.md).
@@ -469,7 +504,7 @@ These commands require an LLM key.
 | `summarize [instruction]` | Summarize the current page. Supports `--selector`, `--filename`, `--raw`, `--stdout`. |
 | `chat <message>` | Send a plain AI chat request without auto-appended browser context. |
 | `chat-result <id>` | Retrieve the result of an async chat task. |
-| `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. |
+| `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. Supports `--wait` (block for the result) and `--wait-timeout <seconds>` (default 600). |
 | `agent status <id>` | Check a running task. |
 | `agent result <id>` | Fetch a completed result. |
 | `agent list` | List tracked agent tasks and their status. |
@@ -504,6 +539,30 @@ browser4-cli batch --bail "goto https://example.com" "snapshot" "screenshot"
 browser4-cli loop "load https://example.com and extract the title" -i 300 -n 10
 browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60
 browser4-cli loop --list
+```
+
+#### Network inspection, HAR recording & request routing
+
+Inspect what the page actually loaded (XHR/fetch calls, status codes, headers,
+response bodies), record a HAR 1.2 archive importable by Chrome DevTools, and
+route (mock/abort) matching requests. See
+[`skills/browser4-cli/references/network.md`](skills/browser4-cli/references/network.md)
+for the full guide.
+
+| Command | Description |
+|---|---|
+| `network requests` | List tracked requests. Supports `--filter`, `--type`, `--method`, `--status` (`200`, `2xx`, `400-499`), `--clear`. |
+| `network request <id>` | Full detail of one request: headers, timing, and the response body (fetched on demand). |
+| `network har start [--content <mode>]` | Start a HAR recording. Content mode: `none`, `text`, or `all` (binary base64). |
+| `network har stop [path]` | Stop recording and print the HAR JSON, or write it to a `.har` file when a path is given. |
+| `network route <pattern> --body <text>\|--abort` | Intercept matching requests (mock response or fail them) via CDP Fetch. Supports `--content-type`, `--resource-type`. |
+| `network unroute [pattern]` | Remove routes; without a pattern, disable interception entirely. |
+
+```bash
+browser4-cli network requests --filter api --status 2xx
+browser4-cli network har start --content text
+browser4-cli network har stop ./capture.har
+browser4-cli network route "**/api/users" --body '{"users":[]}' --content-type application/json
 ```
 
 #### Swarm and crawl for scale
@@ -619,7 +678,7 @@ The runtime bundle is stored separately in a platform-conventional application-d
 
 ## 🚀 Build from Source
 
-**Prerequisites:** Git, JDK 17+ (21+ recommended), Chrome/Chromium, and PowerShell 7 (Linux/macOS only). For the full prerequisites table, platform-specific tools, and Chrome auto-detection paths, see [Build from Source](docs/build-from-source.md).
+**Prerequisites:** Git, JDK 25+ (Eclipse Temurin), Chrome/Chromium, and PowerShell 7 (Linux/macOS only). For the full prerequisites table, platform-specific tools, and Chrome auto-detection paths, see [Build from Source](docs/build-from-source.md).
 
 1. **Clone the repository**
    ```shell
@@ -685,6 +744,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 - **Backend** (`browser4-rest`) — Spring Boot server, dispatches MCP tools to browser drivers
 - **Browser driver** (`browser4-core/browser4-browser`) — wraps Chrome DevTools Protocol
 - **Agent tools** (`browser4-agentic`) — maps MCP tool names to browser automation methods
+- **Programming kernel** (`browser4-coding`) — dependency-light agent toolkit (sandboxed shell/filesystem, scaffolding, validation, self-development tools) — see [below](#-programming-agent-kernel-browser4-coding)
 
 ## 📦 Modules Overview
 
@@ -696,6 +756,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 | `browser4-dependencies` | BOM and dependency version alignment                                 |
 | `browser4-tools` | Operational tools and launch helpers                                 |
 | `browser4-agentic` | AI agents, MCP integration, skill registration                       |
+| `browser4-coding` | Programming-agent kernel — sandboxed shell/fs, artifact scaffolding & validation, self-development tools (47 `coding.*` tools) |
 | `browser4-agent-tools` | High-level agent tools: scraping, crawling, stateful page interaction |
 | `browser4-rest` | Spring Boot REST layer & command endpoints                           |
 | `browser4-apps/browser4-standalone` | Product packaging — unified launcher (`target/Browser4.jar`)         |
@@ -703,6 +764,28 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 | `browser4-tests` | E2E, integration, and scenario test suites                           |
 | `cdp-protocol` | Chrome DevTools Protocol JSON definitions                            |
 | `coworker/` | Builtin AI coworker                                                  |
+
+---
+
+## 🧩 Programming-Agent Kernel (browser4-coding)
+
+`browser4-coding` is the dependency-light programming kernel that lets an AI agent create Browser4 artifacts **and** develop Browser4 itself. It is independent of `browser4-agentic` and `pulsar-common` (only SLF4J + Jackson + coroutines), so it can be reused by non-agent hosts. Heavy backends (LSP servers, kotlin-compiler-embeddable) are probed at runtime and never downloaded by default.
+
+The `coding` domain exposes **47 tools** in four groups:
+
+| Group | Count | Highlights |
+|---|---|---|
+| Shell & filesystem | 28 | sandboxed `coding.shell` (command whitelist), snapshot-based edit primitives with `revert`, `diff` (Myers/Patience), repo-governance protection (`coding.protect`) |
+| Artifact creation & validation | 6 | `scaffold` (plugin/skill/js/script), `scaffoldFlow` (multi-file dev-flow), `scaffoldFromExample` (anti-staleness live templates, directory mode + stem-derived renames), `validate` (incl. `repo-consistency`) |
+| Self-development | 7 | `mvnBuild` (structured diagnostics), `ktSymbols`/`ktReferences`/`ktInheritance` (zero-dep Kotlin analysis), `impact` + `moduleGraph` (live pom graph), `devTask` (AGENTS.md flow + execution), `trapCheck` (CDP pitfalls) |
+| LSP | 4 | on-demand `diagnostics`/`symbols`/`references` for ts/js/py/rs (degrades gracefully when a server is missing) |
+
+**Generic vs project-specific**: the kernel is layered by *mechanism vs data* — diff, sandbox, LSP client, Kotlin analysis, Maven passthrough and the pom-graph scanner are generic and portable; the scaffolds, validators, `ModuleMap`, `CdpTrapCheck` and the governance defaults encode Browser4 conventions and are the layer to rewrite when reusing the kernel elsewhere.
+
+- Full tool reference & workflows: `skills/browser4-coding/SKILL.md`
+- Developing Browser4 itself: `skills/browser4-dev/SKILL.md`
+- Four-artifact comparison examples (real vs scaffold output): `docs-dev/copilot/examples/`
+- Evaluation summary (P1–P7): `docs-dev/copilot/browser4-programming-support-eval.md`
 
 ---
 

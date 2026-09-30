@@ -7,13 +7,14 @@ import ai.platon.pulsar.common.config.ImmutableConfig
  *
  * - [TEXT]: Tools rendered as Kotlin-like signatures in the system prompt.
  *   Messages collapsed to two plain strings via [BrowserChatModel.call].
- *   **This is today's behaviour and the default.**
+ *   Legacy mode; tool results flow back only through the bounded
+ *   previous-step-result message.
  * - [CHAT]: Structured [ChatMessage] lists through
  *   [BrowserChatModel.langChainChat]. Tools still rendered in the system
  *   prompt.  Behaviourally identical to TEXT.
  * - [TOOL_CALLING]: Structured messages + native [ToolSpecification] objects
  *   via [BrowserChatModel.langChainChat] with function-calling protocol.
- *   The tool list is omitted from the system prompt.
+ *   Tool results feed back into the conversation automatically — **the default**.
  */
 enum class ToolExposeMode {
     TEXT,
@@ -31,15 +32,15 @@ enum class ToolExposeMode {
          * Parse [ToolExposeMode] from configuration.
          *
          * Reads key `agent.tool.expose.mode`:
-         * - `text` (default)  → [TEXT]
-         * - `chat`            → [CHAT]
-         * - `toolCalling` or `langchain4j` → [TOOL_CALLING]
+         * - `toolCalling` or `langchain4j` (default) → [TOOL_CALLING]
+         * - `chat`                                → [CHAT]
+         * - `text`                                → [TEXT] (explicit fallback)
          */
         fun from(conf: ImmutableConfig): ToolExposeMode {
             return when (conf.get("agent.tool.expose.mode")?.lowercase()) {
+                "text" -> TEXT
                 "chat" -> CHAT
-                "toolcalling", "langchain4j" -> TOOL_CALLING
-                else -> TEXT
+                else -> TOOL_CALLING
             }
         }
     }

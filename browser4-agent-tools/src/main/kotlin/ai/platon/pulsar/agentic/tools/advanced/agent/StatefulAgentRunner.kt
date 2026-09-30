@@ -1,18 +1,26 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
 import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.agentic.agents.RunEngine
+import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
+import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
+import ai.platon.pulsar.api.AbstractWebDriver
+import ai.platon.pulsar.api.Browser
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.Closeable
 import java.nio.file.Path
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 open class StatefulAgentRunner(
@@ -32,6 +40,25 @@ open class StatefulAgentRunner(
         .expireAfterWrite(2, TimeUnit.HOURS)
         .recordStats()
         .build()
+
+    /**
+     * Serializes agent task execution for this session. The companion agent and its
+     * AgentStateManager are shared session resources — concurrent tasks would interleave
+     * their contexts and histories, so only one run may be active at a time. Tasks
+     * submitted while another is running are queued here.
+     */
+    private val runMutex = Mutex()
+
+    /**
+     * Scope for agent task execution jobs. Cancelling the job of a task stops
+     * its agent loop (see [cancel]).
+     */
+    private val taskScope = CoroutineScope(
+        Dispatchers.IO + SupervisorJob() + CoroutineName("agent-tasks")
+    )
+
+    /** Currently queued/running task jobs by task id (for [cancel]). */
+    private val runningJobs = ConcurrentHashMap<String, Job>()
 
     internal val persistence = JsonlPersistence(
         file = agentPersistencePath(),
@@ -75,6 +102,23 @@ open class StatefulAgentRunner(
                 logger.debug("Skipping expired agent task {} during restore (created={})", entry.id, entry.createdTime)
                 return@restore
             }
+            // Skip stale non-terminal entries too: created/queued tasks are never
+            // auto-resumed after a restart, so restoring them only pollutes the
+            // status caches with zombie "queued" records from previous sessions.
+            if (entry.processState != terminalState &&
+                entry.createdTime.isBefore(ttlCutoff)
+            ) {
+                logger.debug("Skipping stale non-terminal agent task {} during restore (created={})", entry.id, entry.createdTime)
+                return@restore
+            }
+            // Terminal states never regress: when an earlier row already restored
+            // a terminal status for this id, a later non-terminal row (append-order
+            // glitch in the JSONL) must not overwrite it back to queued/in_progress.
+            val cached = statusCache.getIfPresent(entry.id)
+            if (cached?.processState == terminalState && entry.processState != terminalState) {
+                logger.debug("Skipping non-terminal row for agent task {} — terminal status already restored", entry.id)
+                return@restore
+            }
             statusCache.put(entry.id, entry)
             logger.debug("Restored agent task {}", entry.id)
         }
@@ -95,8 +139,15 @@ open class StatefulAgentRunner(
         logger.info("Compacted {} expired agent tasks (TTL: {} min)", stale.size, taskTtlMinutes)
 
         // Rewrite the persistence file so compacted tasks don't revive on restart.
+        // Serialize detached snapshots: an in-progress status may hold the agent's live
+        // history reference, which can grow/trim concurrently with this rewrite.
         persistence.clear()
-        statusCache.asMap().values.forEach { persistence.append(it) }
+        statusCache.asMap().values.forEach { status ->
+            val snapshot = status.copy().apply {
+                agentHistory = status.agentHistory?.let { AgentHistory(it.states.toMutableList()) }
+            }
+            persistence.append(snapshot)
+        }
     }
 
     fun create(): AgentTaskStatus {
@@ -121,10 +172,46 @@ open class StatefulAgentRunner(
      * @param plainCommand The plain text command for the agent to execute.
      * @return AgentStatus containing the execution result.
      */
-    suspend fun execute(plainCommand: String): AgentTaskStatus {
+    suspend fun execute(
+        plainCommand: String,
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
+    ): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status)
+        execute(plainCommand, status, noopLimit, engine)
         return status
+    }
+
+    /**
+     * Submit [plainCommand] for background execution and return the tracked [Job].
+     *
+     * The job is recorded so [cancel] can stop the task: cancelling the job
+     * interrupts the agent loop, releases the [runMutex], and marks the task
+     * failed with reason "Task cancelled" (see [executeSerialized]).
+     */
+    fun submit(
+        plainCommand: String,
+        status: AgentTaskStatus,
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
+    ): Job {
+        val job = taskScope.launch { execute(plainCommand, status, noopLimit, engine) }
+        runningJobs[status.id] = job
+        job.invokeOnCompletion { runningJobs.remove(status.id) }
+        return job
+    }
+
+    /**
+     * Cancel a queued/running task by id.
+     *
+     * @return true when a live job was found and cancelled; false when the task
+     *   is unknown, already finished, or its job is no longer tracked.
+     */
+    fun cancel(id: String): Boolean {
+        val job = runningJobs.remove(id) ?: return false
+        logger.info("Cancelling agent task {} (session={})", id, session.uuid)
+        job.cancel()
+        return true
     }
 
     /**
@@ -133,15 +220,48 @@ open class StatefulAgentRunner(
      * The status is updated with the agent's state history reference, allowing callers
      * to access the latest agent state via [AgentTaskStatus.agentState] during execution.
      *
+     * Execution is serialized per session through [runMutex] so concurrent tasks cannot
+     * interleave the shared companion agent's execution contexts and history.
+     *
      * This method creates and wires up ServerSideAgentEventHandlers for event collection,
      * following the pattern from StatefulPageVisitor#doVisit. A [supervisorScope] ensures
      * the event collector is structured within this call — it is launched as a child,
      * cancelled in the finally block, and the scope suspends until it terminates.
      * Multiple commands can run concurrently without cross-talk between SSE streams.
      */
-    suspend fun execute(plainCommand: String, status: AgentTaskStatus) {
+    suspend fun execute(
+        plainCommand: String,
+        status: AgentTaskStatus,
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
+    ) {
+        runMutex.withLock {
+            executeSerialized(plainCommand, status, noopLimit, engine)
+        }
+    }
+
+    private suspend fun executeSerialized(
+        plainCommand: String,
+        status: AgentTaskStatus,
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
+    ) {
         try {
             status.refresh(ResourceStatus.SC_PROCESSING)
+
+            // Per-task noop tolerance (e.g. `agent run --noop-limit 10`): long coding chains
+            // benefit from a higher limit than the default. A null value resets any stale
+            // override left over from a previous task.
+            (session.companionAgent as? RobustBrowserAgent)?.let {
+                it.noopLimitOverride = noopLimit
+                if (noopLimit != null) {
+                    logger.info("Agent task {} (session={}): noop limit overridden to {}", status.id, session.uuid, noopLimit)
+                }
+                it.runEngineOverride = engine
+                if (engine != null) {
+                    logger.info("Agent task {} (session={}): engine overridden to {}", status.id, session.uuid, engine)
+                }
+            }
 
             // Create and wire up ServerSideAgentEventHandlers for this command
             val serverSideAgentEventHandlers = DefaultServerSideAgentEventHandlers()
@@ -191,6 +311,40 @@ open class StatefulAgentRunner(
     }
 
     /**
+     * Ensure the session's bound driver is usable before an agent task runs.
+     *
+     * [ai.platon.pulsar.skeleton.session.PulsarSession.getOrCreateBoundDriver]
+     * returns the existing bound driver without a health check, so a driver whose
+     * browser was torn down keeps being reused across tasks. When the health check
+     * fails, unbind and close the dead driver (and its browser) so the next
+     * [ai.platon.pulsar.skeleton.session.PulsarSession.getOrCreateBoundDriver]
+     * launches a fresh browser.
+     */
+    private suspend fun ensureSessionDriverHealthy() {
+        val driver = runCatching { session.boundDriver }.getOrNull() as? AbstractWebDriver
+            ?: return // no bound driver yet — a fresh one is created on first use
+
+        val healthy = runCatching { driver.quickCheckHealthy().isOK }.getOrDefault(false)
+        if (healthy) {
+            return
+        }
+
+        logger.warn("Agent task: session driver is unhealthy; resetting bound driver and browser")
+        runCatching { session.unbindDriver(driver) }
+            .onFailure { logger.warn("Failed to unbind unhealthy driver", it) }
+        runCatching { driver.close() }
+            .onFailure { logger.warn("Failed to close unhealthy driver", it) }
+
+        val browser = runCatching { session.boundBrowser }.getOrNull()
+        if (browser != null) {
+            runCatching { session.unbindBrowser(browser) }
+                .onFailure { logger.warn("Failed to unbind dead browser", it) }
+            runCatching { browser.close() }
+                .onFailure { logger.warn("Failed to close dead browser", it) }
+        }
+    }
+
+    /**
      * Executes the agent command logic.
      *
      * This method is extracted to allow the event handlers to be properly bound
@@ -203,6 +357,23 @@ open class StatefulAgentRunner(
         // getting results for the right task (prevents cross-talk confusion).
         status.submittedTask = plainCommand
 
+        // Pure coding tasks (file ops / build) don't need a browser page. Switch the
+        // agent into coding mode: no driver health check, no search-engine navigation,
+        // no screenshots — those page steps were the source of the 30s DOM timeouts
+        // that killed coding runs.
+        val codingMode = CodingTaskDetector.detect(plainCommand)
+        (agent as? RobustBrowserAgent)?.codingMode = codingMode
+        if (codingMode) {
+            logger.info("Agent task {} (session={}): coding mode — skipping driver health check and page navigation", status.id, session.uuid)
+        } else {
+            // A session reuses its bound driver across tasks. If a previous task (or a
+            // close-all) shut the browser down, the driver points at a dead browser and
+            // the agent would fail every step (DOM settle timeout, browserUseState
+            // degradation, zero-step runs). Reset the bound driver/browser so a fresh
+            // browser is created for this task.
+            ensureSessionDriverHealthy()
+        }
+
         // Set agent history reference to allow real-time state tracking
         status.agentHistory = agent.stateHistory
 
@@ -211,7 +382,16 @@ open class StatefulAgentRunner(
         val savedUrl = runCatching { session.boundDriver?.currentUrl() }.getOrNull()
         logger.debug("Agent task {}: saved user page URL before agent run: {}", status.id, savedUrl)
 
-        val history = agent.run(plainCommand)
+        val history = try {
+            agent.run(plainCommand)
+        } finally {
+            // Scope the status history to THIS task's execution session and detach it
+            // from the agent's live (accumulating/trimming) history list. Without this,
+            // a status could expose other tasks' states, and later history trims could
+            // retroactively shrink a completed task's history.
+            status.agentHistory = agent.stateHistory.snapshotFor(agent.lastRunSessionId)
+        }
+        status.agentHistory = history
 
         // Restore the user's page if the agent navigated away from it
         try {

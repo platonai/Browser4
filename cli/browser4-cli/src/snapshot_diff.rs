@@ -90,10 +90,7 @@ pub fn find_previous_snapshot(exclude: &PathBuf) -> Option<PathBuf> {
     let mut entries: Vec<(PathBuf, std::time::SystemTime)> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path().extension().map_or(false, |ext| ext == "yml")
-                && e.path() != *exclude
-        })
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "yml") && e.path() != *exclude)
         .filter_map(|e| {
             let modified = e.metadata().ok()?.modified().ok()?;
             Some((e.path(), modified))
@@ -135,8 +132,12 @@ fn parse_snapshot(content: &str) -> Vec<SnapNode> {
                     let val = val.trim().trim_matches('"');
                     let entry = pending_props.entry(indent).or_insert((None, None));
                     match prop.trim() {
-                        "url" => { entry.0 = Some(val.to_string()); }
-                        "value" => { entry.1 = Some(val.to_string()); }
+                        "url" => {
+                            entry.0 = Some(val.to_string());
+                        }
+                        "value" => {
+                            entry.1 = Some(val.to_string());
+                        }
                         _ => {}
                     }
                 }
@@ -192,7 +193,10 @@ fn parse_snapshot(content: &str) -> Vec<SnapNode> {
             let next_indent = next_line.chars().take_while(|c| c.is_whitespace()).count();
 
             // Stop if we hit another node at same or lower indent
-            if next_indent <= indent && next_trimmed.starts_with("- ") && !next_trimmed.starts_with("- /") {
+            if next_indent <= indent
+                && next_trimmed.starts_with("- ")
+                && !next_trimmed.starts_with("- /")
+            {
                 break;
             }
 
@@ -201,8 +205,12 @@ fn parse_snapshot(content: &str) -> Vec<SnapNode> {
                     if let Some((prop, val)) = rest.split_once(':') {
                         let val = val.trim().trim_matches('"');
                         match prop.trim() {
-                            "url" => { url = Some(val.to_string()); }
-                            "value" => { value = Some(val.to_string()); }
+                            "url" => {
+                                url = Some(val.to_string());
+                            }
+                            "value" => {
+                                value = Some(val.to_string());
+                            }
                             _ => {}
                         }
                     }
@@ -261,7 +269,7 @@ fn parse_quoted_name(s: &str) -> (String, &str) {
     }
 
     let name = &s[1..end - 1]; // strip quotes
-    // Unescape common escapes
+                               // Unescape common escapes
     let name = name.replace("\\\"", "\"").replace("\\\\", "\\");
     let rest = &s[end..];
     (name, rest)
@@ -457,9 +465,18 @@ fn format_diff_output(diffs: &[DiffEntry], before: &PathBuf, after: &PathBuf) ->
     }
 
     // Count summary
-    let added = diffs.iter().filter(|d| matches!(d, DiffEntry::Added(_))).count();
-    let removed = diffs.iter().filter(|d| matches!(d, DiffEntry::Removed(_))).count();
-    let modified = diffs.iter().filter(|d| matches!(d, DiffEntry::Modified { .. })).count();
+    let added = diffs
+        .iter()
+        .filter(|d| matches!(d, DiffEntry::Added(_)))
+        .count();
+    let removed = diffs
+        .iter()
+        .filter(|d| matches!(d, DiffEntry::Removed(_)))
+        .count();
+    let modified = diffs
+        .iter()
+        .filter(|d| matches!(d, DiffEntry::Modified { .. }))
+        .count();
 
     lines.push(format!(
         "# {} added, {} removed, {} modified",
@@ -486,7 +503,8 @@ fn format_diff_output(diffs: &[DiffEntry], before: &PathBuf, after: &PathBuf) ->
         for entry in matches {
             match entry {
                 DiffEntry::Added(node) => {
-                    lines.push(format!("+ {} {} \"{}\"",
+                    lines.push(format!(
+                        "+ {} {} \"{}\"",
                         node.role,
                         short_id(&node.ref_id),
                         truncate_str(&node.name, 60),
@@ -498,13 +516,18 @@ fn format_diff_output(diffs: &[DiffEntry], before: &PathBuf, after: &PathBuf) ->
                     }
                 }
                 DiffEntry::Removed(node) => {
-                    lines.push(format!("- {} {} \"{}\"",
+                    lines.push(format!(
+                        "- {} {} \"{}\"",
                         node.role,
                         short_id(&node.ref_id),
                         truncate_str(&node.name, 60),
                     ));
                 }
-                DiffEntry::Modified { before: _b, after: _a, changes } => {
+                DiffEntry::Modified {
+                    before: _b,
+                    after: _a,
+                    changes,
+                } => {
                     let node = &_b;
                     let node_a = &_a;
                     let id = if node.ref_id == node_a.ref_id {
@@ -512,7 +535,8 @@ fn format_diff_output(diffs: &[DiffEntry], before: &PathBuf, after: &PathBuf) ->
                     } else {
                         format!("{}→{}", short_id(&node.ref_id), short_id(&node_a.ref_id))
                     };
-                    lines.push(format!("~ {} {} \"{}\"",
+                    lines.push(format!(
+                        "~ {} {} \"{}\"",
                         node.role,
                         id,
                         truncate_str(&node.name, 60),
@@ -596,27 +620,48 @@ mod tests {
     #[test]
     fn test_parse_quoted_name() {
         assert_eq!(parse_quoted_name(r#""Search""#).0, "Search");
-        assert_eq!(parse_quoted_name(r#""Hello World" [ref=e5]"#).0, "Hello World");
+        assert_eq!(
+            parse_quoted_name(r#""Hello World" [ref=e5]"#).0,
+            "Hello World"
+        );
         assert_eq!(parse_quoted_name(r#"no-quotes"#).0, "");
     }
 
     #[test]
     fn test_diff_added_removed() {
         // Different roles and boxes far apart → no match
-        let before = vec![
-            SnapNode {
-                depth: 0, role: "button".into(), name: "Submit".into(),
-                ref_id: "e1".into(), box_rect: Some(BoxRect { x: 0.0, y: 0.0, w: 100.0, h: 40.0 }),
-                url: None, value: None, text: None, raw_line: String::new(),
-            },
-        ];
-        let after = vec![
-            SnapNode {
-                depth: 0, role: "link".into(), name: "New Link".into(),
-                ref_id: "e99".into(), box_rect: Some(BoxRect { x: 500.0, y: 500.0, w: 80.0, h: 20.0 }),
-                url: None, value: None, text: None, raw_line: String::new(),
-            },
-        ];
+        let before = vec![SnapNode {
+            depth: 0,
+            role: "button".into(),
+            name: "Submit".into(),
+            ref_id: "e1".into(),
+            box_rect: Some(BoxRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 40.0,
+            }),
+            url: None,
+            value: None,
+            text: None,
+            raw_line: String::new(),
+        }];
+        let after = vec![SnapNode {
+            depth: 0,
+            role: "link".into(),
+            name: "New Link".into(),
+            ref_id: "e99".into(),
+            box_rect: Some(BoxRect {
+                x: 500.0,
+                y: 500.0,
+                w: 80.0,
+                h: 20.0,
+            }),
+            url: None,
+            value: None,
+            text: None,
+            raw_line: String::new(),
+        }];
 
         let diffs = compute_diff(&before, &after);
         // Different role → no match → old removed, new added
@@ -627,26 +672,47 @@ mod tests {
 
     #[test]
     fn test_diff_value_changed() {
-        let before = vec![
-            SnapNode {
-                depth: 0, role: "textbox".into(), name: "Query".into(),
-                ref_id: "e3".into(), box_rect: Some(BoxRect { x: 100.0, y: 80.0, w: 400.0, h: 40.0 }),
-                url: None, value: Some("".into()), text: None, raw_line: String::new(),
-            },
-        ];
-        let after = vec![
-            SnapNode {
-                depth: 0, role: "textbox".into(), name: "Query".into(),
-                ref_id: "e99".into(), box_rect: Some(BoxRect { x: 100.0, y: 80.0, w: 400.0, h: 40.0 }),
-                url: None, value: Some("Laser-Engraved Crystal".into()), text: None, raw_line: String::new(),
-            },
-        ];
+        let before = vec![SnapNode {
+            depth: 0,
+            role: "textbox".into(),
+            name: "Query".into(),
+            ref_id: "e3".into(),
+            box_rect: Some(BoxRect {
+                x: 100.0,
+                y: 80.0,
+                w: 400.0,
+                h: 40.0,
+            }),
+            url: None,
+            value: Some("".into()),
+            text: None,
+            raw_line: String::new(),
+        }];
+        let after = vec![SnapNode {
+            depth: 0,
+            role: "textbox".into(),
+            name: "Query".into(),
+            ref_id: "e99".into(),
+            box_rect: Some(BoxRect {
+                x: 100.0,
+                y: 80.0,
+                w: 400.0,
+                h: 40.0,
+            }),
+            url: None,
+            value: Some("Laser-Engraved Crystal".into()),
+            text: None,
+            raw_line: String::new(),
+        }];
 
         let diffs = compute_diff(&before, &after);
         assert_eq!(diffs.len(), 1);
         match &diffs[0] {
             DiffEntry::Modified { changes, .. } => {
-                assert!(changes.iter().any(|c| c.contains("value")), "Should detect value change");
+                assert!(
+                    changes.iter().any(|c| c.contains("value")),
+                    "Should detect value change"
+                );
             }
             _ => panic!("Expected Modified entry"),
         }
@@ -655,14 +721,27 @@ mod tests {
     #[test]
     fn test_diff_identical_no_output() {
         let node = SnapNode {
-            depth: 0, role: "button".into(), name: "Submit".into(),
-            ref_id: "e1".into(), box_rect: Some(BoxRect { x: 0.0, y: 0.0, w: 100.0, h: 40.0 }),
-            url: None, value: None, text: None, raw_line: String::new(),
+            depth: 0,
+            role: "button".into(),
+            name: "Submit".into(),
+            ref_id: "e1".into(),
+            box_rect: Some(BoxRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 40.0,
+            }),
+            url: None,
+            value: None,
+            text: None,
+            raw_line: String::new(),
         };
         let before = vec![node.clone()];
         let after = vec![node.clone()];
         let diffs = compute_diff(&before, &after);
-        assert!(diffs.is_empty(), "Identical elements should produce no diff");
+        assert!(
+            diffs.is_empty(),
+            "Identical elements should produce no diff"
+        );
     }
 }
-

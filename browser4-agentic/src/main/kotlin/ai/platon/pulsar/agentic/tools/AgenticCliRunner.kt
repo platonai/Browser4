@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools
 
+import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import org.slf4j.LoggerFactory
@@ -566,9 +567,10 @@ class AgenticCliRunner(
     companion object {
         /**
          * Frontend MCP tool name aliases — maps browser4-cli MCP tool names to internal
-         * tool names. Mirrors [ai.platon.pulsar.rest.mcp.controller.MCPToolController.FRONTEND_TOOL_NAME_ALIASES].
+         * tool names. Kept in sync with [McpToolNames.frontendAliases]; the key set is
+         * asserted by `McpToolAliasParityTest`.
          */
-        private val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
+        internal val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
             "browser_navigate" to "navigate",
             "browser_snapshot" to "aria_snapshot",
             "browser_navigate_back" to "go_back",
@@ -590,12 +592,28 @@ class AgenticCliRunner(
             "browser_check" to "check",
             "browser_uncheck" to "uncheck",
             "browser_evaluate" to "evaluate_value",
+            "browser_generate_locator" to "generate_locator",
             "browser_resize" to "resize",
             "browser_take_screenshot" to "screenshot",
+            "browser_pdf_save" to "pdf",
             "browser_save_storage_state" to "save_storage_state",
             "browser_load_storage_state" to "load_storage_state",
             "browser_console_messages" to "consoleMessages",
             "browser_console_clear" to "consoleClear",
+            "browser_focus" to "focus",
+            "browser_is_visible" to "is_visible",
+            "browser_is_enabled" to "is_enabled",
+            "browser_is_checked" to "is_checked",
+            "browser_dialog_status" to "dialog_status",
+            "browser_network_requests" to "network_requests",
+            "browser_network_request" to "network_request",
+            "browser_network_route" to "network_route",
+            "browser_network_unroute" to "network_unroute",
+            "browser_har_start" to "har_start",
+            "browser_har_stop" to "har_stop",
+            "browser_frame_list" to "frame_list",
+            "browser_frame_switch" to "frame_switch",
+            "browser_frame_main" to "frame_main",
         )
 
         /**
@@ -626,6 +644,17 @@ class AgenticCliRunner(
             "mousewheel" to ToolCall("tab", "mouseWheel", mutableMapOf()),
             "consoleMessages" to ToolCall("tab", "consoleMessages", mutableMapOf()),
             "consoleClear" to ToolCall("tab", "consoleClear", mutableMapOf()),
+            "focus" to ToolCall("tab", "focus", mutableMapOf()),
+            "is_visible" to ToolCall("tab", "isVisible", mutableMapOf()),
+            "is_enabled" to ToolCall("tab", "isEnabled", mutableMapOf()),
+            "is_checked" to ToolCall("tab", "isChecked", mutableMapOf()),
+            "dialog_status" to ToolCall("tab", "dialogStatus", mutableMapOf()),
+            "network_requests" to ToolCall("tab", "networkRequests", mutableMapOf()),
+            "network_request" to ToolCall("tab", "networkRequestDetail", mutableMapOf()),
+            "network_route" to ToolCall("tab", "networkRoute", mutableMapOf()),
+            "network_unroute" to ToolCall("tab", "networkUnroute", mutableMapOf()),
+            "har_start" to ToolCall("tab", "harStart", mutableMapOf()),
+            "har_stop" to ToolCall("tab", "harStop", mutableMapOf()),
         )
 
         /**
@@ -997,16 +1026,12 @@ class AgenticCliRunner(
 
     /**
      * Convert domain+method to snake_case MCP tool name.
-     * Must match [ai.platon.pulsar.rest.mcp.controller.MCPToolController.toMcpToolName]
-     * and Browser4MCPServer logic.
+     *
+     * Delegates to [McpToolNames] so this runner, the private dispatcher and the
+     * standard MCP server cannot drift apart on spelling.
      */
-    private fun toMcpToolName(domain: String, method: String): String {
-        val snake = method.replace(Regex("([A-Z])")) { "_${it.groupValues[1].lowercase()}" }
-        return when (domain) {
-            "tab", "system" -> snake
-            else -> "${domain}_$snake"
-        }
-    }
+    private fun toMcpToolName(domain: String, method: String): String =
+        McpToolNames.toMcpToolName(domain, method)
 
     // =========================================================================
     // Argument normalization

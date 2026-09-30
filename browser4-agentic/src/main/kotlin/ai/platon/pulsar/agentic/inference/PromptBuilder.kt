@@ -9,6 +9,7 @@ import ai.platon.pulsar.agentic.inference.history.HistoryRenderStrategy
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.model.ExecutionContext
+import ai.platon.pulsar.agentic.model.ToolOutcome
 import ai.platon.pulsar.agentic.prompts.buildMainSystemPromptV1
 import ai.platon.pulsar.agentic.prompts.buildToolUseSections
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecFormat
@@ -302,22 +303,40 @@ Return an array of matching elements
         }
     }
 
-    fun buildOperatorSystemPrompt(includeToolList: Boolean = true): String {
+    fun buildOperatorSystemPrompt(
+        includeToolList: Boolean = true,
+        codingTask: Boolean? = null,
+        disclosure: String = "tiered",
+    ): String {
         return """
-${buildMainSystemPromptV1(ToolSpecFormat.KOTLIN, includeToolList)}
+${buildMainSystemPromptV1(ToolSpecFormat.KOTLIN, includeToolList, codingTask, disclosure)}
         """.trimIndent()
     }
 
-    fun buildMultistepAgentMessageListAll(context: ExecutionContext): AgentMessageList {
+    fun buildMultistepAgentMessageListAll(
+        context: ExecutionContext,
+        codingMode: Boolean = false,
+    ): AgentMessageList {
         // Prepare messages for model
         val messages = AgentMessageList()
 
         initObserveUserInstruction(context.instruction, messages)
 
-        buildMultistepMessageListStart(context, context.stateHistory, messages)
+        buildMultistepMessageListStart(context, context.stateHistory, messages, codingMode)
 
-        // browser state, viewport info, interactive elements, DOM
-        buildBrowserStateMessageForBrowserInteraction(messages, context)
+        if (codingMode) {
+            // Coding tasks get NO page info unless the model explicitly calls a
+            // page tool (design §3.5) — replace the Browser State / Viewport /
+            // ARIA sections with a single pointer line.
+            messages.addUser(
+                "## Browser State\n\n" +
+                    "No page context (coding task). To obtain web page information, explicitly call " +
+                    "tab.navigate / tab.ariaSnapshot / tab.textContent / tab.eval.\n\n---\n"
+            )
+        } else {
+            // browser state, viewport info, interactive elements, DOM
+            buildBrowserStateMessageForBrowserInteraction(messages, context)
+        }
 
         return messages
     }
@@ -337,20 +356,39 @@ ${buildMainSystemPromptV1(ToolSpecFormat.KOTLIN, includeToolList)}
     fun buildMultistepMessageListStart(
         context: ExecutionContext, stateHistory: AgentHistory,
         messages: AgentMessageList,
+        codingMode: Boolean = false,
     ): AgentMessageList {
         val instruction = context.instruction
 
-        val systemMsg = buildOperatorSystemPrompt()
+        // Tiered disclosure: coding tasks see coding/cli in full and page tools
+        // collapsed to a summary line; browsing tasks the reverse. `full` keeps
+        // the legacy flat list.
+        val systemMsg = buildOperatorSystemPrompt(
+            includeToolList = true,
+            codingTask = codingMode,
+            disclosure = context.config.toolDisclosure,
+        )
 
         messages.addSystem(systemMsg)
         messages.addLastIfAbsent("user", buildUserRequestMessage(instruction), name = "user_request")
-        messages.addUser(buildAgentStateHistoryMessage(stateHistory, context.stateHistoryPath))
+        // Task-scoped history: the shared history may contain states of previous
+        // runs — rendering them into the prompt pollutes the model's context and
+        // caused false completions (observed: new task "remembered" the previous
+        // task's steps). Slice by the run's session id.
+        val runHistory = stateHistory.snapshotFor(context.sessionId)
+        messages.addUser(buildAgentStateHistoryMessage(runHistory, context.stateHistoryPath))
         if (context.screenshotB64 != null) {
             messages.addUser(buildBrowserVisionInfo())
         }
 
-        val prevTCResult = context.agentState.prevState?.toolCallResult
-        if (prevTCResult != null) {
+        val prevState = context.agentState.prevState
+        val prevTCResult = prevState?.toolCallResult
+        val prevModelError = prevState?.actionDescription?.modelResponse?.modelError
+        // Render the previous step result when there is either an executed tool
+        // result or a model error worth forwarding. The model-error-only case
+        // covers tool-loop overflow: the step executed tools but left no
+        // toolCallResult — the overflow digest must still reach the next step.
+        if (prevTCResult != null || !prevModelError.isNullOrBlank()) {
             messages.addUser(buildPrevToolCallResultMessage(context))
         }
 
@@ -398,18 +436,23 @@ $userProvidedInstructions
 
     fun buildPrevToolCallResultMessage(context: ExecutionContext): String {
         val agentState = requireNotNull(context.agentState)
-        val toolCallResult = requireNotNull(context.agentState.prevState?.toolCallResult)
-        val evaluate = toolCallResult.evaluate
-        val evalResult = evaluate.value?.toString()
-        val exception = evaluate.exception?.cause
-        val evalMessage = when {
-            exception != null -> "[Execution Error]\n" + exception.brief()
-            evalResult.isNullOrBlank() -> "[Execution Succeeded]"
-            else -> "[Execution Succeeded] Output: $evalResult"
-        }.let { Strings.compactInline(it, 5000) }
-        val help = evaluate.exception?.help?.takeIf { it.isNotBlank() }
+        // toolCallResult may be absent (e.g. a tool-loop overflow step that
+        // executed tools internally but produced no parsed ToolCall) — in that
+        // case render the model error only, so the overflow digest still flows
+        // into the next step's prompt instead of crashing the build.
+        val toolCallResult = context.agentState.prevState?.toolCallResult
+        // Bounded ToolOutcome envelope: header + truncated body + errors — the
+        // model sees the previous step's achievement/problem without context blow-up.
+        val evalMessage = toolCallResult?.let {
+            val outcome = ToolOutcome.from(it)
+            outcome.render().let { rendered -> Strings.compactInline(rendered, 5000) }
+        } ?: "(no tool result; see Previous model error below)"
+        val help = toolCallResult?.evaluate?.exception?.help?.takeIf { it.isNotBlank() }
         val helpMessageOrEmpty = help?.let { "Help:\n```\n$it\n```" } ?: ""
-        val lastModelError = agentState.actionDescription?.modelResponse?.modelError
+        // The PREVIOUS step's actionDescription carries the overflow modelError
+        // (the current state's is still null at prompt-build time) — reading the
+        // wrong state made this section dead code and dropped the overflow digest.
+        val lastModelError = agentState.prevState?.actionDescription?.modelResponse?.modelError
         val lastModelErrorOrEmpty = if (lastModelError != null) {
             """
 Previous model error:

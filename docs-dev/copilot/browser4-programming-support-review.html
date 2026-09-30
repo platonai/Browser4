@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Browser4 编程支持评估报告</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #59636e;
+    --border: #d1d9e0;
+    --accent: #0969da;
+    --accent-soft: #ddf4ff;
+    --green: #1a7f37;
+    --green-soft: #dafbe1;
+    --red: #cf222e;
+    --red-soft: #ffebe9;
+    --amber: #9a6700;
+    --amber-soft: #fff8c5;
+    --purple: #8250df;
+    --purple-soft: #fbefff;
+    --code-bg: #f6f8fa;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.7;
+    padding: 32px 16px 64px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  header {
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: 20px;
+    margin-bottom: 28px;
+  }
+  h1 { font-size: 28px; letter-spacing: -0.02em; margin-bottom: 6px; }
+  .sub { color: var(--muted); font-size: 14px; }
+  .badge-row { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge {
+    font-size: 12px; padding: 3px 10px; border-radius: 20px;
+    border: 1px solid var(--border); background: var(--code-bg); color: var(--muted);
+  }
+  h2 {
+    font-size: 21px; margin: 40px 0 14px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border); letter-spacing: -0.01em;
+  }
+  h3 { font-size: 16px; margin: 24px 0 10px; }
+  h4 { font-size: 14px; margin: 16px 0 8px; }
+  p { margin-bottom: 12px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 12.5px; background: var(--code-bg); padding: 2px 6px;
+    border-radius: 6px; border: 1px solid var(--border);
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; font-size: 12.5px; margin: 10px 0 16px;
+    line-height: 1.6;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 20px; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; white-space: nowrap; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .card {
+    border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-bottom: 14px;
+  }
+  .verdict {
+    background: var(--green-soft); border: 1px solid #8ddbaa; border-radius: 10px;
+    padding: 16px 20px; margin: 16px 0 24px;
+  }
+  .verdict h3 { margin-top: 0; color: var(--green); }
+  .score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin: 16px 0; }
+  .score-item {
+    border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: #fff;
+  }
+  .score-item .name { font-weight: 600; font-size: 14px; }
+  .score-item .dim { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  .meter { height: 8px; background: var(--code-bg); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+  .meter > div { height: 100%; border-radius: 4px; }
+  .score-item .note { font-size: 12.5px; color: var(--muted); }
+  .lv { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+  .lv-strong { background: var(--green-soft); color: var(--green); }
+  .lv-mid { background: var(--amber-soft); color: var(--amber); }
+  .lv-weak { background: var(--red-soft); color: var(--red); }
+  .tag { display: inline-block; font-size: 11.5px; padding: 1px 8px; border-radius: 4px; margin-right: 6px; }
+  .tag-good { background: var(--green-soft); color: var(--green); }
+  .tag-warn { background: var(--amber-soft); color: var(--amber); }
+  .tag-risk { background: var(--red-soft); color: var(--red); }
+  ul, ol { margin: 6px 0 14px 22px; }
+  li { margin-bottom: 5px; }
+  .p0 { border-left: 4px solid var(--red); }
+  .p1 { border-left: 4px solid var(--amber); }
+  .p2 { border-left: 4px solid var(--accent); }
+  .footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+  .file-ref { font-size: 12px; color: var(--muted); font-family: "SFMono-Regular", Consolas, monospace; }
+  .tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin: 10px 0 16px; }
+  .tool-chip {
+    font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px;
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;
+    background: var(--code-bg); color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .tool-chip b { color: var(--accent); }
+  .flow {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin: 12px 0 20px; font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 12.5px; line-height: 2; overflow-x: auto; white-space: pre;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Browser4 编程支持评估报告</h1>
+  <div class="sub">基于 <code>browser4-agentic</code> 模块源码审查 · 评估日期 2026-08-14 · 版本 4.13.4-SNAPSHOT</div>
+  <div class="badge-row">
+    <span class="badge">评估范围：browser4-agentic 模块</span>
+    <span class="badge">核心文件：26 个 Kotlin 源文件</span>
+    <span class="badge">测试：CodingToolExecutorTest 等 12+ 相关测试类</span>
+  </div>
+</header>
+
+<div class="verdict">
+  <h3>总体结论</h3>
+  <p>Browser4 的编程支持定位为<b>「浏览器自动化 Agent 的辅助编码能力」</b>：以统一的 <code>coding</code> 工具域（28 个方法）为核心，提供完整的文件读写、代码搜索、Shell/构建/测试/版本控制执行与浏览器内 JS 求值，并配套一套<b>分层命令白名单安全模型</b>。这套能力足以支撑「写脚本、改配置、跑构建、做测试、调页面」类轻量开发任务，工程质量与安全设计优于多数同类型项目；但<b>不具备 IDE 级深度编程能力</b>（无 LSP/语义理解、无结构化编辑、无代码审查/重构工具），距离 Claude Code / Codex 类专用编程 Agent 还有明显差距。</p>
+  <p><b>综合评级：B+（良好，有明确提升空间）</b> — 作为辅助编码能力足够实用，作为独立编程 Agent 尚不完整。</p>
+</div>
+
+<h2>1. 能力全景</h2>
+<p>编程支持由 <code>AgentToolManager</code> 统一调度，通过 domain 路由分发到各执行器。完整调用链如下：</p>
+<div class="flow">LLM (agent loop)
+  │  ToolCall { domain, method, arguments }
+  ▼
+AgentToolManager.execute()          ← domain 别名归一化 (dev→coding, browser4-cli→cli)
+  │  ┌──────────────┬──────────────┬───────────────┐
+  ▼  ▼              ▼              ▼               ▼
+coding 域          cli 域         tab 域          skill 域
+CodingToolExecutor CliToolExecutor BrowserTabTool  SkillToolExecutor
+  ├─ CodingAgentShell    └─ CodingAgentShell      ├─ eval / evaluateValue
+  └─ CodingAgentFileSystem                          └─ consoleMessages</div>
+
+<table>
+  <tr><th>工具域</th><th>编程相关能力</th><th>核心文件</th></tr>
+  <tr>
+    <td><code>coding</code></td>
+    <td>统一编程工具：Shell 执行（7 方法）+ 文件系统（21 方法），替代并废弃旧的 <code>fs</code>/<code>shell</code> 域</td>
+    <td>CodingToolExecutor.kt / CodingAgentShell.kt / CodingAgentFileSystem.kt</td>
+  </tr>
+  <tr>
+    <td><code>cli</code></td>
+    <td>调用 browser4-cli 子进程组合浏览器自动化命令（带防递归保护）</td>
+    <td>CliToolExecutor.kt</td>
+  </tr>
+  <tr>
+    <td><code>tab</code></td>
+    <td>浏览器内 JS 执行：<code>eval</code> / <code>evaluateValue</code> / <code>evaluateValueDetail</code>，控制台消息读取/清空</td>
+    <td>BrowserTabToolExecutor.kt</td>
+  </tr>
+  <tr>
+    <td><code>system</code> / <code>skill</code></td>
+    <td>工具帮助查询、技能激活与脚本执行（SKILL.md 驱动）</td>
+    <td>SystemToolExecutor.kt / skills/</td>
+  </tr>
+</table>
+
+<h2>2. 分维度评分</h2>
+<div class="score-grid">
+  <div class="score-item">
+    <div class="name">文件系统操作</div>
+    <div class="dim">读写/目录/搜索/变更追踪</div>
+    <div class="meter"><div style="width:88%; background:var(--green)"></div></div>
+    <div class="note">21 个方法覆盖完整 CRUD + glob/grep + 快照 diff/回滚，超大多数同类项目</div>
+  </div>
+  <div class="score-item">
+    <div class="name">Shell / 构建 / 测试</div>
+    <div class="dim">90+ dev 工具白名单</div>
+    <div class="meter"><div style="width:90%; background:var(--green)"></div></div>
+    <div class="note">git/cargo/mvn/npm/python/gcc/go/dotnet/docker 等全覆盖，会话化执行 + 输出截断</div>
+  </div>
+  <div class="score-item">
+    <div class="name">代码搜索与理解</div>
+    <div class="dim">grep / glob / 语言检测</div>
+    <div class="meter"><div style="width:55%; background:var(--amber)"></div></div>
+    <div class="note">仅文本级正则匹配，无 LSP/AST 感知，无符号跳转、引用查找、类型查询</div>
+  </div>
+  <div class="score-item">
+    <div class="name">代码修改</div>
+    <div class="dim">write / replace / append</div>
+    <div class="meter"><div style="width:62%; background:var(--amber)"></div></div>
+    <div class="note">字符串级替换，无结构化编辑/正则替换/多文件批量重构</div>
+  </div>
+  <div class="score-item">
+    <div class="name">浏览器内编程</div>
+    <div class="dim">JS eval + 控制台</div>
+    <div class="meter"><div style="width:65%; background:var(--amber)"></div></div>
+    <div class="note">页面/元素级 JS 求值与调试可用，但无独立脚本运行时抽象（需借 shell）</div>
+  </div>
+  <div class="score-item">
+    <div class="name">安全模型</div>
+    <div class="dim">分层白名单 + 黑名单</div>
+    <div class="meter"><div style="width:92%; background:var(--green)"></div></div>
+    <div class="note">4 层命令分类 + 硬编码黑名单 + 显式 allow/deny + 路径穿越防护 + 可解释策略</div>
+  </div>
+  <div class="score-item">
+    <div class="name">扩展性</div>
+    <div class="dim">自定义 domain / 插件</div>
+    <div class="meter"><div style="width:85%; background:var(--green)"></div></div>
+    <div class="note">registerCustomTarget + ToolMount 插件发现 + 动态 prompt 注入，扩展路径清晰</div>
+  </div>
+  <div class="score-item">
+    <div class="name">测试与工程质量</div>
+    <div class="dim">CodingToolExecutorTest 807 行</div>
+    <div class="meter"><div style="width:85%; background:var(--green)"></div></div>
+    <div class="note">逐方法参数/默认值/校验测试 + 命名参数测试 + 安全策略测试，覆盖扎实</div>
+  </div>
+</div>
+
+<h2>3. 编程能力详解</h2>
+
+<h3>3.1 统一 coding 域 — 架构亮点</h3>
+<p><code>CodingToolExecutor</code> 将 Shell 与文件系统组合为单一 <code>Target</code>（shell + fs），以 28 个方法统一暴露。相比旧架构（<code>fs</code>/<code>shell</code> 分离），<code>FileSystemToolExecutor</code> 与 <code>ShellToolExecutor</code> 已标注 <code>@Deprecated</code>，提示迁移到 <code>coding.*</code>。domain 别名（<code>dev</code> → <code>coding</code>）保证向后兼容。该设计是本次评估中最值得肯定的一点：<b>单一入口 + 明确演进方向</b>。</p>
+<p class="file-ref">browser4-agentic/.../tools/builtin/CodingToolExecutor.kt · AgentToolManager.kt:90-128, 297-298</p>
+
+<h3>3.2 文件系统（CodingAgentFileSystem）</h3>
+<div class="tool-grid">
+  <span class="tool-chip"><b>read</b>(path)</span>
+  <span class="tool-chip"><b>readLines</b>(p,s,e)</span>
+  <span class="tool-chip"><b>write</b>(p,content)</span>
+  <span class="tool-chip"><b>append</b>(p,c)</span>
+  <span class="tool-chip"><b>replace</b>(p,o,n,count)</span>
+  <span class="tool-chip"><b>mkdir</b>(p)</span>
+  <span class="tool-chip"><b>delete</b>(p,rec)</span>
+  <span class="tool-chip"><b>copy</b>(s,d)</span>
+  <span class="tool-chip"><b>move</b>(s,d)</span>
+  <span class="tool-chip"><b>listDir</b>(p,depth)</span>
+  <span class="tool-chip"><b>glob</b>(pattern)</span>
+  <span class="tool-chip"><b>grep</b>(re,p,f)</span>
+  <span class="tool-chip"><b>stat</b>(p)</span>
+  <span class="tool-chip"><b>diff</b>(p)</span>
+  <span class="tool-chip"><b>changeSummary</b>()</span>
+  <span class="tool-chip"><b>languages</b>()</span>
+  <span class="tool-chip"><b>workspaceRoot</b>()</span>
+</div>
+<h4>亮点</h4>
+<ul>
+  <li><span class="tag tag-good">快照回滚</span> 每次写操作前自动 <code>snapshotFile()</code>，<code>diff</code>/<code>changeSummary</code> 可审计全部变更（含 created/modified/deleted 状态）——这是同类项目少有的能力。</li>
+  <li><span class="tag tag-good">健壮性</span> 5MB 读取上限、60+ 二进制扩展名识别（仅返回元数据）、glob 结果上限 10,000、grep 结果上限 500。</li>
+  <li><span class="tag tag-good">安全</span> 默认沙箱在 workspaceRoot 内，<code>resolvePath</code> 双重校验拦截路径穿越；外部访问需 <code>allowExternalAccess=true</code> 显式开启。</li>
+</ul>
+<h4>局限</h4>
+<ul>
+  <li><span class="tag tag-warn">replace 仅字符串替换</span> 无正则替换、无行号定位编辑（readLines 与 replace 之间缺「按行区间替换」）。</li>
+  <li><span class="tag tag-warn">diff 为朴素逐行比较</span> 非标准 Myers diff，大文件/复杂编辑场景输出噪声大。</li>
+  <li><span class="tag tag-warn">grep 无并发/索引</span> 每次全树遍历，大仓性能有限。</li>
+</ul>
+<p class="file-ref">browser4-agentic/.../common/CodingAgentFileSystem.kt（717 行）</p>
+
+<h3>3.3 Shell 执行与安全模型（CodingAgentShell）</h3>
+<p>命令校验采用<b>优先级分层的白名单策略</b>，是本模块安全设计的核心：</p>
+<table>
+  <tr><th>优先级</th><th>策略</th><th>说明</th></tr>
+  <tr><td>1</td><td>硬编码黑名单模式</td><td><code>rm -rf /</code>、<code>mkfs.*</code>、<code>dd of=/dev/</code>、fork 炸弹、<code>shutdown</code> 等 10 条正则，不可被任何配置覆盖</td></tr>
+  <tr><td>2</td><td>显式 deny / denyPattern</td><td>绝对否决，优先于一切放行规则（含 SAFE 集）</td></tr>
+  <tr><td>3</td><td>显式 allow / allowPattern</td><td>绕过分类检查，用于扩展非标准工具（如 <code>ffmpeg</code>）</td></tr>
+  <tr><td>4</td><td>分类检查</td><td>SAFE（只读，恒放行）→ DEV（90+ 工具，默认放行）→ NETWORK（需 opt-in）→ DESTRUCTIVE（需 opt-in）</td></tr>
+  <tr><td>5</td><td>PATH 回退</td><td>未分类但存在于 PATH 的命令在 <code>allowDevTools=true</code> 时放行</td></tr>
+</table>
+<ul>
+  <li><span class="tag tag-good">可解释</span> <code>explain(command)</code> 返回每条命令被放行/拦截的具体原因，便于审计与调试。</li>
+  <li><span class="tag tag-good">会话化</span> 结果按 sessionId 留存，<code>shellOutput</code>/<code>shellStatus</code>/<code>shellList</code> 支持异步取回；持久环境变量 <code>shellSetEnv</code>。</li>
+  <li><span class="tag tag-good">防护</span> 超时 120s（上限 600s）、输出截断 200KB、超时强杀进程、Windows/Linux 双平台适配。</li>
+  <li><span class="tag tag-warn">注意</span> 默认 <code>allowDestructive=true</code>——删除类命令（rm/del/kill 等）在默认配置下即被放行（仅受黑名单模式限制），独立部署时建议收紧。</li>
+</ul>
+<p class="file-ref">browser4-agentic/.../common/CodingAgentShell.kt（688 行）</p>
+
+<h3>3.4 浏览器内编程（tab 域）</h3>
+<ul>
+  <li><code>tab.eval(expression)</code> / <code>tab.evaluateValue(expression, selector)</code>：页面级与元素级 JS 求值，支持将表达式作为 functionDeclaration 转发，可用于 DOM 操作、数据提取、页面调试。</li>
+  <li><code>tab.consoleMessages(level)</code> / <code>tab.consoleClear()</code>：首次调用即注入控制台拦截器并缓冲消息，支持按级别过滤——对前端调试类编程任务实用。</li>
+  <li><code>tab.saveStorageState</code> / <code>loadStorageState</code>：cookies + localStorage 序列化/恢复，支撑登录态复用的测试场景。</li>
+</ul>
+<p class="file-ref">browser4-agentic/.../tools/builtin/BrowserTabToolExecutor.kt（1711 行）</p>
+
+<h3>3.5 CLI 集成（cli 域）</h3>
+<ul>
+  <li><code>cli.run(args)</code> 可组合任意 browser4-cli 命令（goto/click/fill/snapshot/extract...），复用 <code>CodingAgentShell</code> 的安全校验。</li>
+  <li><span class="tag tag-good">防递归</span> <code>AGENT_SPAWN_PATTERN</code> 拦截 <code>agent run</code>/<code>agent-run</code>/<code>act</code> 子命令，杜绝 agent→cli→子进程→新 agent 的无界递归——设计周到。</li>
+</ul>
+<p class="file-ref">browser4-agentic/.../tools/builtin/CliToolExecutor.kt（126 行）</p>
+
+<h3>3.6 Agent 编排与工具暴露</h3>
+<ul>
+  <li><b>Prompt 动态生成</b>：<code>MainSystemPrompt.kt</code> 按需渲染工具列表（Kotlin 与 JSON 两种格式），coding/cli 的 specs 通过 <code>ToolCallSpecificationRenderer.registerBuiltinDomainSpecs()</code> 注册，新增工具即自动进入 prompt。</li>
+  <li><b>双通道调用</b>：支持文本解析调用（<code>SimpleKotlinParser</code> 状态机解析 <code>coding.shell("git status")</code> 形式表达式，正确处理引号/转义/嵌套括号）与 LangChain4j 原生函数调用（<code>getLangChain4jToolSpecifications()</code>）。</li>
+  <li><b>自定义工具</b>：<code>CustomToolRegistry</code> + <code>ToolMount</code> 插件接口，外部模块可注册新 domain 与 target，<code>CalculatorToolExecutor</code> 提供模板。</li>
+</ul>
+<p class="file-ref">browser4-agentic/.../prompts/MainSystemPrompt.kt · common/SimpleKotlinParser.kt · tools/README.md</p>
+
+<h2>4. 测试与工程质量</h2>
+<table>
+  <tr><th>测试类</th><th>覆盖点</th></tr>
+  <tr><td>CodingToolExecutorTest（807 行）</td><td>coding 域全部 28 方法：参数映射、默认值、required 校验、receiverClass 断言</td></tr>
+  <tr><td>CliToolExecutorTest</td><td>cli.run/version/help、agent 防递归拦截</td></tr>
+  <tr><td>ExecutorsNamedArgsTest</td><td>命名参数 vs 位置参数的归一化（对 LLM 输出质量关键）</td></tr>
+  <tr><td>AgentToolManagerTest</td><td>domain 别名归一化、自定义 target 注册/注销</td></tr>
+  <tr><td>AgenticCliRunnerTest / ToolCallSpecificationRendererTest</td><td>CLI 命令路由、prompt 渲染正确性</td></tr>
+</table>
+<p>测试以「方法级行为 + 参数契约」为主，未发现针对文件系统快照/回滚与安全策略（黑名单模式）的独立压力测试，可作补充。</p>
+
+<h2>5. 优势总结</h2>
+<ol>
+  <li><b>统一工具域设计</b>：coding 域整合 Shell+FS，架构演进方向清晰，旧域明确废弃。</li>
+  <li><b>安全模型成熟</b>：分层白名单 + 硬编码黑名单 + 可解释策略 + 路径穿越防护，是同类项目中少见的完整度。</li>
+  <li><b>变更可审计</b>：写操作快照 + diff + changeSummary，为 Agent 自主改代码提供了回退与审查基础。</li>
+  <li><b>工程化细节</b>：超时强杀、输出截断、二进制防护、跨平台、会话化结果管理。</li>
+  <li><b>防递归与防失控</b>：CLI 嵌套 agent 拦截、命令超时上限等设计体现了对自主 Agent 风险的清醒认知。</li>
+  <li><b>扩展路径清晰</b>：自定义 domain/target/executor 三级扩展 + 动态 prompt 注入。</li>
+</ol>
+
+<h2>6. 短板与风险</h2>
+<table>
+  <tr><th>短板</th><th>影响</th><th>严重度</th></tr>
+  <tr><td>无 LSP / 语义级代码理解</td><td>无法利用编译器诊断、符号/引用/类型查询；改代码全靠文本匹配，大型重构易出错</td><td><span class="lv lv-mid">中</span></td></tr>
+  <tr><td>无结构化代码编辑</td><td>replace 仅字符串级，无正则/行区间/多文件批量编辑，长任务 token 开销大</td><td><span class="lv lv-mid">中</span></td></tr>
+  <tr><td>无独立代码执行运行时</td><td>需借助 shell 间接执行脚本，无 sandbox 化的 run-code/REPL 抽象</td><td><span class="lv lv-weak">低-中</span></td></tr>
+  <tr><td>无代码审查/修复回路</td><td>Agent 无法「编译→看错误→修」的自闭环；依赖 LLM 自觉调用 shell</td><td><span class="lv lv-mid">中</span></td></tr>
+  <tr><td>默认 allowDestructive=true</td><td>删除类命令默认放行，独立部署/多租户场景有风险敞口</td><td><span class="lv lv-mid">中</span></td></tr>
+  <tr><td>编程技能空白</td><td>skills/ 下仅有浏览器自动化类技能（browser4-cli 等），无内置 coding skill（如「修 bug」「写测试」工作流）</td><td><span class="lv lv-weak">低</span></td></tr>
+  <tr><td>grep/glob 无索引</td><td>大仓库下搜索延迟，Agent 等待成本高</td><td><span class="lv lv-weak">低</span></td></tr>
+</table>
+
+<h2>7. 改进建议</h2>
+
+<div class="card p1">
+  <h4><span class="tag tag-warn">P1 · 高价值</span> 引入代码智能层（LSP 或轻量索引）</h4>
+  <p>在 coding 域新增 <code>diagnostics(path)</code>（编译诊断）、<code>symbols(pattern)</code>（符号查找）、<code>references(symbol)</code>（引用查询）方法，可直接对接 JDTLS / rust-analyzer / typescript-language-server 等 LSP。这是从「文本编辑」跃迁到「编程 Agent」最关键的一步。</p>
+</div>
+<div class="card p1">
+  <h4><span class="tag tag-warn">P1 · 高价值</span> 补齐编辑原语</h4>
+  <p>新增 <code>replaceRegex</code>、<code>editLines(path, start, end, content)</code>、<code>insertAfter(path, anchor, content)</code>；diff 升级为标准算法（如 Myers/Patience），并在 replace 后自动输出 diff 供 Agent 自检。</p>
+</div>
+<div class="card p1">
+  <h4><span class="tag tag-warn">P1 · 高价值</span> 内置「编译-测试-修复」回路技能</h4>
+  <p>创建 coding skill（如 <code>fix-bug</code>：读错误→定位→修改→重跑测试→验证），把零散工具组合为可复用工作流；同时收紧独立部署默认值（<code>allowDestructive=false</code>）。</p>
+</div>
+<div class="card p2">
+  <h4><span class="tag tag-good">P2 · 增强</span> 沙箱化代码执行</h4>
+  <p>新增 <code>runCode(language, code)</code> 抽象（Node/Python 子进程 + 资源限制 + 独立临时目录），避免 Agent 手动拼 shell 命令，也便于统一超时/内存控制。</p>
+</div>
+<div class="card p2">
+  <h4><span class="tag tag-good">P2 · 增强</span> 搜索性能</h4>
+  <p>为 grep/glob 增加缓存索引或排除目录配置（node_modules/target/.git 等），大仓库下显著降低 Agent 等待时间。</p>
+</div>
+
+<h2>8. 结论</h2>
+<p><b>Browser4 的编程支持在「Web Agent 的辅助编码」这个定位上是称职且超出预期的</b>：统一工具域、完整的安全模型、可审计的变更追踪，工程质量扎实。它能让 Agent 可靠地完成读写代码、跑构建测试、调页面调试等任务，与浏览器自动化能力形成互补闭环。</p>
+<p>但其能力边界在「<b>代码理解</b>」这一层——没有 LSP/语义索引、没有结构化编辑、没有内置的修 bug/写测试工作流，因此现阶段更适合作为自动化 Agent 的附属能力，而非独立的编程 Agent。若按 P1 建议补齐代码智能层与编辑原语，编程支持评级可从 B+ 提升至 A-，具备与主流编程 Agent 竞争的基础。</p>
+
+<div class="footer">
+  评估方法：静态源码审查（browser4-agentic 模块 26 个主源文件 + 12 个相关测试类）· 未执行运行时验证<br>
+  主要参考：CodingToolExecutor.kt · CodingAgentShell.kt · CodingAgentFileSystem.kt · AgentToolManager.kt · MainSystemPrompt.kt · CliToolExecutor.kt · BrowserTabToolExecutor.kt · tools/README.md
+</div>
+
+</div>
+</body>
+</html>

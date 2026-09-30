@@ -1,0 +1,16 @@
+{
+  "meta": {
+    "date": "20260831-205407",
+    "source": "20260831-205407-extraction-method-routing.issues.json",
+    "scenario": "extraction-method-routing",
+    "mode": "dev"
+  },
+  "background": {
+    "commands": "",
+    "workarounds": "",
+    "executionContext": "",
+    "task": ""
+  },
+  "assessment": null,
+  "issues": []
+}

@@ -45,7 +45,10 @@ pub enum SessionKind {
 impl SessionKind {
     /// Derive the legacy `is_attached` flag from this kind.
     pub fn is_attached(self) -> bool {
-        matches!(self, SessionKind::CdpAttached | SessionKind::ExtensionAttached)
+        matches!(
+            self,
+            SessionKind::CdpAttached | SessionKind::ExtensionAttached
+        )
     }
 
     /// Derive the legacy `attach_type` string from this kind.
@@ -158,12 +161,49 @@ impl Default for CliState {
     }
 }
 
+/// Subdirectory of `~/.browser4` holding one state namespace per development
+/// checkout (see [`resolve_default_state_dir`]).
+pub const WORKSPACES_DIR_NAME: &str = "workspaces";
+
 /// Resolve the default state directory, honouring `BROWSER4_CLI_STATE_DIR`.
+///
+/// In development mode — the CLI was invoked from a Browser4 repository
+/// checkout — every checkout gets its own state namespace
+/// (`~/.browser4/workspaces/<checkout>-<hash>/`).  Two workspaces therefore
+/// keep separate server URLs, sessions, managed-process registries and AOT
+/// caches and can run their own backends side by side instead of overwriting
+/// each other's state.  Installed (production) runs keep the flat
+/// `~/.browser4` layout.
 pub fn resolve_default_state_dir() -> PathBuf {
     if let Some(override_dir) = user_state_dir_override() {
         return override_dir;
     }
+    if let Some(workspace_dir) = dev_workspace_state_dir() {
+        return workspace_dir;
+    }
     default_home_state_dir()
+}
+
+/// The user-global state directory, ignoring the per-checkout development
+/// namespace.
+///
+/// Used by the few lookups that must stay shared across every checkout — today
+/// the legacy `~/.browser4/lib` runtime migration, which predates per-checkout
+/// namespaces.
+pub fn resolve_global_state_dir() -> PathBuf {
+    user_state_dir_override().unwrap_or_else(default_home_state_dir)
+}
+
+/// Per-checkout state directory used in development mode, or `None` when the
+/// CLI is not running from a repository checkout (or the caller overrode the
+/// state dir with `BROWSER4_CLI_STATE_DIR`).
+fn dev_workspace_state_dir() -> Option<PathBuf> {
+    let root = crate::daemon::dev_workspace_root()?;
+    Some(
+        default_home_state_dir()
+            .join(WORKSPACES_DIR_NAME)
+            .join(crate::daemon::workspace_state_slug(&root)),
+    )
 }
 
 /// `Some(path)` when `BROWSER4_CLI_STATE_DIR` is set to an accepted value
@@ -320,6 +360,20 @@ pub fn read_state(state_dir: Option<&Path>, session_name: Option<&str>) -> CliSt
     CliState::default()
 }
 
+/// True when a state file for [session_name] already exists on disk.
+///
+/// Development mode uses this to tell "this checkout never recorded a server,
+/// so it needs its own development port" from "a server URL was persisted
+/// (either by a previous run of this workspace or by `--server`), so honour
+/// it".  Mirrors [`read_state`]: the workspace-relative fallback directory is
+/// checked as well when the effective state dir is the implicit default.
+pub fn has_persisted_state(session_name: Option<&str>) -> bool {
+    if state_file(&resolve_default_state_dir(), session_name).is_file() {
+        return true;
+    }
+    is_implicit_default_dir(None) && state_file(&fallback_state_dir(), session_name).is_file()
+}
+
 /// Parse and migrate a raw state JSON string.
 fn parse_state(raw: &str) -> CliState {
     let mut state: CliState = serde_json::from_str::<CliState>(raw).unwrap_or_default();
@@ -334,10 +388,7 @@ fn migrate_legacy_kind(state: &mut CliState) {
     // Only migrate if kind is the default AND the legacy fields indicate
     // something different.
     if state.kind == SessionKind::Browser4Launched && state.is_attached {
-        state.kind = SessionKind::from_legacy(
-            state.is_attached,
-            state.attach_type.as_deref(),
-        );
+        state.kind = SessionKind::from_legacy(state.is_attached, state.attach_type.as_deref());
     }
 }
 
@@ -407,7 +458,27 @@ fn write_state_to_dir(
     state.attach_type = state.kind.attach_type_str().map(|s| s.to_string());
 
     let json = serde_json::to_string_pretty(&state).expect("state serialization should not fail");
-    fs::write(path, json)
+    atomic_write(&path, json.as_bytes())
+}
+
+/// Write bytes to `path` atomically: write to a unique temp file in the same
+/// directory, then rename over the target.
+///
+/// Readers never observe a partially written state file, and a crash cannot
+/// corrupt the previous state.  The temp file is unique per process so
+/// concurrent CLI invocations do not stomp on each other's temp files (the
+/// last rename wins, but the file itself stays intact).
+fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let tmp_path = PathBuf::from(format!("{}.{}.tmp", path.display(), std::process::id()));
+    if let Err(e) = fs::write(&tmp_path, contents) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Clear all persisted CLI state (called on `close`).
@@ -544,8 +615,9 @@ fn write_loop_state_to_dir(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(state).expect("loop state serialization should not fail");
-    fs::write(path, json)
+    let json =
+        serde_json::to_string_pretty(state).expect("loop state serialization should not fail");
+    atomic_write(&path, json.as_bytes())
 }
 
 /// Return the full path to the loop state file (for display).
@@ -856,9 +928,7 @@ fn write_loop_history_to_dir(entry: &LoopHistoryEntry, dir: &Path) -> std::io::R
     // Write back as JSONL
     let content: String = entries
         .iter()
-        .map(|e| {
-            serde_json::to_string(e).expect("LoopHistoryEntry serialization should not fail")
-        })
+        .map(|e| serde_json::to_string(e).expect("LoopHistoryEntry serialization should not fail"))
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(path, content)
@@ -911,10 +981,18 @@ pub struct AsyncTaskEntry {
     #[serde(rename = "submittedAt")]
     pub submitted_at: String,
     /// Last known status (empty until first poll).
-    #[serde(rename = "lastStatus", skip_serializing_if = "String::is_empty", default)]
+    #[serde(
+        rename = "lastStatus",
+        skip_serializing_if = "String::is_empty",
+        default
+    )]
     pub last_status: String,
     /// ISO-8601 timestamp when the task was first observed as completed (None until done).
-    #[serde(rename = "completedAt", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "completedAt",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub completed_at: Option<String>,
     /// Batch id shared by every task of one submission (None for legacy entries).
     #[serde(rename = "batchId", skip_serializing_if = "Option::is_none", default)]
@@ -1017,7 +1095,10 @@ pub fn read_async_tasks(state_dir: Option<&std::path::Path>) -> AsyncTaskList {
 }
 
 /// Save an async task list to disk, with fallback on PermissionDenied.
-pub fn write_async_tasks(list: &AsyncTaskList, state_dir: Option<&std::path::Path>) -> std::io::Result<()> {
+pub fn write_async_tasks(
+    list: &AsyncTaskList,
+    state_dir: Option<&std::path::Path>,
+) -> std::io::Result<()> {
     let path = async_tasks_path(state_dir);
 
     match write_async_tasks_to_path(list, &path) {
@@ -1038,7 +1119,7 @@ fn write_async_tasks_to_path(list: &AsyncTaskList, path: &Path) -> std::io::Resu
         std::fs::create_dir_all(parent)?;
     }
     let content = serde_json::to_string_pretty(list)?;
-    std::fs::write(path, content)
+    atomic_write(path, content.as_bytes())
 }
 
 /// Add a task to the tracked list and persist.
@@ -1077,9 +1158,7 @@ pub fn track_async_task_in_batch(
 
 /// Remove completed/failed tasks from the tracked list.
 #[allow(dead_code)]
-pub fn prune_async_tasks(
-    state_dir: Option<&std::path::Path>,
-) -> std::io::Result<usize> {
+pub fn prune_async_tasks(state_dir: Option<&std::path::Path>) -> std::io::Result<usize> {
     let mut list = read_async_tasks(state_dir);
     let before = list.tasks.len();
     list.tasks.retain(|entry| {
@@ -1152,9 +1231,25 @@ pub fn format_async_task_list(
     let paginated = limit < total || offset > 0;
 
     // Column widths (capped for readability)
-    let id_w = page.iter().map(|t| t.task_id.len()).max().unwrap_or(8).max(8).min(12);
-    let cmd_w = page.iter().map(|t| t.command.len()).max().unwrap_or(7).max(7);
-    let desc_w = page.iter().map(|t| t.description.len()).max().unwrap_or(11).min(40);
+    let id_w = page
+        .iter()
+        .map(|t| t.task_id.len())
+        .max()
+        .unwrap_or(8)
+        .max(8)
+        .min(12);
+    let cmd_w = page
+        .iter()
+        .map(|t| t.command.len())
+        .max()
+        .unwrap_or(7)
+        .max(7);
+    let desc_w = page
+        .iter()
+        .map(|t| t.description.len())
+        .max()
+        .unwrap_or(11)
+        .min(40);
     let desc_w = desc_w.max(11);
     let status_w = page
         .iter()
@@ -1201,12 +1296,15 @@ pub fn format_async_task_list(
         // Collapse whitespace and replace newlines so the description stays on
         // one line and doesn't break table formatting.  Agent task descriptions
         // can contain embedded \n from multi-line user input.
-        let mut desc = entry.description
+        let mut desc = entry
+            .description
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        if desc.len() > desc_w {
-            desc = format!("{}…", &desc[..desc_w - 1]);
+        if desc.chars().count() > desc_w {
+            // Truncate on char boundaries — byte slicing panics on multi-byte
+            // UTF-8 (e.g. Chinese task descriptions).
+            desc = format!("{}…", desc.chars().take(desc_w - 1).collect::<String>());
         };
         let status = if entry.last_status.is_empty() {
             "pending".to_string()
@@ -1248,14 +1346,11 @@ pub fn format_async_task_list(
         if remaining > 0 {
             out.push(format!(
                 "\n  ... {} more task(s). Use --offset {} to see the next page.",
-                remaining,
-                showing
+                remaining, showing
             ));
         }
     } else if total > 20 {
-        out.push(
-            "\n  Hint: Use --limit N to paginate large lists.".to_string(),
-        );
+        out.push("\n  Hint: Use --limit N to paginate large lists.".to_string());
     }
 
     out.join("\n")
@@ -1315,7 +1410,11 @@ pub fn summarize_async_tasks(tasks: &[AsyncTaskEntry]) -> String {
 pub fn format_timestamp_display(iso: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(iso)
         .or_else(|_| chrono::DateTime::parse_from_rfc3339(&format!("{}Z", iso)))
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
         .unwrap_or_else(|_| iso.chars().take(19).collect())
 }
 
@@ -1329,7 +1428,11 @@ pub fn epoch_millis_to_display(millis: i64) -> String {
     let secs = millis / 1000;
     let nanos = ((millis % 1000) * 1_000_000) as u32;
     chrono::DateTime::from_timestamp(secs, nanos)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
         .unwrap_or_else(|| "-".to_string())
 }
 
@@ -1690,8 +1793,13 @@ mod tests {
     #[test]
     fn test_track_async_task_adds_entry() {
         let tmp = test_temp_dir();
-        track_async_task("crawl-job-1", "crawl", "https://example.com", Some(tmp.path()))
-            .unwrap();
+        track_async_task(
+            "crawl-job-1",
+            "crawl",
+            "https://example.com",
+            Some(tmp.path()),
+        )
+        .unwrap();
 
         let list = read_async_tasks(Some(tmp.path()));
         assert_eq!(list.tasks.len(), 1);
@@ -1847,13 +1955,20 @@ mod tests {
         // "new" must appear before "old" in the output
         let new_pos = output.find("new").unwrap();
         let old_pos = output.find("old").unwrap();
-        assert!(new_pos < old_pos, "latest task should appear first, but 'new' at {new_pos} is after 'old' at {old_pos}");
+        assert!(
+            new_pos < old_pos,
+            "latest task should appear first, but 'new' at {new_pos} is after 'old' at {old_pos}"
+        );
     }
 
     /// Helper: format a UTC RFC 3339 timestamp as it would appear in local time display.
     fn local_display(utc_rfc3339: &str) -> String {
         chrono::DateTime::parse_from_rfc3339(utc_rfc3339)
-            .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+            .map(|dt| {
+                dt.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
             .unwrap_or_else(|_| utc_rfc3339.chars().take(19).collect())
     }
 
@@ -1873,10 +1988,20 @@ mod tests {
         let output = format_async_task_list(&list, None, None);
         // Started column — should show local time
         let expected_started = local_display("2026-07-22T14:00:00+00:00");
-        assert!(output.contains(&expected_started), "expected started time '{}' in output:\n{}", expected_started, output);
+        assert!(
+            output.contains(&expected_started),
+            "expected started time '{}' in output:\n{}",
+            expected_started,
+            output
+        );
         // Finished column — should show the timestamp, not "-"
         let expected_finished = local_display("2026-07-22T14:05:30+00:00");
-        assert!(output.contains(&expected_finished), "expected finished time '{}' in output:\n{}", expected_finished, output);
+        assert!(
+            output.contains(&expected_finished),
+            "expected finished time '{}' in output:\n{}",
+            expected_finished,
+            output
+        );
     }
 
     #[test]
@@ -1895,12 +2020,19 @@ mod tests {
         let output = format_async_task_list(&list, None, None);
         // Started should show local time
         let expected_started = local_display("2026-07-22T16:00:00+00:00");
-        assert!(output.contains(&expected_started), "expected started time '{}' in output:\n{}", expected_started, output);
+        assert!(
+            output.contains(&expected_started),
+            "expected started time '{}' in output:\n{}",
+            expected_started,
+            output
+        );
         // Finished should show "-" for unfinished tasks
         let needle = &expected_started;
         let after_started = &output[output.find(needle).unwrap() + needle.len()..];
-        assert!(after_started.trim().starts_with("-") || after_started.contains("  -  "),
-                "unfinished task should show '-' in FINISHED column");
+        assert!(
+            after_started.trim().starts_with("-") || after_started.contains("  -  "),
+            "unfinished task should show '-' in FINISHED column"
+        );
     }
 
     #[test]
@@ -2019,7 +2151,12 @@ mod tests {
             None,
         );
         let expected = local_display("2026-07-22T12:00:00Z");
-        assert!(output.contains(&expected), "expected local time '{}' in output:\n{}", expected, output);
+        assert!(
+            output.contains(&expected),
+            "expected local time '{}' in output:\n{}",
+            expected,
+            output
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2151,7 +2288,11 @@ mod tests {
 
     #[test]
     fn test_summarize_all_completed() {
-        let tasks = vec![entry("agent", "completed"), entry("crawl", "completed"), entry("swarm", "completed")];
+        let tasks = vec![
+            entry("agent", "completed"),
+            entry("crawl", "completed"),
+            entry("swarm", "completed"),
+        ];
         let result = summarize_async_tasks(&tasks);
         assert!(result.contains("3 total"));
         assert!(result.contains("3 completed"));

@@ -18,12 +18,10 @@
     and creates + pushes a vX.Y.Z tag that triggers the release workflow.
 
     main is the single release source: the tag must be created from the latest
-    origin/main commit. Maintenance releases may also be tagged from the tip of
-    the matching X.Y.x branch (e.g. v4.13.12 → origin/4.13.x). The script
-    verifies HEAD matches origin/main or the matching maintenance branch and
-    warns (asking for confirmation in -Apply mode) when it does not — release.yml
-    hard-fails any release whose tag is off both, so the workflow never
-    rewrites main to match a tag.
+    origin/main commit. The script verifies HEAD matches origin/main and warns
+    (asking for confirmation in -Apply mode) when it does not — release.yml
+    hard-fails any release whose tag does not point at the latest main, so the
+    workflow never rewrites main to match a tag.
 
     By default the script runs in DRY RUN mode: it performs all read-only
     checks, previews the tag and release notes, and exits without changing
@@ -39,15 +37,14 @@
     kimi, codex, dsh, copilot). The combined notes are used as the annotated
     tag message (unless -message is given) and shown as a preview.
 
+    Non-interactive hosts (CI/automation): set BROWSER4_RELEASE_YES=1 to
+    auto-confirm every prompt and to auto-skip the release-message prompt
+    (Read-Host throws in NonInteractive PowerShell). The pre-rename name
+    BROWSER4_RELEASE_ASSUME_YES is still honoured as a legacy alias;
+    BROWSER4_RELEASE_YES wins when both are set.
+
 .PARAMETER remote
     The git remote to push the tag to (default: "origin").
-
-.NOTES
-    Non-interactive hosts (CI/automation): set BROWSER4_RELEASE_ASSUME_YES=1
-    to auto-confirm every interactive prompt instead of calling Read-Host
-    (which throws in NonInteractive PowerShell). Pairs with
-    monitor-release.ps1 -NoWatch. The release-message prompt auto-skips,
-    producing a lightweight tag unless -message is given.
 
 .PARAMETER message
     Explicit release message for the annotated tag. Takes precedence over
@@ -69,10 +66,27 @@
     invokes an AI agent. A pinned backend overrides $env:BROWSER4_AGENT and the
     config.psd1 backend order for this invocation.
 
+.PARAMETER SyncMain
+    When HEAD is ahead of origin/main (fast-forward possible), automatically
+    fast-forward main to HEAD — switch main, merge --ff-only the current
+    branch, push, switch back — before tagging. Releases must be tagged from
+    the latest main (release.yml enforces it), so this makes releasing from a
+    dev branch a single command. Without it the script warns and asks for
+    confirmation when HEAD is off main.
+
+.PARAMETER Force
+    Allow overwriting an existing tag. Overwriting is destructive — deleting
+    and re-pushing a tag can re-trigger the release workflow, and the workflow
+    fails if a GitHub release for that tag already exists. -Force is required
+    even under BROWSER4_RELEASE_YES: automation must opt in deliberately
+    instead of auto-confirming the overwrite.
+
 .EXAMPLE
     .\bin\release\trigger-release.ps1                       # dry run (preview only)
     .\bin\release\trigger-release.ps1 -Apply                # actually create + push
     .\bin\release\trigger-release.ps1 -Apply -message "Hotfix for login crash"
+    .\bin\release\trigger-release.ps1 -Apply -SyncMain      # auto-fast-forward main first
+    .\bin\release\trigger-release.ps1 -Apply -Force         # overwrite an existing tag
     .\bin\release\trigger-release.ps1 -Agent auto           # dry run, AI notes (auto backend)
     .\bin\release\trigger-release.ps1 -Agent dsh            # dry run, AI notes via dsh
 #>
@@ -82,6 +96,8 @@ param(
     [string]$message = "",
     [switch]$Apply,
     [switch]$DryRun,
+    [switch]$SyncMain,
+    [switch]$Force,
     [ValidateSet('auto', 'claude', 'kimi', 'codex', 'dsh', 'copilot')]
     [string]$Agent = ""
 )
@@ -91,18 +107,6 @@ $ErrorActionPreference = "Stop"
 # Dry run is the default. -Apply opts into real execution; -DryRun is an
 # explicit (redundant) confirmation of the default.
 $isDryRun = $DryRun -or -not $Apply
-
-# Non-interactive confirmation: when BROWSER4_RELEASE_ASSUME_YES=1, every
-# interactive prompt auto-confirms (used by CI/automation — pairs with
-# monitor-release.ps1 -NoWatch). Read-Host throws in NonInteractive hosts.
-function Confirm-ReleasePrompt {
-    param([string]$Prompt)
-    if ($env:BROWSER4_RELEASE_ASSUME_YES -eq '1') {
-        Write-Host "$Prompt [auto-confirmed: BROWSER4_RELEASE_ASSUME_YES=1]"
-        return 'y'
-    }
-    return Read-Host $Prompt
-}
 
 # AI release notes are opt-in via -Agent. Any non-empty value (auto or a
 # pinned backend name) enables them; ValidateSet guards the allowed values.
@@ -117,6 +121,43 @@ if ($Agent -and $Agent -ne 'auto') {
 
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
 Set-Location $repoRoot
+
+# ── Non-interactive confirmation ────────────────────────────────────
+# Every prompt routes through Confirm-Step. When the non-interactive flag
+# is set (CI / automation / non-TTY shells), all prompts auto-confirm
+# (or auto-skip for the optional release message) instead of calling
+# Read-Host, which fails in NonInteractive mode.
+#
+# Two names are honoured. BROWSER4_RELEASE_YES is the canonical switch;
+# BROWSER4_RELEASE_ASSUME_YES is the name the first implementation shipped
+# (2b5b3581da) and the name bin/release/README.md kept documenting after the
+# rename (c214e2d4a8). Automation written against those docs would otherwise
+# fall through to Read-Host and die in a NonInteractive host, so the alias
+# keeps working, with a migration hint. The canonical name wins when both
+# are set.
+function Get-NonInteractiveFlag {
+    if ($env:BROWSER4_RELEASE_YES) { return 'BROWSER4_RELEASE_YES' }
+    if ($env:BROWSER4_RELEASE_ASSUME_YES) { return 'BROWSER4_RELEASE_ASSUME_YES' }
+    return ''
+}
+
+if (-not $env:BROWSER4_RELEASE_YES -and $env:BROWSER4_RELEASE_ASSUME_YES) {
+    Write-Warning "BROWSER4_RELEASE_ASSUME_YES is a legacy alias - prefer BROWSER4_RELEASE_YES (see bin/release/README.md)."
+}
+
+function Confirm-Step {
+    param([string]$Prompt, [string]$Default = '')
+    if (Get-NonInteractiveFlag) {
+        # A caller that passes -Default (the release-message prompt passes '')
+        # wants exactly that value on a non-interactive host - auto-skip.
+        # Testing the *presence* of the parameter instead of its truthiness is
+        # what makes an empty default mean "skip" instead of falling through
+        # to 'y' and annotating the tag with a literal "y".
+        if ($PSBoundParameters.ContainsKey('Default')) { return $Default }
+        return 'y'
+    }
+    return Read-Host $Prompt
+}
 
 # Import common utility script
 . (Join-Path $repoRoot "bin" "common" "Util.ps1")
@@ -149,7 +190,7 @@ $status = git status --porcelain
 if ($status) {
     Write-Warning "Uncommitted changes detected"
     if (-not $isDryRun) {
-        $continue = Confirm-ReleasePrompt "Continue anyway? (y/n)"
+        $continue = Confirm-Step "Continue anyway? (y/n)"
         if ($continue -ne 'y') {
             Write-Host "Cancelled"
             exit 0
@@ -162,38 +203,115 @@ if ($status) {
 # origin/main. main is the single release source — release.yml verifies
 # the tag points at the latest origin/main and aborts the workflow
 # otherwise. Fail fast here instead of pushing a tag that CI will reject.
+#
+# When the current branch is ahead of main (fast-forward possible),
+# -SyncMain automates the sync: switch main → merge --ff-only → push →
+# switch back — so releasing from a dev branch is a single command.
 # ═══════════════════════════════════════════════════════════════════
 
 Write-Host ""
-Write-Host "Verifying HEAD is the latest $remote/main (or the matching X.Y.x maintenance branch) ..."
+Write-Host "Verifying HEAD is the latest $remote/main ..."
 git fetch $remote main 2>$null
+$fetchExit = $LASTEXITCODE
+if ($null -eq $fetchExit) { $fetchExit = -1 }
 
 $headSha = git rev-parse HEAD
 $mainSha = git rev-parse "$remote/main" 2>$null
+$mainResolved = ($null -ne $mainSha -and $mainSha)
 
-if ($null -eq $mainSha -or -not $mainSha) {
-    Write-Warning "Could not resolve $remote/main (fetch failed?). Skipping main-branch check."
-} elseif ($headSha -ne $mainSha) {
-    # Maintenance-line allowance: a release may also be tagged from the tip
-    # of the matching X.Y.x maintenance branch (mirrors release.yml).  The
-    # branch is derived from VERSION, e.g. v4.13.12 → origin/4.13.x.
-    $maintAllowed = $false
-    $releaseVersion = ((Get-Content "VERSION" -ErrorAction SilentlyContinue).Trim() -replace '-SNAPSHOT$', '')
-    if ($releaseVersion -match '^(\d+\.\d+)\.\d+$') {
-        $maintBranch = "$remote/$($Matches[1]).x"
-        git fetch $remote $Matches[1].x 2>$null
-        $maintSha = git rev-parse $maintBranch 2>$null
-        if ($maintSha -and $headSha -eq $maintSha) {
-            $maintAllowed = $true
-            Write-Host "[OK] HEAD is the latest $maintBranch ($maintSha)"
-        }
+if (-not $mainResolved -or $fetchExit -ne 0) {
+    # The main-branch guard is the core release invariant — release.yml
+    # hard-fails any tag that is not on the latest origin/main. It must never
+    # be skipped silently: an Apply run aborts here (the pushed tag would be
+    # rejected by CI anyway); a dry run warns and continues the preview
+    # because nothing is pushed in preview mode.
+    $why = if (-not $mainResolved) {
+        "Could not resolve $remote/main (git fetch exit code $fetchExit)."
+    } else {
+        "git fetch $remote main failed (exit code $fetchExit) — $remote/main may be stale."
     }
-    if (-not $maintAllowed) {
+    if ($isDryRun) {
+        Write-Warning "$why Dry-run preview continues unverified — run -Apply only when $remote is reachable."
+    } else {
+        Write-Error "$why Aborting: a tag pushed without verification would be rejected by release.yml."
+        exit 1
+    }
+} elseif ($headSha -ne $mainSha) {
+    # Can HEAD fast-forward main? (origin/main must be an ancestor of HEAD)
+    git merge-base --is-ancestor $mainSha $headSha 2>$null
+    $ffOk = ($LASTEXITCODE -eq 0)
+
+    if ($ffOk -and $SyncMain) {
+        if ($isDryRun) {
+            Write-Host "HEAD is ahead of $remote/main — would fast-forward main to HEAD (-SyncMain):" -ForegroundColor Cyan
+            Write-Host "  git switch main; git merge --ff-only $(git rev-parse --abbrev-ref HEAD); git push $remote main; switch back" -ForegroundColor DarkGray
+        } else {
+            Write-Host "HEAD is ahead of $remote/main — fast-forwarding main to HEAD (-SyncMain) ..." -ForegroundColor Cyan
+            $currentBranch = git rev-parse --abbrev-ref HEAD
+            git show-ref --verify --quiet refs/heads/main
+            $hadLocalMain = ($LASTEXITCODE -eq 0)
+
+            # Native git commands do NOT throw under $ErrorActionPreference =
+            # "Stop", so try/catch cannot catch a failed step. Every step
+            # checks $LASTEXITCODE explicitly; on failure we still try to
+            # switch back to the original branch before exiting.
+            $syncFailed = ''
+            if ($hadLocalMain) { git switch main } else { git switch -c main "$remote/main" }
+            if ($LASTEXITCODE -ne 0) { $syncFailed = "git switch to main failed (exit code $LASTEXITCODE)" }
+            if (-not $syncFailed) {
+                git merge --ff-only $currentBranch
+                if ($LASTEXITCODE -ne 0) { $syncFailed = "git merge --ff-only $currentBranch failed (exit code $LASTEXITCODE)" }
+            }
+            if (-not $syncFailed) {
+                git push $remote main
+                if ($LASTEXITCODE -ne 0) { $syncFailed = "git push $remote main failed (exit code $LASTEXITCODE)" }
+            }
+
+            git switch $currentBranch 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Could not switch back to $currentBranch — you are still on main. Run: git switch $currentBranch"
+            }
+
+            if ($syncFailed) {
+                Write-Error "SyncMain failed: $syncFailed"
+                exit 1
+            }
+
+            git fetch $remote main 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Re-fetch after sync failed — verifying against the local tracking ref (updated by the push)."
+            }
+            $mainSha = git rev-parse "$remote/main"
+            if ($headSha -ne $mainSha) {
+                Write-Error "SyncMain verification failed: $remote/main is still not at HEAD after sync."
+                exit 1
+            }
+            Write-Host "[OK] $remote/main fast-forwarded to HEAD ($mainSha)" -ForegroundColor Green
+        }
+    } elseif ($ffOk) {
         Write-Warning "HEAD ($headSha) does not match $remote/main ($mainSha)."
-        Write-Warning "Releases must be tagged from the latest main (or the matching X.Y.x maintenance branch) — release.yml will abort the workflow otherwise."
-        Write-Warning "Run 'git checkout main && git pull' (or push your commits to main) before tagging."
+        Write-Warning "Releases must be tagged from the latest main commit — release.yml will abort the workflow if the tag is off main."
+        Write-Warning "HEAD is ahead of main: pass -SyncMain to fast-forward main automatically (or push to main manually)."
         if (-not $isDryRun) {
-            $continue = Confirm-ReleasePrompt "Continue anyway? (y/n)"
+            $continue = Confirm-Step "Continue anyway? (y/n)"
+            if ($continue -ne 'y') {
+                Write-Host "Cancelled"
+                exit 0
+            }
+        }
+    } else {
+        # main has commits not in HEAD: main cannot be fast-forwarded. The
+        # release can still proceed from this branch (release.yml accepts
+        # release-branch tags), but the drift must be surfaced so main gets
+        # merged back afterwards — otherwise it silently rots.
+        $mainAhead = git rev-list --count "HEAD..$remote/main" 2>$null
+        if (-not $mainAhead) { $mainAhead = '?' }
+        Write-Warning "⚠  Drift: $remote/main is ahead of this branch by $mainAhead commit(s) — main has commits that never flowed through $(git rev-parse --abbrev-ref HEAD):"
+        git log --oneline --no-merges "HEAD..$remote/main" 2>$null | Select-Object -First 10 | ForEach-Object { Write-Warning "      $_" }
+        Write-Warning "    The release continues from this branch, but afterwards run:"
+        Write-Warning "      git merge $remote/main   (merge main back into this branch)"
+        if (-not $isDryRun) {
+            $continue = Confirm-Step "Continue with the release anyway? (y/n)"
             if ($continue -ne 'y') {
                 Write-Host "Cancelled"
                 exit 0
@@ -266,7 +384,7 @@ try {
         Write-Host $checkOutput
     }
     if (-not $isDryRun) {
-        $confirm = Confirm-ReleasePrompt "Continue anyway? (y/n)"
+        $confirm = Confirm-Step "Continue anyway? (y/n)"
         if ($confirm -ne 'y') {
             Write-Host "Cancelled"
             exit 0
@@ -313,7 +431,7 @@ if ($parseOk) {
         }
 
         if (-not $isDryRun) {
-            $confirm = Confirm-ReleasePrompt "Continue anyway? (y/n)"
+            $confirm = Confirm-Step "Continue anyway? (y/n)"
             if ($confirm -ne 'y') {
                 Write-Host "Cancelled"
                 exit 0
@@ -329,11 +447,43 @@ $newTag = "v$version"
 $existingTag = git tag -l $newTag
 if ($existingTag) {
     if ($isDryRun) {
-        Write-Warning "Tag '$newTag' already exists (would be overwritten with -Apply)."
+        Write-Warning "Tag '$newTag' already exists (would be overwritten with -Apply -Force)."
     } else {
+        # Overwriting a tag is destructive — deleting + re-pushing can
+        # re-trigger the release workflow or collide with an existing GitHub
+        # release. It therefore requires an explicit -Force, which is NOT
+        # auto-granted by BROWSER4_RELEASE_YES: automation must opt in.
+        if (-not $Force) {
+            Write-Error "Tag '$newTag' already exists. Pass -Force to overwrite it — without it the script refuses to touch an existing tag."
+            exit 1
+        }
         Write-Host "Tag '$newTag' already exists"
 
-        $confirm = Confirm-ReleasePrompt "Do you want to overwrite it? (y/n)"
+        # If the remote tag has already been consumed by a GitHub release,
+        # overwriting it will re-trigger release.yml against an existing
+        # release and the workflow fails. Best-effort check via gh.
+        $remoteTag = git ls-remote --tags $remote "refs/tags/$newTag" 2>$null
+        if ($remoteTag) {
+            $releaseExists = $false
+            try {
+                gh release view $newTag 2>$null | Out-Null
+                $releaseExists = ($LASTEXITCODE -eq 0)
+            } catch {
+                Write-Warning "Could not verify GitHub release status for '$newTag' (gh unavailable?) — overwriting may re-trigger the workflow."
+            }
+            if ($releaseExists) {
+                Write-Warning "A GitHub release for '$newTag' already exists."
+                $confirm = Confirm-Step "Overwrite anyway? The re-triggered workflow may fail. (y/n)"
+                if ($confirm -ne 'y') {
+                    Write-Host "Cancelled"
+                    exit 0
+                }
+            } else {
+                Write-Warning "Remote tag '$newTag' exists on $remote — deleting and re-pushing it may re-trigger the release workflow."
+            }
+        }
+
+        $confirm = Confirm-Step "Do you want to overwrite it? (y/n)"
         if ($confirm -ne 'y') {
             Write-Host "Cancelled"
             exit 0
@@ -341,12 +491,13 @@ if ($existingTag) {
         try {
             # Delete local tag
             git tag -d $newTag
+            if ($LASTEXITCODE -ne 0) { throw "git tag -d failed (exit code $LASTEXITCODE)" }
             Write-Host "Deleted local tag: $newTag"
 
             # Delete remote tag if it exists
-            $remoteTag = git ls-remote --tags $remote "refs/tags/$newTag" 2>$null
             if ($remoteTag) {
                 git push $remote --delete $newTag
+                if ($LASTEXITCODE -ne 0) { throw "git push --delete failed (exit code $LASTEXITCODE)" }
                 Write-Host "Deleted remote tag: $newTag"
             }
         } catch {
@@ -375,8 +526,11 @@ function Get-TagSortKey {
     }
 }
 
-# Get previous tag for release notes (supports vX.Y.Z and X.Y.Z-rc.N)
-$tagCandidates = git tag --list | Where-Object { $_ -match '^(v\d+\.\d+\.\d+|\d+\.\d+\.\d+-rc\.\d+)$' }
+# Get previous tag for release notes. The filter must accept the v-prefixed
+# rc form (vX.Y.Z-rc.N): this script itself creates tags as "v$version", so an
+# rc release was previously never picked as the previous tag — release notes
+# spanned back to the last full release instead of the previous rc.
+$tagCandidates = git tag --list | Where-Object { $_ -match '^v?\d+\.\d+\.\d+(-rc\.\d+)?$' }
 $prevTag = $tagCandidates |
         ForEach-Object {
             $key = Get-TagSortKey $_
@@ -417,7 +571,11 @@ if ($prevTag) {
 # function scopes the defined functions to that function only, so
 # Invoke-Agent would not be visible to Invoke-ReleaseNotesAgent below
 # (it failed with: "The term 'Invoke-Agent' is not recognized").
-$script:AgentScriptPath = Join-Path $repoRoot 'coworker\scripts\workers\agent.ps1'
+# Forward slashes on purpose: Join-Path does not translate backslashes on
+# Linux/macOS, and a literal backslash path makes Test-Path -LiteralPath fail —
+# which would silently disable the -Agent feature there (same cross-platform
+# pitfall documented in monitor-release.ps1).
+$script:AgentScriptPath = Join-Path $repoRoot 'coworker/scripts/workers/agent.ps1'
 $script:AgentHelpersLoaded = $false
 if (Test-Path -LiteralPath $script:AgentScriptPath) {
     try {
@@ -642,7 +800,7 @@ if ($isDryRun) {
     Write-Host "  Tag type:      $tagType"
     Write-Host "  Remote:        $remote"
     if ($existingTag) {
-        Write-Host "  Note:          tag '$newTag' already exists (would be overwritten)" -ForegroundColor Yellow
+        Write-Host "  Note:          tag '$newTag' already exists (would be overwritten with -Apply -Force)" -ForegroundColor Yellow
     }
     if ($agentUsed) {
         Write-Host "  Release notes: What's New (AI via $($script:ReleaseAgent.Backend)) + commit sections" -ForegroundColor Green
@@ -662,19 +820,13 @@ if ($isDryRun) {
 # ── APPLY: prompt for message if still missing, then create + push ──────
 if ([string]::IsNullOrWhiteSpace($effectiveMessage)) {
     Write-Host ""
-    if ($env:BROWSER4_RELEASE_ASSUME_YES -eq '1') {
-        # Non-interactive: no message → lightweight tag (same as pressing Enter).
-        $effectiveMessage = ""
-        Write-Host "Enter release message (optional, press Enter to skip) [auto-skip: BROWSER4_RELEASE_ASSUME_YES=1]"
-    } else {
-        $effectiveMessage = Read-Host "Enter release message (optional, press Enter to skip)"
-    }
+    $effectiveMessage = Confirm-Step "Enter release message (optional, press Enter to skip)" ''
     $tagType = if ([string]::IsNullOrWhiteSpace($effectiveMessage)) { "lightweight" } else { "annotated" }
 }
 
 # Confirm creation
 Write-Host ""
-$confirm = Confirm-ReleasePrompt "Create and push $tagType tag '$newTag'? (y/n)"
+$confirm = Confirm-Step "Create and push $tagType tag '$newTag'? (y/n)"
 if ($confirm -ne 'y') {
     Write-Host "Cancelled"
     exit 0

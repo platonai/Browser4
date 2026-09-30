@@ -20,10 +20,12 @@ class AgentMessageList(
     val instruction get() = find("instruction") ?: find("user_request")
 
     fun addSystem(message: String, name: String? = null) {
+        if (message.isBlank()) return
         addLast("system", message, name)
     }
 
     fun addUser(message: String, name: String? = null) {
+        if (message.isBlank()) return
         addLast("user", message, name)
     }
 

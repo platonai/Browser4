@@ -42,11 +42,12 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 
 ### ✨ Key Capabilities
 
-* 🤖 **Agent Browser** — Browser automation CLI for AI agents.
-* ⚙️ **Machine Learning Agent** — Turns complex pages into Excel/structured data without consuming tokens.
-* ⚡ **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
-* 🧬 **Data Extraction** — Hybrid of LLM, ML, X-SQL and selectors for clean data across chaotic pages.
-* 📦 **And More** - Swarm scraping, crawl, batch, loop, stateful sessions, page storage, extension, plugins, and more.
+* 🤖 **Agent Browser** — AI agents and humans drive real browsers via a Rust CLI, MCP, and an agentic backend: navigate, click, fill, snapshot, batch, and loop.
+* 🧬 **Zero-Token Extraction** — X-SQL + CSS selectors for deterministic extraction from live pages or stored HTML snapshots; WebMiner ML clustering turns HTML corpora into spreadsheet and report views with no LLM tokens.
+* 🧠 **Hybrid Intelligence** — Combine LLM extraction, ML clustering, X-SQL, and a progressive experience store that reuses learned selectors and blockers.
+* ⚡ **High-Performance Runtime** — Coroutine-safe, CDP-native engine designed for 100k–200k complex page visits per machine per day via swarm/crawl scale-out.
+* 📦 **Enterprise-Scale Automation** — Swarm crawling, batch/loop jobs, stateful sessions, plugins, runtime skills, browser extension, and MCP-over-HTTP.
+* 🛠️ **Programming-Agent Kernel** — 50+ `coding.*` tools (sandboxed shell/fs, scaffolding, validation, self-development) for agents building Browser4 artifacts — or Browser4 itself.
 
 ## Quick Start
 
@@ -282,6 +283,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `doctor` | Run diagnostics: build info, LLM status, stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`. |
 | `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
 | `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
+| `doctor status [--section <name>] [--verbose]` | Print the aggregated status panel report in the terminal: summary layer by default, full detail with `--verbose`, one report with `--section` (health, build, runtime, llm, sessions, pulsar-sessions, swarm, url-pool, browsers, drivers, privacy, plugins, skills, metrics, logs), machine-readable JSON with `--json`. |
 | `delete-data` | Delete session data. |
 | `install` | Install the Browser4 runtime bundle. Supports `--tag <version>` and `--force`. |
 | `upgrade` | Upgrade the CLI/runtime bundle. Supports `--tag <version>` and `--force`. |
@@ -293,6 +295,7 @@ browser4-cli attach --cdp chrome
 browser4-cli doctor --verbose
 browser4-cli doctor log server.log --tail
 browser4-cli doctor metrics grep request
+browser4-cli doctor status --section skills --verbose
 ```
 
 #### Navigation
@@ -503,6 +506,30 @@ browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60
 browser4-cli loop --list
 ```
 
+#### Network inspection, HAR recording & request routing
+
+Inspect what the page actually loaded (XHR/fetch calls, status codes, headers,
+response bodies), record a HAR 1.2 archive importable by Chrome DevTools, and
+route (mock/abort) matching requests. See
+[`skills/browser4-cli/references/network.md`](../skills/browser4-cli/references/network.md)
+for the full guide.
+
+| Command | Description |
+|---|---|
+| `network requests` | List tracked requests. Supports `--filter`, `--type`, `--method`, `--status` (`200`, `2xx`, `400-499`), `--clear`. |
+| `network request <id>` | Full detail of one request: headers, timing, and the response body (fetched on demand). |
+| `network har start [--content <mode>]` | Start a HAR recording. Content mode: `none`, `text`, or `all` (binary base64). |
+| `network har stop [path]` | Stop recording and print the HAR JSON, or write it to a `.har` file when a path is given. |
+| `network route <pattern> --body <text>\|--abort` | Intercept matching requests (mock response or fail them) via CDP Fetch. Supports `--content-type`, `--resource-type`. |
+| `network unroute [pattern]` | Remove routes; without a pattern, disable interception entirely. |
+
+```bash
+browser4-cli network requests --filter api --status 2xx
+browser4-cli network har start --content text
+browser4-cli network har stop ./capture.har
+browser4-cli network route "**/api/users" --body '{"users":[]}' --content-type application/json
+```
+
 #### Swarm and crawl for scale
 
 The `co` prefix is accepted as an alias for `swarm`.
@@ -610,11 +637,23 @@ CLI state lives under `~/.browser4` unless overridden.
 
 The runtime bundle is stored separately in a platform-conventional application-data directory, so clearing session state does not force a re-download of Browser4 itself.
 
+### Exit codes
+
+| Code | Meaning |
+|---:|---|
+| `0` | Success — the command completed successfully. |
+| `1` | Internal error — unexpected failure. |
+| `2` | Usage error — invalid arguments, unknown command, bad URL, missing required arguments. |
+| `3` | Session error — no active session, the session expired, or a session conflict. |
+| `4` | Server error — the server is unreachable, the health check timed out, or daemon startup failed. |
+| `5` | Batch partial failure — one or more commands in a batch failed; the batch itself was processed. |
+| `6` | Partial failure — the command completed but one or more items failed (e.g. `crawl` pages that failed to fetch or extract); results are partial. |
+
 ---
 
 ## 🚀 Build from Source
 
-**Prerequisites:** Git, JDK 17+ (21+ recommended), Chrome/Chromium, and PowerShell 7 (Linux/macOS only). For the full prerequisites table, platform-specific tools, and Chrome auto-detection paths, see [Build from Source](docs/build-from-source.md).
+**Prerequisites:** Git, JDK 25+ (Eclipse Temurin), Chrome/Chromium, and PowerShell 7 (Linux/macOS only). For the full prerequisites table, platform-specific tools, and Chrome auto-detection paths, see [Build from Source](docs/build-from-source.md).
 
 1. **Clone the repository**
    ```shell

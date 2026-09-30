@@ -49,7 +49,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * By default, E2ETest tagged tests are excluded from normal test runs. To run them:
  * ```bash
- * ./mvnw test -P all-main-modules -pl :pulsar-e2e-tests -am -Dtest=SkillInstallE2ETest
+ * ./mvnw test -P all-main-modules -pl :browser4-e2e-tests -am -Dtest=SkillInstallE2ETest
  * ```
  *
  * Or run all E2E tests:

@@ -13,6 +13,7 @@ import ai.platon.pulsar.api.model.TabState
 import ai.platon.pulsar.common.MessageWriter
 import ai.platon.pulsar.common.getLogger
 import kotlinx.coroutines.withTimeout
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
 import java.util.*
@@ -234,7 +235,7 @@ class AgentStateManager(
     ): ExecutionContext {
         val sessionId = baseContext?.sessionId ?: UUID.randomUUID().toString()
         val prevAgentState = baseContext?.agentState
-        val currentAgentState = getAgentState(instruction, step, prevAgentState)
+        val currentAgentState = getAgentState(instruction, step, sessionId, prevAgentState)
 
         if (baseContext != null) {
             require(instruction == baseContext.instruction) { "Instruction should be the same as base context. instruction=$instruction vs baseInstruction=${baseContext.instruction}" }
@@ -272,12 +273,18 @@ class AgentStateManager(
         return context
     }
 
-    suspend fun getAgentState(instruction: String, step: Int, prevAgentState: AgentState? = null): AgentState {
+    suspend fun getAgentState(
+        instruction: String,
+        step: Int,
+        sessionId: String? = null,
+        prevAgentState: AgentState? = null
+    ): AgentState {
         val browserUseState = getBrowserUseState()
         val agentState = AgentState(
             instruction = instruction,
             step = step,
             browserUseState = browserUseState,
+            sessionId = sessionId,
             prevState = prevAgentState
         )
         return agentState
@@ -301,7 +308,13 @@ class AgentStateManager(
 
         require(context.agentState.toolCallResult?.actionDescription == context.agentState.actionDescription)
 
-        updateAgentState(context, observeElement, toolCall, toolCallResult, description)
+        // Forward the action-level exception (e.g. tool execution failure) so the state
+        // carries a proper success/failure signal: isSuccess/hasErrors/toString all rely
+        // on it. Without this, failed actions were recorded as successful states.
+        updateAgentState(
+            context, observeElement, toolCall, toolCallResult, description,
+            exception = detailedActResult.exception
+        )
 
         writeActionResult(context, detailedActResult)
     }
@@ -402,6 +415,12 @@ class AgentStateManager(
         MessageWriter.writeOnce(sessionLogDir.resolve(jsonFileName), context.toJson())
     }
 
+    /**
+     * Appends one JSON line per state snapshot to `state-history.jsonl` (one line for the
+     * pre-action state at context creation, one after [updateAgentState]). This file is an
+     * audit stream of ALL state snapshots — it is NOT the per-step history. The canonical
+     * per-step history lives in `history.jsonl` (see [writeHistory]).
+     */
     fun writeAgentState(state: AgentState, sessionId: String) {
         val fileName = "state-history.log"
         val jsonFileName = AGENT_HISTORY_FILE_NAME
@@ -436,8 +455,9 @@ class AgentStateManager(
     }
 
     fun resolveSessionLogDir(sessionId: String): Path {
-        val sessionLogDir = logDir.resolve("task-$sessionId")
-        java.nio.file.Files.createDirectories(sessionLogDir)
+        val shortId = sessionId.take(8)
+        val sessionLogDir = logDir.resolve("task-$shortId")
+        Files.createDirectories(sessionLogDir)
         return sessionLogDir
     }
 
@@ -449,6 +469,10 @@ class AgentStateManager(
 
     /**
      * Remove the last history entry if its step is >= provided step. Used for rollback on errors.
+     *
+     * The removal is applied to the in-memory history AND to the on-disk history files
+     * (history.jsonl / history.log) of the active session, so the persisted audit trail
+     * stays consistent with memory after a rollback.
      */
     fun removeLastIfStep(step: Int) {
         synchronized(this) {
@@ -456,11 +480,41 @@ class AgentStateManager(
             val last = history.lastOrNull()
             if (last != null && last.step >= step) {
                 history.removeAt(history.size - 1)
+                truncateLastHistoryLine()
             }
         }
     }
 
+    /**
+     * Removes the last line from the session's history files. `removeLastIfStep` only ever
+     * removes the most recently added entry, which is also the last line appended by
+     * [writeHistory], so truncating the last line keeps disk consistent with memory.
+     */
+    private fun truncateLastHistoryLine() {
+        val sessionId = _activeContext?.sessionId ?: return
+        val sessionLogDir = resolveSessionLogDir(sessionId)
+        listOf("history.jsonl", "history.log").forEach { fileName ->
+            val path = sessionLogDir.resolve(fileName)
+            runCatching {
+                if (Files.exists(path)) {
+                    val lines = Files.readAllLines(path)
+                    if (lines.isNotEmpty()) {
+                        Files.write(path, lines.dropLast(1))
+                    }
+                }
+            }.onFailure { logger.warn("Failed to truncate history file {} after rollback", path, it) }
+        }
+    }
+
     private suspend fun getBrowserUseState(): BrowserUseState {
+        // Coding tasks must not pay page-state costs and must not automatically
+        // receive page info (design §3.5): short-circuit to DUMMY — no DOM-settle
+        // wait, no full snapshot, no tab injection. Page info becomes available
+        // only after the model explicitly drives the page via tab.* tools.
+        if (agent.codingMode) {
+            return BrowserUseState.DUMMY
+        }
+
         pageStateTracker.waitForDOMSettle()
 
         val snapshotOptions = SnapshotOptions(
@@ -477,7 +531,18 @@ class AgentStateManager(
 
         // Add timeout to prevent hanging on DOM snapshot operations
         return withTimeout(30_000.milliseconds) {
-            val baseState = driver.browserUseState(snapshotOptions = snapshotOptions)
+            val baseState = try {
+                driver.browserUseState(snapshotOptions = snapshotOptions)
+            } catch (e: Exception) {
+                // A session may reuse the same bound driver across agent tasks; when the
+                // previous task tore the page/browser down, browserUseState can throw
+                // (typically NPE from the upstream driver). Degrade to the dummy state
+                // instead of crashing the whole task.
+                logger.warn(
+                    "browserUseState failed ({}); degrading to dummy state", e.message
+                )
+                BrowserUseState.DUMMY
+            }
             injectTabsInfo(baseState)
         }
     }
@@ -489,6 +554,13 @@ class AgentStateManager(
     private suspend fun injectTabsInfo(baseState: BrowserUseState): BrowserUseState {
         val currentDriver = this.driver
         val browser = currentDriver.browser
+
+        // The browser may already be torn down when the session reuses the driver
+        // across agent tasks; in that case keep the base state unchanged.
+        if (browser == null || !browser.isConnected) {
+            logger.warn("injectTabsInfo skipped: browser is not connected")
+            return baseState
+        }
 
         // fetch all drivers
         browser.listDrivers()
@@ -520,6 +592,11 @@ class AgentStateManager(
         )
     }
 
+    /**
+     * Appends one JSON line per completed/attempted step to `history.jsonl` — this is the
+     * canonical per-step execution history (mirrors [addToHistory]). Rolled-back entries are
+     * removed from the file by [removeLastIfStep].
+     */
     private fun writeHistory(state: AgentState) {
         val sessionId = _activeContext?.sessionId ?: return
         val sessionLogDir = resolveSessionLogDir(sessionId)

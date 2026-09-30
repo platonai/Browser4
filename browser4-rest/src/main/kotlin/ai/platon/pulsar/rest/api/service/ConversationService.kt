@@ -9,6 +9,7 @@ import ai.platon.pulsar.common.ai.llm.PromptTemplateLoader
 import ai.platon.pulsar.common.serialize.json.JSONExtractor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.PromptRequest
@@ -21,6 +22,7 @@ class ConversationService(
     val sessionManager: PulsarSessionManager,
     val loadService: LoadService,
 ) {
+    private val logger = getLogger(ConversationService::class)
     val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
 
     suspend fun chat(prompt: String): String {
@@ -65,7 +67,15 @@ class ConversationService(
 
         val url = urls.first()
 
-        val json = convertPlainCommandToJSON(request, url)
+        // A plain command that only LOOKS like a URL command (e.g. an agent
+        // task mentioning dotted package names or file paths) must fall back
+        // to agent execution instead of failing the whole submission.
+        val json = try {
+            convertPlainCommandToJSON(request, url)
+        } catch (e: Exception) {
+            logger.warn("Failed to normalize plain command as URL request (falling back to agent execution): {}", e.message)
+            null
+        }
         if (json.isNullOrBlank()) {
             return null
         }

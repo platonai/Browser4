@@ -39,8 +39,20 @@ cleanup() {
         wait "$HTTP_PID" 2>/dev/null || true
     fi
     if [ -n "${TEMP_DIR:-}" ] && [ -d "$TEMP_DIR" ]; then
-        rm -rf "$TEMP_DIR"
+        # On Windows the JVM/Chrome may hold jar and log handles open for a
+        # few seconds after kill-all ("Device or resource busy").  Retry
+        # briefly, and never let a cleanup failure override the script's
+        # PASS/FAIL exit status — the test result is what matters, and CI
+        # runners are ephemeral anyway.
+        local attempt
+        for attempt in 1 2 3 4 5; do
+            if rm -rf "$TEMP_DIR" 2>/dev/null; then
+                break
+            fi
+            sleep 2
+        done
     fi
+    return 0
 }
 trap cleanup EXIT
 
@@ -204,6 +216,13 @@ run_cli() {
     #   BROWSER4_RUNTIME_DIR  → where the installed runtime lives
     #   BROWSER4_CLI_STATE_DIR → where CLI session state is persisted
     #   BROWSER4_SERVER_LOG_DIR → where server startup logs go
+    #   BROWSER4_CLI_FORCE_REMOTE_BUNDLE → skip the "build local bundle from
+    #     the repo checkout" dev path.  Without this, the CLI prefers a
+    #     Maven rebuild of browser4-bundle when run inside a checkout
+    #     (and hard-fails when Maven cannot run, e.g. no/mismatched JDK).
+    #     The smoke test must exercise the *downloaded archive*, not a
+    #     locally rebuilt bundle, so force the installed-runtime path.
+    BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1 \
     BROWSER4_CLI_STATE_DIR="$STATE_DIR" \
     BROWSER4_RUNTIME_DIR="$RUNTIME_DIR" \
     BROWSER4_SERVER_LOG_DIR="$SERVER_LOG_DIR" \

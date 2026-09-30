@@ -133,6 +133,7 @@ data class ExtractResult(
     }
 }
 
+@Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
 data class ObserveOptions(
     // the user's instruction
     val instruction: String? = null,
@@ -153,6 +154,7 @@ data class ObserveOptions(
     val fromResolve: Boolean = false
 )
 
+@Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
 data class ObserveResult constructor(
     // the domain of the tool call, `browser`, `tab`, `fs`, `agent`, etc
     val domain: String? = null,
@@ -206,11 +208,20 @@ interface PerceptiveAgent : AutoCloseable {
     val processTrace: List<ProcessTrace>
 
     /**
+     * The execution session id of the most recent [run] call, or null when the agent
+     * has not run yet. Each run starts a new execution session; all [AgentState]s
+     * collected during that run carry this id so callers can build task-scoped views
+     * of the accumulated [stateHistory].
+     */
+    val lastRunSessionId: String? get() = null
+
+    /**
      * High-level problem resolution entry. Implementations should construct an [ActionOptions]
      * from the raw problem string and delegate to [run] with the options.
      *
      * @param task The user goal or instruction to fulfill.
-     * @return The final action result produced by the agent.
+     * @return The history of THIS run: a detached snapshot containing only the states
+     * collected for this task, scoped by the run's execution session.
      */
     @MCP
     suspend fun run(task: String): AgentHistory
@@ -221,7 +232,8 @@ interface PerceptiveAgent : AutoCloseable {
      * should record structured traces while keeping [stateHistory] focused on executed tool actions only.
      *
      * @param action The action options describing the user goal and context.
-     * @return The final action result for the resolution attempt.
+     * @return The history of THIS run: a detached snapshot containing only the states
+     * collected for this task, scoped by the run's execution session.
      */
     suspend fun run(action: ActionOptions): AgentHistory
 
@@ -232,6 +244,7 @@ interface PerceptiveAgent : AutoCloseable {
      * @param instruction The observation instruction from the user.
      * @return Zero or more observation results describing candidate elements and potential actions.
      */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     @MCP
     suspend fun observe(instruction: String): List<ObserveResult>
 
@@ -243,6 +256,7 @@ interface PerceptiveAgent : AutoCloseable {
      * @param options Observation options including the instruction and flags.
      * @return A list of observation results; empty if nothing actionable is found.
      */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     suspend fun observe(options: ObserveOptions): List<ObserveResult>
 
     /**
@@ -285,6 +299,7 @@ interface PerceptiveAgent : AutoCloseable {
      * @param observe The observation result containing the candidate action.
      * @return The result of executing the derived tool call.
      */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     suspend fun act(observe: ObserveResult): ActResult
 
     /**

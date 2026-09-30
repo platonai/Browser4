@@ -125,17 +125,22 @@ class AgentToolManagerTest {
     }
 
     @Test
-    @DisplayName("closeTab without target resolves the session-bound driver, not frontDriver")
+    @DisplayName("closeTab without target prefers a live frontDriver, else the session-bound driver")
     fun closeTabWithoutTargetResolvesBoundDriver() = runBlocking {
-        // The session-bound driver defines "current tab": frontDriver may be
-        // stale (destroyDriver never clears it) and must not be trusted.
+        // The user-visible current tab is browser.frontDriver (tab-list marks
+        // it active), but it can be stale — destroyDriver never clears it.
+        // When its guid is no longer a key of the driver map it must be
+        // ignored in favor of the session-bound driver.
         val bound = mockk<AbstractWebDriver>(relaxed = true)
         every { bound.guid } returns "BOUND-GUID"
         every { bound.browser } returns browser
         every { session.getOrCreateBoundDriver() } returns bound
 
         val staleFront: WebDriver = mockk(relaxed = true)
+        every { staleFront.guid } returns "STALE-GUID"
         every { browser.frontDriver } returns staleFront
+        // Only the bound driver is a live key of the driver map.
+        every { browser.drivers } returns mapOf("BOUND-GUID" to bound)
 
         val executorDriver = mockk<AbstractWebDriver>(relaxed = true)
         every { browser.findDriverByGUID("BOUND-GUID") } returns executorDriver
@@ -178,6 +183,8 @@ class AgentToolManagerTest {
         val staleFront = mockk<AbstractWebDriver>(relaxed = true)
         every { staleFront.guid } returns "BOUND-GUID"
         every { browser.frontDriver } returns staleFront
+        // The frontDriver still points at a live map key (the bound tab).
+        every { browser.drivers } returns mapOf("BOUND-GUID" to bound)
 
         val executorDriver = mockk<AbstractWebDriver>(relaxed = true)
         every { browser.findDriverByGUID("BOUND-GUID") } returns executorDriver

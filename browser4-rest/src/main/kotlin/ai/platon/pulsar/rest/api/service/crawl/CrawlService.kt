@@ -1652,6 +1652,16 @@ class CrawlService(
     }
 
     /**
+     * Number of crawl tasks executing right now.
+     *
+     * `jobStore` holds exactly the running jobs — each is removed in the `finally`
+     * of its coroutine — so this is the value behind the `async.queue.depth`
+     * gauge: a number that grows with backlog before the rate limiter starts
+     * refusing submissions.
+     */
+    fun runningTaskCount(): Int = jobStore.size
+
+    /**
      * Cancel a running crawl task by its ID.
      *
      * A cancellation is a *choice*, not a loss: the task's checkpoint is written

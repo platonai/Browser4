@@ -38,16 +38,16 @@ class ToolSpecificationTest {
     }
 
     @Test
-    @DisplayName("null domain defaults to browser interaction for safety")
-    fun testNullDomainDefaultsToBrowserInteraction() {
-        assertTrue(ToolSpecification.isBrowserInteraction(null))
+    @DisplayName("null domain (no tool call) is NOT a browser interaction")
+    fun testNullDomainIsNotBrowserInteraction() {
+        assertFalse(ToolSpecification.isBrowserInteraction(null))
     }
 
     @Test
-    @DisplayName("blank domain defaults to browser interaction for safety")
-    fun testBlankDomainDefaultsToBrowserInteraction() {
-        assertTrue(ToolSpecification.isBrowserInteraction(""))
-        assertTrue(ToolSpecification.isBrowserInteraction("  "))
+    @DisplayName("blank domain (no tool call) is NOT a browser interaction")
+    fun testBlankDomainIsNotBrowserInteraction() {
+        assertFalse(ToolSpecification.isBrowserInteraction(""))
+        assertFalse(ToolSpecification.isBrowserInteraction("  "))
     }
 
     @Test

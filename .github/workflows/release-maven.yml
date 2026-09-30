@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 env:
-  JAVA_VERSION: '17'
+  JAVA_VERSION: '25'
   MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
 
 jobs:
@@ -216,25 +216,30 @@ jobs:
           # Update VERSION file
           version_file.write_text(f"{release_version}\n", encoding="utf-8")
 
-          # Update all pom.xml files, skipping build outputs and archetype template resources
-          # (archetype-resources/pom.xml uses ${browser4-version} placeholders and must stay untouched)
-          updated_files = []
-          for pom_file in repo_root.rglob("pom.xml"):
-              rel_path = pom_file.relative_to(repo_root).as_posix()
-              if "/target/" in f"/{rel_path}/" or "archetype-resources" in rel_path:
-                  continue
-              original = pom_file.read_text(encoding="utf-8")
-              updated = original.replace(snapshot_version, release_version)
-              if updated != original:
-                  pom_file.write_text(updated, encoding="utf-8", newline="\n")
-                  updated_files.append(rel_path)
+          if snapshot_version == release_version:
+              # rc / final tags already carry the final version (e.g. 4.14.0-rc.2):
+              # there is nothing to strip — proceed straight to deploy.
+              print(f"✅ VERSION already equals release version {release_version}; skipping pom version replacement")
+          else:
+              # Update all pom.xml files, skipping build outputs and archetype template resources
+              # (archetype-resources/pom.xml uses ${browser4-version} placeholders and must stay untouched)
+              updated_files = []
+              for pom_file in repo_root.rglob("pom.xml"):
+                  rel_path = pom_file.relative_to(repo_root).as_posix()
+                  if "/target/" in f"/{rel_path}/" or "archetype-resources" in rel_path:
+                      continue
+                  original = pom_file.read_text(encoding="utf-8")
+                  updated = original.replace(snapshot_version, release_version)
+                  if updated != original:
+                      pom_file.write_text(updated, encoding="utf-8", newline="\n")
+                      updated_files.append(rel_path)
 
-          if not updated_files:
-              raise SystemExit(f"No pom.xml files contained snapshot version {snapshot_version}")
+              if not updated_files:
+                  raise SystemExit(f"No pom.xml files contained snapshot version {snapshot_version}")
 
-          print(f"Updated {len(updated_files)} pom.xml files:")
-          for path in updated_files:
-              print(f"  - {path}")
+              print(f"Updated {len(updated_files)} pom.xml files:")
+              for path in updated_files:
+                  print(f"  - {path}")
 
           print(f"Version replacement complete: {snapshot_version} → {release_version}")
           PY
@@ -247,11 +252,60 @@ jobs:
           echo "=== Running tests before deploy ==="
           ./mvnw --batch-mode test --show-version --errors
 
+      - name: Ensure pom project names (Central validation)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import os, re
+
+          repo_root = Path(os.environ["GITHUB_WORKSPACE"])
+          updated = []
+          for pom_file in repo_root.rglob("pom.xml"):
+              rel = pom_file.relative_to(repo_root).as_posix()
+              if "/target/" in f"/{rel}/" or "archetype-resources" in rel:
+                  continue
+              text = pom_file.read_text(encoding="utf-8")
+              if "<name>" in text:
+                  continue
+              # The project's own artifactId is the one after </parent>.
+              after_parent = text.split("</parent>", 1)[-1]
+              m = re.search(r"<artifactId>([^<]+)</artifactId>", after_parent)
+              if not m:
+                  continue
+              artifact = m.group(1)
+              display = " ".join(
+                  part.capitalize()
+                  for part in re.split(r"[-_.]", artifact)
+                  if part
+              ) or artifact
+              patched = text.replace(
+                  f"<artifactId>{artifact}</artifactId>",
+                  f"<artifactId>{artifact}</artifactId>\n    <name>{display}</name>",
+                  1,
+              )
+              if patched != text:
+                  pom_file.write_text(patched, encoding="utf-8", newline="\n")
+                  updated.append(rel)
+
+          if updated:
+              print(f"Added missing <name> to {len(updated)} pom.xml files:")
+              for p in updated:
+                  print(f"  - {p}")
+          else:
+              print("All pom.xml files already declare a project <name>.")
+          PY
+
       - name: Deploy to Sonatype Central
         if: success() || (steps.tests.outcome == 'skipped')
         run: |
           echo "=== Deploying to Maven Central ==="
+          # dokka 1.9.x cannot run on JDK 25; the repo now pins dokka 2.2.0.
+          # Override on the CLI so a release tag that predates the pom bump
+          # still deploys (poms at the tag keep their own dokka.version).
           ./mvnw --batch-mode deploy -P deploy,release -DskipTests \
+            -Ddokka.version=2.2.0 \
             -Dgpg.passphrase="$GPG_PASSPHRASE" \
             -Dgpg.batch=true \
             -Dgpg.pinentry-mode=loopback \

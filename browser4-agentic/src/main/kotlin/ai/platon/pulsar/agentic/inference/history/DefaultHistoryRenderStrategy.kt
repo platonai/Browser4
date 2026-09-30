@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.inference.history
 
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
+import ai.platon.pulsar.agentic.model.ToolOutcome
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.Pson
@@ -15,7 +16,10 @@ class DefaultHistoryRenderStrategy(
     override fun render(agentHistory: AgentHistory, stateHistoryPath: String?): String {
         val history = agentHistory.states
         if (history.isEmpty()) {
-            return ""
+            // A blank render would flow into an empty user message and crash the
+            // LangChain4j conversion ("text cannot be null or blank") on a fresh
+            // task's first step. Emit an informative placeholder instead.
+            return "No execution history yet."
         }
 
         val recentStates = history.takeLast(recentStepsToKeep)
@@ -43,6 +47,9 @@ class DefaultHistoryRenderStrategy(
             add("")
             add("### Recent Steps")
             renderHistoryWithBudget(recentStates, this, stateHistoryPath)
+            add("")
+            add("### Tool Outcomes")
+            renderToolOutcomes(recentStates, this)
             if (olderStates.isNotEmpty()) {
                 add("")
                 if (stateHistoryPath != null) {
@@ -121,11 +128,28 @@ class DefaultHistoryRenderStrategy(
         output.add(suffix)
     }
 
+    /**
+     * Render the bounded tool-outcome feed — the model's window into what each
+     * executed tool actually returned. `step/tool/ok/summary` are never dropped;
+     * bodies are capped at 200 chars here (the full body flows through the
+     * previous-step-result message with its own budget).
+     */
+    private fun renderToolOutcomes(recentStates: List<AgentState>, output: MutableList<String>) {
+        recentStates.forEach { state ->
+            val result = state.toolCallResult ?: return@forEach
+            val outcome = ToolOutcome.from(result)
+            output.add("${state.step}. ${outcome.header}")
+            outcome.body?.take(200)?.let { output.add("   ${it.trim().replace('\n', ' ')}") }
+            outcome.errors.take(2).forEach { output.add("   - ${it.take(200)}") }
+        }
+    }
+
     private fun renderDetailedState(state: AgentState, compress: Boolean = false): String {
         return Pson.toJson(
             mapOf(
                 "step" to state.step,
                 "toolCall" to state.actionDescription?.pseudoExpression,
+                "result" to state.resultPreview?.let { if (compress) it.take(200) else it },
                 "exception" to state.exception?.brief(),
                 "summary" to state.summary,
                 "nextGoal" to state.nextGoal.takeIf { !compress },

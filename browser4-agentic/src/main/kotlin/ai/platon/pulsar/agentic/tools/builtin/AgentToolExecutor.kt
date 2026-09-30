@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.model.ExtractionSchema
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.ChatModelFactory
+import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import kotlin.reflect.KClass
 
 class AgentToolExecutor : AbstractToolExecutor() {
@@ -38,6 +39,11 @@ class AgentToolExecutor : AbstractToolExecutor() {
      */
     private fun requireLLMConfigured(agent: PerceptiveAgent) {
         val config = agent.session.configuration
+
+        // Test harness: the file-backed mock LLM replaces the need for an API key.
+        if (TestChatModelFactory.isEnabled()) {
+            return
+        }
 
         // Primary: delegate to the factory's own validation
         val factorySaysConfigured = try {
@@ -89,16 +95,6 @@ class AgentToolExecutor : AbstractToolExecutor() {
         val agent = requireNotNull(receiver as? PerceptiveAgent) { "Target must be a PerceptiveAgent" }
 
         return when (functionName) {
-            // agent.act(action: String)
-            "act" -> {
-                validateArgs(args, allowed = setOf("action"), required = setOf("action"), functionName)
-                agent.act(paramString(args, "action", functionName)!!)
-            }
-            // agent.observe(instruction: String)
-            "observe" -> {
-                validateArgs(args, allowed = setOf("instruction"), required = setOf("instruction"), functionName)
-                agent.observe(paramString(args, "instruction", functionName)!!)
-            }
             // agent.extract(instruction: String) OR agent.extract(instruction: String, schema: Map<String,String>)
             "extract" -> {
                 requireLLMConfigured(agent)

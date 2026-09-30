@@ -42,9 +42,14 @@
     <button id="hover-target" type="button">Hover</button>
     <button id="prompt-target" type="button">Prompt</button>
     <button id="confirm-target" type="button">Confirm</button>
+    <button id="error-target" type="button">Log Console Error</button>
+    <input id="disabled-target" type="text" disabled />
+    <div id="hidden-target" style="display: none;">hidden element</div>
     <div id="drag-source" draggable="true">drag source</div>
     <div id="drag-target">drag target</div>
     <pre id="state-log"></pre>
+    <div style="height: 1600px;"></div>
+    <div id="scroll-target">scroll target (below the fold)</div>
   </main>
   <script>
     window.__browser4State = {
@@ -145,6 +150,11 @@
     document.getElementById('hover-target').addEventListener('mouseleave', () => {
       window.__browser4State.hovered = false;
       window.__browser4State.hoverLeaveCount += 1;
+      syncState();
+    });
+
+    document.getElementById('error-target').addEventListener('click', () => {
+      console.error('fixture-console-error');
       syncState();
     });
 
