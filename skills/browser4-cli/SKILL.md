@@ -194,6 +194,7 @@ Element commands (`click`, `fill`, `type`, …) resolve CSS selectors against th
 | `errors` | Console errors only (alias of `console --min-level error`) | Surface page JS errors fast | — |
 | `extract`, `summarize`, `agent run` | AI-powered extraction | Natural language extraction (needs LLM key) | [agent.md](references/agent.md) |
 | `crawl` | Recursive crawling + bulk extraction | Multi-page traversal, seed-file processing | [crawl.md](references/crawl.md) |
+| `search`, `search-status`, `search-result`, `search-cancel` | Web search via Tavily (default) or Bocha, with optional result scraping | Find URLs by query, then fetch full content of hits | [search.md](references/search.md) |
 | `swarm` | Parallel scraping across browser contexts | High-throughput extraction | [swarm.md](references/swarm.md) |
 | `loop` | Repeated task execution with persistence | Monitoring, scheduled checks | [loop.md](references/loop.md) |
 | `state-save`, `state-load`, `cookie-*`, `*-storage-*` | Browser storage management | Auth state reuse, cookie manipulation | [storage-state.md](references/storage-state.md) |

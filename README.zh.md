@@ -601,6 +601,25 @@ browser4-cli crawl list
 browser4-cli crawl resume <task-id>    # 续传被中断的 crawl
 ```
 
+#### 网页搜索
+
+通过可插拔搜索引擎（默认 Tavily，`search.provider=bocha` 切换为博查）进行网页搜索。
+提交查询后轮询结果，可选地通过浏览器会话抓取每条命中的完整页面内容。
+
+| 命令 | 说明 |
+|---|---|
+| `search <query>` | 提交网页搜索。支持 `-n/--max-results`、`--scrape`、`--scrape-format`、`--topic`、`--time-range`、`--include-domains`、`--exclude-domains`、`--timeout`、`-bg/--background`。 |
+| `search status <id>` | 查询搜索任务状态。 |
+| `search result <id>` | 获取完成的搜索结果；`--verbose` 每条命中打印一行。 |
+| `search cancel <id>` | 取消正在运行的搜索任务。 |
+
+```bash
+browser4-cli search "Rust async runtime comparison" --max-results 5
+browser4-cli search "GLM-5.2 benchmarks" --scrape           # 抓取每条命中的完整内容
+browser4-cli search "browser automation" --include-domains "github.com,docs.rs" --background
+browser4-cli search-result <task-id> --verbose
+```
+
 #### 内置 skill 文件 与 已安装运行时 skill
 
 Browser4 中有两套不同的 “skill” 表面：

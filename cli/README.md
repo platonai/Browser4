@@ -557,6 +557,24 @@ browser4-cli crawl "https://example.com" --depth 2 --out-link-selector "a[href]"
 browser4-cli crawl list
 ```
 
+#### Web search
+
+Web search via a pluggable provider (Tavily by default, Bocha when `search.provider=bocha`).
+Submit a query, poll for the result, and optionally scrape each hit's full-page content via the browser session.
+
+| Command | Description |
+|---|---|
+| `search <query>` | Submit a web search. Supports `-n/--max-results`, `--scrape`, `--scrape-format`, `--topic`, `--time-range`, `--include-domains`, `--exclude-domains`, `--timeout`, `-bg/--background`. |
+| `search status <id>` | Check a search task status. |
+| `search result <id>` | Fetch a completed search result; `--verbose` prints one line per hit. |
+| `search cancel <id>` | Cancel a running search task. |
+
+```bash
+browser4-cli search "Rust async runtime comparison" --max-results 5
+browser4-cli search "GLM-5.2 benchmarks" --scrape
+browser4-cli search-result <task-id> --verbose
+```
+
 #### Bundled skill files vs installed runtime skills
 
 Browser4 has two different "skill" surfaces:

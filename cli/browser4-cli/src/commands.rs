@@ -3995,6 +3995,107 @@ pub fn all_commands() -> Vec<CommandDef> {
                 p
             },
         },
+        // ---- Search ----
+        CommandDef {
+            name: "search",
+            description: "Submit a web search (Tavily by default, or Bocha when search.provider=bocha). Returns a task id for polling. Use --scrape to also fetch and extract content from each result URL via the browser session.",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "query", description: "The search query", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "max-results <n>", description: "Maximum number of results to return (default: 10, max: 50)", is_bool: false, short: Some("n") },
+                OptionDef { name: "scrape", description: "Fetch and extract content from each result URL via the browser session. Slower; one browser tab per result. Populates the `scrapedContent` field of each result.", is_bool: true, short: None },
+                OptionDef { name: "scrape-format <fmt>", description: "Output format for scraped content: markdown (default) or html", is_bool: false, short: None },
+                OptionDef { name: "topic <t>", description: "Search topic: general (default) or news", is_bool: false, short: None },
+                OptionDef { name: "time-range <r>", description: "Restrict to recent results: day, week, month, or year. Empty means no restriction.", is_bool: false, short: None },
+                OptionDef { name: "include-domains <list>", description: "Comma-separated list of domains to restrict results to (e.g. example.com,wikipedia.org)", is_bool: false, short: None },
+                OptionDef { name: "exclude-domains <list>", description: "Comma-separated list of domains to exclude from results", is_bool: false, short: None },
+                OptionDef { name: "timeout <dur>", description: "Maximum time the search task may run before the server cancels it: seconds, or a duration such as 30s, 1m (default: 60s; max 10m)", is_bool: false, short: None },
+                OptionDef { name: "background", description: "Submit search and return immediately; use 'search-status' to track progress", is_bool: true, short: Some("bg") },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "search_submit".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "query") { p["query"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "max-results").and_then(|s| s.parse::<i32>().ok()) { p["maxResults"] = json!(v); }
+                if let Some(true) = get_bool(args, "scrape") { p["scrape"] = json!(true); }
+                if let Some(v) = get_opt_str(args, "scrape-format") { p["scrapeFormat"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "topic") { p["topic"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "time-range") { p["timeRange"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "include-domains") {
+                    p["includeDomains"] = json!(v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>());
+                }
+                if let Some(v) = get_opt_str(args, "exclude-domains") {
+                    p["excludeDomains"] = json!(v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>());
+                }
+                if let Some(true) = get_bool(args, "background") { p["background"] = json!(true); }
+                // --timeout is parsed in main.rs (handle_search) via
+                // crawl_timeout_to_millis — same pattern as the crawl command.
+                if let Some(v) = get_opt_str(args, "timeout") { p["timeout"] = json!(v); }
+                p
+            },
+        },
+        CommandDef {
+            name: "search-status",
+            description: "Check status of a search task by its ID",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                p
+            },
+        },
+        CommandDef {
+            name: "search-result",
+            description: "Get the result of a completed search task by its ID",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "verbose", description: "Also print each result with its scraped content (if --scrape was used at submit time)", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                if let Some(true) = get_bool(args, "verbose") { p["verbose"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "search-cancel",
+            description: "Cancel a running search task by its ID",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                p
+            },
+        },
         // ---- HtmlSnapshot ----
         CommandDef {
             name: "htmlsnapshot",
@@ -8801,6 +8902,144 @@ mod tests {
             has_extension,
             "attach command should have --extension option"
         );
+    }
+
+    // ---- search command tests ----
+
+    #[test]
+    fn test_search_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("search").expect("search command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "query");
+        assert!(!cmd.args[0].optional, "query is required");
+        assert_eq!(cmd.category, Category::Swarm);
+        assert_eq!(
+            (cmd.tool_name_fn)(&HashMap::new()),
+            "search_submit",
+            "search command must dispatch to the search_submit MCP tool"
+        );
+    }
+
+    #[test]
+    fn test_search_params_basic_query() {
+        let map = commands_map();
+        let cmd = map.get("search").unwrap();
+        let mut args = HashMap::new();
+        args.insert("query".to_string(), json!("Rust async runtime"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["query"], "Rust async runtime");
+        // maxResults is NOT set when --max-results is absent: the backend
+        // default (10) takes over, and omitting the key keeps the request
+        // body small.
+        assert!(params.get("maxResults").is_none() || params["maxResults"].is_null());
+    }
+
+    #[test]
+    fn test_search_params_max_results_and_scrape() {
+        let map = commands_map();
+        let cmd = map.get("search").unwrap();
+        let mut args = HashMap::new();
+        args.insert("query".to_string(), json!("test query"));
+        args.insert("max-results".to_string(), json!("5"));
+        args.insert("scrape".to_string(), json!(true));
+        args.insert("scrape-format".to_string(), json!("html"));
+        args.insert("topic".to_string(), json!("news"));
+        args.insert("time-range".to_string(), json!("week"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["maxResults"], 5);
+        assert_eq!(params["scrape"], true);
+        assert_eq!(params["scrapeFormat"], "html");
+        assert_eq!(params["topic"], "news");
+        assert_eq!(params["timeRange"], "week");
+    }
+
+    #[test]
+    fn test_search_params_domains_split_on_comma() {
+        let map = commands_map();
+        let cmd = map.get("search").unwrap();
+        let mut args = HashMap::new();
+        args.insert("query".to_string(), json!("test"));
+        args.insert("include-domains".to_string(), json!("github.com, docs.rs"));
+        args.insert("exclude-domains".to_string(), json!("pinterest.com"));
+        let params = (cmd.tool_params_fn)(&args);
+        let include = params["includeDomains"].as_array().expect("includeDomains should be an array");
+        assert_eq!(include.len(), 2);
+        assert_eq!(include[0], "github.com");
+        assert_eq!(include[1], "docs.rs");
+        let exclude = params["excludeDomains"].as_array().expect("excludeDomains should be an array");
+        assert_eq!(exclude.len(), 1);
+        assert_eq!(exclude[0], "pinterest.com");
+    }
+
+    #[test]
+    fn test_search_params_background_passthrough() {
+        let map = commands_map();
+        let cmd = map.get("search").unwrap();
+        let mut args = HashMap::new();
+        args.insert("query".to_string(), json!("test"));
+        args.insert("background".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["background"], true);
+    }
+
+    #[test]
+    fn test_search_params_timeout_passthrough() {
+        let map = commands_map();
+        let cmd = map.get("search").unwrap();
+        let mut args = HashMap::new();
+        args.insert("query".to_string(), json!("test"));
+        args.insert("timeout".to_string(), json!("30s"));
+        let params = (cmd.tool_params_fn)(&args);
+        // tool_params_fn passes the raw string through; main.rs parses it to
+        // millis via crawl_timeout_to_millis before submitting.
+        assert_eq!(params["timeout"], "30s");
+    }
+
+    #[test]
+    fn test_search_status_command_exists() {
+        let map = commands_map();
+        let cmd = map
+            .get("search-status")
+            .expect("search-status command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.category, Category::Swarm);
+        // status/result/cancel use REST endpoints, not MCP tools
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "");
+    }
+
+    #[test]
+    fn test_search_result_command_exists() {
+        let map = commands_map();
+        let cmd = map
+            .get("search-result")
+            .expect("search-result command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.category, Category::Swarm);
+        // --verbose is the only option
+        assert_eq!(cmd.options.len(), 1);
+        assert_eq!(cmd.options[0].name, "verbose");
+        assert!(cmd.options[0].is_bool);
+    }
+
+    #[test]
+    fn test_search_cancel_command_exists() {
+        let map = commands_map();
+        let cmd = map
+            .get("search-cancel")
+            .expect("search-cancel command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.category, Category::Swarm);
     }
 
     // ---- CDP command tests ----
