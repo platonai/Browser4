@@ -3876,7 +3876,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to get (server, timeout, proxy, session)",
+                    description: "The config key to get (server, timeout, proxy, session, extension_id)",
                 },
             ],
             options: &[],
@@ -3897,7 +3897,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to set (server, timeout, proxy, session)",
+                    description: "The config key to set (server, timeout, proxy, session, extension_id)",
                 },
                 ArgDef {
                     name: "value",
@@ -3924,7 +3924,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to delete (server, timeout, proxy, session)",
+                    description: "The config key to delete (server, timeout, proxy, session, extension_id)",
                 },
             ],
             options: &[],
