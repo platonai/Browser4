@@ -54,7 +54,16 @@ class ScrapeController(
         val payload = payload.trim()
 
         val sql = if (payload.startsWith("http")) {
-            "select dom_base_uri(dom) as url from load_and_select('$payload', ':root')"
+            // The payload is a url plus optional LoadOptions ("<url> -expires 1d
+            // -requireNotBlank '#productTitle'"), and it is embedded in an X-SQL string literal, so
+            // both halves have to be handled here: the url has to be valid *now* instead of in the
+            // job half an hour later, and the literal has to be escaped.  Entry-page hrefs carry
+            // apostrophes, and interpolating one raw broke the statement — reported as "Invalid URL
+            // or X-SQL" about a perfectly good url — while letting the url text escape the literal.
+            // Both belong to the shared implementation, see ScrapeAPIUtils.
+            ScrapeAPIUtils.requireStandardUrl(payload)
+            val literal = ScrapeAPIUtils.escapeSqlStringLiteral(payload)
+            "select dom_base_uri(dom) as url from load_and_select('$literal', ':root')"
         } else payload
 
         runCatching { ScrapeAPIUtils.checkSql(sql) }.onFailure {
