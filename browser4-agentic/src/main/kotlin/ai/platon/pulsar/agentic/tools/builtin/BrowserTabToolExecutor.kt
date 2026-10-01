@@ -454,12 +454,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
     /**
      * Refuse an address the browser cannot be sent to, instead of handing it over and hoping.
      *
-     * The navigation path takes the url **verbatim**, and this gate deliberately does not change
-     * that: normalization is the *storage* identity (`PulsarSession.normalize` is what the page
-     * store and the page cache are keyed by), and a navigation must not go through it — a normalized
-     * url has lost its fragment, and `goto "https://h/doc#section"` is a legitimate request.
-     * `NavigateEntry` states the same contract: `userTypedUrl` is the raw address (typed, or taken
-     * from a link's `href`) and `pageUrl` is the normalized lookup key.
+     * The navigation path takes the url **verbatim** — *normalize for the key, href for the address*.
+     * `PulsarSession.normalize` is the identity the page store and the page cache are keyed by, and a
+     * navigation must not go through it: a normalized url has lost its fragment, and
+     * `goto "https://h/doc#section"` is a legitimate request.  `NormURL` says the same thing with its
+     * `url`/`href` pair, and `NavigateEntry` with `pageUrl`/`userTypedUrl`.
      *
      * What was missing was not normalization but *validation*: a url the driver cannot use was sent
      * anyway.  `PulsarWebDriver` then logs a `warn` and returns before it records the navigation, so
