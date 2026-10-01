@@ -699,7 +699,7 @@ Examples:
 html_snapshot.capture(sessionId: String)
 ```
 
-Capture the current page as an HTML snapshot with metadata, interactive elements, and link groups.
+Capture the current page as an HTML snapshot with metadata, interactive elements, and link groups. This is the only html_snapshot command that WRITES: it serializes the live tab's document and stores it under the tab's normalized url, overwriting the stored copy. Run it before any read that must see the live document.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -717,7 +717,7 @@ Examples:
 html_snapshot.export(sessionId: String, clean: Boolean = false)
 ```
 
-Export the full, pretty-printed HTML of the current page. Set clean=true to strip <script>, <style>, and non-standard attributes (keeps the vi attribute).
+Export the full, pretty-printed HTML of the stored snapshot of the current page (read-only; run 'htmlsnapshot capture' first to snapshot the live document). Set clean=true to strip <script>, <style>, and non-standard attributes (keeps the vi attribute).
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -736,7 +736,7 @@ Examples:
 html_snapshot.inspect(sessionId: String, selector: String = :root, max: Int = 20, depth: Int = 5)
 ```
 
-Inspect the HTML snapshot and suggest CSS selectors for recurring patterns.
+Inspect the HTML snapshot and suggest CSS selectors for recurring patterns. Reads the stored snapshot of the current page (read-only; run 'htmlsnapshot capture' first to snapshot the live document).
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -765,7 +765,7 @@ Examples:
 html_snapshot.query(sql: String, url: String? = null, sessionId: String)
 ```
 
-Execute an X-SQL query against the current page or a specified URL.
+Execute an X-SQL query against the STORED page of the session's current page, or of a specified URL. Read-only: it serves the stored copy (or loads the page independently when the store is empty) and never captures the live tab — run 'htmlsnapshot capture' first to query the live document.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -793,12 +793,12 @@ Examples:
 html_snapshot.readability(sessionId: String, url: String? = null)
 ```
 
-Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) from the stored HTML snapshot using a Readability-style heuristic. When url is given, the page is fetched independently; otherwise the current session page is used.
+Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) with a Readability-style heuristic from a STORED page: the stored snapshot of the session's current page, or of url when given. Read-only — it never captures the live tab, so a url other than the current page is never filed with the current page's content. Run 'htmlsnapshot capture' first to read the live document.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `sessionId` | String | yes |  | sessionId: String |
-| `url` | String? | no | null | Fetch this URL instead of using the current page. |
+| `url` | String? | no | null | Read this URL from the page store instead of the session's current page. |
 
 Returns: `String`
 
@@ -820,7 +820,7 @@ Examples:
 html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null)
 ```
 
-Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector.
+Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. Reads the stored snapshot of the current page (read-only) — run 'htmlsnapshot capture' first to snapshot the live document.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -843,7 +843,7 @@ Examples:
 html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, offset: Int = 0, limit: Int = -1)
 ```
 
-Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector.
+Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. Reads the stored snapshot of the current page (read-only) — run 'htmlsnapshot capture' first to snapshot the live document.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -874,7 +874,7 @@ Examples:
 html_snapshot.summary(sessionId: String)
 ```
 
-Generate a page summary including title, statistics, and detected link groups.
+Generate a page summary including title, statistics, and detected link groups from the stored snapshot of the current page (read-only; run 'htmlsnapshot capture' first to snapshot the live document).
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|

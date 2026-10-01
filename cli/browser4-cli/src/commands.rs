@@ -3998,7 +3998,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- HtmlSnapshot ----
         CommandDef {
             name: "htmlsnapshot",
-            description: "Capture: take a static HTML snapshot of the current page and store it. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Read commands (`get`, `get all`, `inspect`, `summary`, `grep`, `export`) serve the LIVE page and need no prior capture, so capturing is optional: use it for the metadata or for a deliberate archived copy. Short form of `htmlsnapshot capture`.",
+            description: "Capture: serialize the page the active tab is showing, store it in Browser4's page store, and return page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). This is the only htmlsnapshot command that WRITES: it overwrites the stored copy of the tab's normalized URL. Every read (`get`, `get all`, `inspect`, `summary`, `grep`, `export`, `query`, `readability`) serves the STORE — the captured copy, or an independent read-only load when there is none — so capture first when the read must see the live document (form results, SPA updates, `eval` mutations, login state). Short form of `htmlsnapshot capture`.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -4010,7 +4010,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-capture",
-            description: "Capture: take a static HTML snapshot of the current page and store it. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Read commands (`get`, `get all`, `inspect`, `summary`, `grep`, `export`) serve the LIVE page and need no prior capture, so capturing is optional: use it for the metadata or for a deliberate archived copy.",
+            description: "Capture: serialize the page the active tab is showing, store it in Browser4's page store, and return page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). This is the only htmlsnapshot command that WRITES: it overwrites the stored copy of the tab's normalized URL. Every read (`get`, `get all`, `inspect`, `summary`, `grep`, `export`, `query`, `readability`) serves the STORE — the captured copy, or an independent read-only load when there is none — so capture first when the read must see the live document.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -4022,7 +4022,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get",
-            description: "Extract elements from the LIVE page of the active tab (text, textcontent, html, attr) — no prior `htmlsnapshot` capture needed. Supports batch mode for multi-step workflows.",
+            description: "Extract elements from the stored snapshot of the active tab's page (text, textcontent, html, attr). Read-only: it serves the page store and never captures the live tab, so run `htmlsnapshot` first to make changes that exist only in the tab (forms, SPA updates, `eval`) visible here. Supports batch mode for multi-step workflows.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -4048,7 +4048,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get-all",
-            description: "Extract ALL matching elements from the LIVE page (querySelectorAll semantics) — no prior `htmlsnapshot` capture needed; supports --offset and --limit for pagination. Supports batch mode.",
+            description: "Extract ALL matching elements from the stored snapshot of the active tab's page (querySelectorAll semantics). Read-only: it serves the page store and never captures the live tab, so run `htmlsnapshot` first to make changes that exist only in the tab visible here; supports --offset and --limit for pagination. Supports batch mode.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -4082,7 +4082,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-query",
-            description: "Run X-SQL. Without a URL (or when the URL is the session's current page) the query is seeded from the LIVE page first, so it sees login state, SPA updates and eval mutations; an explicit different URL runs an independent scrape/webdb load. No `htmlsnapshot` capture is required by any read command. IMPORTANT: CSS selectors in X-SQL must use single quotes (SQL syntax); double quotes mean SQL identifiers.",
+            description: "Run X-SQL against the STORED page — the session's current page, or an explicit URL. Read-only: the query serves the page store (or loads the page independently when the store has nothing) and never captures the live tab, so run `htmlsnapshot` first to query the document as the tab shows it right now (login state, SPA updates, `eval` mutations). IMPORTANT: CSS selectors in X-SQL must use single quotes (SQL syntax); double quotes mean SQL identifiers.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -4145,7 +4145,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-export",
-            description: "Export the LIVE page's HTML to a local file — no prior `htmlsnapshot` capture needed. The file path can be passed as a positional argument or via --file.",
+            description: "Export the stored snapshot of the active tab's page to a local file. Read-only: it serves the page store and never captures the live tab, so run `htmlsnapshot` first to export the page as it is right now. The file path can be passed as a positional argument or via --file.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -4185,7 +4185,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-summary",
-            description: "Summarize: produce a compressed Web Page Summary Index (WPSI) from the LIVE page — preserves page structure, key nodes, and stats in <1% of original HTML size. No prior `htmlsnapshot` capture needed.",
+            description: "Summarize: produce a compressed Web Page Summary Index (WPSI) from the stored snapshot of the active tab's page — preserves page structure, key nodes, and stats in <1% of original HTML size. Read-only: run `htmlsnapshot` first to summarize the page as it is right now.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -4206,7 +4206,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-grep",
-            description: "Search the LIVE page's HTML using regex patterns with grep-style output — no prior `htmlsnapshot` capture needed",
+            description: "Search the stored snapshot of the active tab's page using regex patterns with grep-style output. Read-only: run `htmlsnapshot` first to search the page as it is right now",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -4401,7 +4401,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-inspect",
-            description: "Inspect: analyze the LIVE page and discover CSS selectors for recurring patterns (product cards, prices, titles) — no prior `htmlsnapshot` capture needed.",
+            description: "Inspect: analyze the stored snapshot of the active tab's page and discover CSS selectors for recurring patterns (product cards, prices, titles). Read-only: run `htmlsnapshot` first to inspect the page as it is right now.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -4433,7 +4433,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-readability",
-            description: "Readability: extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) from the stored HTML snapshot using a Readability-style heuristic. Use `htmlsnapshot` first to capture the page into storage. Supports an optional URL to fetch independently.",
+            description: "Readability: extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) from a STORED page with a Readability-style heuristic (deterministic, no LLM): the stored copy of the active tab's page, or of an explicit URL. Read-only — it reads that URL's own stored copy and never files the tab's document under it, so run `htmlsnapshot` first to read the page as it is right now.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,

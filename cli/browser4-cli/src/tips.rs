@@ -45,6 +45,9 @@ const TIPS_SNAPSHOT: &[Tip] = &[
 
 const TIPS_HTMLSNAPSHOT_GET: &[Tip] = &[
     Tip {
+        text: "Reads serve the page store: run `htmlsnapshot` first when `htmlsnapshot get` / `query` / `export` must see what the tab shows right now (form results, SPA updates, `eval` mutations)",
+    },
+    Tip {
         text: "Use PowerCSS `:expr()` selectors: `htmlsnapshot get all attr \"img:expr(width>400)\" src` to get large images only",
     },
     Tip {
@@ -69,10 +72,10 @@ const TIPS_HTMLSNAPSHOT_GET: &[Tip] = &[
 
 const TIPS_READABILITY: &[Tip] = &[
     Tip {
-        text: "Use `htmlsnapshot readability` to extract the main article in one step — no CSS selectors, no LLM tokens. Deterministic Readability-style heuristic on the stored snapshot",
+        text: "Use `htmlsnapshot readability` to extract the main article in one step — no CSS selectors, no LLM tokens. Deterministic Readability-style heuristic on the stored snapshot (run `htmlsnapshot` first for the live document)",
     },
     Tip {
-        text: "`htmlsnapshot readability <url>` fetches a specific page independently, like `htmlsnapshot query`'s @url mode",
+        text: "`htmlsnapshot readability <url>` reads that URL's own stored copy (fetched read-only when the store has nothing) — it never files the current tab's document under the URL you pass",
     },
 ];
 
@@ -153,7 +156,7 @@ const TIPS_EVAL: &[Tip] = &[
         text: "Use `eval --wait-selector <css>` to wait for async-rendered content (React/SPA) before querying the DOM",
     },
     Tip {
-        text: "If `eval` returns empty while `htmlsnapshot` finds elements, the page likely loads content asynchronously — use `--wait-selector` or run `wait --selector <css>` first",
+        text: "If `eval` returns empty while `htmlsnapshot` finds elements, the page likely loads content asynchronously — use `--wait-selector` or run `wait --selector <css>` first. (`htmlsnapshot` reads capture the page as rendered, so re-run `htmlsnapshot` after the content appears)",
     },
 ];
 

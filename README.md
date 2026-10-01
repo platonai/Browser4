@@ -209,7 +209,7 @@ browser4-cli fill e16 "Browser4" --submit
 # Extract data from the live page
 browser4-cli get text "h1"
 
-# Capture a static DOM snapshot for repeated extraction
+# Capture the page into the store, then extract from that copy
 browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
@@ -257,7 +257,7 @@ These flags can appear before any command.
 | Tool | Best for | Input model | Output model |
 |---|---|---|---|
 | `snapshot` | clicking, typing, finding interactive elements | live accessibility tree | refs like `e15` |
-| `htmlsnapshot` | DOM inspection, CSS extraction, X-SQL | live page DOM (capture is optional) | CSS selectors and query results |
+| `htmlsnapshot` | DOM inspection, CSS extraction, X-SQL | stored page snapshot (`htmlsnapshot` capture writes it; reads never do) | CSS selectors and query results |
 
 #### LLM configuration
 
@@ -425,25 +425,25 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 
 #### HTML snapshot and X-SQL extraction
 
-`htmlsnapshot` captures a stored raw DOM snapshot and is the center of Browser4's structured extraction workflow.
+`htmlsnapshot` captures a stored raw DOM snapshot and is the center of Browser4's structured extraction workflow. **Capture is the only htmlsnapshot command that writes**: it serializes the page the active tab is showing and overwrites the stored copy of that tab's normalized URL. Every other `htmlsnapshot` command is a read — it serves the stored copy, or loads the page independently (read-only) when the store has nothing for the URL — so run `htmlsnapshot` first whenever a read must see the live document (form results, SPA updates, `eval` mutations).
 
 | Command | Description |
 |---|---|
 | `htmlsnapshot` | Short form of `htmlsnapshot capture`. |
 | `htmlsnapshot capture` | Capture and store a static HTML snapshot with metadata about the page and interactive elements. |
-| `htmlsnapshot get <field> [selector] [name]` | Extract the first matching `text`, `textcontent`, `html`, or `attr` from the live page DOM. |
-| `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from the live page DOM. Supports `--offset` and `--limit`. |
-| `htmlsnapshot query [url]` | Run X-SQL. Supports `--sql <query\|@file>`, `--sql-stdin`, `--sql-base64`, result pagination, and extraction-focused output flags. |
-| `htmlsnapshot export` | Export stored HTML to a file. Supports positional file path or `--file <path>` plus `--clean`. |
-| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI). |
-| `htmlsnapshot grep <pattern>` | Search stored HTML with grep-style flags. |
-| `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`. |
-| `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic — no LLM, no tokens. Supports `--text-only` and pagination. |
+| `htmlsnapshot get <field> [selector] [name]` | Extract the first matching `text`, `textcontent`, `html`, or `attr` from the stored snapshot. |
+| `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from the stored snapshot. Supports `--offset` and `--limit`. |
+| `htmlsnapshot query [url]` | Run X-SQL against the stored page (current page or an explicit URL). Supports `--sql <query\|@file>`, `--sql-stdin`, `--sql-base64`, result pagination, and extraction-focused output flags. |
+| `htmlsnapshot export` | Export the stored snapshot's HTML to a file. Supports positional file path or `--file <path>` plus `--clean`. |
+| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored snapshot. |
+| `htmlsnapshot grep <pattern>` | Search the stored snapshot's HTML with grep-style flags. |
+| `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates in the stored snapshot. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`. |
+| `htmlsnapshot readability [url]` | Extract the main article content from a stored page with a Readability-style heuristic — no LLM, no tokens. Supports `--text-only` and pagination. |
 
 Important rules:
 
 - use `snapshot` when you need refs and interaction
-- use `htmlsnapshot` when you need repeated DOM extraction
+- use `htmlsnapshot` when you need repeated DOM extraction — and run `htmlsnapshot` (capture) first when the page changed in the tab
 - `htmlsnapshot query --sql @query.sql` is the recommended way to avoid shell quoting issues
 - for correlated list extraction, prefer `htmlsnapshot query` over repeated `get all`
 - for one-step article extraction (no selectors needed), use `htmlsnapshot readability`

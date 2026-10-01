@@ -16,7 +16,7 @@ The base `htmlsnapshot` command stores the page in Browser4's page storage and r
 - `interactiveElements` — top weighted interactive elements in Section 8 format (`#closestId tag#id.class`)
 - `linkGroups` — visually detected repeating card/link groups
 
-> `inspect` and `summary` read the **live page** of the active tab, so no prior `htmlsnapshot` capture is required — capturing is useful for the metadata above or for an archived copy.
+> `inspect` and `summary` read the **stored snapshot**, not the live tab: `htmlsnapshot` (capture) is the only htmlsnapshot command that writes, and every read serves the captured copy — or loads the page independently (read-only) when the store has nothing for the URL. Run `htmlsnapshot` first whenever the read must see the page as it is right now (form results, SPA updates, `eval` mutations).
 
 ---
 

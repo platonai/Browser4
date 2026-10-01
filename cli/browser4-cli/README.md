@@ -297,14 +297,15 @@ Details: [Crawl checkpoint & resume](../../docs/crawl-checkpoint-resume.md).
 
 | Command | Description |
 |---|---|
-| `htmlsnapshot` | Short form of `htmlsnapshot capture` — capture a static HTML snapshot and return metadata (optional: reads use the live page) |
-| `htmlsnapshot capture` | Capture a static HTML snapshot and return metadata |
-| `htmlsnapshot get <field> [selector] [name]` | Extract elements from the live page (text, textcontent, html, attr) — no prior capture needed |
-| `htmlsnapshot query [url]` | Run X-SQL against the live page (current page) or an independently fetched URL |
-| `htmlsnapshot export` | Export the live page's HTML to a local file (--clean strips scripts/styles/non-standard attrs) |
-| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the live page |
-| `htmlsnapshot grep [OPTIONS] <pattern>` | Search the live page's HTML with regex patterns and grep-style output |
-| `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic (no LLM) |
+| `htmlsnapshot` | Short form of `htmlsnapshot capture` — serialize the live page into the page store and return metadata. The only htmlsnapshot command that writes |
+| `htmlsnapshot capture` | Serialize the live page into the page store and return metadata (overwrites the stored copy of the tab's normalized URL) |
+| `htmlsnapshot get <field> [selector] [name]` | Extract elements from the STORED snapshot (text, textcontent, html, attr) — read-only; capture first for the live document |
+| `htmlsnapshot query [url]` | Run X-SQL against the STORED page (current page or an explicit URL) — read-only, never captured from the live tab |
+| `htmlsnapshot export` | Export the STORED snapshot's HTML to a local file (--clean strips scripts/styles/non-standard attrs) — read-only |
+| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the STORED snapshot — read-only |
+| `htmlsnapshot grep [OPTIONS] <pattern>` | Search the STORED snapshot's HTML with regex patterns and grep-style output — read-only |
+| `htmlsnapshot inspect [selector]` | Discover CSS selectors over the STORED snapshot — read-only |
+| `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic (no LLM) — reads that URL's own stored copy |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |
 | `diff snapshot [before] [after]` | Diff two saved accessibility snapshots (defaults to the two most recent) |
 

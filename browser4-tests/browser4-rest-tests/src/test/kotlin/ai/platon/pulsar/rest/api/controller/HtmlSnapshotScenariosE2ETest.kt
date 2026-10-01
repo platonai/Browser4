@@ -31,8 +31,10 @@ import kotlin.test.assertTrue
  * product-detail page where 40 elements survive).  Multi-row `load_and_select`
  * on listing pages is not supported under the optimized DOM.
  *
- * `html_snapshot_scrape` and `html_snapshot_export` work against the full
- * browser DOM and are tested extensively across all scenarios.
+ * Every read here (`html_snapshot_scrape`, `_query`, `_export`, ...) serves the
+ * page store and never captures the live tab, so the helpers capture first
+ * (`html_snapshot_capture`) whenever the assertion is about what the tab shows
+ * right now.  That ordering is the contract under test, not a workaround.
  */
 @Tag("E2ETest")
 class HtmlSnapshotScenariosE2ETest : RestAPITestBase() {
@@ -134,7 +136,12 @@ private val createdSessions = mutableListOf<String>()
         return retryId
     }
 
-    /** Force a fresh capture then call html_snapshot_scrape. */
+    /**
+     * Capture, then call html_snapshot_scrape.
+     *
+     * The capture is the contract, not a nicety: reads serve the page store and never capture the
+     * live tab themselves, so a read that must see what the tab shows right now runs after a capture.
+     */
     private fun scrapeField(
         sessionId: String,
         field: String,
@@ -170,7 +177,7 @@ private val createdSessions = mutableListOf<String>()
         return objectMapper.readTree(textContent(response))
     }
 
-    /** Force a fresh capture then export the HTML snapshot. */
+    /** Capture (the family's only writer), then export the stored HTML snapshot. */
     private fun exportHtmlSnapshot(sessionId: String): String {
         callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
         val response = callTool("html_snapshot_export", mapOf("sessionId" to sessionId))
@@ -352,13 +359,18 @@ private val createdSessions = mutableListOf<String>()
         selectTabByUrl(sessionId, "/htmlsnapshot-test/news")
         awaitPageTitle(sessionId, "Hacker News")
 
-        // Capture on the tab-new target must succeed and see the NEW tab.
+        // Capture on the tab-new target must succeed, see the NEW tab, and — the write half of the
+        // contract — key the row by the tab that is active NOW, not by the tab the session started on.
         val captureNewTab = callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
         assertNotError(captureNewTab)
         val newTabText = textContent(captureNewTab)
         assertTrue(
             newTabText.contains("Hacker News"),
             "Capture after tab-new should target the new tab (news fixture): $newTabText"
+        )
+        assertTrue(
+            objectMapper.readTree(newTabText).path("url").asText().contains("/htmlsnapshot-test/news"),
+            "Capture must store the document under the ACTIVE tab's normalized url: $newTabText"
         )
 
         // tab-select back to the original product tab and capture again: the
@@ -375,13 +387,17 @@ private val createdSessions = mutableListOf<String>()
             "Capture after tab-select back should target the original tab: $backText"
         )
         assertTrue(
+            objectMapper.readTree(backText).path("url").asText().contains("/ec/dp/B0E000001"),
+            "Capture after tab-select back must store the re-selected tab's document under its own url: $backText"
+        )
+        assertTrue(
             !backText.contains("ReferenceError"),
             "Capture after tab-select back must not surface a __pulsar_utils__ ReferenceError: $backText"
         )
 
-        // The capture's best-effort runtime recovery must have re-established
-        // the isolated world on the re-selected tab: subsequent evaluations
-        // resolve through the isolated world where __pulsar_utils__ lives.
+        // The driver re-bind (and the capture path's own lazy guard) must have re-established the
+        // isolated world on the re-selected tab: subsequent evaluations resolve through the isolated
+        // world where __pulsar_utils__ lives.
         val runtimeProbe = callTool(
             "browser_evaluate",
             mapOf("sessionId" to sessionId, "expression" to "typeof window.__pulsar_utils__")
@@ -390,18 +406,18 @@ private val createdSessions = mutableListOf<String>()
         assertEquals(
             "function",
             textContent(runtimeProbe).trim(),
-            "After capture on the re-selected tab the __pulsar_utils__ runtime must be available again"
+            "After a tab select the __pulsar_utils__ runtime must be available again"
         )
     }
 
     @Test
-    @DisplayName("1d — Query with @url reflects live DOM mutations on the current page")
+    @DisplayName("1d — Reads serve the store: a capture is what makes the live DOM visible to a query")
     fun test1d_queryReflectsLiveDomMutations() {
         val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
         awaitPageTitle(sessionId, "4K OLED TV")
 
-        // Mutate the LIVE DOM only — no navigation, no server-side change, so
-        // an independent re-fetch of the URL can never see this value.
+        // Mutate the LIVE DOM only — no navigation, no server-side change, so neither the stored copy
+        // nor an independent re-fetch of the URL can see this value.
         val mutation = callTool(
             "browser_evaluate",
             mapOf(
@@ -411,14 +427,17 @@ private val createdSessions = mutableListOf<String>()
         )
         assertNotError(mutation)
 
-        // Querying the current page (no url arg) must be seeded from the live
-        // tab and therefore observe the mutation.  Without live-page seeding
-        // the scrape engine re-fetches the fixture URL and returns the
-        // original server-side title.
         val sql = """
             SELECT dom_first_text(dom, '#productTitle') AS title
             FROM load_and_select(@url, 'body')
         """.trimIndent()
+
+        // `html_snapshot_query` is a READ: it serves the page store (or an independent read-only load)
+        // and never captures the tab, so the mutation is invisible to it.  `html_snapshot_capture` is
+        // the family's only writer — and it re-writes the stored copy of the tab's normalized url —
+        // so it is what puts the live document into the store a read can see.
+        assertNotError(callTool("html_snapshot_capture", mapOf("sessionId" to sessionId)))
+
         val result = queryHtmlSnapshot(sessionId, sql)
         val resultSet = requireResultSet(result)
         assertTrue(resultSet.size() == 1, "Expected 1 body row, got ${resultSet.size()}")
@@ -426,7 +445,7 @@ private val createdSessions = mutableListOf<String>()
         val row = resultSet[0]
         assertTrue(
             row["title"]?.asText()?.contains("LIVE-MUTATED-TITLE") == true,
-            "Query on the current page should reflect the live DOM mutation, got: ${row["title"]}"
+            "After a capture the query must serve the captured live document, got: ${row["title"]}"
         )
     }
 
