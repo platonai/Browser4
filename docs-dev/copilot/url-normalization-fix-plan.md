@@ -285,3 +285,57 @@ base64url 字母表是 `A-Za-z0-9-_`（外加 `=` 填充），且 Java 要求长
 
 也就是说：**"静默跳 Bing" 实际只在 crawl 种子（以及绕过校验直接调用 load API 的集成方）上暴露** —— 这正是
 本轮把校验放在 `/api/crawl` 提交边界的原因。回退本身被保留，因为"用户输入关键词"是它的设计场景。
+
+---
+
+## 八、B4 与 C2-B：基础库的 "standard" 定义与 canonical form
+
+> 位于 `browser4base` 分支 `feat/url-standard-and-canonical-form`，commit `282581a10`。
+> **需要 4.11.24 发版后 browser4 才能消费** —— 与 fragment 修复走的是同一条路。
+
+### 8.1 B4：一个定义
+
+`isStandard(str) := normalizeOrNull(str) != null`。两个门控从此不可能再给出相反结论
+（实测 23 组输入里曾有 9 组相反：能过 `isStandard` 却被归一化成 null，也就是一个 NIL 页）。
+
+同时 `normalize` 明确它处理的 scheme：`http` / `https` / `file`（本地文件它一直支持，
+`testNormalize_WindowsFileURI` 钉着这一点）。`mailto:` / `ftp:` / `data:` 能解析，但不是本文档管线抓取的
+文档 —— 放行它们会让 `isStandard` 对 `mailto:` 为真，于是每个 `mailto:` 锚点都变成 crawl 会去跟的链接。
+
+### 8.2 C2-B：canonical form
+
+`PulsarSession.normalize()`（内部默认 = `URLUtils.normalize`，外部扩展 = `ChainedUrlNormalizer`）的
+**输出**就是"同一资源"的判据。本轮折叠了四种**可证明**等价的拼写：
+
+| 折叠 | 例子 |
+|---|---|
+| scheme / host 大小写 | `HTTPS://Example.COM/a` = `https://example.com/a` |
+| 默认端口 | `:443`（https）/ `:80`（http）等于不写 |
+| 空路径 = `/` | `http://h` = `http://h/` |
+| `.` / `..` 段 | `/a/./b/../c` = `/a/c` |
+
+四种**故意不折叠**，每种都有测试钉住并写明理由：非根路径的尾斜杠、重复分隔符（`//`）、
+unreserved 字符的转义（`%7E`）、query 参数顺序。它们不是可证明的同一资源，而这条 URL 是**浏览器实际要
+去请求的地址**（签名 URL 覆盖的是拼写，不是字符；`/p` 与 `/p/` 在很多服务器上是不同路由）。
+
+crawl 对它自己的身份（`CrawlSupport.normalizeForVisit`）折叠了尾斜杠与 query —— 那回答的是
+"这个 href 值不值得排队"，比"是不是同一页"更粗，差异是有意的。
+
+### 8.3 生效顺序
+
+1. 合并 `feat/url-standard-and-canonical-form` 并发布 4.11.24；
+2. 把 `browser4-dependencies/pom.xml` 的 `browser4-base.version` 改成 4.11.24；
+3. 重跑四模块快速套件。
+
+**升级时要注意的一处放大**：`isStandard` 对 `file://` 从 false 变 true（`normalize` 一直支持 `file:`）。
+browser4 里用 `isStandard` 的门控（`DomUtils` 富文本收集、`JsoupParser` 的 href/referrer、
+`StatefulPageVisitor` 的请求校验、crawl/scrape 的种子校验）届时会接受 `file://`。若不希望 crawl 接受
+`file://` 种子，需要在**种子**门控上再加一条显式的"能通过网络抓取"的要求 —— 独立的小改动，与 4.11.24
+的升级一起做最自然。
+
+### 8.4 本轮尚未折叠的四种拼写（需要你确认）
+
+上表"故意不折叠"的四项**不是**技术上的不可能，而是取舍：折叠它们会让 `normalize` 的输出与用户/服务器
+看到的拼写不同（尾斜杠、`//`、`%7E`、query 顺序都可能被签名或路由区分）。你的规则是
+"`PulsarSession.normalize()` 结果一致 = 同一资源"，如果希望把这四项也纳入同一身份，说一声即可 ——
+改动本身很小（各 2-4 行），代价是会改变浏览器实际请求的地址，需要一起评估签名 URL 与重定向链。
