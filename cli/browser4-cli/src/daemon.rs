@@ -4398,9 +4398,11 @@ fn windows_process_list(names: &[&str]) -> Option<std::process::Output> {
         .ok()
 }
 
-// Stub for non-Windows platforms — never called; satisfies the compiler.
+// Stub for non-Windows platforms — never called, but its signature must match
+// the Windows implementation: the call site sits in an `if cfg!(...)` branch,
+// which is type-checked on every platform even though it never runs.
 #[cfg(not(target_os = "windows"))]
-fn windows_process_list(_executable_name: &str) -> Option<std::process::Output> {
+fn windows_process_list(_names: &[&str]) -> Option<std::process::Output> {
     None
 }
 

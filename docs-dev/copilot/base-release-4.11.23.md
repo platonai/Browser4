@@ -142,4 +142,14 @@ gh run view <run-id> --log-failed --repo platonai/Browser4base   # 关键：失�
 4. **提交信息写"验证过什么"**：本轮每个功能提交都带一行
    `Verified: cargo test … (N passed); mvn -Dtest=… (N passed); real-machine e2e …`，
    评审者不必反问"这跑过没有"。
+5. **`cfg!` 的两个分支在任何平台都会被类型检查 —— 平台专用实现与其 stub 的签名必须同步。**
+   本轮把 `windows_process_list` 的参数从 `&str` 改成 `&[&str]`，忘了改非 Windows 的 stub，
+   于是 Windows 本地全绿、**Linux 编译直接 `E0308`**（`error[E0308] ... expected &str, found &[&str]`），
+   `Cross-Platform Smoke Test` 和依赖 CLI 二进制的 PowerShell 生产测试一起变红（`b4w --help` 退出码 1）。
+   把关办法：
+   - CI 的 `Cross-Platform Smoke Test` 是真正的守门人（本轮就是它抓到的）；
+   - 本地可以试 `rustup target add x86_64-unknown-linux-gnu && cargo check --target x86_64-unknown-linux-gnu`，
+     但本机实测会被依赖 `aws-lc-sys` 的构建脚本挡住（需要 Linux 侧 C 工具链），所以**别把"本地 Windows 绿"当成"CI 绿"**；
+   - 改平台专用函数的签名时，顺手 grep 一遍 `cfg(not(target_os = "windows"))` 的桩：签名不一致就是这类错误的唯一来源。
+
 
