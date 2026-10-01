@@ -88,14 +88,32 @@
 
 ## 四、验证范围与结果
 
-按 AGENTS.md "Don't run full suites"：
+按 AGENTS.md "Don't run full suites"，从最小相关范围起步，按风险升级到 PR 门禁同口径（`surefire.excludedGroups` 默认
+已排除 Slow/Heavy/Integration/E2E/Requires*，与 `.github/workflows/pr.yml` 的 excluded_groups 同量级）。
 
-1. `.\mvnw.cmd -o -q -DskipTests -pl browser4-core/browser4-skeleton,browser4-agent-tools,browser4-rest -am compile` —— 通过。
-2. `browser4-skeleton`：`CombinedUrlNormalizerTest` + `CombinedScopedUrlNormalizerTest`。
-3. `browser4-rest`：`CrawlSupportTest` + `CrawlLedgerTest` + `CrawlCheckpointTest` + `CrawlResumeTest`。
-4. 基础库：`pulsar-common-tests` 的 `URLUtilsTest`（**未在本机执行** —— 见下）。
+| 步骤 | 命令 | 结果 |
+|---|---|---|
+| 1 | `mvnw -o -q -DskipTests -pl browser4-core/browser4-skeleton,browser4-agent-tools,browser4-rest -am compile` | ✅ 通过 |
+| 2 | `browser4-skeleton`：`CombinedUrlNormalizerTest` + `CombinedScopedUrlNormalizerTest` | ✅ **19 / 19** |
+| 3 | `browser4-skeleton` 扩大：`NormUrlTests` + `HyperlinkTests` + `TestLoadOptions` + `AbstractPulsarSessionLoadTest` + 上述两条 | ✅ **85 / 85** |
+| 4 | `browser4-rest`：`CrawlSupportTest` + `CrawlLedgerTest` + `CrawlCheckpointTest` + `CrawlResumeTest` | ✅ **119 / 119** |
+| 5 | `browser4-rest` **全量快速套件** | ✅ **608 / 608**（先出现 3 个 `LlmConfigTemplateTest` 失败，定位为本地 m2 的 `browser4-resources` jar 陈旧、缺少 `config/conf-available/application-private.properties.template`；刷新该模块后 5/5 通过，与本次改动无关） |
+| 6 | 基础库 `pulsar-common-tests` 的 `URLUtilsTest` | 见下 |
 
-> **基础库测试未执行的原因**：`browser4base` 工作区带有使用者未提交的 WIP
-> （`BrowserId.kt`、`PulsarBrowser.kt`、`ProfilePaths.kt` 等），跑该模块的 `test` 会把这份 WIP
-> 一并编译。因此基础库改动只做了源码级验证 + 用真实 jar 复现新旧算法（见第二节表格），
-> `URLUtilsTest` 的新增用例需要在干净的工作区执行。
+### 基础库测试的执行方式
+
+`browser4base` 工作区带有使用者未提交的 WIP（`BrowserId.kt`、`PulsarBrowser.kt`、`ProfilePaths.kt`、
+`WebSocketChromeImpl.kt` 及对应测试）。为避免把这份 WIP 编译进依赖，验证只编译并安装
+**本次改动所在的 `pulsar-common` 模块**（该模块在本分支外没有任何未提交改动），再单独跑
+`pulsar-common-tests` 的 `URLUtilsTest`。
+
+本分支在 `browser4base` 上只 `git add` 了两个文件，使用者的 WIP 保持未暂存、未被提交。
+
+---
+
+## 五、后续动作
+
+1. **基础库发版后删除防护**：`SafeUrlNormalize.kt` 的 TODO 指向本节。删除时把
+   `CombinedUrlNormalizer` 与 `UserCommandExecutor` 改回 `URLUtils`，并移除该文件与其引用。
+2. `browser4-base.version` 保持 `4.11.21`（已发布的 release），本轮不动 —— CI 才能解析到依赖。
+3. Phase B / C 见上表，建议各自独立 PR。
