@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResumeResult
@@ -34,6 +35,21 @@ class CrawlController(
         if (request.url.isBlank() && request.urls.isNullOrEmpty()) {
             throw IllegalArgumentException("url or urls must not be blank")
         }
+        // A seed that cannot be normalized cannot be fetched, and nothing downstream says so: the
+        // crawl used to accept any string, spend its budget, and then either record a NIL page or
+        // fetch the fetcher's *default search-engine url* for the page that was asked for
+        // (`AbstractPulsarContext.normalize` substitutes `SEARCH_ENGINE_URL` when the input is
+        // neither a url nor base64).  A row is then reported under a URL nobody requested.  Refused
+        // here, while the caller can still fix it — the handler below turns this into a 400.
+        (listOf(request.url) + request.urls.orEmpty())
+            .filter { it.isNotBlank() }
+            .forEach { seed ->
+                // A seed may carry trailing LoadOptions, exactly like the scrape payloads do.
+                val url = URLUtils.splitUrlArgs(seed).first
+                if (!URLUtils.isStandard(url)) {
+                    throw IllegalArgumentException("Malformed url: <$url>")
+                }
+            }
         if (request.depth < 0) {
             throw IllegalArgumentException("depth must be >= 0, got ${request.depth}")
         }

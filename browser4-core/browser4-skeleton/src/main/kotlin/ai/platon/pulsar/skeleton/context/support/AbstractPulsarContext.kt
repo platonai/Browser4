@@ -274,7 +274,16 @@ abstract class AbstractPulsarContext(
     }
 
     override fun normalize(urls: Iterable<String>, options: LoadOptions, toItemOption: Boolean): List<NormURL> {
-        return urls.mapNotNull { normalizeOrNull(it, options, toItemOption) }
+        // An unloadable url is dropped rather than failing the batch — that is the contract, and the
+        // single-url overload keeps it too — but nothing else tells the caller that part of what it
+        // asked for is missing, so the loss is reported here.  `Strings.compactInline` keeps a
+        // multi-line url from breaking the log line apart.
+        val rejected = mutableListOf<String>()
+        val normalized = urls.mapNotNull { url ->
+            normalizeOrNull(url, options, toItemOption).also { if (it == null) rejected.add(url) }
+        }
+        reportRejectedUrls(rejected, rejected.size + normalized.size)
+        return normalized
     }
 
     override fun normalize(url: UrlAware, options: LoadOptions, toItemOption: Boolean): NormURL {
@@ -292,7 +301,32 @@ abstract class AbstractPulsarContext(
     }
 
     override fun normalize(urls: Collection<UrlAware>, options: LoadOptions, toItemOption: Boolean): List<NormURL> {
-        return urls.mapNotNull { normalizeOrNull(it, options, toItemOption) }
+        val rejected = mutableListOf<String>()
+        val normalized = urls.mapNotNull { url ->
+            normalizeOrNull(url, options, toItemOption).also { if (it == null) rejected.add(url.url) }
+        }
+        reportRejectedUrls(rejected, rejected.size + normalized.size)
+        return normalized
+    }
+
+    /**
+     * Say out loud how many urls a batch load had to drop, and which ones.
+     *
+     * `normalizeOrNull` swallows the reason (it is `runCatching{}.getOrNull()`), and the batch
+     * overloads silently keep only what they could normalize — so a caller that asked for 100 pages
+     * and got 97 has no way to find out which three are missing, or that anything was missing at
+     * all.  The drop itself stays silent *in the API* (a bad url in a list must not fail the batch,
+     * which is the documented contract); it is the diagnosis that is added here.
+     */
+    private fun reportRejectedUrls(rejected: List<String>, total: Int) {
+        if (rejected.isEmpty()) {
+            return
+        }
+
+        logger.warn(
+            "Dropped {} of {} url(s) that could not be normalized, first: {}",
+            rejected.size, total, rejected.take(3).joinToString("; ") { Strings.compactInline(it) }
+        )
     }
 
     /**
