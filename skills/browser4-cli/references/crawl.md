@@ -307,30 +307,31 @@ browser4-cli crawl "https://example.com" -ol "a[href]" -a "-nMaxRetry 5 -lazyFlu
 
 ## URL deduplication
 
-- Visited URLs are normalized: lowercase, trailing slash removed, query string
-  and URL fragment always stripped for dedup purposes.
-- The same URL is never visited twice within a crawl session.
-- `--top-links` is a budget for **pages**, not anchors: the links a page offers
-  are deduplicated *before* the budget is applied, so a product linked twice
-  (image and title) or a page offered under two query strings costs one slot.
-- A fragment is never part of a queued or reported URL:
-  `product/1.html#specs` is queued — and reported — as `product/1.html`.
-- When one page is offered under several spellings, the crawl queues the first
-  one it saw (document order) and reports that spelling.
-- Fragment-only anchors (`href="#"`, `href="#section"`) can never navigate to
-  a new document and are skipped during link extraction — they are not counted
-  as discovered out-links.
-- Use `--ignore-url-query` to strip query parameters from discovered link hrefs
-  before they are queued, so the URL a result row reports is the URL that was
-  fetched.
-- Use `--no-norm` to disable LoadOptions-level normalization (does not affect
+- Visited URLs are normalized for dedup: the scheme and host are lowercased, the fragment is
+  removed, and a trailing slash is dropped from the *path* (`…/p/` and `…/p/?q=1` fold onto `…/p` and
+  `…/p?q=1`); the **query string is kept** (`?page=1` ≠ `?page=2`) and the path is not lowercased.
+- Use `--ignore-url-query` to treat query variants of one path as the **same** page: it strips the
+  query from discovered link hrefs *before they are queued*, so a grid/list toggle
+  (`?src=grid` / `?src=list`) collapses into one page and costs one `--top-links` slot.  Without the
+  flag each spelling spends budget — the safe default, since a query string usually selects the
+  document.
+- `--top-links` is a budget for **pages**, not anchors: the links a page offers are deduplicated
+  *before* the budget is applied, so a product linked twice (image and title) costs one slot.
+- A fragment is never part of a queued or reported URL: `product/1.html#specs` is queued — and
+  reported — as `product/1.html`.  When a page is offered under several spellings the crawl queues
+  the first it saw (document order) and reports that spelling; fragment-only anchors (`href="#"`)
+  can never navigate to a new document, so they are skipped and not counted as discovered links.
+- The URL the crawl was *asked* to fetch is never rewritten: a seed keeps its query string, so
+  `crawl "https://h/search?q=x&page=3"` fetches exactly that URL and the row reports it.
+  `--no-norm` also disables the LoadOptions-level normalization of discovered link hrefs (never the
   internal dedup normalization).
 
-> **Scope note:** `--ignore-url-query` and `--no-norm` only affect links
-> *discovered* during depth ≥ 1 link discovery.  Seed URLs in a depth-0 bulk
-> fetch are always fetched and reported verbatim, so these flags produce no
-> observable change there.
-
+> **Scope note:** `--ignore-url-query` and `--no-norm` only affect links *discovered* during depth ≥ 1
+> link discovery.  Seed URLs in a depth-0 bulk fetch are always fetched and reported verbatim, so
+> these flags produce no observable change there.
+>
+> When they *are* in scope, `--ignore-url-query` changes which pages a crawl finds, not just how they
+> are spelled: `?page=1…N` yields **one** page with the flag and N without it.
 ## `--readonly` and the X-SQL second read
 
 A crawl normally forces a fresh fetch (`-refresh`) on every page it loads.  With

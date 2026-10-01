@@ -68,31 +68,78 @@ private const val MAX_REPORTED_FAILED_PAGES = 5
 /**
  * Canonical form used to dedupe URLs inside a crawl round.
  *
- * Fragment-only suffixes are stripped too: resolving a fragment-only href
- * against the portal URL appends '#' to it, and the canonicalized form must
- * dedupe against the fragment-less URL instead of surfacing a spurious
- * trailing-'#' page (or counting it as a new link).
+ * The **query is kept**: `?page=2` and `?page=3` are two documents, and folding them onto one
+ * identity silently capped a paginated crawl at its first page — the second URL was refused by
+ * the ledger and never queued, whatever `-top-links` said.  `-ignoreUrlQuery` is the option that
+ * asks for the coarser identity, and it is applied one layer up, where a discovered href becomes
+ * a queued URL ([selectDiscoveredLinks] rewrites the spelling): by the time this function is
+ * called on such a link it is already query-less, so the collapse still happens — it just has to
+ * be asked for.  (Depth-0 seeds are fetched verbatim, see the `-ignoreUrlQuery` note in
+ * `references/crawl.md`.)
  *
- * Order matters, and it is fragment/query **first**, trailing slash **last**.
- * Dropping the slash first only collapsed `…/product/1/` onto `…/product/1`;
- * the very same page linked as `…/product/1/?utm_source=x` kept its slash
- * (`substringBefore('?')` then ends in '/'), so one page submitted under two
- * spellings produced two identities — two submissions, two rows, two depths —
- * which is exactly what this function exists to prevent.  Every crawl path
- * derives its dedup key (and the `visited` / `depths` / `recorded` lookups)
- * from here, so the fix has to live here: `http://h/p/` = `http://h/p` =
- * `http://h/p?q=1` = `http://h/p#f`.
+ * Only the **scheme and the host** are lowercased.  They are case insensitive, while the path and
+ * the query are not: `/Product/1` is a different document from `/product/1` on any case-sensitive
+ * server, so lowercasing the whole url invented a collision that no server would agree with.
+ * User info (`user:Pass@host`) keeps its case too — only the host is folded.
  *
- * Note the deliberate asymmetry: this key is used to *dedupe submissions* and
- * to report losses, never to decide that a page arrived.  A page's final URL
- * can differ from the URL it was submitted under (redirects,
- * `document.baseURI`), so settlement is counted per page, not matched by URL.
+ * Order matters, and it is fragment **first**, then the trailing slash of the path, then the
+ * query is put back:
+ *
+ *  * the fragment is dropped because a jump target inside a document never identifies a page, and
+ *    because resolving a fragment-only href against the portal URL appends '#' to it — the
+ *    canonicalized form must dedupe against the fragment-less URL instead of surfacing a spurious
+ *    trailing-'#' page;
+ *  * the trailing slash is removed from the *path*, so `…/product/1/?utm=1` folds onto
+ *    `…/product/1?utm=1` as well as `…/product/1/` folding onto `…/product/1`.  Dropping the slash
+ *    from the whole string instead left the query-carrying spelling with its slash, so one page
+ *    linked two ways produced two identities, two submissions, two rows and two depths;
+ *
+ * Every crawl path derives its dedup key (and the `visited` / `depths` / `recorded` lookups) from
+ * here, so the rule has to live here and nowhere else.
+ *
+ * Note the deliberate asymmetry: this key is used to *dedupe submissions* and to report losses,
+ * never to decide that a page arrived.  A page's final URL can differ from the URL it was
+ * submitted under (redirects, `document.baseURI`), so settlement is counted per page, not matched
+ * by URL.
  */
 internal fun normalizeForVisit(url: String): String {
-    return url.trim().lowercase()
-        .substringBefore('#')  // strip the fragment for dedup
-        .substringBefore('?')  // strip the query for dedup
-        .removeSuffix("/")     // …last, so '/?query' and '/#frag' fold onto the page
+    val noFragment = url.trim().substringBefore('#')
+    val queryStart = noFragment.indexOf('?')
+    val path = (if (queryStart < 0) noFragment else noFragment.substring(0, queryStart)).removeSuffix("/")
+    val query = if (queryStart < 0) "" else noFragment.substring(queryStart + 1)
+
+    val canonical = if (query.isEmpty()) path else "$path?$query"
+    return lowercaseSchemeAndHost(canonical)
+}
+
+/**
+ * Lowercase the scheme and the host of [url], leaving the path, the query and the user info alone.
+ *
+ * A url without an authority (`example.com/p`, `mailto:a@b.com`) has no host to fold and is
+ * returned unchanged: lowercasing it would change a case-sensitive part of it.
+ */
+private fun lowercaseSchemeAndHost(url: String): String {
+    val schemeEnd = url.indexOf("://")
+    if (schemeEnd < 0) {
+        return url
+    }
+
+    val authorityStart = schemeEnd + 3
+    var authorityEnd = url.length
+    for (i in authorityStart until url.length) {
+        val c = url[i]
+        if (c == '/' || c == '?' || c == '#') {
+            authorityEnd = i
+            break
+        }
+    }
+
+    val authority = url.substring(authorityStart, authorityEnd)
+    val userInfoEnd = authority.lastIndexOf('@') + 1
+    val userInfo = authority.substring(0, userInfoEnd)
+    val host = authority.substring(userInfoEnd).lowercase()
+
+    return url.substring(0, schemeEnd).lowercase() + "://" + userInfo + host + url.substring(authorityEnd)
 }
 
 /**
@@ -121,11 +168,26 @@ internal fun resolveQueueDepth(
     submittedUrl: String,
     servedUrl: String?,
     depths: Map<String, Int>,
-): Int? {
-    depths[normalizeForVisit(submittedUrl)]?.let { return it }
-    val servedKey = servedUrl?.takeIf { it.isNotBlank() }?.let { normalizeForVisit(it) }
-        ?: return null
-    return depths[servedKey]
+): Int? = resolveQueueDepthKey(submittedUrl, servedUrl, depths)?.let { depths[it] }
+
+/**
+ * The queued identity [resolveQueueDepth] resolved, or null when neither url was queued.
+ *
+ * The key is what a page has to be *settled* under: `CrawlLedger.outstanding()` looks for the
+ * submitted identity, so a page that reached the crawl under another url (a redirect, a
+ * `<base href>`) has to be recorded against the key it was queued with as well as the url it was
+ * served under — otherwise it is reported as a lost page next to its own successful row.
+ *
+ * @see resolveQueueDepth for the lookup order and why the submission is tried first.
+ */
+internal fun resolveQueueDepthKey(
+    submittedUrl: String,
+    servedUrl: String?,
+    depths: Map<String, Int>,
+): String? {
+    normalizeForVisit(submittedUrl).takeIf { it in depths }?.let { return it }
+    val servedKey = servedUrl?.takeIf { it.isNotBlank() }?.let { normalizeForVisit(it) } ?: return null
+    return servedKey.takeIf { it in depths }
 }
 
 /**
@@ -551,8 +613,7 @@ internal fun matchesPattern(url: String, pattern: String?): Boolean {
  * The out-links one discovery pass may queue, and the anchors it refused.
  *
  * A storefront routinely offers one destination through several anchors — the
- * product image and the product title are two `href`s to the same page, and a
- * grid/list toggle spells another page twice with different query strings.  The
+ * product image and the product title are two `href`s to the same page.  The
  * budget (`-top-links`) is a budget for *pages*, so it can only be spent after
  * the repeats are gone: feeding the anchors straight into `take(n)` lets two
  * copies of one link take two slots, and the crawl then queues fewer distinct
@@ -562,10 +623,17 @@ internal fun matchesPattern(url: String, pattern: String?): Boolean {
  * Identity is [normalizeForVisit], the crawl's one dedup key, and the spelling
  * that survives is the first one seen.  The fragment is always dropped: a jump
  * target inside a document never identifies a page, so it must not reach the
- * URL a row reports.  The query is dropped when [ignoreUrlQuery] is set — the
- * flag is documented as stripping the query from a *discovered* href, so it has
- * to be applied where discovered hrefs become queued URLs; the load path never
- * sees it for these links.
+ * URL a row reports.  The query is dropped — and the two spellings of a
+ * grid/list toggle therefore collapse — only when [ignoreUrlQuery] is set, which
+ * is what the flag is documented to mean.  This is the layer that has to apply
+ * it: it is where a discovered href becomes a queued URL, so the identity
+ * derived afterwards (the ledger, `visited`, `depths`) inherits the collapse
+ * without any of them having to know the flag.
+ *
+ * Note the two spellings of a *tracking* parameter (`?src=grid` vs `?src=list`)
+ * are two pages by default, and each one spends budget: without this option the
+ * crawl cannot tell a toggle from a paginated listing.  Pass `-ignoreUrlQuery`
+ * when the query is known not to select the document.
  *
  * [visited] is the crawl's cross-page memory (identities this crawl already
  * queued).  A single-level crawl passes an empty set: it has no memory to keep,

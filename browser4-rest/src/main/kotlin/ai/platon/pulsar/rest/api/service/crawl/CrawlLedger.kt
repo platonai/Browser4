@@ -292,10 +292,22 @@ class CrawlLedger(
      * The caller owns exactly-once semantics here (both crawl loops guard the
      * recording path with their own first-event set), because the URL a page
      * ends up under can differ from the URL it was submitted under.
+     *
+     * Both identities are settled when they differ.  [url] is what the row reports (the URL the
+     * document was served under); [submittedUrl] is the identity this round queued, which is what
+     * [outstanding] looks for.  Settling only the served one left a redirecting page in the
+     * "never settled" list next to its own successful row — breaking
+     * `pages + failed + outstanding == pagesExpected` — and made a resumed crawl fetch it again.
+     *
+     * @param url the URL the recorded page reports, or null when unknown.
+     * @param submittedUrl the URL this round queued it under, when that differs from [url].
      */
-    fun recordSuccess(url: String? = null) {
+    fun recordSuccess(url: String? = null, submittedUrl: String? = null) {
         if (!settle()) return
-        url?.takeIf { it.isNotBlank() }?.let { succeededKeys.add(normalizeForVisit(it)) }
+        sequenceOf(url, submittedUrl)
+            .filterNotNull()
+            .filter { it.isNotBlank() }
+            .forEach { succeededKeys.add(normalizeForVisit(it)) }
     }
 
     /**

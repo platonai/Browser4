@@ -7,6 +7,7 @@ import ai.platon.pulsar.skeleton.context.PulsarContext
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -35,7 +36,7 @@ class CrawlSupportTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("URL canonicalization strips the fragment, the query and a trailing slash")
+    @DisplayName("URL canonicalization strips the fragment and a trailing slash, and folds the host case")
     fun testNormalizeForVisitCanonicalizes() {
         assertEquals(
             "https://example.com/product/1",
@@ -45,11 +46,27 @@ class CrawlSupportTest {
             "https://example.com/product/1",
             normalizeForVisit("  HTTPS://Example.com/product/1/  ")
         )
-        // A query string or a fragment must not create a second identity for the
-        // same page, or the crawl would submit it twice.
+        // The path is case sensitive: folding it would invent a collision no server
+        // would agree with, so `/Product/1` stays a page of its own.
         assertEquals(
-            normalizeForVisit("https://example.com/product/1?utm_source=x"),
+            "https://example.com/Product/1",
+            normalizeForVisit("https://Example.com/Product/1")
+        )
+        // A fragment never identifies a page…
+        assertEquals(
+            normalizeForVisit("https://example.com/product/1"),
             normalizeForVisit("https://example.com/product/1#details")
+        )
+        // …a query string does: `?page=2` and `?page=3` are two documents, and folding
+        // them together used to cap a paginated crawl at its first page.  -ignoreUrlQuery
+        // is the option that asks for the coarser identity.
+        assertNotEquals(
+            normalizeForVisit("https://example.com/product/1?page=2"),
+            normalizeForVisit("https://example.com/product/1?page=3")
+        )
+        assertEquals(
+            "https://example.com/product/1?page=2",
+            normalizeForVisit("https://example.com/product/1?page=2")
         )
     }
 
@@ -83,9 +100,13 @@ class CrawlSupportTest {
     @Test
     @DisplayName("repeats on one page do not spend the -top-links budget")
     fun testRepeatsDoNotSpendTheBudget() {
-        // The image and the title of a product are two anchors with one href, and
-        // a grid/list toggle spells one page twice.  Taking the budget before the
-        // repeats are gone spends three slots on two pages.
+        // The image and the title of a product are two anchors with one href.  Taking the
+        // budget before the repeats are gone spends three slots on two pages.
+        //
+        // `product/4.html?src=grid` and `product/4.html?src=list` are NOT repeats here: with
+        // the default, strict identity a query string selects the document, so the two
+        // spellings are two pages and each one is entitled to a slot.  Folding them together
+        // is what -ignoreUrlQuery is for (see testIgnoreUrlQueryStripsTheQueuedSpelling).
         val selection = selectDiscoveredLinks(
             hrefs = duplicateHubHrefs(),
             visited = emptySet(),
@@ -102,9 +123,9 @@ class CrawlSupportTest {
             ),
             selection.links
         )
-        assertEquals(3, selection.repeated, "two repeats of product/1 and one of product/4")
+        assertEquals(2, selection.repeated, "one repeat of product/1 and one of product/2")
         assertEquals(0, selection.alreadyVisited)
-        assertEquals(2, selection.overBudget, "product/4 and product/5 did not fit")
+        assertEquals(3, selection.overBudget, "the two ?src= spellings and product/5 did not fit")
         assertEquals(5, selection.skipped)
     }
 
@@ -124,21 +145,24 @@ class CrawlSupportTest {
             ignoreUrlQuery = false
         )
 
+        // Distinct identities, in document order: product/3, then the two ?src= spellings —
+        // which are pages of their own under the default identity, so they take the two
+        // remaining slots and product/5 falls outside the budget.
         assertEquals(
             listOf(
                 "http://h/generated/crawl/product/3.html",
                 "http://h/generated/crawl/product/4.html?src=grid",
-                "http://h/generated/crawl/product/5.html"
+                "http://h/generated/crawl/product/4.html?src=list"
             ),
             selection.links
         )
-        assertEquals(3, selection.repeated)
+        assertEquals(2, selection.repeated)
         assertEquals(2, selection.alreadyVisited)
-        assertEquals(0, selection.overBudget)
+        assertEquals(1, selection.overBudget)
     }
 
     @Test
-    @DisplayName("one page offered twice is queued once, under the first spelling seen")
+    @DisplayName("a fragment-only spelling is queued once; a query-carrying one is a page of its own")
     fun testOnePageIsQueuedUnderItsFirstSpelling() {
         val selection = selectDiscoveredLinks(
             hrefs = listOf(
@@ -152,10 +176,14 @@ class CrawlSupportTest {
             ignoreUrlQuery = false
         )
 
-        // The identity ignores the query (that is the documented dedup rule), so
-        // the first spelling is the one the row will report.
-        assertEquals(listOf("http://h/p/4.html?src=grid", "http://h/p/5.html"), selection.links)
-        assertEquals(1, selection.repeated)
+        // The identity keeps the query (see normalizeForVisit), so the two ?src= spellings are
+        // two pages and both are queued; the fragment is still dropped, so p/5 is queued under
+        // its fragment-less spelling.  What -ignoreUrlQuery changes is pinned next door.
+        assertEquals(
+            listOf("http://h/p/4.html?src=grid", "http://h/p/4.html?src=list", "http://h/p/5.html"),
+            selection.links
+        )
+        assertEquals(0, selection.repeated)
     }
 
     @Test
@@ -173,6 +201,9 @@ class CrawlSupportTest {
             ignoreUrlQuery = true
         )
 
+        // Shaping the href here is what makes the flag mean something for the whole round: the
+        // two spellings collapse *before* the identity is derived, so the ledger, `visited` and
+        // `depths` inherit the collapse without having to know the option.
         assertEquals(listOf("http://h/p/4.html", "http://h/p/5.html"), selection.links)
         assertEquals(1, selection.repeated)
     }
@@ -264,8 +295,8 @@ class CrawlSupportTest {
 
         assertTrue(selection.links.isEmpty())
         assertEquals(0, selection.filtered)
-        assertEquals(3, selection.repeated)
-        assertEquals(5, selection.overBudget)
+        assertEquals(2, selection.repeated)
+        assertEquals(6, selection.overBudget)
     }
 
     // ------------------------------------------------------------------
@@ -367,46 +398,64 @@ class CrawlSupportTest {
     }
 
     @Test
-    @DisplayName("the depth lookup survives query, fragment and case drift")
+    @DisplayName("the depth lookup survives fragment, trailing-slash and host-case drift")
     fun testDepthLookupIsCanonical() {
         val depths = mapOf(normalizeForVisit("https://example.com/product/1") to 3)
 
-        assertEquals(3, resolveQueueDepth("HTTPS://Example.com/Product/1?utm=1", null, depths))
+        // A query string is part of the identity (see normalizeForVisit), so a page served
+        // under `?utm=1` when the crawl queued the plain url is URL drift, not the same page:
+        // reporting a made-up depth would be worse than reporting none.
+        assertNull(resolveQueueDepth("HTTPS://Example.com/Product/1?utm=1", null, depths))
+        assertNull(resolveQueueDepth("HTTPS://Example.com/Product/1?utm=1#details", null, depths))
+        // The path is case sensitive, so a served URL that differs only in path case is drift too.
+        // (The host case is *not*: it is folded, see lowercaseSchemeAndHost.)
+        assertNull(resolveQueueDepth("https://example.com/Product/1", null, depths))
+        // The fragment, the trailing slash and the host case are folded, so they still resolve.
         assertEquals(3, resolveQueueDepth("https://example.com/product/1#details", null, depths))
-        // The fallback canonicalizes too, or a redirect's trailing slash would
+        assertEquals(3, resolveQueueDepth("https://Example.com/product/1", null, depths))
+        // The fallback canonicalizes the same way, or a redirect's trailing slash would
         // silence a depth the crawl does know.
-        assertEquals(3, resolveQueueDepth("https://example.com/redirect-me", "HTTPS://Example.com/Product/1/", depths))
+        assertEquals(3, resolveQueueDepth("https://example.com/redirect-me", "HTTPS://Example.com/product/1/", depths))
+        assertEquals(3, resolveQueueDepth("https://example.com/redirect-me", "https://example.com/product/1#top", depths))
     }
 
     @Test
-    @DisplayName("a trailing slash before a query or a fragment collapses onto the plain URL")
+    @DisplayName("a trailing slash on the path collapses, whether or not a query follows it")
     fun testTrailingSlashBeforeQueryCollapses() {
-        // normalizeForVisit strips the fragment and the query *before* it removes
-        // the trailing slash.  It used to do it the other way round, so
-        // "…/product/1/?utm=1" kept its slash while "…/product/1" lost its own:
-        // one page, two identities, two submissions, two rows, two depths.  Every
-        // crawl path derives its dedupe key from this one function, so the order
-        // is the fix and it is pinned here.
+        // The trailing slash is removed from the *path*, so `…/product/1/` folds onto
+        // `…/product/1` and `…/product/1/?utm=1` onto `…/product/1?utm=1`.  It used to be removed
+        // from the whole string, which left the query-carrying spelling with its slash: one page,
+        // two identities, two submissions, two rows, two depths.  Every crawl path derives its
+        // dedupe key from this one function, so the rule is the fix and it is pinned here.
         val plain = normalizeForVisit("https://example.com/product/1")
         assertEquals(plain, normalizeForVisit("https://example.com/product/1/"))
-        assertEquals(plain, normalizeForVisit("https://example.com/product/1/?utm=1"))
         assertEquals(plain, normalizeForVisit("https://example.com/product/1/#details"))
-        assertEquals(plain, normalizeForVisit("https://example.com/product/1/?utm=1#details"))
+        assertEquals(
+            normalizeForVisit("https://example.com/product/1?utm=1"),
+            normalizeForVisit("https://example.com/product/1/?utm=1")
+        )
+        assertEquals(
+            normalizeForVisit("https://example.com/product/1?utm=1"),
+            normalizeForVisit("https://example.com/product/1/?utm=1#details")
+        )
+        // The query is *not* dropped: `?utm=1` is only folded with its own spelling.
+        assertNotEquals(plain, normalizeForVisit("https://example.com/product/1?utm=1"))
 
-        // The depth lookup is the main consumer of this key: it inherits the
-        // collapse, or the page would be queued twice with two depths.
+        // The depth lookup is the main consumer of this key: it inherits the collapse, or the
+        // page would be queued twice with two depths.
         val depths = mapOf(plain to 3)
-        assertEquals(3, resolveQueueDepth("https://example.com/product/1/?utm=1", null, depths))
         assertEquals(3, resolveQueueDepth("https://example.com/product/1/#details", null, depths))
-        assertEquals(3, resolveQueueDepth("https://example.com/product/1/?utm=1/", null, depths))
+        assertEquals(3, resolveQueueDepth("https://example.com/product/1/", null, depths))
     }
 
     @Test
     @DisplayName("a root URL keeps one identity with or without its slash")
     fun testRootUrlKeepsOneIdentity() {
         assertEquals("https://example.com", normalizeForVisit("https://example.com/"))
-        assertEquals("https://example.com", normalizeForVisit("https://example.com/?q=1"))
         assertEquals("https://example.com", normalizeForVisit("https://example.com/#top"))
+        // A query string is kept, and the root has no path left to fold the slash out of.
+        assertEquals("https://example.com?q=1", normalizeForVisit("https://example.com/?q=1"))
+        assertEquals("https://example.com?q=1", normalizeForVisit("https://example.com?q=1"))
     }
 
     // ------------------------------------------------------------------

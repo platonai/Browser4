@@ -393,8 +393,10 @@ All item page options work identically to their main counterparts but apply only
 - **Names**: `-ignoreUrlQuery`, `--ignore-url-query`
 - **Type**: Boolean (flag)
 - **Default**: false
-- **Purpose**: Strip query parameters from URLs
-- **AI Note**: Treats URLs with different params as same resource
+- **Purpose**: Treat query variants of one path as the same resource during link discovery
+- **AI Note**: Applied where a **discovered** href becomes a queued URL, so it decides the crawl's
+  dedup identity (`?page=1` = `?page=2`).  It does **not** rewrite the URL that is being loaded: a
+  seed keeps its query string, because the query is usually what selects the document.
 - **Example**: `-ignoreUrlQuery`
 
 #### noNorm
@@ -402,7 +404,9 @@ All item page options work identically to their main counterparts but apply only
 - **Type**: Boolean (flag)
 - **Default**: false
 - **Purpose**: Disable URL normalization
-- **AI Note**: Can lead to duplicate URLs in different formats
+- **AI Note**: Honoured both as a load option and as an argument written next to the url itself
+  (`"https://h/p -noNorm"`), which is how a crawl forwards it to a discovered link.  Can lead to
+  duplicate URLs in different formats.
 - **Example**: `-noNorm`
 
 ---

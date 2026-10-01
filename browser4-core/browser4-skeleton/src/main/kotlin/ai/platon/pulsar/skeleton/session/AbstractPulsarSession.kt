@@ -813,7 +813,10 @@ abstract class AbstractPulsarSession(
         }
 
         link = link.takeUnless { ignoreQuery } ?: URLUtils.getUrlWithoutParameters(link)
-        return link.substringBeforeLast("#")
+        // Everything from the first sharp on is a fragment, never part of the resource: use
+        // substringBefore, not substringBeforeLast, or `http://h/p#a#b` keeps `#a` — an id no
+        // browser would ever request. (CrawlSupport.normalizeForVisit strips it the same way.)
+        return link.substringBefore("#")
     }
 
     private suspend fun loadOutPages0(portalUrl: UrlAware, options: LoadOptions): List<WebPage> {

@@ -1,122 +1,101 @@
-# URL Normalization 修复计划
+# URL Normalization 修复计划与执行记录
 
 > 配套审查报告：[`url-normalization-review.md`](./url-normalization-review.md)
-> 分支：`fix/url-normalization-consistency`（Browser4）、`fix/urlutils-normalize-fragment-safe`（browser4base）
-> 原则：先修"行为与自身文档/契约矛盾"的地方（不改对外语义），再改"语义本身有歧义"的地方（需确认）。
+> 分支：Browser4 `fix/url-normalization-consistency`、browser4base `fix/urlutils-normalize-fragment-safe`
+> 原则：先修"行为与自身文档/契约矛盾"的地方（不改对外语义），再改"语义本身有歧义"的地方（已与用户确认）。
 
 ---
 
-## 决策摘要
+## 一、已确认的决策
 
 | # | 决策 | 结论 | 依据 |
 |---|---|---|---|
-| D1 | `URLUtils.normalize` 的职责 | **保持窄职责**：剥 args + fragment，不做 canonicalization | 加 host 大小写 / 默认端口 / dot-segment / 尾斜杠 / query 顺序归一化会改掉 page store、page cache、ledger 的 key 语义，需要迁移评估。列入 Phase C |
-| D2 | `normalizeForVisit` 的职责 | **crawl 内部身份键**；`lowercase` 只作用于 scheme+host；query 敏感性**待确认**（见 Q1） | `.lowercase()` 作用整条 URL 会吞掉大小写敏感路径，这一点无歧义必改 |
-| D3 | `-ignoreUrlQuery` 的作用域 | **只作用于"发现链接"的排队与去重，不改写被加载的主 URL** | 与 `help crawl`、`references/crawl.md` 两处文档一致，也与 draft issue Issue 1 的修复建议一致 |
-| D4 | 基础库改动方式 | **待确认**（见 Q2） | 推荐"基础库修正确 + 本轮 browser4 侧自带防护"，避免把 base 仓库未提交的 WIP 编译进依赖 jar |
+| D1 | `URLUtils.normalize` 的职责 | **保持窄职责**：剥 args + fragment，本轮不做 canonicalization | 加 host 大小写 / 默认端口 / dot-segment / 尾斜杠 / query 顺序归一化会改掉 page store、page cache、ledger 的 key 语义，需要存量迁移评估。列入 Phase C |
+| D2 | `normalizeForVisit` 的职责 | **crawl 内部身份键，默认保留 query**；`lowercase` 只作用于 scheme+host | 用户确认方案 A。分页站点被静默限制在第一页属于缺陷而非设计 |
+| D3 | `-ignoreUrlQuery` 的作用域 | **只作用于"发现链接"的排队与去重**，不改写被加载的主 URL | 与 `help crawl`、`references/crawl.md` 一致，也与 draft issue Issue 1 的修复建议一致 |
+| D4 | 基础库落地方式 | 基础库分支修正确 + browser4 本轮自带防护；下个基础库发版后删防护 | 用户确认方案 A。browser4 仍 pin 已发布的 `4.11.21`，CI 不受影响 |
 
 ---
 
-## Phase A —— 本轮执行（低风险，不改对外语义契约）
+## 二、已完成的改动
 
-### A1 修 S2：fragment 里的非法转义不应让整条 URL 判死
+### 基础库（browser4base，分支 `fix/urlutils-normalize-fragment-safe`，commit `244d6f47f`）
 
-**问题**：`URLUtils.normalize` 先用 `URIBuilder` 构造完整 URI 才 `fragment = null`，
-所以即将被丢弃的 fragment 里一个裸 `%` 就能让 `https://x.com/a#100%` 变成 `null` → NIL。
+| 文件 | 改动 |
+|---|---|
+| `pulsar-core/pulsar-common/.../urls/URLUtils.kt` | `normalize` 在构造 uri **之前**先剥 fragment（`substringBefore('#')`），fragment 不再能让整条 URL 判死 |
+| `pulsar-core/pulsar-core-tests/.../urls/URLUtilsTest.kt` | 新增 2 条测试：丢弃的 fragment 不得拒绝 URL；**保留部分**的非法转义仍被拒绝 |
 
-**改法**（双处，互为纵深）：
-1. **基础库**（`browser4base`）：`URLUtils.normalize` 在 `splitUrlArgs` 之后、
-   `URIBuilder` 之前先 `substringBefore('#')`。fragment 反正要丢，不该参与校验。
-2. **browser4**：新增归一化门面（`browser4-common`），在把字符串交给 `URLUtils.normalizeOrNull`
-   之前统一先剥 fragment。覆盖 4 个真实调用点：
-   - `CombinedUrlNormalizer.kt:52`（主链接归一化）
-   - `UserCommandExecutor.kt:223`（`isConfiguredUrl`：当前会把可加载页面判为非 URL）
-   - `AbstractPulsarSession.kt:865`（`parseNormalizedLink`：当前会把合法 link **静默丢弃**）
-   - `Browser4WebDriver` 的 `pageUrlNormalizer` 装配处（`AbstractPulsarSession.kt:397-399`）
+实测（用真实 `pulsar-common-4.11.21.jar` 里的 `splitUrlArgs` + `URIBuilder` 复现新旧算法）：
 
-**验收**：`#100%`、`#x#y`、`!@#$%^&*()` 三类输入归一化为
-`https://x.com/a` / `https://x.com/a` / `http://example.com/!@`，不再返回 null。
-
-### A2 修 M1：`CombinedUrlNormalizer` 的 `noNorm` / `ignoreUrlQuery` 改读 `finalOptions`
-
-`CombinedUrlNormalizer.kt:36,52` 读的是入参 `options`（未被 `finalArgs` 影响），
-而同函数第 30-32 行的 `priority` 读的是 `finalOptions`。改为一律读 `finalOptions`，
-使"url args 覆盖 LoadOptions"这一自述契约成立。
-
-### A3 修 H1：`-ignoreUrlQuery` 不再改写被加载的主 URL
-
-- `CombinedUrlNormalizer.kt:52` 不再把 `ignoreUrlQuery` 传入 `URLUtils.normalizeOrNull`
-  （该处归一化的是**待加载的主 URL**，不是发现链接）。
-- 保留 `CrawlSupport.kt:622`（discovered href 层）与 `buildLinkArgs`（`:764`）的现有行为。
-- 更正 `CrawlSupport.kt:590-600` 中与代码相反的注释
-  （"the load path never sees it for these links"）。
-- 行为变化：`crawl --ignore-url-query "<seed with query>"` 现在按文档抓取 **带 query 的 seed**。
-
-### A4 修 M2：`url + args` 不再被当成 URL 校验
-
-`StatefulPageVisitor.kt:173,193` 改为先 `URLUtils.splitUrlArgs(url).first` 再 `isStandard`。
-修掉 `https://example.com -expires 1s` → `Invalid URL` 的偶发误报。
-
-### A5 修 L1：统一 fragment 剥离规则
-
-`AbstractPulsarSession.kt:869` 的 `substringBeforeLast("#")` → `substringBefore('#')`
-（前者在 `http://h/p#a#b` 上会留下 `#a`）。与 `CrawlSupport.kt:622` 对齐。
-
-### A6 修 H4：重定向的 seed 不再被同时报成功与丢失
-
-`CrawlLedger` 在 `recordSuccess` 时同时登记"提交键"，
-或让 `outstanding()`（`CrawlLedger.kt:343-353`）像 `lossReasonForLoaded`
-（`CrawlSupport.kt:420`）那样接受 `page.url` 兜底。
-恢复 `pages + failed + outstanding == pagesExpected` 不变式。
-
-### A7 日志：NIL 归一化从 info 提到 warn 并带原因
-
-`AbstractPulsarContext.kt:283` 目前 `logger.info("URL is normalized to NIL | {}")`。
-改为 `warn` 并说明是归一化链拒绝（区分"非法 URL"与"被 normalizer 拒绝"）。
-
----
-
-## Phase B —— 需确认后执行（改行为语义）
-
-| # | 项 | 内容 | 阻塞于 |
-|---|---|---|---|
-| B1 | H2 / H3 | `normalizeForVisit` 增加 query 敏感性；`.lowercase()` 收敛到 scheme+host | **Q1** |
-| B2 | M4 | crawl/scrape seed 入队前校验，拒绝非法 seed（替代"静默换搜索引擎"） | 可直接做，但会改 REST 错误语义 |
-| B3 | M5 | 统一失败语义：区分"没有 URL"与"URL 非法"，并把非法值回给调用方 | 需要定 API 形状 |
-| B4 | M6 / M7 | 经验层：`rawPath` 替代 `path`、`extractDomain` 加 `IDN.toASCII`+lowercase 且禁止回退原始 URL、Level-1 加 URL gate | 独立，可单独排期 |
-
----
-
-## Phase C —— 本轮不做（列入后续评估）
-
-| # | 项 | 为什么不在本轮 |
+| 输入 | 旧 | 新 |
 |---|---|---|
-| C1 | S1：`goto` 路径接入 `normalize` | 需要产品决策："goto 是否应剥 fragment / 规范化"取决于用户预期，且影响 `attach`、fragment 跳转、SPA 路由 |
-| C2 | `URLUtils.normalize` canonicalization（D1 的 5 项） | 改 page store / cache / ledger 的 key，需要存量数据迁移与兼容评估 |
+| `https://example.com/a#100%` | `URISyntaxException` | `https://example.com/a` |
+| `https://example.com/a#x#y` | `URISyntaxException` | `https://example.com/a` |
+| `http://example.com/!@#$%^&*()` | `URISyntaxException` | `http://example.com/!@` |
+| `https://example.com/a%` / `a%zz` | 拒绝 | 拒绝（不变） |
+| `http://example.com/path&%!({{` | `URISyntaxException` | `URISyntaxException`（不变，既有测试仍通过） |
+| `https://example.com/p -requireNotBlank '#productTitle'` | `https://example.com/p` | `https://example.com/p`（`#` 在被剥离的 args 里，未被误判） |
+
+### browser4
+
+| 项 | 位置 | 改动 |
+|---|---|---|
+| **A1** 新增防护门面 | `browser4-skeleton/.../common/urls/SafeUrlNormalize.kt` | 先 `splitUrlArgs` 再 `substringBefore('#')`，之后才交给 `URLUtils`。带 TODO：基础库发版后删除 |
+| **S2** 修复 | `CombinedUrlNormalizer.kt` | 改走 `SafeUrlNormalize`；`NormURL` 构造包 `runCatching`，`-noNorm` 下不可解析的 URL 变 NIL 而不是抛异常 |
+| **A2** 修复 M1 | `CombinedUrlNormalizer.kt` | `noNorm` / `ignoreUrlQuery` 一律读 `finalOptions`（与同函数内 `priority` 一致，兑现"url args 覆盖 LoadOptions"的自述契约） |
+| **A3** 修复 H1 | `CombinedUrlNormalizer.kt` | 归一化**不再**传入 `ignoreUrlQuery`：该 flag 属于发现链接层。seed 不再被改写（对齐 draft issue Issue 1），本地文件 URL 不再塌缩成一个 cache key |
+| **A4** 修复 M2 | `StatefulPageVisitor.kt` ×2 | 先 `splitUrlArgs(...).first` 再 `isStandard` / 进 X-SQL |
+| **A5** 修复 L1 | `AbstractPulsarSession.kt` | `substringBeforeLast("#")` → `substringBefore("#")`（与 `CrawlSupport` 对齐） |
+| **A6** 修复 H4 | `CrawlSupport.resolveQueueDepthKey` + `CrawlLedger.recordSuccess(url, submittedUrl)` + `CrawlRoundRunner` | 重定向/`<base href>` 的页面同时结清"报告身份"和"提交身份"，不再同时出现在成功行与 `outstanding()` |
+| **A7** 日志 | `CombinedUrlNormalizer.nil()` / `AbstractPulsarContext` | NIL 原因在 `CombinedUrlNormalizer` 里以 warn 说出（浏览器内部 URL 如 `about:blank` 降为 debug）；`AbstractPulsarContext` 的重复 info 日志移除 |
+| **Q1-A** crawl 身份键 | `CrawlSupport.normalizeForVisit` | 默认**保留 query**；尾斜杠只从 path 上剥（`/p/?utm=1` ≡ `/p?utm=1`）；只 lowercase scheme+host（path/query/userinfo 大小写保留） |
+| **入口** | `UserCommandExecutor.isConfiguredUrl` | 改用 `SafeUrlNormalize`：fragment 里带非法转义的 URL 不再被降级成 agent 任务 |
+| 文档 | `CrawlSupport` KDoc ×3 | 更正与代码相反的注释（"the load path never sees it"、query 折叠规则） |
+
+### 测试
+
+| 文件 | 内容 |
+|---|---|
+| `CombinedUrlNormalizerTest.kt`（新增 9 条） | 内联 `-noNorm` / `UrlAware.args` 的 `-noNorm` 生效；`-ignoreUrlQuery` **不**改写被加载的 URL、**不**塌缩本地文件 URL；fragment 非法转义不再 NIL；path 非法转义仍 NIL；`-noNorm` + 不可解析 → NIL 不抛异常；normalizer 链拒绝 → NIL |
+| `CombinedScopedUrlNormalizerTest.kt` | 特殊字符用例从"断言 isNil"改为断言正确结果 `http://example.com/!@`；空格用例保留并注明是已知限制（S1） |
+| `CrawlSupportTest.kt` | 身份键断言按 Q1-A 重写（query 敏感、只折叠 host 大小写、尾斜杠只在 path 上剥）；`selectDiscoveredLinks` 的 `repeated` / `overBudget` / `links` 期望值更新 |
+| `CrawlLedgerTest.kt` | 新增"served elsewhere 的页面同时结清提交身份" |
+
+---
+
+## 三、未做（已排期，不在本轮）
+
+### Phase B —— 需要先定 API 形状
+
+| # | 项 | 内容 |
+|---|---|---|
+| B1 | M4 | crawl/scrape seed 入队前校验，替代"静默换搜索引擎"（会改 REST 错误语义：从 202+搜索引擎结果 变成 400） |
+| B2 | M5 | 统一失败语义：区分"没有 URL"与"URL 非法"，并把非法值回给调用方（`ConversationService` 的 `"URL must not be blank"` 文案也是错的） |
+| B3 | M6/M7 | 经验层：`rawPath` 替代 `path`、`extractDomain` 加 `IDN.toASCII` + lowercase 且禁止回退原始 URL、Level-1 加 URL gate |
+| B4 | H2 补 | `isStandard` 与 `normalizeOrNull` 的分歧（实测 23 组里 9 组结论相反）收敛到一个解析器 |
+
+### Phase C —— 本轮明确不做
+
+| # | 项 | 为什么 |
+|---|---|---|
+| C1 | S1：`goto` 路径接入归一化 | 需要产品决策（goto 是否应剥 fragment / 规范化），且影响 `attach`、fragment 跳转、SPA 路由 |
+| C2 | `URLUtils.normalize` canonicalization | 改 page store / cache / ledger 的 key，需要存量迁移方案（D1） |
 | C3 | M8：Scrape/Swarm SQL 转义统一 | 与本主题正交，宜独立 PR |
 | C4 | L3：SQL context 保留 `detail` | 同上 |
 
 ---
 
-## 测试计划
+## 四、验证范围与结果
 
-| # | 位置 | 断言 |
-|---|---|---|
-| T1 | `browser4-skeleton` 新增 `CombinedUrlNormalizerTest` | 内联 args 的 `-noNorm` / `-ignoreUrlQuery` 生效；fragment 非法转义不再产生 NIL |
-| T2 | `browser4-skeleton` 新增 `URLUtilsContractTest` | fragment 安全三类输入；记录 `isStandard` 与 `normalizeOrNull` 的已知分歧（防回归基线） |
-| T3 | `CrawlSupportTest` | 按 Q1 结论补 query 敏感性用例 |
-| T4 | `CrawlLedgerTest` | 重定向 seed 不出现在 `outstanding()` |
-| T5 | `CrawlSupportTest` / `CrawlCheckpointTest` | `-ignoreUrlQuery` 下 seed 保留 query、discovered href 剥 query（A3） |
-| T6 | 更新 `CombinedScopedUrlNormalizerTest.kt:150-163` | 空格/特殊字符不再断言"静默截断"，改为断言完整保留或显式失败 |
-| T7 | `browser4base` 新增 `URLUtilsTest` | `normalize` 对 fragment 非法转义的处理 |
+按 AGENTS.md "Don't run full suites"：
 
-**最小验证范围**（按 AGENTS.md "Don't run full suites"）：
-`mvn -q -DskipTests` 编译 → `mvn test -pl browser4-core/browser4-skeleton -Dtest=CombinedUrlNormalizerTest+URLUtilsContractTest`
-→ `mvn test -pl browser4-rest -Dtest=CrawlSupportTest+CrawlLedgerTest+CrawlCheckpointTest`
-→ 受影响路径跑一次 `cargo test --test e2e -- --scenario=*crawl*`（需要真实后端时再决定）。
+1. `.\mvnw.cmd -o -q -DskipTests -pl browser4-core/browser4-skeleton,browser4-agent-tools,browser4-rest -am compile` —— 通过。
+2. `browser4-skeleton`：`CombinedUrlNormalizerTest` + `CombinedScopedUrlNormalizerTest`。
+3. `browser4-rest`：`CrawlSupportTest` + `CrawlLedgerTest` + `CrawlCheckpointTest` + `CrawlResumeTest`。
+4. 基础库：`pulsar-common-tests` 的 `URLUtilsTest`（**未在本机执行** —— 见下）。
 
----
-
-## 待确认问题
-
-见对话中的 Q1 / Q2 / Q3。
+> **基础库测试未执行的原因**：`browser4base` 工作区带有使用者未提交的 WIP
+> （`BrowserId.kt`、`PulsarBrowser.kt`、`ProfilePaths.kt` 等），跑该模块的 `test` 会把这份 WIP
+> 一并编译。因此基础库改动只做了源码级验证 + 用真实 jar 复现新旧算法（见第二节表格），
+> `URLUtilsTest` 的新增用例需要在干净的工作区执行。
