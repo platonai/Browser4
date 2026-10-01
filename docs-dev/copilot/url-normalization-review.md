@@ -23,6 +23,12 @@
 
 只要"同一份输入在四处的'是不是同一页'结论不同"，几乎所有下游问题都能追溯到"用错了哪一套"。
 
+**修复方向（已与用户确认）**：系统里应当只有**一个**"同一资源"的判据 —— `PulsarSession.normalize()` 的
+输出；其余去重键（crawl ledger、经验库 pattern 等）是各自层面**有意更粗**的近似，必须写明理由。
+同时守住一条原则：**规范化只做存取身份，送给浏览器的地址保持原始形式**（`NormURL.href` /
+`NavigateEntry.userTypedUrl` / `fetchTask.href` 优先）—— 因为规范化会丢掉 fragment，而
+`goto "https://h/doc#section"` 是合法且常用的请求。详见修复计划 §原则。
+
 ---
 
 ## 二、实测结果（真实 jar，非推断）

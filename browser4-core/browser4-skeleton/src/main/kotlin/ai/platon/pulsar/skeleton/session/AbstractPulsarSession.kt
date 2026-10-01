@@ -394,6 +394,13 @@ abstract class AbstractPulsarSession(
             // injects while serializing.  Normalization is this session's policy
             // (`PulsarSession.normalize`), so the session installs it on the
             // driver instead of letting every capture path invent its own URL.
+            //
+            // That link is the document's *identity*, not the address it was
+            // opened by — the document may well have been navigated to with a
+            // fragment or a tracking query this normalization drops.  The raw
+            // address travels beside it as `link[rel=href]` (see JsoupParser), so
+            // a consumer that wants to re-open the page has both, and should
+            // prefer the href.
             (driver as? Browser4WebDriver)?.pageUrlNormalizer = { url ->
                 runCatching { normalize(url).takeIf { it.isNotNil }?.urlString }.getOrNull()
             }

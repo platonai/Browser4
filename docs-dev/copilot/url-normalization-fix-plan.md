@@ -1,8 +1,43 @@
 # URL Normalization 修复计划与执行记录
 
 > 配套审查报告：[`url-normalization-review.md`](./url-normalization-review.md)
-> 分支：Browser4 `fix/url-normalization-consistency`、browser4base `fix/urlutils-normalize-fragment-safe`
-> 原则：先修"行为与自身文档/契约矛盾"的地方（不改对外语义），再改"语义本身有歧义"的地方（已与用户确认）。
+> 分支：Browser4 `fix/url-normalization-consistency`、browser4base `feat/url-standard-and-canonical-form`
+> （fragment 修复已随 `v4.11.23` 发布并被 browser4 消费；B4/C2-B 待 4.11.24）
+> 执行原则：先修"行为与自身文档/契约矛盾"的地方（不改对外语义），再改"语义本身有歧义"的地方（与用户确认后落地）。
+
+---
+
+## 原则：规范化只做存取身份，原始 href 优先
+
+> **Normalization is an identity, never an address.**
+> 规范化后的 url 只用来做**存取身份**（page store / page cache / url pool / ledger / 经验库的 key，
+> 以及"是不是同一页"的判据）；**送给浏览器的地址保持原始形式**。
+
+这条原则决定了每个 URL 的两种拼写各自归谁：
+
+| 用途 | 用哪种拼写 | 代码里叫什么 |
+|---|---|---|
+| 存入、查找、去重（page store / page cache / url pool / ledger / 经验库） | **规范化后** | `NormURL.url` / `page.url` / `normURL.urlString` |
+| 送给浏览器去打开 | **原始（未修改的 href / 用户输入）** | `NormURL.href` / `NavigateEntry.userTypedUrl` / `fetchTask.href` |
+| 没有 href 时的兜底 | 退回规范化 url | `fetchTask.href ?: fetchTask.url`、`page.href ?: page.url` |
+
+**为什么不能反过来**：`normalize()` 会丢掉 fragment —— 而 `goto "https://h/doc#section"` 是**有效且常用**
+的请求（长文档锚点、SPA 路由）；它还可能按需丢掉 query 或尾随参数列表。拿规范化结果去导航，等于把这些
+信息一起丢掉。反过来，拿原始 href 当 key 也不行：同一页的多种拼写会各存一份、各抓一次。
+
+**落地位置**（同一原则，各处各说一次，便于按名字检索）：
+
+- `URLUtils.normalize` KDoc（基础库）："Normalization produces an identity, never an address."
+- `NavigateEntry`：`userTypedUrl` = 地址（逐字送给浏览器）、`pageUrl` = 身份（查 WebPage 用）。
+  这份 KDoc 之前把两者写反了（说 `userTypedUrl` 是"locating the WebPage 的 source of truth"），已更正。
+- `NormURL`：类级 KDoc 写明 `url` 是身份、`href` 是地址，且 `href` 优先用于打开。
+- `PulsarSession.normalize`：**"同一资源"的唯一判据** —— 两个拼写在这里不一致，就扩展这里，
+  而不是在别处改用另一种拼写做 key。
+- `BrowserTabToolExecutor.requireNavigable`：`goto` 只**校验**地址、绝不规范化它。
+- `AbstractPulsarSession.bindDriver`：捕获下来的 HTML 里 `link[rel=normalizedURI]` 记的是**身份**，
+  旁边的 `link[rel=href]` 才是地址；要重新打开这个页面，应优先用后者。
+
+**审计证据见 §九**：page store / page cache / url pool 的每个写入点都只认规范化后的拼写，没有第二套 key。
 
 ---
 
