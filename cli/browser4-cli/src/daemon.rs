@@ -15,7 +15,6 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
 use reqwest::Client;
@@ -3569,12 +3568,175 @@ impl std::fmt::Display for BrowserChannel {
     }
 }
 
-/// Resolve a channel name to a CDP HTTP endpoint URL.
+/// Where a candidate CDP port was discovered (used in diagnostics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CdpCandidateSource {
+    /// `<user-data-dir>/DevToolsActivePort` — the file Chrome writes whenever
+    /// remote debugging is active, including the built-in
+    /// `chrome://inspect/#remote-debugging` mode.
+    DevToolsActivePort,
+    /// `--remote-debugging-port=N` (N != 0) on the browser's command line.
+    ProcessFlag,
+    /// Another port the browser process listens on — this is how a browser
+    /// started with `--remote-debugging-port=0` is discovered.
+    ProcessListener,
+    /// The channel's conventional debug port.
+    DefaultPort,
+    /// The 9222–9333 fallback scan.
+    PortScan,
+}
+
+/// One candidate CDP endpoint, with the source that produced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CdpCandidate {
+    port: u16,
+    /// Browser-level WebSocket path (`/devtools/browser/<uuid>`) when the source
+    /// published one — the second line of `DevToolsActivePort`. It is what makes
+    /// a WebSocket-only endpoint (Chrome's built-in remote debugging) attachable.
+    browser_ws_path: Option<String>,
+    source: CdpCandidateSource,
+}
+
+impl CdpCandidate {
+    fn new(port: u16, source: CdpCandidateSource) -> Self {
+        Self {
+            port,
+            browser_ws_path: None,
+            source,
+        }
+    }
+
+    /// A candidate that carries the browser-level WebSocket path published next
+    /// to the port.
+    fn with_browser_ws_path(port: u16, browser_ws_path: Option<String>, source: CdpCandidateSource) -> Self {
+        Self {
+            port,
+            browser_ws_path: browser_ws_path.filter(|path| !path.trim().is_empty()),
+            source,
+        }
+    }
+}
+
+/// What a probe learned about one candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CdpProbe {
+    candidate: CdpCandidate,
+    /// Any HTTP answer — even 404 — proves a listener; a refused connection does not.
+    listening: bool,
+    /// `GET /json/version` answered 2xx, i.e. legacy HTTP discovery is served.
+    http_discovery: bool,
+    /// Status of `GET /json/version` when an HTTP response was received.
+    version_status: Option<u16>,
+    /// `Browser` identity reported by `/json/version`.
+    browser: Option<String>,
+    /// `page` targets listed by `/json`; `None` when `/json` did not answer 2xx.
+    page_targets: Option<usize>,
+    /// `ws://…/devtools/browser/<uuid>` when known: from `/json/version`'s
+    /// `webSocketDebuggerUrl`, else from the `DevToolsActivePort` path.
+    browser_ws_url: Option<String>,
+}
+
+impl CdpProbe {
+    /// HTTP attachability: the endpoint lists at least one page target, which is
+    /// what the `/json`-based driver needs.
+    fn attachable(&self) -> bool {
+        self.page_targets.unwrap_or(0) > 0
+    }
+
+    /// A listener that serves no HTTP discovery endpoint. Chrome ≥144's built-in
+    /// "Allow remote debugging for this browser instance" mode keeps the
+    /// browser-level WebSocket on that port but answers `/json*` with 404, so no
+    /// page target can be resolved over HTTP.
+    fn websocket_only(&self) -> bool {
+        self.listening && !self.http_discovery
+    }
+
+    /// A WebSocket-only endpoint whose browser socket is known is attachable too:
+    /// the driver discovers pages with `Target.getTargets` over that socket.
+    fn websocket_attachable(&self) -> bool {
+        self.websocket_only() && self.browser_ws_url.is_some()
+    }
+
+    /// Whether this probe is worth attaching to, over either transport.
+    fn attachable_any(&self) -> bool {
+        self.attachable() || self.websocket_attachable()
+    }
+
+    /// The endpoint URL to hand to the backend.
+    fn endpoint(&self) -> Option<String> {
+        if self.attachable() {
+            Some(cdp_endpoint_url(self.candidate.port))
+        } else {
+            self.browser_ws_url.clone()
+        }
+    }
+
+    /// Short human-readable description used in error messages.
+    fn describe(&self) -> String {
+        let pages = match self.page_targets {
+            Some(count) => format!("pages={count}"),
+            None if self.browser_ws_url.is_some() => "WebSocket-only".to_string(),
+            None => "no /json".to_string(),
+        };
+        match self.browser.as_deref() {
+            Some(browser) => format!("port {} ({browser} · {pages})", self.candidate.port),
+            None => format!("port {} ({pages})", self.candidate.port),
+        }
+    }
+}
+
+fn cdp_endpoint_url(port: u16) -> String {
+    format!("http://localhost:{port}")
+}
+
+/// Endpoint of the first attachable probe: an HTTP endpoint when one lists page
+/// targets, else the browser-level WebSocket of a WebSocket-only endpoint.
+fn first_attachable_endpoint(probes: &[CdpProbe]) -> Option<String> {
+    probes
+        .iter()
+        .find(|probe| probe.attachable_any())
+        .and_then(|probe| probe.endpoint())
+}
+
+/// Probe candidates in order, skipping ports that were already probed, and stop
+/// at the first one that can be attached to — the later, more expensive stages
+/// only run when no earlier candidate qualifies.
+fn probe_candidates(candidates: &[CdpCandidate], seen: &mut Vec<u16>) -> Vec<CdpProbe> {
+    let mut probes = Vec::new();
+    for candidate in candidates {
+        if seen.contains(&candidate.port) {
+            continue;
+        }
+        seen.push(candidate.port);
+        let probe = probe_cdp_candidate(candidate.clone());
+        let attachable = probe.attachable_any();
+        probes.push(probe);
+        if attachable {
+            break;
+        }
+    }
+    probes
+}
+
+/// Resolve a channel name to a CDP endpoint URL.
 ///
-/// Uses a three-tier strategy:
-/// 1. Scan running processes for `--remote-debugging-port=N`
-/// 2. Probe the channel's default port
-/// 3. Scan ports 9222–9333 for a responding CDP endpoint
+/// Candidate endpoints are gathered from every source that can describe a
+/// running browser, probed in order, and the first candidate that can host a
+/// page wins:
+///
+/// 1. `<user-data-dir>/DevToolsActivePort` plus `--remote-debugging-port=N` —
+///    the two places a browser itself publishes its debug endpoint.
+/// 2. Other ports the browser process listens on (Windows) — this is what makes
+///    a browser started with `--remote-debugging-port=0` discoverable.
+/// 3. The channel's conventional port (9222/…).
+/// 4. A 9222–9333 scan, as a last resort.
+///
+/// The result is an `http://localhost:<port>` endpoint when the candidate lists
+/// page targets over `/json`, and otherwise the browser-level **WebSocket URL**
+/// (`ws://…/devtools/browser/<uuid>`, published by `DevToolsActivePort`) for
+/// WebSocket-only endpoints — Chrome's built-in remote debugging, which answers
+/// every `/json*` request with 404. When nothing is attachable the error names
+/// what was found instead of handing a doomed endpoint to the backend.
 pub fn resolve_channel_to_endpoint(channel: &str) -> Result<String, String> {
     let ch = BrowserChannel::from_str(channel).ok_or_else(|| {
         format!(
@@ -3585,125 +3747,583 @@ pub fn resolve_channel_to_endpoint(channel: &str) -> Result<String, String> {
     })?;
 
     let executable_name = ch.executable_name();
-
-    // Tier 1: find --remote-debugging-port in running process command lines
-    if let Some(port) = find_debug_port_in_running_processes(executable_name) {
-        let endpoint = format!("http://localhost:{port}");
-        if probe_cdp_port(port) {
-            return Ok(endpoint);
-        }
-    }
-
-    // Tier 2: try the channel's default port
     let default_port = ch.default_debug_port();
-    if probe_cdp_port(default_port) {
-        return Ok(format!("http://localhost:{default_port}"));
-    }
 
-    // Tier 3: scan a range of ports concurrently — probe all ports in the
-    // range at once since localhost connection-refused is near-instant and
-    // sequential scanning would waste time on timeouts for non-CDP open ports.
-    let found = AtomicU16::new(0);
-    let found_ref = &found;
-    std::thread::scope(|s| {
-        for port in 9222..=9333 {
-            s.spawn(move || {
-                if found_ref.load(Ordering::Relaxed) == 0 && probe_cdp_port(port) {
-                    found_ref.store(port, Ordering::Relaxed);
-                }
-            });
+    // Every probe is kept so a total failure can name what was actually found
+    // instead of handing the backend an endpoint that cannot be attached to.
+    let command_lines = browser_process_command_lines(executable_name);
+    let mut seen: Vec<u16> = Vec::new();
+    let mut probes: Vec<CdpProbe> = Vec::new();
+
+    // Stage 1 — what the browser itself publishes: DevToolsActivePort (written
+    // in every remote-debugging mode, including Chrome's built-in
+    // chrome://inspect toggle), then the --remote-debugging-port it was started
+    // with.
+    let mut published: Vec<CdpCandidate> = Vec::new();
+    for dir in devtools_active_port_dirs(&ch, &command_lines) {
+        if let Some(active_port) = read_devtools_active_port(&dir) {
+            published.push(CdpCandidate::with_browser_ws_path(
+                active_port.port,
+                active_port.browser_path,
+                CdpCandidateSource::DevToolsActivePort,
+            ));
         }
-    });
-    let found_port = found.load(Ordering::Relaxed);
-    if found_port != 0 {
-        return Ok(format!("http://localhost:{found_port}"));
+    }
+    if let Some(port) = parse_remote_debugging_port(&command_lines).filter(|port| *port != 0) {
+        published.push(CdpCandidate::new(port, CdpCandidateSource::ProcessFlag));
+    }
+    probes.extend(probe_candidates(&published, &mut seen));
+    if let Some(endpoint) = first_attachable_endpoint(&probes) {
+        return Ok(endpoint);
     }
 
-    Err(format!(
-        "Could not find a running {executable_name} browser with remote debugging enabled.\n\
-         To attach to a {channel} browser:\n\
-         1. Open {executable_name} and go to chrome://inspect/#remote-debugging\n\
-         2. Check 'Allow remote debugging for this browser instance'\n\
-         3. Or start it with: {executable_name} --remote-debugging-port={default_port}\n\
-         Then run: browser4-cli attach --cdp http://localhost:{default_port}"
+    // Stage 2 — other ports the browser process listens on. This is what makes
+    // Browser4-managed browsers (random debug port) discoverable by channel name.
+    let listeners = process_listener_candidates(executable_name);
+    probes.extend(probe_candidates(&listeners, &mut seen));
+    if let Some(endpoint) = first_attachable_endpoint(&probes) {
+        return Ok(endpoint);
+    }
+
+    // Stage 3 — the channel's conventional port.
+    let conventional = [CdpCandidate::new(default_port, CdpCandidateSource::DefaultPort)];
+    probes.extend(probe_candidates(&conventional, &mut seen));
+    if let Some(endpoint) = first_attachable_endpoint(&probes) {
+        return Ok(endpoint);
+    }
+
+    // Stage 4 — scan a range of ports concurrently: a localhost
+    // connection-refused is near-instant, but sequential scanning would still
+    // pay the HTTP timeout for every open non-CDP port, so probe all at once.
+    probes.extend(scan_for_attachable_cdp_endpoint(9222, 9333));
+    if let Some(endpoint) = first_attachable_endpoint(&probes) {
+        return Ok(endpoint);
+    }
+
+    Err(describe_no_attachable_endpoint(
+        &probes,
+        channel,
+        executable_name,
+        default_port,
     ))
 }
 
-/// Search for a running process matching `executable_name` and extract
-/// its `--remote-debugging-port` value from the command line.
-fn find_debug_port_in_running_processes(executable_name: &str) -> Option<u16> {
+/// Command lines of every running process whose executable matches
+/// `executable_name`.
+fn browser_process_command_lines(executable_name: &str) -> Vec<String> {
+    browser_processes_command_lines(&[executable_name])
+}
+
+/// Command lines of running processes matching **any** of `names`.
+///
+/// One OS query for the whole set: callers that need several browser families
+/// (e.g. extension-profile discovery, which considers Chrome and Edge) must not
+/// pay for one PowerShell spawn per name.
+pub(crate) fn browser_processes_command_lines(names: &[&str]) -> Vec<String> {
+    if names.is_empty() {
+        return Vec::new();
+    }
+
     let output = if cfg!(target_os = "windows") {
         // Windows: try PowerShell (Get-CimInstance) first, fall back to
         // deprecated wmic for older Windows versions.
-        windows_process_list(executable_name)?
+        match windows_process_list(names) {
+            Some(output) => output,
+            None => return Vec::new(),
+        }
     } else {
         // macOS / Linux: use ps with `-o args=` for the full command line
         // (BSD `command=` may truncate long lines; `args=` is the portable
         // column for the complete argument vector).
-        std::process::Command::new("ps")
+        match std::process::Command::new("ps")
             .args(["-e", "-o", "args="])
             .output()
-            .ok()?
+        {
+            Ok(output) => output,
+            Err(_) => return Vec::new(),
+        }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut requested_port: Option<u16> = None;
-    for line in stdout.lines() {
-        let lower = line.to_ascii_lowercase();
-        // Only consider lines that actually reference the executable
-        if !lower.contains(executable_name) {
-            continue;
-        }
-        // Parse --remote-debugging-port=N
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        // Only consider lines that actually reference one of the executables.
+        .filter(|line| {
+            let lower = line.to_ascii_lowercase();
+            names.iter().any(|name| lower.contains(name))
+        })
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// The `--remote-debugging-port=N` value a browser was started with, if any.
+///
+/// `Some(0)` means Chrome picked a free port at random (Browser4-launched
+/// browsers use this). The value 0 is not a usable endpoint by itself, so
+/// callers fall through to DevToolsActivePort and listening-port discovery.
+fn parse_remote_debugging_port(command_lines: &[String]) -> Option<u16> {
+    let mut requested: Option<u16> = None;
+    for line in command_lines {
         for part in line.split_whitespace() {
             if let Some(port_str) = part.strip_prefix("--remote-debugging-port=") {
-                if let Ok(port) = port_str.parse::<u16>() {
-                    requested_port = Some(port);
+                if let Ok(port) = port_str.trim_matches('"').parse::<u16>() {
+                    requested = Some(port);
                 }
             }
         }
     }
+    requested
+}
 
-    if let Some(port) = requested_port {
-        if port != 0 {
-            return Some(port);
+/// `--user-data-dir=<path>` values on one command line.
+///
+/// Handles both forms the OS reports:
+/// `--user-data-dir="C:\Users\me\App Data\profile"` (quoted) and the unquoted
+/// variants `--user-data-dir=C:\profiles\one`, including Windows' habit of
+/// appending a stray closing quote and a `/prefetch:N` token to child
+/// processes.
+pub(crate) fn parse_user_data_dirs_from_line(line: &str) -> Vec<PathBuf> {
+    const MARKER: &str = "--user-data-dir=";
+    let mut dirs = Vec::new();
+    let mut rest = line;
+    while let Some(idx) = rest.find(MARKER) {
+        let after = &rest[idx + MARKER.len()..];
+        // `consumed` walks past the opening quote and the value, so a second
+        // occurrence later on the same line is still found.
+        let (value, consumed) = if let Some(quoted) = after.strip_prefix('"') {
+            let value = quoted.split('"').next().unwrap_or("");
+            (value.to_string(), 1 + value.len() + 1)
+        } else {
+            // Unquoted: the value runs to a stray closing quote or to the next
+            // `--flag`; within that window the path is reassembled over spaces
+            // while it still names an existing directory, because a launcher may
+            // pass a path containing spaces without quoting it.
+            let end = [after.find('"'), after.find(" --")]
+                .into_iter()
+                .flatten()
+                .min()
+                .unwrap_or(after.len());
+            (user_data_dir_value(&after[..end]), end)
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            break;
         }
-        // --remote-debugging-port=0 means Chrome picked a free port at random
-        // (Browser4-launched browsers use this). The requested value 0 is not
-        // a usable endpoint, so fall through to listening-port discovery below.
+        dirs.push(PathBuf::from(value));
+        rest = &after[consumed.min(after.len())..];
+    }
+    dirs
+}
+
+/// The directory named at the start of `window`.
+///
+/// Whitespace inside an unquoted `--user-data-dir` value is ambiguous — it can
+/// separate the path from the next token, or be part of the path. The file
+/// system settles it: score every token prefix and keep the **longest** that is
+/// an existing directory, so
+/// `C:\...\PULSAR_CHROME /prefetch:4` yields the profile (nothing longer
+/// exists) while `C:\...\Edge\User Data` is not cut down to the shorter
+/// `…\Edge\User` directory that happens to exist next to it. When no prefix
+/// exists the whole window is returned — callers verify the directory exists
+/// before scanning it.
+fn user_data_dir_value(window: &str) -> String {
+    let window = window.trim();
+    if window.is_empty() {
+        return String::new();
     }
 
-    // The command line either had no --remote-debugging-port, or used `=0`
-    // (random port). On Windows, find every port the executable is currently
-    // LISTENING on and return the first one that answers a CDP health check.
-    // This is what makes Browser4-launched browsers (random debug port)
-    // discoverable via `attach --cdp chrome`.
+    let mut candidate = String::new();
+    let mut longest_existing: Option<String> = None;
+    for token in window.split_whitespace() {
+        if !candidate.is_empty() {
+            candidate.push(' ');
+        }
+        candidate.push_str(token);
+        if Path::new(&candidate).is_dir() {
+            longest_existing = Some(candidate.clone());
+        }
+    }
+    longest_existing.unwrap_or_else(|| window.to_string())
+}
+
+/// Contents of a `DevToolsActivePort` file: the debug port and the
+/// browser-level WebSocket path Chrome publishes next to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DevToolsActivePort {
+    port: u16,
+    /// `/devtools/browser/<uuid>` — `None` when the file holds only a port.
+    browser_path: Option<String>,
+}
+
+/// Port and browser socket path from a `DevToolsActivePort` file, whose first
+/// line is the port and whose second line is the browser-level WebSocket path:
+///
+/// ```text
+/// 4887
+/// /devtools/browser/8b91cacf-…
+/// ```
+///
+/// The file is left behind when the browser exits, so a parsed port is only a
+/// candidate — the probe decides whether anything still answers there.
+fn parse_devtools_active_port(content: &str) -> Option<DevToolsActivePort> {
+    let mut lines = content.lines();
+    let port = lines
+        .next()?
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)?;
+    let browser_path = lines
+        .next()
+        .map(|line| line.trim().to_string())
+        .filter(|path| !path.is_empty());
+    Some(DevToolsActivePort { port, browser_path })
+}
+
+/// Directories that may hold a `DevToolsActivePort` file, most specific first:
+/// the `--user-data-dir` of every running browser process, then the channel's
+/// conventional user-data directory — a browser running its default profile
+/// carries no `--user-data-dir` on the command line.
+fn devtools_active_port_dirs(channel: &BrowserChannel, command_lines: &[String]) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for line in command_lines {
+        for dir in parse_user_data_dirs_from_line(line) {
+            if !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+    }
+    for root in browser_user_data_roots(channel) {
+        if !dirs.contains(&root) {
+            dirs.push(root);
+        }
+    }
+    dirs
+}
+
+/// Read the debug port (and browser socket path) published in
+/// `<dir>/DevToolsActivePort`.
+fn read_devtools_active_port(dir: &Path) -> Option<DevToolsActivePort> {
+    let files = [
+        dir.join("DevToolsActivePort"),
+        dir.join("Default").join("DevToolsActivePort"),
+    ];
+    files
+        .iter()
+        .find_map(|file| fs::read_to_string(file).ok())
+        .and_then(|content| parse_devtools_active_port(&content))
+}
+
+/// Conventional user-data directories for a channel, the channel's own family
+/// first.
+fn browser_user_data_roots(channel: &BrowserChannel) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let edge = is_edge_channel(channel);
+
     #[cfg(target_os = "windows")]
     {
-        if let Some(pid) = resolve_executable_pid(executable_name) {
-            let ps_cmd = format!(
-                "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object {{ $_.OwningProcess -eq {pid} }} | Select-Object -ExpandProperty LocalPort"
-            );
-            if let Ok(out) = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-Command", &ps_cmd])
-                .output()
-            {
-                if out.status.success() {
-                    for line in String::from_utf8_lossy(&out.stdout).lines() {
-                        if let Ok(port) = line.trim().parse::<u16>() {
-                            if probe_cdp_port(port) {
-                                return Some(port);
-                            }
+        if let Ok(local) = env::var("LOCALAPPDATA") {
+            let base = PathBuf::from(local);
+            let edge_root = base.join("Microsoft").join("Edge").join("User Data");
+            let chrome_root = base.join("Google").join("Chrome").join("User Data");
+            roots.push(if edge { edge_root.clone() } else { chrome_root.clone() });
+            roots.push(if edge { chrome_root } else { edge_root });
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = env::var("HOME") {
+            let base = PathBuf::from(home).join("Library").join("Application Support");
+            let edge_root = base.join("Microsoft Edge");
+            let chrome_root = base.join("Google").join("Chrome");
+            roots.push(if edge { edge_root.clone() } else { chrome_root.clone() });
+            roots.push(if edge { chrome_root } else { edge_root });
+        }
+    }
+    #[cfg(all(target_os = "linux", not(target_os = "macos")))]
+    {
+        if let Ok(home) = env::var("HOME") {
+            let base = PathBuf::from(home).join(".config");
+            let edge_root = base.join("microsoft-edge");
+            let chrome_root = base.join("google-chrome");
+            roots.push(if edge { edge_root.clone() } else { chrome_root.clone() });
+            roots.push(if edge { chrome_root } else { edge_root });
+        }
+    }
+
+    roots
+}
+
+/// Whether this channel belongs to the Microsoft Edge family.
+fn is_edge_channel(channel: &BrowserChannel) -> bool {
+    matches!(
+        channel,
+        BrowserChannel::MsEdge
+            | BrowserChannel::MsEdgeBeta
+            | BrowserChannel::MsEdgeDev
+            | BrowserChannel::MsEdgeCanary
+    )
+}
+
+/// Every port the browser process is listening on, in the order PowerShell
+/// reports them.
+///
+/// Windows-only: discovering the real port of a browser started with
+/// `--remote-debugging-port=0` relies on `Get-NetTCPConnection` keyed to the
+/// process id.
+#[cfg(target_os = "windows")]
+fn process_listener_candidates(executable_name: &str) -> Vec<CdpCandidate> {
+    let Some(pid) = resolve_executable_pid(executable_name) else {
+        return Vec::new();
+    };
+    let ps_cmd = format!(
+        "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object {{ $_.OwningProcess -eq {pid} }} | Select-Object -ExpandProperty LocalPort"
+    );
+    let Ok(out) = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps_cmd])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u16>().ok())
+        .map(|port| CdpCandidate::new(port, CdpCandidateSource::ProcessListener))
+        .collect()
+}
+
+// Stub for non-Windows platforms — the listening-port tier is Windows-only.
+#[cfg(not(target_os = "windows"))]
+fn process_listener_candidates(_executable_name: &str) -> Vec<CdpCandidate> {
+    Vec::new()
+}
+
+/// Probe one candidate: is anything listening, does it serve HTTP discovery, how
+/// many page targets does it list, and what browser-level WebSocket does it
+/// publish?
+fn probe_cdp_candidate(candidate: CdpCandidate) -> CdpProbe {
+    let port = candidate.port;
+    // The browser socket published next to the port — the only way into an
+    // endpoint that serves no HTTP discovery at all.
+    let published_browser_ws_url = candidate
+        .browser_ws_path
+        .as_deref()
+        .map(|path| format!("ws://localhost:{port}{path}"));
+
+    let mut probe = CdpProbe {
+        candidate,
+        listening: false,
+        http_discovery: false,
+        version_status: None,
+        browser: None,
+        page_targets: None,
+        browser_ws_url: published_browser_ws_url,
+    };
+
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    else {
+        return probe;
+    };
+
+    let version_url = format!("http://localhost:{port}/json/version");
+    match client.get(&version_url).send() {
+        Ok(response) => {
+            // Any HTTP answer proves a listener, even when the path is unknown:
+            // Chrome's built-in remote debugging answers 404 on every /json* path.
+            probe.listening = true;
+            probe.version_status = Some(response.status().as_u16());
+            if response.status().is_success() {
+                probe.http_discovery = true;
+                if let Ok(body) = response.json::<serde_json::Value>() {
+                    probe.browser = body
+                        .get("Browser")
+                        .and_then(|value| value.as_str())
+                        .map(|browser| browser.to_string());
+                    // Prefer the socket the browser itself advertises over one
+                    // reconstructed from a port file.
+                    if let Some(url) = body.get("webSocketDebuggerUrl").and_then(|value| value.as_str()) {
+                        if url.contains("/devtools/browser") {
+                            probe.browser_ws_url = Some(url.to_string());
                         }
                     }
                 }
             }
         }
+        Err(_) => {
+            // A refused connection means nothing is listening; a timeout on a
+            // port that does accept TCP still counts as a listener.
+            probe.listening = is_localhost_port_listening(port);
+        }
     }
 
-    // Fall back to the requested non-zero port even if the listening-port
-    // discovery above found nothing (e.g. non-Windows or probe failures).
-    requested_port.filter(|p| *p != 0)
+    if probe.listening {
+        let list_url = format!("http://localhost:{port}/json");
+        if let Ok(response) = client.get(&list_url).send() {
+            if response.status().is_success() {
+                if let Ok(body) = response.json::<serde_json::Value>() {
+                    probe.page_targets = Some(
+                        body.as_array()
+                            .map(|targets| {
+                                targets
+                                    .iter()
+                                    .filter(|target| {
+                                        target.get("type").and_then(|value| value.as_str())
+                                            == Some("page")
+                                    })
+                                    .count()
+                            })
+                            .unwrap_or(0),
+                    );
+                }
+            }
+        }
+    }
+
+    probe
+}
+
+/// Cheap localhost TCP probe, used when the HTTP request to a listening port did
+/// not complete.
+fn is_localhost_port_listening(port: u16) -> bool {
+    let ipv4 = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    if TcpStream::connect_timeout(&ipv4, Duration::from_millis(250)).is_ok() {
+        return true;
+    }
+    let ipv6 = SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), port);
+    TcpStream::connect_timeout(&ipv6, Duration::from_millis(250)).is_ok()
+}
+
+/// Concurrent scan of `start..=end` for the first endpoint that lists a page
+/// target.
+fn scan_for_attachable_cdp_endpoint(start: u16, end: u16) -> Option<CdpProbe> {
+    let winner: std::sync::Mutex<Option<CdpProbe>> = std::sync::Mutex::new(None);
+    let winner_ref = &winner;
+    std::thread::scope(|scope| {
+        for port in start..=end {
+            let winner_ref = winner_ref;
+            scope.spawn(move || {
+                if winner_ref.lock().map(|slot| slot.is_some()).unwrap_or(true) {
+                    return;
+                }
+                let probe =
+                    probe_cdp_candidate(CdpCandidate::new(port, CdpCandidateSource::PortScan));
+                if probe.attachable_any() {
+                    if let Ok(mut slot) = winner_ref.lock() {
+                        if slot.is_none() {
+                            *slot = Some(probe);
+                        }
+                    }
+                }
+            });
+        }
+    });
+    winner.into_inner().ok().flatten()
+}
+
+/// Explain why no candidate could be attached to, naming what was found.
+fn describe_no_attachable_endpoint(
+    probes: &[CdpProbe],
+    channel: &str,
+    executable_name: &str,
+    default_port: u16,
+) -> String {
+    let websocket_only: Vec<&CdpProbe> = probes
+        .iter()
+        .filter(|probe| probe.websocket_only())
+        .collect();
+    if !websocket_only.is_empty() {
+        let mut found = websocket_only
+            .iter()
+            .map(|probe| probe.describe())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let others = probes
+            .iter()
+            .filter(|probe| probe.listening && !probe.websocket_only())
+            .map(|probe| probe.describe())
+            .collect::<Vec<_>>();
+        if !others.is_empty() {
+            found.push_str(&format!(
+                "; other CDP endpoints without page targets: {}",
+                others.join(", ")
+            ));
+        }
+        let status = websocket_only[0]
+            .version_status
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "no response".to_string());
+        return format!(
+            "Found a running {executable_name} browser, but it serves no CDP HTTP discovery endpoint \
+             (GET /json/version → HTTP {status}): {found}.\n\
+             This is the built-in remote debugging enabled from chrome://inspect/#remote-debugging: it keeps the \
+             browser-level WebSocket while exposing no /json page targets, and the socket URL could not be \
+             discovered automatically.\n\
+             Pass it explicitly: browser4-cli attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>\n\
+             (the path is the second line of the profile's DevToolsActivePort file)\n\
+             Or start a browser for CDP: {executable_name} --remote-debugging-port={default_port} --user-data-dir=<separate profile>\n\
+             Attaching through the extension also works: browser4-cli attach --extension"
+        );
+    }
+
+    let reachable: Vec<&CdpProbe> = probes.iter().filter(|probe| probe.listening).collect();
+    if !reachable.is_empty() {
+        let found = reachable
+            .iter()
+            .map(|probe| probe.describe())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!(
+            "Found a CDP endpoint for the '{channel}' channel, but it lists no page target: {found}.\n\
+             Open a tab in that browser, then retry attach — or attach through the extension: \
+             browser4-cli attach --extension"
+        );
+    }
+
+    let dead_flag = probes
+        .iter()
+        .find(|probe| probe.candidate.source == CdpCandidateSource::ProcessFlag)
+        .map(|probe| {
+            format!(
+                "\nA {executable_name} process runs with --remote-debugging-port={}, but nothing is listening on that port.",
+                probe.candidate.port
+            )
+        })
+        .unwrap_or_default();
+    let platform_note = platform_discovery_note(cfg!(target_os = "windows"));
+    format!(
+        "Could not find a running {executable_name} browser with remote debugging enabled.{dead_flag}\n\
+         To attach to a {channel} browser:\n\
+         1. Start one with a debug port: {executable_name} --remote-debugging-port={default_port} --user-data-dir=<separate profile>\n\
+         2. Or attach through the extension (this is the supported path when remote debugging was enabled from \
+         chrome://inspect/#remote-debugging): browser4-cli attach --extension\n\
+         Then run: browser4-cli attach --cdp http://localhost:{default_port}{platform_note}"
+    )
+}
+
+/// Platform note appended to the terminal "nothing was found" error.
+///
+/// On Windows the resolver can also enumerate the ports a browser process is
+/// listening on, so a browser started with `--remote-debugging-port=0` is found
+/// even when its `DevToolsActivePort` is out of reach. Elsewhere that tier does
+/// not exist: enumerating another process's listening sockets is not portable
+/// across Linux and macOS (it needs `/proc` walking, or `lsof`/`ss` with the
+/// right privileges), so the message hands the user the recipe instead of
+/// implying the resolver missed something it could have seen.
+fn platform_discovery_note(is_windows: bool) -> &'static str {
+    if is_windows {
+        return "";
+    }
+    "\nOn this platform the resolver cannot enumerate a browser's listening ports (that tier is \
+     Windows-only). If the browser was started with --remote-debugging-port=0, read the port from \
+     the first line of <user-data-dir>/DevToolsActivePort — its second line is the browser-level \
+     WebSocket path — and pass it explicitly: browser4-cli attach --cdp http://localhost:<port>, \
+     or browser4-cli attach --cdp ws://localhost:<port><path> for a browser in built-in \
+     remote-debugging mode."
 }
 
 /// Resolve the PID of a process whose name matches `executable_name` AND whose
@@ -3738,12 +4358,21 @@ fn resolve_executable_pid(_executable_name: &str) -> Option<String> {
 
 /// On Windows, enumerate running processes via PowerShell (preferred) or
 /// the deprecated `wmic` as a fallback for older systems.
+///
+/// The PowerShell filter matches the executable **name** (`chrome.exe`,
+/// `msedge.exe`), not a substring of the command line: WebView2 hosts
+/// (`msedgewebview2.exe`) and drivers carry their own `--user-data-dir` values
+/// and must not be mistaken for a browser the user runs.
 #[cfg(target_os = "windows")]
-fn windows_process_list(executable_name: &str) -> Option<std::process::Output> {
+fn windows_process_list(names: &[&str]) -> Option<std::process::Output> {
     // PowerShell — Get-CimInstance is the modern replacement for wmic.
+    let name_filter = names
+        .iter()
+        .map(|name| format!("$_.Name -ieq '{name}.exe'"))
+        .collect::<Vec<_>>()
+        .join(" -or ");
     let ps_cmd = format!(
-        "Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like '*{}*' }} | Select-Object -ExpandProperty CommandLine",
-        executable_name
+        "Get-CimInstance Win32_Process | Where-Object {{ {name_filter} }} | Select-Object -ExpandProperty CommandLine"
     );
     if let Ok(out) = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", &ps_cmd])
@@ -3755,12 +4384,13 @@ fn windows_process_list(executable_name: &str) -> Option<std::process::Output> {
     }
 
     // Fallback: wmic (deprecated since Windows 10 21H1, but still present
-    // on most systems).
+    // on most systems). Best effort: it only takes one name.
+    let executable = format!("{}.exe", names.first().copied().unwrap_or(""));
     std::process::Command::new("wmic")
         .args([
             "process",
             "where",
-            &format!("name like '%{executable_name}%'"),
+            &format!("name='{executable}'"),
             "get",
             "commandline",
         ])
@@ -3774,19 +4404,15 @@ fn windows_process_list(_executable_name: &str) -> Option<std::process::Output> 
     None
 }
 
-/// Probe whether a CDP endpoint is listening on `localhost:<port>`.
+/// Probe whether a CDP endpoint serves HTTP discovery on `localhost:<port>`.
 ///
-/// Sends a quick GET to `/json/version` — the standard Chrome DevTools
-/// Protocol health-check endpoint.
+/// Sends a quick GET to `/json/version` — the standard Chrome DevTools Protocol
+/// health-check endpoint. Production code goes through [probe_cdp_candidate],
+/// which also counts page targets; this stays as the narrow check the port
+/// probes were originally written for.
+#[cfg(test)]
 fn probe_cdp_port(port: u16) -> bool {
-    let url = format!("http://localhost:{port}/json/version");
-    match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .and_then(|client| client.get(&url).send())
-    {
-        Ok(resp) => resp.status().is_success(),        Err(_) => false,
-    }
+    probe_cdp_candidate(CdpCandidate::new(port, CdpCandidateSource::DefaultPort)).http_discovery
 }
 
 /// Window-state snapshot of Browser4-managed Chrome processes.
@@ -8398,6 +9024,632 @@ mod tests {
     fn cdp_probe_unused_port_returns_false() {
         // Port 19999 is very unlikely to have anything listening
         assert!(!probe_cdp_port(19999));
+    }
+
+    /// Live smoke test: resolves a channel against whatever browser this machine
+    /// runs with remote debugging enabled. Skipped by default; run with
+    /// `cargo test --bin browser4-cli -- --ignored --nocapture resolve_channel_live_smoke`.
+    #[test]
+    #[ignore = "requires a running Chrome/Edge with remote debugging enabled"]
+    fn resolve_channel_live_smoke() {
+        let endpoint = resolve_channel_to_endpoint("chrome")
+            .expect("a running chrome with remote debugging must resolve");
+        println!("resolve_channel_to_endpoint(\"chrome\") = {endpoint}");
+        assert!(endpoint.starts_with("http://localhost:"), "{endpoint}");
+    }
+
+    // -------------------------------------------------------------------
+    // CDP candidate discovery tests
+    // -------------------------------------------------------------------
+
+    /// Minimal HTTP/1.1 stub answering the CDP discovery paths, so probe and
+    /// selection behaviour can be tested without a browser.
+    struct CdpHttpStub {
+        port: u16,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl CdpHttpStub {
+        /// `version_status` is what `/json/version` answers; when it is 2xx the
+        /// body identifies the browser and `/json` lists `page_targets` pages.
+        fn start(version_status: u16, page_targets: usize) -> Self {
+            Self::start_with_browser_ws(version_status, page_targets, "")
+        }
+
+        /// Same stub, whose `/json/version` also advertises a browser-level
+        /// WebSocket (`browser_ws_path`, e.g. `/devtools/browser/from-json`).
+        fn start_with_browser_ws(
+            version_status: u16,
+            page_targets: usize,
+            browser_ws_path: &str,
+        ) -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind CDP stub");
+            let port = listener.local_addr().expect("CDP stub addr").port();
+            listener.set_nonblocking(true).expect("nonblocking CDP stub");
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop_flag = stop.clone();
+            let browser_ws_path = browser_ws_path.to_string();
+            let handle = std::thread::spawn(move || {
+                while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            let _ = respond_to_cdp_request(
+                                stream,
+                                version_status,
+                                page_targets,
+                                &browser_ws_path,
+                            );
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Self {
+                port,
+                stop,
+                handle: Some(handle),
+            }
+        }
+    }
+
+    impl Drop for CdpHttpStub {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn respond_to_cdp_request(
+        mut stream: std::net::TcpStream,
+        version_status: u16,
+        page_targets: usize,
+        browser_ws_path: &str,
+    ) -> std::io::Result<()> {
+        // An accepted socket inherits the listener's non-blocking mode on
+        // Windows, which would make the read below fail with `WouldBlock`
+        // before the request line arrives.
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        let mut buffer = [0u8; 2048];
+        let read = stream.read(&mut buffer)?;
+        let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+        let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+        let discovery_ok = (200..300).contains(&version_status);
+
+        let (status, body) = if path.starts_with("/json/version") && discovery_ok {
+            let browser_ws = if browser_ws_path.is_empty() {
+                String::new()
+            } else {
+                let port = stream.local_addr().map(|addr| addr.port()).unwrap_or(0);
+                format!(
+                    r#","webSocketDebuggerUrl":"ws://127.0.0.1:{port}{browser_ws_path}""#
+                )
+            };
+            (
+                200,
+                format!(r#"{{"Browser":"Chrome/Test","Protocol-Version":"1.3"{browser_ws}}}"#),
+            )
+        } else if path.starts_with("/json/version") {
+            (version_status, String::new())
+        } else if path.starts_with("/json") && discovery_ok {
+            let pages = (0..page_targets)
+                .map(|index| {
+                    format!(
+                        r#"{{"id":"p{index}","type":"page","title":"t","url":"about:blank"}}"#
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            (200, format!("[{pages}]"))
+        } else {
+            (404, String::new())
+        };
+
+        let reason = if status == 200 { "OK" } else { "Not Found" };
+        let response = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes())?;
+        stream.flush()
+    }
+
+    fn probe_of(port: u16, source: CdpCandidateSource) -> CdpProbe {
+        probe_cdp_candidate(CdpCandidate::new(port, source))
+    }
+
+    fn synthetic_probe(
+        port: u16,
+        source: CdpCandidateSource,
+        listening: bool,
+        http_discovery: bool,
+        version_status: Option<u16>,
+        browser: Option<&str>,
+        page_targets: Option<usize>,
+    ) -> CdpProbe {
+        CdpProbe {
+            candidate: CdpCandidate::new(port, source),
+            listening,
+            http_discovery,
+            version_status,
+            browser: browser.map(|value| value.to_string()),
+            page_targets,
+            browser_ws_url: None,
+        }
+    }
+
+    /// A WebSocket-only endpoint (Chrome's built-in remote debugging) whose
+    /// browser socket is known.
+    fn websocket_only_probe(port: u16, browser_ws_path: Option<&str>) -> CdpProbe {
+        let candidate = CdpCandidate::with_browser_ws_path(
+            port,
+            browser_ws_path.map(|path| path.to_string()),
+            CdpCandidateSource::DevToolsActivePort,
+        );
+        CdpProbe {
+            candidate,
+            listening: true,
+            http_discovery: false,
+            version_status: Some(404),
+            browser: None,
+            page_targets: None,
+            browser_ws_url: browser_ws_path.map(|path| format!("ws://localhost:{port}{path}")),
+        }
+    }
+
+    #[test]
+    fn parse_devtools_active_port_reads_the_port_and_the_browser_socket_path() {
+        assert_eq!(
+            Some(DevToolsActivePort {
+                port: 4887,
+                browser_path: Some("/devtools/browser/8b91cacf-d8aa".to_string()),
+            }),
+            parse_devtools_active_port("4887\n/devtools/browser/8b91cacf-d8aa\n")
+        );
+        assert_eq!(
+            Some(DevToolsActivePort {
+                port: 9222,
+                browser_path: Some("/devtools/browser/x".to_string()),
+            }),
+            parse_devtools_active_port("  9222  \r\n/devtools/browser/x\r\n")
+        );
+        // Port only — the file is written in two steps, so a partial file is valid.
+        assert_eq!(
+            Some(DevToolsActivePort {
+                port: 9222,
+                browser_path: None,
+            }),
+            parse_devtools_active_port("9222")
+        );
+    }
+
+    #[test]
+    fn parse_devtools_active_port_rejects_garbage() {
+        assert_eq!(None, parse_devtools_active_port(""));
+        assert_eq!(None, parse_devtools_active_port("/devtools/browser/x"));
+        assert_eq!(None, parse_devtools_active_port("not-a-port\n/ws"));
+        assert_eq!(None, parse_devtools_active_port("0\n/devtools/browser/x"));
+        assert_eq!(None, parse_devtools_active_port("99999\n/ws"));
+    }
+
+    #[test]
+    fn websocket_only_endpoint_with_a_published_socket_is_attachable() {
+        // Chrome's built-in remote debugging: no /json at all, but the port file
+        // names the browser socket — that is enough to attach.
+        let probe = websocket_only_probe(9222, Some("/devtools/browser/8b91cacf"));
+
+        assert!(probe.websocket_only());
+        assert!(!probe.attachable(), "there is no HTTP page discovery to use");
+        assert!(probe.websocket_attachable());
+        assert!(probe.attachable_any());
+        assert_eq!(
+            Some("ws://localhost:9222/devtools/browser/8b91cacf".to_string()),
+            probe.endpoint()
+        );
+        assert_eq!(Some("ws://localhost:9222/devtools/browser/8b91cacf".to_string()),
+            first_attachable_endpoint(&[probe]));
+    }
+
+    #[test]
+    fn websocket_only_endpoint_without_a_socket_path_is_not_attachable() {
+        // A WebSocket-only listener found by the port sweep: nothing published the
+        // socket path, so the endpoint cannot be built and must not win.
+        let probe = websocket_only_probe(51343, None);
+
+        assert!(probe.websocket_only());
+        assert!(!probe.websocket_attachable());
+        assert!(!probe.attachable_any());
+        assert_eq!(None, probe.endpoint());
+        assert!(probe.describe().contains("no /json"), "{}", probe.describe());
+        assert_eq!(None, first_attachable_endpoint(std::slice::from_ref(&probe)));
+    }
+
+    #[test]
+    fn selection_follows_candidate_order_across_transports() {
+        // Stage order is the priority: within one stage whichever candidate comes
+        // first and can host a page wins, over either transport.
+        let websocket_only = || websocket_only_probe(9222, Some("/devtools/browser/x"));
+        let http = || {
+            synthetic_probe(
+                7036,
+                CdpCandidateSource::ProcessListener,
+                true,
+                true,
+                Some(200),
+                Some("Chrome/154.0.0.0"),
+                Some(1),
+            )
+        };
+
+        assert_eq!(
+            Some("ws://localhost:9222/devtools/browser/x".to_string()),
+            first_attachable_endpoint(&[websocket_only(), http()])
+        );
+        assert_eq!(
+            Some("http://localhost:7036".to_string()),
+            first_attachable_endpoint(&[http(), websocket_only()])
+        );
+        // A candidate that cannot host a page never wins, even when it is first.
+        let page_less = synthetic_probe(
+            9223,
+            CdpCandidateSource::DefaultPort,
+            true,
+            true,
+            Some(200),
+            Some("Chrome/154.0.0.0"),
+            Some(0),
+        );
+        assert_eq!(
+            Some("http://localhost:7036".to_string()),
+            first_attachable_endpoint(&[page_less, http()])
+        );
+    }
+
+    #[test]
+    fn parse_user_data_dirs_handles_quoted_and_plain_forms() {
+        assert_eq!(
+            vec![PathBuf::from(r"C:\Users\me\browser4")],
+            parse_user_data_dirs_from_line(
+                r#""C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir=C:\Users\me\browser4 --remote-debugging-port=0"#
+            )
+        );
+        assert_eq!(
+            vec![PathBuf::from(r"C:\Users\me\App Data\profile")],
+            parse_user_data_dirs_from_line(
+                r#"chrome.exe --user-data-dir="C:\Users\me\App Data\profile" --headless"#
+            )
+        );
+        // An unquoted path that contains a space runs to the next flag — a
+        // portable launcher may pass one, and truncating it loses the profile.
+        assert_eq!(
+            vec![PathBuf::from(r"C:\Portable Chrome\Data\profile")],
+            parse_user_data_dirs_from_line(
+                r#"chrome.exe --user-data-dir=C:\Portable Chrome\Data\profile --headless --mute-audio"#
+            )
+        );
+        // ...including when it is the last argument.
+        assert_eq!(
+            vec![PathBuf::from(r"C:\Portable Chrome\profile")],
+            parse_user_data_dirs_from_line("chrome.exe --user-data-dir=C:\\Portable Chrome\\profile")
+        );
+        // Windows reports a space-containing path with a stray closing quote
+        // (`/prefetch:4` follows); the quote ends the value.
+        assert_eq!(
+            vec![PathBuf::from(r"C:\Users\me\App Data\profile")],
+            parse_user_data_dirs_from_line(
+                r#"chrome.exe --user-data-dir=C:\Users\me\App Data\profile" /prefetch:4 --type=renderer"#
+            )
+        );
+        assert!(parse_user_data_dirs_from_line("chrome.exe --headless").is_empty());
+        assert!(parse_user_data_dirs_from_line("chrome.exe --user-data-dir=").is_empty());
+    }
+
+    #[test]
+    fn user_data_dir_value_keeps_the_longest_existing_prefix() {
+        // A path with no spaces is returned as-is, also when a single-dash token
+        // follows it (Windows appends `/prefetch:N` to child processes) — no
+        // longer prefix exists, so the token is not swallowed.
+        let existing = test_temp_dir();
+        let existing_path = existing.path().to_string_lossy().to_string();
+        assert_eq!(
+            existing_path,
+            user_data_dir_value(&format!("{existing_path} /prefetch:4"))
+        );
+        assert_eq!(existing_path, user_data_dir_value(&existing_path));
+
+        // Nothing on disk matches: the whole window is kept so the caller can
+        // report/scan it rather than silently truncating the path.
+        assert_eq!(
+            "C:\\not\\a\\real\\Portable Chrome\\profile",
+            user_data_dir_value("C:\\not\\a\\real\\Portable Chrome\\profile")
+        );
+        assert_eq!("", user_data_dir_value("   "));
+
+        // A directory whose name contains spaces is reassembled token by token,
+        // and a shorter sibling directory must not win over the full path.
+        let parent = test_temp_dir();
+        let shorter = parent.path().join("App");
+        let spaced = shorter.join("Data").join("profile");
+        std::fs::create_dir_all(&spaced).unwrap();
+        std::fs::create_dir_all(&shorter).unwrap();
+        let spaced_str = spaced.to_string_lossy().to_string();
+        assert_eq!(
+            spaced_str,
+            user_data_dir_value(&format!("{spaced_str} --headless"))
+        );
+    }
+
+    #[test]
+    fn parse_remote_debugging_port_keeps_the_last_value() {
+        let lines = vec![
+            "chrome.exe --remote-debugging-port=9222".to_string(),
+            "chrome.exe --remote-debugging-port=0".to_string(),
+        ];
+        assert_eq!(Some(0), parse_remote_debugging_port(&lines));
+        assert_eq!(
+            Some(9333),
+            parse_remote_debugging_port(&["chrome.exe --remote-debugging-port=9333".to_string()])
+        );
+        assert_eq!(None, parse_remote_debugging_port(&["chrome.exe".to_string()]));
+    }
+
+    #[test]
+    fn devtools_active_port_dirs_prefers_the_running_browsers_own_dir() {
+        let lines = vec![r#"chrome.exe --user-data-dir=C:\profiles\one --remote-debugging-port=0"#
+            .to_string()];
+        let dirs = devtools_active_port_dirs(&BrowserChannel::Chrome, &lines);
+        assert_eq!(Some(&PathBuf::from(r"C:\profiles\one")), dirs.first());
+    }
+
+    #[test]
+    fn read_devtools_active_port_accepts_root_and_default_profile_layouts() {
+        let temp = test_temp_dir();
+        let root = temp.path().join("User Data");
+        create_dir_all(&root).unwrap();
+
+        write(root.join("DevToolsActivePort"), "4887\n/devtools/browser/x\n").unwrap();
+        assert_eq!(
+            Some(DevToolsActivePort {
+                port: 4887,
+                browser_path: Some("/devtools/browser/x".to_string()),
+            }),
+            read_devtools_active_port(&root)
+        );
+
+        // Chrome writes the file into the user-data-dir; keep the Default/
+        // layout working for browsers that publish it per profile.
+        let profile_root = temp.path().join("Profile Data");
+        let profile = profile_root.join("Default");
+        create_dir_all(&profile).unwrap();
+        write(profile.join("DevToolsActivePort"), "9222\n/devtools/browser/y\n").unwrap();
+        assert_eq!(
+            Some(DevToolsActivePort {
+                port: 9222,
+                browser_path: Some("/devtools/browser/y".to_string()),
+            }),
+            read_devtools_active_port(&profile_root)
+        );
+
+        assert_eq!(None, read_devtools_active_port(&temp.path().join("missing")));
+    }
+
+    #[test]
+    fn probe_candidate_reports_identity_and_page_targets() {
+        let stub = CdpHttpStub::start(200, 2);
+        let probe = probe_of(stub.port, CdpCandidateSource::DevToolsActivePort);
+
+        assert!(probe.listening);
+        assert!(probe.http_discovery);
+        assert_eq!(Some(200), probe.version_status);
+        assert_eq!(Some("Chrome/Test".to_string()), probe.browser);
+        assert_eq!(Some(2), probe.page_targets);
+        assert!(probe.attachable());
+        assert!(!probe.websocket_only());
+        // The stub publishes no webSocketDebuggerUrl, so no socket is known.
+        assert_eq!(None, probe.browser_ws_url);
+    }
+
+    #[test]
+    fn probe_candidate_adopts_the_published_browser_websocket() {
+        // A legacy endpoint advertises its browser socket in /json/version; the
+        // probe keeps it, which is what a WebSocket-only sibling would need.
+        let stub = CdpHttpStub::start_with_browser_ws(200, 1, "/devtools/browser/from-json");
+        let probe = probe_of(stub.port, CdpCandidateSource::DefaultPort);
+
+        assert_eq!(
+            Some(format!("ws://127.0.0.1:{}/devtools/browser/from-json", stub.port)),
+            probe.browser_ws_url
+        );
+    }
+
+    #[test]
+    fn probe_candidate_detects_websocket_only_endpoint() {
+        // Chrome's built-in remote debugging: the port answers, /json* does not.
+        let stub = CdpHttpStub::start(404, 0);
+        let probe = probe_of(stub.port, CdpCandidateSource::DevToolsActivePort);
+
+        assert!(probe.listening, "an HTTP 404 still proves a listener");
+        assert!(!probe.http_discovery);
+        assert_eq!(Some(404), probe.version_status);
+        assert!(probe.websocket_only());
+        assert!(!probe.attachable());
+        assert!(probe.describe().contains("no /json"), "{}", probe.describe());
+    }
+
+    #[test]
+    fn probe_candidate_builds_the_socket_url_from_devtools_active_port() {
+        // The published path is what turns a /json-less endpoint into an
+        // attachable one, so the probe must reconstruct the URL from it.
+        let stub = CdpHttpStub::start(404, 0);
+        let candidate = CdpCandidate::with_browser_ws_path(
+            stub.port,
+            Some("/devtools/browser/8b91cacf".to_string()),
+            CdpCandidateSource::DevToolsActivePort,
+        );
+        let probe = probe_cdp_candidate(candidate);
+
+        assert!(probe.websocket_only());
+        assert!(probe.websocket_attachable());
+        assert_eq!(
+            Some(format!("ws://localhost:{}/devtools/browser/8b91cacf", stub.port)),
+            probe.endpoint()
+        );
+    }
+
+    #[test]
+    fn probe_candidate_reports_page_less_endpoint() {
+        let stub = CdpHttpStub::start(200, 0);
+        let probe = probe_of(stub.port, CdpCandidateSource::ProcessListener);
+
+        assert!(probe.http_discovery);
+        assert_eq!(Some(0), probe.page_targets);
+        assert!(!probe.attachable());
+        assert!(!probe.websocket_only());
+    }
+
+    #[test]
+    fn probe_candidates_skips_seen_ports_and_stops_at_the_first_attachable() {
+        let page_less = CdpHttpStub::start(200, 0);
+        let attachable = CdpHttpStub::start(200, 1);
+        let mut seen = vec![page_less.port];
+
+        let probes = probe_candidates(
+            &[
+                CdpCandidate::new(page_less.port, CdpCandidateSource::DefaultPort),
+                CdpCandidate::new(attachable.port, CdpCandidateSource::ProcessListener),
+                // Never probed: the attachable candidate above stops the walk.
+                CdpCandidate::new(19998, CdpCandidateSource::PortScan),
+            ],
+            &mut seen,
+        );
+
+        assert_eq!(1, probes.len());
+        assert_eq!(attachable.port, probes[0].candidate.port);
+        assert_eq!(
+            Some(format!("http://localhost:{}", attachable.port)),
+            first_attachable_endpoint(&probes)
+        );
+    }
+
+    #[test]
+    fn describe_no_attachable_endpoint_names_built_in_remote_debugging() {
+        let probes = vec![
+            synthetic_probe(
+                9222,
+                CdpCandidateSource::DevToolsActivePort,
+                true,
+                false,
+                Some(404),
+                None,
+                None,
+            ),
+            synthetic_probe(
+                51343,
+                CdpCandidateSource::ProcessListener,
+                true,
+                true,
+                Some(200),
+                Some("Chrome/153.0.8010.48"),
+                Some(0),
+            ),
+        ];
+
+        let message = describe_no_attachable_endpoint(&probes, "chrome", "chrome", 9222);
+
+        assert!(message.contains("port 9222"), "{message}");
+        assert!(message.contains("HTTP 404"), "{message}");
+        assert!(message.contains("chrome://inspect/#remote-debugging"), "{message}");
+        assert!(message.contains("browser4-cli attach --extension"), "{message}");
+        // The page-less endpoint is named too instead of being silently dropped.
+        assert!(message.contains("51343"), "{message}");
+    }
+
+    #[test]
+    fn describe_no_attachable_endpoint_asks_for_a_tab_when_discovery_works() {
+        let probes = vec![synthetic_probe(
+            9222,
+            CdpCandidateSource::ProcessFlag,
+            true,
+            true,
+            Some(200),
+            Some("Chrome/153.0.8010.48"),
+            Some(0),
+        )];
+
+        let message = describe_no_attachable_endpoint(&probes, "chrome", "chrome", 9222);
+
+        assert!(message.contains("lists no page target"), "{message}");
+        assert!(message.contains("Open a tab in that browser"), "{message}");
+        assert!(message.contains("attach --extension"), "{message}");
+    }
+
+    #[test]
+    fn describe_no_attachable_endpoint_keeps_the_not_found_wording() {
+        let probes = vec![synthetic_probe(
+            9222,
+            CdpCandidateSource::ProcessFlag,
+            false,
+            false,
+            None,
+            None,
+            None,
+        )];
+
+        let message = describe_no_attachable_endpoint(&probes, "chrome", "chrome", 9222);
+
+        assert!(
+            message.starts_with("Could not find a running chrome browser with remote debugging enabled."),
+            "{message}"
+        );
+        assert!(
+            message.contains("nothing is listening on that port"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn platform_discovery_note_explains_the_windows_only_tier() {
+        // Windows can enumerate the browser's listening ports, so there is
+        // nothing extra to explain.
+        assert_eq!("", platform_discovery_note(true));
+
+        let note = platform_discovery_note(false);
+        assert!(note.contains("Windows-only"), "{note}");
+        assert!(note.contains("DevToolsActivePort"), "{note}");
+        assert!(
+            note.contains("browser4-cli attach --cdp http://localhost:<port>"),
+            "{note}"
+        );
+        assert!(note.contains("ws://localhost:<port><path>"), "{note}");
+    }
+
+    #[test]
+    fn describe_no_attachable_endpoint_adds_the_platform_note_where_it_applies() {
+        let probes = vec![synthetic_probe(
+            9222,
+            CdpCandidateSource::ProcessFlag,
+            false,
+            false,
+            None,
+            None,
+            None,
+        )];
+
+        let message = describe_no_attachable_endpoint(&probes, "chrome", "chrome", 9222);
+        let expected = platform_discovery_note(cfg!(target_os = "windows"));
+
+        if expected.is_empty() {
+            assert!(!message.contains("Windows-only"), "{message}");
+        } else {
+            assert!(message.contains(expected), "{message}");
+        }
     }
 
     // -------------------------------------------------------------------
