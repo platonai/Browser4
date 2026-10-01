@@ -10,7 +10,7 @@ import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.skeleton.common.urls.SafeUrlNormalize
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.refreshed
@@ -220,7 +220,11 @@ class UserCommandExecutor(
     }
 
     private fun isConfiguredUrl(s: String): Boolean {
-        return Strings.isSingleLine(s) && URLUtils.normalizeOrNull(s) != null
+        // SafeUrlNormalize, not URLUtils: a url whose *fragment* holds an invalid escape
+        // (`https://x.com/a#100%`) is loadable — the fragment is dropped by the normalization —
+        // and URLUtils used to reject it outright, which demoted a perfectly good url command to
+        // a free-form agent task.
+        return Strings.isSingleLine(s) && SafeUrlNormalize.normalizeOrNull(s) != null
     }
 
     /**

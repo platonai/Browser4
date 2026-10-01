@@ -117,7 +117,7 @@ class CombinedScopedUrlNormalizerTest {
     }
 
     @Test
-        @DisplayName("test normalize with special characters in url not supported")
+        @DisplayName("test normalize keeps the path and only drops the fragment")
     fun testNormalizeWithSpecialCharactersInUrlNotSupported() {
         val urlAware = mock(UrlAware::class.java)
         `when`(urlAware.url).thenReturn("http://example.com/!@#$%^&*()")
@@ -128,7 +128,12 @@ class CombinedScopedUrlNormalizerTest {
         val result = normalizer.normalize(urlAware, options, false)
 
         assertNotNull(result)
-        assertTrue { result.isNil }
+        // `$%^&*()` is the fragment — a bare '%' is not a legal escape — and it is what the
+        // normalization discards.  This used to normalize to NIL: the uri was built with the
+        // fragment still attached, so a part that was about to be thrown away could reject a url
+        // every browser loads.  `!@` is the path and stays.
+        assertFalse(result.isNil, "a discarded fragment must not reject the url")
+        assertEquals("http://example.com/!@", result.url.toString())
     }
 
     @Test
@@ -148,7 +153,7 @@ class CombinedScopedUrlNormalizerTest {
     }
 
     @Test
-        @DisplayName("test normalize with url containing spaces not supported")
+        @DisplayName("test normalize truncates an unencoded space, a known limitation")
     fun testNormalizeWithUrlContainingSpacesNotSupported() {
         val urlAware = mock(UrlAware::class.java)
         `when`(urlAware.url).thenReturn("http://example.com/with spaces-not-supported")
@@ -159,6 +164,12 @@ class CombinedScopedUrlNormalizerTest {
         val result = normalizer.normalize(urlAware, options, false)
 
         assertNotNull(result)
+        // A url and its trailing argument list are one whitespace-separated string
+        // (`"$url -expires 1s"`), so the first space ends the url — a raw space inside a url reads
+        // as the start of the args.  Pinned as the documented behaviour, not as a promise: an
+        // unencoded space silently truncates the url today, tracked as S1 in
+        // docs-dev/copilot/url-normalization-review.md (the fix belongs to the goto/load input
+        // validation, not to the normalizer).
         assertEquals("http://example.com/with", result.url.toString())
     }
 }

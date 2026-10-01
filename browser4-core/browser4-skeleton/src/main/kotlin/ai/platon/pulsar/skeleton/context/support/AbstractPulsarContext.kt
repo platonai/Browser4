@@ -278,11 +278,9 @@ abstract class AbstractPulsarContext(
     }
 
     override fun normalize(url: UrlAware, options: LoadOptions, toItemOption: Boolean): NormURL {
-        val normURL = CombinedUrlNormalizer(urlNormalizerOrNull).normalize(url, options, toItemOption)
-        if (normURL.isNil) {
-            logger.info("URL is normalized to NIL | {}", url)
-        }
-        return normURL
+        // CombinedUrlNormalizer owns the NIL diagnosis (it knows whether a normalizer rejected the
+        // url or the url simply has no normal form) and logs it at warn, so this stays quiet.
+        return CombinedUrlNormalizer(urlNormalizerOrNull).normalize(url, options, toItemOption)
     }
 
     override fun normalizeOrNull(url: UrlAware?, options: LoadOptions, toItemOption: Boolean): NormURL? {
