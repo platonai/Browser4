@@ -281,33 +281,24 @@ differences between headless and headed for those.
 
 **`attach --cdp` — endpoint resolution**
 
-`--cdp` accepts a channel name (`chrome`, `chrome-canary`, `msedge`,
-`msedge-dev`, …), an HTTP endpoint (`http://localhost:9222`), a WebSocket URL, a
-bare port, or `host:port`. A **browser-level** WebSocket
+`--cdp` takes a channel name, an HTTP endpoint (`http://localhost:9222`), a
+WebSocket URL, a bare port, or `host:port`. A **browser-level** WebSocket
 (`ws://…/devtools/browser/<uuid>`) is attached to over that socket; a
-**page-level** one (`ws://…/devtools/page/<id>`) is only a host:port hint, and
-page targets are resolved there over `GET /json`.
+**page-level** one is only a host:port hint, with pages resolved over `GET /json`.
 
-Channel-name resolution gathers candidates and picks the first one that can host a
-page: the browser's own `<user-data-dir>/DevToolsActivePort` file (whose second
-line is the browser socket) and `--remote-debugging-port=N`, then the process's
-other listening ports, then the channel's default port, then a scan of 9222–9333.
-**When the browser was started with `--remote-debugging-port=0` (which is what
-Browser4-launched browsers use), the port comes from its `DevToolsActivePort`
-file — the CLI knows the `--user-data-dir` from the running process, so this works
-on every platform.** Enumerating the process's *other* listening ports is the
-Windows-only part, and only matters when that file cannot be located (a default
-profile, or an unknown install root): there, pass an explicit endpoint (or start
-the target browser with a fixed `--remote-debugging-port`).
+Channel-name resolution takes the first candidate that can host a page: the
+browser's `<user-data-dir>/DevToolsActivePort` (second line = its socket) and
+`--remote-debugging-port=N`, then the process's other listening ports, the channel
+default, and a 9222–9333 scan. Browsers started with `--remote-debugging-port=0`
+(Browser4-launched) resolve through `DevToolsActivePort` on every platform — the
+CLI reads the `--user-data-dir` from the running process; only the listening-port
+sweep is Windows-only, and only when that file cannot be located.
 
-**Chrome's built-in remote debugging is a supported `--cdp` endpoint.** The
-`chrome://inspect/#remote-debugging` toggle *"Allow remote debugging for this
-browser instance"* publishes a browser-level WebSocket and answers every `/json*`
-path with HTTP 404. Browser4 attaches over that socket — pages are discovered with
-`Target.getTargets` and driven through `ws://<host>:<port>/devtools/page/<targetId>`
-— so `attach --cdp chrome` resolves it from `DevToolsActivePort`, and
-`attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>` works when the URL is
-passed explicitly. `attach --extension` remains an alternative for that browser.
+Chrome's built-in `chrome://inspect/#remote-debugging` toggle is a supported
+`--cdp` endpoint: it publishes a browser-level WebSocket and 404s every `/json*`
+path, so `attach --cdp chrome` resolves it from `DevToolsActivePort`, an explicit
+`ws://127.0.0.1:<port>/devtools/browser/<uuid>` works too, and pages come from
+`Target.getTargets`. `attach --extension` stays available as an alternative.
 
 Attaching binds the session to a page tab of the target browser — an existing page
 when one is available, otherwise a newly created `about:blank` tab. Subsequent
@@ -361,9 +352,8 @@ Need to drive a browser
 │  ├─ No debugging-port setup wanted → attach --extension [channel]
 │  │    (avoid chrome:// pages; one session per browser; not for CI)
 │  └─ Want a controlled/remote endpoint → attach --cdp <url|host:port|channel>
-│       (a channel finds the browser's DevToolsActivePort on every platform;
-│        pass an explicit endpoint when that file is not where the CLI looks;
-│        `close` leaves the browser running)
+│       (a channel finds DevToolsActivePort on every platform; otherwise pass an
+│        explicit endpoint; `close` leaves the browser running)
 ├─ Bulk, non-interactive, throughput?
 │  └─ swarm create [--profile-mode TEMPORARY] [--max-browser-contexts N]
 │     → swarm query --sql @q.sql --seed-file urls.txt --refresh
