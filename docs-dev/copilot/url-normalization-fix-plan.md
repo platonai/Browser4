@@ -113,7 +113,11 @@
 | 3 | `browser4-skeleton` 扩大：`NormUrlTests` + `HyperlinkTests` + `TestLoadOptions` + `AbstractPulsarSessionLoadTest` + 上述两条 | ✅ **85 / 85** |
 | 4 | `browser4-rest`：`CrawlSupportTest` + `CrawlLedgerTest` + `CrawlCheckpointTest` + `CrawlResumeTest` | ✅ **119 / 119** |
 | 5 | `browser4-rest` **全量快速套件** | ✅ **608 / 608**（先出现 3 个 `LlmConfigTemplateTest` 失败，定位为本地 m2 的 `browser4-resources` jar 陈旧、缺少 `config/conf-available/application-private.properties.template`；刷新该模块后 5/5 通过，与本次改动无关） |
-| 6 | 基础库 `pulsar-common-tests` 的 `URLUtilsTest` | ✅ **43 / 43**（含新增 2 条） |
+| 6 | `browser4-agentic` **全量快速套件**（Phase B 之后） | ✅ **1476 / 1476**（含 `UrlNormalizerTest` 45 条、`KnowledgeStore*Test`、`PemKnowledgeProviderTest`、`ExperienceToolExecutor*Test`、`AgentProfileTest`） |
+| 7 | 跨模块复查：装上新的 agentic 制品后重跑 `browser4-rest` 全量快速套件 | ✅ **608 / 608** |
+| 8 | 基础库 `pulsar-common-tests` 的 `URLUtilsTest` | ✅ **43 / 43**（含新增 2 条） |
+
+合计 **2212** 条测试通过。
 
 ### 基础库测试的执行方式
 
