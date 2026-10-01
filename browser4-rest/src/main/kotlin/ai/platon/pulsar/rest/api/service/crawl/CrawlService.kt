@@ -1408,9 +1408,13 @@ class CrawlService(
             remaining = remaining,
             resumable = keepCheckpoint && checkpoints.containsKey(task.taskId)
         )
+        // Settle the checkpoint BEFORE publishing the terminal record: an observer that
+        // sees a finished task (the CLI's `crawl result`, the resume gate, a test) must
+        // never find a checkpoint the record says is not there.  `resumable` was already
+        // resolved above, so the ordering below cannot change the decision.
+        finishCheckpoint(task.taskId, resumable = completed.resumable)
         taskStore.put(task.taskId, completed)
         onStatusChanged(completed)
-        finishCheckpoint(task.taskId, resumable = completed.resumable)
         logger.info(
             "Crawl task {} completed: {} pages, {} lost, status {}, parallel budget {} (peak {} in flight){}",
             task.taskId, allPages.size, failedPages.size, completed.status,
@@ -1561,9 +1565,11 @@ class CrawlService(
                 // be continued instead of re-submitted.
                 resumable = remaining > 0 && checkpoints.containsKey(task.taskId)
             )
+            // Settle the checkpoint before the terminal record becomes visible — see
+            // the completion path for why the order matters.
+            finishCheckpoint(task.taskId, resumable = timedOut.resumable)
             taskStore.put(task.taskId, timedOut)
             onStatusChanged(timedOut)
-            finishCheckpoint(task.taskId, resumable = timedOut.resumable)
             logger.warn(
                 "Crawl task {} cancelled or timed out: {} — {} page(s) recorded, {} lost, " +
                     "{} seed(s) never settled, {} URL(s) resumable",
@@ -1598,9 +1604,10 @@ class CrawlService(
             // never reached are what a resume would fetch.
             resumable = remaining > 0 && checkpoints.containsKey(task.taskId)
         )
+        // Settle the checkpoint before the record is observable, as above.
+        finishCheckpoint(task.taskId, resumable = failed.resumable)
         taskStore.put(task.taskId, failed)
         onStatusChanged(failed)
-        finishCheckpoint(task.taskId, resumable = failed.resumable)
         logger.error("Crawl task {} failed: {}", task.taskId, e.message, e)
     }
 
@@ -1705,9 +1712,10 @@ class CrawlService(
                 }
             ).joinToString(" | ").takeIf { it.isNotBlank() }
         )
+        // Settle the checkpoint before the cancelled record is observable, as above.
+        finishCheckpoint(taskId, resumable = cancelled.resumable)
         taskStore.put(taskId, cancelled)
         onStatusChanged(cancelled)
-        finishCheckpoint(taskId, resumable = cancelled.resumable)
         logger.info("Crawl task {} cancelled by user ({} URL(s) left, resumable={})", taskId, remaining, cancelled.resumable)
         return true
     }
