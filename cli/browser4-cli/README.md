@@ -242,12 +242,12 @@ Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer enc
 
 | Command | Description |
 |---|---|
-| `config` | List all CLI configuration values (server, timeout, proxy, session) |
+| `config` | List all CLI configuration values (server, timeout, proxy, session, extension_id) |
 | `config get <key>` | Get a single configuration value |
 | `config set <key> <value>` | Set a configuration value (persisted to `~/.browser4/config.json`) |
 | `config delete <key>` | Remove a configuration value, resetting it to default |
 
-Keys: `server` (default Browser4 URL), `timeout` (seconds, positive integer), `proxy` (download proxy URL), `session` (default session name). Configuration values are global fallbacks — explicit flags (`--server`, `--timeout`, `--proxy`, `-s`) override them per invocation.
+Keys: `server` (default Browser4 URL), `timeout` (seconds, positive integer), `proxy` (download proxy URL), `session` (default session name), `extension_id` (id of a locally loaded Browser4 extension, used by `attach --extension`). Configuration values are global fallbacks — explicit flags (`--server`, `--timeout`, `--proxy`, `-s`) override them per invocation, and `BROWSER4_EXTENSION_ID` overrides the persisted `extension_id`.
 
 ### Global options
 

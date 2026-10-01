@@ -44,7 +44,7 @@ isolation) → display (whether a human must participate) → secondary knobs.
 | | `GUI` (`--headed`) | a human must act (login, CAPTCHA, QR code); demos; visual debugging | uses the desktop; impossible in CI / no-display environments |
 | | `SUPERVISED` | wrapping Chrome in an external supervisor process | inert unless a supervisor is configured; **not** implicitly headless |
 | **Source** | backend-launched (`open`) | production batches, clean environments, CI | `close` terminates the browser process |
-| | `attach --cdp` | debugging live issues, cloud browsers, Electron, remote Chrome | needs a debugging endpoint (explicit one on Linux/macOS) |
+| | `attach --cdp` | debugging live issues, cloud browsers, Electron, remote Chrome | needs a debugging endpoint; a channel name resolves the common cases, otherwise pass `--cdp <url\|port\|host:port>` |
 | | `attach --extension` | "just use my own browser" with zero flags/ports | not for CI; one relay connection per browser; extension required |
 
 ## 1. Axis 1 — Session
@@ -270,9 +270,9 @@ differences between headless and headed for those.
 | | Backend-launched (`open`) | `attach --cdp` | `attach --extension` |
 |---|---|---|---|
 | Browser | Chrome launched by Browser4 | any already-running CDP endpoint: Chrome/Edge/Electron/cloud | already-running Chrome/Edge **with the Browser4 extension installed** |
-| Setup | none | remote debugging enabled in the target browser (`chrome://inspect/#remote-debugging`), or start it with `--remote-debugging-port=N` | install the extension; optionally set `BROWSER4_EXTENSION_TOKEN` to skip the approval dialog |
+| Setup | none | remote debugging enabled in either form — start the browser with `--remote-debugging-port=N` (plus a non-default `--user-data-dir`), or flip `chrome://inspect/#remote-debugging` → *"Allow remote debugging for this browser instance"* | install the extension; optionally set `BROWSER4_EXTENSION_TOKEN` to skip the approval dialog |
 | Login state | whatever the Browser4 profile holds (or `state-save`/`state-load`) | the real profile you are using | the real profile you are using |
-| Connection check | — | endpoint probed (`/json/version` + at least one page target) before binding; loud errors otherwise | session stays pending until the extension connects; pending connections expire after ~2 min |
+| Connection check | — | candidates from `DevToolsActivePort` + process listeners are probed, and the first endpoint that can host a page wins: an HTTP endpoint with `/json` page targets, or a browser-level WebSocket that answers `Target.getTargets`; loud errors otherwise | session stays pending until the extension connects; pending connections expire after ~2 min |
 | `close` behaviour | **terminates the browser process** | disconnects; **the browser keeps running**, but the tab Browser4 was driving is closed | disconnects the relay; the browser keeps running, but the tabs Browser4 drove are removed (`chrome.tabs.remove`) |
 | If the connection drops | a new session can be created | **never silently replaced** — the command errors and asks you to re-attach | same, and a stale extension session is auto-reconnected once |
 | Concurrency | one browser per session | several sessions may attach to the same browser | **one relay connection per browser** — a new attach tears down the previous one |
@@ -283,15 +283,31 @@ differences between headless and headed for those.
 
 `--cdp` accepts a channel name (`chrome`, `chrome-canary`, `msedge`,
 `msedge-dev`, …), an HTTP endpoint (`http://localhost:9222`), a WebSocket URL, a
-bare port, or `host:port`.
+bare port, or `host:port`. A **browser-level** WebSocket
+(`ws://…/devtools/browser/<uuid>`) is attached to over that socket; a
+**page-level** one (`ws://…/devtools/page/<id>`) is only a host:port hint, and
+page targets are resolved there over `GET /json`.
 
-Channel-name resolution has three tiers: scan running processes for
-`--remote-debugging-port=N`, then the channel's default port, then a scan of
-9222–9333. **When the browser was started with `--remote-debugging-port=0`
-(which is what Browser4-launched browsers use), the real port is discovered by
-listing the process's listening ports — this tier is Windows-only.** On
-Linux/macOS, pass an explicit endpoint (or start the target browser with a fixed
-`--remote-debugging-port`) instead of relying on the channel name.
+Channel-name resolution gathers candidates and picks the first one that can host a
+page: the browser's own `<user-data-dir>/DevToolsActivePort` file (whose second
+line is the browser socket) and `--remote-debugging-port=N`, then the process's
+other listening ports, then the channel's default port, then a scan of 9222–9333.
+**When the browser was started with `--remote-debugging-port=0` (which is what
+Browser4-launched browsers use), the port comes from its `DevToolsActivePort`
+file — the CLI knows the `--user-data-dir` from the running process, so this works
+on every platform.** Enumerating the process's *other* listening ports is the
+Windows-only part, and only matters when that file cannot be located (a default
+profile, or an unknown install root): there, pass an explicit endpoint (or start
+the target browser with a fixed `--remote-debugging-port`).
+
+**Chrome's built-in remote debugging is a supported `--cdp` endpoint.** The
+`chrome://inspect/#remote-debugging` toggle *"Allow remote debugging for this
+browser instance"* publishes a browser-level WebSocket and answers every `/json*`
+path with HTTP 404. Browser4 attaches over that socket — pages are discovered with
+`Target.getTargets` and driven through `ws://<host>:<port>/devtools/page/<targetId>`
+— so `attach --cdp chrome` resolves it from `DevToolsActivePort`, and
+`attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>` works when the URL is
+passed explicitly. `attach --extension` remains an alternative for that browser.
 
 Attaching binds the session to a page tab of the target browser — an existing page
 when one is available, otherwise a newly created `about:blank` tab. Subsequent
@@ -345,7 +361,9 @@ Need to drive a browser
 │  ├─ No debugging-port setup wanted → attach --extension [channel]
 │  │    (avoid chrome:// pages; one session per browser; not for CI)
 │  └─ Want a controlled/remote endpoint → attach --cdp <url|host:port|channel>
-│       (on Linux/macOS pass an explicit endpoint; `close` leaves the browser running)
+│       (a channel finds the browser's DevToolsActivePort on every platform;
+│        pass an explicit endpoint when that file is not where the CLI looks;
+│        `close` leaves the browser running)
 ├─ Bulk, non-interactive, throughput?
 │  └─ swarm create [--profile-mode TEMPORARY] [--max-browser-contexts N]
 │     → swarm query --sql @q.sql --seed-file urls.txt --refresh

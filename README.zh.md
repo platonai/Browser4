@@ -291,7 +291,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | 命令 | 说明 |
 |---|---|
 | `open [url]` | 打开浏览器会话，或重新连接已有会话。**默认为无头模式。** 支持 `--headed`（可视窗口）、`--headless`、`--profile <path>`、`--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`、`--interact-level <FASTEST\|FAST\|DEFAULT>`。 |
-| `attach` | 通过 CDP 或 Browser4 扩展附加到现有浏览器。支持 `--cdp <url\|port\|channel>` 与远程 endpoint 选项。成功附加后 CLI 会打印实际连接的浏览器（`Connected browser: …` / `Attached to … at …`），当实际浏览器与请求的 channel 不符（如请求 msedge 却连到 Chrome）时会输出 ⚠ 告警——请在驱动会话前核对。 |
+| `attach` | 通过 CDP 或 Browser4 扩展附加到现有浏览器。支持 `--cdp <url\|port\|channel>` 与远程 endpoint 选项。channel 名会依次从浏览器的 `DevToolsActivePort`、`--remote-debugging-port` 与监听端口收集候选，并绑定第一个能承载页面的端点——走 `/json`，或走 Chrome 内置 `chrome://inspect/#remote-debugging` 开关发布的浏览器级 WebSocket（也可直接 `attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>`）。成功附加后 CLI 会打印实际连接的浏览器（`Connected browser: …` / `Attached to … at …`），当实际浏览器与请求的 channel 不符（如请求 msedge 却连到 Chrome）时会输出 ⚠ 告警——请在驱动会话前核对。 |
 | `close` | 关闭当前活动浏览器会话。 |
 | `list` | 列出浏览器会话及其状态和下次打开行为。Connection 列优先显示后端上报的真实浏览器，并在 channel 冲突时标注（如 `requested msedge · actual Google Chrome`）。支持 `--all`。 |
 | `session-default <name>` | 把一个命名会话设为默认未命名会话。 |
