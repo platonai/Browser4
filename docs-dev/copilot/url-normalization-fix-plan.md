@@ -339,3 +339,26 @@ browser4 里用 `isStandard` 的门控（`DomUtils` 富文本收集、`JsoupPars
 看到的拼写不同（尾斜杠、`//`、`%7E`、query 顺序都可能被签名或路由区分）。你的规则是
 "`PulsarSession.normalize()` 结果一致 = 同一资源"，如果希望把这四项也纳入同一身份，说一声即可 ——
 改动本身很小（各 2-4 行），代价是会改变浏览器实际请求的地址，需要一起评估签名 URL 与重定向链。
+
+---
+
+## 九、身份审计：`normalize()` 之外还有没有第二个 key
+
+决定"`PulsarSession.normalize()` 的输出就是同一资源"之后，必须确认没有别的地方**绕过它**造 key。
+把 store / cache / pool 的写入点全部过了一遍，结论是**没有泄漏**，而且现有代码本来就是这个原则：
+
+| 用途 | 用的东西 | 证据 |
+|---|---|---|
+| page cache 写 | `page.url`（= page shell 建立时的 `normURL.urlString`） | `LoadComponent.kt:429`、`GlobalCache.putPDCache:117`、`ParseComponent.kt:44` |
+| page cache 读 | `normURL.urlString` | `LoadComponent.getCachedPageOrNull:549-557`、`AbstractPulsarSession.getCachedPageOrNull:845` |
+| page store 读 | `normURL.urlString` | `LoadComponent.kt:364` |
+| page store 写 | `page.url` | `LoadComponent.kt:703`（`webDb.put(page)`）、`AbstractPulsarSession.persist:725` |
+| X-SQL 缓存冻结 | `session.normalize(url, READ_ONLY_OPTION).urlString` | `ScrapeAPIUtils.resolveQueryUrl:171` |
+| **送给浏览器的地址** | **原始 href**，回退到规范化 url | `InteractiveBrowserEmulator.kt:686-693` `val userTypedUrl = fetchTask.href ?: fetchTask.url`；`NavigateEntry.userTypedUrl`；`HTMLSnapshotToolExecutor.kt:283` |
+
+也就是说：**规范化后的 url 只做存取身份，原始 href 做浏览器地址** —— 这正是你在 C1-A 里定的原则，
+也是 `NormURL` KDoc 里那句 "Href is the first choice to locate resources" 的意思。C1-A 对 `goto` 的改动
+（只校验、不规范化）不是引入新原则，而是让 MCP 那条路**跟上**已有原则。
+
+唯一一处"第二个 key"是刻意的：`fetchTask.href` 优先用于导航，`fetchTask.url` 用于存储 —— 两者本来
+就可能是不同拼写，`InteractiveBrowserEmulator` 的注释写明了这一点。
