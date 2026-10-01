@@ -64,15 +64,30 @@
 
 ---
 
-## 三、未做（已排期，不在本轮）
+## 三、Phase B：经验记忆层（M6 / M7，已在本分支完成）
 
-### Phase B —— 需要先定 API 形状
+用户确认的下一步。这一层的三个函数原本互不一致，而它们必须给同一个页面同一个拼写：
+`normalize` 产出 `host/path[?显著query]`、`urlPatternOf` 产出存进 fact 的 pattern 形状、
+`matches` 回答"某个 pattern 是否覆盖这个 url"。
 
-| # | 项 | 内容 |
+| # | 问题 | 改动 |
 |---|---|---|
-| B1 | M4 | crawl/scrape seed 入队前校验，替代"静默换搜索引擎"（会改 REST 错误语义：从 202+搜索引擎结果 变成 400） |
-| B2 | M5 | 统一失败语义：区分"没有 URL"与"URL 非法"，并把非法值回给调用方（`ConversationService` 的 `"URL must not be blank"` 文案也是错的） |
-| B3 | M6/M7 | 经验层：`rawPath` 替代 `path`、`extractDomain` 加 `IDN.toASCII` + lowercase 且禁止回退原始 URL、Level-1 加 URL gate |
+| B3-1 | M6 `extractDomain` 是目录名却不设防 | host 小写 + `IDN.toASCII`（`中文.cn` → `xn--fiq228c.cn`）+ 只保留 host 允许字符 + **永不回退成整条 URL**；`KnowledgeStore` 新增 `safeSegment`（domain 与 intent 都过 allow-list，`trim('.')` 挡掉 `..` 逃逸），`factsFilePath` / `writeFactsLocked` / `listFactsForDomain` 三处统一 |
+| B3-2 | M6 `matches` 与生产调用形状不匹配 | 重写为单一 `pathOf`/`queryOf`：`/{asterisk}` 能匹配多段路径与根；尾随 `*` 表示"余下路径"（但仍要求至少一段，`/dp/*` 不匹配 `/dp/`）；带 query 的 pattern 约束它点名的参数，不带 query 的旧 pattern 依旧匹配任何 query |
+| B3-3 | M6 `urlPatternOf` 有两份重复实现且丢掉 query | 收敛进 `UrlNormalizer`，并保留 query 形状（值通配）——KDoc 承诺的 `/s?k=*` 现在真能产出，也真能匹配 |
+| B3-4 | M6 `normalize` 用了解码后的 path/query | 改用 `rawPath`/`rawQuery`：`%2F` 不再被解码成路径分隔符、值里的 `%26` 不再截断；无 scheme 输入先补 `https://`，于是幂等 |
+| B3-5 | M7 一页两个 pattern | 丢弃路径里的 `key=value` **追踪段**（只丢已知 key 与 `ref_`/`pf_rd_`/`pd_rd_` 前缀，base64 padding 如 `abc==` 保住）→ `/dp/X/ref=sr_1_1` 与 `/dp/X` 归一 |
+| B3-6 | M6 Level-1 绕过 URL、Level-2 按目录顺序 | Level-1 增加 URL gate（pattern 为空时不 gate，保持向后兼容）；Level-2 改用 `findBestMatch`；`specificity` 把 query 形状计入，`/s?k=*` 胜过 `/s` |
+| B3-7 | M6 catch 兜底与正常路径不同形状 | 兜底也剥 scheme/fragment/query 并小写 host，不再保留 query、不再可能返回整条 URL |
+| B3-8 | M6 参数键大小写 | 显著参数键比较大小写不敏感（`?K=` 不再被整个丢掉） |
+| B3-9 | Low 可变全局集合 | `SEMANTICALLY_SIGNIFICANT_PARAMS` 改为不可变 `Set`（每次 `normalize` 都读它，而"按站点可配置"那一期还没设计） |
+
+### 仍未做
+
+| # | 项 | 为什么 |
+|---|---|---|
+| B1 | M4 | seed 非法时静默换成搜索引擎。改成显式失败会动 REST 语义（202 → 400），而 `AbstractPulsarContext` 的搜索回退看起来是有意设计，需要产品决策 |
+| B2 | M5 | 三种失败语义混用、非法 URL 被静默降级成 agent 任务；需要先定"没有 URL / URL 非法"的 API 形状 |
 | B4 | H2 补 | `isStandard` 与 `normalizeOrNull` 的分歧（实测 23 组里 9 组结论相反）收敛到一个解析器 |
 
 ### Phase C —— 本轮明确不做
