@@ -68,7 +68,7 @@ class CombinedUrlNormalizer(private val urlNormalizers: ChainedUrlNormalizer? = 
             // reported the seed — the wrong document under the right URL. It also collapsed every
             // `http://localfile.internal?path=<base64>` url (and every `browser.internal?url=...`)
             // onto a single page-store and page-cache key.
-            normURL = SafeUrlNormalize.normalizeOrNull(normURL)
+            normURL = URLUtils.normalizeOrNull(normURL)
         }
 
         val normalized = normURL ?: return nil(url, spec, "the url has no normal form")

@@ -6,6 +6,7 @@ import ai.platon.pulsar.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
 import ai.platon.pulsar.api.model.NavigateEntry
+import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
@@ -24,6 +25,27 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         private const val READ_ACTIONS_WHITELIST_PROPERTY = "browser4.tab.read.actions.whitelist"
         private const val READ_ACTIONS_WHITELIST_ENV = "BROWSER4_TAB_READ_ACTIONS_WHITELIST"
         private val logger: Logger = Logger.getLogger(BrowserTabToolExecutor::class.java.name)
+
+        /**
+         * The schemes a browser navigates to that are not http(s) urls: a local file, an in-memory
+         * document (`data:`), a blob url, and the browser's own pages.
+         *
+         * @see isNavigableAddress
+         */
+        private val BROWSER_ADDRESS_SCHEMES =
+            setOf("about", "chrome", "edge", "brave", "file", "data", "blob")
+
+        /**
+         * Result contract of `tab.dialogStatus`.
+         *
+         * `type`/`message` are optional on purpose: the driver-less fallback answers
+         * `{pending: false}` and nothing else, and a schema that demanded all three
+         * fields would reject that legitimate result.
+         */
+        private const val DIALOG_STATUS_SCHEMA =
+            """{"type":"object","required":["pending"],"properties":""" +
+                """{"pending":{"type":"boolean"},"type":{"type":"string"},"message":{"type":"string"}}}"""
+
         // Actions that read page state and can become flaky if executed too soon after mutations/navigation.
         private val DEFAULT_READ_PAGE_STATE_ACTIONS = setOf(
             "waitForSelector", "waitForNavigation", "waitForPage",
@@ -430,6 +452,45 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
     }
 
     /**
+     * Refuse an address the browser cannot be sent to, instead of handing it over and hoping.
+     *
+     * The navigation path takes the url **verbatim**, and this gate deliberately does not change
+     * that: normalization is the *storage* identity (`PulsarSession.normalize` is what the page
+     * store and the page cache are keyed by), and a navigation must not go through it — a normalized
+     * url has lost its fragment, and `goto "https://h/doc#section"` is a legitimate request.
+     * `NavigateEntry` states the same contract: `userTypedUrl` is the raw address (typed, or taken
+     * from a link's `href`) and `pageUrl` is the normalized lookup key.
+     *
+     * What was missing was not normalization but *validation*: a url the driver cannot use was sent
+     * anyway.  `PulsarWebDriver` then logs a `warn` and returns before it records the navigation, so
+     * the caller is left with an unchanged page and no reason — the same silent failure the load
+     * path's NIL diagnosis was added for.
+     *
+     * The accepted set is "navigable", which is *not* "normalizable": `about:blank`, `chrome://` and
+     * a `file:///` target are perfectly good things to open and have no normal form at all.
+     */
+    private fun requireNavigable(url: String) {
+        require(isNavigableAddress(url)) {
+            "Not a navigable address: <$url>; expected an http(s) url, or a browser page such as about:blank"
+        }
+    }
+
+    /**
+     * True when a browser can be sent to [url]: an http(s) url, or one of the addresses a browser
+     * opens by itself.
+     *
+     * `URLUtils.isStandard` is http(s)-only, so `file:///…`, `data:` and `blob:` need naming here —
+     * without them this gate would refuse an address Chrome loads happily, which is a regression the
+     * gate has no business introducing.
+     */
+    private fun isNavigableAddress(url: String): Boolean {
+        if (URLUtils.isBrowserURL(url) || URLUtils.isStandard(url)) {
+            return true
+        }
+        return url.substringBefore(':').lowercase() in BROWSER_ADDRESS_SCHEMES
+    }
+
+    /**
      * After a navigation-triggering action, detect whether the page started navigating and wait for
      * the DOM to settle before returning.
      *
@@ -642,8 +703,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 when {
                     args.containsKey("url") -> {
                         validateArgs(args, allowed("url"), setOf("url"), functionName)
+                        val url = paramString(args, "url", functionName)!!
+                        requireNavigable(url)
                         val urlBefore = driver.currentUrl()
-                        driver.navigate(paramString(args, "url", functionName)!!)
+                        driver.navigate(url)
                         // After navigation, wait for the page to load. Do NOT use
                         // waitForNavigation() here — the no-arg overload's predicate
                         // is `"" != currentUrl()`, true as soon as the page has any
@@ -656,10 +719,12 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
                     args.containsKey("rawUrl") || args.containsKey("pageUrl") -> {
                         validateArgs(args, allowed("rawUrl", "pageUrl"), setOf("rawUrl", "pageUrl"), functionName)
+                        val rawUrl = paramString(args, "rawUrl", functionName)!!
+                        requireNavigable(rawUrl)
                         val urlBefore = driver.currentUrl()
                         driver.navigate(
                             NavigateEntry(
-                                paramString(args, "rawUrl", functionName)!!,
+                                rawUrl,
                                 pageUrl = paramString(args, "pageUrl", functionName)!!
                             )
                         )

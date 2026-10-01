@@ -72,7 +72,7 @@ abstract class AbstractBrowser4SQLContext(
     }
 
     override fun normalize(url: String, options: LoadOptions, toItemOption: Boolean): NormURL {
-        return reKeyForSql(super.normalize(url, options, toItemOption))
+        return super.normalize(realUrlOf(url), options, toItemOption)
     }
 
     @Throws(Exception::class)
@@ -202,32 +202,26 @@ abstract class AbstractBrowser4SQLContext(
 
     companion object {
         /**
-         * Re-key [normURL] with the url the caller meant, undoing the X-SQL quote placeholder.
+         * The url the caller meant, with the X-SQL quote placeholder undone.
          *
-         * A url inside an X-SQL statement carries `^27` where it means `'`
+         * A url inside an X-SQL statement can carry `^27` where it means `'`
          * ([SQLUtils.SINGLE_QUOTE_PLACE_HOLDER] — `URLEncoder` turns a quote into `%27`, so the
          * engine needs a character a url cannot contain).  Everything downstream — the page store,
          * the page cache, the url a result row reports — has to see the real url, so the placeholder
          * is undone here.
          *
-         * Two things this deliberately does **not** lose:
+         * It has to happen **before** the url is parsed, which is why this is the input of
+         * [normalize] and not a post-processing step on its result: `^` is not a legal uri character,
+         * so a `^27`-bearing url is rejected by the parser and normalized to NIL before anything
+         * could restore it.  (The un-sanitizing used to run *after* `normalize`, where it was a no-op
+         * for every url that could reach it — super had already refused the ones it was meant to
+         * fix — and the `NormURL` it rebuilt then dropped `NormURL.detail` on the way.)
          *
-         *  * `detail`, the `UrlAware` the caller normalized.  Dropping it killed the `referrer`
-         *    fallback (`NormURL.referrer` is `options.referrer ?: detail?.referrer`) and left a
-         *    caller that kept a handle on its own url object with nothing to read back.
-         *  * a url the un-sanitizing *breaks*.  [SQLUtils.unsanitizeUrl] rewrites every literal
-         *    `^27`, including one a real url contains, and the rewritten url may no longer parse.
-         *    `super` already produced one that does parse, so the rewrite is what is wrong: keep the
-         *    original instead of throwing — or, worse, turning a loadable page into a NIL one.
-         *
-         * @return a `NormURL` for the same page, carrying [NormURL.detail] and the caller's href.
+         * The collision this accepts is bounded: a url that genuinely contains `^27` is unparseable
+         * as a uri anyway, so the placeholder is the only reading of it that can work, and no
+         * producer writes `^27` into a url by accident (`URLEncoder` writes `%27`).
          */
         @JvmStatic
-        internal fun reKeyForSql(normURL: NormURL): NormURL {
-            val spec = SQLUtils.unsanitizeUrl(normURL.urlString)
-            return runCatching {
-                NormURL(spec, normURL.options, hrefSpec = normURL.hrefSpec, detail = normURL.detail)
-            }.getOrDefault(normURL)
-        }
+        internal fun realUrlOf(url: String): String = SQLUtils.unsanitizeUrl(url)
     }
 }

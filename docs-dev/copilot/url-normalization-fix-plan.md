@@ -187,7 +187,101 @@
 
 ## 五、后续动作
 
-1. **基础库发版后删除防护**：`SafeUrlNormalize.kt` 的 TODO 指向本节。删除时把
-   `CombinedUrlNormalizer` 与 `UserCommandExecutor` 改回 `URLUtils`，并移除该文件与其引用。
-2. `browser4-base.version` 保持 `4.11.21`（已发布的 release），本轮不动 —— CI 才能解析到依赖。
-3. Phase B / C 见上表，建议各自独立 PR。
+1. ~~基础库发版后删除防护~~ → **已完成**，见下节。
+2. ~~`browser4-base.version` 保持 `4.11.21`~~ → **已升到 `4.11.23`**（含 fragment 修复的 release）。
+3. Phase B / C 见上表。
+
+---
+
+## 六、本轮（决策落地）：C1-A / M4-A / 基础库升级 / C4-3
+
+### 6.1 基础库升到 `4.11.23`，拆除 `SafeUrlNormalize`
+
+- 已验证 `244d6f47f`（fragment 修复）**在 `v4.11.23` tag 内**（`git merge-base --is-ancestor` 退出码 0），并且用 `pulsar-common-4.11.23.jar` 实测三类输入都已修复、其余行为未变。
+- `SafeUrlNormalize.kt` 删除，`CombinedUrlNormalizer` 与 `UserCommandExecutor` 改回 `URLUtils`。
+
+> **顺带修掉一个陷阱**：`browser4-base.version` 原本**声明了两处** —— 根 `pom.xml` 与
+> `browser4-dependencies/pom.xml`。真正被消费的只有后者（它 import `pulsar-bom`，是全仓库唯一
+> 使用 `${browser4-base.version}` 的地方），根 pom 那一份没有任何读者。也就是说：改根 pom 的版本
+> **不会改变任何依赖**。现已把定义收敛到 `browser4-dependencies`，根 pom 只留一条指向它的注释。
+
+### 6.2 C1-A：`goto` 送浏览器的地址只校验、不规范化
+
+用户定的原则：**URL 规范化只用于网页存取身份，送给浏览器的地址尽量保持原有形式**；`Hyperlink`/`UrlAware`
+（以及 `NavigateEntry` 自己的 KDoc：`userTypedUrl` 是原始地址、`pageUrl` 是规范化后的库键）已经表达了
+这个设计，就是"每个 hyperlink 有一个规范化后的 url，也尽量保留原始 href 作为发给浏览器的首要地址"。
+
+所以本轮**没有**把归一化接进导航路径，只补上缺失的校验：
+
+- `BrowserTabToolExecutor.requireNavigable(url)`：`URLUtils.isBrowserURL(url) || URLUtils.isStandard(url)`，
+  否则抛 `Not a navigable address: <...>`；
+- 覆盖 `navigate` 的两条分支（`url`、`rawUrl`+`pageUrl`），校验的是 `rawUrl`（真正被导航的地址）。
+
+"可导航"与"可归一化"是**两个问题**：`about:blank` 是合法导航目标却没有规范形式；fragment 是地址的一部分，
+`goto "https://h/doc#section"` 必须保留它 —— 这正是不能拿 `normalize()` 当导航前置步骤的原因。
+
+### 6.3 M4-A：crawl / scrape 提交入口校验
+
+- `/api/crawl`：`CrawlController.startCrawl` 对 `url` 与 `urls` 的每一个种子做
+  `URLUtils.isStandard(splitUrlArgs(seed).first)`，非法抛 `Malformed url: <...>`；该控制器已有
+  `@ExceptionHandler(IllegalArgumentException → 400)`，所以是 **400**。
+- `/api/x/submit`、`/api/swarm/submit`：上一轮已加同样的校验。
+- **`ScrapeController` 原本没有异常处理器** → 它抛出的 `IllegalArgumentException` 在 Spring 里是 **500**。
+  本轮补上与 crawl/swarm 相同的 `@ExceptionHandler(IllegalArgumentException → 400)`，否则"M4-A → 400"
+  在 scrape 这一侧只是纸面成立。
+
+`AbstractPulsarContext` 的**搜索引擎回退保留不动** —— 它服务交互式场景，删除属于产品决策。详见下节。
+
+### 6.4 C4-3：`^27` 反净化挪到解析之前
+
+`AbstractBrowser4SQLContext.normalize` 改为 `super.normalize(realUrlOf(url), ...)`，即先把占位符还原成
+`'`、再解析。原来的写法是在 `super.normalize` **之后**重建 `NormURL`，而 `^` 不是合法 URI 字符 ——
+带 `^27` 的 URL 在解析阶段就被判成 NIL，反净化永远不可能生效（对一切可解析输入都是 no-op），且那次重建
+还会丢掉 `detail`。挪到前面之后，`detail` 由 `super` 自然带出，`reKeyForSql` 整个消失。
+
+代价（已在 KDoc 写明）：真正含字面 `^27` 的 URL 会被读成 `'`。这类 URL 本来也不是合法 URI，而 `^27`
+不会由任何生产者写进 URL（`URLEncoder` 写的是 `%27`）。
+
+---
+
+## 七、搜索引擎回退：完整判定树与可达路径
+
+`AbstractPulsarContext.normalize(url: String, ...)`（`browser4-core/browser4-skeleton/.../AbstractPulsarContext.kt:242-259`）
+是全仓库唯一做这件事的地方：
+
+```
+输入串
+ ├─ 1. 以 about: / data: / blob: / javascript: / chrome: / edge: 开头 → 原样放行
+ ├─ 2. 含 "://"                                                     → 原样放行（任何 scheme，包括拼错的 htps://）
+ └─ 3. 否则：当成 base64url 解码
+        ├─ a. 解码成功 → 把解码出的字节当 URL 用（乱码，通常最终 NIL）
+        └─ b. 抛 IllegalArgumentException → ★ 回退搜索引擎 ★
+                                            CN: https://cn.bing.com/
+                                            其它: https://cn.bing.com/?ensearch=1
+```
+
+**第 3b 步的触发条件**：不含 `://`、不属于上面 6 个前缀、且**不是合法 base64url**。
+base64url 字母表是 `A-Za-z0-9-_`（外加 `=` 填充），且 Java 要求长度 `% 4 ∈ {0,2,3}`。
+
+| 输入 | 结局 |
+|---|---|
+| `not a url`（含空格） | ★ **Bing** |
+| `amazon.com`（含 `.`） | ★ **Bing** |
+| `你好`（非 ASCII） | ★ **Bing** |
+| `electronics`（11 字符，`%4==3`，全是字母） | 能解码 → 乱码 → NIL |
+| `abcd` | 能解码 → 乱码 → NIL |
+| `htps://exmple.com` | 含 `://` → 原样放行 → 后续 URI 解析失败 → NIL |
+| `about:blank` / `chrome://version` | 原样放行 |
+
+**哪些入口真的会走到这里**（这一栏纠正了本报告早期版本的说法）：
+
+| 入口 | 会回退 Bing？ | 原因 |
+|---|---|---|
+| MCP `goto` / `browser_navigate` | ❌ **不会** | 它根本不经过 `normalize`，原串直接交给 Chrome（见 6.2） |
+| CLI / REST 的 plain command（`UserCommandExecutor`） | ❌ 不会 | 前面有 `isConfiguredUrl()`（要求 `normalizeOrNull != null`）拦着 |
+| **crawl 种子**（`/api/crawl`） | ✅ **会** | 种子直接进 `session.load(seed)`，本轮之前没有任何校验 |
+| scrape / swarm submit | ❌ 不会 | `ScrapeAPIUtils.normalize` 先查 `isStandard`；本轮又把校验前移到提交边界 |
+| 任何直接调 `session.load(用户串)` 的集成方 | ✅ 会 | 同上 |
+
+也就是说：**"静默跳 Bing" 实际只在 crawl 种子（以及绕过校验直接调用 load API 的集成方）上暴露** —— 这正是
+本轮把校验放在 `/api/crawl` 提交边界的原因。回退本身被保留，因为"用户输入关键词"是它的设计场景。

@@ -1,25 +1,21 @@
 package ai.platon.pulsar.agentic.context.sql
 
 import ai.platon.pulsar.common.sql.SQLUtils
-import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertSame
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
-import java.net.URL
+import org.junit.jupiter.api.assertThrows
 
 /**
  * The url an X-SQL statement resolves the page by.
  *
- * [AbstractBrowser4SQLContext.reKeyForSql] is the one place the SQL layer re-keys a `NormURL`, and it
- * is the only place that undoes the X-SQL quote placeholder — so it is also the only place that can
- * lose the caller's `UrlAware`.
+ * [AbstractBrowser4SQLContext] is the only place that undoes the X-SQL quote placeholder, and the
+ * *order* is the whole point: the placeholder is `^27`, `^` is not a legal uri character, and the url
+ * is parsed into a `NormURL` on the way in.
  */
-@DisplayName("AbstractBrowser4SQLContext.reKeyForSql")
+@DisplayName("AbstractBrowser4SQLContext.realUrlOf")
 class AbstractBrowser4SQLContextTest {
 
     private val options = LoadOptions.parse("")
@@ -27,53 +23,34 @@ class AbstractBrowser4SQLContextTest {
     @Test
     @DisplayName("undoes the X-SQL quote placeholder")
     fun undoesTheQuotePlaceholder() {
-        // `java.net.URL` accepts '^' while `java.net.URI` rejects it, which is exactly why a
-        // `^27`-bearing url can only exist in a NormURL built from a URL -- and why undoing the
-        // placeholder is the SQL layer's job: nothing else can see that url shape at all.
-        val sanitized = URL("http://example.com/o${SQLUtils.SINGLE_QUOTE_PLACE_HOLDER}brien")
-        val normURL = NormURL(sanitized, options)
-
-        val reKeyed = AbstractBrowser4SQLContext.reKeyForSql(normURL)
-
-        assertEquals("http://example.com/o'brien", reKeyed.urlString)
+        assertEquals(
+            "http://example.com/o'brien",
+            AbstractBrowser4SQLContext.realUrlOf(
+                "http://example.com/o${SQLUtils.SINGLE_QUOTE_PLACE_HOLDER}brien"
+            )
+        )
     }
 
     @Test
-    @DisplayName("keeps the url, the href and the options of a url with no placeholder")
-    fun keepsTheUrlHrefAndOptions() {
-        val normURL = NormURL("http://example.com/p", options, hrefSpec = "http://example.com/p#top")
-
-        val reKeyed = AbstractBrowser4SQLContext.reKeyForSql(normURL)
-
-        assertEquals("http://example.com/p", reKeyed.urlString)
-        assertEquals("http://example.com/p#top", reKeyed.hrefSpec)
-        assertEquals(options, reKeyed.options)
+    @DisplayName("leaves a url without the placeholder exactly as it is")
+    fun leavesPlainUrlsAlone() {
+        assertEquals("http://example.com/p", AbstractBrowser4SQLContext.realUrlOf("http://example.com/p"))
     }
 
     @Test
-    @DisplayName("keeps detail, so the caller's own url object is still reachable")
-    fun keepsTheCallersDetail() {
-        // `detail` is the UrlAware the caller normalized.  Dropping it left a caller that kept a
-        // handle on its own url object with nothing to read back, and killed the referrer fallback
-        // (`NormURL.referrer` is `options.referrer ?: detail?.referrer`).
-        val page = Hyperlink("http://example.com/p", "", referrer = "http://example.com/from")
-        val normURL = NormURL("http://example.com/p", options, detail = page)
+    @DisplayName("the placeholder has to be undone before the url is parsed")
+    fun theUnsanitizingHasToRunBeforeTheParse() {
+        // `NormURL(String)` parses with `java.net.URI`, which rejects '^' — while `java.net.URL`
+        // accepts it.  A `^27`-bearing url therefore cannot become a NormURL at all, which is why the
+        // un-sanitizing runs *before* `super.normalize`: it used to run after, where it could only
+        // ever be a no-op (super had already refused the very urls it was meant to fix, and reported
+        // them as NIL), and the NormURL it rebuilt on the way dropped `detail`.
+        val sanitized = "http://example.com/o${SQLUtils.SINGLE_QUOTE_PLACE_HOLDER}brien"
 
-        val reKeyed = AbstractBrowser4SQLContext.reKeyForSql(normURL)
-
-        assertSame(page, reKeyed.detail, "the caller's url object must survive the re-key")
-        assertEquals("http://example.com/from", reKeyed.referrer)
-    }
-
-    @Test
-    @DisplayName("a NIL url stays NIL and keeps its detail")
-    fun keepsNilUrlsNil() {
-        val page = Hyperlink("http://example.com/p", "")
-        val nil = NormURL.createNil(page)
-
-        val reKeyed = AbstractBrowser4SQLContext.reKeyForSql(nil)
-
-        assertTrue(reKeyed.isNil)
-        assertNotNull(reKeyed.detail)
+        assertThrows<IllegalArgumentException> { NormURL(sanitized, options) }
+        assertEquals(
+            "http://example.com/o'brien",
+            NormURL(AbstractBrowser4SQLContext.realUrlOf(sanitized), options).urlString
+        )
     }
 }

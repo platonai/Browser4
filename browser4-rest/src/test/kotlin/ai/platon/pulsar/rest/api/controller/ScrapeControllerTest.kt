@@ -106,4 +106,16 @@ class ScrapeControllerTest {
         assertThrows<IllegalArgumentException> { controller.submit("DROP TABLE users") }
         verify(scrapeService, never()).submitJob(any())
     }
+
+    @Test
+    @DisplayName("a refused payload answers the 400 body the handler builds")
+    fun theHandlerMapsARefusalToBadRequest() {
+        // Without the handler Spring answers 500 for these, which tells the caller to retry something
+        // that can never succeed — the crawl and swarm endpoints have mapped the same exception to
+        // 400 all along.
+        val body = controller.handleBadRequest(IllegalArgumentException("Malformed url: <http://>"))
+
+        assertEquals("Bad Request", body["error"])
+        assertEquals("Malformed url: <http://>", body["message"])
+    }
 }

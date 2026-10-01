@@ -658,6 +658,53 @@ class BrowserTabToolExecutorTest {
     }
 
     @Test
+    fun `navigate refuses an address the browser cannot be sent to`() = runBlocking {
+        // The address is handed to the driver verbatim — normalization is the *storage* identity
+        // (PulsarSession.normalize keys the page store and the page cache), and `goto
+        // "https://h/doc#section"` must keep its fragment — but a url the driver cannot use cannot be
+        // handed over either: PulsarWebDriver logs a warn and returns before it records the
+        // navigation, so the caller is left with an unchanged page and no reason.
+        val driver = Mockito.mock(WebDriver::class.java)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "navigate", mutableMapOf<String, Any?>("url" to "not a url")),
+            driver
+        )
+
+        assertTrue(
+            result.exception?.cause?.message?.contains("Not a navigable address") == true,
+            "expected a refusal, got ${result.exception?.cause}"
+        )
+        Mockito.verify(driver, Mockito.never()).navigate(Mockito.anyString())
+        Unit
+    }
+
+    @Test
+    fun `navigate accepts a browser page and a fragment-bearing url`() = runBlocking {
+        // "Navigable" is deliberately not "normalizable": `about:blank`, a `file:///` target and a
+        // `data:` document are perfectly good addresses with no normal form, and a fragment is part
+        // of the address the browser is sent to.
+        listOf(
+            "about:blank",
+            "file:///tmp/page.html",
+            "data:text/html,<b>hi</b>",
+            "https://example.com/doc#section"
+        ).forEach { target ->
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn(target)
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "navigate", mutableMapOf<String, Any?>("url" to target)),
+                driver
+            )
+
+            assertFalse(result.exception != null, "expected <$target> to be navigable: ${result.exception}")
+            verify(driver).navigate(target)
+        }
+        Unit
+    }
+
+    @Test
     fun `wedged page skips the stacked body wait after readyState poll timeout`() {
         runBlocking {
             val driver = Mockito.mock(WebDriver::class.java)
