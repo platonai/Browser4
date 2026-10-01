@@ -83,7 +83,11 @@ class SwarmController(
             // string literal.  Entry-page hrefs legitimately contain apostrophes,
             // and an unescaped quote would both break the statement and let the
             // URL text escape the literal — escape it instead of rejecting it.
-            val literal = escapeSqlStringLiteral(payload)
+            // A url that cannot be normalized cannot be fetched either, so it is
+            // rejected here rather than in the job.  Both live in ScrapeAPIUtils,
+            // so the two submit endpoints cannot drift apart again.
+            ScrapeAPIUtils.requireStandardUrl(payload)
+            val literal = ScrapeAPIUtils.escapeSqlStringLiteral(payload)
             "select dom_base_uri(dom) as url from load_and_select('$literal', ':root')"
         } else payload
 
@@ -95,10 +99,6 @@ class SwarmController(
         val normalizedBatchId = batchId?.trim()?.takeIf { it.isNotEmpty() }
         return swarmService.submit(ScrapeRequest(sql, normalizedBatchId), normalizedBatchId)
     }
-
-    /** Escape a value for use inside a single-quoted X-SQL string literal. */
-    private fun escapeSqlStringLiteral(value: String): String =
-        value.replace("'", "''").replace("\r", " ").replace("\n", " ")
 
     /**
      * Submit an X-SQL query to execute against a loaded webpage.

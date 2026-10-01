@@ -96,8 +96,56 @@
 |---|---|---|
 | C1 | S1：`goto` 路径接入归一化 | 需要产品决策（goto 是否应剥 fragment / 规范化），且影响 `attach`、fragment 跳转、SPA 路由 |
 | C2 | `URLUtils.normalize` canonicalization | 改 page store / cache / ledger 的 key，需要存量迁移方案（D1） |
-| C3 | M8：Scrape/Swarm SQL 转义统一 | 与本主题正交，宜独立 PR |
-| C4 | L3：SQL context 保留 `detail` | 同上 |
+| C3 | M8：Scrape/Swarm SQL 转义统一 | ~~与本主题正交~~ → **已完成，见下节** |
+| C4 | L3：SQL context 保留 `detail` | ~~同上~~ → **1+2 已完成，3+4 见下节** |
+
+---
+
+## 三之三、Phase C 先行项：C3 与 C4(1+2)（本轮完成）
+
+这两项没有任何产品决策，先做掉。
+
+### C3 — Scrape 与 Swarm 的转义/校验统一
+
+| 改动 | 位置 |
+|---|---|
+| `escapeSqlStringLiteral` 从 `SwarmController` 的私有方法提到 `ScrapeAPIUtils`（`'` → `''`，CR/LF → 空格） | `ScrapeAPIUtils.kt` |
+| 新增 `ScrapeAPIUtils.requireStandardUrl(payload)`：剥掉 LoadOptions 后校验 url，非法则抛 `Malformed url: <...>` | 同上 |
+| `ScrapeController.submit` 复用两者（此前**直接插值**，无转义、无校验） | `ScrapeController.kt` |
+| `SwarmController.submit` 改调共享实现，删除私有副本，并加上同一份校验 | `SwarmController.kt` |
+
+**修掉的两个后果**：
+1. 含 `'` 的 URL 在 `/api/x/submit` 上会破坏 SQL 字面量，调用方却收到 `Invalid URL or X-SQL`（原因指错），且 URL 文本可逃出字面量；
+2. `checkSql` 只查**语法**，而 URL 在 `load_and_select('...')` 里语法上永远合法 —— 所以"空主机"一族（`http://`、`https://`、`http://:8080/p`）以前会**返回 UUID 再在异步任务里失败**，或者被 fetcher 悄悄换成默认搜索引擎 URL。现在在提交边界上返回 `Malformed url: <...>`。
+
+**实测：这份校验的覆盖边界**（用真实 `isStandard` 跑过候选集）：
+
+| payload | 结果 |
+|---|---|
+| `http://`、`https://`、`http://:8080/p`、`http://..`、`http://[::1` | ✅ 被拒（新行为） |
+| `htps://exmple.com` | 不以 `http` 开头 → **不进 URL 分支**，仍由 `checkSql` 拒绝，状态码与文案相同 |
+| `http://exa mple.com/p` | ❌ 仍漏：`splitUrlArgs` 在第一个空白处截断，token 变成 `http://exa`（合法） |
+| `https://example.com/o'brien?q=it's` | ✅ 合法（okhttp 会把 `'` 百分号编码）→ 现在的转义把它安全地送进字面量 |
+
+后两行是**遗留缺口**，属于 S1/M4 一族（入口未规范化 + `splitUrlArgs` 的空白截断），不在本轮范围。
+
+### C4(1+2) — SQL context 的 `NormURL` 重建
+
+`AbstractBrowser4SQLContext.normalize` 改为调用新的 companion 函数 `reKeyForSql`：
+
+| 项 | 内容 |
+|---|---|
+| **1. 保留 `detail`** | `NormURL(spec, options, hrefSpec = ..., detail = normURL.detail)`。此前 `detail` 被丢掉，`NormURL.referrer`（= `options.referrer ?: detail?.referrer`）的兜底随之失效，调用方也拿不回自己传进来的 `UrlAware` |
+| **2. 异常安全** | 重建包在 `runCatching` 里，失败时**返回原 `NormURL`** 而不是抛异常（`NormURL(String)` 会 `URI.create`）。原代码的 `URI.create` 在 try 之外 |
+
+**顺带查清 `^27` 占位符的真相**（原 C4 第 3 项，尚未修）：
+
+- `SQLUtils.sanitizeUrl`（生产 `^27` 的一方）在 **browser4 里没有任何调用者**，`unsanitizeUrl` 只在 SQL context 里被调用 —— 机制是**半接线**的；
+- `java.net.URI` 拒绝 `^`，而 `NormURL(String)` 走的就是 `URI.create` —— 所以**携带 `^27` 的 URL 根本到不了 `reKeyForSql`**：`super.normalize` 会先把它判成 NIL。也就是说反净化在当前位置上对一切可解析输入都是 no-op；
+- 真正的修法是**把反净化挪到解析之前**（`super.normalize(SQLUtils.unsanitizeUrl(url), ...)`），一行即可 —— 但它会改变"手写 `^27` 的 X-SQL 能否工作"这一行为，且今天没有生产者，属于**无观测效应的语义变更**，所以留给下一轮决定。
+- 已在 `reKeyForSql` 的 KDoc 里写明这个不变量，避免下一个人误以为它是活跃路径。
+
+新增测试：`AbstractBrowser4SQLContextTest`（4 条，含用 `java.net.URL` 构造 `^27` URL 来证明反净化确实生效 —— `URI` 做不到这一点）。
 
 ---
 
@@ -116,8 +164,11 @@
 | 6 | `browser4-agentic` **全量快速套件**（Phase B 之后） | ✅ **1476 / 1476**（含 `UrlNormalizerTest` 45 条、`KnowledgeStore*Test`、`PemKnowledgeProviderTest`、`ExperienceToolExecutor*Test`、`AgentProfileTest`） |
 | 7 | 跨模块复查：装上新的 agentic 制品后重跑 `browser4-rest` 全量快速套件 | ✅ **608 / 608** |
 | 8 | 基础库 `pulsar-common-tests` 的 `URLUtilsTest` | ✅ **43 / 43**（含新增 2 条） |
+| 9 | C3 / C4(1+2) 之后：`browser4-agent-tools` 全量快速套件 | ✅ **77 / 77** |
+| 10 | 同上：`browser4-agentic` 全量快速套件 | ✅ **1480 / 1480**（+4 = `AbstractBrowser4SQLContextTest`） |
+| 11 | 同上：`browser4-rest` 全量快速套件 | ✅ **616 / 616**（+7 `ScrapeControllerTest`、+1 `SwarmControllerTest`） |
 
-合计 **2212** 条测试通过。
+合计 **2301** 条测试通过。
 
 ### 基础库测试的执行方式
 

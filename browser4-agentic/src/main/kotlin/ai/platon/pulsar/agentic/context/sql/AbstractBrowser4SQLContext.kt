@@ -72,8 +72,7 @@ abstract class AbstractBrowser4SQLContext(
     }
 
     override fun normalize(url: String, options: LoadOptions, toItemOption: Boolean): NormURL {
-        val normURL = super.normalize(url, options, toItemOption)
-        return NormURL(SQLUtils.unsanitizeUrl(normURL.urlString), normURL.options, hrefSpec = normURL.hrefSpec)
+        return reKeyForSql(super.normalize(url, options, toItemOption))
     }
 
     @Throws(Exception::class)
@@ -198,6 +197,37 @@ abstract class AbstractBrowser4SQLContext(
     private fun ensureRunning() {
         if (!isActive) {
             throw IllegalApplicationStateException("SQLContext is closed | #$id")
+        }
+    }
+
+    companion object {
+        /**
+         * Re-key [normURL] with the url the caller meant, undoing the X-SQL quote placeholder.
+         *
+         * A url inside an X-SQL statement carries `^27` where it means `'`
+         * ([SQLUtils.SINGLE_QUOTE_PLACE_HOLDER] — `URLEncoder` turns a quote into `%27`, so the
+         * engine needs a character a url cannot contain).  Everything downstream — the page store,
+         * the page cache, the url a result row reports — has to see the real url, so the placeholder
+         * is undone here.
+         *
+         * Two things this deliberately does **not** lose:
+         *
+         *  * `detail`, the `UrlAware` the caller normalized.  Dropping it killed the `referrer`
+         *    fallback (`NormURL.referrer` is `options.referrer ?: detail?.referrer`) and left a
+         *    caller that kept a handle on its own url object with nothing to read back.
+         *  * a url the un-sanitizing *breaks*.  [SQLUtils.unsanitizeUrl] rewrites every literal
+         *    `^27`, including one a real url contains, and the rewritten url may no longer parse.
+         *    `super` already produced one that does parse, so the rewrite is what is wrong: keep the
+         *    original instead of throwing — or, worse, turning a loadable page into a NIL one.
+         *
+         * @return a `NormURL` for the same page, carrying [NormURL.detail] and the caller's href.
+         */
+        @JvmStatic
+        internal fun reKeyForSql(normURL: NormURL): NormURL {
+            val spec = SQLUtils.unsanitizeUrl(normURL.urlString)
+            return runCatching {
+                NormURL(spec, normURL.options, hrefSpec = normURL.hrefSpec, detail = normURL.detail)
+            }.getOrDefault(normURL)
         }
     }
 }
