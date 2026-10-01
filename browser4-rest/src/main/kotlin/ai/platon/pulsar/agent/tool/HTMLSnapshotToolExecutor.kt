@@ -472,10 +472,11 @@ class HTMLSnapshotToolExecutor(
 
         val explicitUrl = paramString(args, "url", "query", required = false)?.takeIf { it.isNotBlank() }
 
-        // A session is needed only when no URL is given — the target then IS the session's
-        // live page.  With an explicit URL the query is a pure page-store/webdb query: it
-        // runs session-less (offline corpus queries included) and never touches a session,
-        // which is also why it cannot pick up the live tab's document any more.
+        // A session is needed only when no URL is given: the target is then the URL of the page the
+        // session is currently showing (and the query serves that URL's stored copy, as above).  With
+        // an explicit URL the query is a pure page-store/webdb query: it runs session-less (offline
+        // corpus queries included) and never touches a session, which is also why it cannot pick up
+        // the live tab's document any more.
         val url = explicitUrl ?: resolveSession(args, receiver).let { managed ->
             managed.agenticSession.normalize(managed.driver.currentUrl()).urlString
         }
@@ -487,9 +488,9 @@ class HTMLSnapshotToolExecutor(
         // after `html_snapshot_capture`, which owns every write in this family.
         //
         // This used to seed the store from the live tab whenever the target happened to be
-        // the current page — a read that wrote, and on a target the caller never asked to
-        // capture.  Removed: the live document reaches the store through `capture`, the
-        // target URL reaches it through `capture --url`, and `query` itself only reads.
+        // the current page — a read that wrote, on a target the caller never asked to
+        // capture.  Removed: the live document reaches the store through `capture` (which
+        // always archives the active tab, under that tab's own url), and `query` only reads.
         val processedSql = SQLTemplate(sql).createSQL(url)
         val response = scrapeService.executeQuery(ScrapeRequest(processedSql))
 
