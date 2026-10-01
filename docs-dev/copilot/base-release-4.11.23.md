@@ -151,5 +151,20 @@ gh run view <run-id> --log-failed --repo platonai/Browser4base   # 关键：失�
    - 本地可以试 `rustup target add x86_64-unknown-linux-gnu && cargo check --target x86_64-unknown-linux-gnu`，
      但本机实测会被依赖 `aws-lc-sys` 的构建脚本挡住（需要 Linux 侧 C 工具链），所以**别把"本地 Windows 绿"当成"CI 绿"**；
    - 改平台专用函数的签名时，顺手 grep 一遍 `cfg(not(target_os = "windows"))` 的桩：签名不一致就是这类错误的唯一来源。
+6. **文档有硬性行数上限，而且由 CI 门禁把关（M1-M8 / M6）。**
+   `bin/skill-doc-lint.ps1` 在 `PowerShell Tests` 工作流里跑，规则 M6：`SKILL.md`、decision 文档、procedure 文档
+   **≤ 500 物理行**（catalog 不设上限）。本轮给 `skills/browser4-cli/references/browser-modes.md` 补了 WebSocket
+   段落，把它从 ~490 推到 **508 行**，门禁直接失败：
+   ```
+   checked 37 files, 1 issue(s) [M6=1]
+     browser4-cli/references/browser-modes.md  [M6] decision doc is 508 lines (cap 500)
+   ```
+   做法：**改 `skills/**/*.md` 后先本地跑 `pwsh bin/skill-doc-lint.ps1`**（输出 `checked N files, 0 issue(s)` 才算干净，
+   它会检查行数、模板章节、链接、emoji 等）。触发是路径过滤的：`skills/**/*.md` 的改动会拉起 `PowerShell Tests`，
+   而只改 `cli/**` 的 Rust 提交不会 —— 所以"没触发"不等于"没门禁"，必要时 `gh workflow run ps1-tests.yml --ref <branch>` 手动补跑。
+7. **发版前先把分支跑绿。** 本轮顺序是：先修 Linux 编译（`bb0e954`）+ 文档行数（`bb2f064`），
+   等 `Cross-Platform Smoke Test` 与 `PowerShell Tests` 都 success，再 `node bin/version.mjs bump patch` → 打 tag。
+   另外 `bump patch` **只更新 VERSION 与 Maven pom**，CLI 文件要再跑一次 `node bin/version.mjs cli sync`
+   （否则 `version.mjs check` 报 `cli/Cargo.toml: … expected …`），全部一致后才 `git tag -a vX.Y.Z` 推送。
 
 
