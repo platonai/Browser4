@@ -1577,13 +1577,23 @@ async fn get_or_create_navigation_session(
 /// - Channel name (e.g. `"chrome"`, `"msedge"`) — resolved via process
 ///   scanning and port probing
 fn resolve_cdp_endpoint(raw: &str) -> Result<String, String> {
+    // Callers trim the `--cdp` value, but the resolver is total on its own too:
+    // a padded URL must not fall through to the channel-name branch.
+    let raw = raw.trim();
+
     // Already an HTTP(S) URL
     if raw.starts_with("http://") || raw.starts_with("https://") {
         return Ok(raw.to_string());
     }
 
-    // WebSocket URL — extract host:port and rewrite as HTTP
+    // WebSocket URL. A browser-level socket is a first-class CDP endpoint — it is
+    // the only one Chrome's built-in remote debugging publishes — so it is passed
+    // through untouched. Page-level sockets still reduce to their host:port,
+    // where page targets are resolved over GET /json as before.
     if raw.starts_with("ws://") || raw.starts_with("wss://") {
+        if is_browser_level_ws_url(raw) {
+            return Ok(raw.trim().to_string());
+        }
         // Strip the scheme prefix
         let after_scheme = if raw.starts_with("ws://") {
             raw.strip_prefix("ws://").unwrap()
@@ -1613,6 +1623,24 @@ fn resolve_cdp_endpoint(raw: &str) -> Result<String, String> {
 
     // Channel name — delegate to daemon.rs resolution
     resolve_channel_to_endpoint(raw)
+}
+
+/// Whether `raw` is a browser-level CDP WebSocket URL
+/// (`ws://host:port/devtools/browser/<uuid>`).
+///
+/// Such an endpoint is attached to over the socket itself: the driver answers
+/// `Browser.getVersion` and discovers pages with `Target.getTargets`. Chrome's
+/// built-in remote debugging publishes exactly this form while serving no
+/// `/json`, which is why it must not be reduced to its host:port.
+fn is_browser_level_ws_url(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if !(trimmed.starts_with("ws://") || trimmed.starts_with("wss://")) {
+        return false;
+    }
+    trimmed
+        .split_once("://")
+        .map(|(_, rest)| rest.contains("/devtools/browser"))
+        .unwrap_or(false)
 }
 
 /// Build the final params payload for an `execute_cdp_command` MCP call.
@@ -1700,38 +1728,105 @@ const BROWSER4_EXTENSION_ID: &str = "jdcmdidbgjeebbhkoepjgifeibipfimi";
 ///
 /// Priority:
 ///   1. `BROWSER4_EXTENSION_ID` environment variable (explicit override).
-///   2. A locally loaded ("unpacked", developer-mode) Browser4 Extension
+///   2. `extension_id` in `~/.browser4/config.json`
+///      (`browser4-cli config set extension_id <id>`).
+///   3. A locally loaded ("unpacked", developer-mode) Browser4 Extension
 ///      found in the browser's Preferences — unpacked extensions get a
 ///      path-derived ID that differs from the Web Store listing.
-///   3. The published store ID ([BROWSER4_EXTENSION_ID]).
+///   4. The published store ID ([BROWSER4_EXTENSION_ID]).
 fn resolve_browser4_extension_id(channel: Option<&str>) -> String {
-    if let Ok(id) = std::env::var("BROWSER4_EXTENSION_ID") {
-        let id = id.trim().to_string();
-        if id.len() == 32 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
-            return id;
+    let env_id = std::env::var("BROWSER4_EXTENSION_ID").ok();
+    let config_id = config::read_config().extension_id;
+    let roots = unpacked_extension_roots(channel);
+    resolve_extension_id_from(env_id.as_deref(), config_id.as_deref(), &roots)
+}
+
+/// The precedence order behind [resolve_browser4_extension_id], with every
+/// input passed in so the order is testable without touching the environment,
+/// the config file or the real browser profiles.
+///
+/// An input that is not a well-formed extension ID is skipped rather than
+/// trusted: a typo in the config must not silently open a non-existent
+/// `chrome-extension://` page.
+fn resolve_extension_id_from(
+    env_id: Option<&str>,
+    config_id: Option<&str>,
+    unpacked_roots: &[std::path::PathBuf],
+) -> String {
+    for candidate in [env_id, config_id].into_iter().flatten() {
+        if config::is_valid_extension_id(candidate) {
+            return candidate.trim().to_string();
         }
     }
-    if let Some(id) = detect_unpacked_extension_id(channel) {
+    if let Some(id) = detect_unpacked_extension_id(unpacked_roots) {
         return id;
     }
     BROWSER4_EXTENSION_ID.to_string()
 }
 
-/// Scans browser user-data directories for a dev-mode ("unpacked") Browser4
-/// Extension and returns its ID. Unpacked extensions record their load path
-/// in `extensions.settings.<id>.path` of the profile's Preferences (or the
-/// encrypted variant, Secure Preferences). The entry is verified against the
-/// extension's on-disk manifest because the preferences copy of `manifest`
-/// is not populated for locally loaded extensions.
-fn detect_unpacked_extension_id(channel: Option<&str>) -> Option<String> {
-    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+/// Browser user-data directories to scan for a locally loaded extension.
+///
+/// Running browsers come first — that is where **portable builds** and custom
+/// profiles keep their user data (next to the program, or wherever
+/// `--user-data-dir` points), which the conventional locations below never
+/// cover. A launcher that injects the flag is picked up too, because the filter
+/// is on the command line, not on the process name alone. Then the conventional
+/// per-user directories follow, the requested family first.
+fn unpacked_extension_roots(channel: Option<&str>) -> Vec<std::path::PathBuf> {
+    let edge_first = is_edge_channel(channel);
+    let executables: [&str; 2] = if edge_first {
+        ["msedge", "chrome"]
+    } else {
+        ["chrome", "msedge"]
+    };
+
+    let mut process_dirs: Vec<std::path::PathBuf> = Vec::new();
+    for line in crate::daemon::browser_processes_command_lines(&executables) {
+        for dir in crate::daemon::parse_user_data_dirs_from_line(&line) {
+            if !process_dirs.contains(&dir) {
+                process_dirs.push(dir);
+            }
+        }
+    }
+
+    let (chrome_root, edge_root) = conventional_user_data_roots();
+    unpacked_extension_roots_from(process_dirs, chrome_root, edge_root, edge_first)
+}
+
+/// Compose the scan order: what running browsers actually use first, then the
+/// conventional locations with the requested family first. Directories already
+/// contributed by a running process are not repeated.
+fn unpacked_extension_roots_from(
+    process_dirs: Vec<std::path::PathBuf>,
+    chrome_root: Option<std::path::PathBuf>,
+    edge_root: Option<std::path::PathBuf>,
+    edge_first: bool,
+) -> Vec<std::path::PathBuf> {
+    let mut roots = process_dirs;
+    let conventional = if edge_first {
+        [edge_root, chrome_root]
+    } else {
+        [chrome_root, edge_root]
+    };
+    for root in conventional.into_iter().flatten() {
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    roots
+}
+
+/// `(chrome, edge)` conventional user-data directories on this platform.
+fn conventional_user_data_roots() -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
+    let mut chrome_root: Option<std::path::PathBuf> = None;
+    let mut edge_root: Option<std::path::PathBuf> = None;
 
     #[cfg(target_os = "windows")]
     {
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             let base = std::path::PathBuf::from(local);
-            roots.push(base.join("Microsoft").join("Edge").join("User Data"));
-            roots.push(base.join("Google").join("Chrome").join("User Data"));
+            chrome_root = Some(base.join("Google").join("Chrome").join("User Data"));
+            edge_root = Some(base.join("Microsoft").join("Edge").join("User Data"));
         }
     }
     #[cfg(target_os = "macos")]
@@ -1740,23 +1835,29 @@ fn detect_unpacked_extension_id(channel: Option<&str>) -> Option<String> {
             let base = std::path::PathBuf::from(home)
                 .join("Library")
                 .join("Application Support");
-            roots.push(base.join("Microsoft Edge"));
-            roots.push(base.join("Google").join("Chrome"));
+            chrome_root = Some(base.join("Google").join("Chrome"));
+            edge_root = Some(base.join("Microsoft Edge"));
         }
     }
     #[cfg(all(target_os = "linux", not(target_os = "macos")))]
     {
         if let Ok(home) = std::env::var("HOME") {
             let base = std::path::PathBuf::from(home).join(".config");
-            roots.push(base.join("microsoft-edge"));
-            roots.push(base.join("google-chrome"));
+            chrome_root = Some(base.join("google-chrome"));
+            edge_root = Some(base.join("microsoft-edge"));
         }
     }
 
-    if is_edge_channel(channel) {
-        roots.rotate_left(1);
-    }
+    (chrome_root, edge_root)
+}
 
+/// Scans browser user-data directories for a dev-mode ("unpacked") Browser4
+/// Extension and returns its ID. Unpacked extensions record their load path
+/// in `extensions.settings.<id>.path` of the profile's Preferences (or the
+/// encrypted variant, Secure Preferences). The entry is verified against the
+/// extension's on-disk manifest because the preferences copy of `manifest`
+/// is not populated for locally loaded extensions.
+fn detect_unpacked_extension_id(roots: &[std::path::PathBuf]) -> Option<String> {
     for root in roots {
         if !root.is_dir() {
             continue;
@@ -2249,6 +2350,12 @@ async fn handle_attach(
     // (process scanning, port probing via reqwest::blocking) and must run
     // outside the tokio async context to avoid runtime-drop panics.
     let cdp_endpoint = if let Some(raw) = cdp_raw {
+        if is_browser_level_ws_url(raw) {
+            cli_println!(
+                "Attaching over the browser-level WebSocket: page targets are discovered with \
+                 Target.getTargets on that socket (no /json discovery needed)."
+            );
+        }
         let raw_owned = raw.to_string();
         let resolved = tokio::task::spawn_blocking(move || resolve_cdp_endpoint(&raw_owned))
             .await
@@ -23476,9 +23583,25 @@ mod tests {
     }
 
     #[test]
-    fn resolve_cdp_endpoint_ws_url_converts_to_http() {
+    fn resolve_cdp_endpoint_browser_websocket_passes_through() {
+        // A browser-level socket is attachable as-is: it is the only endpoint
+        // Chrome's built-in remote debugging publishes.
         assert_eq!(
-            resolve_cdp_endpoint("ws://localhost:9222/devtools/browser").unwrap(),
+            resolve_cdp_endpoint("ws://localhost:9222/devtools/browser/d7504e91-bbf6").unwrap(),
+            "ws://localhost:9222/devtools/browser/d7504e91-bbf6"
+        );
+        assert_eq!(
+            resolve_cdp_endpoint("  wss://cloud.example.com/devtools/browser/x  ").unwrap(),
+            "wss://cloud.example.com/devtools/browser/x"
+        );
+    }
+
+    #[test]
+    fn resolve_cdp_endpoint_page_websocket_converts_to_http() {
+        // A page-level socket carries one tab and still goes through the
+        // HTTP-discovery path, which reuses its host:port.
+        assert_eq!(
+            resolve_cdp_endpoint("ws://localhost:9222/devtools/page/ABC").unwrap(),
             "http://localhost:9222"
         );
         assert_eq!(
@@ -30354,6 +30477,170 @@ mod tests {
             "BROWSER4_EXTENSION_ID must match the published Chrome Web Store / Edge Add-ons listing"
         );
         assert_eq!(BROWSER4_EXTENSION_ID.len(), 32); // Chrome extension IDs are 32 chars
+    }
+
+    /// Browser user-data directory containing a profile whose `Preferences`
+    /// records a locally loaded ("unpacked") extension, plus that extension's
+    /// on-disk manifest — what Chrome writes for *Load unpacked*.
+    fn temp_root_with_unpacked_extension(
+        id: &str,
+        manifest_name: &str,
+    ) -> (TempDir, std::path::PathBuf) {
+        let temp = test_temp_dir();
+        let base = temp.path().join("browser-data");
+        let root = base.join("User Data");
+        let profile = root.join("Default");
+        let extension_dir = base.join("ext");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::create_dir_all(&extension_dir).unwrap();
+
+        std::fs::write(
+            extension_dir.join("manifest.json"),
+            format!(r#"{{"name":"{manifest_name}","version":"0.2.2"}}"#),
+        )
+        .unwrap();
+        // JSON needs the Windows path separators escaped.
+        let recorded_path = extension_dir.display().to_string().replace('\\', "\\\\");
+        std::fs::write(
+            profile.join("Preferences"),
+            format!(r#"{{"extensions":{{"settings":{{"{id}":{{"path":"{recorded_path}"}}}}}}}}"#),
+        )
+        .unwrap();
+
+        (temp, root)
+    }
+
+    #[test]
+    fn resolve_extension_id_prefers_env_then_config_then_unpacked() {
+        let env_id = "a".repeat(32);
+        let config_id = "b".repeat(32);
+        let unpacked_id = "c".repeat(32);
+        let (_temp, root) = temp_root_with_unpacked_extension(&unpacked_id, "Browser4 Extension");
+
+        assert_eq!(
+            env_id,
+            resolve_extension_id_from(Some(&env_id), Some(&config_id), std::slice::from_ref(&root))
+        );
+        assert_eq!(
+            config_id,
+            resolve_extension_id_from(None, Some(&config_id), std::slice::from_ref(&root))
+        );
+        assert_eq!(
+            unpacked_id,
+            resolve_extension_id_from(None, None, std::slice::from_ref(&root))
+        );
+    }
+
+    #[test]
+    fn resolve_extension_id_skips_malformed_inputs() {
+        // A typo must never win over a working source: the store ID is the
+        // last resort when nothing valid is configured.
+        assert_eq!(
+            BROWSER4_EXTENSION_ID,
+            resolve_extension_id_from(Some("not-an-id"), Some("ALSO-BAD"), &[])
+        );
+        assert_eq!(BROWSER4_EXTENSION_ID, resolve_extension_id_from(None, None, &[]));
+        // A trailing/leading space around a valid ID is tolerated.
+        let padded = format!("  {}  ", "d".repeat(32));
+        assert_eq!("d".repeat(32), resolve_extension_id_from(Some(&padded), None, &[]));
+    }
+
+    #[test]
+    fn detect_unpacked_extension_id_finds_a_locally_loaded_extension() {
+        let id = "c".repeat(32);
+        let (_temp, root) = temp_root_with_unpacked_extension(&id, "Browser4 Extension");
+        assert_eq!(Some(id), detect_unpacked_extension_id(&[root]));
+    }
+
+    /// Live smoke test: prints the directories scanned for a locally loaded
+    /// extension and the id that wins. Run with
+    /// `cargo test --bin browser4-cli -- --ignored --nocapture unpacked_extension_roots_live_smoke`.
+    #[test]
+    #[ignore = "depends on the browsers running on this machine"]
+    fn unpacked_extension_roots_live_smoke() {
+        for root in unpacked_extension_roots(Some("chrome")) {
+            println!("scan root = {}", root.display());
+        }
+        println!("resolved id = {}", resolve_browser4_extension_id(Some("chrome")));
+    }
+
+    #[test]
+    fn unpacked_extension_roots_prefer_running_browser_dirs_then_the_family_order() {
+        let running = std::path::PathBuf::from("/portable/chrome/profile");
+        let chrome_root = std::path::PathBuf::from("/conventional/chrome");
+        let edge_root = std::path::PathBuf::from("/conventional/edge");
+
+        // A portable/custom profile found on a command line wins over the
+        // conventional locations.
+        assert_eq!(
+            vec![running.clone(), chrome_root.clone(), edge_root.clone()],
+            unpacked_extension_roots_from(
+                vec![running.clone()],
+                Some(chrome_root.clone()),
+                Some(edge_root.clone()),
+                false
+            )
+        );
+
+        // The requested family comes first among the conventional roots, and a
+        // directory already contributed by a process is not duplicated.
+        assert_eq!(
+            vec![running.clone(), chrome_root.clone(), edge_root.clone()],
+            unpacked_extension_roots_from(
+                vec![running.clone(), chrome_root.clone()],
+                Some(chrome_root.clone()),
+                Some(edge_root.clone()),
+                true
+            )
+        );
+
+        assert_eq!(
+            Vec::<std::path::PathBuf>::new(),
+            unpacked_extension_roots_from(vec![], None, None, false)
+        );
+    }
+
+    #[test]
+    fn detect_unpacked_extension_id_ignores_other_extensions() {
+        let id = "d".repeat(32);
+        let (_temp, root) = temp_root_with_unpacked_extension(&id, "Some Other Extension");
+        assert_eq!(None, detect_unpacked_extension_id(&[root]));
+    }
+
+    #[test]
+    fn detect_unpacked_extension_id_handles_missing_and_unusable_profiles() {
+        assert_eq!(None, detect_unpacked_extension_id(&[]));
+
+        let temp = test_temp_dir();
+        assert_eq!(
+            None,
+            detect_unpacked_extension_id(&[temp.path().join("missing")])
+        );
+
+        // A relative path (Chrome always records an absolute one) is ignored
+        // rather than resolved against the CLI's working directory.
+        let root = temp.path().join("User Data");
+        let profile = root.join("Default");
+        std::fs::create_dir_all(&profile).unwrap();
+        let id = "e".repeat(32);
+        std::fs::write(
+            profile.join("Preferences"),
+            format!(r#"{{"extensions":{{"settings":{{"{id}":{{"path":"ext"}}}}}}}}"#),
+        )
+        .unwrap();
+        assert_eq!(None, detect_unpacked_extension_id(&[root]));
+    }
+
+    #[test]
+    fn is_browser_level_ws_url_detects_browser_endpoints_only() {
+        assert!(is_browser_level_ws_url(
+            "ws://localhost:9222/devtools/browser/d7504e91-bbf6-44f0-9338-46952523ed7c"
+        ));
+        assert!(is_browser_level_ws_url("wss://cloud.example.com/devtools/browser/x"));
+        assert!(!is_browser_level_ws_url("ws://localhost:9222/devtools/page/ABC"));
+        assert!(!is_browser_level_ws_url("http://localhost:9222/devtools/browser/x"));
+        assert!(!is_browser_level_ws_url("ws://localhost:9222"));
+        assert!(!is_browser_level_ws_url("chrome"));
     }
 
     #[test]

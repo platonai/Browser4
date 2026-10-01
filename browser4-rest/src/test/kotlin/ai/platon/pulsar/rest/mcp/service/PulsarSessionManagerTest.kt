@@ -503,6 +503,26 @@ class PulsarSessionManagerTest {
     }
 
     @Test
+    fun attachOverADeadBrowserWebSocketFailsLoudly() {
+        // The browser-level WebSocket path (Chrome's built-in remote debugging)
+        // must fail at attach time when nothing answers on the socket — never
+        // bind a browser that drives nothing.
+        val deadPort = java.net.ServerSocket(0).use { it.localPort }
+        val endpoint = "ws://127.0.0.1:$deadPort/devtools/browser/8b91cacf-d8aa-4fa3-8b45-687c7de7af8a"
+
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            sessionManager.createAttachedSession(cdpEndpoint = endpoint)
+        }
+
+        val message = failure.message ?: ""
+        assertTrue(message.contains("could not be attached over its browser-level WebSocket"), message)
+        assertTrue(message.contains(endpoint), message)
+        assertTrue(message.contains("retry attach"), message)
+        // No session may be registered: the attach never succeeded.
+        assertNull(sessionManager.getSession(endpoint))
+    }
+
+    @Test
     fun sessionWithLostDriverLinkIsRecoveredViaInPlaceDriverReconnect() {
         // pulsar 4.11.5+: the driver can reconnect to the same tab in place.
         // Recovery must prefer that over creating a new driver on the browser.

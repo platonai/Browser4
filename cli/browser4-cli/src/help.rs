@@ -1168,6 +1168,22 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - A channel name is resolved from the browser's DevToolsActivePort file, its"
+                .to_string(),
+        );
+        lines.push(
+            "    --remote-debugging-port and its listening ports; the first endpoint that can host a page wins."
+                .to_string(),
+        );
+        lines.push(
+            "  - A browser-level WebSocket URL (ws://host:port/devtools/browser/<uuid>) is driven over that"
+                .to_string(),
+        );
+        lines.push(
+            "    socket — this is what Chrome's chrome://inspect/#remote-debugging toggle publishes."
+                .to_string(),
+        );
+        lines.push(
             "  - --endpoint accepts a remote Browser4 server URL (e.g. http://browser4-server:8182) for distributed setups."
                 .to_string(),
         );
