@@ -98,16 +98,20 @@
 | 3 | `browser4-skeleton` 扩大：`NormUrlTests` + `HyperlinkTests` + `TestLoadOptions` + `AbstractPulsarSessionLoadTest` + 上述两条 | ✅ **85 / 85** |
 | 4 | `browser4-rest`：`CrawlSupportTest` + `CrawlLedgerTest` + `CrawlCheckpointTest` + `CrawlResumeTest` | ✅ **119 / 119** |
 | 5 | `browser4-rest` **全量快速套件** | ✅ **608 / 608**（先出现 3 个 `LlmConfigTemplateTest` 失败，定位为本地 m2 的 `browser4-resources` jar 陈旧、缺少 `config/conf-available/application-private.properties.template`；刷新该模块后 5/5 通过，与本次改动无关） |
-| 6 | 基础库 `pulsar-common-tests` 的 `URLUtilsTest` | 见下 |
+| 6 | 基础库 `pulsar-common-tests` 的 `URLUtilsTest` | ✅ **43 / 43**（含新增 2 条） |
 
 ### 基础库测试的执行方式
 
-`browser4base` 工作区带有使用者未提交的 WIP（`BrowserId.kt`、`PulsarBrowser.kt`、`ProfilePaths.kt`、
-`WebSocketChromeImpl.kt` 及对应测试）。为避免把这份 WIP 编译进依赖，验证只编译并安装
-**本次改动所在的 `pulsar-common` 模块**（该模块在本分支外没有任何未提交改动），再单独跑
-`pulsar-common-tests` 的 `URLUtilsTest`。
+`browser4base` 工作区曾带有使用者未提交的 WIP，为避免把这份 WIP 编译进依赖，验证走
+`-pl pulsar-core/pulsar-core-tests/pulsar-common-tests -am`：反应堆只包含
+`Browser4 Base → Pulsar Common → Pulsar Common Tests` 三个模块，本次改动所在的
+`pulsar-common` 被就地重编译，其余从本地仓库解析。
 
-本分支在 `browser4base` 上只 `git add` 了两个文件，使用者的 WIP 保持未暂存、未被提交。
+本分支在 `browser4base` 上只 `git add` 了 `URLUtils.kt` 与 `URLUtilsTest.kt` 两个文件；
+使用者自己的 WIP 后来由使用者自行提交在 `c1dca9881`，期间未被本分支改动或暂存。
+
+> 注：为运行该测试，本地 m2 里的 `pulsar-common-4.11.23-SNAPSHOT.jar` 已被本次改动刷新；
+> 它不影响 browser4（后者 pin 的是已发布的 `4.11.21`）。
 
 ---
 
