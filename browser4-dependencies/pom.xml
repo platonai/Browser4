@@ -561,7 +561,7 @@
              pulsar-bom below.  This property is the *only* definition that is read: the same name
              used to be declared in the root pom as well, where nothing consumed it, so bumping the
              root copy silently changed nothing. -->
-        <browser4-base.version>4.11.23</browser4-base.version>
+        <browser4-base.version>4.11.24</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
 
         <!-- Agent memory system: SQLite FTS derived index (design: docs-dev/copilot/robust-browser-agent-memory-system-design.md) -->
