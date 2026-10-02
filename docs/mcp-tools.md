@@ -154,7 +154,7 @@ Examples:
 command.cancel(id: String)
 ```
 
-Cancel a running agent command task.
+Cancel a running command task: an agent task is interrupted, a page visit runs to completion.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -192,9 +192,10 @@ Examples:
 <details><summary>Full documentation</summary>
 
 Stops the task's runner and reports the outcome as JSON
-(`cancelled=true|false`). A page-load command cannot be interrupted
-mid-navigation, so cancelling one after it finished reports
-`cancelled=false` instead of pretending otherwise.
+(`cancelled=true|false`, plus a `reason` whenever nothing was cancelled).
+A page visit cannot be interrupted mid-navigation: cancelling a live one
+reports `cancelled=false` with that reason, and so does cancelling a task
+that already finished — the response never pretends the id is unknown.
 
 </details>
 

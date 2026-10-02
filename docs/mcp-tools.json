@@ -145,7 +145,7 @@
     "method" : "cancel",
     "mcpNames" : [ "command_cancel" ],
     "signature" : "command.cancel(id: String)",
-    "description" : "Cancel a running agent command task.",
+    "description" : "Cancel a running command task: an agent task is interrupted, a page visit runs to completion.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "id",
@@ -162,7 +162,7 @@
       "executable" : true
     } ],
     "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
-    "help" : "Stops the task's runner and reports the outcome as JSON\n(`cancelled=true|false`). A page-load command cannot be interrupted\nmid-navigation, so cancelling one after it finished reports\n`cancelled=false` instead of pretending otherwise."
+    "help" : "Stops the task's runner and reports the outcome as JSON\n(`cancelled=true|false`, plus a `reason` whenever nothing was cancelled).\nA page visit cannot be interrupted mid-navigation: cancelling a live one\nreports `cancelled=false` with that reason, and so does cancelling a task\nthat already finished — the response never pretends the id is unknown."
   }, {
     "domain" : "command",
     "method" : "result",
