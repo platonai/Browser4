@@ -4505,7 +4505,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "task-type", description: "Canonical task type (e.g. extract_product_detail, search, navigate, publish_post)", is_bool: false, short: None },
                 OptionDef { name: "facts", description: "Retrospective knowledge patch: inline JSON or @file.json with selectors/interaction_hints/known_blockers/anti_patterns (merged into the domain facts entry; refused when VERIFIED)", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "experience_save".to_string(),
             tool_params_fn: |args| {
                 let trace_str = get_str(args, "trace").unwrap_or_default();
@@ -4529,7 +4529,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "intent", description: "Free-text intent description for classification", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "experience_query".to_string(),
             tool_params_fn: |args| {
                 let mut params = json!({ "url": get_str(args, "url").unwrap_or_default() });
@@ -4550,7 +4550,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page", description: "Page number (default: 1)", is_bool: false, short: None },
                 OptionDef { name: "page-size", description: "Results per page (default: 20, max: 100)", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "experience_list".to_string(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -4574,7 +4574,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "force", description: "Force deep learning even if confidence is already high", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "experience_deep_learn".to_string(),
             tool_params_fn: |args| {
                 let mut params = json!({

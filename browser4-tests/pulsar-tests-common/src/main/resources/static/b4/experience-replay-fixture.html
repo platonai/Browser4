@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser4 CLI Experience Replay Fixture</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; padding: 24px; }
+    .panel { margin-bottom: 12px; }
+    label { display: block; margin-bottom: 4px; font-weight: bold; }
+    input { padding: 4px 8px; width: 300px; }
+    button { padding: 8px 24px; margin-top: 8px; }
+    .decoy { margin-bottom: 12px; color: #888; }
+    #search-result[data-state="found"] { color: #0a0; font-weight: bold; }
+    #search-result[data-state="mismatch"] { color: #c00; }
+    #replay-outcome[data-state="replayed"] { color: #0a0; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Experience Replay Fixture</h1>
+  <p>
+    Round 1 drives this page and records the selectors that worked; round 2 must
+    drive it again using only the selectors returned by <code>experience query</code>.
+  </p>
+
+  <!-- Decoy input: disabled, and deliberately the first input on the page, so a
+       guessed or positional target ("the first input") cannot drive the flow —
+       only the recorded, verified selector works. -->
+  <div class="decoy">
+    <label for="search-box-legacy">Legacy search (disabled)</label>
+    <input id="search-box-legacy" type="text" disabled />
+  </div>
+
+  <div class="panel">
+    <label for="expected-query">Query the page expects</label>
+    <span id="expected-query">loading</span>
+  </div>
+
+  <!-- A real form: typing the query and pressing Enter submits it (fill --submit),
+       and clicking the submit button drives the very same handler. -->
+  <form id="search-form">
+    <div class="panel">
+      <label for="search-box">Search</label>
+      <input id="search-box" type="text" placeholder="Type the expected query" />
+      <button id="search-button" type="submit">Search</button>
+    </div>
+  </form>
+
+  <div class="panel">
+    <label for="search-result">Search result</label>
+    <span id="search-result" data-state="idle">idle</span>
+  </div>
+
+  <div class="panel">
+    <label for="replay-outcome">Replay outcome</label>
+    <span id="replay-outcome" data-state="pending">pending</span>
+  </div>
+
+  <pre id="state-log"></pre>
+
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const rawNonce = (params.get('nonce') || '').trim();
+      const nonce = rawNonce || 'default-nonce';
+      const expected = nonce + '-target';
+
+      const state = window.__experienceFixture = {
+        nonce: nonce,
+        expected: expected,
+        searchCount: 0,
+        lastQuery: '',
+        resultState: 'idle',
+        replayOutcome: 'pending'
+      };
+
+      function sync() {
+        const log = document.getElementById('state-log');
+        if (log) {
+          log.textContent = JSON.stringify(state);
+        }
+      }
+
+      document.getElementById('expected-query').textContent = expected;
+
+      function runSearch() {
+        const input = document.getElementById('search-box');
+        const value = (input.value || '').trim();
+        const result = document.getElementById('search-result');
+        const outcome = document.getElementById('replay-outcome');
+
+        state.searchCount += 1;
+        state.lastQuery = value;
+
+        if (value === expected) {
+          state.resultState = 'found';
+          state.replayOutcome = 'ok:' + nonce;
+          result.textContent = nonce + '-found';
+          result.dataset.state = 'found';
+          outcome.textContent = 'ok:' + nonce;
+          outcome.dataset.state = 'replayed';
+        } else {
+          state.resultState = 'mismatch';
+          result.textContent = 'mismatch';
+          result.dataset.state = 'mismatch';
+        }
+
+        sync();
+      }
+
+      // Both entry points — Enter in the input and the submit button — must go
+      // through the same handler, so either interaction completes the flow.
+      document.getElementById('search-form').addEventListener('submit', function (event) {
+        event.preventDefault();
+        runSearch();
+      });
+
+      document.getElementById('search-box').addEventListener('input', function () {
+        state.lastQuery = document.getElementById('search-box').value;
+        sync();
+      });
+
+      sync();
+    })();
+  </script>
+</body>
+</html>

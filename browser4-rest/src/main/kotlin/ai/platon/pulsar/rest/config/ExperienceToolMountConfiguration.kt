@@ -15,6 +15,11 @@ import org.springframework.context.annotation.Lazy
  * both the MCP dispatcher and the LLM agent tool system.
  *
  * Enabled by default; opt out with `browser4.experience.enabled=false`.
+ *
+ * The store location is the canonical `knowledge.dir` system property (see
+ * [KnowledgeStore.KNOWLEDGE_DIR_PROPERTY]), resolved by [KnowledgeStore]
+ * itself, so `-Dknowledge.dir=<path>` relocates both these MCP tools and the
+ * engine-side memory pipeline that deposits into the same store.
  */
 @Configuration
 @ConditionalOnProperty(
@@ -27,6 +32,8 @@ open class ExperienceToolMountConfiguration : ToolMount {
 
     @Bean
     open fun knowledgeStore(): KnowledgeStore {
+        // The constructor resolves `knowledge.dir` (see KnowledgeStore), so this
+        // bean, the executor below and AgentMemory all agree on one directory.
         val store = KnowledgeStore()
         store.initializeStore()
         return store
