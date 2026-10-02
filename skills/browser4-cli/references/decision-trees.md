@@ -24,7 +24,7 @@ tier: decision
 
 | Command | Writes? | Notes |
 |---------|---------|-------|
-| `htmlsnapshot` (capture) | **Yes — the only one** | Serializes the live page into the page store under the tab's normalized URL (overwrites the stored copy, refresh semantics) and returns page metadata. Run it before any read that must see the live document |
+| `htmlsnapshot` (capture) | **Yes — the only one** | Serializes the live page into the page store under the tab's normalized URL (overwrites the stored copy — the `-refresh` load option bypasses the page cache so the write is real; it is **not** a page reload) and returns page metadata. Run it before any read that must see the live document |
 | `htmlsnapshot get` / `get all` | No — read-only | `text` / `textcontent` / `html` / `attr` via CSS selectors, from the stored snapshot; loads the page independently (read-only) when the store has nothing |
 | `htmlsnapshot inspect` | No — read-only | Recurring-pattern / selector discovery over the stored snapshot |
 | `htmlsnapshot summary` | No — read-only | Visual-clustering page summary of the stored snapshot |

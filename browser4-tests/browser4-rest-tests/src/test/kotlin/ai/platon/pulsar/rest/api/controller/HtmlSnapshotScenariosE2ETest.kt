@@ -449,6 +449,64 @@ private val createdSessions = mutableListOf<String>()
         )
     }
 
+    @Test
+    @DisplayName("1f — A second capture overwrites the stored copy (the must-write option, not a reload)")
+    fun test1f_secondCaptureOverwritesTheStoredCopy() {
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        // The first capture is also what makes the next one dangerous: `LoadComponent.onLoaded`
+        // puts every non-readonly load into the process-wide page cache, and `persist` deliberately
+        // drops the CONTENT field of a page whose shell came from that cache.  A capture that did
+        // not bypass the cache would therefore serialize the live document, report it, and leave the
+        // older document in the store — stamped with a fresh fetch time.
+        assertNotError(callTool("html_snapshot_capture", mapOf("sessionId" to sessionId)))
+
+        // A marker that has never existed on the server (or in any earlier run of this suite), so a
+        // stale stored copy can never satisfy the assertions below by accident.  Both the document
+        // title (which the capture metadata reports) and the product heading (which the query reads
+        // back out of the store) carry it.
+        val marker = "SECOND-CAPTURE-WINS-${System.currentTimeMillis()}"
+        assertNotError(
+            callTool(
+                "browser_evaluate",
+                mapOf("sessionId" to sessionId, "expression" to "document.title = '$marker'")
+            )
+        )
+        assertNotError(
+            callTool(
+                "browser_evaluate",
+                mapOf(
+                    "sessionId" to sessionId,
+                    "expression" to "document.querySelector('#productTitle').textContent = '$marker'"
+                )
+            )
+        )
+
+        // The capture under test: same url, same tab, already in the page cache.
+        val second = callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
+        assertNotError(second)
+        assertTrue(
+            textContent(second).contains(marker),
+            "the second capture must serialize the tab as it is now: ${textContent(second).take(400)}"
+        )
+
+        // A read serves the STORE and never the live tab, so the marker can only be visible here if
+        // the second capture really overwrote the stored content.  (Without the must-write option this
+        // fails twice over: the assertion above already sees the cached document, and the store keeps
+        // the first capture's copy — see HTMLSnapshotToolExecutor.MUST_WRITE_OPTION.)
+        val sql = """
+            SELECT dom_first_text(dom, '#productTitle') AS title
+            FROM load_and_select(@url, 'body')
+        """.trimIndent()
+        val result = requireResultSet(queryHtmlSnapshot(sessionId, sql))
+        assertTrue(result.size() == 1, "Expected 1 body row, got ${result.size()}")
+        assertTrue(
+            result[0]["title"]?.asText()?.contains(marker) == true,
+            "the second capture must overwrite the stored document, got: ${result[0]["title"]}"
+        )
+    }
+
     // =========================================================================
     // Scenario 2 — News Headline Aggregator
     // =========================================================================

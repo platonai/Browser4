@@ -110,10 +110,12 @@ class HTMLSnapshotToolExecutorTest {
         val driver = tab(address)
         val page = page(url = "https://example.com/product/1", href = address)
         val session = sessionShowing(driver) {
-            // The refresh option is part of the contract, not an implementation detail: without it the
-            // load pipeline can answer from a cached page shell, and `persist` drops the CONTENT field
-            // of a cached shell — a capture would then report the new document while the store kept
-            // the old one.  Pin it here.
+            // The must-write option is part of the contract, not an implementation detail: without it
+            // the load pipeline may answer from a cached page shell, and `persist` drops the CONTENT
+            // field of a cached shell — a capture would then report the new document while the store
+            // kept the old one (see HTMLSnapshotToolExecutor.MUST_WRITE_OPTION).  The stub below spells
+            // the flag out as a literal on purpose: what has to keep working is the option *string*
+            // that LoadOptions.parse understands, not a constant's value.
             onBlocking { capture(driver, "$address -refresh") } doReturn page
             on { parse(page, true) } doReturn document(html, "https://example.com/product/1")
         }

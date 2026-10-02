@@ -32,9 +32,10 @@ import kotlin.reflect.KClass
  *
  * `capture` is the **only** command that writes: it serializes the document the active tab
  * already shows and persists it under the tab's normalized url, overwriting any older copy of
- * that url.  Every other command is a **read** and serves the page store (`webdb`) — the stored
- * copy when there is one, otherwise an independent read-only load.  Nothing but `capture` ever
- * files a document.
+ * that url.  The `-refresh` option behind [MUST_WRITE_OPTION] is what guarantees that overwrite —
+ * it bypasses the process-wide page cache, it does **not** reload the page.  Every other command
+ * is a **read** and serves the page store (`webdb`) — the stored copy when there is one, otherwise
+ * an independent read-only load.  Nothing but `capture` ever files a document.
  *
  * So the order to read the live document is always: `capture` first, then read.  A `query`,
  * `get`, `readability`, `summary`, `inspect` or `export` that runs on a page which was never
@@ -318,14 +319,10 @@ class HTMLSnapshotToolExecutor(
             // `session.capture(driver)` serializes the live document AND persists it, under the
             // normalized url of the tab.
             //
-            // `-refresh` is what makes that write real.  Without it the load pipeline may build the
-            // page from an in-memory cache shell, and `persist` deliberately drops the CONTENT field
-            // of a cached shell (LoadComponent.persist) — the capture would return the new document
-            // while the store kept the old one, stamped with a fresh fetch time and therefore served
-            // for the whole default EXPIRES window (decades).  The refresh only bypasses that cache;
-            // the document still comes from the tab, never from the network, so capture never
-            // navigates.
-            val page = pulsarSession.capture(managed.driver, url = "$currentUrl -refresh")
+            // [MUST_WRITE_OPTION] is what makes that write real — it is a *cache* flag, not a
+            // reload: see its KDoc for what it does, what it deliberately does not do (capture
+            // never navigates), and why the second capture of a url needs it.
+            val page = pulsarSession.capture(managed.driver, url = "$currentUrl $MUST_WRITE_OPTION")
             val document = pulsarSession.parse(page, noCache = true)
 
             htmlSnapshotMetadataJson(
@@ -608,6 +605,53 @@ class HTMLSnapshotToolExecutor(
     }
 
     companion object {
+        /**
+         * The load option that makes a capture actually **write**: `-refresh`.
+         *
+         * ### What it does
+         *
+         * It makes the load pipeline build a fresh page shell instead of reusing the process-wide
+         * page-cache copy (`LoadComponent.getCachedPageOrNull` returns null for a refreshing url), and
+         * marks the fetch state as `REFRESH` (retry counter reset).
+         *
+         * ### What it does NOT do
+         *
+         * It does **not** reload, re-navigate or re-fetch the page.  Which of the two things a
+         * pipeline fetch does is decided by `page.hasVar(VAR_CAPTURE)` inside
+         * `InteractiveBrowserEmulator.browseWithWebDriver`: capture mode calls `captureLivePage`
+         * (serialize the document the tab already shows — no `driver.navigate`, no scroll, no
+         * network), while the navigate path (`navigateAndInteract`) is the *other* branch.  The
+         * document keeps coming from the tab, so interactions survive the capture.
+         *
+         * ### Why capture needs it
+         *
+         * A cached page shell poisons a capture twice over, and both bites land on the **second**
+         * capture of a url — the first one is what puts that url into the page cache (`onLoaded`
+         * caches every non-readonly load, capture included):
+         *
+         *  1. `createPageShell` pins the shell's content to the cached bytes: it calls
+         *     `clearPersistContent()`, which sets `tmpContent`, and `GoraWebPage.content` returns
+         *     `tmpContent` whenever that is non-null.  The freshly serialized live document is
+         *     written into the persist buffer and then never read, so capture *reports* the previous
+         *     document instead of the tab.
+         *  2. `persist` deliberately drops the CONTENT field of a cached page
+         *     (`if (page.isCached) page.unbox().clearDirty(GWebPage.Field.CONTENT.index)`), so the
+         *     store keeps the previous bytes as well — with a fresh `prevFetchTime` on top, and
+         *     served for the whole default `EXPIRES` window (decades).
+         *
+         * `HtmlSnapshotScenariosE2ETest#test1f` is the regression test: it captures, mutates the tab,
+         * captures again, and reads the store back.  As a negative control, dropping this option from
+         * the call below makes it fail (the second capture returns the first capture's document).
+         *
+         * ### Why it travels inside the url string
+         *
+         * `PulsarSession.capture(driver, url)` has no `LoadOptions` parameter, and the normalizer
+         * splits trailing arguments off the url (`URLUtils.splitUrlArgs`, see
+         * `CombinedUrlNormalizer.normalize`), so `"$url -refresh"` is the supported spelling —
+         * the same one `AbstractPulsarSession.open` uses.
+         */
+        internal const val MUST_WRITE_OPTION = "-refresh"
+
         internal fun shouldAppendSelectorQuoteHint(message: String, sql: String): Boolean =
             message.contains("not found") &&
                 message.contains("SQL statement") &&
