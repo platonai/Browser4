@@ -55,15 +55,16 @@ Only CSS selectors are accepted — element refs (`e5`) are rejected.
 
 ```bash
 # First match only (querySelector semantics)
-browser4-cli htmlsnapshot get <text|html|attr> <selector> [name]
+browser4-cli htmlsnapshot get <text|textcontent|html|attr> <selector> [name]
 
 # All matches (querySelectorAll semantics)
-browser4-cli htmlsnapshot get all <text|html|attr> <selector> [name] [--offset N] [--limit N]
+browser4-cli htmlsnapshot get all <text|textcontent|html|attr> <selector> [name] [--offset N] [--limit N]
 ```
 
 | Field | Description | Requires `name`? |
 |---|---|---|
-| `text` | Visible text of matched element(s) | No |
+| `text` | Text content of the matched element(s), whitespace-normalized | No |
+| `textcontent` | Same as `text` today — an alias kept for compatibility; neither is a rendered-text (`innerText`) read, so CSS overflow does not clip them | No |
 | `html` | Inner HTML of matched element(s) | No |
 | `attr` | Value of a named attribute | **Yes** (3rd argument) |
 
@@ -93,7 +94,7 @@ browser4-cli htmlsnapshot get all text ".result" --offset 10   # skip first 10
 
 If `htmlsnapshot get` returns an empty string when the page clearly has matching elements:
 
-1. **Check the page and the selector first** — the read captured the tab first, so the snapshot *is* the page as it is now; an empty result means the selector did not match it. If the content arrives asynchronously, wait for it (`wait --selector <css>`) and read again
+1. **Check the page and the selector first** — the read captured the tab first, so the snapshot *is* the page as it is now; an empty result means the selector did not match it. If the content arrives asynchronously, wait for it (`wait "<css>"`) and read again
 2. **Verify the CSS selector** with `htmlsnapshot grep <pattern>` to search the HTML
 3. **Use `htmlsnapshot query` or `htmlsnapshot get all`** for multiple results or complex queries
 4. **Check page load:** ensure the page finished loading before the capture (AJAX content may take time)

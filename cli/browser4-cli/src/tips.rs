@@ -156,7 +156,7 @@ const TIPS_EVAL: &[Tip] = &[
         text: "Use `eval --wait-selector <css>` to wait for async-rendered content (React/SPA) before querying the DOM",
     },
     Tip {
-        text: "If `eval` returns empty while `htmlsnapshot` finds elements, the page likely loads content asynchronously — use `--wait-selector` or run `wait --selector <css>` first. (`htmlsnapshot` reads capture the page as rendered, so re-run the read once the content appears)",
+        text: "If `eval` returns empty while `htmlsnapshot` finds elements, the page likely loads content asynchronously — wait for it (`wait \"<css>\"`) and re-run the read; every `htmlsnapshot` read captures the active page itself, so it sees the newly rendered content",
     },
 ];
 

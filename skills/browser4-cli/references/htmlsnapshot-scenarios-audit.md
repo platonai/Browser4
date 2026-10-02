@@ -45,9 +45,9 @@ The scenarios use `htmlsnapshot` flags and load options — see [htmlsnapshot.md
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `grep` finds nothing | Pattern doesn't match the snapshot HTML | Check regex flags (`-i`, `-F`) and re-capture before grepping |
+| `grep` finds nothing | Pattern doesn't match the page as it is now (`grep` captures the active page itself) | Check regex flags (`-i`, `-F`), and wait for async content before grepping |
 | Baseline diff shows everything changed | Page loaded inconsistently | Use load options (`-expires`, quality requirements) to stabilize captures |
-| Compliance check passes wrongly | Stale snapshot | Always re-capture with `htmlsnapshot` before verification runs |
+| Compliance check passes wrongly | The page had not finished rendering when the check captured it | Wait for the page to settle (`wait --load networkidle`, `wait "<css>"`) before verification runs |
 
 Practical recipes for auditing web pages, tracking competitive pricing, verifying compliance requirements, running CI regression checks, and debugging incidents — using `htmlsnapshot grep`, `query`, `export`, and load options.
 

@@ -393,26 +393,28 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 
 #### HTML snapshot and X-SQL extraction
 
-`htmlsnapshot` captures a stored raw DOM snapshot and is the center of Browser4's structured extraction workflow.
+`htmlsnapshot` is the center of Browser4's structured extraction workflow. Every command in it works on a **fresh snapshot of the active page**: the tab is captured first — serializing the document it already shows, without navigating — and the command then operates on that snapshot. A command aimed at another URL (`readability <url>`, `query <url>`) reads *that URL's* stored copy instead, and never files the tab's document under it.
 
 | Command | Description |
 |---|---|
 | `htmlsnapshot` | Short form of `htmlsnapshot capture`. |
-| `htmlsnapshot capture` | Capture and store a static HTML snapshot with metadata about the page and interactive elements. |
-| `htmlsnapshot get <field> [selector] [name]` | Extract the first matching `text`, `html`, or `attr` from the stored snapshot. |
-| `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from the stored snapshot. Supports `--offset` and `--limit`. |
-| `htmlsnapshot query [url]` | Run X-SQL. Supports `--sql <query\|@file>`, `--sql-stdin`, `--sql-base64`, result pagination, and extraction-focused output flags. |
-| `htmlsnapshot export` | Export stored HTML to a file. Supports positional file path or `--file <path>` plus `--clean`. |
-| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI). |
-| `htmlsnapshot grep <pattern>` | Search stored HTML with grep-style flags. |
-| `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`. |
+| `htmlsnapshot capture` | Capture the active tab into the page store and return metadata about the page and interactive elements. |
+| `htmlsnapshot get <field> [selector] [name]` | Extract the first matching `text`, `textcontent`, `html`, or `attr` from a fresh snapshot of the active page. |
+| `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from that fresh snapshot. Supports `--offset` and `--limit`. |
+| `htmlsnapshot query [url]` | Run X-SQL over a fresh snapshot of the active page, or over an explicit URL's stored page. Supports `--sql <query\|@file>`, `--sql-stdin`, `--sql-base64`, result pagination, and extraction-focused output flags. |
+| `htmlsnapshot export` | Export a fresh snapshot's HTML to a file. Supports positional file path or `--file <path>` plus `--clean`. |
+| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from a fresh snapshot. |
+| `htmlsnapshot grep <pattern>` | Search a fresh snapshot's HTML with grep-style flags. |
+| `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates in a fresh snapshot. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`. |
+| `htmlsnapshot readability [url]` | Extract the main article with a Readability-style heuristic — no LLM, no selectors, no tokens. |
 
 Important rules:
 
 - use `snapshot` when you need refs and interaction
-- use `htmlsnapshot` when you need repeated DOM extraction
+- use `htmlsnapshot` when you need repeated DOM extraction — every read captures the active page first, so rerunning it sees the page as it is now
 - `htmlsnapshot query --sql @query.sql` is the recommended way to avoid shell quoting issues
 - for correlated list extraction, prefer `htmlsnapshot query` over repeated `get all`
+- for one-step article extraction (no selectors needed), use `htmlsnapshot readability`
 
 ```bash
 browser4-cli htmlsnapshot
@@ -421,6 +423,7 @@ browser4-cli htmlsnapshot get all text ".result-title" --offset 10 --limit 5
 browser4-cli htmlsnapshot inspect ".s-result-item" --depth 6 --max 20
 browser4-cli htmlsnapshot export --file page.html --clean
 browser4-cli htmlsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot readability --text-only
 ```
 
 For deep X-SQL usage, see [skills/browser4-cli/references/htmlsnapshot.md](skills/browser4-cli/references/htmlsnapshot.md) and [skills/browser4-cli/references/x-sql-dom-load-select.md](skills/browser4-cli/references/x-sql-dom-load-select.md).

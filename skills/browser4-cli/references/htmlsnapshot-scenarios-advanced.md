@@ -46,7 +46,7 @@ The scenarios use `htmlsnapshot` flags (`--selector`, `--sql`, `-limit`/`-offset
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `inspect` returns few/no matches | Selector too specific or page changed | Start from `:root` or `summary` and narrow down |
-| Discovered selector extracts nothing | Snapshot is stale | Re-run `htmlsnapshot` (re-capture) before extracting |
+| Discovered selector extracts nothing | The selector does not match the page as it is now (`get` captures the active page first) | Wait for the content to arrive (`wait "<css>"`), then re-run the read — no separate capture step |
 | Form discovery misses fields | Fields rendered by JS after load | Use load options to wait for rendering (see [load-options-guide.md](load-options-guide.md)) |
 
 Practical recipes for discovering page structure, finding CSS selectors on unfamiliar pages, and using HTML snapshots in agent-assisted form-filling workflows.

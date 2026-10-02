@@ -257,7 +257,7 @@ These flags can appear before any command.
 | Tool | Best for | Input model | Output model |
 |---|---|---|---|
 | `snapshot` | clicking, typing, finding interactive elements | live accessibility tree | refs like `e15` |
-| `htmlsnapshot` | DOM inspection, CSS extraction, X-SQL | stored page snapshot (`htmlsnapshot` capture writes it; reads never do) | CSS selectors and query results |
+| `htmlsnapshot` | DOM inspection, CSS extraction, X-SQL | a fresh snapshot of the active page (every command captures the tab first, then reads) | CSS selectors and query results |
 
 #### LLM configuration
 
@@ -443,7 +443,7 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 Important rules:
 
 - use `snapshot` when you need refs and interaction
-- use `htmlsnapshot` when you need repeated DOM extraction — and run `htmlsnapshot` (capture) first when the page changed in the tab
+- use `htmlsnapshot` when you need repeated DOM extraction — every command captures the tab first, so simply rerunning it sees the page as it is now
 - `htmlsnapshot query --sql @query.sql` is the recommended way to avoid shell quoting issues
 - for correlated list extraction, prefer `htmlsnapshot query` over repeated `get all`
 - for one-step article extraction (no selectors needed), use `htmlsnapshot readability`

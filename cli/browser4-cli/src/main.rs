@@ -8247,10 +8247,10 @@ async fn handle_html_snapshot_capture(
         // takes a static copy; eval, snapshot, and other commands still work
         // against the live DOM.
         eprintln!("  ℹ️  The live page is still accessible — use `eval`, `snapshot`, or `click` to continue interacting.");
-        eprintln!("  ℹ️  Reads (`get`, `query`, `export`) now serve this captured copy — re-run `htmlsnapshot` after the page changes.");
+        eprintln!("  ℹ️  Reads (`get`, `query`, `export`) capture the page themselves before reading — just re-run them after the page changes.");
         // Next-step hints
         eprintln!("  💡 Try these next:");
-        eprintln!("    Use `get all text` to extract visible text, or `get all attr <name>` for attribute values.");
+        eprintln!("    Use `get all text` to extract text, or `get all attr <name>` for attribute values.");
         eprintln!("    The SQL variant lets you query with full expressive power (joins, filters, aggregates).");
         if !title.is_empty() {
             eprintln!("     htmlsnapshot get text \"h1\"   # page heading");
@@ -8331,11 +8331,15 @@ async fn handle_html_snapshot_get(
     .await
     .map_err(|e| {
         // Improve error messages for htmlsnapshot get failures.
-        // The backend auto-captures when no snapshot exists, but if capture
-        // itself fails, guide the user toward a fix.
+        // The read captures the active page itself before reading it, so a
+        // failure here is a failure of that capture: point at the real cause
+        // (a tab with no archivable document) instead of telling the user to
+        // run a capture they cannot profit from.
         if e.contains("htmlsnapshot get failed") || e.contains("html_snapshot_scrape") {
             format!(
-                "{}\n\nTip: Run `htmlsnapshot` first to explicitly capture the page, then try again.",
+                "{}\n\nTip: every htmlsnapshot read captures the active page first, so this failure came from \
+                 that capture — make sure the tab shows an http(s) or file:// page (`goto <url>` if it does not), \
+                 then retry.",
                 e
             )
         } else {
@@ -8364,10 +8368,10 @@ async fn handle_html_snapshot_get(
         cli_println!("{}", text);
         cli_println!("No elements matched \"{}\".", display_selector);
         cli_println!(
-            "  The read served the STORED copy of the page, so the element is simply not there — check the selector, the current URL, and that the page has finished loading."
+            "  The read captured the page as the tab shows it now, so the element is simply not there — check the selector, the current URL, and that the page has finished loading."
         );
         cli_println!(
-            "  If the page changed in the tab (a form was submitted, a list was sorted, `eval` inserted markup), re-run `htmlsnapshot` to capture it, then repeat the read."
+            "  If the content arrives asynchronously, wait for it (`wait \"<css>\"`) and then read again — every read re-captures the page first."
         );
         cli_println!(
             "  Verify the selector with `htmlsnapshot grep \"{}\"`, or discover valid selectors with `htmlsnapshot inspect`.",
@@ -9719,17 +9723,17 @@ async fn handle_html_snapshot_inspect(
             render_speculative(sel, count);
         }
         // If the selector is :root (the default, meaning "everything") and there
-        // are 0 matches, the page was most likely not captured (or was captured
-        // before it finished loading).  inspect reads the STORE, so the fix is a
-        // fresh `htmlsnapshot`, not a different selector.
+        // are 0 matches, the page either had nothing to show or finished loading
+        // after the snapshot inspect took.  inspect captures the active page
+        // itself, so the fix is waiting for the page, not running a capture.
         if selector == ":root" {
             cli_println!("");
             cli_println!("  ⚠️  No elements matched the default :root selector.");
-            cli_println!("  inspect analyzes the STORED snapshot — run `browser4-cli htmlsnapshot` once the page has");
-            cli_println!("  loaded, then retry with a narrower selector:");
+            cli_println!("  inspect already captured the active page, so an empty result means there was nothing to");
+            cli_println!("  inspect yet — wait for the page to settle, then retry with a narrower selector:");
             cli_println!("       browser4-cli htmlsnapshot inspect \".your-selector\"");
         } else {
-            cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
+            cli_println!("- No elements matched. Check the CSS selector, and make sure the page has loaded (`browser4-cli wait \"<css>\"`).");
         }
         // Add actionable troubleshooting hints
         if selector.starts_with('.') {
@@ -10020,7 +10024,7 @@ async fn handle_html_snapshot_inspect(
         cli_println!("       browser4-cli htmlsnapshot get attr \"img[src]\" src --limit 1");
     } else if !actionable.is_empty() {
         cli_println!("  💡 Try these next:");
-        cli_println!("    Use `get all text` to extract visible text, or `get all attr <name>` for attribute values.");
+        cli_println!("    Use `get all text` to extract text, or `get all attr <name>` for attribute values.");
         cli_println!("    The SQL variant lets you query with full expressive power (joins, filters, aggregates).");
         for sel in &actionable {
             cli_println!("     htmlsnapshot get all text \"{}\" --limit 20", sel);

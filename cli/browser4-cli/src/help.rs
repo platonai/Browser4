@@ -35,6 +35,7 @@ pub fn public_command_name(name: &str) -> &str {
         "htmlsnapshot-summary" => "htmlsnapshot summary",
         "htmlsnapshot-grep" => "htmlsnapshot grep",
         "htmlsnapshot-inspect" => "htmlsnapshot inspect",
+        "htmlsnapshot-readability" => "htmlsnapshot readability",
         "snapshot-grep" => "snapshot grep",
         "snapshot-list" => "snapshot list",
         "snapshot-clean" => "snapshot clean",
@@ -202,7 +203,7 @@ pub fn generate_help() -> String {
     lines.push("║                        an interactive-oriented layout, not an interactive-only filter)".to_string());
     lines.push("║    click <ref>        Click an element by its ref (e5) or CSS selector".to_string());
     lines.push("║    fill <ref> \"<txt>\"  Fill a form field (--submit to press Enter)".to_string());
-    lines.push("║    htmlsnapshot       Capture the live page into the store (reads serve that copy)".to_string());
+    lines.push("║    htmlsnapshot       Capture the live page into the store; so do reads".to_string());
     lines.push("║    dialog-accept      Accept a native JavaScript dialog (alert/confirm/prompt)".to_string());
     lines.push("║".to_string());
     lines.push("║  Learn more: browser4-cli --help <command>  or  --help-json for AI/scripts".to_string());
@@ -213,9 +214,9 @@ pub fn generate_help() -> String {
     lines.push("  Navigate & inspect:".to_string());
     lines.push("    goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0".to_string());
     lines.push("  Extract data:".to_string());
-    lines.push("    htmlsnapshot                             # capture the live page into the store".to_string());
-    lines.push("    htmlsnapshot get text \"<css>\"           # single field (reads the stored copy)".to_string());
-    lines.push("    htmlsnapshot query --sql @query.sql       # structured extraction (reads the store)".to_string());
+    lines.push("    htmlsnapshot                             # the capture every htmlsnapshot command runs".to_string());
+    lines.push("    htmlsnapshot get text \"<css>\"           # single field (captures the tab first)".to_string());
+    lines.push("    htmlsnapshot query --sql @query.sql       # structured extraction (also captures first)".to_string());
     lines.push("  Form interaction:".to_string());
     lines.push("    fill <ref> \"<text>\" --submit              # fill + press Enter".to_string());
     lines.push("  Handle dialogs (two-step):".to_string());
@@ -368,8 +369,8 @@ pub fn generate_quick_reference() -> String {
     // ── Extract & Query ──
     lines.push(String::new());
     lines.push("── Extract & Query ─────────────────────────────────────────────────".to_string());
-    lines.push(fmt_cmd("htmlsnapshot", "Capture the live page into the store, with metadata (the only htmlsnapshot writer)"));
-    lines.push(fmt_cmd("htmlsnapshot query", "Run X-SQL against the stored page (read-only)"));
+    lines.push(fmt_cmd("htmlsnapshot", "Capture the live page into the store, with metadata (the capture every read runs)"));
+    lines.push(fmt_cmd("htmlsnapshot query", "Run X-SQL over a fresh snapshot of the active page, or a stored url"));
     lines.push(fmt_cmd("extract \"<instr>\"", "AI-powered structured data extraction"));
     lines.push(fmt_cmd("get <mode> <sel>", "Extract text, html, attr, box, or styles"));
     lines.push(fmt_cmd("eval \"<js>\"", "Run JavaScript on the page"));
@@ -778,11 +779,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "htmlsnapshot-inspect" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Inspects the STORED snapshot of the current page (read-only), so run `htmlsnapshot`"
+            "  - Inspects a FRESH snapshot of the current page (the tab is captured first), so it"
                 .to_string(),
         );
         lines.push(
-            "    first to inspect the page as the tab shows it right now."
+            "    already reflects what the tab shows right now."
                 .to_string(),
         );
         lines.push(
@@ -1000,7 +1001,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  `htmlsnapshot` + `htmlsnapshot get` for extraction on a stored DOM copy."
+            "  `htmlsnapshot` + `htmlsnapshot get` for extraction from a fresh snapshot of the active page."
                 .to_string(),
         );
     }
@@ -1856,53 +1857,58 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Subcommands:".to_string());
         lines.push(format_with_gap(
             "  htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]",
-            "Extract elements from the STORED snapshot of the active tab's page (text, textcontent, html, attr) — read-only; capture first for the live document",
+            "Extract elements from a FRESH snapshot of the active page (the tab is captured first): text, textcontent, html, attr",
             50,
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]",
-            "Extract ALL matching elements from the STORED snapshot (querySelectorAll semantics) — read-only",
+            "Extract ALL matching elements from that fresh snapshot (querySelectorAll semantics)",
             50,
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot query [url]",
-            "Run X-SQL against the STORED page (the current page, or an explicit URL) — read-only, never captured from the live tab. Use --format table for human-readable output.",
+            "Run X-SQL over a fresh snapshot of the active page, or an explicit URL's stored page. Use --format table for human-readable output.",
             50,
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot export",
-            "Export the STORED snapshot's HTML to a local file — read-only",
+            "Export that fresh snapshot's HTML to a local file",
             50,
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot summary",
-            "Summarize: produce a compressed Web Page Summary Index (WPSI) from the STORED snapshot — read-only",
+            "Summarize: produce a compressed Web Page Summary Index (WPSI) from that fresh snapshot",
             50,
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot grep [OPTIONS] <pattern>",
-            "Search the STORED snapshot's HTML with regex patterns and grep-style output — read-only. Use | for alternation or -e for multiple patterns.",
+            "Search that fresh snapshot's HTML with regex patterns and grep-style output. Use | for alternation or -e for multiple patterns.",
             50,
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot inspect [selector] [--max N] [--depth D]",
-            "Analyze the STORED snapshot's DOM and discover CSS selectors for recurring patterns — read-only",
+            "Analyze a fresh snapshot of the active page's DOM and discover CSS selectors for recurring patterns",
+            50,
+        ));
+        lines.push(format_with_gap(
+            "  htmlsnapshot readability [url]",
+            "Extract the main article with a Readability-style heuristic (no LLM) — the active page, or that URL's stored copy",
             50,
         ));
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(wrap_text(
-            "The base `htmlsnapshot` command captures a static HTML snapshot, stores it in Browser4's page storage, and returns enriched metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box). It is the ONLY htmlsnapshot command that writes: it serializes the document the active tab is showing and overwrites the stored copy of the tab's normalized URL. Every other command is a READ and serves the page store — the captured copy, or an independent read-only load when there is none. Run `htmlsnapshot` first whenever a read must see the live document (form submissions, SPA updates, `eval` mutations, login state).",
+            "The base `htmlsnapshot` command captures a static HTML snapshot, stores it in Browser4's page storage, and returns enriched metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box). It serializes the document the active tab is showing — without navigating — and overwrites the stored copy of the tab's normalized URL. Every other command captures the active page the same way first, then operates on that snapshot, so a read already sees the live document (form submissions, SPA updates, `eval` mutations, login state) with no capture of its own. A command aimed at another URL (`readability <url>`, `query <url>`) reads that URL's own stored copy instead and never files the tab's document under it.",
             "  - ",
             4,
         ));
         lines.push(wrap_text(
-            "Extract elements by CSS selector with `htmlsnapshot get <field> [selector]` — it reads the stored snapshot, so run `htmlsnapshot` first to include changes that exist only in the tab.",
+            "Extract elements by CSS selector with `htmlsnapshot get <field> [selector]` — it captures the tab first and reads that fresh snapshot, so changes that exist only in the tab need no separate capture.",
             "  - ",
             4,
         ));
         lines.push(
-            "  - The `get` subcommand supports four fields: `text` (inner text, may be clipped by CSS overflow), `textcontent` (full text content), `html` (inner HTML), and `attr` (attribute value)."
+            "  - The `get` subcommand supports four fields: `text` and `textcontent` (the element's text content, whitespace-normalized; the two are currently equivalent, and neither is a rendered-text read, so CSS overflow does not clip them), `html` (inner HTML), and `attr` (attribute value)."
                 .to_string(),
         );
         lines.push(wrap_text(
@@ -1925,11 +1931,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Unlike top-level `get` (accessibility tree), `htmlsnapshot get` uses CSS selectors on stored HTML."
+            "  - Unlike top-level `get` (accessibility tree), `htmlsnapshot get` uses CSS selectors on a fresh snapshot of the active page."
                 .to_string(),
         );
         lines.push(
-            "    For live page queries (AXTree-based), use `get text <ref>`. For CSS extraction, capture with `htmlsnapshot` first."
+            "    For live page queries (AXTree-based), use `get text <ref>`. For CSS extraction, no capture step is needed."
                 .to_string(),
         );
         lines.push(wrap_text(
@@ -1955,21 +1961,21 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(
-            "  - Export the stored snapshot's HTML to a local file with `htmlsnapshot export --file <path>`. Add `--clean` to strip scripts, styles, and non-standard attributes. The export is read-only: run `htmlsnapshot` first to export the page as it is right now."
+            "  - Export a fresh snapshot of the active page's HTML to a local file with `htmlsnapshot export --file <path>`. Add `--clean` to strip scripts, styles, and non-standard attributes. The export captures the tab first, so it is already the page as it is right now."
                 .to_string(),
         );
         lines.push(wrap_text(
-            "Generate a compressed page summary (WPSI) from the stored snapshot with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size.",
+            "Generate a compressed page summary (WPSI) from a fresh snapshot of the active page with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size.",
             "  - ",
             4,
         ));
         lines.push(wrap_text(
-            "Search the stored snapshot's HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -n (GNU grep compatibility - line numbers are printed by default, so -n is a no-op), -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Regex dialect is Rust regex: | is alternation (an escaped \\| is also accepted and converted), and ^/$ anchor the start/end of a line, so write a literal dollar as [$] (e.g. '[$][0-9]+') — it survives every shell layer; add -F to match plain text.",
+            "Search a fresh snapshot of the active page's HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -n (GNU grep compatibility - line numbers are printed by default, so -n is a no-op), -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Regex dialect is Rust regex: | is alternation (an escaped \\| is also accepted and converted), and ^/$ anchor the start/end of a line, so write a literal dollar as [$] (e.g. '[$][0-9]+') — it survives every shell layer; add -F to match plain text.",
             "  - ",
             4,
         ));
         lines.push(wrap_text(
-            "Analyze the stored snapshot's DOM and discover CSS selectors for recurring patterns with `htmlsnapshot inspect [selector]`. When the selector matches multiple elements (e.g. `.product-card`), it compares child structures across matches and suggests selectors ranked by recurrence. Use --max to control sample size and --depth to limit descendant traversal. For detail pages (single product, article) where no repeating patterns exist, inspect falls back to showing the page's top-level container structure — use `htmlsnapshot get` and `htmlsnapshot summary` to extract individual fields.",
+            "Analyze a fresh snapshot of the active page's DOM and discover CSS selectors for recurring patterns with `htmlsnapshot inspect [selector]`. When the selector matches multiple elements (e.g. `.product-card`), it compares child structures across matches and suggests selectors ranked by recurrence. Use --max to control sample size and --depth to limit descendant traversal. For detail pages (single product, article) where no repeating patterns exist, inspect falls back to showing the page's top-level container structure — use `htmlsnapshot get` and `htmlsnapshot summary` to extract individual fields.",
             "  - ",
             4,
         ));
@@ -2033,11 +2039,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Return only the resultSet array, omitting wrapper metadata".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --result-only".to_string());
         lines.push(String::new());
-        lines.push("  # Export the stored snapshot's HTML to a file (add --clean for LLM consumption)".to_string());
+        lines.push("  # Export the active page's fresh snapshot to a file (add --clean for LLM consumption)".to_string());
         lines.push("  browser4-cli htmlsnapshot export --file snapshot.html".to_string());
         lines.push("  browser4-cli htmlsnapshot export --file clean.html --clean".to_string());
         lines.push(String::new());
-        lines.push("  # Generate a compressed page summary from the stored snapshot".to_string());
+        lines.push("  # Generate a compressed page summary from the active page's fresh snapshot".to_string());
         lines.push("  browser4-cli htmlsnapshot summary".to_string());
         lines.push(String::new());
         lines.push("  # Search for 'error' case-insensitively".to_string());
@@ -3561,17 +3567,16 @@ mod tests {
         assert!(help.contains("Subcommands:"));
         assert!(help.contains("htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]"));
         // Help text is wrapped — search for individual line fragments
-        assert!(help.contains("Extract elements from"));
-        assert!(help.contains("STORED snapshot"));
-        assert!(help.contains("textcontent, html, attr"));
+        assert!(help.contains("Extract elements from a FRESH snapshot"));
+        assert!(help.contains("of the active page (the tab is captured first): text, textcontent,"));
         assert!(help.contains("htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]"));
-        assert!(help.contains("ALL matching elements from the STORED snapshot"));
+        assert!(help.contains("ALL matching elements from that fresh snapshot"));
         assert!(help.contains("querySelectorAll"));
         assert!(help.contains("htmlsnapshot query [url]"));
         assert!(help.contains("Run X-SQL"));
-        assert!(help.contains("never captured from the live tab"));
+        assert!(help.contains("URL's stored page. Use --format table"));
         assert!(help.contains("htmlsnapshot export"));
-        assert!(help.contains("Export the STORED snapshot's HTML to a local file"));
+        assert!(help.contains("Export that fresh snapshot's HTML to a local file"));
         assert!(help.contains("htmlsnapshot summary"));
         assert!(help.contains("Summarize: produce a compressed Web Page Summary Index (WPSI)"));
         // Notes
@@ -3607,7 +3612,10 @@ mod tests {
         assert!(help.contains("browser4-cli htmlsnapshot grep --selector main \"Submit\""));
         assert!(help.contains("browser4-cli htmlsnapshot grep --selector-all \".product_pod\" \"price_color\""));
         assert!(help.contains("htmlsnapshot inspect [selector] [--max N] [--depth D]"));
-        assert!(help.contains("Analyze the STORED snapshot's DOM and discover CSS selectors"));
+        assert!(help.contains("Analyze a fresh snapshot of the active page's DOM and discover"));
+        // The readability subcommand must be listed, not silently missing
+        assert!(help.contains("htmlsnapshot readability [url]"));
+        assert!(help.contains("the active page, or that URL's stored copy"));
         assert!(help.contains("browser4-cli htmlsnapshot inspect \".product_pod\""));
         // enriched metadata
         assert!(help.contains("image/link counts"));

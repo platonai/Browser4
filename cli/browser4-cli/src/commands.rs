@@ -4027,7 +4027,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text returns visible text (may be truncated by CSS overflow); textcontent returns the full text content", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text and textcontent are currently equivalent — both return the element's whitespace-normalized text content, and neither is a rendered-text read, so CSS overflow does not clip them", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -4053,7 +4053,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text returns visible text (may be truncated by CSS overflow); textcontent returns the full text content", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text and textcontent are currently equivalent — both return the element's whitespace-normalized text content, and neither is a rendered-text read, so CSS overflow does not clip them", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -4440,7 +4440,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "url", description: "URL to extract from. Defaults to the current session's page URL (stored snapshot or fresh capture)", optional: true },
+                ArgDef { name: "url", description: "URL to extract from. Defaults to the active page, which is captured fresh before the read (a url the tab does not show reads that url's own stored copy instead)", optional: true },
             ],
             options: &[
                 OptionDef { name: "text-only", short: None, is_bool: true, description: "Print only the extracted plain text, without the metadata header" },
