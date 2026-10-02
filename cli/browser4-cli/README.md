@@ -297,15 +297,15 @@ Details: [Crawl checkpoint & resume](../../docs/crawl-checkpoint-resume.md).
 
 | Command | Description |
 |---|---|
-| `htmlsnapshot` | Short form of `htmlsnapshot capture` — serialize the live page into the page store and return metadata. The only htmlsnapshot command that writes |
+| `htmlsnapshot` | Short form of `htmlsnapshot capture` — serialize the live page into the page store and return metadata (the same capture every htmlsnapshot command runs) |
 | `htmlsnapshot capture` | Serialize the live page into the page store and return metadata (overwrites the stored copy of the tab's normalized URL) |
-| `htmlsnapshot get <field> [selector] [name]` | Extract elements from the STORED snapshot (text, textcontent, html, attr) — read-only; capture first for the live document |
-| `htmlsnapshot query [url]` | Run X-SQL against the STORED page (current page or an explicit URL) — read-only, never captured from the live tab |
-| `htmlsnapshot export` | Export the STORED snapshot's HTML to a local file (--clean strips scripts/styles/non-standard attrs) — read-only |
-| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the STORED snapshot — read-only |
-| `htmlsnapshot grep [OPTIONS] <pattern>` | Search the STORED snapshot's HTML with regex patterns and grep-style output — read-only |
-| `htmlsnapshot inspect [selector]` | Discover CSS selectors over the STORED snapshot — read-only |
-| `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic (no LLM) — reads that URL's own stored copy |
+| `htmlsnapshot get <field> [selector] [name]` | Extract elements from a FRESH snapshot of the active page (text, textcontent, html, attr) — the tab is captured first, then read |
+| `htmlsnapshot query [url]` | Run X-SQL against a fresh snapshot of the active page (captured first), or against an explicit URL's stored page — a URL the tab does not show is never captured |
+| `htmlsnapshot export` | Export a fresh snapshot of the active page to a local file (--clean strips scripts/styles/non-standard attrs) |
+| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from a fresh snapshot of the active page |
+| `htmlsnapshot grep [OPTIONS] <pattern>` | Search a fresh snapshot of the active page's HTML with regex patterns and grep-style output |
+| `htmlsnapshot inspect [selector]` | Discover CSS selectors over a fresh snapshot of the active page |
+| `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic (no LLM) — the active page, or that URL's own stored copy |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |
 | `diff snapshot [before] [after]` | Diff two saved accessibility snapshots (defaults to the two most recent) |
 

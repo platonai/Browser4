@@ -28,22 +28,31 @@ import kotlin.reflect.KClass
  *
  * Domain: `html_snapshot`
  *
- * ## The read/write contract
+ * ## The contract: a fresh snapshot of the active page, then the operation
  *
- * `capture` is the **only** command that writes: it serializes the document the active tab
- * already shows and persists it under the tab's normalized url, overwriting any older copy of
- * that url.  The `-refresh` option behind [MUST_WRITE_OPTION] is what guarantees that overwrite —
- * it bypasses the process-wide page cache, it does **not** reload the page.  Every other command
- * is a **read** and serves the page store (`webdb`) — the stored copy when there is one, otherwise
- * an independent read-only load.  Nothing but `capture` ever files a document.
+ * This family is about the page the session is *showing*, so no command trusts an older copy of
+ * it: a command first **captures** the active tab — serializing the document the tab already
+ * shows, without navigating — and then operates on that snapshot.
  *
- * So the order to read the live document is always: `capture` first, then read.  A `query`,
- * `get`, `readability`, `summary`, `inspect` or `export` that runs on a page which was never
- * captured either serves an older stored copy or an independent load — never the live tab,
- * even when the target url is the page currently on screen.  (Commands used to fall back to
- * capturing the live tab, which made a read write, and — worse — filed the live tab's document
- * under whatever url the caller passed, so `readability <other-url>` returned the current page
- * as if it were `<other-url>`.)
+ *  - `capture` *returns* the snapshot: page metadata (url, href, title, size, timestamps,
+ *    interactive elements, link groups).
+ *  - every read (`get`, `get all`, `export`, `summary`, `inspect`, `readability`, `query`)
+ *    *consumes* it, so a read sees the tab as it is right now — form submissions, SPA updates,
+ *    `eval` mutations, login state — with no separate capture step.
+ *
+ * Two consequences, and both are deliberate:
+ *
+ *  1. A read of the active page also archives it, under the tab's **own** normalized url, with
+ *     [MUST_WRITE_OPTION] semantics (it overwrites the stored copy — the flag is a *cache* flag,
+ *     not a reload; see its KDoc).
+ *  2. A read **never files a document under a url the caller passed.**  A url the tab does not
+ *     show cannot be captured (a capture labels the document with the *tab's own* url), so such a
+ *     target keeps the read-only path: the stored copy of that url, or an independent read-only
+ *     load when the store has nothing — fetched on the shared scrape session, never on the
+ *     session's own tab, so a read of another url cannot move the page out from under the caller.
+ *     This is the trap the family used to fall into: the read fallback captured the live tab *and
+ *     labelled it with the requested url*, so `readability <other-url>` returned the current page
+ *     as if it were `<other-url>` and poisoned that url's store row.
  *
  * The url/href invariant holds throughout: the *normalized url* is the store identity, and the
  * *original href* travels beside it as the browser-facing address.
@@ -53,11 +62,11 @@ import kotlin.reflect.KClass
  * - `capture(sessionId)` — Serialize the live tab's document, persist it, and return metadata
  * - `scrape(sessionId, field, selector?, attrName?)` — Extract text/html/attr from a single element
  * - `scrape_all(sessionId, field, selector?, attrName?, offset?, limit?)` — Extract from all matching elements
- * - `query(sessionId?, sql, url?)` — Execute an X-SQL query against the stored page
+ * - `query(sessionId?, sql, url?)` — Execute an X-SQL query against the active page, or against a stored url
  * - `export(sessionId)` — Export the full HTML of the current page
  * - `summary(sessionId)` — Generate a page summary with link groups
  * - `inspect(sessionId, selector?, max?, depth?)` — Inspect the HTML snapshot for selector suggestions
- * - `readability(sessionId, url?)` — Extract the readable article text of a stored page
+ * - `readability(sessionId, url?)` — Extract the readable article text of the active page, or of a stored url
  */
 class HTMLSnapshotToolExecutor(
     private val sessionManager: PulsarSessionManager,
@@ -89,10 +98,11 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("sessionId", "String", null),
             ),
             returnType = "String",
-            description = "Capture the current page as an HTML snapshot with metadata, interactive elements, and link groups. " +
-                "This is the only html_snapshot command that WRITES: it serializes the live tab's document and stores it " +
-                "under the tab's normalized url, overwriting the stored copy. Run it before any read that must see the " +
-                "live document.",
+            description = "Capture the active tab as an HTML snapshot and return its metadata: url, href, title, size, " +
+                "timestamps, interactive elements (tag, class, id, aria, bounding box) and link groups. Capturing first is " +
+                "what every htmlsnapshot command does — the reads (get, get all, export, summary, inspect, readability, " +
+                "query) capture the active page too, then operate on that fresh snapshot, so the snapshot this command " +
+                "returns is the same one they see. Use it when the metadata itself is what you need.",
             examples = listOf(
                 ToolExample(
                     title = "Snapshot the page the session is on",
@@ -112,8 +122,8 @@ class HTMLSnapshotToolExecutor(
             ),
             returnType = "String",
             description = "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. " +
-                "Reads the stored snapshot of the current page (read-only) — run 'htmlsnapshot capture' first to snapshot " +
-                "the live document.",
+                "Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form " +
+                "submissions, SPA updates and `eval` mutations are visible without a separate capture.",
             examples = listOf(
                 ToolExample(
                     title = "Read one field",
@@ -146,8 +156,8 @@ class HTMLSnapshotToolExecutor(
             returnType = "String",
             outputSchema = ToolResultSchemas.HTML_SNAPSHOT_SCRAPE_ALL,
             description = "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. " +
-                "Reads the stored snapshot of the current page (read-only) — run 'htmlsnapshot capture' first to snapshot " +
-                "the live document.",
+                "Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form " +
+                "submissions, SPA updates and `eval` mutations are visible without a separate capture.",
             examples = listOf(
                 ToolExample(
                     title = "Read every product title",
@@ -171,9 +181,11 @@ class HTMLSnapshotToolExecutor(
             ),
             returnType = "String",
             outputSchema = ToolResultSchemas.HTML_SNAPSHOT_QUERY,
-            description = "Execute an X-SQL query against the STORED page of the session's current page, or of a specified URL. " +
-                "Read-only: it serves the stored copy (or loads the page independently when the store is empty) and never " +
-                "captures the live tab — run 'htmlsnapshot capture' first to query the live document.",
+            description = "Execute an X-SQL query against a FRESH snapshot of the active page (the live tab is captured " +
+                "first, then queried, so the query sees the page as it is now). With a url argument instead: the query " +
+                "targets THAT url's stored page — a url the tab does not show cannot be captured — and it runs " +
+                "without a session, so offline corpus queries keep working. IMPORTANT: CSS selectors in X-SQL must use " +
+                "single quotes (SQL syntax); double quotes mean SQL identifiers.",
             examples = listOf(
                 ToolExample(
                     title = "Run X-SQL against the current page",
@@ -193,8 +205,8 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("clean", "Boolean", "false"),
             ),
             returnType = "String",
-            description = "Export the full, pretty-printed HTML of the stored snapshot of the current page (read-only; run " +
-                "'htmlsnapshot capture' first to snapshot the live document). Set clean=true to strip <script>, <style>, and " +
+            description = "Export the full, pretty-printed HTML of a FRESH snapshot of the active page (the live tab is " +
+                "captured first, so the export is the page as it is now). Set clean=true to strip <script>, <style>, and " +
                 "non-standard attributes (keeps the vi attribute).",
             examples = listOf(
                 ToolExample(
@@ -211,8 +223,8 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("sessionId", "String", null),
             ),
             returnType = "String",
-            description = "Generate a page summary including title, statistics, and detected link groups from the stored " +
-                "snapshot of the current page (read-only; run 'htmlsnapshot capture' first to snapshot the live document).",
+            description = "Generate a page summary including title, statistics, and detected link groups from a FRESH " +
+                "snapshot of the active page (the live tab is captured first, so the summary is the page as it is now).",
             examples = listOf(
                 ToolExample(title = "Summarise the current page", args = mapOf("sessionId" to "<session-id>")),
             ),
@@ -229,8 +241,8 @@ class HTMLSnapshotToolExecutor(
             ),
             returnType = "String",
             outputSchema = ToolResultSchemas.HTML_SNAPSHOT_INSPECT,
-            description = "Inspect the HTML snapshot and suggest CSS selectors for recurring patterns. Reads the stored " +
-                "snapshot of the current page (read-only; run 'htmlsnapshot capture' first to snapshot the live document).",
+            description = "Inspect the HTML snapshot and suggest CSS selectors for recurring patterns. Operates on a FRESH " +
+                "snapshot of the active page: the live tab is captured first, then inspected.",
             examples = listOf(
                 ToolExample(
                     title = "Find selectors for repeated cards",
@@ -244,14 +256,15 @@ class HTMLSnapshotToolExecutor(
             method = "readability",
             arguments = listOf(
                 ToolSpec.Arg("sessionId", "String", null),
-                ToolSpec.Arg("url", "String?", "null", "Read this URL from the page store instead of the session's current page."),
+                ToolSpec.Arg("url", "String?", "null", "Read this URL's stored page instead of the active page."),
             ),
             returnType = "String",
             outputSchema = ToolResultSchemas.HTML_SNAPSHOT_READABILITY,
             description = "Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) with a " +
-                "Readability-style heuristic from a STORED page: the stored snapshot of the session's current page, or of url " +
-                "when given. Read-only — it never captures the live tab, so a url other than the current page is never filed " +
-                "with the current page's content. Run 'htmlsnapshot capture' first to read the live document.",
+                "Readability-style heuristic. Without url it reads a FRESH snapshot of the active page (the live tab is " +
+                "captured first). With url it reads THAT url's own stored page — or loads it read-only on the shared " +
+                "scrape session, never on the caller's tab, when the store has nothing — because a url the tab does not " +
+                "show cannot be captured, so the tab's document is never filed under it.",
             examples = listOf(
                 ToolExample(
                     title = "Extract the article of the current page",
@@ -284,21 +297,15 @@ class HTMLSnapshotToolExecutor(
     // =========================================================================
 
     /**
-     * Archive the live document of the session's active tab into the page store and return its
-     * metadata.
+     * Snapshot the session's active tab into the page store and return the snapshot's metadata.
      *
-     * **Capture is this family's only writer, and it always writes.**  It stores the page — the row
-     * is keyed by the *normalized* url of the tab, the identity every other lookup uses (see `NormURL`
-     * and `PulsarSession.normalize`), and the raw address travels beside it as the metadata `href` —
-     * overwriting any older copy of that url, cached or stored.  Re-capturing is therefore how a page
-     * that changed in the tab (a form submitted, a list sorted, `eval`-inserted markup) reaches the
-     * store.
-     *
-     * Every read command (`get`, `get all`, `export`, `summary`, `inspect`, `readability`, `query`)
-     * serves that stored copy, or loads the page independently (read-only) when the store has
-     * nothing; none of them captures, and none of them writes.  A read that has to see the *live*
-     * document — form submission results, SPA updates, `eval` mutations, login state — therefore runs
-     * **after** this command.
+     * The snapshot is keyed by the *normalized* url of the tab — the identity every other lookup uses
+     * (see `NormURL` and `PulsarSession.normalize`) — the raw address travels beside it as the
+     * metadata `href`, and the row overwrites whatever the store held for that url.  Re-capturing is
+     * therefore how a page that changed in the tab (a form submitted, a list sorted, `eval`-inserted
+     * markup) reaches the store, and it is exactly what every read command in this family does first:
+     * this command exists for the metadata (title, size, timestamps, interactive elements, link
+     * groups) that the reads do not return.
      *
      * The capture never navigates: it serializes the document the tab already shows, with the capture
      * annotations (vi bounding boxes and the `normalizedURI` link) produced by the fetch pipeline.  A
@@ -310,19 +317,15 @@ class HTMLSnapshotToolExecutor(
 
         return managed.withLock {
             val pulsarSession = managed.agenticSession
-            val currentUrl = runCatching { managed.driver.currentUrl() }.getOrNull()
-            require(!currentUrl.isNullOrBlank() && isArchivableAddress(currentUrl)) {
-                "Nothing to capture: the active tab shows <${currentUrl ?: ""}>. Navigate to an http(s) " +
-                    "or file:// page first — about:blank and browser error pages have no snapshot."
-            }
+            val address = requireArchivableActivePage(
+                runCatching { managed.driver.currentUrl() }.getOrNull(),
+                action = "capture",
+            )
 
-            // `session.capture(driver)` serializes the live document AND persists it, under the
-            // normalized url of the tab.
-            //
-            // [MUST_WRITE_OPTION] is what makes that write real — it is a *cache* flag, not a
-            // reload: see its KDoc for what it does, what it deliberately does not do (capture
-            // never navigates), and why the second capture of a url needs it.
-            val page = pulsarSession.capture(managed.driver, url = "$currentUrl $MUST_WRITE_OPTION")
+            // [MUST_WRITE_OPTION] is what makes the write real — it is a *cache* flag, not a reload:
+            // see its KDoc for what it does, what it deliberately does not do (capture never
+            // navigates), and why the second capture of a url needs it.
+            val page = captureActivePage(managed, address)
             val document = pulsarSession.parse(page, noCache = true)
 
             htmlSnapshotMetadataJson(
@@ -343,25 +346,162 @@ class HTMLSnapshotToolExecutor(
         url.startsWith("http://") || url.startsWith("https://") || url.startsWith("file://")
 
     /**
-     * The page a **read** command serves for [url]: the stored copy, or an independent read-only load
-     * when the store has nothing.
+     * The active tab's address, refusing a tab that shows nothing this family can snapshot — with the
+     * address named, so the caller learns *what* was refused instead of reading an internal error.
      *
-     * `-readonly` is the query path's own sealing option: it serves the page cache when it can,
-     * otherwise it loads the page independently, and it never writes the result back — so a read
-     * stays a read.  Capturing the live tab here instead (which is what this used to do) was wrong
-     * twice over: it wrote to the store as a side effect of a read, and `capture` labels *whatever
-     * the tab shows* with the url it is handed, so a read of a different url filed the live tab's
-     * document under that url.
+     * [action] is the command being attempted ("capture", "read", "query"), so the same refusal reads
+     * naturally from either half of the family.
      */
-    private suspend fun storedPageOrIndependentLoad(managed: ManagedSession, url: String): WebPage {
-        val pulsarSession = managed.agenticSession
-        return pulsarSession.getOrNull(url)
-            ?: pulsarSession.load("$url ${ScrapeAPIUtils.READ_ONLY_OPTION}")
+    private fun requireArchivableActivePage(address: String?, action: String): String {
+        val archivable = address?.takeIf { isArchivableAddress(it) }
+        require(archivable != null) {
+            "Nothing to $action: the active tab shows <${address ?: "no page"}>. Navigate to an http(s) " +
+                "or file:// page first — about:blank and browser error pages have no snapshot."
+        }
+        return archivable
     }
 
-    /** The normalized identity of the page the session's active tab is showing. */
-    private suspend fun currentPageUrl(managed: ManagedSession): String =
-        managed.agenticSession.normalize(managed.driver.currentUrl()).urlString
+    /**
+     * Serialize the live document of the active tab into the page store and return the page that was
+     * written — the snapshot this family operates on, keyed by the tab's own normalized url.
+     *
+     * [MUST_WRITE_OPTION] rides inside the url because `PulsarSession.capture(driver, url)` has no
+     * options parameter; without it a second capture of the same url reports the tab while the store
+     * keeps the older document (see the constant's KDoc).
+     */
+    private suspend fun captureActivePage(managed: ManagedSession, address: String): WebPage =
+        managed.agenticSession.capture(managed.driver, url = "$address $MUST_WRITE_OPTION")
+
+    /**
+     * The normalized identity of the page the active tab shows, or null when the tab shows nothing
+     * archivable (`about:blank`, a browser error page, no tab at all).
+     */
+    private suspend fun activePageKeyOrNull(managed: ManagedSession): String? {
+        val address = runCatching { managed.driver.currentUrl() }.getOrNull() ?: return null
+        if (!isArchivableAddress(address)) return null
+        return normalizeOrNull(managed, address)
+    }
+
+    /** [url] normalized to the store identity, or null when it cannot be normalized at all. */
+    private suspend fun normalizeOrNull(managed: ManagedSession, url: String): String? =
+        runCatching { managed.agenticSession.normalize(url).urlString }.getOrNull()
+
+    /**
+     * The snapshot a command operates on: **the active page, captured a moment ago**, or — for a url
+     * the tab does not show — that url's stored page.
+     *
+     * [requestedUrl] is what the caller asked for (`readability` and `query` accept one); null means
+     * "whatever the tab is showing".
+     *
+     * When the target *is* the active page (no url, or a url that normalizes to the tab's own key) the
+     * tab is captured first and the page that was just written is returned.  That is the family's
+     * contract, and it is why a read sees form submissions, SPA updates and `eval` mutations without a
+     * capture of its own — no read ever serves an older copy of the page on screen.
+     *
+     * A url the tab does *not* show cannot be captured — a capture labels the document with the tab's
+     * own url, never with an argument — so that target stays on the read-only path
+     * ([storedPageOrIndependentLoad]).  Nothing is ever filed under the requested url; that is the
+     * invariant this branch exists for.
+     */
+    private suspend fun snapshotPageFor(managed: ManagedSession, requestedUrl: String?): WebPage {
+        if (requestedUrl != null) {
+            val requestedKey = normalizeOrNull(managed, requestedUrl) ?: requestedUrl
+            if (requestedKey != activePageKeyOrNull(managed)) {
+                return storedPageOrIndependentLoad(managed, requestedKey)
+            }
+        }
+
+        val address = requireArchivableActivePage(
+            runCatching { managed.driver.currentUrl() }.getOrNull(),
+            action = "read",
+        )
+        return captureActivePage(managed, address)
+    }
+
+    /**
+     * The url an X-SQL query targets, refreshing the active page's snapshot when the query is about
+     * the page on screen.
+     *
+     * Without [explicitUrl] the target *is* the active page: it is captured first (the family's
+     * contract) and the normalized identity that was just written is returned, so
+     * `load_and_select(@url, ...)` serves the document the tab shows now.
+     *
+     * With [explicitUrl] the query may be about a page the session is not showing — an offline corpus
+     * query, say — which no capture can produce.  Such a query stays session-optional: the session is
+     * looked up **without recovery** and the url passes through untouched, unless the session is
+     * showing exactly that page — then the caller asked about the active page, and it is refreshed
+     * like any other read.
+     */
+    private suspend fun resolveQueryTarget(
+        args: Map<String, Any?>,
+        receiver: Any,
+        explicitUrl: String?,
+    ): String {
+        if (explicitUrl == null) {
+            val managed = resolveSession(args, receiver)
+            val address = requireArchivableActivePage(
+                runCatching { managed.driver.currentUrl() }.getOrNull(),
+                action = "query",
+            )
+            // Capture, then query the identity that was just written — the same snapshot a read sees.
+            val page = captureActivePage(managed, address)
+            return page.url.ifBlank { normalizeOrNull(managed, address) ?: address }
+        }
+
+        val managed = liveSessionOrNull(args, receiver) ?: return explicitUrl
+        val address = boundAddressOrNull(managed)?.takeIf { isArchivableAddress(it) } ?: return explicitUrl
+        val requestedKey = normalizeOrNull(managed, explicitUrl) ?: return explicitUrl
+        if (normalizeOrNull(managed, address) != requestedKey) return explicitUrl
+
+        // The caller named the very page the session is showing: refresh it like any other read.
+        captureActivePage(managed, address)
+        return requestedKey
+    }
+
+    /**
+     * The session named by the arguments **without creating or recovering anything** — or null.
+     *
+     * This is the manager's read-only lookup: it never launches a browser, never health-checks and
+     * never recreates a session.  That matters for a url-targeted query, which is often a pure
+     * page-store query about a page the session is not showing: asking whether the session is on that
+     * url must not resurrect a browser as a side effect.
+     */
+    private fun liveSessionOrNull(args: Map<String, Any?>, receiver: Any): ManagedSession? {
+        if (receiver is ManagedSession) return receiver
+        val sessionId = args["sessionId"]?.toString()?.takeIf { it.isNotBlank() } ?: return null
+        return sessionManager.getSession(sessionId)
+    }
+
+    /**
+     * The address the session's **already bound** tab is showing, or null when the session has no
+     * bound driver.  Never creates one: see [liveSessionOrNull].
+     */
+    private suspend fun boundAddressOrNull(managed: ManagedSession): String? =
+        managed.agenticSession.boundDriver?.let { runCatching { it.currentUrl() }.getOrNull() }
+
+    /**
+     * The stored page of [url], or an independent read-only load when the store has nothing.
+     *
+     * This is the path for a url the active tab does **not** show — the only one that cannot be
+     * captured.  Two invariants hold here:
+     *
+     *  * nothing is ever filed under [url] (no capture is involved at all), and
+     *  * **the session's own tab is never touched.**  A browser load resolves its driver from the
+     *    page config, which inherits the *session's* bound driver, so `agenticSession.load(...)` would
+     *    navigate the tab the caller is looking at — a read that moves the page out from under the
+     *    user.  (`HtmlSnapshotScenariosE2ETest#test1h` pins this: it reads a foreign url that is not in
+     *    the store and then asserts the tab still shows the original page.)  The load therefore goes to
+     *    the shared scrape session, which has no bound driver, so the fetch runs on a privacy-scoped
+     *    driver — exactly the path `html_snapshot_query --url` takes for a corpus page.
+     */
+    private suspend fun storedPageOrIndependentLoad(managed: ManagedSession, url: String): WebPage {
+        // The store first: the copy a capture (or any earlier load) filed is the cheapest answer, and
+        // it needs no browser at all.
+        managed.agenticSession.getOrNull(url)?.let { return it }
+
+        val readOnlyUrl = "$url ${ScrapeAPIUtils.READ_ONLY_OPTION}"
+        return sessionManager.ensureSwarmSession().agenticSession.load(readOnlyUrl)
+    }
 
     private suspend fun scrape(args: Map<String, Any?>, receiver: Any = Any()): String {
         val field = paramString(args, "field", "scrape")!!
@@ -393,11 +533,10 @@ class HTMLSnapshotToolExecutor(
                 }
             }
 
-            // Serve the STORE: the stored copy of the current page, or an independent read-only load
-            // when there is none.  A read never captures the live tab — see the read/write contract
-            // at the bottom of this file.
+            // The active page's FRESH snapshot: the live tab is captured first, then read — see the
+            // contract at the bottom of this file.
             val pulsarSession = managed.agenticSession
-            extractFrom(pulsarSession.parse(storedPageOrIndependentLoad(managed, currentPageUrl(managed))))
+            extractFrom(pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null), noCache = true))
         }
     }
 
@@ -437,9 +576,10 @@ class HTMLSnapshotToolExecutor(
                 }
             }
 
-            // Serve the STORE, as `get` does — see the read/write contract at the bottom of this file.
+            // The active page's FRESH snapshot, as `get` does — see the contract at the bottom of this
+            // file.
             val pulsarSession = managed.agenticSession
-            extractAllFrom(pulsarSession.parse(storedPageOrIndependentLoad(managed, currentPageUrl(managed))))
+            extractAllFrom(pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null), noCache = true))
         }
 
         @Suppress("UNCHECKED_CAST")
@@ -468,26 +608,18 @@ class HTMLSnapshotToolExecutor(
         }
 
         val explicitUrl = paramString(args, "url", "query", required = false)?.takeIf { it.isNotBlank() }
+        val url = resolveQueryTarget(args, receiver, explicitUrl)
 
-        // A session is needed only when no URL is given: the target is then the URL of the page the
-        // session is currently showing (and the query serves that URL's stored copy, as above).  With
-        // an explicit URL the query is a pure page-store/webdb query: it runs session-less (offline
-        // corpus queries included) and never touches a session, which is also why it cannot pick up
-        // the live tab's document any more.
-        val url = explicitUrl ?: resolveSession(args, receiver).let { managed ->
-            managed.agenticSession.normalize(managed.driver.currentUrl()).urlString
-        }
-
-        // Serve the STORE — see the read/write contract at the bottom of this file.  The
-        // X-SQL engine's load_and_select goes through the read-only load path, which answers
-        // from the page cache when it can and otherwise loads the page independently; it
-        // never captures the live tab.  A query that must reflect the LIVE document runs
-        // after `html_snapshot_capture`, which owns every write in this family.
+        // The query runs against what [resolveQueryTarget] just captured whenever it is about the
+        // active page, so `load_and_select(@url, ...)` serves the live document without the caller
+        // having to capture first — the family's contract, see the banner at the bottom of this file.
+        // For a url the tab does not show it is a pure page-store query: the engine's read-only load
+        // path answers from the page cache when it can and otherwise loads the page independently.
         //
-        // This used to seed the store from the live tab whenever the target happened to be
-        // the current page — a read that wrote, on a target the caller never asked to
-        // capture.  Removed: the live document reaches the store through `capture` (which
-        // always archives the active tab, under that tab's own url), and `query` only reads.
+        // This used to seed the store from the live tab whenever the target happened to be the current
+        // page — a read that wrote, on a target the caller never asked to capture.  Now the capture is
+        // unconditional for the active page and always keyed by the tab's own url, so a query of
+        // another page can never be answered with the tab's document.
         val processedSql = SQLTemplate(sql).createSQL(url)
         val response = scrapeService.executeQuery(ScrapeRequest(processedSql))
 
@@ -547,9 +679,9 @@ class HTMLSnapshotToolExecutor(
         val managed = resolveSession(args, receiver)
 
         return managed.withLock {
-            // Serve the STORE — see the read/write contract at the bottom of this file.
+            // The active page's FRESH snapshot — see the contract at the bottom of this file.
             val pulsarSession = managed.agenticSession
-            val document = pulsarSession.parse(storedPageOrIndependentLoad(managed, currentPageUrl(managed)))
+            val document = pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null), noCache = true)
 
             if (clean) {
                 // --clean must change the serialized OUTPUT, not just the parsed
@@ -643,6 +775,9 @@ class HTMLSnapshotToolExecutor(
          * captures again, and reads the store back.  As a negative control, dropping this option from
          * the call below makes it fail (the second capture returns the first capture's document).
          *
+         * Every command of the family captures — that is the contract (`captureActivePage` is the one
+         * place that loads the tab) — so every one of them inherits this option, reads included.
+         *
          * ### Why it travels inside the url string
          *
          * `PulsarSession.capture(driver, url)` has no `LoadOptions` parameter, and the normalizer
@@ -708,11 +843,11 @@ class HTMLSnapshotToolExecutor(
         val managed = resolveSession(args, receiver)
 
         return managed.withLock {
-            // Serve the STORE — see the read/write contract at the bottom of this file.
+            // The active page's FRESH snapshot — see the contract at the bottom of this file.
             val pulsarSession = managed.agenticSession
-            val url = currentPageUrl(managed)
-            val document = pulsarSession.parse(storedPageOrIndependentLoad(managed, url))
-            PageSummaryIndexService.generate(document, url, document.title)
+            val page = snapshotPageFor(managed, requestedUrl = null)
+            val document = pulsarSession.parse(page, noCache = true)
+            PageSummaryIndexService.generate(document, page.url, document.title)
         }
     }
 
@@ -720,9 +855,9 @@ class HTMLSnapshotToolExecutor(
         val managed = resolveSession(args, receiver)
 
         return managed.withLock {
-            // Serve the STORE — see the read/write contract at the bottom of this file.
+            // The active page's FRESH snapshot — see the contract at the bottom of this file.
             val pulsarSession = managed.agenticSession
-            val document = pulsarSession.parse(storedPageOrIndependentLoad(managed, currentPageUrl(managed)))
+            val document = pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null), noCache = true)
 
             val selector = paramString(args, "selector", "inspect", required = false, default = ":root")?.ifEmpty { ":root" } ?: ":root"
             val maxMatches = paramInt(args, "max", "inspect", required = false, default = 20) ?: 20
@@ -733,18 +868,19 @@ class HTMLSnapshotToolExecutor(
     }
 
     /**
-     * Extract the main article content from the stored HTML snapshot using a
-     * Readability-style heuristic (deterministic, no LLM).
+     * Extract the main article content from the HTML snapshot using a Readability-style heuristic
+     * (deterministic, no LLM).
      *
-     * @param args `url` (optional) — the page to read. Without it, the session's current page is
-     *   used. Either way the page comes from the **store**, or from an independent read-only load
-     *   when the store has nothing; the live tab is never captured here.
-     *
-     *   This is where a capture of a *different* url used to be filed under the requested url: the
-     *   old fallback called `capture(driver, url)`, and a capture labels whatever the tab shows with
-     *   the url it is handed — so `readability <other-url>` could store the live tab's document (and
-     *   return its article) under `<other-url>`, poisoning every later lookup of that url. Run
-     *   `html_snapshot_capture` first when the live document is what you want to read.
+     * @param args `url` (optional) — the page to read.
+     *   - Without it: a fresh snapshot of the **active page** (the live tab is captured first, then
+     *     read), so the article is the one the tab shows right now.
+     *   - With it: that url's **own** stored copy, or an independent read-only load when the store has
+     *     nothing (loaded on the shared scrape session — the caller's tab is never navigated).  A url
+     *     the tab does not show cannot be captured — a capture labels the document with the tab's own
+     *     url — so the requested url's row is never filled with the tab's document.
+     *     (This is the trap the old code fell into: its fallback called `capture(driver, url)`, so
+     *     `readability <other-url>` stored the live tab's document — and returned its article — under
+     *     `<other-url>`, poisoning every later lookup of that url.)
      *
      * @return JSON with title, byline, siteName, excerpt, length, confidence,
      *   textContent and cleaned article content HTML.
@@ -756,11 +892,9 @@ class HTMLSnapshotToolExecutor(
             val pulsarSession = managed.agenticSession
             val requestedUrl = paramString(args, "url", "readability", required = false)
                 ?.takeIf { it.isNotBlank() }
-            val url = requestedUrl?.let { pulsarSession.normalize(it).urlString }
-                ?: currentPageUrl(managed)
 
-            val page = storedPageOrIndependentLoad(managed, url)
-            val document = pulsarSession.parse(page)
+            val page = snapshotPageFor(managed, requestedUrl)
+            val document = pulsarSession.parse(page, noCache = true)
 
             val result = ReadabilityExtractor().extract(document.document)
                 ?: throw IllegalArgumentException(
@@ -805,31 +939,40 @@ class HTMLSnapshotToolExecutor(
 }
 
 // =========================================================================
-// The html snapshot family's read/write contract
+// The html snapshot family's contract: a fresh snapshot, then the operation
 //
-// `capture` is the family's only writer: it archives the LIVE document of the
-// session's active tab into the page store, keyed by the normalized url of that
-// tab, overwriting whatever the store held for that url, and returns its
-// metadata.  Every read (`get`, `get all`, `export`, `summary`, `inspect`,
-// `readability`, `query`) serves that stored copy, or loads the page
-// independently (read-only, never written back) when the store has nothing for
-// the url — none of them captures.
+// This family is about the page the session is SHOWING, so every command
+// captures the active tab first — serializing the document the tab already
+// shows, without navigating — and then works on that snapshot:
 //
-// The split matters because the two are different documents: the stored page is
-// what the fetch pipeline produced, while form submissions, toggles and `eval`
-// mutations exist only in the interactive tab.  A read that must see the live
-// document therefore runs *after* a capture.  Reads used to capture implicitly,
-// which both wrote to the store behind a read's back and — because a capture
-// labels whatever the tab shows with the url it is handed — filed the live tab's
-// document under a *different* url.
+//   * `capture` returns the snapshot: page metadata, interactive elements,
+//     link groups;
+//   * `get`, `get all`, `export`, `summary`, `inspect`, `readability` and
+//     `query` consume it, so a read sees form submissions, SPA updates and
+//     `eval` mutations with no capture of its own.
+//
+// The capture is always keyed by the ACTIVE TAB's own normalized url, never by
+// a url the caller passed.  A url the tab does not show therefore cannot be
+// captured, and that target keeps the read-only path: the stored copy of that
+// url, or an independent read-only load when the store has nothing — so nothing
+// is ever filed under the requested url.
+//
+// The distinction matters because the underlying documents differ: the stored
+// page is what the fetch pipeline produced, while form submissions, toggles and
+// `eval` mutations exist only in the interactive tab.  Reads used to capture
+// implicitly *under the requested url*, which is why `readability <other-url>`
+// could return the tab's document as if it were `<other-url>` and poison that
+// url's store row.  The fix is not "never capture on a read" — a read must see
+// the page as it is now — it is "capture, keyed by the tab's own url".
 // =========================================================================
 
 /**
  * Build the html snapshot capture metadata JSON from a parsed [document].
  *
  * Pure function — the output structure consumed by downstream get / get all / inspect / export /
- * summary and the CLI's metadata rendering.  Only `capture` produces it: every other command in this
- * family is a read (see the read/write contract at the bottom of this file).
+ * summary and the CLI's metadata rendering.  Only `capture` *returns* it (the reads in this family
+ * work on the same snapshot but return their own results — see the contract at the bottom of this
+ * file).
  *
  * @param url The document URL: the normalized url, which is the store identity.
  * @param href The browser-facing address of the document (the raw url, query and fragment included).

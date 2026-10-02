@@ -31,10 +31,10 @@ import kotlin.test.assertTrue
  * product-detail page where 40 elements survive).  Multi-row `load_and_select`
  * on listing pages is not supported under the optimized DOM.
  *
- * Every read here (`html_snapshot_scrape`, `_query`, `_export`, ...) serves the
- * page store and never captures the live tab, so the helpers capture first
- * (`html_snapshot_capture`) whenever the assertion is about what the tab shows
- * right now.  That ordering is the contract under test, not a workaround.
+ * Every read here (`html_snapshot_scrape`, `_query`, `_export`, ...) refreshes the active page first:
+ * the command captures the tab and then serves the snapshot it just took.  That ordering is the
+ * contract under test, not a workaround — the helpers below read without capturing on purpose, so
+ * every scenario also asserts that a read sees what the tab shows right now.
  */
 @Tag("E2ETest")
 class HtmlSnapshotScenariosE2ETest : RestAPITestBase() {
@@ -137,10 +137,11 @@ private val createdSessions = mutableListOf<String>()
     }
 
     /**
-     * Capture, then call html_snapshot_scrape.
+     * Call html_snapshot_scrape.
      *
-     * The capture is the contract, not a nicety: reads serve the page store and never capture the
-     * live tab themselves, so a read that must see what the tab shows right now runs after a capture.
+     * No capture first, deliberately: a read refreshes the active page itself — it captures the tab
+     * and then serves that snapshot — so a helper that captured first would hide a regression in the
+     * very behavior it is meant to exercise.
      */
     private fun scrapeField(
         sessionId: String,
@@ -148,9 +149,6 @@ private val createdSessions = mutableListOf<String>()
         selector: String,
         attrName: String? = null
     ): String {
-        // Force a fresh HTML snapshot capture — the implicit capture in scrape
-        // may return a stale cached page.
-        callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
         val args = buildMap<String, Any?> {
             put("sessionId", sessionId)
             put("field", field)
@@ -177,9 +175,8 @@ private val createdSessions = mutableListOf<String>()
         return objectMapper.readTree(textContent(response))
     }
 
-    /** Capture (the family's only writer), then export the stored HTML snapshot. */
+    /** Export the HTML snapshot — no capture first, see [scrapeField]. */
     private fun exportHtmlSnapshot(sessionId: String): String {
-        callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
         val response = callTool("html_snapshot_export", mapOf("sessionId" to sessionId))
         assertNotError(response)
         return textContent(response)
@@ -411,18 +408,19 @@ private val createdSessions = mutableListOf<String>()
     }
 
     @Test
-    @DisplayName("1d — Reads serve the store: a capture is what makes the live DOM visible to a query")
+    @DisplayName("1d — A read refreshes the active page itself: the live DOM is visible without a capture")
     fun test1d_queryReflectsLiveDomMutations() {
         val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
         awaitPageTitle(sessionId, "4K OLED TV")
 
-        // Mutate the LIVE DOM only — no navigation, no server-side change, so neither the stored copy
-        // nor an independent re-fetch of the URL can see this value.
+        // Mutate the LIVE DOM only — no navigation, no server-side change, so neither an older stored
+        // copy nor an independent re-fetch of the URL can see this value.
+        val marker = "LIVE-MUTATED-TITLE-${System.currentTimeMillis()}"
         val mutation = callTool(
             "browser_evaluate",
             mapOf(
                 "sessionId" to sessionId,
-                "expression" to "document.querySelector('#productTitle').textContent = 'LIVE-MUTATED-TITLE'"
+                "expression" to "document.querySelector('#productTitle').textContent = '$marker'"
             )
         )
         assertNotError(mutation)
@@ -432,20 +430,105 @@ private val createdSessions = mutableListOf<String>()
             FROM load_and_select(@url, 'body')
         """.trimIndent()
 
-        // `html_snapshot_query` is a READ: it serves the page store (or an independent read-only load)
-        // and never captures the tab, so the mutation is invisible to it.  `html_snapshot_capture` is
-        // the family's only writer — and it re-writes the stored copy of the tab's normalized url —
-        // so it is what puts the live document into the store a read can see.
-        assertNotError(callTool("html_snapshot_capture", mapOf("sessionId" to sessionId)))
-
+        // No capture before this read, deliberately: `html_snapshot_query` captures the active tab and
+        // then serves that snapshot, so the live mutation is visible straight away.  If the read served
+        // an older stored copy or an independent load, this would return the server's own title.
         val result = queryHtmlSnapshot(sessionId, sql)
         val resultSet = requireResultSet(result)
         assertTrue(resultSet.size() == 1, "Expected 1 body row, got ${resultSet.size()}")
-
-        val row = resultSet[0]
         assertTrue(
-            row["title"]?.asText()?.contains("LIVE-MUTATED-TITLE") == true,
-            "After a capture the query must serve the captured live document, got: ${row["title"]}"
+            resultSet[0]["title"]?.asText()?.contains(marker) == true,
+            "a read must refresh the active page first, got: ${resultSet[0]["title"]}"
+        )
+
+        // The same holds for `get`, the other read shape these scenarios lean on.
+        val title = scrapeField(sessionId, "text", "#productTitle")
+        assertTrue(title.contains(marker), "htmlsnapshot get must see the live DOM too, got: $title")
+    }
+
+    @Test
+    @DisplayName("1h — A read of another URL loads it read-only and leaves the active tab alone")
+    fun test1h_aReadOfAnotherUrlDoesNotTouchTheActiveTab() {
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        val tabUrlBefore = callTool(
+            "browser_evaluate", mapOf("sessionId" to sessionId, "expression" to "document.URL")
+        )
+        assertNotError(tabUrlBefore)
+        val before = textContent(tabUrlBefore).trim()
+        assertTrue(before.contains("/ec/dp/B0E000001"), "the session must be on the product page, got: $before")
+
+        // A url this session never opened, and one no other test can have stored: the probe makes the
+        // normalized url unique.  A read aimed at it cannot capture the tab (the tab does not show it),
+        // so the page has to be loaded read-only, independently — and the tab must stay exactly where
+        // it was: an independent load is not allowed to navigate the session's own tab.
+        val articleUrl = "${TestUrls.MOCK_HTML_SNAPSHOT_BASE}/readability-article?probe=${System.currentTimeMillis()}"
+        val article = callTool(
+            "html_snapshot_readability", mapOf("sessionId" to sessionId, "url" to articleUrl)
+        )
+        assertNotError(article)
+        assertTrue(
+            objectMapper.readTree(textContent(article)).path("textContent").asText().contains("Memory safety"),
+            "the read must serve the requested url's own content, got: ${textContent(article).take(300)}"
+        )
+
+        val tabUrlAfter = callTool(
+            "browser_evaluate", mapOf("sessionId" to sessionId, "expression" to "document.URL")
+        )
+        assertNotError(tabUrlAfter)
+        assertEquals(
+            before,
+            textContent(tabUrlAfter).trim(),
+            "the independent read-only load must not navigate the session's tab",
+        )
+        val productTitle = scrapeField(sessionId, "text", "#productTitle")
+        assertTrue(productTitle.contains("4K OLED TV"), "the tab must still show the product page, got: $productTitle")
+
+        // The same holds for a url-targeted query, which resolves no session at all.
+        val sql = "SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, 'body')"
+        assertNotError(
+            callTool(
+                "html_snapshot_query",
+                mapOf("sessionId" to sessionId, "url" to articleUrl, "sql" to sql),
+            )
+        )
+        val tabUrlAfterQuery = callTool(
+            "browser_evaluate", mapOf("sessionId" to sessionId, "expression" to "document.URL")
+        )
+        assertNotError(tabUrlAfterQuery)
+        assertEquals(
+            before,
+            textContent(tabUrlAfterQuery).trim(),
+            "a url-targeted query must not navigate the session's tab either",
+        )
+    }
+
+    @Test
+    @DisplayName("1g — A read follows the active tab: navigating away serves the new page, not the old copy")
+    fun test1g_aReadFollowsTheActiveTabToAnotherPage() {
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        // Capture the product page, so a stored copy of it exists and would be there to be served by
+        // mistake — keyed by the product url, which is what the store identity is.
+        assertNotError(callTool("html_snapshot_capture", mapOf("sessionId" to sessionId)))
+
+        // Navigate the SAME tab elsewhere.  A read captures the active tab and files it under that
+        // tab's OWN url, so the product page's stored copy can neither satisfy this read nor receive
+        // the news document.  (The old read fallback captured the live tab under the url it was handed,
+        // which is how a read of one page could return — and store — another page's document.)
+        navigate(sessionId, TestUrls.MOCK_NEWS_URL)
+        awaitPageTitle(sessionId, "Hacker News")
+
+        val newsHtml = exportHtmlSnapshot(sessionId)
+        assertTrue(
+            newsHtml.contains("Hacker News") || newsHtml.contains("news"),
+            "the read must serve the page the tab is on now, got: ${newsHtml.take(400)}"
+        )
+        assertFalse(
+            newsHtml.contains("4K OLED TV"),
+            "the read must not serve the previous page's stored copy: ${newsHtml.take(400)}"
         )
     }
 
@@ -491,10 +574,10 @@ private val createdSessions = mutableListOf<String>()
             "the second capture must serialize the tab as it is now: ${textContent(second).take(400)}"
         )
 
-        // A read serves the STORE and never the live tab, so the marker can only be visible here if
-        // the second capture really overwrote the stored content.  (Without the must-write option this
-        // fails twice over: the assertion above already sees the cached document, and the store keeps
-        // the first capture's copy — see HTMLSnapshotToolExecutor.MUST_WRITE_OPTION.)
+        // A read serves the snapshot it takes itself (the contract), so the marker is visible here only
+        // because the captures really overwrote what the store held.  (Without the must-write option
+        // this fails twice over: the assertion above already sees the cached document, and this read
+        // would serve the first capture's copy — see HTMLSnapshotToolExecutor.MUST_WRITE_OPTION.)
         val sql = """
             SELECT dom_first_text(dom, '#productTitle') AS title
             FROM load_and_select(@url, 'body')
@@ -657,9 +740,9 @@ private val createdSessions = mutableListOf<String>()
         val title1 = r1[0]["title"]?.asText().orEmpty()
         assertTrue(title1.isNotBlank(), "Expected first product title to be non-blank")
 
-        // Navigate to another product page
+        // Navigate to another product page — no capture needed: the query below refreshes the active
+        // page itself and files it under the tab's own url.
         navigate(sessionId, "${MockServerPorts.baseUrl()}/ec/dp/B0E000002")
-        callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
         // Product titles are randomly generated by the mock server; just
         // verify a title exists and differs from the first product.
         awaitAnyTitle(sessionId)

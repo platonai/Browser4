@@ -65,7 +65,7 @@ browser4-cli htmlsnapshot get all text "<css-selector>"   # all matches
 | Use for | **Interaction** — get refs to click/fill | **Extraction** — read text / data / attributes |
 | Decider | "I need to click a button / find an input" | "I need to read an article / extract a price" |
 
-Every `htmlsnapshot` read — `get` / `get all` / `inspect` / `summary` / `grep` / `export` / `query` / `readability` — serves the **page store**: the copy that `htmlsnapshot` (capture) filed, or an independent read-only load when the store has nothing for the URL. **Capture is the only command that writes**, so run `browser4-cli htmlsnapshot` whenever a read must see the page as it is right now — JS-updated content (post-interaction, form submission, SPA route change) reaches reads only through a capture. The only other precondition is a loaded, navigable page (http(s)/file); use `eval --json` for arbitrary JavaScript against the live DOM.
+Every `htmlsnapshot` command — `capture` / `get` / `get all` / `inspect` / `summary` / `grep` / `export` / `query` / `readability` — **captures the active page first and then works on that snapshot**: `capture` returns the metadata, the reads consume the snapshot. So a read already sees the page as it is right now — JS-updated content (post-interaction, form submission, SPA route change) included — with no capture step to remember. A command aimed at another URL (`readability <url>`, `query --url <url>`) reads that URL's own stored copy instead, or loads it read-only when the store has nothing; the tab's document is never filed under it. The only precondition is a loaded, archivable page (http(s)/file); use `eval --json` for arbitrary JavaScript against the live DOM.
 
 ## Refs: Single-Use Handles
 

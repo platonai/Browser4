@@ -16,7 +16,7 @@ The base `htmlsnapshot` command stores the page in Browser4's page storage and r
 - `interactiveElements` — top weighted interactive elements in Section 8 format (`#closestId tag#id.class`)
 - `linkGroups` — visually detected repeating card/link groups
 
-> `inspect` and `summary` read the **stored snapshot**, not the live tab: `htmlsnapshot` (capture) is the only htmlsnapshot command that writes, and every read serves the captured copy — or loads the page independently (read-only) when the store has nothing for the URL. Run `htmlsnapshot` first whenever the read must see the page as it is right now (form results, SPA updates, `eval` mutations).
+> `inspect` and `summary` work on a **fresh snapshot of the active page**: every htmlsnapshot command captures the tab first (serializing the document the tab already shows, without navigating) and then operates on that snapshot — `htmlsnapshot` (capture) returns its metadata, the reads consume it. So `inspect`/`summary` already see the page as it is right now (form results, SPA updates, `eval` mutations); a command aimed at another URL (`readability <url>`, `query --url <url>`) reads that URL's stored copy instead, or loads it read-only when the store has nothing, and never files the tab's document under it.
 
 ---
 

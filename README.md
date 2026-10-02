@@ -425,20 +425,20 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 
 #### HTML snapshot and X-SQL extraction
 
-`htmlsnapshot` captures a stored raw DOM snapshot and is the center of Browser4's structured extraction workflow. **Capture is the only htmlsnapshot command that writes**: it serializes the page the active tab is showing and overwrites the stored copy of that tab's normalized URL. Every other `htmlsnapshot` command is a read — it serves the stored copy, or loads the page independently (read-only) when the store has nothing for the URL — so run `htmlsnapshot` first whenever a read must see the live document (form results, SPA updates, `eval` mutations).
+`htmlsnapshot` captures a raw DOM snapshot of the page the active tab is showing and is the center of Browser4's structured extraction workflow. **Every `htmlsnapshot` command works on a fresh snapshot of the active page**: it captures the tab first (serializing the document the tab already shows, without navigating) and then operates on that snapshot — `capture` returns the metadata, while the reads consume it, so a read already sees the live document (form results, SPA updates, `eval` mutations). A command aimed at another URL (`readability <url>`, `query --url <url>`) reads *that URL's* stored copy, or an independent read-only load when the store has nothing — a URL the tab does not show is never captured, so the tab's document is never filed under it.
 
 | Command | Description |
 |---|---|
 | `htmlsnapshot` | Short form of `htmlsnapshot capture`. |
 | `htmlsnapshot capture` | Capture and store a static HTML snapshot with metadata about the page and interactive elements. |
-| `htmlsnapshot get <field> [selector] [name]` | Extract the first matching `text`, `textcontent`, `html`, or `attr` from the stored snapshot. |
-| `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from the stored snapshot. Supports `--offset` and `--limit`. |
-| `htmlsnapshot query [url]` | Run X-SQL against the stored page (current page or an explicit URL). Supports `--sql <query\|@file>`, `--sql-stdin`, `--sql-base64`, result pagination, and extraction-focused output flags. |
-| `htmlsnapshot export` | Export the stored snapshot's HTML to a file. Supports positional file path or `--file <path>` plus `--clean`. |
-| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored snapshot. |
-| `htmlsnapshot grep <pattern>` | Search the stored snapshot's HTML with grep-style flags. |
-| `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates in the stored snapshot. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`. |
-| `htmlsnapshot readability [url]` | Extract the main article content from a stored page with a Readability-style heuristic — no LLM, no tokens. Supports `--text-only` and pagination. |
+| `htmlsnapshot get <field> [selector] [name]` | Extract the first matching `text`, `textcontent`, `html`, or `attr` from a fresh snapshot of the active page. |
+| `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from a fresh snapshot of the active page. Supports `--offset` and `--limit`. |
+| `htmlsnapshot query [url]` | Run X-SQL against a fresh snapshot of the active page, or against an explicit URL's stored page. Supports `--sql <query\|@file>`, `--sql-stdin`, `--sql-base64`, result pagination, and extraction-focused output flags. |
+| `htmlsnapshot export` | Export a fresh snapshot's HTML to a file. Supports positional file path or `--file <path>` plus `--clean`. |
+| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from a fresh snapshot of the active page. |
+| `htmlsnapshot grep <pattern>` | Search a fresh snapshot's HTML with grep-style flags. |
+| `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates in a fresh snapshot of the active page. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`. |
+| `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic — no LLM, no tokens. Without a URL: the active page; with one: that URL's own stored copy. Supports `--text-only` and pagination. |
 
 Important rules:
 

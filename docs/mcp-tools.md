@@ -699,7 +699,7 @@ Examples:
 html_snapshot.capture(sessionId: String)
 ```
 
-Capture the current page as an HTML snapshot with metadata, interactive elements, and link groups. This is the only html_snapshot command that WRITES: it serializes the live tab's document and stores it under the tab's normalized url, overwriting the stored copy. Run it before any read that must see the live document.
+Capture the active tab as an HTML snapshot and return its metadata: url, href, title, size, timestamps, interactive elements (tag, class, id, aria, bounding box) and link groups. Capturing first is what every htmlsnapshot command does — the reads (get, get all, export, summary, inspect, readability, query) capture the active page too, then operate on that fresh snapshot, so the snapshot this command returns is the same one they see. Use it when the metadata itself is what you need.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -717,7 +717,7 @@ Examples:
 html_snapshot.export(sessionId: String, clean: Boolean = false)
 ```
 
-Export the full, pretty-printed HTML of the stored snapshot of the current page (read-only; run 'htmlsnapshot capture' first to snapshot the live document). Set clean=true to strip <script>, <style>, and non-standard attributes (keeps the vi attribute).
+Export the full, pretty-printed HTML of a FRESH snapshot of the active page (the live tab is captured first, so the export is the page as it is now). Set clean=true to strip <script>, <style>, and non-standard attributes (keeps the vi attribute).
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -736,7 +736,7 @@ Examples:
 html_snapshot.inspect(sessionId: String, selector: String = :root, max: Int = 20, depth: Int = 5)
 ```
 
-Inspect the HTML snapshot and suggest CSS selectors for recurring patterns. Reads the stored snapshot of the current page (read-only; run 'htmlsnapshot capture' first to snapshot the live document).
+Inspect the HTML snapshot and suggest CSS selectors for recurring patterns. Operates on a FRESH snapshot of the active page: the live tab is captured first, then inspected.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -765,7 +765,7 @@ Examples:
 html_snapshot.query(sql: String, url: String? = null, sessionId: String)
 ```
 
-Execute an X-SQL query against the STORED page of the session's current page, or of a specified URL. Read-only: it serves the stored copy (or loads the page independently when the store is empty) and never captures the live tab — run 'htmlsnapshot capture' first to query the live document.
+Execute an X-SQL query against a FRESH snapshot of the active page (the live tab is captured first, then queried, so the query sees the page as it is now). With a url argument instead: the query targets THAT url's stored page — a url the tab does not show cannot be captured — and it runs without a session, so offline corpus queries keep working. IMPORTANT: CSS selectors in X-SQL must use single quotes (SQL syntax); double quotes mean SQL identifiers.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -793,12 +793,12 @@ Examples:
 html_snapshot.readability(sessionId: String, url: String? = null)
 ```
 
-Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) with a Readability-style heuristic from a STORED page: the stored snapshot of the session's current page, or of url when given. Read-only — it never captures the live tab, so a url other than the current page is never filed with the current page's content. Run 'htmlsnapshot capture' first to read the live document.
+Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) with a Readability-style heuristic. Without url it reads a FRESH snapshot of the active page (the live tab is captured first). With url it reads THAT url's own stored page — or loads it read-only on the shared scrape session, never on the caller's tab, when the store has nothing — because a url the tab does not show cannot be captured, so the tab's document is never filed under it.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `sessionId` | String | yes |  | sessionId: String |
-| `url` | String? | no | null | Read this URL from the page store instead of the session's current page. |
+| `url` | String? | no | null | Read this URL's stored page instead of the active page. |
 
 Returns: `String`
 
@@ -820,7 +820,7 @@ Examples:
 html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null)
 ```
 
-Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. Reads the stored snapshot of the current page (read-only) — run 'htmlsnapshot capture' first to snapshot the live document.
+Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -843,7 +843,7 @@ Examples:
 html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, offset: Int = 0, limit: Int = -1)
 ```
 
-Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. Reads the stored snapshot of the current page (read-only) — run 'htmlsnapshot capture' first to snapshot the live document.
+Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -874,7 +874,7 @@ Examples:
 html_snapshot.summary(sessionId: String)
 ```
 
-Generate a page summary including title, statistics, and detected link groups from the stored snapshot of the current page (read-only; run 'htmlsnapshot capture' first to snapshot the live document).
+Generate a page summary including title, statistics, and detected link groups from a FRESH snapshot of the active page (the live tab is captured first, so the summary is the page as it is now).
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|

@@ -725,19 +725,23 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "htmlsnapshot-query" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - The query is read-only and serves the STORE: the current page's stored copy, or an"
+            "  - The query serves a FRESH snapshot of the active page: the live tab is captured first,"
                 .to_string(),
         );
         lines.push(
-            "    explicit URL's stored copy (loaded independently when the store has nothing)."
+            "    then queried, so the query sees the document as the tab shows it now (login state,"
                 .to_string(),
         );
         lines.push(
-            "    It never captures the live tab, so run `htmlsnapshot` first to query the page as the"
+            "    SPA updates, eval mutations). A URL argument targets THAT url's stored page instead"
                 .to_string(),
         );
         lines.push(
-            "    tab shows it now (login state, SPA updates, eval mutations)."
+            "    (loaded independently when the store has nothing) — a url the tab does not show"
+                .to_string(),
+        );
+        lines.push(
+            "    cannot be captured."
                 .to_string(),
         );
         lines.push(
@@ -1929,7 +1933,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(wrap_text(
-            "X-SQL queries via `htmlsnapshot query --sql` use `@url` as a placeholder for the target page URL (unquoted — SQLTemplate handles escaping). The query is read-only and serves the STORE: it never captures the live tab, so run `htmlsnapshot` first to query the page as the tab shows it now.",
+            "X-SQL queries via `htmlsnapshot query --sql` use `@url` as a placeholder for the target page URL (unquoted — SQLTemplate handles escaping). The query captures the active page first and then serves that fresh snapshot, so it sees the page as the tab shows it now (login state, SPA updates, eval mutations).",
             "  - ",
             4,
         ));
@@ -3634,7 +3638,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-get").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot get <field> [selector] [name]"));
-        assert!(help.contains("Extract elements from the stored snapshot of the active tab's page (text, textcontent, html, attr)"));
+        assert!(help.contains("Extract elements from a FRESH snapshot of the active tab's page (text, textcontent, html, attr)"));
         assert!(help.contains("What to extract: text, textcontent, html, or attr"));
         assert!(help.contains("Attribute name (required for attr field)"));
         assert!(!help.contains("browser4-cli htmlsnapshot-get"));
@@ -3646,9 +3650,9 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-query").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot query [url]"));
-        assert!(help.contains("The query is read-only and serves the STORE"));
-        assert!(help.contains("explicit URL's stored copy"));
-        assert!(help.contains("It never captures the live tab"));
+        assert!(help.contains("The query serves a FRESH snapshot of the active page"));
+        assert!(help.contains("A URL argument targets THAT url's stored page instead"));
+        assert!(help.contains("cannot be captured"));
         assert!(help.contains("--sql"));
         assert!(help.contains("--sql-stdin"));
         assert!(help.contains("--sql-base64"));
@@ -3670,7 +3674,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-export").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot export"));
-        assert!(help.contains("Export the stored snapshot of the active tab's page to a local file"));
+        assert!(help.contains("Export a FRESH snapshot of the active tab's page to a local file"));
         assert!(help.contains("--file"));
         assert!(help.contains("--clean"));
         assert!(!help.contains("browser4-cli htmlsnapshot-export"));
@@ -3682,7 +3686,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-summary").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot summary"));
-        assert!(help.contains("Summarize: produce a compressed Web Page Summary Index (WPSI) from the stored snapshot"));
+        assert!(help.contains("Summarize: produce a compressed Web Page Summary Index (WPSI) from a FRESH snapshot"));
         assert!(!help.contains("browser4-cli htmlsnapshot-summary"));
     }
 
@@ -3692,7 +3696,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-get-all").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot get all <field> [selector] [name]"));
-        assert!(help.contains("Extract ALL matching elements from the stored snapshot of the active tab's page (querySelectorAll semantics)"));
+        assert!(help.contains("Extract ALL matching elements from a FRESH snapshot of the active tab's page (querySelectorAll semantics)"));
         assert!(help.contains("What to extract: text, textcontent, html, or attr"));
         assert!(help.contains("Attribute name (required for attr field)"));
         assert!(help.contains("--offset"));

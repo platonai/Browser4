@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agent.tool
 
 import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -23,6 +24,7 @@ import org.junit.jupiter.api.assertThrows
 import org.mockito.kotlin.KStubbing
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.doThrow
@@ -34,17 +36,22 @@ import java.time.Instant
 /**
  * The parts of the `html_snapshot` family that hold without a browser: the
  * capture metadata assembly, the X-SQL error hints, and — the reason this class
- * exists — the family's read/write contract.
+ * exists — the family's contract.
  *
- * **`capture` is the only command that writes.**  It serializes the document the
- * active tab already shows and files it in the page store under the tab's
- * normalized url; every other command (`get`, `get all`, `export`, `summary`,
- * `inspect`, `readability`, `query`) serves the store, or loads the page
- * independently when the store has nothing, and never files a document — not
- * even when the target url happens to be the page on screen.
+ * **Every command works on a fresh snapshot of the active page.**  A command
+ * captures the tab first (serializing the document the tab already shows, with
+ * no navigation) and then operates on that snapshot: `capture` returns its
+ * metadata, while the reads (`get`, `get all`, `export`, `summary`, `inspect`,
+ * `readability`, `query`) consume it — which is why a read sees form
+ * submissions, SPA updates and `eval` mutations without a capture of its own.
+ *
+ * A url the tab does *not* show cannot be captured, so such a target keeps the
+ * read-only path: that url's stored copy, or an independent read-only load when
+ * the store has nothing.  The tab's document is never filed under a requested
+ * url.
  *
  * The session is mocked here, so a test can assert both halves of that contract:
- * what was written, and what was *not*.
+ * what was captured, and what was *not*.
  */
 @DisplayName("HTMLSnapshotToolExecutor")
 class HTMLSnapshotToolExecutorTest {
@@ -53,6 +60,36 @@ class HTMLSnapshotToolExecutorTest {
     private val h2HexError = "Hexadecimal string contains non-hex character: \"899.99\" (SQL 90004-197)"
 
     private val mapper = pulsarObjectMapper()
+
+    /** The two urls the contract tests work with: what the tab shows, and what the caller asks for. */
+    private val liveUrl = "https://example.com/form"
+    private val otherUrl = "https://example.com/article"
+
+    /**
+     * A page with enough prose for `ReadabilityExtractor`, so the foreign-url half of the contract can
+     * assert on really extracted text instead of an empty payload.
+     */
+    private val articleHtml = """
+        <html><head>
+          <title>How Rust Conquered the Kernel</title>
+          <meta name="author" content="Ada Lovelace">
+          <meta property="og:site_name" content="Systems Weekly">
+        </head><body>
+          <nav id="main-nav"><a href="/">Home</a> <a href="/news">News</a></nav>
+          <div id="content"><article class="post">
+            <h1>How Rust Conquered the Kernel</h1>
+            <p>Rust brings memory safety to the Linux kernel without sacrificing performance. This
+               article explores the history, the technical design and the community effort behind the
+               largest incremental rewrite in kernel history.</p>
+            <p>The first Rust code landed in Linux 6.1, guarded by a strict configuration flag. Since
+               then, device drivers, filesystems and networking components have begun migrating to safe
+               abstractions that eliminate entire classes of vulnerabilities.</p>
+            <p>Critics point to the learning curve and the difficulty of auditing unsafe blocks.
+               Proponents counter that the ecosystem tooling catches whole bug families at compile time
+               rather than at runtime.</p>
+          </article></div>
+        </body></html>
+    """.trimIndent()
 
     private fun executor(scrapeService: ScrapeService? = null) =
         HTMLSnapshotToolExecutor(mock<PulsarSessionManager>(), scrapeService)
@@ -69,6 +106,9 @@ class HTMLSnapshotToolExecutorTest {
         stub: KStubbing<AgenticSession>.() -> Unit = {},
     ): AgenticSession = mock {
         on { getOrCreateBoundDriver() } doReturn driver
+        // `boundDriver` is the *non-creating* accessor, and it is what the query path reads to decide
+        // whether a requested url is the page on screen — so it must be stubbed like the creating one.
+        on { boundDriver } doReturn driver
         on { normalize(any<String>()) } doAnswer { NormURL(it.getArgument<String>(0), LoadOptions.DEFAULT) }
         stub()
     }
@@ -158,37 +198,117 @@ class HTMLSnapshotToolExecutorTest {
     }
 
     @Test
+    @DisplayName("a read of the active page captures it first and reads the snapshot it just took")
+    fun aReadOfTheActivePageReadsTheSnapshotItJustCaptured() = runBlocking<Unit> {
+        val address = "https://example.com/form"
+        val driver = tab(address)
+        val captured = page(address, href = "$address#step-2")
+        val session = sessionShowing(driver) {
+            // The must-write option is pinned as a literal on purpose — see
+            // HTMLSnapshotToolExecutor.MUST_WRITE_OPTION.
+            onBlocking { capture(driver, "$address -refresh") } doReturn captured
+            on { parse(captured, true) } doReturn
+                document("<html><body><h1>Live after submit</h1></body></html>", address)
+        }
+
+        val payload = executor().call(
+            // `scrape` is the executor's method name for the CLI's `htmlsnapshot get`.
+            "scrape",
+            mapOf("sessionId" to "s", "field" to "text", "selector" to "h1"),
+            ManagedSession("s", session, null),
+        ) as String
+
+        assertEquals("Live after submit", payload)
+        // Captured first, with must-write semantics: the snapshot is the tab as it is now.
+        verify(session).capture(driver, "$address -refresh", null)
+        // And then read from that snapshot — the store is never consulted for the active page.
+        verify(session, never()).getOrNull(any<String>())
+        verify(session, never()).load(any<String>())
+    }
+
+    @Test
+    @DisplayName("every read refreshes the active page first — none of them serves an older copy")
+    fun everyReadRefreshesTheActivePageFirst() = runBlocking<Unit> {
+        val response = ScrapeResponse(
+            id = "task-1",
+            statusCode = 200,
+            pageStatusCode = 200,
+            pageContentBytes = 64,
+            isDone = true,
+            resultSet = listOf(mapOf("title" to "Widget Alpha")),
+            event = "completed",
+        )
+
+        for (method in listOf("scrape", "scrape_all", "export", "summary", "inspect", "readability", "query")) {
+            val address = "https://example.com/article"
+            val driver = tab(address)
+            val captured = page(address)
+            val session = sessionShowing(driver) {
+                onBlocking { capture(driver, "$address -refresh") } doReturn captured
+                on { parse(captured, true) } doReturn document(articleHtml, address)
+            }
+            val scrapeService = mock<ScrapeService> { on { executeQuery(any()) } doReturn response }
+            val args = buildMap<String, Any?> {
+                put("sessionId", "s")
+                when (method) {
+                    "scrape", "scrape_all" -> {
+                        put("field", "text")
+                        put("selector", "h1")
+                    }
+
+                    "query" -> put(
+                        "sql", "SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, 'body')"
+                    )
+                }
+            }
+
+            assertNotNull(
+                HTMLSnapshotToolExecutor(mock<PulsarSessionManager>(), scrapeService)
+                    .call(method, args, ManagedSession("s", session, null)),
+                "read '$method' must return a result",
+            )
+
+            try {
+                verify(session).capture(driver, "$address -refresh", null)
+            } catch (e: AssertionError) {
+                throw AssertionError("read '$method' must capture the active page first: ${e.message}", e)
+            }
+            verify(session, never()).getOrNull(any<String>())
+            verify(session, never()).load(any<String>())
+        }
+    }
+
+    @Test
+    @DisplayName("a read on a tab with nothing archivable is refused by name, without capturing")
+    fun aReadOnAnUnarchivableTabIsRefusedByName() = runBlocking<Unit> {
+        val bound = sessionShowing(tab("about:blank"))
+
+        val exception = assertThrows<IllegalArgumentException> {
+            runBlocking {
+                executor().call(
+                    "scrape",
+                    mapOf("sessionId" to "s", "field" to "text", "selector" to "h1"),
+                    ManagedSession("s", bound, null),
+                )
+            }
+        }
+
+        assertTrue(
+            exception.message!!.contains("about:blank"),
+            "the refusal must name what the tab shows, got: ${exception.message}",
+        )
+        verify(bound, never()).capture(any(), anyOrNull(), anyOrNull())
+    }
+
+    @Test
     @DisplayName("readability of another url reads that url's stored copy and never captures the live tab")
     fun readabilityOfAnotherUrlNeverFilesTheLiveDocument() = runBlocking<Unit> {
-        val liveUrl = "https://example.com/form"
-        val otherUrl = "https://example.com/article"
-        val articleHtml = """
-            <html><head>
-              <title>How Rust Conquered the Kernel</title>
-              <meta name="author" content="Ada Lovelace">
-              <meta property="og:site_name" content="Systems Weekly">
-            </head><body>
-              <nav id="main-nav"><a href="/">Home</a> <a href="/news">News</a></nav>
-              <div id="content"><article class="post">
-                <h1>How Rust Conquered the Kernel</h1>
-                <p>Rust brings memory safety to the Linux kernel without sacrificing performance. This
-                   article explores the history, the technical design and the community effort behind the
-                   largest incremental rewrite in kernel history.</p>
-                <p>The first Rust code landed in Linux 6.1, guarded by a strict configuration flag. Since
-                   then, device drivers, filesystems and networking components have begun migrating to safe
-                   abstractions that eliminate entire classes of vulnerabilities.</p>
-                <p>Critics point to the learning curve and the difficulty of auditing unsafe blocks.
-                   Proponents counter that the ecosystem tooling catches whole bug families at compile time
-                   rather than at runtime.</p>
-              </article></div>
-            </body></html>
-        """.trimIndent()
         val stored = page(otherUrl)
-        // The tab shows a different page, and the store has nothing for it — which is exactly when the
-        // old code captured the live tab and filed it under `otherUrl`.
+        // The tab shows a different page, and the store has the requested url — which is exactly when
+        // the old code captured the live tab and filed it under `otherUrl`.
         val session = sessionShowing(tab(liveUrl)) {
             on { getOrNull(otherUrl) } doReturn stored
-            on { parse(stored) } doReturn document(articleHtml, otherUrl)
+            on { parse(stored, true) } doReturn document(articleHtml, otherUrl)
         }
 
         val payload = executor().call(
@@ -212,30 +332,44 @@ class HTMLSnapshotToolExecutorTest {
     }
 
     @Test
-    @DisplayName("a read that misses the store loads the page independently instead of capturing the live tab")
-    fun aReadThatMissesTheStoreLoadsInsteadOfCapturing() = runBlocking<Unit> {
-        val liveUrl = "https://example.com/form"
-        val loaded = page(liveUrl)
+    @DisplayName("a read of a url the tab does not show loads it independently, without touching the tab")
+    fun aReadOfAUrlTheTabDoesNotShowLoadsItReadOnly() = runBlocking<Unit> {
+        val loaded = page(otherUrl)
+        // A url the tab does not show cannot be captured, so when the store has nothing the only way
+        // left is an independent, read-only load — and that load must NOT run on the session's tab: a
+        // browser load resolves its driver from the page config, which inherits the session's bound
+        // driver, so `session.load()` would navigate the page the caller is looking at.
         val session = sessionShowing(tab(liveUrl)) {
-            on { getOrNull(liveUrl) } doReturn null
-            onBlocking { load("$liveUrl -readonly") } doReturn loaded
-            on { parse(loaded) } doReturn document("<html><body><h1>Stored copy</h1></body></html>", liveUrl)
+            on { getOrNull(otherUrl) } doReturn null
+            on { parse(loaded, true) } doReturn document(articleHtml, otherUrl)
         }
+        val swarmSession = sessionShowing(tab("about:blank")) {
+            onBlocking { load("$otherUrl -readonly") } doReturn loaded
+        }
+        val sessionManager = mock<PulsarSessionManager> {
+            on { ensureSwarmSession() } doReturn ManagedSession("swarm", swarmSession, null)
+        }
+        val executor = HTMLSnapshotToolExecutor(sessionManager)
 
-        val payload = executor().call(
-            // `scrape` is the executor's method name for the CLI's `htmlsnapshot get`.
-            "scrape",
-            mapOf("sessionId" to "s", "field" to "text", "selector" to "h1"),
-            ManagedSession("s", session, null),
+        val payload = executor.call(
+            "readability", mapOf("sessionId" to "s", "url" to otherUrl), ManagedSession("s", session, null),
         ) as String
 
-        assertEquals("Stored copy", payload)
-        verify(session).load("$liveUrl -readonly")
+        assertTrue(
+            mapper.readTree(payload)["textContent"].asText().contains("Rust brings memory safety"),
+            "the article must come from the independent load",
+        )
+        // The page was loaded on the shared scrape session (which has no bound driver, so the fetch
+        // runs on a privacy-scoped one) …
+        verify(swarmSession).load("$otherUrl -readonly")
+        // … and the caller's session was used to read the store and parse the result, never to load.
+        verify(session).getOrNull(otherUrl)
+        verify(session, never()).load(any<String>())
         verify(session, never()).capture(any(), anyOrNull(), anyOrNull())
     }
 
     @Test
-    @DisplayName("a url-targeted query runs session-less: it resolves no session and captures nothing")
+    @DisplayName("a url-targeted query of another page resolves no session and captures nothing")
     fun aUrlTargetedQueryNeverTouchesASession() = runBlocking<Unit> {
         val response = ScrapeResponse(
             id = "task-1",
@@ -247,10 +381,12 @@ class HTMLSnapshotToolExecutorTest {
             event = "completed",
         )
         val scrapeService = mock<ScrapeService> { on { executeQuery(any()) } doReturn response }
-        // A url-targeted query must not even ask for a session: seeding the store from the live page is
-        // gone, and the arguments below deliberately carry no sessionId to make a regression loud.
+        // A url-targeted query must not even look for a session: the url is not the page the session is
+        // showing, so there is nothing to capture, and the arguments below deliberately carry no
+        // sessionId to make a regression loud.
         val sessionManager = mock<PulsarSessionManager> {
             on { getOrRecoverSession(any()) } doThrow IllegalStateException("a url-targeted query must not resolve a session")
+            on { getSession(any()) } doThrow IllegalStateException("a url-targeted query must not look up a session")
         }
         val executor = HTMLSnapshotToolExecutor(sessionManager, scrapeService)
 
@@ -261,6 +397,52 @@ class HTMLSnapshotToolExecutorTest {
         ) as String
 
         assertEquals(true, mapper.readTree(payload)["isDone"].asBoolean())
+        verify(sessionManager, never()).getOrRecoverSession(any())
+        verify(sessionManager, never()).getSession(any())
+    }
+
+    @Test
+    @DisplayName("a query that targets the page the session is showing refreshes it first")
+    fun aQueryOfTheSessionsOwnPageRefreshesItFirst() = runBlocking<Unit> {
+        val address = "https://example.com/article"
+        val response = ScrapeResponse(
+            id = "task-1",
+            statusCode = 200,
+            pageStatusCode = 200,
+            pageContentBytes = 64,
+            isDone = true,
+            resultSet = listOf(mapOf("title" to "Widget Alpha")),
+            event = "completed",
+        )
+        val scrapeService = mock<ScrapeService> { on { executeQuery(any()) } doReturn response }
+        val driver = tab(address)
+        val captured = page(address)
+        val session = sessionShowing(driver) {
+            onBlocking { capture(driver, "$address -refresh") } doReturn captured
+        }
+        // The session is found through the manager's NON-recovering lookup: a query may ask "is the
+        // session on this url?" without resurrecting a browser to answer it.
+        val sessionManager = mock<PulsarSessionManager> {
+            on { getSession("s") } doReturn ManagedSession("s", session, null)
+        }
+        val executor = HTMLSnapshotToolExecutor(sessionManager, scrapeService)
+        val sql = "SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, 'body')"
+
+        val payload = executor.callFunctionOn(
+            "html_snapshot", "query",
+            mapOf("sessionId" to "s", "url" to address, "sql" to sql),
+            Unit,
+        ) as String
+
+        assertTrue(mapper.readTree(payload)["isDone"].asBoolean())
+        verify(session).capture(driver, "$address -refresh", null)
+        // The X-SQL was pointed at the url that was just written — the same snapshot a read serves.
+        val request = argumentCaptor<ScrapeRequest>()
+        verify(scrapeService).executeQuery(request.capture())
+        assertTrue(
+            request.firstValue.sql.contains("'$address'"),
+            "the query must target the captured page's url, got: ${request.firstValue.sql}",
+        )
         verify(sessionManager, never()).getOrRecoverSession(any())
     }
 

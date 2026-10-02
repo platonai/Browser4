@@ -20,37 +20,36 @@ tier: decision
 
 **Rule of thumb:** If you want to **interact** with elements → `snapshot`. If you want to **read content** → `htmlsnapshot`.
 
-> **⚠️ htmlsnapshot reads the STORE — `htmlsnapshot` (capture) is the only writer:**
+> **⚠️ Every htmlsnapshot command captures the active page first and then works on that snapshot:**
 
-| Command | Writes? | Notes |
-|---------|---------|-------|
-| `htmlsnapshot` (capture) | **Yes — the only one** | Serializes the live page into the page store under the tab's normalized URL (overwrites the stored copy — the `-refresh` load option bypasses the page cache so the write is real; it is **not** a page reload) and returns page metadata. Run it before any read that must see the live document |
-| `htmlsnapshot get` / `get all` | No — read-only | `text` / `textcontent` / `html` / `attr` via CSS selectors, from the stored snapshot; loads the page independently (read-only) when the store has nothing |
-| `htmlsnapshot inspect` | No — read-only | Recurring-pattern / selector discovery over the stored snapshot |
-| `htmlsnapshot summary` | No — read-only | Visual-clustering page summary of the stored snapshot |
-| `htmlsnapshot grep` | No — read-only | Regex search over the stored snapshot's HTML |
-| `htmlsnapshot export` | No — read-only | Exports the stored snapshot's HTML to a file |
-| `htmlsnapshot query` | No — read-only | Current page → its stored copy. Other URLs → that URL's stored copy (fetched read-only when absent, no session state) |
-| `htmlsnapshot readability` | No — read-only | Article extraction from a stored page; `readability <url>` reads *that URL's* copy and never files the tab's document under it |
+| Command | Captures? | Notes |
+|---------|-----------|-------|
+| `htmlsnapshot` (capture) | **Yes** | Serializes the live page into the page store under the tab's normalized URL (overwrites the stored copy — the `-refresh` load option bypasses the page cache so the write is real; it is **not** a page reload) and returns page metadata. Same capture the reads run; use it when the metadata itself is what you need |
+| `htmlsnapshot get` / `get all` | Yes | `text` / `textcontent` / `html` / `attr` via CSS selectors, from the snapshot taken a moment ago — so tab-only changes (forms, SPA, `eval`) are visible |
+| `htmlsnapshot inspect` | Yes | Recurring-pattern / selector discovery over the fresh snapshot |
+| `htmlsnapshot summary` | Yes | Visual-clustering page summary of the fresh snapshot |
+| `htmlsnapshot grep` | Yes | Regex search over the fresh snapshot's HTML |
+| `htmlsnapshot export` | Yes | Exports the fresh snapshot's HTML to a file |
+| `htmlsnapshot query` | Yes, unless an explicit other URL is given | No URL (or the URL the session is showing) → captures the tab, then queries that snapshot. Another URL → that URL's stored copy (fetched read-only when absent, no session state) — a URL the tab does not show cannot be captured |
+| `htmlsnapshot readability` | Yes, unless an explicit other URL is given | Article extraction from the fresh snapshot (no URL), or from *that URL's* stored copy (URL given) — the tab's document is never filed under a URL you pass |
 
-> The preconditions are a **loaded page** (navigable http(s)/file document in the active tab) and, for a
-> read that must reflect what the tab shows *right now*, a preceding `htmlsnapshot` capture.
-> If a read comes back empty, check the selector and the current URL — and re-run `htmlsnapshot` if the
-> page changed in the tab since the last capture.
+> The precondition is a **loaded, archivable page** (navigable http(s)/file document in the active tab);
+> a tab showing `about:blank` or a browser error page is refused by name. Nothing else has to happen
+> first: a read captures the page itself, so there is no capture step to remember.
 >
 > **"No HTML snapshot found"** is not an error: it is a CLI hint printed when `inspect` finds 0 matches
 > with the default `:root` selector (exit code stays 0).
 
-> **⚠️ Important:** a `htmlsnapshot` capture reflects the live DOM **at capture time** — content added or modified by JavaScript before the capture (form submission results, dynamic updates, SPA route changes) is included, and the reads after it see exactly that. Without a capture, a read serves the previous stored copy (or an independent read-only load), so it can be stale by definition. For one-off live reads that skip the store entirely, use `get text "<selector>"` (live DOM) or `eval`.
+> **⚠️ Important:** a `htmlsnapshot` capture reflects the live DOM **at capture time** — content added or modified by JavaScript (form submission results, dynamic updates, SPA route changes) is included, and every read sees it because the read captures the tab first. For one-off reads of the live DOM that skip the store entirely, use `get text "<selector>"` (live DOM) or `eval`.
 
 ## Decision Tree
 
 ```
 Need to extract data from a page?
 ├─ Need to interact first (click, fill, scroll)?
-│  → snapshot + refs, interact, capture with `htmlsnapshot`, then read the captured copy
+│  → snapshot + refs, interact, then read with `htmlsnapshot get`/`query` (the read captures the tab)
 ├─ Page has JS-updated content (after interaction, form submit, SPA)?
-│  → capture with `htmlsnapshot` first, then read — the read commands serve the store;
+│  → just read with `htmlsnapshot get`/`query`/`export` — the read captures the tab first;
 │    `eval --json` for arbitrary JS (use --stdin or --file on Windows, --await for Promises)
 ├─ Static page, one field? → htmlsnapshot get text "<selector>"
 ├─ Static page, one field, ALL matches? → htmlsnapshot get all text "<selector>"
