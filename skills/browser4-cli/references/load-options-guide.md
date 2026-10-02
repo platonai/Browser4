@@ -184,8 +184,8 @@ All item options mirror their main counterparts but apply only to detail pages e
 | Option | Short | Purpose | Example |
 |--------|-------|---------|---------|
 | `-parse` | `-ps` | Enable parsing after fetch (flag) | `-parse` |
-| `-ignoreUrlQuery` | | Strip query parameters from URLs — treats `?page=1` and `?page=2` as same resource (flag) | `-ignoreUrlQuery` |
-| `-noNorm` | | Disable URL normalization — may cause duplicate URLs (flag) | `-noNorm` |
+| `-ignoreUrlQuery` | | Treat query variants of one path as one resource when **discovered** hrefs are queued — treats `?page=1` and `?page=2` as same resource (flag) | `-ignoreUrlQuery` |
+| `-noNorm` | | Disable URL normalization for discovered hrefs, and for a url that carries `-noNorm` itself — may cause duplicate URLs (flag) | `-noNorm` |
 
 ### 10. Retry & Failure Handling
 
@@ -321,7 +321,10 @@ Set an explicit deadline:
 
 ## Choosing Load Options
 
-Need to pick which LoadOptions to use? See [LoadOptions — Choosing Options](load-options-decision.md) — the decision tree lives there.
+Need to pick which LoadOptions to use? Start from [Quick Reference](#quick-reference) above
+for the option index, then check [Parameter Relationships](#parameter-relationships) for the
+options that interact, and [Common Pitfalls & Solutions](#common-pitfalls--solutions) for the
+failure modes that call for a quality gate.
 
 
 ## Portal vs Item Pattern

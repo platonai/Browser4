@@ -72,8 +72,7 @@ abstract class AbstractBrowser4SQLContext(
     }
 
     override fun normalize(url: String, options: LoadOptions, toItemOption: Boolean): NormURL {
-        val normURL = super.normalize(url, options, toItemOption)
-        return NormURL(SQLUtils.unsanitizeUrl(normURL.urlString), normURL.options, hrefSpec = normURL.hrefSpec)
+        return super.normalize(realUrlOf(url), options, toItemOption)
     }
 
     @Throws(Exception::class)
@@ -199,5 +198,30 @@ abstract class AbstractBrowser4SQLContext(
         if (!isActive) {
             throw IllegalApplicationStateException("SQLContext is closed | #$id")
         }
+    }
+
+    companion object {
+        /**
+         * The url the caller meant, with the X-SQL quote placeholder undone.
+         *
+         * A url inside an X-SQL statement can carry `^27` where it means `'`
+         * ([SQLUtils.SINGLE_QUOTE_PLACE_HOLDER] — `URLEncoder` turns a quote into `%27`, so the
+         * engine needs a character a url cannot contain).  Everything downstream — the page store,
+         * the page cache, the url a result row reports — has to see the real url, so the placeholder
+         * is undone here.
+         *
+         * It has to happen **before** the url is parsed, which is why this is the input of
+         * [normalize] and not a post-processing step on its result: `^` is not a legal uri character,
+         * so a `^27`-bearing url is rejected by the parser and normalized to NIL before anything
+         * could restore it.  (The un-sanitizing used to run *after* `normalize`, where it was a no-op
+         * for every url that could reach it — super had already refused the ones it was meant to
+         * fix — and the `NormURL` it rebuilt then dropped `NormURL.detail` on the way.)
+         *
+         * The collision this accepts is bounded: a url that genuinely contains `^27` is unparseable
+         * as a uri anyway, so the placeholder is the only reading of it that can work, and no
+         * producer writes `^27` into a url by accident (`URLEncoder` writes `%27`).
+         */
+        @JvmStatic
+        internal fun realUrlOf(url: String): String = SQLUtils.unsanitizeUrl(url)
     }
 }

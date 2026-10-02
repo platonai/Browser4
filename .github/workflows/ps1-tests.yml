@@ -10,10 +10,17 @@ name: PowerShell Tests
 # release line could carry a red PS gate that no run ever saw. 4.14.x did: a
 # stale test-type map and a call to a function the script never defined, both
 # fixed in e863f936a3 and 2dd1658ea1.
+#
+# The M1-M8 lint step reads skills/**/*.md, so those paths belong in the filters
+# below.  Without them, a merge that inflated references/crawl.md to 621 lines —
+# past the 500-line M6 cap — never triggered this workflow at all, and only the
+# nightly cron saw it: the gate was red from 2026-09-24 until the document was
+# trimmed back under the cap.
 
 on:
-  # Any release line that touches PowerShell code. This workflow file is part
-  # of the filter, so a change to the gate is exercised by the gate.
+  # Any release line that touches PowerShell code, or the skill documents the
+  # M1-M8 lint step below reads.  This workflow file is part of the filter, so a
+  # change to the gate is exercised by the gate.
   push:
     branches:
       - main
@@ -22,6 +29,7 @@ on:
       - '**/*.ps1'
       - '**/*.psm1'
       - '**/*.psd1'
+      - 'skills/**/*.md'
       - '.github/workflows/ps1-tests.yml'
   # Every PR touching PowerShell code, whatever branch it targets (pr.yml only
   # guards PRs whose base is main/master, so X.Y.x PRs had no PS coverage).
@@ -30,6 +38,7 @@ on:
       - '**/*.ps1'
       - '**/*.psm1'
       - '**/*.psd1'
+      - 'skills/**/*.md'
       - '.github/workflows/ps1-tests.yml'
   # On demand. GitHub only exposes workflow_dispatch once the file is on the
   # default branch, so this becomes usable after the next merge into main.

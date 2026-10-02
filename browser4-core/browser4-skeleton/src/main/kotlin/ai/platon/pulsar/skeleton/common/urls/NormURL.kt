@@ -12,16 +12,24 @@ import java.net.URL
 /**
  * [NormURL] stands for `normal url`, which means the url is final and will be used to locate the resource.
  *
- * Every normal url contains two urls: a `url` and a `href`, `url` stands for Uniform Resource Locator,
- * both for external webpage and internal database record, and `href` stands for Hyperlink Reference,
- * which contains a url extracted from an HTML document.
+ * Every normal url contains two urls, a `url` and a `href`, and the split between them is the rule the
+ * whole pipeline is built on: **the normalized `url` is an identity, the raw `href` is an address.**
  *
- * `Href` is the first choice to locate resources, because it's extracted from the HTML document
- * without modification, while `url` is typically normalized.
+ *  * `url` keys the page store, the page cache and every other url-keyed lookup.  It is what
+ *    `PulsarSession.normalize` produces, so two spellings of one page produce one key.
+ *  * `href` is the url as the document carried it, unmodified, and it is the first choice when
+ *    something has to be *opened*: normalization has thrown the fragment away (and a same-document
+ *    jump such as `…#section` is a perfectly good request), and it may have thrown the query or a
+ *    trailing argument list away as well.
+ *
+ * A caller that has no `href` still navigates with `url` — `page.href ?: page.url`, which is exactly
+ * how `InteractiveBrowserEmulator` resolves a task's address.
  * */
 open class NormURL constructor(
     /**
-     * The url is final and will be used to locate the resource.
+     * The url is final, and it is the identity the resource is stored and looked up by.
+     *
+     * It is not the address to navigate to — see [href].
      * */
     val url: URL,
     /**
@@ -32,8 +40,9 @@ open class NormURL constructor(
      * The href is the raw url in the html without normalization, for example, a url with a timestamp
      * query parameter added.
      *
-     * The href is the first choice to locate resources, because it's extracted from the HTML document
-     * without modification, while url is typically normalized.
+     * It is the address, and the first choice whenever the resource has to be *opened*, because it is
+     * extracted from the HTML document without modification, while [url] is normalized and only
+     * identifies the page.
      * */
     var href: URL? = null,
     /**

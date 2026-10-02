@@ -6,6 +6,8 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
 import ai.platon.pulsar.rest.api.service.ScrapeService
 import jakarta.servlet.http.HttpServletRequest
+import org.slf4j.LoggerFactory
+import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.codec.ServerSentEvent
 import org.springframework.web.bind.annotation.*
@@ -24,6 +26,22 @@ import reactor.core.publisher.Flux
 class ScrapeController(
     val scrapeService: ScrapeService
 ) {
+    private val logger = LoggerFactory.getLogger(ScrapeController::class.java)
+
+    /**
+     * A malformed payload is the caller's mistake, not a server failure.
+     *
+     * Both `/api/x/submit` branches below throw [IllegalArgumentException] for a payload they refuse
+     * (a malformed url, a statement that is not a single SELECT).  Without a handler Spring answers
+     * 500 for those, which tells the caller to retry something that can never succeed — the crawl and
+     * swarm endpoints have mapped the same exception to 400 all along.
+     */
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(IllegalArgumentException::class)
+    fun handleBadRequest(e: IllegalArgumentException): Map<String, Any> {
+        logger.warn("Bad scrape request: {}", e.message)
+        return mapOf("error" to "Bad Request", "message" to (e.message ?: ""))
+    }
     /**
      * @param sql The SQL to execute
      * @return The response
@@ -54,7 +72,16 @@ class ScrapeController(
         val payload = payload.trim()
 
         val sql = if (payload.startsWith("http")) {
-            "select dom_base_uri(dom) as url from load_and_select('$payload', ':root')"
+            // The payload is a url plus optional LoadOptions ("<url> -expires 1d
+            // -requireNotBlank '#productTitle'"), and it is embedded in an X-SQL string literal, so
+            // both halves have to be handled here: the url has to be valid *now* instead of in the
+            // job half an hour later, and the literal has to be escaped.  Entry-page hrefs carry
+            // apostrophes, and interpolating one raw broke the statement — reported as "Invalid URL
+            // or X-SQL" about a perfectly good url — while letting the url text escape the literal.
+            // Both belong to the shared implementation, see ScrapeAPIUtils.
+            ScrapeAPIUtils.requireStandardUrl(payload)
+            val literal = ScrapeAPIUtils.escapeSqlStringLiteral(payload)
+            "select dom_base_uri(dom) as url from load_and_select('$literal', ':root')"
         } else payload
 
         runCatching { ScrapeAPIUtils.checkSql(sql) }.onFailure {

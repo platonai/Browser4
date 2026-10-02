@@ -169,7 +169,14 @@ class StatefulPageVisitor(
         status: PageVisitStatus,
         eventHandlers: PageEventHandlers
     ) {
-        val url = request.url
+        // `request.url` is a *configured* url — `NormURL.urlSpec` is "$url $args" (see
+        // UserCommandExecutor) — so the argument list has to come off before the url is validated
+        // or interpolated into an X-SQL.  Validating the whole string made the check depend on the
+        // url's shape: `"https://example.com -expires 1s"` puts the space in the authority, which
+        // okhttp rejects ("Invalid URL"), while `"https://example.com/p -expires 1s"` puts it in
+        // the path, which okhttp happily percent-encodes — the same command passing or failing by
+        // accident.  Every other call site splits first (CombinedUrlNormalizer, ScrapeAPIUtils).
+        val url = URLUtils.splitUrlArgs(request.url).first
         require(URLUtils.isStandard(url)) { "Invalid URL: $url" }
 
         request.enhanceArgs()
@@ -189,7 +196,9 @@ class StatefulPageVisitor(
         request: PageVisitRequest,
         status: PageVisitStatus
     ) {
-        val url = request.url
+        // See visitAnalyzeAndExtractPage: the argument list is not part of the url, and it must not
+        // reach the X-SQL either.
+        val url = URLUtils.splitUrlArgs(request.url).first
         require(URLUtils.isStandard(url)) { "Invalid URL: $url" }
 
         status.pageStatusCode = page.protocolStatus.minorCode

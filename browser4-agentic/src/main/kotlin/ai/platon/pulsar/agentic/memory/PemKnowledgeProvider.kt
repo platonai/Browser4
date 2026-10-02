@@ -74,7 +74,7 @@ class PemKnowledgeProvider(
                 taskType = taskTypeOf(instruction),
                 domain = domainName,
                 url = url,
-                urlPattern = urlPatternOf(url),
+                urlPattern = UrlNormalizer.urlPatternOf(url),
                 outcome = outcome,
                 failureCategory = failureCategory,
                 actions = events.filterIsInstance<ToolExecuted>().mapIndexed { i, t ->
@@ -100,7 +100,7 @@ class PemKnowledgeProvider(
 
             // Hypothesis facts so list/query find the entry without deep_learn.
             if (knowledgeStore.loadFacts(domainName, intentKey) == null) {
-                knowledgeStore.saveFacts(KnowledgeFacts.createHypothesis(intentKey, domainName, urlPatternOf(url)))
+                knowledgeStore.saveFacts(KnowledgeFacts.createHypothesis(intentKey, domainName, UrlNormalizer.urlPatternOf(url)))
             }
 
             // Sampled promotion (throttled per (domain,intent)); never throws.
@@ -162,15 +162,5 @@ class PemKnowledgeProvider(
         instruction.contains(Regex("(?i)(navigate|go to|visit|open)")) -> "navigate"
         instruction.contains(Regex("(?i)(compare|vs|versus)")) -> "compare"
         else -> null
-    }
-
-    private fun urlPatternOf(normalizedUrl: String): String {
-        val path = UrlNormalizer.extractPath(normalizedUrl)
-        val segments = path.split('/').filter { it.isNotEmpty() }
-        if (segments.isEmpty()) return "/*"
-        val last = segments.last()
-        val isLikelyId = last.any { it.isDigit() } && last.length > 4 && !last.all { it.isLetter() }
-        return if (isLikelyId) "/" + segments.dropLast(1).joinToString("/") + "/*"
-        else "/" + segments.joinToString("/")
     }
 }

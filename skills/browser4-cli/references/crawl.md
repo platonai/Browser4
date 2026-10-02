@@ -267,23 +267,35 @@ Detail pages (`/ec/dp/…`) use ID selectors, listing pages (`/ec/b?node=…`) c
 
 ## URL deduplication
 
-- Visited URLs are normalized for dedup: lowercase, trailing slash removed, query string and
-  URL fragment always stripped; the same URL is never visited twice in a crawl session.
+- Visited URLs are normalized for dedup: the scheme and the host are lowercased, the URL fragment
+  is removed, and a trailing slash is dropped from the *path* (`…/p/` and `…/p/?q=1` fold onto
+  `…/p` and `…/p?q=1`).  The **query string is kept**: `?page=1` and `?page=2` are two pages, and
+  the path is not lowercased either — both are case sensitive on most servers.
+- Use `--ignore-url-query` to treat query variants of one path as the **same** page: it strips the
+  query from discovered link hrefs *before they are queued*, so a grid/list toggle
+  (`?src=grid` / `?src=list`) collapses into one page and costs one `--top-links` slot.  Without
+  the flag each spelling is a page of its own and each one spends budget — which is the safe
+  default, because a query string is usually what selects the document.
 - `--top-links` is a budget for **pages**, not anchors: the links a page offers are
-  deduplicated *before* the budget is applied, so a product linked twice (image and title) or
-  a page offered under two query strings costs one slot.
+  deduplicated *before* the budget is applied, so a product linked twice (image and title) costs
+  one slot.
 - A fragment is never part of a queued or reported URL: `product/1.html#specs` is queued —
   and reported — as `product/1.html`.  When one page is offered under several spellings, the
   crawl queues the first one it saw (document order) and reports that spelling, and
   fragment-only anchors (`href="#"`, `href="#section"`) are skipped during link extraction
   (they can never navigate to a new document) and are not counted as discovered out-links.
-- Use `--ignore-url-query` to strip query parameters from discovered link hrefs before they
-  are queued, so the URL a result row reports is the URL that was fetched; `--no-norm`
-  disables LoadOptions-level normalization (not the internal dedup normalization).
+- The URL the crawl was *asked* to fetch is never rewritten: a seed keeps its query string, so
+  `crawl "https://h/search?q=x&page=3"` fetches exactly that URL and the row reports it.  Use
+  `--no-norm` to also disable the LoadOptions-level normalization of discovered link hrefs
+  (it does not disable the internal dedup normalization).
 
 > **Scope note:** `--ignore-url-query` and `--no-norm` only affect links *discovered* during
 > depth ≥ 1 link discovery.  Seed URLs in a depth-0 bulk fetch are always fetched and
 > reported verbatim, so these flags produce no observable change there.
+>
+> When they *are* in scope, `--ignore-url-query` changes which pages a crawl finds, not just how
+> they are spelled: a paginated listing linked as `?page=1…N` yields **one** page with the flag
+> and N pages without it.
 
 ## `--readonly` and the X-SQL second read
 

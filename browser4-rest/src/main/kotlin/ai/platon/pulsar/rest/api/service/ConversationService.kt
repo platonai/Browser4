@@ -73,7 +73,13 @@ class ConversationService(
         val json = try {
             convertPlainCommandToJSON(request, url)
         } catch (e: Exception) {
-            logger.warn("Failed to normalize plain command as URL request (falling back to agent execution): {}", e.message)
+            // Name the url and the reason: this fallback is by design (a command that only *looks*
+            // like a url command must still reach the agent), but "Failed to normalize plain command
+            // as URL request" with no url in it cannot be told apart from a real extraction bug.
+            logger.warn(
+                "Failed to convert the plain command as a url request for <{}> (falling back to agent execution): {}",
+                url, e.message
+            )
             null
         }
         if (json.isNullOrBlank()) {
@@ -86,7 +92,9 @@ class ConversationService(
     }
 
     suspend fun convertPlainCommandToJSON(plainCommand: String, url: String): String? {
-        require(URLUtils.isStandard(url)) { "URL must not be blank" }
+        // The message used to say "URL must not be blank" for a url that is not blank but not a
+        // standard url either, which sends the reader looking for the wrong problem.
+        require(URLUtils.isStandard(url)) { "Not a standard url: <$url>" }
 
         // Replace the URL in the request with a placeholder, so the result from the LLM can be cached.
         val processedRequest = plainCommand.replace(url, PLACEHOLDER_URL)
