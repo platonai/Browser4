@@ -4201,6 +4201,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({});
                 if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
                 if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
+                // Pass through CLI-side flag for outline rendering in main.rs handler
+                if let Some(true) = get_bool(args, "verbose") { p["verbose"] = json!(true); }
                 p
             },
         },

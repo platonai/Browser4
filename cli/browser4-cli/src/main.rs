@@ -9453,11 +9453,7 @@ fn format_summary_outline(yaml: &str, verbose: bool) -> String {
             outline.push_str("  htmlsnapshot get all text \"a\" --limit 20\n");
         }
 
-        if verbose {
-            outline.push_str(
-                "  # Use --verbose to see internal scoring that ranks these suggestions.\n",
-            );
-        } else {
+        if !verbose {
             outline.push_str("  # Add --verbose to see internal scoring and score legend.\n");
         }
 
