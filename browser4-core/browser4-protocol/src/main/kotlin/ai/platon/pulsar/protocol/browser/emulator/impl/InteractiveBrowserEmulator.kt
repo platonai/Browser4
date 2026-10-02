@@ -423,17 +423,42 @@ open class InteractiveBrowserEmulator(
 
     @Throws(NavigateTaskCancellationException::class, WebDriverCancellationException::class)
     private suspend fun browseWithWebDriver(navigateTask: NavigateTask, driver: WebDriver): Response {
-        val fetchTask = navigateTask.fetchTask
-        checkState(navigateTask.fetchTask, driver)
         require(driver is AbstractWebDriver)
 
-        val browserSettings = driver.browser.settings
         // TODO: a better flag to specify whether to capture or navigate
-        val page = fetchTask.page
+        val page = navigateTask.fetchTask.page
         require(page is AbstractWebPage)
         val capture = page.hasVar(VAR_CAPTURE)
-        val interactResult = if (capture) {
+
+        // `ignoreDOMFeatures` lives on the DRIVER, and only a capture wants it: it suppresses the
+        // driver-side DOM feature computation (`willComputeFeature`) and the HTML integrity check for
+        // the load being built — a capture serializes the live document itself and the DOM may already
+        // be mutated by the interactions that ran before it.  It must not outlive this load: leaving it
+        // set made every later navigation on the same driver silently skip both, so a tab that captured
+        // a snapshot once kept navigating pages whose elements carry no `vi` features.  (The base
+        // library's pulsar-protocol copy carries the same fix; this module is the one browser4 runs.)
+        val previousIgnoreDOMFeatures = driver.ignoreDOMFeatures
+        if (capture) {
             driver.ignoreDOMFeatures = true
+        }
+        try {
+            return browseAndCreateResponse(navigateTask, driver, capture)
+        } finally {
+            driver.ignoreDOMFeatures = previousIgnoreDOMFeatures
+        }
+    }
+
+    @Throws(NavigateTaskCancellationException::class, WebDriverCancellationException::class)
+    private suspend fun browseAndCreateResponse(
+        navigateTask: NavigateTask,
+        driver: AbstractWebDriver,
+        capture: Boolean,
+    ): Response {
+        val fetchTask = navigateTask.fetchTask
+        checkState(navigateTask.fetchTask, driver)
+
+        val browserSettings = driver.browser.settings
+        val interactResult = if (capture) {
             captureLivePage(navigateTask, driver, browserSettings)
         } else {
             navigateAndInteract(navigateTask, driver, browserSettings)
