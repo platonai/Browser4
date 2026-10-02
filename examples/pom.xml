@@ -14,7 +14,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>examples</artifactId>
-    <version>4.13.25-SNAPSHOT</version>
+    <version>4.13.26-SNAPSHOT</version>
 
     <packaging>pom</packaging>
 
