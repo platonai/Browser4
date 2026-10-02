@@ -61,11 +61,12 @@ use help::{
 };
 use http::{
     call_tool, call_tool_with_result, call_tool_with_timeout_override, cancel_crawl,
-    clear_all_crawls, clear_crawls, close_swarm_session, crawl_request_timeout,
+    cancel_search, clear_all_crawls, clear_crawls, close_swarm_session, crawl_request_timeout,
     get_command_result, get_command_status, get_crawl_result, get_crawl_status,
+    get_search_result, get_search_status,
     get_swarm_batch_status, get_swarm_result, get_swarm_status, is_stale_session_error, make_client,
     resume_crawl, submit_batch_commands, submit_crawl, submit_plain_command,
-    submit_plain_command_with_options, submit_swarm_payload,
+    submit_plain_command_with_options, submit_search, submit_swarm_payload,
     submit_swarm_query, CallToolResult,
 };
 use managed_processes::{
@@ -499,6 +500,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "crawl-clear",
         "crawl-list",
         "crawl-resume",
+        "search",
+        "search-status",
+        "search-result",
+        "search-cancel",
         "htmlsnapshot",
         "htmlsnapshot-capture",
         "htmlsnapshot-get",
@@ -15640,6 +15645,259 @@ fn crawl_failure_counts(parsed: &Value, page_count: usize) -> (usize, usize) {
     (page_count.saturating_sub(broken_pages), failed)
 }
 
+/// Submit a search task. Mirrors [handle_crawl]'s shape (submit + poll +
+/// print) but for the search domain: the request is a single `query` rather
+/// than a URL/seed-file/SQL/args bundle, so the handler is much shorter.
+///
+/// Like crawl, `--background` returns immediately after submission; without
+/// it the handler polls `search-status` until the task is terminal, then
+/// prints the result.
+async fn handle_search(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    _session_name: Option<&str>,
+) -> Result<(), CliError> {
+    // ---- Query (required) ----
+    let query = tool_params
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if query.is_empty() {
+        return Err("Search query is required. Usage: browser4-cli search <query> [options]".into());
+    }
+
+    // ---- Parse --timeout via the shared crawl helper ----
+    // Search uses the same duration spelling as crawl ("30s", "1m", bare
+    // seconds) so the same parser applies.  An invalid value is silently
+    // dropped here — the server-side default (60s) takes over — to match
+    // crawl's tolerance for unset timeouts.
+    let timeout_str = tool_params
+        .get("timeout")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let timeout_millis: Option<i64> = if timeout_str.is_empty() {
+        None
+    } else {
+        crawl_timeout_to_millis(timeout_str)
+    };
+
+    // ---- Build server-bound params (strip CLI-only keys) ----
+    // `timeout` is the raw CLI string (parsed above into millis); `background`
+    // is a client-side hint that the backend's SearchRequest does not carry.
+    let mut server_params = tool_params.clone();
+    if let Some(obj) = server_params.as_object_mut() {
+        obj.remove("timeout");
+        let _ = obj.remove("background");
+    }
+    if let Some(millis) = timeout_millis {
+        server_params["taskTimeoutMillis"] = json!(millis);
+    }
+
+    // ---- Submit ----
+    let task_id = submit_search(client, base_url, &server_params).await?;
+    let task_id = task_id.trim().trim_matches('"').to_string();
+    cli_println!("Search task submitted: {}", task_id);
+    cli_println!("  Query: {}", query);
+    if let Some(m) = timeout_millis {
+        cli_println!("  Timeout: {}s", m / 1000);
+    }
+    json_field("task_id", json!(task_id));
+
+    // Persist for cross-session tracking
+    let _ = track_async_task(&task_id, "search", &query, None);
+
+    let background = tool_params
+        .get("background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if background {
+        cli_println!(
+            "Running in background. Task ID: {}. \
+             Use 'browser4-cli search-status {}' to check progress.",
+            task_id, task_id
+        );
+        return Ok(());
+    }
+
+    // ---- Poll until terminal ----
+    let poll_interval = std::time::Duration::from_secs(1);
+    let overall_timeout = crawl_request_timeout();
+    let start = std::time::Instant::now();
+    let mut last_status = String::new();
+
+    cli_println!("Waiting for search to complete (task {})...", task_id);
+    loop {
+        if start.elapsed() > overall_timeout {
+            return Err(format!(
+                "Search task {} did not complete within {}s. \
+                 Use 'browser4-cli search-result {}' to read the result later.",
+                task_id,
+                overall_timeout.as_secs(),
+                task_id
+            )
+            .into());
+        }
+        let status_raw = get_search_status(client, base_url, &task_id).await?;
+        let parsed = serde_json::from_str::<Value>(&status_raw)
+            .unwrap_or_else(|_| Value::String(status_raw.clone()));
+        let status = parsed["status"].as_str().unwrap_or("").to_string();
+        if status != last_status {
+            eprintln!("  status: {}", status);
+            last_status = status.clone();
+        }
+        if is_terminal_search_status(&status) {
+            break;
+        }
+        std::thread::sleep(poll_interval);
+    }
+
+    // ---- Fetch and print the final result ----
+    let result_raw = get_search_result(client, base_url, &task_id).await?;
+    cli_println!("{}", result_raw);
+    Ok(())
+}
+
+/// Terminal status spellings used by [SearchService] / [SearchResponse].
+///
+/// Mirrors the crawl domain's terminal set but with search's vocabulary
+/// (`REQUEST_TIMEOUT`, `INTERNAL_SERVER_ERROR`, `NOT_FOUND`).
+fn is_terminal_search_status(status: &str) -> bool {
+    matches!(
+        status,
+        "OK"
+            | "SC_OK"
+            | "REQUEST_TIMEOUT"
+            | "SC_REQUEST_TIMEOUT"
+            | "INTERNAL_SERVER_ERROR"
+            | "SC_INTERNAL_SERVER_ERROR"
+            | "NOT_FOUND"
+            | "SC_NOT_FOUND"
+            | "FAILED"
+            | "CANCELLED"
+    )
+}
+
+async fn handle_search_status(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if id.is_empty() {
+        return Err("Task ID is required. Use 'browser4-cli search-status <id>'.".to_string());
+    }
+
+    let result = get_search_status(client, base_url, id).await?;
+    // Human-readable one-line summary on stderr; stdout stays the raw JSON
+    // record so scripts and tests can parse it directly.
+    if !quiet_active() && !json_active() {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
+            let status = parsed["status"].as_str().unwrap_or("");
+            let pages = parsed["pagesFound"].as_i64().unwrap_or(0);
+            eprintln!("Status: {} | Results so far: {}", status, pages);
+        }
+    }
+    cli_println!("{}", result);
+    json_field("task_id", json!(id));
+    Ok(())
+}
+
+async fn handle_search_result(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if id.is_empty() {
+        return Err("Task ID is required. Use 'browser4-cli search-result <id>'.".to_string());
+    }
+
+    let result = get_search_result(client, base_url, id).await?;
+    let verbose = tool_params
+        .get("verbose")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if !quiet_active() && !json_active() {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
+            let status = parsed["status"].as_str().unwrap_or("");
+            if !is_terminal_search_status(status) {
+                eprintln!(
+                    "Note: task is still {} — poll again with 'search-status {}' or 'search-result {}'.",
+                    status, id, id
+                );
+            }
+            let results = parsed["results"].as_array();
+            let count = results.map(|a| a.len()).unwrap_or(0);
+            eprintln!("Status: {} | Results: {}", status, count);
+            // Verbose: print one line per result so a terminal user can scan
+            // the hits without re-piping through `jq`.  Goes to stderr so
+            // stdout stays the raw record for scripts.
+            if verbose {
+                if let Some(arr) = results {
+                    for (i, r) in arr.iter().enumerate() {
+                        let url = r["url"].as_str().unwrap_or("");
+                        let title = r["title"].as_str().unwrap_or("");
+                        eprintln!("  [{}] {} — {}", i + 1, title, url);
+                    }
+                }
+            }
+        }
+    }
+    cli_println!("{}", result);
+    json_field("task_id", json!(id));
+    Ok(())
+}
+
+async fn handle_search_cancel(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if id.is_empty() {
+        return Err("Task ID is required. Use 'browser4-cli search-cancel <id>'.".to_string());
+    }
+
+    let result = cancel_search(client, base_url, id).await?;
+    cli_println!("{}", result);
+    json_field("task_id", json!(id));
+
+    // A failed cancel is otherwise a silent no-op; explain what happened on
+    // stderr (stdout carries the JSON record).
+    if !quiet_active() && !json_active() {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
+            if parsed["cancelled"].as_bool() == Some(false) {
+                eprintln!(
+                    "Note: task was not cancellable — no running worker was found for it. \
+                     Check its state with 'search-status {}'.",
+                    id
+                );
+            }
+        }
+    }
+
+    // Update local tracking
+    let _ = update_async_task_status(id, "cancelled", None);
+    Ok(())
+}
+
 async fn handle_crawl(
     client: &Client,
     base_url: &str,
@@ -23344,6 +23602,9 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "crawl-clear" => Some("crawl clear"),
         "crawl-list" => Some("crawl list"),
         "crawl-resume" => Some("crawl resume"),
+        "search-status" => Some("search status"),
+        "search-result" => Some("search result"),
+        "search-cancel" => Some("search cancel"),
         "co-create" => Some("swarm create"),
         "co-submit" => Some("swarm submit"),
         "co-query" => Some("swarm query"),
@@ -26023,6 +26284,24 @@ async fn run(
         }
         "crawl-resume" => {
             handle_crawl_resume(&client, &base_url, &tool_params).await?;
+        }
+        "search" => {
+            handle_search(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "search-status" => {
+            handle_search_status(&client, &base_url, &tool_params).await?;
+        }
+        "search-result" => {
+            handle_search_result(&client, &base_url, &tool_params).await?;
+        }
+        "search-cancel" => {
+            handle_search_cancel(&client, &base_url, &tool_params).await?;
         }
         "experience-save" => {
             handle_experience_save(&client, &base_url, &tool_params).await?;
@@ -33531,6 +33810,33 @@ mod tests {
         assert_eq!(crawl_timeout_to_millis("2d"), Some(172_800_000));
         assert_eq!(crawl_timeout_to_millis("soon"), None);
         assert_eq!(crawl_timeout_to_millis(""), None);
+    }
+
+    #[test]
+    fn is_terminal_search_status_recognises_terminal_states() {
+        // Terminal spellings produced by SearchService / SearchResponse.
+        assert!(is_terminal_search_status("OK"));
+        assert!(is_terminal_search_status("SC_OK"));
+        assert!(is_terminal_search_status("REQUEST_TIMEOUT"));
+        assert!(is_terminal_search_status("SC_REQUEST_TIMEOUT"));
+        assert!(is_terminal_search_status("INTERNAL_SERVER_ERROR"));
+        assert!(is_terminal_search_status("SC_INTERNAL_SERVER_ERROR"));
+        assert!(is_terminal_search_status("NOT_FOUND"));
+        assert!(is_terminal_search_status("SC_NOT_FOUND"));
+        assert!(is_terminal_search_status("FAILED"));
+        assert!(is_terminal_search_status("CANCELLED"));
+    }
+
+    #[test]
+    fn is_terminal_search_status_rejects_running_states() {
+        // CREATED and PROCESSING are the only non-terminal states the
+        // backend ever emits; polling must continue when it sees them.
+        assert!(!is_terminal_search_status("CREATED"));
+        assert!(!is_terminal_search_status("SC_CREATED"));
+        assert!(!is_terminal_search_status("PROCESSING"));
+        assert!(!is_terminal_search_status("SC_PROCESSING"));
+        assert!(!is_terminal_search_status(""));
+        assert!(!is_terminal_search_status("queued"));
     }
 
     #[test]

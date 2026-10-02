@@ -27,6 +27,9 @@ pub fn public_command_name(name: &str) -> &str {
         "crawl-clear" => "crawl clear",
         "crawl-list" => "crawl list",
         "crawl-resume" => "crawl resume",
+        "search-status" => "search status",
+        "search-result" => "search result",
+        "search-cancel" => "search cancel",
         "htmlsnapshot-capture" => "htmlsnapshot capture",
         "htmlsnapshot-get" => "htmlsnapshot get",
         "htmlsnapshot-get-all" => "htmlsnapshot get all",
@@ -153,6 +156,7 @@ const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("plugin", "plugins"),
     ("swarm", "swarm"),
     ("crawl", "swarm"),
+    ("search", "swarm"),
     ("cfg", "config"),
     ("settings", "config"),
 ];
@@ -373,6 +377,7 @@ pub fn generate_quick_reference() -> String {
     lines.push(fmt_cmd("get <mode> <sel>", "Extract text, html, attr, box, or styles"));
     lines.push(fmt_cmd("eval \"<js>\"", "Run JavaScript on the page"));
     lines.push(fmt_cmd("crawl <url>", "Crawl websites with link discovery & X-SQL"));
+    lines.push(fmt_cmd("search <query>", "Web search (Tavily/Bocha); --scrape to fetch full content"));
 
     // ── Sessions ──
     lines.push(String::new());
@@ -513,6 +518,7 @@ pub fn generate_help_json(sub_command: Option<&str>) -> String {
             "plugin": "plugins",
             "swarm": "swarm",
             "crawl": "swarm",
+            "search": "swarm",
         },
     });
 

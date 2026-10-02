@@ -259,6 +259,30 @@ const TIPS_CRAWL: &[Tip] = &[
     },
 ];
 
+const TIPS_SEARCH: &[Tip] = &[
+    Tip {
+        text: "Use `search <query>` to discover URLs by natural-language query, then `crawl`/`swarm` for structured extraction from those pages",
+    },
+    Tip {
+        text: "Use `--scrape` with `search` to fetch the full-page content (markdown or html) of each result via the browser session — slower, one tab per hit",
+    },
+    Tip {
+        text: "Use `--include-domains example.com,docs.rs` and `--exclude-domains` to restrict results to specific sites",
+    },
+    Tip {
+        text: "Use `--time-range day|week|month|year` to restrict to recent results; use `--topic news` for news search",
+    },
+    Tip {
+        text: "Use `--background` (or `--bg`) to submit and return immediately; poll with `search-status <id>`, read with `search-result <id>`",
+    },
+    Tip {
+        text: "Provider selection: `search.provider=tavily` (default) or `=bocha`; each needs its API key (TAVILY_API_KEY / BOCHA_API_KEY)",
+    },
+    Tip {
+        text: "Use `search-cancel <task-id>` to stop a running search; an unknown or already-finished task reports `cancelled: false` rather than an error",
+    },
+];
+
 const TIPS_SWARM: &[Tip] = &[
     Tip {
         text: "Use `--max-browser-contexts 3` to control parallelism in swarm operations",
@@ -469,6 +493,7 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         "screenshot" | "pdf" => TIPS_SCREENSHOT,
         "crawl" | "crawl-status" | "crawl-result" | "crawl-cancel" | "crawl-clear"
         | "crawl-list" | "crawl-resume" => TIPS_CRAWL,
+        "search" | "search-status" | "search-result" | "search-cancel" => TIPS_SEARCH,
         "swarm-create" | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result"
         | "swarm-list" | "swarm-close" => TIPS_SWARM,
         "agent-run" | "agent-status" | "agent-result" | "agent-list" => TIPS_AGENT,

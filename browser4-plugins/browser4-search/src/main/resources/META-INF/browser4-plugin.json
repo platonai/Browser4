@@ -1,0 +1,10 @@
+{
+  "name": "browser4-search",
+  "version": "1.0.0",
+  "sdkVersion": "${project.version}",
+  "description": "Web search plugin for Browser4 — Tavily and Bocha providers with async task lifecycle (Caffeine 100 LRU + 8-way concurrent coroutines), REST endpoints under api/search, and MCP/LLM tools (domain=search).",
+  "dependsOn": ["browser4-skeleton", "browser4-protocol", "browser4-agentic"],
+  "autoConfigurationClasses": [
+    "ai.platon.pulsar.search.config.SearchAutoConfiguration"
+  ]
+}
