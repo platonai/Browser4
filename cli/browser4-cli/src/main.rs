@@ -2836,40 +2836,49 @@ async fn handle_navigation_action(
     let state = require_session(session_name)?;
     let sid = get_session_id(&state)?;
 
+    // Follow mode nests several tool calls in one function, so every call is
+    // boxed: each await point then stores a pointer instead of a whole nested
+    // future, which keeps this state machine inside the debug build's stack
+    // budget on Windows (see the stack note in the click dispatch arm).
     // 1. Capture page URL before the click to detect silent navigation failures.
-    let url_before = call_tool(client, base_url, "page_url", json!({ "sessionId": &sid }))
-        .await
-        .ok();
+    let url_before = Box::pin(call_tool(
+        client,
+        base_url,
+        "page_url",
+        json!({ "sessionId": &sid }),
+    ))
+    .await
+    .ok();
 
     // 2. Record tabs before the click.
-    let tabs_before: HashSet<usize> = call_tool(
+    let tabs_before: HashSet<usize> = Box::pin(call_tool(
         client,
         base_url,
         "browser_tabs",
         json!({ "sessionId": &sid, "action": "list" }),
-    )
+    ))
     .await
     .map(|resp| parse_tab_list(&resp).into_iter().map(|t| t.index).collect())
     .unwrap_or_default();
 
     // 3. Perform the click (backend handles same-tab navigation detection).
-    handle_tool_command(
+    Box::pin(handle_tool_command(
         client,
         base_url,
         tool_name,
         tool_params,
         false,
         session_name,
-    )
+    ))
     .await?;
 
     // 4. Check for new tabs.
-    let tabs_after: Vec<TabInfo> = call_tool(
+    let tabs_after: Vec<TabInfo> = Box::pin(call_tool(
         client,
         base_url,
         "browser_tabs",
         json!({ "sessionId": &sid, "action": "list" }),
-    )
+    ))
     .await
     .map(|resp| parse_tab_list(&resp))
     .unwrap_or_default();
@@ -2881,7 +2890,7 @@ async fn handle_navigation_action(
 
     if new_tabs.is_empty() {
         // No new tabs — verify same-tab navigation and warn if URL unchanged.
-        verify_click_navigation(client, base_url, &sid, tool_params, &url_before).await;
+        Box::pin(verify_click_navigation(client, base_url, &sid, tool_params, &url_before)).await;
         return Ok(());
     }
 
@@ -2901,12 +2910,12 @@ async fn handle_navigation_action(
         .iter()
         .max_by_key(|t| t.index)
         .expect("new_tabs is non-empty");
-    call_tool(
+    Box::pin(call_tool(
         client,
         base_url,
         "browser_tabs",
         json!({ "sessionId": &sid, "action": "select", "index": newest.index }),
-    )
+    ))
     .await
     .map_err(|e| format!("Failed to switch to new tab {}: {}", newest.index, e))?;
 
@@ -2928,12 +2937,12 @@ async fn verify_click_navigation(
         return;
     };
 
-    let url_after = call_tool(
+    let url_after = Box::pin(call_tool(
         client,
         base_url,
         "page_url",
         json!({ "sessionId": session_id }),
-    )
+    ))
     .await
     .ok();
 
@@ -2957,7 +2966,7 @@ async fn verify_click_navigation(
         // clicks via JavaScript (e.g. Baidu search results with custom
         // routing).  Try a JS-based click as a fallback — element.click()
         // bypasses CDP event handling and triggers the page's own handlers.
-        let js_fallback = call_tool(
+        let js_fallback = Box::pin(call_tool(
             client,
             base_url,
             "browser_evaluate",
@@ -2966,17 +2975,17 @@ async fn verify_click_navigation(
                 "expression": "element => element.click()",
                 "ref": ref_val,
             }),
-        )
+        ))
         .await;
 
         if js_fallback.is_ok() {
             // Check if the JS click triggered navigation
-            let url_after_js = call_tool(
+            let url_after_js = Box::pin(call_tool(
                 client,
                 base_url,
                 "page_url",
                 json!({ "sessionId": session_id }),
-            )
+            ))
             .await
             .ok();
 
@@ -26485,15 +26494,39 @@ async fn run(
                 .get("follow")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            handle_navigation_action(
-                &client,
-                &base_url,
-                &tool_name,
-                &tool_params,
-                global.session_name.as_deref(),
-                follow,
-            )
-            .await?;
+            // Follow mode needs the tab/navigation bookkeeping inside
+            // `handle_navigation_action`; the common path calls the tool directly.
+            // Keeping that extra async layer off the common path also keeps the
+            // click chain inside the debug build's stack budget on Windows, where
+            // the main thread only gets a 1 MB reserve — see
+            // docs-dev/cli-e2e-test-coverage-analysis.md ("click aborts the CLI on
+            // Windows") and the regression scenario
+            // `test_e2e_mock_click_is_stack_safe`.
+            if follow {
+                // Follow mode nests the page/tab probes, so it is boxed here **and**
+                // at each of its own call sites: with only one of the two, the
+                // Windows debug build still overflows (verified with
+                // `docs-dev/fake-mcp-server.ps1`). The click itself is unaffected.
+                Box::pin(handle_navigation_action(
+                    &client,
+                    &base_url,
+                    &tool_name,
+                    &tool_params,
+                    global.session_name.as_deref(),
+                    true,
+                ))
+                .await?;
+            } else {
+                handle_tool_command(
+                    &client,
+                    &base_url,
+                    &tool_name,
+                    &tool_params,
+                    false,
+                    global.session_name.as_deref(),
+                )
+                .await?;
+            }
         }
         "page-info" => {
             handle_page_info(&client, &base_url, global.session_name.as_deref()).await?;
@@ -27250,6 +27283,58 @@ mod tests {
             .prefix("main-")
             .tempdir_in(&root)
             .unwrap()
+    }
+
+    /// The Windows build must reserve a Linux-sized main-thread stack.
+    ///
+    /// Windows defaults to 1 MB, which the debug-profile async chain exceeded for
+    /// `click`/`dblclick` (the process aborted with `STATUS_STACK_OVERFLOW` before
+    /// sending the tool request). `build.rs` now links every Windows target with
+    /// `/STACK:8388608`; this reads the PE header back so removing that flag fails
+    /// here instead of in the field — and it runs on the Windows smoke gate
+    /// (`.github/workflows/nightly-cli.yml`), which is the only place CI builds a
+    /// Windows binary at all.
+    #[cfg(all(target_os = "windows", target_env = "msvc"))]
+    #[test]
+    fn test_windows_binary_reserves_a_linux_sized_main_thread_stack() {
+        const EXPECTED_MIN_RESERVE: u64 = 8 * 1024 * 1024;
+
+        let exe = std::env::current_exe().expect("test binary path");
+        let bytes = std::fs::read(&exe).expect("read the test binary");
+
+        // PE layout: `e_lfanew` at 0x3C points at the PE signature; the optional
+        // header follows COFF header (20 bytes) + signature (4 bytes).
+        let pe_offset = u32::from_le_bytes(bytes[0x3C..0x40].try_into().unwrap()) as usize;
+        assert_eq!(&bytes[pe_offset..pe_offset + 4], b"PE\0\0", "not a PE image");
+        let optional_header = pe_offset + 24;
+        let magic =
+            u16::from_le_bytes(bytes[optional_header..optional_header + 2].try_into().unwrap());
+        assert!(
+            magic == 0x10b || magic == 0x20b,
+            "unexpected optional header magic {magic:#x}"
+        );
+        // `SizeOfStackReserve` sits at offset 0x48 in both PE32 and PE32+; it is a
+        // 4-byte field in PE32 and 8-byte in PE32+.
+        let reserve = if magic == 0x20b {
+            u64::from_le_bytes(
+                bytes[optional_header + 0x48..optional_header + 0x50]
+                    .try_into()
+                    .unwrap(),
+            )
+        } else {
+            u32::from_le_bytes(
+                bytes[optional_header + 0x48..optional_header + 0x4C]
+                    .try_into()
+                    .unwrap(),
+            ) as u64
+        };
+
+        assert!(
+            reserve >= EXPECTED_MIN_RESERVE,
+            "the Windows CLI must reserve at least {EXPECTED_MIN_RESERVE} bytes for the main \
+             thread (build.rs: cargo:rustc-link-arg=/STACK:...), got {reserve} — the debug \
+             build's async chain overflowed the 1 MB default on `click`"
+        );
     }
 
     /// Guard that restores an env var to its previous value on drop, holding the shared

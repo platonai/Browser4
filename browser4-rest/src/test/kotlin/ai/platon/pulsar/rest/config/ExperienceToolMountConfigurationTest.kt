@@ -11,6 +11,8 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.deleteRecursively
+import kotlin.io.path.exists
+import kotlin.io.path.listDirectoryEntries
 import kotlin.test.*
 
 /**
@@ -166,6 +168,74 @@ class ExperienceToolMountConfigurationTest {
             )
             val queryJson = mapper.readTree(queryResult as String)
             assertNotEquals("P5", queryJson["tier"].asText())
+        }
+    }
+
+    @Nested
+    @DisplayName("configured knowledge dir")
+    inner class ConfiguredKnowledgeDir {
+        @Test
+        @DisplayName("both the bean and the mounted executor write under knowledge.dir")
+        fun testEverythingFollowsTheProperty() = runBlocking {
+            val configured = tempDir.resolve("configured-store")
+            val previous = System.getProperty(KnowledgeStore.KNOWLEDGE_DIR_PROPERTY)
+            try {
+                System.setProperty(KnowledgeStore.KNOWLEDGE_DIR_PROPERTY, configured.toString())
+
+                // Path 1: the Spring bean.
+                val config = ExperienceToolMountConfiguration()
+                val store = config.knowledgeStore()
+                assertTrue(
+                    configured.resolve("traces").exists(),
+                    "the knowledgeStore bean must initialize the configured directory",
+                )
+
+                // Path 2: ToolMount.getToolExecutors() — the executor PluginManager
+                // actually registers for MCP/LLM. It builds its own store, and it
+                // must land in the same directory instead of forking the knowledge
+                // base in two.
+                val executors = config.getToolExecutors()
+                assertEquals(1, executors.size)
+                val mounted = executors[0] as? ExperienceToolExecutor
+                    ?: fail("the mounted executor must be the experience executor, got ${executors[0]::class}")
+                val mapper = ai.platon.pulsar.common.serialize.json.pulsarObjectMapper()
+                mounted.callFunctionOn(
+                    domain = "experience", functionName = "save",
+                    args = mapOf(
+                        "url" to "https://configured.example.com/p/1",
+                        "trace" to mapper.writeValueAsString(
+                            ai.platon.pulsar.agentic.tools.experience.ExecutionTrace(
+                                url = "https://configured.example.com/p/1",
+                                taskType = "extract",
+                                outcome = "success",
+                            )
+                        ),
+                        "outcome" to "success",
+                        "intent" to "extract the price",
+                    ),
+                    receiver = mounted,
+                )
+
+                val traceDir = configured.resolve("traces/configured.example.com")
+                assertTrue(traceDir.exists(), "traces must be written per domain under the configured dir")
+                assertTrue(
+                    traceDir.listDirectoryEntries("*.yaml").isNotEmpty(),
+                    "the mounted executor must persist traces under the configured directory",
+                )
+
+                // And nothing leaked into the cwd-relative default.
+                assertTrue(
+                    !java.nio.file.Path.of(KnowledgeStore.DEFAULT_BASE_DIR.toString())
+                        .resolve("traces/configured.example.com").exists(),
+                    "the default 'knowledge' directory must stay untouched",
+                )
+            } finally {
+                if (previous == null) {
+                    System.clearProperty(KnowledgeStore.KNOWLEDGE_DIR_PROPERTY)
+                } else {
+                    System.setProperty(KnowledgeStore.KNOWLEDGE_DIR_PROPERTY, previous)
+                }
+            }
         }
     }
 

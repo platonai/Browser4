@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MousePosition {
@@ -1442,14 +1443,26 @@ pub fn epoch_millis_to_display(millis: i64) -> String {
 /// - `e15`       → `backend:15`
 /// - `backend:15` → `backend:15` (pass-through)
 /// - CSS/XPath selectors are passed through unchanged
+///
+/// The pattern is compiled once (see [`ref_pattern`]): this function is the
+/// deepest frame of every ref-bearing tool call, and recompiling the regex on
+/// each call was the stack cost that pushed `click` over the 1 MB main-thread
+/// stack reserve of a Windows debug build
+/// (`docs-dev/cli-e2e-test-coverage-analysis.md`, "click aborts the CLI on Windows").
 pub fn resolve_ref(raw_ref: &str) -> String {
     let trimmed = raw_ref.trim();
-    // Match e<digits> (case-insensitive)
-    let re = regex::Regex::new(r"(?i)^e(\d+)$").unwrap();
-    if let Some(caps) = re.captures(trimmed) {
+    if let Some(caps) = ref_pattern().captures(trimmed) {
         return format!("backend:{}", &caps[1]);
     }
     trimmed.to_string()
+}
+
+/// The `e<digits>` element-ref pattern, compiled once for the process.
+fn ref_pattern() -> &'static regex::Regex {
+    static REF_PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+    REF_PATTERN.get_or_init(|| {
+        regex::Regex::new(r"(?i)^e(\d+)$").expect("the element-ref pattern is a valid regex")
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1666,6 +1679,29 @@ mod tests {
         assert_eq!(resolve_ref("backend:15"), "backend:15");
         assert_eq!(resolve_ref(".my-class"), ".my-class");
         assert_eq!(resolve_ref("#some-id"), "#some-id");
+    }
+
+    #[test]
+    fn test_resolve_ref_near_misses_are_passthrough() {
+        // Only the exact `e<digits>` shape is a ref; anything else must reach the
+        // backend untouched (a rewrite here would silently retarget the call).
+        assert_eq!(resolve_ref("e"), "e");
+        assert_eq!(resolve_ref("e5x"), "e5x");
+        assert_eq!(resolve_ref("5e"), "5e");
+        assert_eq!(resolve_ref("element"), "element");
+        assert_eq!(resolve_ref("backend:e5"), "backend:e5");
+        assert_eq!(resolve_ref("//div[@id='e5']"), "//div[@id='e5']");
+    }
+
+    #[test]
+    fn test_resolve_ref_pattern_is_shared_and_stable() {
+        // The pattern is compiled once (OnceLock); repeated calls must agree and
+        // must not rebuild it — the per-call `Regex::new` used to be the deepest
+        // stack consumer on the click path (Windows debug builds overflowed).
+        let first = ref_pattern() as *const regex::Regex;
+        assert_eq!(resolve_ref("e1"), "backend:1");
+        assert_eq!(resolve_ref("e999999"), "backend:999999");
+        assert_eq!(ref_pattern() as *const regex::Regex, first);
     }
 
     #[test]

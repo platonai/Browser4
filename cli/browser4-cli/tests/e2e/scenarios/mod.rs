@@ -2792,6 +2792,49 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         exclusion_reason: None,
         estimated_duration_ms: None,
     },
+    ScenarioDef {
+        name: "test_e2e_experience_web_roundtrip",
+        short_name: "test_experience_web_roundtrip",
+        requires_browser4: true,
+        restart_browser4: false,
+        // One pass: `test_count` is a repeat count, and a second pass would run
+        // against the (domain, intent) entry the first one already promoted.
+        test_count: 1,
+        test_fn: browser::test_e2e_experience_web_roundtrip,
+        group: Some("experience"),
+        level: ScenarioLevel::Extended,
+        exclude_by_default: false,
+        exclusion_reason: None,
+        estimated_duration_ms: Some(90_000),
+    },
+    ScenarioDef {
+        name: "test_e2e_experience_real_web_smoke",
+        short_name: "test_experience_real_web_smoke",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_experience_real_web_smoke,
+        group: Some("experience"),
+        level: ScenarioLevel::Extended,
+        exclude_by_default: true,
+        exclusion_reason: Some("needs the public internet (example.com)"),
+        estimated_duration_ms: Some(30_000),
+    },
+    ScenarioDef {
+        name: "test_e2e_mock_click_is_stack_safe",
+        short_name: "test_mock_click_is_stack_safe",
+        // Mock server only: the overflow happened before any tool request was
+        // sent, so no browser is needed to keep it from coming back.
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_mock_click_is_stack_safe,
+        group: Some("interaction"),
+        level: ScenarioLevel::Basic,
+        exclude_by_default: false,
+        exclusion_reason: None,
+        estimated_duration_ms: Some(10_000),
+    },
 ];
 
 pub(super) fn all_scenarios() -> &'static [ScenarioDef] {

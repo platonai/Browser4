@@ -222,6 +222,7 @@ struct FixturePages {
     frame_nested_html: String,
     frame_inner_html: String,
     console_probe_html: String,
+    experience_html: String,
 }
 
 impl FixtureServer {
@@ -252,6 +253,7 @@ impl FixtureServer {
             frame_nested_html: load_html_fixture(FRAME_NESTED_FIXTURE_FILE),
             frame_inner_html: load_html_fixture(FRAME_INNER_FIXTURE_FILE),
             console_probe_html: load_html_fixture(CONSOLE_PROBE_FIXTURE_FILE),
+            experience_html: load_html_fixture(EXPERIENCE_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -450,6 +452,15 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "text/html; charset=utf-8",
             pages.console_probe_html.clone(),
+        )
+    } else if path.split('?').next() == Some(EXPERIENCE_PATH) {
+        // The experience-replay fixture derives its expected query from
+        // `?nonce=<value>`, so this route matches on the path only — every other
+        // route above is query-free and keeps its exact-match semantics.
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.experience_html.clone(),
         )
     } else {
         (
@@ -1487,11 +1498,13 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 }
             };
 
+            // An async submission is accepted (202) and answers `{"id": "<task id>"}` — the
+            // endpoint declares `application/json`, so a bare id string is not an option.
             write_http_response(
                 &mut stream,
-                "200 OK",
+                "202 Accepted",
                 "application/json",
-                &format!(r#""{}""#, task_id),
+                &format!(r#"{{"id":"{}"}}"#, task_id),
             );
         }
         _ if method == "POST"
@@ -2492,6 +2505,12 @@ impl E2ECtx {
     /// The console serialization probe page (see `console-probe-fixture.html`).
     fn console_probe_url(&self) -> String {
         format!("{}{}", self.fixture_base_url, CONSOLE_PROBE_PATH)
+    }
+
+    /// The experience-replay fixture.  `nonce` makes the query this page expects
+    /// unique per run, so a replay that merely guessed cannot pass.
+    fn experience_url(&self, nonce: &str) -> String {
+        format!("{}{}?nonce={}", self.fixture_base_url, EXPERIENCE_PATH, nonce)
     }
 
     /// A slow fixture URL (served after a fixed delay) used to hold browser
@@ -4616,10 +4635,31 @@ fn create_e2e_test_resources() -> E2ETestResources {
         extra_env.push((FORCE_REMOTE_BUNDLE_CLI_ENV.to_string(), "1".to_string()));
     }
     // Tag the backend JVM so process-management tooling can distinguish
-    // test-server instances from production ones.
+    // test-server instances from production ones, and pin the PEM knowledge
+    // store inside this run's temp tree.  The store otherwise defaults to the
+    // cwd-relative `knowledge/` of the installed runtime (see KnowledgeStore),
+    // which survives into later scenarios of the same run — the experience
+    // scenario would then be asserting against another scenario's deposits.
+    //
+    // `BROWSER4_SERVER_OPTS` is split on whitespace (see daemon.rs), so a temp
+    // path containing spaces cannot be passed here; in that case the per-run
+    // runtime dir still isolates the store between runs and the scenario's
+    // assertions stay delta-based.  Against an external service
+    // (`BROWSER4_E2E_SERVICE_URL`) this variable never reaches the backend, so
+    // the scenario must not depend on it.
+    let knowledge_dir = temp_dir.path().join("knowledge");
+    let knowledge_dir_opt = if knowledge_dir.to_string_lossy().contains(char::is_whitespace) {
+        eprintln!(
+            "[e2e] temp path contains whitespace — leaving the PEM knowledge store at its \
+             cwd-relative default for this run"
+        );
+        String::new()
+    } else {
+        format!(" -Dknowledge.dir={}", knowledge_dir.display())
+    };
     extra_env.push((
         "BROWSER4_SERVER_OPTS".to_string(),
-        "-Dapp.name=browser4-test".to_string(),
+        format!("-Dapp.name=browser4-test{knowledge_dir_opt}"),
     ));
     // Skip JVM AOT cache training (JEP 483/515): on a fresh runtime bundle the
     // one-time training run can take ~2 minutes, blowing past the CLI command
@@ -5110,6 +5150,11 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         // test_live_profiler_commands (real browser CDP profiler)
         "profiler-start",
         "profiler-stop",
+        // test_experience_web_roundtrip (real page → save/query/list/deep-learn)
+        "experience-save",
+        "experience-query",
+        "experience-list",
+        "experience-deep-learn",
     ]
     .into();
 

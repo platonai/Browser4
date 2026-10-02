@@ -13,9 +13,11 @@ List → Deep Learning pipeline:
   experience_list      — List stored knowledge by domain/intent/status
   experience_deep_learn — Deep Learning: analyze, build facts, promote
 
-The experience tools are MCP tools registered in the backend, NOT CLI
-commands.  The agent calls them via HTTP POST to the backend's /mcp/call-tool
-endpoint while using standard CLI commands for browser interaction.
+The experience tools are MCP tools registered in the backend (`experience_save`,
+`experience_query`, `experience_list`, `experience_deep_learn`) and exposed as the
+four CLI commands listed below, which is what this scenario drives.  The CLI talks
+to the backend over HTTP, so no manual port discovery or MCP envelope handling is
+needed; standard CLI commands are used for browser interaction.
 
 Uses an AI agent (Claude/Kimi) to check the result of each step and report
 any issues found against browser4-cli usability and reliability.

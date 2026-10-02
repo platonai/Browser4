@@ -117,6 +117,8 @@ Starting a new task?
 
 > **Note:** The automatic engine hook is **live** (since 2026-08-24): `RobustBrowserAgent` auto-deposits completed/failed tasks into the knowledge store (`MemoryConsolidator` → PEM fusion) and auto-injects recalled knowledge into the run-start `## Memory` section. Calling `experience_save` yourself is still supported for richer traces and diagnostics, but forgetting it no longer loses knowledge.
 
+> **Where the knowledge lives:** the store root is the `knowledge.dir` JVM system property, defaulting to a `knowledge/` directory relative to the backend process's working directory (`traces/`, `experience/`, `facts/`). The engine's auto-deposit and these tools resolve the same property, so one `-Dknowledge.dir=<path>` relocates the whole knowledge base; when the CLI starts the backend, pass it as `BROWSER4_SERVER_OPTS="-Dknowledge.dir=<path>"`. See [config.md](../../docs/config.md) and [experience-memory.md](../../docs/experience-memory.md#storage-layout).
+
 ### experience_save
 
 Persists a task execution trace to the knowledge store.

@@ -3982,3 +3982,679 @@ pub(super) fn test_e2e_mouse_trusted_click(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["close"]);
 }
+
+// ---------------------------------------------------------------------------
+// Experience (PEM v2): real-web round trip
+// ---------------------------------------------------------------------------
+
+/// Knowledge entries are keyed by host with the port stripped
+/// (`UrlNormalizer.extractDomain`), so never hardcode the fixture domain.
+fn experience_domain(ctx: &E2ECtx) -> String {
+    ctx.fixture_base_url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches("www.")
+        .to_string()
+}
+
+/// Run an `experience` command in `--json` mode and return its `output.result`.
+///
+/// `--json` suppresses the human output and leaves exactly one
+/// `{"status","command","output":{…}}` envelope on stdout (see `json_envelope`),
+/// which is what makes the tool payload machine-readable for assertions.
+fn experience_result(ctx: &mut E2ECtx, args: &[&str]) -> serde_json::Value {
+    let (exit_code, envelope) = experience_envelope(ctx, args);
+    assert_eq!(
+        exit_code,
+        0,
+        "`{}` must succeed, got exit {exit_code} and envelope: {envelope}",
+        args.join(" ")
+    );
+    assert_eq!(
+        envelope["status"].as_str(),
+        Some("ok"),
+        "`{}` reported an error envelope: {envelope}",
+        args.join(" ")
+    );
+    envelope["output"]["result"].clone()
+}
+
+/// [`experience_result`] without the success assertion: negative cases need the
+/// error envelope (it is printed to stdout in `--json` mode).
+fn experience_envelope(ctx: &mut E2ECtx, args: &[&str]) -> (i32, serde_json::Value) {
+    let mut full: Vec<&str> = args.to_vec();
+    full.push("--json");
+    let result = run_command_allowing_failure(ctx, &full);
+    let envelope = serde_json::from_str(result.stdout.trim()).unwrap_or_else(|error| {
+        panic!(
+            "`{}` did not print a JSON envelope ({error}):\nstdout:>>>\n{}\n<<<\nstderr:>>>\n{}\n<<<",
+            full.join(" "),
+            result.stdout,
+            result.stderr
+        )
+    });
+    (result.exit_code, envelope)
+}
+
+/// Wait until the experience fixture has rendered, so the state-based waits
+/// below never evaluate against a not-yet-loaded DOM.
+fn wait_for_experience_fixture(ctx: &mut E2ECtx, timeout_ms: u64) {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    while Instant::now() < deadline {
+        let count = eval_text(ctx, "String(document.querySelectorAll('#state-log').length)");
+        if count.trim() == "1" {
+            return;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!("the experience fixture did not render within {timeout_ms}ms");
+}
+
+/// Real-web round trip for the `experience_*` tools.
+///
+/// Round 1 drives the `/experience` fixture with a real browser, reads the query
+/// the page expects **from the DOM**, and records the selectors that actually
+/// worked (`experience save --facts`) together with the page's disabled decoy
+/// input as a blocker / anti-pattern.  Round 2 opens a fresh session and drives
+/// the same page using **only** the selectors `experience query` returns, so the
+/// replay can only succeed if the stored knowledge really is actionable.
+///
+/// The flow submits the fixture's search form with `fill` + `press Enter`
+/// (trusted CDP key events) rather than `click`.  That is deliberate even though
+/// the Windows stack overflow on the click path is fixed (regex hoisted in
+/// `resolve_ref`, the extra async layer dropped from the common path, the follow
+/// bookkeeping boxed — see `test_e2e_mock_click_is_stack_safe` and
+/// `test_e2e_mouse_trusted_click` for the click coverage): the margin there is
+/// empirical, not structural, and this scenario must not fail for a reason that
+/// has nothing to do with the experience commands.  The fixture routes Enter and
+/// the submit button through one handler, so switching back is the two lines that
+/// replace `["press", "Enter", EXPERIENCE_SEARCH_BOX_SELECTOR]` with
+/// `["click", EXPERIENCE_SEARCH_BUTTON_SELECTOR]` in round 1, and
+/// `["press", "Enter", &search_input]` with `["click", &search_button]` in round 2.
+///
+/// Assertions are delta-based and scoped to the fixture's `(domain, intent)` entry
+/// on purpose: the knowledge store is shared with the engine's automatic deposits
+/// (`MemoryConsolidator`), and it is only pinned per run when the harness starts
+/// the backend itself (`-Dknowledge.dir`, see `create_e2e_test_resources`).
+pub(super) fn test_e2e_experience_web_roundtrip(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let nonce = format!("exp{}", std::process::id());
+    let url = ctx.experience_url(&nonce);
+    let domain = experience_domain(ctx);
+    let intent = "buy the product";
+    let intent_key = "buy";
+    let expected_query = format!("{nonce}-target");
+    let replayed = format!("ok:{nonce}");
+
+    // ── Round 1: do the task on the real page ───────────────────────────────
+    run_command(ctx, &["open", &url, OPEN_PROFILE_MODE_ARG]);
+    wait_for_experience_fixture(ctx, 15_000);
+
+    // The query the page expects is read from the DOM, not assumed: the trace
+    // recorded below must describe what the page really showed.
+    let rendered = eval_text_for_target(
+        ctx,
+        "element => element.textContent.trim()",
+        EXPERIENCE_EXPECTED_SELECTOR,
+    );
+    assert_eq!(
+        rendered.trim(),
+        expected_query,
+        "the fixture must render its run-unique expected query"
+    );
+
+    // A disabled decoy input is deliberately the first input on the page, so only
+    // a recorded selector — never a positional guess — can drive the flow.
+    let decoy_disabled = eval_text(
+        ctx,
+        "String(document.querySelector('#search-box-legacy').disabled)",
+    );
+    assert_eq!(
+        decoy_disabled.trim(),
+        "true",
+        "the fixture's decoy input must stay disabled"
+    );
+
+    run_command(
+        ctx,
+        &["fill", EXPERIENCE_SEARCH_BOX_SELECTOR, rendered.trim()],
+    );
+    // Enter submits the fixture's search form (trusted CDP key event). See the
+    // scenario doc for why this is not a `click`.
+    run_command(ctx, &["press", "Enter", EXPERIENCE_SEARCH_BOX_SELECTOR]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["replayOutcome"].as_str() == Some(replayed.as_str()),
+        5_000,
+        "Expected the round-1 interaction to complete the fixture flow",
+    );
+
+    // ── Record what worked: real selectors + the decoy verdict ──────────────
+    let trace = serde_json::json!({
+        "url": url,
+        "task_type": "extract_product_detail",
+        "outcome": "success",
+        "final_page_url": url,
+        "final_page_title": EXPERIENCE_TITLE,
+        "duration_ms": 1200,
+        "extraction_results": { "nonce": nonce },
+        "steps": [
+            { "sequence": 1, "action": "navigate", "value": url, "result": "success" },
+            { "sequence": 2, "action": "fill",
+              "selector": EXPERIENCE_SEARCH_BOX_SELECTOR,
+              "value": rendered.trim(), "result": "success" },
+            { "sequence": 3, "action": "press",
+              "selector": EXPERIENCE_SEARCH_BOX_SELECTOR,
+              "value": "Enter", "result": "success" }
+        ]
+    })
+    .to_string();
+
+    let facts = serde_json::json!({
+        "selectors": {
+            "search_input": { "primary": EXPERIENCE_SEARCH_BOX_SELECTOR },
+            "search_button": { "primary": EXPERIENCE_SEARCH_BUTTON_SELECTOR },
+            "expected_query": { "primary": EXPERIENCE_EXPECTED_SELECTOR },
+            "replay_outcome": { "primary": EXPERIENCE_REPLAY_OUTCOME_SELECTOR }
+        },
+        "interaction_hints": [
+            format!("nonce={nonce}: read {EXPERIENCE_EXPECTED_SELECTOR}, type it into {EXPERIENCE_SEARCH_BOX_SELECTOR}, then press Enter to submit the search form")
+        ],
+        "known_blockers": [
+            { "type": "disabled_decoy", "selector": EXPERIENCE_DECOY_SELECTOR, "action": "skip",
+              "note": format!("nonce={nonce}: disabled legacy input, first in the DOM — positional targeting fails here") }
+        ],
+        "anti_patterns": [
+            format!("{EXPERIENCE_DECOY_SELECTOR} is a disabled decoy (nonce={nonce}); never target the first input on this page")
+        ]
+    })
+    .to_string();
+
+    let facts_file = ctx.workspace_dir.join("_e2e_experience_facts.json");
+    std::fs::write(&facts_file, &facts).expect("write the facts patch file");
+    let facts_file_arg = format!("@{}", facts_file.display());
+
+    // Five successful traces are what the promotion thresholds need
+    // (`confidence >= 0.85 && successes >= 5` → VERIFIED); round 1 passes the
+    // patch inline, round 2 through `--facts @file` (the documented file form).
+    let mut previous_confidence = 0.0_f64;
+    for round in 1..=5 {
+        let mut args: Vec<&str> = vec![
+            "experience",
+            "save",
+            &url,
+            &trace,
+            "--intent",
+            intent,
+            "--outcome",
+            "success",
+        ];
+        match round {
+            1 => {
+                args.push("--facts");
+                args.push(&facts);
+            }
+            2 => {
+                args.push("--facts");
+                args.push(&facts_file_arg);
+            }
+            _ => {}
+        }
+
+        let save = experience_result(ctx, &args);
+        assert_eq!(
+            save["saved"].as_bool(),
+            Some(true),
+            "round {round} save: {save}"
+        );
+        assert_eq!(
+            save["domain"].as_str(),
+            Some(domain.as_str()),
+            "round {round} save must key on the fixture host: {save}"
+        );
+        assert_eq!(
+            save["intent"].as_str(),
+            Some(intent_key),
+            "'{intent}' must classify as '{intent_key}': {save}"
+        );
+        assert_eq!(
+            save["outcome"].as_str(),
+            Some("success"),
+            "round {round} save: {save}"
+        );
+        assert!(
+            save["trace_path"]
+                .as_str()
+                .map(|path| !path.is_empty())
+                .unwrap_or(false),
+            "round {round} save must report where the trace landed: {save}"
+        );
+        if round <= 2 {
+            // The first two rounds carry the knowledge patch. A fresh entry must
+            // accept it; an entry an earlier pass already promoted to VERIFIED
+            // must refuse it — the same immutability rule the post-promotion
+            // check below asserts. `facts_status` is lowercased by the executor,
+            // while the status enums in the deep-learn payload are not, hence the
+            // case-insensitive comparisons throughout this scenario.
+            let facts_status = save["facts_status"]
+                .as_str()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let merged = save["facts_merged"].as_bool().unwrap_or(false);
+            let rejected = save["facts_rejected"].as_bool().unwrap_or(false);
+            assert_eq!(
+                merged, !rejected,
+                "round {round}: merged and rejected are mutually exclusive: {save}"
+            );
+            assert_eq!(
+                rejected,
+                facts_status == "verified",
+                "round {round}: only a VERIFIED entry may refuse knowledge: {save}"
+            );
+            if !rejected {
+                assert_eq!(
+                    facts_status, "hypothesis",
+                    "round {round}: merged knowledge starts as a hypothesis: {save}"
+                );
+            }
+        }
+
+        let confidence = save["confidence"].as_f64().unwrap_or(0.0);
+        assert!(
+            confidence >= previous_confidence,
+            "round {round}: confidence must not decrease ({previous_confidence} → {confidence}): {save}"
+        );
+        assert!(
+            confidence >= 0.5,
+            "round {round}: confidence must stay at or above the initial 0.50: {save}"
+        );
+        previous_confidence = confidence;
+    }
+
+    let deep = experience_result(ctx, &["experience", "deep-learn", &url, intent, "--force"]);
+    assert_eq!(
+        deep["completed"].as_bool(),
+        Some(true),
+        "--force must always deep-learn: {deep}"
+    );
+    assert_eq!(deep["domain"].as_str(), Some(domain.as_str()), "{deep}");
+    assert_eq!(deep["intent"].as_str(), Some(intent_key), "{deep}");
+    assert!(
+        deep["selectors_found"].as_u64().unwrap_or(0) >= 4,
+        "the merged selectors must be counted: {deep}"
+    );
+    assert!(
+        deep["new_confidence"].as_f64().unwrap_or(0.0) >= 0.85,
+        "five successes must reach the P1 confidence band: {deep}"
+    );
+    // `status_before`/`status_after` serialize the enum name (upper case), while
+    // the save payload lowercases it — normalize before comparing.
+    let status_before = deep["status_before"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let status_after = deep["status_after"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    assert!(
+        status_after == "candidate" || status_after == "verified",
+        "the promotion pipeline must reach candidate or verified, got '{status_after}': {deep}"
+    );
+    if status_before == "verified" {
+        // A previous pass already confirmed this entry (the scenario is written to
+        // be re-runnable against a populated store): deep-learn must leave the
+        // double-confirmed knowledge alone instead of promoting it again.
+        assert_eq!(
+            deep["promoted"].as_bool(),
+            Some(false),
+            "an already-VERIFIED entry must not be promoted again: {deep}"
+        );
+    } else {
+        assert_eq!(
+            deep["promoted"].as_bool(),
+            Some(true),
+            "five successful traces must promote the entry: {deep}"
+        );
+    }
+
+    // The immutability rule: a VERIFIED entry refuses further facts patches, a
+    // non-VERIFIED one accepts them.  Asserting the rule itself (instead of a
+    // fixed outcome) keeps the check meaningful whatever the promotion reached.
+    let after_promotion = experience_result(
+        ctx,
+        &[
+            "experience",
+            "save",
+            &url,
+            &trace,
+            "--intent",
+            intent,
+            "--outcome",
+            "success",
+            "--facts",
+            &facts,
+        ],
+    );
+    let rejected = after_promotion["facts_rejected"].as_bool().unwrap_or(false);
+    if status_after == "verified" {
+        assert!(
+            rejected,
+            "a VERIFIED entry is immutable — the facts patch must be refused: {after_promotion}"
+        );
+        assert_eq!(
+            after_promotion["facts_merged"].as_bool(),
+            Some(false),
+            "{after_promotion}"
+        );
+        assert!(
+            after_promotion["facts_message"]
+                .as_str()
+                .unwrap_or_default()
+                .to_lowercase()
+                .contains("verified"),
+            "the refusal must name the reason: {after_promotion}"
+        );
+    } else {
+        assert!(
+            !rejected,
+            "a non-VERIFIED entry must accept knowledge: {after_promotion}"
+        );
+        assert_eq!(
+            after_promotion["facts_merged"].as_bool(),
+            Some(true),
+            "{after_promotion}"
+        );
+    }
+
+    // ── Round 2: fresh session, replay from the stored knowledge ────────────
+    run_command(ctx, &["close"]);
+    run_command(ctx, &["open", &url, OPEN_PROFILE_MODE_ARG]);
+    wait_for_experience_fixture(ctx, 15_000);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["replayOutcome"].as_str() == Some("pending"),
+        10_000,
+        "A freshly opened fixture page must start from 'pending', otherwise the replay below proves nothing",
+    );
+
+    let query = experience_result(ctx, &["experience", "query", &url, "--intent", intent]);
+    assert_eq!(query["domain"].as_str(), Some(domain.as_str()), "{query}");
+    assert_eq!(query["intent"].as_str(), Some(intent_key), "{query}");
+    assert_ne!(
+        query["tier"].as_str(),
+        Some("P5"),
+        "stored knowledge must resolve above cold start: {query}"
+    );
+    assert!(
+        query["confidence"].as_f64().unwrap_or(0.0) > 0.0,
+        "a resolved entry must carry confidence: {query}"
+    );
+    assert!(
+        query["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("intent_match"),
+        "the (domain, intent) level must answer before any wider fallback: {query}"
+    );
+
+    let selectors = query["primary_selectors"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    for key in [
+        "search_input",
+        "search_button",
+        "expected_query",
+        "replay_outcome",
+    ] {
+        assert!(
+            selectors.contains_key(key),
+            "experience query must return the stored '{key}' selector: {query}"
+        );
+    }
+    let blockers = query["known_blockers"].as_array().cloned().unwrap_or_default();
+    assert!(
+        blockers
+            .iter()
+            .any(|blocker| blocker["selector"].as_str() == Some(EXPERIENCE_DECOY_SELECTOR)),
+        "the decoy blocker recorded in round 1 must come back: {query}"
+    );
+
+    // Every target below comes from the query payload — this test never hardcodes
+    // a selector for the replay, so success means the knowledge is actionable.
+    let search_input = selectors["search_input"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let search_button = selectors["search_button"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let expected_selector = selectors["expected_query"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let outcome_selector = selectors["replay_outcome"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert_ne!(
+        search_input, EXPERIENCE_DECOY_SELECTOR,
+        "the disabled decoy must never have been recorded as the target: {query}"
+    );
+    assert!(
+        !search_button.is_empty(),
+        "the stored submit selector must come back with the knowledge: {query}"
+    );
+
+    let expected_now = eval_text_for_target(
+        ctx,
+        "element => element.textContent.trim()",
+        &expected_selector,
+    );
+    assert_eq!(
+        expected_now.trim(),
+        expected_query,
+        "the stored selector must still resolve the page's expected query"
+    );
+    run_command(ctx, &["fill", &search_input, expected_now.trim()]);
+    run_command(ctx, &["press", "Enter", &search_input]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["replayOutcome"].as_str() == Some(replayed.as_str()),
+        5_000,
+        "The replay driven by stored selectors must complete the fixture flow",
+    );
+    let outcome_text = eval_text_for_target(
+        ctx,
+        "element => element.textContent.trim()",
+        &outcome_selector,
+    );
+    assert_eq!(
+        outcome_text.trim(),
+        replayed,
+        "the replayed selectors must reach the same page state"
+    );
+
+    // ── The store reports what happened ─────────────────────────────────────
+    let list = experience_result(
+        ctx,
+        &[
+            "experience",
+            "list",
+            "--filter",
+            &domain,
+            "--intent-filter",
+            intent_key,
+        ],
+    );
+    let entries = list["entries"].as_array().cloned().unwrap_or_default();
+    let entry = entries
+        .iter()
+        .find(|entry| {
+            entry["domain"].as_str() == Some(domain.as_str())
+                && entry["intent"].as_str() == Some(intent_key)
+        })
+        .unwrap_or_else(|| {
+            panic!("experience list must contain ({domain}, {intent_key}): {list}")
+        });
+    assert!(
+        entry["success_count"].as_u64().unwrap_or(0) >= 5,
+        "every successful save must be counted: {list}"
+    );
+    assert_eq!(
+        entry["status"]
+            .as_str()
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+        status_after,
+        "list must report the promoted status: {list}"
+    );
+
+    // ── Negative paths, and the store survives them ─────────────────────────
+    let unseen = format!("https://never-seen-{nonce}.invalid/page");
+    let cold = experience_result(
+        ctx,
+        &["experience", "query", &unseen, "--intent", "extract data"],
+    );
+    assert_eq!(
+        cold["tier"].as_str(),
+        Some("P5"),
+        "an unseen domain must cold-start instead of erroring: {cold}"
+    );
+
+    run_command_expecting_failure(
+        ctx,
+        &["experience", "save", &url, "this is not valid json {{{"],
+        "Failed to parse trace JSON",
+    );
+    run_command_expecting_failure(
+        ctx,
+        &["experience", "save", "not-a-valid-url", &trace],
+        "must start with http:// or https://",
+    );
+    run_command_expecting_failure(ctx, &["experience", "query"], "url");
+
+    let after_failures = experience_result(ctx, &["experience", "list", "--filter", &domain]);
+    assert!(
+        after_failures["total"].as_u64().unwrap_or(0) >= 1,
+        "rejected calls must not corrupt the store: {after_failures}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Opt-in companion to [`test_e2e_experience_web_roundtrip`] that runs the same
+/// lifecycle against a real public site (`example.com`).
+///
+/// Excluded by default because it needs the public internet; run it with
+/// `--enable-all --scenario=test_e2e_experience_real_web_smoke`.
+pub(super) fn test_experience_real_web_smoke(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let url = "https://example.com/";
+    let domain = "example.com";
+    let intent = "extract the page headline";
+    let nonce = format!("expweb{}", std::process::id());
+
+    run_command(ctx, &["open", url, OPEN_PROFILE_MODE_ARG]);
+    let title = eval_text(ctx, "document.title");
+    assert!(
+        !title.trim().is_empty(),
+        "the real page must load before its trace is recorded"
+    );
+
+    // Record only a selector this live page really resolves, so the replay below
+    // tests the knowledge round trip rather than the site's current markup
+    // (example.com has kept an `h1`, but a page is free to change).
+    let headline_count = eval_text(ctx, "String(document.querySelectorAll('h1').length)");
+    let headline_selector = if headline_count.trim() == "0" {
+        "body"
+    } else {
+        "h1"
+    };
+
+    let trace = serde_json::json!({
+        "url": url,
+        "task_type": "extract_article",
+        "outcome": "success",
+        "final_page_url": url,
+        "final_page_title": title.trim(),
+        "extraction_results": { "nonce": nonce },
+        "steps": [
+            { "sequence": 1, "action": "navigate", "value": url, "result": "success" }
+        ]
+    })
+    .to_string();
+
+    let facts = serde_json::json!({
+        "selectors": { "headline": { "primary": headline_selector } },
+        "interaction_hints": [format!("nonce={nonce}: read the headline with '{headline_selector}'")],
+        "known_blockers": [],
+        "anti_patterns": []
+    })
+    .to_string();
+
+    let save = experience_result(
+        ctx,
+        &[
+            "experience",
+            "save",
+            url,
+            &trace,
+            "--intent",
+            intent,
+            "--facts",
+            &facts,
+        ],
+    );
+    assert_eq!(save["saved"].as_bool(), Some(true), "{save}");
+    assert_eq!(save["domain"].as_str(), Some(domain), "{save}");
+    assert_eq!(save["facts_merged"].as_bool(), Some(true), "{save}");
+
+    let query = experience_result(ctx, &["experience", "query", url, "--intent", intent]);
+    assert_eq!(query["domain"].as_str(), Some(domain), "{query}");
+    assert_ne!(
+        query["tier"].as_str(),
+        Some("P5"),
+        "the recorded knowledge must be found on a real site: {query}"
+    );
+    let headline = query["primary_selectors"]
+        .as_object()
+        .and_then(|selectors| selectors.get("headline"))
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(
+        headline, headline_selector,
+        "the stored selector must come back from a real site: {query}"
+    );
+
+    // Actionable on the live page: the selector under test is the one the store
+    // returned, not a literal in this test. The two probes are separate so a
+    // failure says whether the selector is gone or the element-targeted eval is.
+    let resolves = eval_text(
+        ctx,
+        &format!("String(document.querySelector('{headline}') !== null)"),
+    );
+    assert_eq!(
+        resolves.trim(),
+        "true",
+        "the stored selector must resolve on the live page: {query}"
+    );
+    let text = eval_text_for_target(ctx, "element => element.textContent.trim()", &headline);
+    assert!(
+        !text.trim().is_empty(),
+        "reading through the stored selector must return the page's content"
+    );
+
+    run_command(ctx, &["close"]);
+}

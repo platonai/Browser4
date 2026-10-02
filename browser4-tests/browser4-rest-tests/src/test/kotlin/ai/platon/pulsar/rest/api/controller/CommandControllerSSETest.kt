@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.common.printlnPro
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import org.junit.jupiter.api.DisplayName
@@ -61,12 +62,13 @@ class CommandControllerSSETest : RestAPITestBase() {
     }
 
     private fun submitAsyncAndGetId(request: CommandRequest): String {
-        // For async requests, POST /api/commands returns the command id as plain text (JSON string or raw string).
+        // An async request is accepted (202) and answers `{"id": "<task id>"}` — an object,
+        // because the endpoint declares `application/json` and a bare id is not JSON.
         val rawBody = client.post().uri("/api/commands")
             .contentType(MediaType.APPLICATION_JSON)
             .body(request)
             .exchange()
-            .expectStatus().is2xxSuccessful
+            .expectStatus().isAccepted
             .expectBody<String>()
             .returnResult()
             .responseBody
@@ -74,8 +76,15 @@ class CommandControllerSSETest : RestAPITestBase() {
         val body = rawBody?.trim()
         check(!body.isNullOrBlank()) { "Expected non-blank async command id body" }
 
-        // It might be returned as a JSON string ("id") or as plain text (id)
-        val id = body.removeSurrounding("\"").trim()
+        // A bare id is still tolerated here so this helper never hides the contract behind
+        // a parse error — the controller test is what pins the shape.
+        val id = if (body.startsWith("{")) {
+            val node = pulsarObjectMapper().readTree(body).get("id")
+            check(node != null && !node.isNull) { "Expected an 'id' field in the async response but got: $body" }
+            node.asText()
+        } else {
+            body.removeSurrounding("\"").trim()
+        }
         check(id.isNotBlank()) { "Expected non-blank command id but got: $body" }
 
         // Sanity: it should also be queryable as status.

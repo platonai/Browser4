@@ -118,6 +118,31 @@ pub const FRAME_INNER_FIXTURE_FILE: &str = "frame-inner.html";
 
 pub const CONSOLE_PROBE_FIXTURE_FILE: &str = "console-probe-fixture.html";
 
+/// Experience-replay fixture: a real page whose flow only completes when the
+/// selectors recorded by `experience save --facts` are replayed.  The page
+/// carries a disabled decoy input so positional guesses cannot drive it.
+/// `?nonce=<value>` makes each run's expected query unique.
+pub const EXPERIENCE_PATH: &str = "/experience";
+
+pub const EXPERIENCE_TITLE: &str = "Browser4 CLI Experience Replay Fixture";
+
+pub const EXPERIENCE_FIXTURE_FILE: &str = "experience-replay-fixture.html";
+
+/// Input that must receive the expected query (see the fixture page).
+pub const EXPERIENCE_SEARCH_BOX_SELECTOR: &str = "#search-box";
+
+/// Disabled decoy input, deliberately the first input on the page.
+pub const EXPERIENCE_DECOY_SELECTOR: &str = "#search-box-legacy";
+
+/// Button that completes the flow (see the fixture page).
+pub const EXPERIENCE_SEARCH_BUTTON_SELECTOR: &str = "#search-button";
+
+/// Element whose text is the query the page expects for the current nonce.
+pub const EXPERIENCE_EXPECTED_SELECTOR: &str = "#expected-query";
+
+/// Element stamped with `ok:<nonce>` once the recorded flow was replayed.
+pub const EXPERIENCE_REPLAY_OUTCOME_SELECTOR: &str = "#replay-outcome";
+
 pub const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attempt
 
 pub const OUTPUT_COLLECTOR_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
