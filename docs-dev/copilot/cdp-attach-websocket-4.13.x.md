@@ -227,11 +227,12 @@ browser4-cli -s dbg page-info
 
 ## 9. 未决项
 
-- **非 Windows 的监听端口枚举**（P2）：目前只有 Windows 会枚举进程的其他监听端口；Linux/macOS 仍依赖
-  `DevToolsActivePort`（`--user-data-dir` 可从 `ps -e -o args=` 解析，故 Browser4 托管浏览器已覆盖）。
+- **非 Windows 的监听端口枚举**（P2）→ 已开 issue **platonai/Browser4#615**：目前只有 Windows 会枚举进程的其他监听端口；
+  Linux/macOS 仍依赖 `DevToolsActivePort`（`--user-data-dir` 可从 `ps -e -o args=` 解析，故 Browser4 托管浏览器已覆盖）。
   剩余缺口是"默认 profile 或不常见安装根 + 随机端口"。实现思路：Linux 走 `/proc/<pid>/fd` → socket inode →
   比对 `/proc/net/tcp{,6}`（`ss -ltnp` 回退）；macOS 走 `lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN`，
-  配套纯解析函数单测。
+  配套纯解析函数单测。issue 里还列了验收标准（删掉 `DevToolsActivePort` 后仍能靠端口扫描解析、e2e 覆盖 Linux/macOS 腿、
+  文档去掉 Windows-only 说明）。
 - **内置模式端口拓扑的最后确认**：`DevToolsActivePort` 报 9222，而某随机端口（如 51343）也应答
   `/json/version` 却 `Target.getTargets` 为空。已在 #611 请报告者用探针脚本回贴输出确认二者关系
   （本机无法复现内置模式）。
