@@ -38,7 +38,14 @@ import kotlin.io.path.*
  * Read → Modify → Write .tmp → fsync → Rename → target
  */
 class KnowledgeStore(
-    private val baseDir: Path = DEFAULT_BASE_DIR,
+    /**
+     * Store root. Defaults to [resolveBaseDir], i.e. the canonical
+     * `knowledge.dir` system property when it is set, else the cwd-relative
+     * [DEFAULT_BASE_DIR] — so every construction path (the `experience_*`
+     * tools, the REST beans and the engine-side memory pipeline) lands in the
+     * same place.
+     */
+    private val baseDir: Path = resolveBaseDir(),
 ) {
     private val logger = getLogger(KnowledgeStore::class)
 
@@ -818,10 +825,28 @@ class KnowledgeStore(
     )
 
     companion object {
+        /** Store root used when [KNOWLEDGE_DIR_PROPERTY] is not set. */
         val DEFAULT_BASE_DIR: Path = Path.of("knowledge")
 
+        /**
+         * The one property that relocates the whole PEM knowledge base.
+         *
+         * `AgentMemory` already reads it for the engine-side L1 layer
+         * ([ai.platon.pulsar.agentic.memory.AgentMemory]); honoring it here as
+         * well keeps automatic deposits and explicit `experience_*` calls on a
+         * single directory instead of silently forking the store in two.
+         */
+        const val KNOWLEDGE_DIR_PROPERTY: String = "knowledge.dir"
+
+        /** [KNOWLEDGE_DIR_PROPERTY] when set and non-blank, else [DEFAULT_BASE_DIR]. */
+        fun resolveBaseDir(): Path =
+            System.getProperty(KNOWLEDGE_DIR_PROPERTY)
+                ?.takeIf { it.isNotBlank() }
+                ?.let { Path.of(it) }
+                ?: DEFAULT_BASE_DIR
+
         fun createDefault(): KnowledgeStore {
-            val store = KnowledgeStore(DEFAULT_BASE_DIR)
+            val store = KnowledgeStore(resolveBaseDir())
             store.initializeStore()
             return store
         }

@@ -429,6 +429,25 @@ docker run -d -p 18182:18182 `
   discarded by `crawl clear --all`. See
   [Crawl checkpoint & resume](crawl-checkpoint-resume.md).
 
+* **`knowledge.dir`** *(JVM system property; default: `knowledge`)*
+  Root of the progressive experience memory (PEM) store: the `traces/`, `experience/` and
+  `facts/` YAML trees live under it (see [experience-memory.md](experience-memory.md#storage-layout)).
+  A relative path resolves against the backend process's working directory.
+  The engine's agent-memory L1 layer reads the same property, so one setting keeps explicit
+  `experience save|query|list|deep-learn` calls and the engine's automatic deposits in **one**
+  knowledge base instead of two — and lets several backends (or a test harness) avoid sharing a store.
+
+  Because it is a JVM system property rather than an `application.properties` key, pass it on the
+  command line:
+
+  ```bash
+  # Backend started by the CLI (the CLI forwards BROWSER4_SERVER_OPTS to the JVM)
+  BROWSER4_SERVER_OPTS="-Dknowledge.dir=/var/lib/browser4/knowledge" browser4-cli open
+
+  # Backend started by you
+  java -Dknowledge.dir=/var/lib/browser4/knowledge -jar Browser4.jar
+  ```
+
 ### 📦 `browser.profile.mode` Comparison Table
 
 | Mode           | Description                                                                 | User Data Directory Behavior                             | Use Case            |

@@ -17,6 +17,14 @@ on:
     #   flaky past the suite's failure tolerance. The job always ended red.
     #   The Docker-backed backend on Linux is the configuration proven by
     #   ci.yml and nightly.yml, which both pass daily.
+    #
+    # The `windows-smoke` job is the exception, and deliberately so: it runs only
+    # scenarios that need **no backend** (`requires_browser4: false` — mock server
+    # and CLI-state scenarios) plus the Windows stack-overflow regression. That
+    # keeps it free of Java/Chrome/Docker and of the CLI-managed-backend flakiness
+    # that killed the old matrix job, while still covering the part of the CLI the
+    # Linux jobs structurally cannot see: Windows process/state behaviour and the
+    # 1 MB main-thread stack reserve (`cli/browser4-cli/build.rs`).
     - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
@@ -194,3 +202,54 @@ jobs:
           cleanup_compose: 'true'
           cleanup_volumes: 'true'
           network_name: ${{ env.NETWORK_NAME }}
+
+  windows-smoke:
+    name: 'CLI smoke (Windows x64, no backend)'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli/browser4-cli
+
+      - name: Build e2e test binary
+        shell: pwsh
+        run: cargo test --test e2e --manifest-path ${{ env.CLI_MANIFEST_PATH }} --no-run
+
+      - name: Run SMOKE scenarios
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          # Every SMOKE scenario is `requires_browser4: false` (mock server or CLI state only),
+          # so this needs no Java, Chrome or Docker. What it buys is the Windows-only half of the
+          # CLI: process/state handling and the PE stack reserve.
+          cargo test --test e2e --manifest-path ${{ env.CLI_MANIFEST_PATH }} -- --nocapture --level=SMOKE --max-failures=0
+
+      - name: Run Windows stack-overflow regression
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          # `click`/`dblclick` used to abort the CLI with STATUS_STACK_OVERFLOW (0xC00000FD) on
+          # Windows debug builds, before it even sent the tool request (1 MB main-thread reserve
+          # vs. a deep debug async chain). The scenario is BASIC level, so the SMOKE run above does
+          # not cover it, and it is mock-only: ~1 s, no backend.
+          cargo test --test e2e --manifest-path ${{ env.CLI_MANIFEST_PATH }} -- --nocapture --scenario=test_e2e_mock_click_is_stack_safe --max-failures=0
+
+      - name: Pipeline Summary
+        if: always()
+        shell: pwsh
+        run: |
+          echo "::group::Nightly CLI smoke summary (Windows x64)"
+          echo "Platform: Windows x64 (windows-latest)"
+          echo "Scope: SMOKE scenarios + the Windows click/dblclick stack-overflow regression"
+          echo "No backend: every selected scenario declares requires_browser4: false"
+          echo "Status: ${{ job.status }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "::endgroup::"

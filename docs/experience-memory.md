@@ -267,7 +267,7 @@ Patterns like `/dp/*` match concrete URLs like `/dp/B0CXJ1NT4B`. When multiple p
         └── <intent>.yaml                       ← KnowledgeFacts (verified, immutable)
 ```
 
-The knowledge tiers are **file-level YAML keyed by `(domain, intent)`** (one file per intent under `facts/<domain>/`). The store root `{knowledge_dir}` defaults to `knowledge/`, resolved **relative to the backend process's current working directory** — `KnowledgeStore` uses `DEFAULT_BASE_DIR = Path.of("knowledge")`. There is **no `knowledge.dir` config property**; earlier documentation claiming one is wrong (a Java system property of the same name only affects the separate generic agent-memory subsystem, not this PEM store). To relocate the store, change the backend working directory.
+The knowledge tiers are **file-level YAML keyed by `(domain, intent)`** (one file per intent under `facts/<domain>/`). The store root `{knowledge_dir}` is resolved by `KnowledgeStore` itself: the **`knowledge.dir` system property** when it is set, else `DEFAULT_BASE_DIR = Path.of("knowledge")` — a path **relative to the backend process's current working directory**. Every construction path (the `experience_*` executor, the `browser4-rest` bean, and the engine-side `AgentMemory` L1 layer) resolves the same property, so one `-Dknowledge.dir=<path>` relocates the whole knowledge base instead of forking it in two.
 
 > The reserved `patterns/` family/category/universal directories are only *read* for cross-site fallback lookups; `initializeStore()` creates `traces/`, `experience/`, `facts/` (and `.archive/` for evicted artifacts) under the root on first start.
 
@@ -282,8 +282,9 @@ The knowledge tiers are **file-level YAML keyed by `(domain, intent)`** (one fil
 | Property | Default | Description |
 |----------|---------|-------------|
 | `browser4.experience.enabled` | `true` | Enable/disable the entire PEM system |
+| `knowledge.dir` (JVM system property) | `knowledge` | Store root. Relative paths resolve against the backend working directory. `AgentMemory` reads the same property for its L1 layer, so both writers stay on one directory. Pass it to a CLI-launched backend with `BROWSER4_SERVER_OPTS="-Dknowledge.dir=<path>"`, or set it in the backend's own JVM options when you start the server yourself. |
 
-There is **no `knowledge.dir` property** — the store root defaults to `knowledge/` relative to the backend process working directory (see [Storage Layout](#storage-layout)); the row documented in earlier revisions of this page was removed because no such config option exists.
+Set `knowledge.dir` whenever several backends (or a test harness) must not share one knowledge base; the CLI e2e harness uses exactly that to pin the store inside its per-run temp tree (see [TESTING.md](TESTING.md#cli-e2e-的-experience-覆盖本轮补齐)).
 
 The `ExperienceToolMountConfiguration` in `browser4-rest` registers the executor via Spring Boot auto-configuration (conditional on `browser4.experience.enabled=true`). The executor implements `ToolMount`, so `PluginManager` automatically wires it into both the MCP dispatcher and the LLM agent tool system.
 

@@ -198,24 +198,59 @@ AND NOT ManualOnly
 
 ## CI 门禁实际覆盖（实测盘点）
 
-> 数字来自对 `src/test` 的静态清点与 e2e harness 的 `--list`（2026-09 盘点）。
+> 数字来自对 `src/test` 的静态清点与 e2e harness 的 `--list`（2026-09 盘点；2026-10 复测：新增
+> `test_e2e_experience_web_roundtrip`（EXTENDED，默认跑）、`test_e2e_experience_real_web_smoke`
+> （EXTENDED，`--enable-all` 才跑）与 `test_e2e_mock_click_is_stack_safe`（BASIC，mock server），因此
+> BASIC 计数 +1、EXTENDED 计数 +2）。
 
 ### 门禁矩阵
 
 | Workflow | JVM `excluded_groups` | JVM 增量 | CLI e2e | 预算 |
 | --- | --- | --- | --- | --- |
 | `pr.yml`（PR） | 除 `Unit/Fast` 外全排除 + `-Pquality-gate`（**强制** INSTRUCTION ≥ 0.20） | 快档基线 | 无 | 25 min |
-| `ci.yml`（release tag） | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck` | +Integration/Heavy | `--level=BASIC`（148） | 50 min |
-| `nightly.yml`（00:00 UTC） | `ManualOnly,RequiresAI,E2E,E2ETest` | +Slow/HeavyTest/TestInfraCheck（约 32 个方法）、JaCoCo **仅观测**（`-Djacoco.check.skip=true`） | `--level=EXTENDED --enable-all --max-failures=0`（204） | 75 / 30 min |
-| `nightly-cli.yml`（03:00 UTC） | — | — | `--level=ALL --enable-all`（204） | 30 min |
+| `ci.yml`（release tag） | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck` | +Integration/Heavy | `--level=BASIC`（150） | 50 min |
+| `nightly.yml`（00:00 UTC） | `ManualOnly,RequiresAI,E2E,E2ETest` | +Slow/HeavyTest/TestInfraCheck（约 32 个方法）、JaCoCo **仅观测**（`-Djacoco.check.skip=true`） | `--level=EXTENDED --enable-all --max-failures=0`（208） | 75 / 30 min |
+| `nightly-cli.yml`（03:00 UTC） | — | — | `--level=ALL --enable-all`（208） | 30 min |
+| `nightly-cli.yml` 的 `windows-smoke` job（03:00 UTC） | — | — | `--level=SMOKE --max-failures=0`（7，含 coverage 伪条目）**+** `--scenario=test_e2e_mock_click_is_stack_safe` | 25 min |
 | `release.yml` / `release-cli.yml` | 仅构建 | — | `--level=EXTENDED --enable-all` | — |
 
 Rust 单元测试（`cli/browser4-cli/src`，约 1400 个 `#[test]`/`#[tokio::test]`）**只有 `nightly.yml` 会跑**
 （`cargo test --bin browser4-cli --lib`）；其余 workflow 只构建 `e2e` 测试目标。
 
+`windows-smoke` 是**唯一在 Windows 上跑 CLI 的门禁**，只选 `requires_browser4: false` 的场景（mock server /
+CLI 状态类，不需要 Java、Chrome、Docker），因此不会重蹈旧的三平台矩阵 job 因 CLI 托管后端在 Windows 上不稳
+而整条变红的覆辙；它覆盖的是 Linux job 结构上看不到的一半：Windows 的进程/状态路径，以及**主线程栈保留**
+（`cli/browser4-cli/build.rs` 用 `/STACK:8388608` 对齐 Linux/macOS 的 ~8 MB 默认；Windows 默认只有 1 MB，
+debug 构建的异步链曾在 `click` 上撞穿它并让进程 `STATUS_STACK_OVERFLOW` 直接 abort）。该保留值由
+`main.rs::test_windows_binary_reserves_a_linux_sized_main_thread_stack` 读 PE 头钉住。若日后 mock 场景在
+runner 上证明稳定，把该 job 提到 `--level=BASIC` 只是一个词的改动。
+
 `nightly.yml` 与 `ci.yml` 的 job 成败都由**最后一个 gate 步骤**判定（`Enforce Nightly Gate` /
 `Enforce CI Gate`）：JVM 阶段失败不再让 Docker 构建、应用启动和 CLI e2e 阶段被跳过，
 一轮就能同时拿到两侧结论（`.github/workflows/nightly.yml`、`ci.yml` 的 `Check Test Status` 只记录状态）。
+
+### CLI e2e 的 experience 覆盖（本轮补齐）
+
+`experience save|query|list|deep-learn` 原先标 `E2eCoverage::Excluded`：Rust 参数映射单测、REST 派发单测
+（Mockito 掉 `AgentToolManager`）、spec 契约矩阵（只校验参数不执行）和执行器单测都在，但**没有任何一层
+真跑过 CLI → 后端 → 真页面**。现在有两个场景（组 `experience`）：
+
+| 场景 | 级别 | 依赖 | 覆盖要点 |
+| --- | --- | --- | --- |
+| `test_e2e_experience_web_roundtrip` | EXTENDED | 真 Chrome + 后端（fixture `/experience`） | 两轮闭环：真页面操作 → `save --facts` 记录**真实选择器** → 新会话 `query` → **只用返回的选择器**回放并断言页面状态；另含 5 次成功后的 promote（candidate/verified）、VERIFIED 不可变规则、冷启动 P5、坏 trace / 非 http URL / 缺参负向路径 |
+| `test_e2e_experience_real_web_smoke` | EXTENDED | 真 Chrome + 后端 + **公网** | `example.com` 上的同一生命周期；`exclude_by_default`，仅 `--enable-all` 时跑 |
+
+- fixture：`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/experience-replay-fixture.html`
+  （路由 `/experience`，`?nonce=` 让每轮期望值唯一）。页面里有一个 **disabled 诱饵输入且排在 DOM 最前**，
+  所以"取第一个输入框"这类位置猜测必然失败 —— 只有记录下来的选择器能跑通。
+- 知识库位置：`knowledge.dir` 系统属性（见 [config.md](config.md)）。e2e harness 通过默认的
+  `BROWSER4_SERVER_OPTS=-Dknowledge.dir=<run-temp>/knowledge` 把库钉在每轮临时目录里
+  （临时路径含空格时跳过钉定，此时靠 per-run runtime 目录隔离）；断言仍按 `(domain, intent)` 条目做
+  增量比较，因为引擎的自动沉淀（`MemoryConsolidator`）也写同一个库。
+- 命令 `E2eCoverage` 已翻成 `Tested`，并在 `tests/e2e/mod.rs::tested_commands()` 登记（台账守卫强制两者一致）。
+- 本地跑：
+  `cargo test --test e2e -- --nocapture --level EXTENDED --scenario=test_e2e_experience_web_roundtrip`
+  （真实网站变体加 `--enable-all`）。
 
 ### 通过/失败语义（重要）
 

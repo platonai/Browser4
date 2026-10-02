@@ -204,6 +204,45 @@ fn generate_skills_data(skills_dir: &Path, out_dir: &Path) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Windows main-thread stack reserve
+// ---------------------------------------------------------------------------
+
+/// Reserve a Linux-sized stack for the main thread on Windows.
+///
+/// Windows gives an executable's main thread a **1 MB** stack reserve by default,
+/// while Linux and macOS give ~8 MB. The debug-profile CLI links a much deeper
+/// async call chain than the release build, and on Windows that chain used to
+/// cross 1 MB for `click`/`dblclick`: the process died with
+/// `STATUS_STACK_OVERFLOW` (`0xC00000FD`) before it even sent the tool request.
+///
+/// The code-side fixes (one less async layer on the click path, boxed follow
+/// bookkeeping, a cached element-ref regex) bring the chain back under the limit,
+/// but the margin is empirical — `--follow` overflows again if either `Box::pin`
+/// is removed. This reserve removes the whole class of near-limit crashes instead
+/// of moving the threshold, and costs address space only (the reserve is virtual;
+/// pages are committed on use).
+///
+/// Pinned by `test_windows_binary_reserves_a_linux_sized_main_thread_stack` in
+/// `src/main.rs`. See `docs-dev/cli-e2e-test-coverage-analysis.md` and
+/// `coworker/tasks/issues/draft/2026/1001/20261001-224111-windows-click-stack-overflow.issues.md`.
+fn reserve_linux_sized_main_thread_stack() {
+    /// Matches the Linux/macOS main-thread default.
+    const RESERVE_BYTES: u64 = 8 * 1024 * 1024;
+
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+
+    match env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+        // MSVC linker.
+        Ok("msvc") => println!("cargo:rustc-link-arg=/STACK:{RESERVE_BYTES}"),
+        // GNU (MinGW) linker.
+        Ok("gnu") => println!("cargo:rustc-link-arg=-Wl,--stack,{RESERVE_BYTES}"),
+        _ => {}
+    }
+}
+
 fn main() {
     let version = match find_version_cli().and_then(|path| read_version(&path)) {
         Some(v) => v,
@@ -218,6 +257,9 @@ fn main() {
     };
 
     println!("cargo:rustc-env=BROWSER4_CLI_VERSION={version}");
+
+    // Give the Windows binary the stack headroom the other platforms have by default.
+    reserve_linux_sized_main_thread_stack();
 
     // Bundle skill files into the binary.
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap_or_else(|_| ".".to_string()));

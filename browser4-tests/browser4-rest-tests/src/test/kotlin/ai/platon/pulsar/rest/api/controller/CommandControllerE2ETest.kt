@@ -3,6 +3,7 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.TestHelper.MOCK_PRODUCT_DETAIL_URL
 import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.CommandStatus
@@ -188,10 +189,12 @@ class CommandControllerE2ETest : RestAPITestBase() {
     }
 
     private fun submitPlainCommandAsync(request: String): String {
+        // An async submission is accepted (202) and answers `{"id": "<task id>"}` — the same
+        // contract as POST /api/commands/json. See CommandControllerSSETest for the twin helper.
         val rawBody = client.post().uri("/api/commands/plain?async=true")
             .body(request)
             .exchange()
-            .expectStatus().is2xxSuccessful
+            .expectStatus().isAccepted
             .expectBody<String>()
             .returnResult()
             .responseBody
@@ -199,9 +202,18 @@ class CommandControllerE2ETest : RestAPITestBase() {
         val body = rawBody?.trim()
         check(!body.isNullOrBlank()) { "Expected non-blank async command id body" }
 
-        return body.removeSurrounding("\"").trim().also {
-            check(it.isNotBlank()) { "Expected non-blank command id but got: $body" }
+        // A bare id is still tolerated here so this helper never hides the contract behind
+        // a parse error — the controller test is what pins the shape.
+        val id = if (body.startsWith("{")) {
+            val node = pulsarObjectMapper().readTree(body).get("id")
+            check(node != null && !node.isNull) { "Expected an 'id' field in the async response but got: $body" }
+            node.asText()
+        } else {
+            body.removeSurrounding("\"").trim()
         }
+        check(id.isNotBlank()) { "Expected non-blank command id but got: $body" }
+
+        return id
     }
 
     private fun waitForAgentHistory(commandId: String): CommandStatus? {

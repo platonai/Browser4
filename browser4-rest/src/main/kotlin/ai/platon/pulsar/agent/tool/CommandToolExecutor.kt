@@ -156,12 +156,13 @@ class CommandToolExecutor(
                 ToolSpec.Arg("id", "String", null, "Task id returned by `command.run`. Required."),
             ),
             returnType = "String",
-            description = "Cancel a running agent command task.",
+            description = "Cancel a running command task: an agent task is interrupted, a page visit runs to completion.",
             help = """
                 Stops the task's runner and reports the outcome as JSON
-                (`cancelled=true|false`). A page-load command cannot be interrupted
-                mid-navigation, so cancelling one after it finished reports
-                `cancelled=false` instead of pretending otherwise.
+                (`cancelled=true|false`, plus a `reason` whenever nothing was cancelled).
+                A page visit cannot be interrupted mid-navigation: cancelling a live one
+                reports `cancelled=false` with that reason, and so does cancelling a task
+                that already finished — the response never pretends the id is unknown.
             """.trimIndent(),
             outputSchema = TaskEnvelopes.STATUS_SCHEMA,
             examples = listOf(
@@ -252,7 +253,8 @@ class CommandToolExecutor(
                 val status = service.getStatus(sessionId, id) ?: CommandStatus.notFound(id)
                 pulsarObjectMapper().writeValueAsString(
                     envelopeOf(status, overrideStatus = if (cancelled) "cancelled" else null) +
-                        mapOf("cancelled" to cancelled)
+                        mapOf("cancelled" to cancelled) +
+                        cancelReason(cancelled, service.isPageVisitTask(id), status)
                 )
             }
 
@@ -290,5 +292,21 @@ class CommandToolExecutor(
         status.isDone -> if (status.statusCode == ResourceStatus.SC_OK) "done" else "failed"
         status.processState == "created" -> "queued"
         else -> "running"
+    }
+
+    /**
+     * Why a cancellation did not happen.
+     *
+     * The envelope alone cannot distinguish "a live page visit that cannot be
+     * interrupted" from "an agent task that already finished" — both report
+     * `cancelled=false`, and leaving the caller to guess is how a cancel silently
+     * looks like a no-op. A page visit is checked first because it is the case that
+     * is still *running* when the answer is false.
+     */
+    private fun cancelReason(cancelled: Boolean, pageVisit: Boolean, status: CommandStatus): Map<String, Any> = when {
+        cancelled -> emptyMap()
+        pageVisit -> mapOf("reason" to "page visit tasks run to completion and cannot be cancelled")
+        status.isDone -> mapOf("reason" to "task already finished")
+        else -> emptyMap()
     }
 }

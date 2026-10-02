@@ -7738,3 +7738,75 @@ pub(super) fn test_e2e_frame_commands_contract(ctx: &mut E2ECtx) {
     );
     run_command_expecting_failure(ctx, &["frame", "#no-such-frame"], "Frame not found");
 }
+
+// ---------------------------------------------------------------------------
+// click / dblclick dispatch (Windows debug stack overflow regression)
+// ---------------------------------------------------------------------------
+
+/// Regression for the Windows debug-build stack overflow: `click` and `dblclick`
+/// used to abort the CLI (`exit -1073741571` / `STATUS_STACK_OVERFLOW`) **before**
+/// sending the tool request. Their dispatch ran one async layer deeper than
+/// `hover`/`fill`/`press`, and the deepest frame (`resolve_ref`'s per-call
+/// `Regex::new`) tripped the 1 MB main-thread stack reserve Windows gives an
+/// executable by default — an optimized build and an 8 MB reserve both survived.
+///
+/// The mock server pins it without a browser: the crash happened before any tool
+/// call, so a canned response is enough, and the whole scenario runs in ~1 s.
+/// See `docs-dev/cli-e2e-test-coverage-analysis.md` and
+/// `coworker/tasks/issues/draft/2026/1001/20261001-224111-windows-click-stack-overflow.issues.md`.
+pub(super) fn test_mock_click_is_stack_safe(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // The two commands that used to overflow before reaching the backend.
+    for (command, confirmation) in [
+        ("click", "✓ Clicked #click-target"),
+        ("dblclick", "✓ Double-clicked #click-target"),
+    ] {
+        let result = run_command(ctx, &[command, "#click-target"]);
+        assert!(
+            !result.stderr.contains("has overflowed its stack"),
+            "{command} must not overflow the main thread stack:\n{}",
+            result.stderr
+        );
+        assert!(
+            result.stdout.contains(confirmation),
+            "{command} must confirm the interaction:\n{}",
+            result.stdout
+        );
+    }
+
+    // A snapshot ref goes through the same `resolve_ref` path (e5 → backend:5).
+    let by_ref = run_command(ctx, &["click", "e5"]);
+    assert!(
+        by_ref.stdout.contains("✓ Clicked e5"),
+        "a snapshot-ref click must reach the backend:\n{}",
+        by_ref.stdout
+    );
+
+    // The commands that never crashed stay healthy next to it.
+    run_command(ctx, &["hover", "#click-target"]);
+    run_command(ctx, &["fill", "#click-target", "stack probe"]);
+
+    // `--follow` still takes the tab/navigation bookkeeping path.
+    let follow = run_command(ctx, &["click", "#click-target", "--follow"]);
+    assert!(
+        follow.stdout.contains("✓ Clicked #click-target"),
+        "--follow must still click:\n{}",
+        follow.stdout
+    );
+
+    // And the backend really received them.
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let click_calls = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_click")
+        .count();
+    assert!(
+        click_calls >= 4,
+        "expected every click to reach the backend, saw {click_calls} of 4"
+    );
+}

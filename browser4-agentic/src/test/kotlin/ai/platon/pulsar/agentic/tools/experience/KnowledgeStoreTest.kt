@@ -230,4 +230,60 @@ class KnowledgeStoreTest {
             assertEquals(0, result.total)
         }
     }
+
+    @Nested
+    @DisplayName("configured base dir")
+    inner class ConfiguredBaseDir {
+        @Test
+        @DisplayName("resolution falls back to the cwd-relative knowledge dir")
+        fun testDefaultResolution() {
+            withKnowledgeDir(null) {
+                assertEquals(KnowledgeStore.DEFAULT_BASE_DIR, KnowledgeStore.resolveBaseDir())
+            }
+        }
+
+        @Test
+        @DisplayName("knowledge.dir relocates a no-argument store")
+        fun testPropertyWins() {
+            val configured = tempDir.resolve("configured-store")
+            withKnowledgeDir(configured.toString()) {
+                assertEquals(configured, KnowledgeStore.resolveBaseDir())
+
+                // The no-argument constructor is what the executor default and the
+                // REST bean use: it must follow the property, otherwise the
+                // experience_* tools and the engine's automatic deposits fork into
+                // two different stores.
+                val store = KnowledgeStore()
+                store.initializeStore()
+                assertTrue(configured.resolve("traces").exists(), "traces/ must land under the configured dir")
+                assertTrue(configured.resolve("facts").exists(), "facts/ must land under the configured dir")
+            }
+        }
+
+        @Test
+        @DisplayName("a blank knowledge.dir counts as unset")
+        fun testBlankIsUnset() {
+            withKnowledgeDir("   ") {
+                assertEquals(KnowledgeStore.DEFAULT_BASE_DIR, KnowledgeStore.resolveBaseDir())
+            }
+        }
+
+        private fun withKnowledgeDir(value: String?, block: () -> Unit) {
+            val previous = System.getProperty(KnowledgeStore.KNOWLEDGE_DIR_PROPERTY)
+            try {
+                if (value == null) {
+                    System.clearProperty(KnowledgeStore.KNOWLEDGE_DIR_PROPERTY)
+                } else {
+                    System.setProperty(KnowledgeStore.KNOWLEDGE_DIR_PROPERTY, value)
+                }
+                block()
+            } finally {
+                if (previous == null) {
+                    System.clearProperty(KnowledgeStore.KNOWLEDGE_DIR_PROPERTY)
+                } else {
+                    System.setProperty(KnowledgeStore.KNOWLEDGE_DIR_PROPERTY, previous)
+                }
+            }
+        }
+    }
 }
