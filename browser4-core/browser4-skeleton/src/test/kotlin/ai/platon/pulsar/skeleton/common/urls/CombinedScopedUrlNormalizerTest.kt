@@ -24,7 +24,10 @@ class CombinedScopedUrlNormalizerTest {
         val result = normalizer.normalize(urlAware, options, false)
 
         assertNotNull(result)
-        assertEquals("http://example.com", result.url.toString())
+        // A url with no path *is* the root path: `normalize` folds it to `/` (RFC 3986 §6.2.3), and
+        // its result is the page-store key the whole pipeline looks a page up by — see the base
+        // library's URLUtilsTest.
+        assertEquals("http://example.com/", result.url.toString())
     }
 
     @Test
@@ -56,7 +59,8 @@ class CombinedScopedUrlNormalizerTest {
         val result = normalizer.normalize(urlAware, options, false)
 
         assertNotNull(result)
-        assertEquals("http://example.com", result.url.toString())
+        // See testNormalizeWithValidUrlAndOptions: the empty path is the root.
+        assertEquals("http://example.com/", result.url.toString())
         val detail = result.detail
         assertNotNull(detail)
         requireNotNull(detail)
@@ -75,7 +79,8 @@ class CombinedScopedUrlNormalizerTest {
         val result = normalizer.normalize(urlAware, options, false)
 
         assertNotNull(result)
-        assertEquals("http://example.com", result.url.toString())
+        // See testNormalizeWithValidUrlAndOptions: the empty path is the root.
+        assertEquals("http://example.com/", result.url.toString())
     }
 
     @Test

@@ -178,7 +178,7 @@ class UserCommandExecutor(
         // A url whose *fragment* holds an invalid escape (`https://x.com/a#100%`) is loadable — the
         // fragment is dropped by the normalization — and URLUtils used to reject it outright, which
         // demoted a perfectly good url command to a free-form agent task.  The fix is in
-        // pulsar-common 4.11.23 (`URLUtils.normalize` strips the fragment before it parses).
+        // pulsar-common (since 4.11.23: `URLUtils.normalize` strips the fragment before it parses).
         return Strings.isSingleLine(s) && URLUtils.normalizeOrNull(s) != null
     }
 

@@ -1,8 +1,8 @@
 # URL Normalization 修复计划与执行记录
 
 > 配套审查报告：[`url-normalization-review.md`](./url-normalization-review.md)
-> 分支：Browser4 `fix/url-normalization-consistency`、browser4base `feat/url-standard-and-canonical-form`
-> （fragment 修复已随 `v4.11.23` 发布并被 browser4 消费；B4/C2-B 待 4.11.24）
+> 分支：Browser4 `fix/url-normalization-consistency`、browser4base `main`
+> （fragment 修复随 `v4.11.23` 发布；B4/C2-B 随 **`v4.11.24`** 发布 —— 2026-10-02，browser4 已消费 `4.11.24`）
 > 执行原则：先修"行为与自身文档/契约矛盾"的地方（不改对外语义），再改"语义本身有歧义"的地方（与用户确认后落地）。
 
 ---
@@ -340,7 +340,9 @@ base64url 字母表是 `A-Za-z0-9-_`（外加 `=` 填充），且 Java 要求长
 ### 8.2 C2-B：canonical form
 
 `PulsarSession.normalize()`（内部默认 = `URLUtils.normalize`，外部扩展 = `ChainedUrlNormalizer`）的
-**输出**就是"同一资源"的判据。本轮折叠了四种**可证明**等价的拼写：
+**输出**就是"同一资源"的判据。折叠的拼写分两类。
+
+**RFC 自身的等价**（§6.2.2 / §6.2.3）：
 
 | 折叠 | 例子 |
 |---|---|
@@ -348,32 +350,46 @@ base64url 字母表是 `A-Za-z0-9-_`（外加 `=` 填充），且 Java 要求长
 | 默认端口 | `:443`（https）/ `:80`（http）等于不写 |
 | 空路径 = `/` | `http://h` = `http://h/` |
 | `.` / `..` 段 | `/a/./b/../c` = `/a/c` |
+| unreserved 字符的转义（十六进制大小写均可） | `%7Euser` = `%7euser` = `~user` |
 
-四种**故意不折叠**，每种都有测试钉住并写明理由：非根路径的尾斜杠、重复分隔符（`//`）、
-unreserved 字符的转义（`%7E`）、query 参数顺序。它们不是可证明的同一资源，而这条 URL 是**浏览器实际要
-去请求的地址**（签名 URL 覆盖的是拼写，不是字符；`/p` 与 `/p/` 在很多服务器上是不同路由）。
+**按策略折叠**（用户决定，随 `v4.11.24` 生效）：在本文档管线遇到的服务器上它们是同一资源，分开会让
+同一页在页面库里占多行，第二次访问读不到第一次的副本。
 
-crawl 对它自己的身份（`CrawlSupport.normalizeForVisit`）折叠了尾斜杠与 query —— 那回答的是
+| 折叠 | 例子 |
+|---|---|
+| 非根路径的尾斜杠 | `/p/` = `/p` |
+| 重复分隔符 | `/a//b` = `/a/b` |
+| query 参数顺序（按名稳定排序） | `?b=2&a=1` = `?a=1&b=2`；同名参数保持相对顺序，`?a=1&a=2` ≠ `?a=2&a=1`（稳定排序） |
+
+**折叠只改 key，不改地址**：`NormURL` 把调用方的拼写作为 `href` 带在身旁，`NavigateEntry` 叫它
+`userTypedUrl`，`InteractiveBrowserEmulator` 取 `fetchTask.href ?: fetchTask.url` —— 所以 `/p/` 仍然
+按 `/p/` 去抓取，只是存进 `/p` 那一行。仍然**不**折叠的：保留字符转义的大小写（`%2F` ≠ `/`，解码会改变
+解析）、路径大小写、同名参数的相对顺序、非默认端口、scheme。
+
+crawl 对它自己的身份（`CrawlSupport.normalizeForVisit`）另外折叠了尾斜杠与 query —— 那回答的是
 "这个 href 值不值得排队"，比"是不是同一页"更粗，差异是有意的。
 
-### 8.3 生效顺序
+### 8.3 生效顺序（已完成）
 
-1. 合并 `feat/url-standard-and-canonical-form` 并发布 4.11.24；
-2. 把 `browser4-dependencies/pom.xml` 的 `browser4-base.version` 改成 4.11.24；
-3. 重跑四模块快速套件。
+1. ✅ 基础库仓库（`browser4base`）发版 **`v4.11.24`**：2026-10-02 的 GitHub Actions `Release` 全绿
+   （build → tests → deploy 到 Maven Central → GitHub Release → sync-main → bump 到 `4.11.25-SNAPSHOT`）；
+   发版前先跑通了本地 25 模块套件，并修掉三处遗留的陈旧断言（`CombinedScopedUrlNormalizerTest` 的
+   "空路径 = `/`"）。
+2. ✅ `browser4-dependencies/pom.xml` 的 `browser4-base.version` → `4.11.24`。
+3. ✅ 重跑 browser4 全量套件：只有 base 那两份测试的 browser4 副本带着同样的陈旧断言（空路径 = `/`、
+   query 顺序），已随升级一起修正。
 
 **升级时要注意的一处放大**：`isStandard` 对 `file://` 从 false 变 true（`normalize` 一直支持 `file:`）。
 browser4 里用 `isStandard` 的门控（`DomUtils` 富文本收集、`JsoupParser` 的 href/referrer、
 `StatefulPageVisitor` 的请求校验、crawl/scrape 的种子校验）届时会接受 `file://`。若不希望 crawl 接受
 `file://` 种子，需要在**种子**门控上再加一条显式的"能通过网络抓取"的要求 —— 独立的小改动，与 4.11.24
-的升级一起做最自然。
+的升级一起做最自然。（**决定：不加这道闸**。）
 
-### 8.4 本轮尚未折叠的四种拼写（需要你确认）
+### 8.4 折叠范围（原"待你确认"项已决定）
 
-上表"故意不折叠"的四项**不是**技术上的不可能，而是取舍：折叠它们会让 `normalize` 的输出与用户/服务器
-看到的拼写不同（尾斜杠、`//`、`%7E`、query 顺序都可能被签名或路由区分）。你的规则是
-"`PulsarSession.normalize()` 结果一致 = 同一资源"，如果希望把这四项也纳入同一身份，说一声即可 ——
-改动本身很小（各 2-4 行），代价是会改变浏览器实际请求的地址，需要一起评估签名 URL 与重定向链。
+非根路径尾斜杠、`//`、`%7E`、query 顺序这四项原本列为"需要确认"，你已决定**并入** `normalize`：
+`%7E` 按 RFC 解码（任意十六进制大小写），其余三项按策略折叠 —— 见 8.2 的两张表与
+`URLUtilsTest#normalizeFoldsEquivalentSpellings` / `#normalizeKeepsRealDifferences`。
 
 ---
 
@@ -389,7 +405,7 @@ browser4 里用 `isStandard` 的门控（`DomUtils` 富文本收集、`JsoupPars
 | page store 读 | `normURL.urlString` | `LoadComponent.kt:364` |
 | page store 写 | `page.url` | `LoadComponent.kt:703`（`webDb.put(page)`）、`AbstractPulsarSession.persist:725` |
 | X-SQL 缓存冻结 | `session.normalize(url, READ_ONLY_OPTION).urlString` | `ScrapeAPIUtils.resolveQueryUrl:171` |
-| **送给浏览器的地址** | **原始 href**，回退到规范化 url | `InteractiveBrowserEmulator.kt:686-693` `val userTypedUrl = fetchTask.href ?: fetchTask.url`；`NavigateEntry.userTypedUrl`；`HTMLSnapshotToolExecutor.kt:283` |
+| **送给浏览器的地址** | **原始 href**，回退到规范化 url | `InteractiveBrowserEmulator` 的 `val userTypedUrl = fetchTask.href ?: fetchTask.url`；`NavigateEntry.userTypedUrl`；`HTMLSnapshotToolExecutor` 的 capture / read 分派（capture 一律用活动标签页自己的规范化 url 作 key） |
 
 也就是说：**规范化后的 url 只做存取身份，原始 href 做浏览器地址** —— 这正是你在 C1-A 里定的原则，
 也是 `NormURL` KDoc 里那句 "Href is the first choice to locate resources" 的意思。C1-A 对 `goto` 的改动

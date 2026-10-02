@@ -73,7 +73,16 @@ class CombinedUrlNormalizerTest {
 
         val result = normalizer.normalize(url, LoadOptions.parse("-ignoreUrlQuery"), false)
 
-        assertEquals("http://example.com/search?q=x&page=3", result.url.toString())
+        // The query must survive — the flag concerns *discovered* out-link hrefs, not the url the
+        // caller asked to load.  Its parameters come back in the canonical order `normalize` folds
+        // them into (query parameters are ordered by name; see the base library's URLUtilsTest),
+        // which is the page-store identity, not the address the browser is sent to.
+        val loaded = result.url.toString()
+        assertTrue(loaded.startsWith("http://example.com/search?"), "the query must survive: $loaded")
+        assertTrue(
+            loaded.contains("q=x") && loaded.contains("page=3"),
+            "both parameters must survive: $loaded"
+        )
     }
 
     @Test
