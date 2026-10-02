@@ -644,6 +644,10 @@ internal class CrawlRoundRunner(
                 // depth lookup and the diagnosis text, never the row identity.
                 val servedUrl = document.baseURI?.takeIf { it.isNotBlank() } ?: page.url
                 val key = normalizeForVisit(page.url)
+                // The identity this round queued the page under.  It differs from `key` whenever the
+                // document was served under another url (a redirect, or a `<base href>`), and it is
+                // the key the ledger settles the submission with — see `resolveQueueDepthKey`.
+                val queueKey = resolveQueueDepthKey(page.url, servedUrl, depths)
                 // Refuse everything once the round is terminal: a duplicate parse
                 // event arriving minutes later used to keep submitting links for a
                 // task the caller had already been told was finished (issue #592).
@@ -664,7 +668,7 @@ internal class CrawlRoundRunner(
                 // the round did fetch is the one outcome the ledger exists to
                 // prevent.  It is not expanded either, because a depth that cannot
                 // be bounded is exactly how a crawl runs away.
-                val currentDepth = resolveQueueDepth(page.url, servedUrl, depths)
+                val currentDepth = queueKey?.let { depths[it] }
 
                 // Only a load that delivered a document of its own may become a
                 // row.  A fetch that failed here is not an error the caller sees:
@@ -731,7 +735,10 @@ internal class CrawlRoundRunner(
                     // Publish outside the list's monitor (see crawlDepth1): the row log
                     // append it triggers is disk I/O, and the snapshot is already taken.
                     progress.publishPages(published, linksDiscovered.get())
-                    ledger.recordSuccess(key)
+                    // Both identities: the row reports `key`, the submission is tracked as
+                    // `queueKey`, and settling only the first would leave a redirected page in
+                    // `outstanding()` beside its own row.
+                    ledger.recordSuccess(key, queueKey)
                     publishWorkIfDue(progress, ledger, results, linksDiscovered.get())
                     logger.debug("Crawl {}: depth={} page={}", taskId, currentDepth, servedUrl)
                 } else {

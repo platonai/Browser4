@@ -210,8 +210,7 @@ class ExperienceToolExecutor(
         }
 
         val domainName = UrlNormalizer.extractDomain(url)
-        val normalizedUrl = UrlNormalizer.normalize(url)
-        val urlPattern = extractUrlPattern(normalizedUrl)
+        val urlPattern = UrlNormalizer.urlPatternOf(url)
 
         // Classify intent and failure
         // Use explicit --intent first, then trace's intent field, then fall back to
@@ -440,8 +439,7 @@ class ExperienceToolExecutor(
         val force = paramBool(args, "force", "deep_learn", required = false, default = false) ?: false
 
         val domainName = UrlNormalizer.extractDomain(url)
-        val normalizedUrl = UrlNormalizer.normalize(url)
-        val urlPattern = extractUrlPattern(normalizedUrl)
+        val urlPattern = UrlNormalizer.urlPatternOf(url)
         val classifiedIntent = Intent.classify(intentText)
         val intentKey = classifiedIntent.name.lowercase()
 
@@ -527,23 +525,6 @@ class ExperienceToolExecutor(
             lower.contains("publish") || lower.contains("post") || lower.contains("x_post")
                 || lower.contains("cross") || lower.contains("发帖") || lower.contains("发布") -> "publish"
             else -> null
-        }
-    }
-
-    private fun extractUrlPattern(normalizedUrl: String): String {
-        val path = UrlNormalizer.extractPath(normalizedUrl)
-        val segments = path.split('/').filter { it.isNotEmpty() }
-        if (segments.isEmpty()) return "/*"
-
-        val lastSegment = segments.last()
-        val isLikelyId = lastSegment.any { it.isDigit() } &&
-            lastSegment.length > 4 &&
-            !lastSegment.all { it.isLetter() }
-
-        return if (isLikelyId) {
-            "/" + segments.dropLast(1).joinToString("/") + "/*"
-        } else {
-            "/" + segments.joinToString("/")
         }
     }
 }

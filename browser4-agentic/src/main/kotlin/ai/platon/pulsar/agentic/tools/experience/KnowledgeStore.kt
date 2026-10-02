@@ -273,7 +273,7 @@ class KnowledgeStore(
 
     /** Write one facts file; caller must hold the domain lock. */
     private fun writeFactsLocked(facts: KnowledgeFacts) {
-        val dir = factsDir.resolve(facts.domain)
+        val dir = factsDir.resolve(domainSegment(facts.domain))
         if (!dir.exists()) Files.createDirectories(dir)
         val file = factsFilePath(facts.domain, facts.intent)
         writeAtomicYaml(file, mapFromFacts(facts))
@@ -311,9 +311,27 @@ class KnowledgeStore(
     }
 
     private fun factsFilePath(domain: String, intent: String): Path {
-        val safeIntent = intent.take(50).replace(Regex("[^a-zA-Z0-9_]"), "_")
-        return factsDir.resolve(domain).resolve("${safeIntent}.yaml")
+        return factsDir.resolve(domainSegment(domain)).resolve("${intentSegment(intent)}.yaml")
     }
+
+    /**
+     * A name that is safe as one path segment.
+     *
+     * The domain comes from [UrlNormalizer.extractDomain], which now only yields host-shaped text —
+     * but it is still applied to whatever the caller passed, and this is the last boundary before a
+     * string becomes a *path*: a `.` or `..` component escapes the store, and a name that is not even
+     * a legal file name loses the fact.  The rule is an allow-list, so a name can only ever shrink.
+     */
+    private fun safeSegment(raw: String, maxLength: Int): String {
+        return raw.take(maxLength)
+            .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            .trim('.')
+            .ifBlank { "_" }
+    }
+
+    private fun domainSegment(domain: String): String = safeSegment(domain, 100)
+
+    private fun intentSegment(intent: String): String = safeSegment(intent, 50)
 
     // =========================================================================
     // Query — Intent-Based Resolution
@@ -334,20 +352,29 @@ class KnowledgeStore(
         val domain = UrlNormalizer.extractDomain(url)
         val classifiedIntent = Intent.classify(intentText)
         val intentKey = classifiedIntent.name.lowercase()
-
-        // Level 1: Exact (domain, intent) match
-        loadFacts(domain, intentKey)?.let { facts ->
-            val stats = loadStats(domain, intentKey)
-            return buildQueryResult(facts, stats, "intent_match")
-        }
-
-        // Level 2: (domain, url_pattern) match — try any intent for same domain
         val normalizedUrl = UrlNormalizer.normalize(url)
-        val domainFacts = listFactsForDomain(domain)
-        val urlMatch = domainFacts.firstOrNull { facts ->
-            facts.urlPattern.isNotBlank() &&
-                UrlNormalizer.matches(facts.urlPattern, normalizedUrl)
+
+        // Level 1: Exact (domain, intent) match — but only when the stored facts also describe this
+        // *page*.  A fact holds one `urlPattern`, so returning it on the intent alone handed a
+        // product-detail recipe to a search page of the same domain: the caller cannot tell a wrong
+        // answer from a right one, and never falls through to the url-aware levels below.  A fact
+        // without a pattern cannot be checked and is still returned.
+        loadFacts(domain, intentKey)?.let { facts ->
+            if (facts.urlPattern.isBlank() || UrlNormalizer.matches(facts.urlPattern, normalizedUrl)) {
+                val stats = loadStats(domain, intentKey)
+                return buildQueryResult(facts, stats, "intent_match")
+            }
         }
+
+        // Level 2: (domain, url_pattern) match — try any intent for same domain.
+        //
+        // The *most specific* matching pattern wins, not the first file the directory listing
+        // happened to return: `/s?k=*` and the coarser `/s` (and `/dp/*` vs `/`) can both match, and
+        // picking whichever came first made the answer depend on filesystem order.
+        val domainFacts = listFactsForDomain(domain)
+        val urlMatch = UrlNormalizer
+            .findBestMatch(normalizedUrl, domainFacts.map { it.urlPattern }.filter { it.isNotBlank() })
+            ?.let { best -> domainFacts.first { it.urlPattern == best } }
         if (urlMatch != null) {
             val stats = loadStats(domain, urlMatch.intent)
             return buildQueryResult(urlMatch, stats, "url_match")
@@ -522,7 +549,7 @@ class KnowledgeStore(
     // =========================================================================
 
     private fun listFactsForDomain(domain: String): List<KnowledgeFacts> {
-        val dir = factsDir.resolve(domain)
+        val dir = factsDir.resolve(domainSegment(domain))
         if (!dir.exists()) return emptyList()
         return dir.listDirectoryEntries("*.yaml").mapNotNull { file ->
             try {

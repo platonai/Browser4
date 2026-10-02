@@ -146,7 +146,8 @@ browser4-cli get text "#contactForm > button.primary"  # verify with the generat
 
 ```bash
 browser4-cli open --headless "https://example.com/product/42"
-browser4-cli htmlsnapshot get text ".product-title"   # reads the live page — capture is optional
+browser4-cli htmlsnapshot                             # snapshot metadata for the page the tab is on
+browser4-cli htmlsnapshot get text ".product-title"   # reads the tab's fresh snapshot (captured here)
 browser4-cli htmlsnapshot get attr ".product-image" src
 ```
 

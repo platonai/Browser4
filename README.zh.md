@@ -221,7 +221,7 @@ browser4-cli fill e16 "Browser4" --submit
 # 从当前页面实时提取数据
 browser4-cli get text "h1"
 
-# 捕获静态 DOM 快照，用于重复提取
+# 先把页面写入页面库，再从这份副本中提取
 browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
@@ -269,7 +269,7 @@ browser4-cli pdf --filename page.pdf
 | 工具 | 适用场景 | 输入模型 | 输出模型 |
 |---|---|---|---|
 | `snapshot` | 点击、输入、查找可交互元素 | 实时可访问性树 | `e15` 这类 ref |
-| `htmlsnapshot` | DOM 检查、CSS 提取、X-SQL | 实时页面 DOM（抓取可选） | CSS 选择器和查询结果 |
+| `htmlsnapshot` | DOM 检查、CSS 提取、X-SQL | 活动页的最新快照（每条命令都先 capture 活动页，再在快照上操作） | CSS 选择器和查询结果 |
 
 #### LLM 配置
 
@@ -432,25 +432,25 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 
 #### HTML 快照与 X-SQL 提取
 
-`htmlsnapshot` 会捕获并存储原始 DOM 快照，是 Browser4 结构化提取工作流的核心。
+`htmlsnapshot` 会把活动标签页正在显示的页面序列化并生成快照，是 Browser4 结构化提取工作流的核心。**htmlsnapshot 家族中每条命令都先 capture 活动页取得最新快照，然后在这份快照上操作**：capture 返回元数据，读命令消费这份快照——所以读取看到的已经是页面此刻的状态（表单提交结果、SPA 更新、`eval` 改动），无需额外先执行一次 capture。指向别的 URL 的命令（`readability <url>`、`query --url <url>`）读的是该 URL 自己的库内副本，库里没有时做独立只读加载；标签页没有打开的 URL 无法 capture，因此该标签页的文档绝不会被记到它名下。
 
 | 命令 | 说明 |
 |---|---|
 | `htmlsnapshot` | `htmlsnapshot capture` 的简写。 |
-| `htmlsnapshot capture` | 捕获并存储静态 HTML 快照，同时返回页面和交互元素的元数据。 |
-| `htmlsnapshot get <field> [selector] [name]` | 从实时页面 DOM 中提取第一个匹配项的 `text`、`textcontent`、`html` 或 `attr`。 |
-| `htmlsnapshot get all <field> [selector] [name]` | 从实时页面 DOM 中提取全部匹配值。支持 `--offset` 和 `--limit`。 |
-| `htmlsnapshot query [url]` | 运行 X-SQL。支持 `--sql <query\|@file>`、`--sql-stdin`、`--sql-base64`、结果分页和提取导向输出选项。 |
-| `htmlsnapshot export` | 把实时页面 HTML 导出到文件。支持位置参数文件路径或 `--file <path>`，以及 `--clean`。 |
-| `htmlsnapshot summary` | 基于实时页面生成压缩版 Web Page Summary Index（WPSI）。 |
-| `htmlsnapshot grep <pattern>` | 用 grep 风格参数搜索实时页面 HTML。 |
-| `htmlsnapshot inspect [selector]` | 发现重复 DOM 模式和候选选择器。支持 `--max`、`--depth`、`--stdin`、`--selector-base64`。 |
-| `htmlsnapshot readability [url]` | 用 Readability 式启发式算法一步提取正文——无需 LLM、零 token。支持 `--text-only` 与分页。 |
+| `htmlsnapshot capture` | 序列化活动标签页的页面并写入页面库，同时返回页面和交互元素的元数据（覆盖该标签页规范化 URL 对应的旧记录）。 |
+| `htmlsnapshot get <field> [selector] [name]` | 从活动页的最新快照中提取第一个匹配项的 `text`、`textcontent`、`html` 或 `attr`。 |
+| `htmlsnapshot get all <field> [selector] [name]` | 从活动页的最新快照中提取全部匹配值。支持 `--offset` 和 `--limit`。 |
+| `htmlsnapshot query [url]` | 对活动页的最新快照（先 capture 再查询）或指定 URL 的库内页面运行 X-SQL。支持 `--sql <query\|@file>`、`--sql-stdin`、`--sql-base64`、结果分页和提取导向输出选项。 |
+| `htmlsnapshot export` | 把活动页的最新快照的 HTML 导出到文件。支持位置参数文件路径或 `--file <path>`，以及 `--clean`。 |
+| `htmlsnapshot summary` | 基于活动页的最新快照生成压缩版 Web Page Summary Index（WPSI）。 |
+| `htmlsnapshot grep <pattern>` | 用 grep 风格参数搜索活动页最新快照的 HTML。 |
+| `htmlsnapshot inspect [selector]` | 在活动页的最新快照上发现重复 DOM 模式和候选选择器。支持 `--max`、`--depth`、`--stdin`、`--selector-base64`。 |
+| `htmlsnapshot readability [url]` | 用 Readability 式启发式算法提取正文：不给 URL 时读活动页的最新快照；给了 URL 则读该 URL 自己的库内副本，绝不会把当前标签页的文档记到该 URL 名下。支持 `--text-only` 与分页。 |
 
 重要规则：
 
 - 需要 ref 和交互时用 `snapshot`
-- 需要重复 DOM 提取时用 `htmlsnapshot`
+- 需要重复 DOM 提取时用 `htmlsnapshot`；读命令每次都会先捕获活动页，所以页面在标签页里变化后直接重跑读命令即可
 - 推荐使用 `htmlsnapshot query --sql @query.sql`，避免 shell 转义问题
 - 需要关联型列表提取时，优先使用 `htmlsnapshot query`，而不是多次 `get all`
 - 需要一步提取正文（无需手写选择器）时，用 `htmlsnapshot readability`

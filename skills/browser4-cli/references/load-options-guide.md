@@ -184,8 +184,8 @@ All item options mirror their main counterparts but apply only to detail pages e
 | Option | Short | Purpose | Example |
 |--------|-------|---------|---------|
 | `-parse` | `-ps` | Enable parsing after fetch (flag) | `-parse` |
-| `-ignoreUrlQuery` | | Strip query parameters from URLs — treats `?page=1` and `?page=2` as same resource (flag) | `-ignoreUrlQuery` |
-| `-noNorm` | | Disable URL normalization — may cause duplicate URLs (flag) | `-noNorm` |
+| `-ignoreUrlQuery` | | Treat query variants of one path as one resource when **discovered** hrefs are queued — treats `?page=1` and `?page=2` as same resource (flag) | `-ignoreUrlQuery` |
+| `-noNorm` | | Disable URL normalization for discovered hrefs, and for a url that carries `-noNorm` itself — may cause duplicate URLs (flag) | `-noNorm` |
 
 ### 10. Retry & Failure Handling
 

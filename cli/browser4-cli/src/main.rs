@@ -8247,6 +8247,7 @@ async fn handle_html_snapshot_capture(
         // takes a static copy; eval, snapshot, and other commands still work
         // against the live DOM.
         eprintln!("  ℹ️  The live page is still accessible — use `eval`, `snapshot`, or `click` to continue interacting.");
+        eprintln!("  ℹ️  Reads (`get`, `query`, `export`) now serve this captured copy — re-run `htmlsnapshot` after the page changes.");
         // Next-step hints
         eprintln!("  💡 Try these next:");
         eprintln!("    Use `get all text` to extract visible text, or `get all attr <name>` for attribute values.");
@@ -8363,7 +8364,10 @@ async fn handle_html_snapshot_get(
         cli_println!("{}", text);
         cli_println!("No elements matched \"{}\".", display_selector);
         cli_println!(
-            "  The read used the LIVE page, so the element is simply not there — check the selector, the current URL, and that the page has finished loading."
+            "  The read served the STORED copy of the page, so the element is simply not there — check the selector, the current URL, and that the page has finished loading."
+        );
+        cli_println!(
+            "  If the page changed in the tab (a form was submitted, a list was sorted, `eval` inserted markup), re-run `htmlsnapshot` to capture it, then repeat the read."
         );
         cli_println!(
             "  Verify the selector with `htmlsnapshot grep \"{}\"`, or discover valid selectors with `htmlsnapshot inspect`.",
@@ -9719,12 +9723,13 @@ async fn handle_html_snapshot_inspect(
             render_speculative(sel, count);
         }
         // If the selector is :root (the default, meaning "everything") and there
-        // are 0 matches, the page is most likely not loaded yet.  inspect reads
-        // the LIVE page, so there is nothing to capture first.
+        // are 0 matches, the page was most likely not captured (or was captured
+        // before it finished loading).  inspect reads the STORE, so the fix is a
+        // fresh `htmlsnapshot`, not a different selector.
         if selector == ":root" {
             cli_println!("");
             cli_println!("  ⚠️  No elements matched the default :root selector.");
-            cli_println!("  inspect analyzes the LIVE page, so no capture is needed — make sure the page is");
+            cli_println!("  inspect analyzes the STORED snapshot — run `browser4-cli htmlsnapshot` once the page has");
             cli_println!("  loaded, then retry with a narrower selector:");
             cli_println!("       browser4-cli htmlsnapshot inspect \".your-selector\"");
         } else {

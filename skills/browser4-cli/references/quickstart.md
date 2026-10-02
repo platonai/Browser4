@@ -65,7 +65,7 @@ browser4-cli htmlsnapshot get all text "<css-selector>"   # all matches
 | Use for | **Interaction** — get refs to click/fill | **Extraction** — read text / data / attributes |
 | Decider | "I need to click a button / find an input" | "I need to read an article / extract a price" |
 
-Every `htmlsnapshot` read — `get` / `get all` / `inspect` / `summary` / `grep` / `export` / `query` — serves the **live DOM** of the active tab, so **no prior capture is needed**. `htmlsnapshot` (capture) is optional: it returns page metadata and stores an archived copy. The only real precondition is a loaded, navigable page (http(s)/file). JS-updated content is therefore visible to reads without extra steps; use `eval --json` for arbitrary JavaScript.
+Every `htmlsnapshot` command — `capture` / `get` / `get all` / `inspect` / `summary` / `grep` / `export` / `query` / `readability` — **captures the active page first and then works on that snapshot**: `capture` returns the metadata, the reads consume the snapshot. So a read already sees the page as it is right now — JS-updated content (post-interaction, form submission, SPA route change) included — with no capture step to remember. A command aimed at another URL (`readability <url>`, `query --url <url>`) reads that URL's own stored copy instead, or loads it read-only when the store has nothing; the tab's document is never filed under it. The only precondition is a loaded, archivable page (http(s)/file); use `eval --json` for arbitrary JavaScript against the live DOM.
 
 ## Refs: Single-Use Handles
 
@@ -85,7 +85,7 @@ refs are temporary handles: any interaction (click/fill/type/press/select/check/
 
 ```
 Extracting data?
-├─ Needs interaction first? → snapshot + refs → interact → extract (reads use the live DOM)
+├─ Needs interaction first? → snapshot + refs → interact → `htmlsnapshot` (capture) → read the captured copy
 ├─ Static page, single field → htmlsnapshot get text "<sel>"
 ├─ Static page, correlated fields (title+price+URL) → query with DOM_LOAD_AND_SELECT(@url,'.card')
 ├─ Dynamic / complex JS → eval --json

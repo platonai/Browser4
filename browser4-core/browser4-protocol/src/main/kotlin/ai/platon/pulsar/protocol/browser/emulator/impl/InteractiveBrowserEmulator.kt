@@ -423,17 +423,42 @@ open class InteractiveBrowserEmulator(
 
     @Throws(NavigateTaskCancellationException::class, WebDriverCancellationException::class)
     private suspend fun browseWithWebDriver(navigateTask: NavigateTask, driver: WebDriver): Response {
-        val fetchTask = navigateTask.fetchTask
-        checkState(navigateTask.fetchTask, driver)
         require(driver is AbstractWebDriver)
 
-        val browserSettings = driver.browser.settings
         // TODO: a better flag to specify whether to capture or navigate
-        val page = fetchTask.page
+        val page = navigateTask.fetchTask.page
         require(page is AbstractWebPage)
         val capture = page.hasVar(VAR_CAPTURE)
-        val interactResult = if (capture) {
+
+        // `ignoreDOMFeatures` lives on the DRIVER, and only a capture wants it: it suppresses the
+        // driver-side DOM feature computation (`willComputeFeature`) and the HTML integrity check for
+        // the load being built — a capture serializes the live document itself and the DOM may already
+        // be mutated by the interactions that ran before it.  It must not outlive this load: leaving it
+        // set made every later navigation on the same driver silently skip both, so a tab that captured
+        // a snapshot once kept navigating pages whose elements carry no `vi` features.  (The base
+        // library's pulsar-protocol copy carries the same fix; this module is the one browser4 runs.)
+        val previousIgnoreDOMFeatures = driver.ignoreDOMFeatures
+        if (capture) {
             driver.ignoreDOMFeatures = true
+        }
+        try {
+            return browseAndCreateResponse(navigateTask, driver, capture)
+        } finally {
+            driver.ignoreDOMFeatures = previousIgnoreDOMFeatures
+        }
+    }
+
+    @Throws(NavigateTaskCancellationException::class, WebDriverCancellationException::class)
+    private suspend fun browseAndCreateResponse(
+        navigateTask: NavigateTask,
+        driver: AbstractWebDriver,
+        capture: Boolean,
+    ): Response {
+        val fetchTask = navigateTask.fetchTask
+        checkState(navigateTask.fetchTask, driver)
+
+        val browserSettings = driver.browser.settings
+        val interactResult = if (capture) {
             captureLivePage(navigateTask, driver, browserSettings)
         } else {
             navigateAndInteract(navigateTask, driver, browserSettings)
@@ -683,14 +708,17 @@ open class InteractiveBrowserEmulator(
 
         checkState(fetchTask, driver)
 
-        // FetchTask.url is a normalized url that might be different from the FetchTask.href.
-        // FetchTask.href has the higher priority to locate a resource, since it is not normalized,
-        // A human being type navigate to a url in the following methods:
-        // 1. type a url in the browser's address bar
-        // 2. click an anchor on a web page with href attribute
-        // 3. other ways
+        // The rule this whole pipeline is built on: **normalize for the key, href for the address.**
+        // `FetchTask.url` is the normalized identity (what the page store and the page cache are keyed
+        // by); `FetchTask.href` is the url the document carried, unmodified.  The address wins, because
+        // normalization has thrown its fragment away — and a fragment is a legitimate part of a
+        // request (`…#section`, an SPA route) — and a tracking query or a trailing argument list may be
+        // gone with it.  A caller that has no href still navigates by the normalized url, which is what
+        // `page.href ?: page.url` does everywhere else.
         require(task.url == page.url)
         val userTypedUrl = fetchTask.href ?: fetchTask.url
+        // `userTypedUrl` is the address; `pageUrl` (the normalized url) is the identity the WebPage is
+        // filed under — see the pair `NavigateEntry` documents.
         val navigateEntry = NavigateEntry(userTypedUrl, page.id, task.url, pageReferrer = page.referrer)
 
         emit1(EmulateEvents.willNavigate, page, driver)

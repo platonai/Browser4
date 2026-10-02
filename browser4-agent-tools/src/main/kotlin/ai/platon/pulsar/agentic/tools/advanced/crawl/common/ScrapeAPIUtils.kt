@@ -272,6 +272,44 @@ object ScrapeAPIUtils {
         }
     }
 
+    /**
+     * Escape a value for use inside a single-quoted X-SQL string literal.
+     *
+     * The submit endpoints build their statement by interpolation —
+     * `select dom_base_uri(dom) as url from load_and_select('<url>', ':root')` — and entry-page
+     * hrefs legitimately contain apostrophes (any url with a possessive in it). Doubling the quote
+     * is the X-SQL escape; without it the statement loses its quoting and the url text can escape
+     * the literal, while the caller is told "Invalid URL or X-SQL" about a perfectly good url.
+     * Line breaks are flattened because this literal is one line of SQL.
+     *
+     * Both submit endpoints have to use this one implementation: it lived on `SwarmController`
+     * alone, so `ScrapeController` interpolated the payload raw.
+     */
+    fun escapeSqlStringLiteral(value: String): String =
+        value.replace("'", "''").replace("\r", " ").replace("\n", " ")
+
+    /**
+     * The url of a `<url> [args]` payload, validated before the payload is embedded in a statement.
+     *
+     * Submitting a malformed url used to *succeed*: [checkSql] only checks syntax, and a url is
+     * syntactically valid inside `load_and_select('...')`, so the caller was handed a task id and
+     * the failure surfaced later — or the fetcher quietly substituted its default search-engine url
+     * for the page that was asked for, and the crawl reported rows for a site nobody requested. A
+     * url that cannot be normalized cannot be fetched, so it is refused at the boundary.
+     *
+     * @param payload the raw request body, a url plus optional LoadOptions
+     * @return the url token, without the trailing LoadOptions
+     * @throws IllegalArgumentException when the url is not a standard url
+     */
+    @Throws(IllegalArgumentException::class)
+    fun requireStandardUrl(payload: String): String {
+        val url = URLUtils.splitUrlArgs(payload).first
+        if (!URLUtils.isStandard(url)) {
+            throw IllegalArgumentException("Malformed url: <$url>")
+        }
+        return url
+    }
+
     fun eraseUrlOptions(sql: String, vararg fields: String): String {
         // do not forget the blank
         val separator = " | "
