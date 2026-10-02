@@ -2,6 +2,9 @@
 
 > Generated 2026-07-20 from the `4.12.x` branch (cb1bd5443).
 > Updated 2026-07-20 with fixes applied (see [Changes Applied](#changes-applied)).
+> Updated 2026-10-01: the `experience` family is no longer `Excluded` — see
+> [Addendum: experience CLI e2e coverage](#addendum-2026-10-01-experience-cli-e2e-coverage).
+> The counts below are the July snapshot; the addendum records the October re-measure.
 
 ## Changes Applied
 
@@ -462,3 +465,95 @@ cargo test --test e2e -- --list
 | `browser4-rest/src/test/.../ArgumentNormalizersTest.kt` | Argument normalization unit tests |
 | `browser4-tests/real-world-scenarios/` | LLM-agent usability evaluation |
 | `browser4-tests/tests-production/` | Direct CLI production tests |
+
+---
+
+## Addendum (2026-10-01): experience CLI e2e coverage
+
+Re-measured on `4.14.x` (`a7ac3818a6`) while adding the experience round trip. This section
+supersedes the stale numbers above where they disagree.
+
+### What changed
+
+| # | Item | Change | Status |
+|---|------|--------|--------|
+| 1 | `experience save\|query\|list\|deep-learn` marked `E2eCoverage::Excluded` although no layer ever drove the CLI end to end | Flipped to `Tested` + registered in `tested_commands()`; added `test_e2e_experience_web_roundtrip` (real page, two rounds) | ✅ Done |
+| 2 | No real-website variant | Added `test_e2e_experience_real_web_smoke` (`example.com`, `exclude_by_default`) | ✅ Done |
+| 3 | Knowledge-store location not configurable, so a test run could not isolate it | `KnowledgeStore` now resolves the `knowledge.dir` system property (the same property the engine-side `AgentMemory` already read); the e2e harness pins the store per run | ✅ Done |
+| 4 | The Windows debug click crash could not be pinned by any scenario that ran without a browser | Added the mock scenario `test_e2e_mock_click_is_stack_safe` (plus a browser-free reproducer, `docs-dev/fake-mcp-server.ps1`); fixed the crash itself — see below | ✅ Done |
+
+### Counts after the change
+
+| Metric | July snapshot | Now |
+|--------|---------------|-----|
+| Listable scenarios (`--list`, BASIC default) | 112 | 150 (incl. the `test_e2e_command_coverage` pseudo-entry) |
+| Scenarios at `--level=EXTENDED --enable-all` | — | 208 |
+| Scenario groups | 18 | +`experience` |
+| `Tested` / `Excluded` markers | 70 / 45 (`4.12.x`) | consistent (`test_e2e_command_coverage` passes unfiltered) |
+
+### New scenarios
+
+| Scenario | Group / level | Needs | What it proves |
+|---|---|---|---|
+| `test_e2e_experience_web_roundtrip` | `experience`, EXTENDED | Chrome + backend (`/experience` fixture) | Real page → `save --facts` records the selectors that actually worked (+ the page's disabled decoy as a blocker) → 5 successes → `deep-learn` promotes to VERIFIED → a VERIFIED entry refuses further patches → **new session**, `query` returns the knowledge → the page is driven again using **only** the returned selectors → `list` agrees. Plus cold-start P5, malformed trace, non-http URL and missing-argument negatives. |
+| `test_e2e_experience_real_web_smoke` | `experience`, EXTENDED, `exclude_by_default` | Chrome + backend + public internet | The same round trip against `example.com`; records only a selector the live page actually resolves (verified during the run). |
+
+Fixture: `browser4-tests/pulsar-tests-common/src/main/resources/static/b4/experience-replay-fixture.html`
+(route `/experience`, `?nonce=` makes each run's expected value unique; a disabled decoy input sits
+first in the DOM so positional guesses cannot drive the flow).
+
+### ⚠️ Blocker found while measuring: `click` aborted the CLI on Windows — **fixed**, one follow-up left
+
+Every `click` — any target, any page — aborted `browser4-cli` with a main-thread stack overflow
+(`exit -1073741571` / `0xC00000FD`, stdout empty, stderr `thread 'main' has overflowed its stack`):
+
+- manual: `browser4-cli click "#search-button"` (also with `--no-snapshot`, also against a disabled element),
+- harness: the **pre-existing** `test_e2e_mouse_trusted_click` failed the same way at `click #click-target`,
+- control that still works: `fill`, `press`, `hover`, `eval`.
+
+**Root cause (confirmed):** stack exhaustion in the *debug* build's nested async chain, not infinite
+recursion. `click`/`dblclick` ran one async layer deeper (`handle_navigation_action`,
+`main.rs:25966-25980`) than `hover`/`fill`/`press`, and the deepest frame of that chain was
+`resolve_ref` (`state.rs:1445`), which recompiled `regex::Regex::new(r"(?i)^e(\d+)$")` on **every** call.
+Windows gives the main thread a 1 MB stack reserve (Linux/macOS ~8 MB), which the debug chain exceeded and
+the release chain did not:
+
+- `RUSTFLAGS="-C link-arg=/STACK:8388608" cargo build` → the same click exited 0,
+- `cargo build --release` (default 1 MB) → click and dblclick exited 0.
+
+**Fixes applied (2026-10-01):**
+
+1. `state.rs` — the element-ref pattern is compiled once behind a `OnceLock` (`ref_pattern()`), so the
+   per-call regex compilation is gone from the deepest frame.
+2. `main.rs` — the `"click" | "dblclick"` arm calls `handle_tool_command` directly when `!follow`;
+   `handle_navigation_action` (and its `Box::pin` at the call site) is only used for `--follow`, whose
+   inner tool calls are now boxed too. Verified with the browser-free reproducer
+   (`docs-dev/fake-mcp-server.ps1`): `click`, `dblclick`, `click e5`, `click --follow`, `dblclick --follow`
+   all exit 0 on the Windows debug build, where every one of them used to overflow.
+3. `cli/browser4-cli/build.rs` — Windows targets now link with a Linux-sized main-thread stack
+   (`/STACK:8388608` for msvc, `-Wl,--stack,8388608` for gnu). Measured: the debug binary's PE header
+   reports `SizeOfStackReserve = 8388608`, a build made before the flag reports `1048576` — the 1 MB
+   default is exactly what the debug chain exceeded. Pinned by
+   `main.rs::test_windows_binary_reserves_a_linux_sized_main_thread_stack`.
+4. Regression coverage: the new mock scenario **`test_e2e_mock_click_is_stack_safe`** (no browser, ~1 s)
+   plus the pre-existing **`test_e2e_mouse_trusted_click`** (real Chrome), which now passes again.
+5. CI: `.github/workflows/nightly-cli.yml` gained the **`windows-smoke`** job (03:00 UTC) — the only place
+   CI builds and exercises a Windows binary. It runs `--level=SMOKE --max-failures=0` plus this regression
+   scenario; every selected scenario is `requires_browser4: false`, so it needs no Java, Chrome or Docker
+   and cannot repeat the CLI-managed-backend flakiness that retired the old three-platform matrix job.
+
+**Note on the code-side margin:** the two `Box::pin`s (call site + inner calls) are both required in the
+debug build — removing either flips `--follow` back over the 1 MB line in the browser-free reproducer.
+They stay alongside the build-flag fix because they also shrink the debug footprint of an otherwise
+near-limit path.
+
+The experience scenario (`browser.rs`) keeps `fill` + `press Enter` for its form submit on purpose: the
+click path now has its own coverage, and that scenario must not fail for a CLI-side stack reason. Full
+report: `coworker/tasks/issues/draft/2026/1001/20261001-224111-windows-click-stack-overflow.issues.md`.
+
+### Also observed
+
+`BROWSER4_E2E_USE_MAVEN_STARTUP=1` / `--use-maven-startup` is a dead knob: the harness asserts the CLI
+printed `Starting server via Maven spring-boot:run`, but no such message exists in `cli/browser4-cli/src`
+anymore. Use `--force-rebuild-bundle` when a scenario must exercise the checked-out backend sources
+(note: it rebuilds the runtime bundle, and it skips Maven when `Browser4Bundle.jar` already exists).
