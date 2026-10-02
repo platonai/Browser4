@@ -105,6 +105,26 @@ class CommandToolExecutorTest {
         val tooLate = json("cancel", mapOf("id" to "t2", "sessionId" to "s1"))
         assertEquals(false, tooLate["cancelled"], "a task that already finished is reported, not pretended")
         assertEquals("done", tooLate["status"])
+        assertEquals("task already finished", tooLate["reason"], "and the answer says which case it was")
+    }
+
+    @Test
+    @DisplayName("a live page visit says it cannot be cancelled, not that it is unknown")
+    fun livePageVisitExplainsWhyItCannotBeCancelled() {
+        `when`(runner.cancelAgentTask("p1")).thenReturn(false)
+        `when`(runner.isPageVisitTask("p1")).thenReturn(true)
+        `when`(runner.getStatus("s1", "p1")).thenReturn(
+            status(id = "p1", statusCode = ResourceStatus.SC_CREATED, processState = "in_progress")
+        )
+
+        val cancelled = json("cancel", mapOf("id" to "p1", "sessionId" to "s1"))
+
+        assertEquals(false, cancelled["cancelled"])
+        assertEquals("running", cancelled["status"], "the task is still running — it is not unknown")
+        assertEquals(
+            "page visit tasks run to completion and cannot be cancelled",
+            cancelled["reason"],
+        )
     }
 
     @Test

@@ -43,12 +43,23 @@ class UserCommandExecutor(
 ) : Closeable {
     companion object {
         const val FLOW_POLLING_INTERVAL = 1000L
+
+        /**
+         * How many commands may run at the same time.
+         *
+         * Background submissions and synchronous page visits share this bound. A page
+         * visit blocks a thread for its whole duration — the load itself runs inside
+         * `Dispatchers.Default` (see `LoadComponent.loadDeferred`), which is sized to the
+         * CPU count — so an unbounded number of visits, each started from its own request
+         * thread, starves every other coroutine in the JVM that shares that pool.
+         * */
+        const val MAX_CONCURRENT_COMMANDS = 10
     }
 
     private val logger = getLogger(UserCommandExecutor::class)
 
     // Create a dedicated dispatcher for long-running command operations
-    private val commandDispatcher = Dispatchers.IO.limitedParallelism(10)
+    private val commandDispatcher = Dispatchers.IO.limitedParallelism(MAX_CONCURRENT_COMMANDS)
 
     private val commanderScope: CoroutineScope = CoroutineScope(
         commandDispatcher + SupervisorJob() + CoroutineName("commander")
@@ -109,11 +120,21 @@ class UserCommandExecutor(
         }
     }
 
+    /**
+     * Run a page visit synchronously and return its command status.
+     *
+     * The visit runs on [commandDispatcher]: the requesting thread (a servlet worker under
+     * Spring MVC) is released immediately instead of being held for the whole visit, and the
+     * number of visits in flight stays bounded — see [MAX_CONCURRENT_COMMANDS]. Callers that
+     * want the visit to run in their own context should use [ensurePageVisitor] directly.
+     * */
     suspend fun executePageVisitCommand(
         sessionId: String,
         request: PageVisitRequest, eventHandlers: PageEventHandlers
     ): CommandStatus {
-        return ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
+        return withContext(commandDispatcher) {
+            ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
+        }
     }
 
     fun submitPageVisitCommand(
@@ -260,6 +281,11 @@ class UserCommandExecutor(
      * Probes every session's agent runner — the [taskOwner] map may be stale
      * after restarts, and the id itself is globally unique.
      *
+     * Page visits submitted through [submitPageVisitCommand] are **not** cancellable:
+     * the in-flight page load cannot be interrupted, so this deliberately reports
+     * `false` rather than pretending (see [isPageVisitTask] for the explanation
+     * callers surface to their clients).
+     *
      * @return true when a live job was found and cancelled
      */
     fun cancelAgentTask(id: String): Boolean {
@@ -272,6 +298,19 @@ class UserCommandExecutor(
         }
         return cancelled
     }
+
+    /**
+     * Whether [id] belongs to a page visit submitted through [submitPageVisitCommand].
+     *
+     * Cancel endpoints use this to say *why* nothing was cancelled: for a live page
+     * visit, "task not running or unknown" would be a lie. Page visits stay
+     * non-cancellable by design — the page load already dispatched to the browser
+     * cannot be interrupted, so the honest answer is "it runs to completion".
+     *
+     * Only tasks submitted in this process are tracked; after a restart the id is
+     * genuinely unknown.
+     * */
+    fun isPageVisitTask(id: String): Boolean = taskOwner[id] == "page"
 
     /**
      * Look up a command status by task ID.
@@ -374,11 +413,19 @@ class UserCommandExecutor(
         )
 
         val eventHandlers = PageEventHandlersFactory.create()
-        return ensurePageVisitor(sessionId).visit(request2, eventHandlers)
+        return withContext(commandDispatcher) {
+            ensurePageVisitor(sessionId).visit(request2, eventHandlers)
+        }
     }
 
+    /**
+     * Run a page visit synchronously on the bounded command dispatcher (see
+     * [executePageVisitCommand] and [MAX_CONCURRENT_COMMANDS]).
+     * */
     suspend fun executePageVisitCommand(sessionId: String, request: PageVisitRequest): PageVisitStatus {
-        return ensurePageVisitor(sessionId).visit(request)
+        return withContext(commandDispatcher) {
+            ensurePageVisitor(sessionId).visit(request)
+        }
     }
 
     /**
