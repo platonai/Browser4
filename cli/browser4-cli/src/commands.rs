@@ -7828,9 +7828,12 @@ mod tests {
                 .find(|o| o.key() == "expires")
                 .unwrap_or_else(|| panic!("{name} must expose --expires"));
             assert!(!option.is_bool, "{name}: --expires takes a value");
-            let (short_map, _) = crate::args::build_short_option_map(cmd.options);
+            // `-expires` is the spelling load options use (`goto "url -expires 1d"`), and
+            // `build_short_option_map` maps it onto the same key as `--expires`.  Asserted on the
+            // field, not through that helper: `commands.rs` is also compiled as part of the library
+            // target, which does not declare the `args` module.
             assert_eq!(
-                short_map.get("expires").map(String::as_str),
+                option.short,
                 Some("expires"),
                 "{name}: `-expires 1d` must resolve to the same option as `--expires 1d`"
             );
