@@ -83,7 +83,7 @@ private const val MAX_REPORTED_FAILED_PAGES = 5
  * User info (`user:Pass@host`) keeps its case too — only the host is folded.
  *
  * Order matters, and it is fragment **first**, then the trailing slash of the path, then the
- * query is put back:
+ * query is ordered and put back:
  *
  *  * the fragment is dropped because a jump target inside a document never identifies a page, and
  *    because resolving a fragment-only href against the portal URL appends '#' to it — the
@@ -93,6 +93,13 @@ private const val MAX_REPORTED_FAILED_PAGES = 5
  *    `…/product/1?utm=1` as well as `…/product/1/` folding onto `…/product/1`.  Dropping the slash
  *    from the whole string instead left the query-carrying spelling with its slash, so one page
  *    linked two ways produced two identities, two submissions, two rows and two depths;
+ *  * the query parameters are **ordered by name** ([canonicalQueryOrder]), the way the engine's own
+ *    url identity orders them.  A page this crawl queued as `?links=1&failures=1` is *served* under
+ *    the engine's canonical spelling `?failures=1&links=1` (`URLUtils.normalize`'s `canonicalQuery`
+ *    sorts by name, stably), and the depth lookup is anchored to the *served* url: without the same
+ *    fold, the page that was queued with depth 2 came back with no depth record at all — the round
+ *    recorded it with `UNKNOWN_DEPTH` and "following no links from it", so a depth-2 crawl of such a
+ *    URL collected the portal and silently dropped every child it should have discovered.
  *
  * Every crawl path derives its dedup key (and the `visited` / `depths` / `recorded` lookups) from
  * here, so the rule has to live here and nowhere else.
@@ -106,10 +113,39 @@ internal fun normalizeForVisit(url: String): String {
     val noFragment = url.trim().substringBefore('#')
     val queryStart = noFragment.indexOf('?')
     val path = (if (queryStart < 0) noFragment else noFragment.substring(0, queryStart)).removeSuffix("/")
-    val query = if (queryStart < 0) "" else noFragment.substring(queryStart + 1)
+    val query = if (queryStart < 0) "" else canonicalQueryOrder(noFragment.substring(queryStart + 1))
 
     val canonical = if (query.isEmpty()) path else "$path?$query"
     return lowercaseSchemeAndHost(canonical)
+}
+
+/**
+ * Order the parameters of a query by name — the rule the engine's url identity applies, so that a
+ * url this crawl queued and the same page served under the engine's canonical spelling are one
+ * key.
+ *
+ * The sort is **stable** and only the *order* changes: `?b=2&a=1` is `?a=1&b=2`, while a repeated
+ * name keeps the order it was written in (`?a=2&a=1` stays distinct from `?a=1&a=2`) — the server
+ * may care which comes first, while the set of parameters is the same either way.  A bare name
+ * (`?debug`) and an empty value (`?param=`) are different spellings and are left alone, exactly as
+ * the engine leaves them.
+ *
+ * This mirrors `URLUtils.normalize`'s `canonicalQuery` (the engine's own identity), minus its
+ * decoding of unreserved escapes: only the ordering decides whether a queued page is recognised
+ * again when it is served.
+ */
+private fun canonicalQueryOrder(query: String): String {
+    if (query.isEmpty() || '&' !in query) {
+        return query
+    }
+
+    return query.split('&')
+        .map { param ->
+            val eq = param.indexOf('=')
+            (if (eq < 0) param else param.substring(0, eq)) to param
+        }
+        .sortedBy { it.first }
+        .joinToString("&") { it.second }
 }
 
 /**

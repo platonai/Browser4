@@ -81,6 +81,46 @@ class CrawlSupportTest {
         )
     }
 
+    @Test
+    @DisplayName("the query is ordered by name, so the spelling the engine serves is the key we queued")
+    fun testNormalizeForVisitOrdersTheQueryByName() {
+        // The crawl queues `?links=1&failures=1` (the href the portal carried) and the engine serves
+        // the page under its own canonical spelling `?failures=1&links=1` (URLUtils.normalize sorts
+        // the parameters by name).  Without the same fold here, the depth lookup missed its own page:
+        // a depth-2 round recorded the portal with UNKNOWN_DEPTH and followed no links from it.
+        assertEquals(
+            normalizeForVisit("http://localhost:9/__probe/flaky-hub/hub?links=1&failures=1"),
+            normalizeForVisit("http://localhost:9/__probe/flaky-hub/hub?failures=1&links=1")
+        )
+        assertEquals(
+            "https://example.com/search?a=1&b=2",
+            normalizeForVisit("https://example.com/search?b=2&a=1")
+        )
+        // A bare name and an empty value are different spellings and stay untouched — only the order
+        // is folded.
+        assertEquals("https://example.com/p?debug", normalizeForVisit("https://example.com/p?debug"))
+        assertEquals("https://example.com/p?param=", normalizeForVisit("https://example.com/p?param="))
+        // A repeated name keeps the order it was written in: the server may care which comes first.
+        assertNotEquals(
+            normalizeForVisit("https://example.com/p?a=1&a=2"),
+            normalizeForVisit("https://example.com/p?a=2&a=1")
+        )
+    }
+
+    @Test
+    @DisplayName("the depth lookup survives a query the engine reordered under us")
+    fun testDepthLookupSurvivesQueryReordering() {
+        val queued = "http://localhost:9/__probe/flaky-hub/hub?links=1&failures=1"
+        val served = "http://localhost:9/__probe/flaky-hub/hub?failures=1&links=1"
+        val depths = mapOf(normalizeForVisit(queued) to 0)
+
+        assertEquals(
+            0,
+            resolveQueueDepth(served, served, depths),
+            "the page the engine served is the page this crawl queued, so its depth must resolve"
+        )
+    }
+
     // ------------------------------------------------------------------
     // selectDiscoveredLinks
     // ------------------------------------------------------------------
