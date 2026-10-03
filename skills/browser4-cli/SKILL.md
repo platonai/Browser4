@@ -24,6 +24,18 @@ After installing (`browser4-cli install`), invoke commands directly — the docs
 browser4-cli open --headless <url>
 ```
 
+Working from the repository itself? Use the dev wrapper instead of an installed
+binary — it builds the CLI from source and starts the backend from the checkout
+(`./b4w.sh` on Bash / Git Bash / Linux / macOS, `./b4w.ps1` on PowerShell):
+
+```bash
+./b4w.sh goto <url>          # first run builds the runtime bundle (minutes)
+./b4w.sh -Rebuild status     # force a backend bundle rebuild
+```
+
+See [§8 Installation](#8-installation) for the Java 25+ prerequisite and the
+first-run latency.
+
 ## 1. Core Loop
 
 > **🖥️ Headless mode is the default for AI agents:** Always open browsers with `--headless` unless the user **explicitly** asks to see the browser window ("show me the browser", "open visibly", "I want to watch", or "headed"). See Display Mode in §2.
@@ -301,3 +313,27 @@ npm install -g browser4-cli && browser4-cli install     # Node.js available
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex   # Windows
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash  # Linux/macOS
 ```
+
+### Prerequisites
+
+**Java 25 or newer** is required to build or run the backend server and
+MockSite — the root pom's Maven enforcer rejects older JDKs.  Check with
+`java -version`; if the default JDK is older, point `JAVA_HOME` at a 25+ JDK
+before starting anything (e.g. `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64`).
+Running from a repository checkout also needs **Rust** (`cargo`) for the CLI
+and **Git**.
+
+### Developing from a repository checkout
+
+Use the wrapper instead of an installed binary — it builds the CLI from source
+and starts the locally built backend:
+
+```bash
+./b4w.sh <command>      # Bash / Git Bash / Linux / macOS
+./b4w.ps1 <command>     # PowerShell
+```
+
+The first command in a checkout can take several minutes (Maven bundle build
+plus server start); pass `-Rebuild` to force a backend bundle rebuild after
+changing Kotlin sources.  See [AGENTS.md](../../AGENTS.md) and
+[docs/build-from-source.md](../../docs/build-from-source.md).

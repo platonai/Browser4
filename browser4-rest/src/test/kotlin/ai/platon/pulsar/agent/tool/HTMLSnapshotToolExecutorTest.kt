@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 class HTMLSnapshotToolExecutorTest {
     private val h2MissingColumn = "Column \"A\" not found; SQL statement"
@@ -261,6 +263,55 @@ class HTMLSnapshotToolExecutorTest {
                 "SELECT DOM_FIRST_ATTR(DOM, 'img:expr(src^=https://cdn)', 'src') FROM " +
                     "DOM_LOAD_AND_SELECT(@url, 'body')"
             )
+        )
+    }
+
+    // =========================================================================
+    // Session-scoped page freshness (stale / other-session stored pages)
+    // =========================================================================
+
+    @Test
+    fun `stored page from an earlier session is not owned by the current one`() {
+        val sessionStarted = Instant.parse("2026-09-19T10:00:00Z")
+        // The reported defect: a read served form data fetched 522 hours earlier.
+        val fetchedLongAgo = sessionStarted.minus(522, ChronoUnit.HOURS)
+
+        assertFalse(
+            HTMLSnapshotToolExecutor.isStoredPageOwnedBySession(fetchedLongAgo, sessionStarted),
+            "A page fetched 522h before the session started belongs to another session"
+        )
+    }
+
+    @Test
+    fun `stored page fetched by the current session is servable`() {
+        val sessionStarted = Instant.parse("2026-09-19T10:00:00Z")
+        val fetchedAfterStart = sessionStarted.plus(30, ChronoUnit.SECONDS)
+
+        assertTrue(
+            HTMLSnapshotToolExecutor.isStoredPageOwnedBySession(fetchedAfterStart, sessionStarted),
+            "A page this session fetched itself must still be readable"
+        )
+    }
+
+    @Test
+    fun `clock skew inside the grace window does not reject a fresh page`() {
+        val sessionStarted = Instant.parse("2026-09-19T10:00:00Z")
+        val fetchedJustBefore = sessionStarted.minus(2, ChronoUnit.SECONDS)
+
+        assertTrue(
+            HTMLSnapshotToolExecutor.isStoredPageOwnedBySession(fetchedJustBefore, sessionStarted),
+            "The grace window absorbs small clock differences"
+        )
+    }
+
+    @Test
+    fun `stored page beyond the grace window is rejected`() {
+        val sessionStarted = Instant.parse("2026-09-19T10:00:00Z")
+        val fetchedBefore = sessionStarted.minus(10, ChronoUnit.MINUTES)
+
+        assertFalse(
+            HTMLSnapshotToolExecutor.isStoredPageOwnedBySession(fetchedBefore, sessionStarted),
+            "Ten minutes of skew is staleness, not clock noise"
         )
     }
 }

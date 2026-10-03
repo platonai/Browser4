@@ -52,7 +52,10 @@ const MODULE_OPENS: &[&str] = &[
     "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
     "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
     "--add-opens=java.base/sun.nio.cs=ALL-UNNAMED",
-    "--add-opens=java.base/sun.security.action=ALL-UNNAMED",
+    // NOTE: deliberately no `java.base/sun.security.action` — that package left
+    // java.base in JDK 9, so requesting it makes every JVM launch on JDK 21/25
+    // print "WARNING: package sun.security.action not in java.base" as the first
+    // line of an otherwise clean run.
     "--add-opens=java.base/sun.util.calendar=ALL-UNNAMED",
     "--add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED",
 ];
@@ -643,6 +646,69 @@ pub async fn update() -> Result<InstallOutcome, String> {
     install_release(&latest, true).await
 }
 
+/// How long a cached "latest release" answer stays fresh.
+///
+/// The check behind it is purely informational, so an answer a few hours old is
+/// good enough — and caching it stops a bare `webminer` from paying the client's
+/// 30 s timeout on every invocation when GitHub is unreachable.
+const LATEST_RELEASE_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+
+fn latest_release_cache_path() -> Option<PathBuf> {
+    let dir = crate::state::resolve_default_state_dir().join("webminer");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("latest-release.json"))
+}
+
+/// The cached latest release, when it was written within the TTL.
+fn read_cached_latest_release() -> Option<ReleaseInfo> {
+    let path = latest_release_cache_path()?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    let cached_at = value.get("cachedAtEpochSeconds")?.as_u64()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    if now.saturating_sub(cached_at) > LATEST_RELEASE_CACHE_TTL.as_secs() {
+        return None;
+    }
+    let release = value.get("release")?;
+    Some(ReleaseInfo {
+        tag_name: release.get("tagName")?.as_str()?.to_string(),
+        published_at: release
+            .get("publishedAt")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        jar_url: release.get("jarUrl")?.as_str()?.to_string(),
+        jar_size: release.get("jarSize").and_then(|v| v.as_u64()),
+        jar_checksum: release
+            .get("jarChecksum")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    })
+}
+
+fn write_cached_latest_release(info: &ReleaseInfo) {
+    let Some(path) = latest_release_cache_path() else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let payload = serde_json::json!({
+        "cachedAtEpochSeconds": now,
+        "release": {
+            "tagName": info.tag_name,
+            "publishedAt": info.published_at,
+            "jarUrl": info.jar_url,
+            "jarSize": info.jar_size,
+            "jarChecksum": info.jar_checksum,
+        }
+    });
+    let _ = std::fs::write(path, payload.to_string());
+}
+
 /// Collect the current installation state plus the latest release info
 /// (best-effort for the network part).
 pub async fn version_status() -> VersionStatus {
@@ -653,14 +719,22 @@ pub async fn version_status() -> VersionStatus {
         .map(|m| m.len());
     // Quiet: the bare status display should not print rate-limit/mirror
     // fallback noise for what is a purely informational check — the panel
-    // already reports "cannot reach" when both sources failed.
-    let (latest, latest_error) = match fetch_latest_release(true).await {
-        Ok(Some(info)) => (Some(info), None),
-        Ok(None) => (
-            None,
-            Some("latest release has no scent-miner.jar asset".to_string()),
-        ),
-        Err(e) => (None, Some(e)),
+    // already reports "cannot reach" when both sources failed.  The answer is
+    // cached (see [LATEST_RELEASE_CACHE_TTL]) so an unreachable GitHub costs the
+    // 30 s client timeout at most once per TTL instead of on every invocation.
+    let (latest, latest_error) = match read_cached_latest_release() {
+        Some(info) => (Some(info), None),
+        None => match fetch_latest_release(true).await {
+            Ok(Some(info)) => {
+                write_cached_latest_release(&info);
+                (Some(info), None)
+            }
+            Ok(None) => (
+                None,
+                Some("latest release has no scent-miner.jar asset".to_string()),
+            ),
+            Err(e) => (None, Some(e)),
+        },
     };
     VersionStatus {
         installed,

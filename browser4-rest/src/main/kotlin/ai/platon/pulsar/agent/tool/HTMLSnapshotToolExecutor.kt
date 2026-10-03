@@ -9,6 +9,7 @@ import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.dom.FeaturedDocument
+import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.rest.api.service.ScrapeService
 import ai.platon.pulsar.rest.mcp.controller.*
 import ai.platon.pulsar.rest.session.PulsarSessionManager
@@ -19,9 +20,12 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import ai.platon.pulsar.rest.session.ManagedSession
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
+import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
 
 /**
@@ -55,6 +59,99 @@ class HTMLSnapshotToolExecutor(
         val sessionId = requireSessionId(args)
         return sessionManager.getOrRecoverSession(sessionId)
             ?: throw IllegalArgumentException("Session not found: $sessionId")
+    }
+
+    /**
+     * Wall-clock time of the newest LIVE read this session made for a
+     * `<sessionId>|<normalizedUrl>` pair.
+     *
+     * The page store is keyed by URL only and is shared by every session on the
+     * machine, so a stored page cannot say who fetched it or when the reading
+     * session last saw the URL live.  This ledger restores the second half of
+     * that fact for the session doing the reading; [isStoredPageOwnedBySession]
+     * covers the first half.
+     */
+    private val liveReadTimes = ConcurrentHashMap<String, Long>()
+
+    private fun liveReadKey(sessionId: String, url: String) = "$sessionId|$url"
+
+    /** Record that [url] was just read from this session's live document. */
+    private fun recordLiveRead(managed: ManagedSession, url: String?) {
+        if (url.isNullOrBlank()) return
+        liveReadTimes[liveReadKey(managed.sessionId, url)] = System.currentTimeMillis()
+    }
+
+    /**
+     * Look up the stored page for [url], but only when this session could have
+     * fetched it.
+     *
+     * Returns null (so the caller captures the page afresh) when the entry
+     * predates the session, and warns when the entry is older than a live read
+     * this session already made for the same URL — in both cases the stored
+     * copy is not evidence of the current page state.
+     *
+     * @return the stored page, or null when it must not be served.
+     */
+    private fun sessionStoredPageOrNull(managed: ManagedSession, url: String): WebPage? {
+        val page = runCatching { managed.agenticSession.getOrNull(url) }.getOrNull() ?: return null
+
+        val fetchedAt = page.prevFetchTime
+        if (!isStoredPageOwnedBySession(fetchedAt, Instant.ofEpochMilli(managed.createdAt))) {
+            logger.warn(
+                "Refusing the stored page for {} in session {}: it was fetched {} minutes ago, before the session " +
+                    "started. The page store is URL-keyed and shared across sessions, so this entry belongs to " +
+                    "another session or an earlier run",
+                url, managed.sessionId, Duration.between(fetchedAt, Instant.now()).toMinutes()
+            )
+            return null
+        }
+
+        val lastLiveRead = liveReadTimes[liveReadKey(managed.sessionId, url)]?.let { Instant.ofEpochMilli(it) }
+        if (lastLiveRead != null && fetchedAt.isBefore(lastLiveRead)) {
+            logger.warn(
+                "Serving the stored page for {} in session {} although the session read the live document {} seconds " +
+                    "later; the stored copy is stale relative to this session",
+                url, managed.sessionId, Duration.between(fetchedAt, lastLiveRead).seconds
+            )
+        }
+
+        return page
+    }
+
+    /**
+     * Resolve the page a read must operate on when the session's tab has no
+     * usable live document: a stored page this session could have fetched, or a
+     * fresh capture.
+     *
+     * A capture that hands back a page older than the session is refused loudly
+     * rather than served: publishing another session's page as the current page
+     * state is exactly the silent wrong-answer this guard exists to prevent, and
+     * a failed read is recoverable while a wrong extraction is not.
+     *
+     * @param url The page to read; the session's current URL when null.
+     */
+    private suspend fun sessionPageOrCapture(managed: ManagedSession, url: String? = null): WebPage {
+        val pulsarSession = managed.agenticSession
+        val target = url ?: pulsarSession.normalize(managed.driver.currentUrl()).urlString
+
+        sessionStoredPageOrNull(managed, target)?.let { return it }
+
+        val page = if (url == null) {
+            pulsarSession.capture(managed.driver)
+        } else {
+            pulsarSession.capture(managed.driver, url)
+        }
+
+        val fetchedAt = page.prevFetchTime
+        if (!isStoredPageOwnedBySession(fetchedAt, Instant.ofEpochMilli(managed.createdAt))) {
+            throw IllegalStateException(
+                "Refusing to read a stale page for $target: the session's tab has no live document and the newest " +
+                    "copy available was fetched ${Duration.between(fetchedAt, Instant.now()).toMinutes()} minutes " +
+                    "ago, before this session started. Re-run `goto $target`, then retry."
+            )
+        }
+
+        return page
     }
 
     override val domain: String = "html_snapshot"
@@ -257,8 +354,23 @@ class HTMLSnapshotToolExecutor(
             // only exists in the live document (form submission results,
             // JS-updated text, toggles, eval mutations) is therefore captured
             // as documented; the tab is never reloaded or disturbed.
-            val live = captureLiveDocumentSnapshot(managed)
+            //
+            // Bound the capture: a wedged or dismissing driver used to block
+            // until the CLI's client-side timeout and then leave the session
+            // with a dead driver and no explanation.  Failing here with a
+            // diagnosis beats an unbounded wait that hides the cause.
+            val live = try {
+                withTimeout(LIVE_CAPTURE_TIMEOUT_MILLIS) { captureLiveDocumentSnapshot(managed) }
+            } catch (e: TimeoutCancellationException) {
+                throw IllegalStateException(
+                    "Live document capture timed out after $LIVE_CAPTURE_TIMEOUT_MILLIS ms in session " +
+                        "${managed.sessionId}: the browser driver is not responding. Check `doctor log`, then " +
+                        "re-run `goto <url>` to rebind the driver before capturing again.",
+                    e
+                )
+            }
             if (live != null) {
+                recordLiveRead(managed, live.url)
                 val document = parseLiveDocument(live)
                 htmlSnapshotMetadataJson(
                     document = document,
@@ -342,6 +454,7 @@ class HTMLSnapshotToolExecutor(
      */
     private suspend fun liveDocumentOrNull(managed: ManagedSession): FeaturedDocument? {
         val live = captureLiveDocumentSnapshot(managed) ?: return null
+        recordLiveRead(managed, live.url)
         return runCatching { parseLiveDocument(live) }.getOrNull()
     }
 
@@ -381,10 +494,10 @@ class HTMLSnapshotToolExecutor(
             if (liveDocument != null) {
                 extractFrom(liveDocument)
             } else {
+                // No live document: a stored page this session could have
+                // fetched, or a fresh capture — never another session's copy.
                 val pulsarSession = managed.agenticSession
-                val url = pulsarSession.normalize(managed.driver.currentUrl())
-                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
-                extractFrom(pulsarSession.parse(page))
+                extractFrom(pulsarSession.parse(sessionPageOrCapture(managed)))
             }
         }
     }
@@ -431,10 +544,10 @@ class HTMLSnapshotToolExecutor(
             if (liveDocument != null) {
                 extractAllFrom(liveDocument)
             } else {
+                // No live document: a stored page this session could have
+                // fetched, or a fresh capture — never another session's copy.
                 val pulsarSession = managed.agenticSession
-                val url = pulsarSession.normalize(driver.currentUrl())
-                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(driver)
-                extractAllFrom(pulsarSession.parse(page))
+                extractAllFrom(pulsarSession.parse(sessionPageOrCapture(managed)))
             }
         }
 
@@ -616,9 +729,7 @@ class HTMLSnapshotToolExecutor(
             val document = liveDocumentOrNull(managed)
                 ?: run {
                     val pulsarSession = managed.agenticSession
-                    val url = pulsarSession.normalize(driver.currentUrl())
-                    val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(driver)
-                    pulsarSession.parse(page)
+                    pulsarSession.parse(sessionPageOrCapture(managed))
                 }
 
             if (clean) {
@@ -675,6 +786,36 @@ class HTMLSnapshotToolExecutor(
     }
 
     companion object {
+        /**
+         * Clock-skew allowance when comparing a page's fetch time against the
+         * session start: a page the session itself just fetched must never be
+         * rejected because the two clocks disagree by a few milliseconds.
+         */
+        private val SESSION_FRESHNESS_GRACE: Duration = Duration.ofSeconds(5)
+
+        /**
+         * Server-side deadline for serializing the session's live document.
+         * The healthy path is one CDP evaluation (well under a second); the
+         * budget only has to absorb a busy renderer while still failing long
+         * before the CLI's own 60 s client timeout.
+         */
+        private const val LIVE_CAPTURE_TIMEOUT_MILLIS = 20_000L
+
+        /**
+         * True when a page fetched at [fetchedAt] may be served to a session
+         * that started at [sessionCreatedAt].
+         *
+         * The page store is URL-keyed and shared by every session on the
+         * machine, so an entry older than the session cannot be the current
+         * page state: it is another session's page, or an earlier run's.  The
+         * grace window absorbs clock differences between the two timestamps.
+         */
+        internal fun isStoredPageOwnedBySession(
+            fetchedAt: Instant,
+            sessionCreatedAt: Instant,
+            grace: Duration = SESSION_FRESHNESS_GRACE,
+        ): Boolean = !fetchedAt.isBefore(sessionCreatedAt.minus(grace))
+
         internal fun shouldAppendSelectorQuoteHint(message: String, sql: String): Boolean =
             message.contains("not found") &&
                 message.contains("SQL statement") &&
@@ -734,14 +875,14 @@ class HTMLSnapshotToolExecutor(
             // Live document first (carries its URL), archival fallback otherwise.
             val live = captureLiveDocumentSnapshot(managed)
             if (live != null) {
+                recordLiveRead(managed, live.url)
                 val document = parseLiveDocument(live)
                 val title = document.title
                 PageSummaryIndexService.generate(document, live.url, title)
             } else {
                 val pulsarSession = managed.agenticSession
                 val url = pulsarSession.normalize(driver.currentUrl())
-                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(driver)
-                val document = pulsarSession.parse(page)
+                val document = pulsarSession.parse(sessionPageOrCapture(managed, url.urlString))
                 val title = document.title
                 PageSummaryIndexService.generate(document, url.urlString, title)
             }
@@ -755,9 +896,7 @@ class HTMLSnapshotToolExecutor(
             val document = liveDocumentOrNull(managed)
                 ?: run {
                     val pulsarSession = managed.agenticSession
-                    val url = pulsarSession.normalize(driver.currentUrl())
-                    val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(driver)
-                    pulsarSession.parse(page)
+                    pulsarSession.parse(sessionPageOrCapture(managed))
                 }
 
             val selector = paramString(args, "selector", "inspect", required = false, default = ":root")?.ifEmpty { ":root" } ?: ":root"
@@ -787,11 +926,9 @@ class HTMLSnapshotToolExecutor(
                 ?.takeIf { it.isNotBlank() }
 
             val page = if (requestedUrl != null) {
-                val normUrl = pulsarSession.normalize(requestedUrl)
-                pulsarSession.getOrNull(normUrl.urlString) ?: pulsarSession.capture(managed.driver, normUrl.urlString)
+                sessionPageOrCapture(managed, pulsarSession.normalize(requestedUrl).urlString)
             } else {
-                val current = pulsarSession.normalize(driver.currentUrl())
-                pulsarSession.getOrNull(current.urlString) ?: pulsarSession.capture(managed.driver)
+                sessionPageOrCapture(managed)
             }
 
             val document = pulsarSession.parse(page)

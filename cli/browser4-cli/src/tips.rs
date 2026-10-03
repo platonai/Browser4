@@ -591,6 +591,14 @@ fn error_code_from_message(message: &str) -> Option<&str> {
     (!code.is_empty() && code.chars().all(|c| c.is_ascii_uppercase() || c == '_')).then_some(code)
 }
 
+/// True for the CLI's own request-timeout text ("… timed out …", or the
+/// `deadline has elapsed` variant), which reaches the tip layer without a
+/// backend error code attached.
+fn is_client_side_timeout(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("timed out") || lower.contains("deadline has elapsed")
+}
+
 /// Parse the retry delay out of a rejection message
 /// (`… ; retry after 45 ms`), for backends that report it in prose only.
 fn parse_retry_after_ms(message: &str) -> Option<u64> {
@@ -620,7 +628,13 @@ fn failure_tip_for(
     // The message is authoritative — the backend embeds the code in the text
     // (`ERROR: [RATE_LIMITED] …`); the structured field covers a response whose
     // text carries no token.
-    let code = error_code_from_message(error_message).or(error_code)?;
+    let code = match error_code_from_message(error_message).or(error_code) {
+        Some(code) => code,
+        // The CLI's own request timeout carries no backend code, yet it is the
+        // signature of a backend still busy with its first-use initialization.
+        None if is_client_side_timeout(error_message) => "TIMEOUT",
+        None => return None,
+    };
     let name = crate::help::public_command_name(command);
 
     let tip = match code {
@@ -637,8 +651,15 @@ fn failure_tip_for(
         "SESSION_NOT_FOUND" => format!(
             "no live session for '{name}' — open one first (e.g. `browser4-cli open <url>`)."
         ),
-        // Everything else (INTERNAL, INVALID_ARGUMENT, TIMEOUT, …) has no
-        // CLI-side remediation worth a line of noise.
+        // A client-side timeout is not proof the backend is down: the first
+        // fetch-backed call after a backend start pays a multi-minute lazy
+        // storage initialization, during which every tool call times out.
+        "TIMEOUT" => format!(
+            "'{name}' timed out — if the backend was just started, its first fetch-backed call can take \
+             minutes while the page store initializes; retry once it warms up, or check `browser4-cli doctor log`."
+        ),
+        // Everything else (INTERNAL, INVALID_ARGUMENT, …) has no CLI-side
+        // remediation worth a line of noise.
         _ => return None,
     };
 
@@ -852,6 +873,27 @@ mod tests {
             not_found.contains("no live session for 'goto'"),
             "got: {not_found}"
         );
+    }
+
+    #[test]
+    fn test_failure_tip_timeout_from_a_busy_backend() {
+        // The client's own request timeout carries no backend error code, but it
+        // is exactly what a first-use storage initialization looks like.
+        let client_side = failure_tip_for(
+            "htmlsnapshot",
+            "HTTP request timed out [tool=html_snapshot_capture]",
+            None,
+            None,
+        )
+        .expect("a request timeout is actionable when the backend may be warming up");
+        assert!(
+            client_side.contains("'htmlsnapshot'") && client_side.contains("first fetch-backed call"),
+            "got: {client_side}"
+        );
+
+        let backend_code = failure_tip_for("crawl", "ERROR: [TIMEOUT] no progress", None, None)
+            .expect("the backend's own TIMEOUT code is actionable");
+        assert!(backend_code.contains("'crawl'"), "got: {backend_code}");
     }
 
     #[test]

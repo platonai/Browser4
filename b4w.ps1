@@ -235,6 +235,18 @@ if (!$Rebuild -and !$NoBuild -and (Test-Path $Exe)) {
 # forces the bundle rebuild and caches the new hash afterwards.
 $ForcedBundleRebuild = $false
 $BackendHashToCache = $null
+$BackendBundleStampPath = $null
+$BackendBundleStampBefore = $null
+
+# `-Rebuild` must always ask for a bundle rebuild, whatever the cached hash
+# says: the hash only records what the sources looked like, not whether a
+# rebuild ever ran.  A `-Rebuild status` never starts the daemon, yet it used to
+# cache the new hash, so every later `-Rebuild <command>` saw a matching hash,
+# never set the force flag, and silently kept the stale backend.
+if ($Rebuild) {
+    $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = '1'
+    $ForcedBundleRebuild = $true
+}
 if (!$NoBuild -and (Test-Path (Join-Path $ScriptDir 'browser4-apps\browser4-bundle'))) {
     $BackendHashFile = Join-Path $ScriptDir 'cli\browser4-cli\target\.backend-source-hash'
     $BackendCurrentHash = $null
@@ -271,10 +283,22 @@ if (!$NoBuild -and (Test-Path (Join-Path $ScriptDir 'browser4-apps\browser4-bund
             # running code matches the sources — refresh the cache silently
             # instead of warning.
             $BackendNewestSource = ($BackendFiles | ForEach-Object { $_.LastWriteTime } | Measure-Object -Maximum).Maximum
-            $BundleStamp = Join-Path $ScriptDir 'browser4-apps\browser4-bundle\target\runtime-bundle\_work\browser4-bundle-runtime-windows-x64\browser4-bundle-runtime-windows-x64\runtime-bundle.json'
+            # The stamp lives under a platform-specific work directory
+            # (browser4-bundle-runtime-<os>-<arch>): resolve it instead of
+            # hardcoding the Windows path, which never exists on a Linux or
+            # macOS checkout and made the staleness warning fire on every
+            # command there.
+            $BundleWorkRoot = Join-Path $ScriptDir 'browser4-apps\browser4-bundle\target\runtime-bundle\_work'
+            $BundleStamp = Get-ChildItem -Path $BundleWorkRoot -Directory -Filter 'browser4-bundle-runtime-*' -ErrorAction SilentlyContinue |
+                ForEach-Object { Join-Path $_.FullName (Join-Path $_.Name 'runtime-bundle.json') } |
+                Where-Object { Test-Path -LiteralPath $_ } |
+                Sort-Object { (Get-Item -LiteralPath $_).LastWriteTime } -Descending |
+                Select-Object -First 1
             $BundleFresh = $false
-            if (Test-Path $BundleStamp) {
-                $BundleMtime = (Get-Item $BundleStamp).LastWriteTime
+            if ($BundleStamp) {
+                $BackendBundleStampPath = $BundleStamp
+                $BundleMtime = (Get-Item -LiteralPath $BundleStamp).LastWriteTime
+                $BackendBundleStampBefore = $BundleMtime
                 if ($BundleMtime -gt $BackendNewestSource) { $BundleFresh = $true }
             }
             if ($BundleFresh) {
@@ -286,13 +310,9 @@ if (!$NoBuild -and (Test-Path (Join-Path $ScriptDir 'browser4-apps\browser4-bund
                 Write-Host 'Backend sources changed since the runtime bundle was last built.' -ForegroundColor Yellow
                 Write-Host 'Rebuild with:  $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = "1"; b4w <command>' -ForegroundColor Yellow
                 Write-Host '  (or pass -Rebuild to b4w to force the rebuild automatically)' -ForegroundColor DarkGray
-                if ($Rebuild) {
-                    $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = '1'
-                    $ForcedBundleRebuild = $true
-                    $BackendHashToCache = $BackendCurrentHash
-                }
             }
         }
+        if ($Rebuild) { $BackendHashToCache = $BackendCurrentHash }
     }
 }
 
@@ -1042,12 +1062,26 @@ if (Test-Path $Exe) {
 }
 
 # After a -Rebuild-forced bundle rebuild, persist the backend source hash so
-# subsequent invocations skip the staleness warning.
-if ($ForcedBundleRebuild -and $BackendHashToCache) {
-    try {
-        New-Item -Path (Split-Path $BackendHashFile -Parent) -ItemType Directory -Force -ErrorAction SilentlyContinue > $null
-        $BackendHashToCache | Out-File -FilePath $BackendHashFile -Encoding ascii -NoNewline
-    } catch { }
+# subsequent invocations skip the staleness warning.  The hash is written only
+# when the rebuild demonstrably happened — i.e. the bundle's build stamp
+# advanced during this invocation.  Writing it unconditionally after -Rebuild
+# made commands that never start the daemon (help, status, doctor) look like
+# completed rebuilds and silently suppressed every later one.
+if ($ForcedBundleRebuild -and $BackendHashToCache -and $BackendBundleStampPath) {
+    $stampAfter = if (Test-Path -LiteralPath $BackendBundleStampPath) {
+        (Get-Item -LiteralPath $BackendBundleStampPath).LastWriteTime
+    } else {
+        $null
+    }
+    $rebuilt = $stampAfter -and (!$BackendBundleStampBefore -or $stampAfter -gt $BackendBundleStampBefore)
+    if ($rebuilt) {
+        try {
+            New-Item -Path (Split-Path $BackendHashFile -Parent) -ItemType Directory -Force -ErrorAction SilentlyContinue > $null
+            $BackendHashToCache | Out-File -FilePath $BackendHashFile -Encoding ascii -NoNewline
+        } catch { }
+    } else {
+        Write-Host 'The backend bundle was not rebuilt by this command; the staleness marker is unchanged.' -ForegroundColor DarkGray
+    }
 }
 
 # Capture the CLI's exit status BEFORE restoring the working directory.

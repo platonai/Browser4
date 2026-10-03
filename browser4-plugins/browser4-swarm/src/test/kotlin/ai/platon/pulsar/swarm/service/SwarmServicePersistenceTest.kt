@@ -169,6 +169,30 @@ class SwarmServicePersistenceTest {
         assertEquals(200, done.statusCode, "Terminal tasks must not be touched")
     }
 
+    @Test
+    fun `abortPendingTasks leaves a task whose result was already delivered`(@TempDir tempDir: Path) {
+        val service = newService()
+
+        val queued = ScrapeResponse(id = "q1", statusCode = 201, pageStatusCode = 200)
+        service.responseCache.put("q1", queued)
+        // The X-SQL stage publishes the rows and a 200 before the terminal
+        // transition lands: the user has already seen this task complete, so
+        // closing the session must not rewrite it into a failure.
+        val delivered = ScrapeResponse(id = "d1", statusCode = 200, pageStatusCode = 200)
+        delivered.resultSet = listOf(mapOf("title" to "4K OLED TV 55", "price" to "$899.99"))
+        service.responseCache.put("d1", delivered)
+
+        val aborted = service.abortPendingTasks("Swarm session was closed; task dropped")
+
+        assertEquals(1, aborted, "Only the task without a published result is pending")
+        assertTrue(queued.isDone)
+        assertEquals(ResourceStatus.SC_GONE, queued.statusCode)
+        assertFalse(delivered.isDone, "A delivered task keeps its own terminal transition")
+        assertEquals(200, delivered.statusCode, "The delivered status must not be overwritten")
+        assertNull(delivered.message, "The abort reason must not be attached to a delivered task")
+        assertEquals(1, delivered.resultSet?.size, "The delivered rows must survive the close")
+    }
+
     // -----------------------------------------------------------------
     // Session replacement aborts pending tasks (issue #577)
     // -----------------------------------------------------------------
