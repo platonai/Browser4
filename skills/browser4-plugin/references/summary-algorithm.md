@@ -1,3 +1,9 @@
+---
+title: "Contributing a `htmlsnapshot summary` Algorithm"
+description: "Use when adding a page summary algorithm to a Browser4 plugin — implement the PageSummaryAlgorithm SPI, mount it, and make it selectable with --algorithm."
+tier: procedure
+---
+
 # Contributing a `htmlsnapshot summary` Algorithm
 
 The `htmlsnapshot summary` command summarizes a **fresh snapshot of the active
@@ -11,7 +17,32 @@ packaging, the `plugins/` directory, and SDK compatibility, start from
 [workflow.md](workflow.md) and model the project on
 `browser4-plugins/browser4-markdown/`.
 
-## Architecture
+## Quick Start
+
+An algorithm is four files plus a build — the steps below take them one at a time:
+
+| File | What it holds | Step |
+|---|---|---|
+| `pom.xml` | Parent `browser4-pdk`; `browser4-skeleton` in `provided` scope | 1 |
+| `…/summary/<Name>SummaryAlgorithm.kt` | The `PageSummaryAlgorithm` implementation | 2 |
+| `…/config/<Name>AutoConfiguration.kt` | The `PageSummaryAlgorithmMount` bean, named in `AutoConfiguration.imports` | 3 |
+| `META-INF/browser4-plugin.json` | Plugin name, version, SDK constraint | 4 |
+
+Then package, deploy into `$BROWSER4_HOME/plugins/`, restart, and verify that
+`htmlsnapshot algorithms` lists the id (step 5).
+
+## When to Use
+
+Reach for the SPI when the built-in `wpsi` outline is the wrong shape — you want
+article-focused plain text, a domain-specific digest, or JSON a downstream agent
+can parse — and the result must be selectable by every session with
+`htmlsnapshot summary --algorithm <id>`.
+
+For a single page, don't: `htmlsnapshot get` / `htmlsnapshot query` plus your own
+post-processing needs no plugin. The SPI is for algorithms that ship with the
+server and are reused across sessions.
+
+## How It Works
 
 ```
 plugin JAR
@@ -168,7 +199,29 @@ browser4-cli htmlsnapshot summary --algorithm readability
 The startup log also records the registration:
 `Registered page summary algorithm: 'readability' (...)`.
 
-## Making your algorithm the default
+## Patterns
+
+**Delegate to the built-in.** `WpsiPageSummaryAlgorithm` is an object, so your
+algorithm can keep the WPSI skeleton and add to it:
+
+```kotlin
+override fun generate(input: PageSummaryInput): String = buildString {
+    append(WpsiPageSummaryAlgorithm.generate(input))   // the WPSI skeleton
+    appendLine()
+    appendLine("readability:")
+    appendLine("  words: ${countWords(input.document)}")   // your own helper
+}
+```
+
+**Return machine-readable output.** The string travels back over MCP verbatim
+and is saved to a file by the CLI, so JSON or YAML costs nothing extra — only
+the built-in `wpsi` output is rendered as a compact outline.
+
+**Ship several algorithms at once.** `getPageSummaryAlgorithms()` returns a
+list, so one plugin can register a family of formats and let `--algorithm`
+choose between them.
+
+## Flags & Default Selection
 
 Clients must normally opt in with `--algorithm <id>`. To make your algorithm
 the server-wide default — so plain `htmlsnapshot summary` uses it — set the
@@ -201,3 +254,13 @@ plugin-contributed ids are selectable. Semantics:
   built-in `WpsiPageSummaryAlgorithm` to keep tests isolated.
 - Verify failure behavior: selecting an unknown id must surface an error whose
   message contains the available id list.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Startup throws while registering | the `id` does not match `[a-z0-9][a-z0-9-]*` | rename the id — it is validated at registration |
+| A startup warning names your id as a duplicate | first-wins: `wpsi` or an earlier plugin already registered that id | pick a distinct id, or drop the other plugin |
+| `--algorithm <id>` fails with the list of available ids | the algorithm was never registered | check the JAR is in `plugins/`, the plugin is enabled and SDK-compatible, and the log line `Registered page summary algorithm: '<id>'` is present |
+| Plain `htmlsnapshot summary` ignores your algorithm | the server-wide default is unset, or names another id | set `browser4.htmlsnapshot.summary.algorithm=<id>`; an unknown value fails fast with the available-id list |
+| The mount bean never runs | the auto-configuration class is missing from `AutoConfiguration.imports`, or `@ConditionalOnProperty` excluded it | add the import line, and check the property value |

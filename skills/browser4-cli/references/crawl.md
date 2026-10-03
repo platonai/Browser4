@@ -128,6 +128,15 @@ server-side clamp), never the raw request, and — the budget being a whole-task
 very large seed list needs a larger `--timeout` or several crawls; the losses tell you
 exactly which URLs never started.
 
+Inside the budget, a round (one seed URL at depth >= 1) gets the **smaller** of `5 min × depth`
+(capped at 30 min) and what the task has left minus a 30s reporting margin — so a round ends on
+its own terms and its outstanding URLs are reported as lost, instead of being killed by the task
+limit (which used to turn a deep crawl into "fewer pages, no losses reported").  A seed with less
+than ~45s of budget left is refused outright, as above, with a `skipped` seed status.
+
+The CLI's own wait is 600s (`BROWSER4_CLI_CRAWL_TIMEOUT_SECS`): when it expires the crawl keeps
+running server-side, so poll it with `crawl status` / `crawl result`.
+
 ```bash
 # Beyond the 10m default; and a short pre-release check that reports what was left
 browser4-cli crawl --seed-file urls.txt -d 0 --timeout 30m --refresh
@@ -337,21 +346,6 @@ both a positional `url` and `--seed-file` are given, the URL is prepended to the
 https://www.amazon.com/dp/B0C17W3Q9B
 ```
 
-## Timeout
-
-- CLI-side default: 600s (`BROWSER4_CLI_CRAWL_TIMEOUT_SECS`).  When that wait expires the
-  crawl keeps running server-side — poll it with `crawl status` / `crawl result`.
-- Backend task limit: **10 minutes per crawl task** by default (raise it per crawl with
-  `--timeout`, up to 1h), however many seeds or levels it has.  A task that reaches it ends
-  `TIMEOUT` and still reports the pages it collected plus every seed it never settled.
-- A round (one seed URL at depth >= 1) gets the **smaller** of `5 min × depth` (capped at
-  30 min) and what the task has left minus a 30s reporting margin — so it always times out on
-  its own terms, with its outstanding URLs reported as lost, instead of being killed by the
-  task limit (which used to turn a deep crawl into "fewer pages, no losses reported").
-- A seed the remaining budget cannot carry (less than ~45s left) is **not submitted at all**:
-  it is reported as a lost page and its `seedStatuses` entry is `skipped`, rather than being
-  started and killed with no accounting.
-
 ## Error handling
 
 | Situation | Behavior |
@@ -414,7 +408,7 @@ browser4-cli crawl list --status interrupted
 
 The wire values are `ResourceStatus` display text — `Created`, `Processing`, `OK`, `Request
 Timeout`, `Internal Server Error`, `Not Found`, plus `Interrupted` (the worker died with the
-backend — see [Resume after an interruption](#resume-after-an-interruption)); one vocabulary,
+backend — see [`crawl resume`](#crawl-resume)); one vocabulary,
 defined by `CrawlStatus` on the backend.  Lifecycle labels: `queued`, `processing`,
 `completed`, `failed (timeout)`, `failed (error)`, `failed (not found)`, `interrupted`.
 
@@ -467,30 +461,8 @@ runs — `pagesFound + failedPages.size == pagesExpected` still holds, each row 
 `fetchedAt` / `restoredFromCheckpoint` — and a rejected resume (already completed, nothing
 left, no checkpoint on disk) prints the reason and exits non-zero; a live worker is refused.
 
-## Resume after an interruption
-
-A crawl interrupted by a restart, a crash or the server-side `--timeout` budget is reported
-as `Interrupted` (never as a phantom `Processing`) and keeps a **checkpoint** on disk: its
-input contract, the URLs that succeeded, the URLs that failed terminally, the URLs that were
-in flight and the links it had discovered but never queued.  `crawl resume <task-id>`
-continues it:
-
-```bash
-browser4-cli crawl list --status interrupted
-browser4-cli crawl resume 3f1c…             # continues and polls to completion
-browser4-cli crawl resume 3f1c… --bg        # fire and forget
-browser4-cli crawl result 3f1c…             # union of both runs, per-row provenance
-```
-
-What a resume promises:
-
-- **No repeat request for a URL that already succeeded.** It is restored from the
-  checkpoint and reported in `skippedAlreadyFetched`.
-- **Terminal failures stay failed** unless `--retry-failed`.
-- **The frontier is followed**, so `--depth >= 1` continues its breadth-first walk.
-- **The accounting survives the merge**: `pagesFound + failedPages.size == pagesExpected`.
-- **A rejected resume says why** (already completed → use `--force`; nothing left; no
-  checkpoint on disk) and exits non-zero.
+The **checkpoint** on disk holds the input contract, the URLs that succeeded, the URLs that
+failed terminally, the URLs still in flight and the links it had discovered but never queued.
 
 Automatic resume at backend startup is **off by default** (`crawl.autoResume=false`): a
 restart is not consent to keep hitting sites.  Checkpoints live under
