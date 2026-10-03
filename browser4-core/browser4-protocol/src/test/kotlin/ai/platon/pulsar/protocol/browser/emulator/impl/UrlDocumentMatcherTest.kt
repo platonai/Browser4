@@ -50,6 +50,68 @@ class UrlDocumentMatcherTest {
     }
 
     @Test
+    @DisplayName("the same parameters in another order are the same document")
+    fun queryParameterOrderIsNotADifferentDocument() {
+        // The normalizer sorts a fetch's parameters (`FetchTask.url`), while the
+        // driver is navigated to the document's own address (`FetchTask.href`) and
+        // reports it back verbatim as document.URL.  Comparing the two literally
+        // made the guard refuse its own navigation and lose the page.
+        assertTrue(
+            UrlDocumentMatcher.referToSameDocument(
+                "http://localhost:38252/__probe/hub/alpha?links=3&delayMs=600",
+                "http://localhost:38252/__probe/hub/alpha?delayMs=600&links=3"
+            ),
+            "the address the browser committed and the fetch's normalized identity are one document"
+        )
+        assertTrue(
+            UrlDocumentMatcher.referToSameDocument(
+                "https://example.com/search?q=a&page=2&sort=price",
+                "https://example.com/search?sort=price&q=a&page=2"
+            )
+        )
+    }
+
+    @Test
+    @DisplayName("reordering is all that is ignored: names, values and multiplicity still matter")
+    fun queryReorderingOnlyIgnoresOrder() {
+        assertTrue(
+            UrlDocumentMatcher.referToSameDocument(
+                "https://example.com/p?a=1&a=2",
+                "https://example.com/p?a=2&a=1"
+            ),
+            "a repeated parameter reordered is still the same request"
+        )
+        assertFalse(
+            UrlDocumentMatcher.referToSameDocument(
+                "https://example.com/p?a=1",
+                "https://example.com/p?a=1&a=1"
+            ),
+            "a parameter the other side does not carry is a different request"
+        )
+        assertFalse(
+            UrlDocumentMatcher.referToSameDocument(
+                "https://example.com/p?a=1",
+                "https://example.com/p?a=2"
+            ),
+            "the same name with another value is a different request"
+        )
+        assertFalse(
+            UrlDocumentMatcher.referToSameDocument(
+                "https://example.com/p?a=1",
+                "https://example.com/p?a="
+            ),
+            "an empty value is not the same as a missing one"
+        )
+        assertFalse(
+            UrlDocumentMatcher.referToSameDocument(
+                "https://example.com/p?a=1",
+                "https://example.com/p"
+            ),
+            "a query the other side does not have at all is a different request"
+        )
+    }
+
+    @Test
     @DisplayName("bare /dp/<ASIN> redirect to ?th=1 is the same page")
     fun bareDpRedirectIsSamePage() {
         assertTrue(
