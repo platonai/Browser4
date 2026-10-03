@@ -11,7 +11,10 @@ import ai.platon.pulsar.common.urls.URLUtils
  * are needed:
  *
  * - [referToSameDocument] — scheme + host + port + path + query.  This is the
- *   "same request, no redirect" case.
+ *   "same request, no redirect" case.  Query *parameter order* is not part of
+ *   that identity: the engine's own normalizer sorts the parameters, so the
+ *   identity a fetch is filed under and the address the browser was navigated
+ *   to (and reports back as `document.URL`) differ in spelling alone.
  * - [referToSamePageIgnoringQuery] — the same, ignoring the query string.
  *   Sites routinely answer a URL with a 302 that changes only variant or
  *   tracking parameters (Amazon: `…/dp/B0X?psc=1` → `…/dp/B0X?th=1`, and
@@ -24,7 +27,7 @@ import ai.platon.pulsar.common.urls.URLUtils
  */
 internal object UrlDocumentMatcher {
 
-    /** Scheme, host, port, path and query must all match. */
+    /** Scheme, host, port, path and query must all match (query order excepted). */
     fun referToSameDocument(a: String, b: String): Boolean {
         if (a == b) return true
         return runCatching {
@@ -36,8 +39,37 @@ internal object UrlDocumentMatcher {
             val pb = (ub.path ?: "").removeSuffix("/")
             ha == hb && ua.scheme == ub.scheme &&
                 effectivePort(ua) == effectivePort(ub) &&
-                pa == pb && (ua.query ?: "") == (ub.query ?: "")
+                pa == pb && referToSameQuery(ua.query, ub.query)
         }.getOrDefault(false)
+    }
+
+    /**
+     * Whether two query strings carry the same parameters, in any order.
+     *
+     * Parameter order is not part of a URL's identity, and the engine produces
+     * both spellings for one fetch: `FetchTask.url` is the *normalized* identity,
+     * whose query the normalizer sorts (`?delayMs=600&links=3`), while the driver
+     * is navigated to the document's own *address*, `FetchTask.href`
+     * (`?links=3&delayMs=600`) — the rule the emulator states as "normalize for
+     * the key, href for the address".  The browser reports the address back
+     * verbatim as `document.URL`, and comparing the two literally made the
+     * snapshot origin guard refuse the document of its **own** navigation: the
+     * driver was retired, the fetch retried as `TabOriginMismatchException`, and
+     * the page was lost with empty content (a crawl of such a URL finds 0
+     * out-links and reports "Portal page returned near-empty content, 44 bytes").
+     *
+     * Only the order is ignored — names and values must still match exactly, so a
+     * genuinely different request (`?th=1` for a fetch of `?psc=1`) is still
+     * refused, which is what keeps the guard meaningful.
+     */
+    private fun referToSameQuery(a: String?, b: String?): Boolean {
+        val qa = a.orEmpty()
+        val qb = b.orEmpty()
+        if (qa == qb) return true
+        if (qa.isEmpty() || qb.isEmpty()) return false
+        val pa = qa.split('&')
+        val pb = qb.split('&')
+        return pa.size == pb.size && pa.sorted() == pb.sorted()
     }
 
     /** Same as [referToSameDocument] but the query string is irrelevant. */
