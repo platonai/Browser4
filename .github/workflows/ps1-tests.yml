@@ -3,6 +3,10 @@ name: PowerShell Tests
 # Runs bin/test.ps1 ps — every *.tests.ps1 in the repository — plus the
 # skill-document lint. Fast and self-contained: no Java/Maven/Docker, ~3 min.
 #
+# `test.ps1 ps` runs that lint itself now (as its last step), so the local gate
+# and this job check the same two things; the explicit step below stays for a
+# named, separately-reported verdict.
+#
 # This is the only place the *.tests.ps1 suite runs: pr.yml parses five
 # hardcoded RWS scripts without executing a suite, and ci.yml is tag-only plus
 # manual dispatch. The suite therefore used to run on the nightly schedule

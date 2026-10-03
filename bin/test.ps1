@@ -303,10 +303,11 @@ function Print-Usage {
     Write-Host "              (aliases: server, mocksite, mocksiteboot)"
     Write-Host "              First run installs ~25 Maven modules; ~10-15 min cold."
     Write-Host "  rest        Run REST module tests"
-    Write-Host "  skills      Run skills-focused agentic tests"
+    Write-Host "  skills      Run skills-focused agentic tests + skills/ document conformance"
     Write-Host "  mcp         Run MCP-focused agentic tests"
     Write-Host "  mcp-contract  Contract gate: tool matrix, docs, lint, validators (agentic + rest)"
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
+    Write-Host "              (+ skills/ document conformance, methodology M1-M8)"
     Write-Host "  rws         Run real-world scenario tests (requires a mode)"
     Write-Host "              sc, scenarios <names...>  run named tasks via run-tests.ps1"
     Write-Host "              sc add <name> <url>       create a scenario from template"
@@ -358,10 +359,10 @@ function Print-Usage {
     Write-Host "        b4w.ps1, test.ps1 fast/it/e2e) contend for the Kotlin compiler daemon and"
     Write-Host "        fail with 'Failed connecting to the daemon in 4 retries'. The launcher"
     Write-Host "        retries once automatically; if it still fails, see the printed recovery guide."
-    Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
+    Write-Host "  test.ps1 skills                     # Skills agentic tests + the skills/ doc conformance lint"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 mcp-contract               # Contract gate: matrix + docs + lint + validators"
-    Write-Host "  test.ps1 ps                         # Run all PowerShell *.tests.ps1 files"
+    Write-Host "  test.ps1 ps                         # PowerShell tests + the skills/ conformance lint CI runs next"
     Write-Host "  test.ps1 ps -Quiet                  # Run PowerShell tests with -Quiet flag"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
     Write-Host "  test.ps1 rws                        # Show RWS help"
@@ -3532,6 +3533,60 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
     if ($exitCode -ne 0) { exit $exitCode }
 }
 
+function Invoke-SkillDocConformance {
+    <#
+    .SYNOPSIS
+        Lint the skills/ documents against methodology M1-M8 (bin/skill-doc-lint.ps1).
+
+    .DESCRIPTION
+        Every workflow runs bin/skill-doc-lint.ps1 as its own step right after the
+        PowerShell tests (see .github/workflows/ps1-tests.yml), which makes CI the
+        first reader of a drifted skills/ document.  Running the same check from the
+        local gates turns that into a ~1s local failure instead of a red run after
+        the push — a procedure document past the 500-line cap, a reference without
+        frontmatter, a broken relative link.
+
+        The linter runs in its own pwsh process, exactly the way CI invokes it, so
+        its `exit` cannot terminate the caller; the exit code is returned instead.
+
+    .PARAMETER LintScript
+        Path to skill-doc-lint.ps1.  Defaults to the sibling script in bin/.
+
+    .PARAMETER Path
+        Skills directory to lint.  Defaults to the linter's own default (<repo>/skills).
+
+    .OUTPUTS
+        System.Int32 — the linter's exit code: 0 = conformant, 1 = issues reported.
+    #>
+    param(
+        [string]$LintScript = (Join-Path $scriptDir 'skill-doc-lint.ps1'),
+        [string]$Path
+    )
+
+    # A missing linter never fails a test run: it is a check, not a fixture.
+    if (-not (Test-Path -LiteralPath $LintScript)) {
+        Write-Host "    [WARN] SKIP: skill-doc-lint.ps1 not found at $LintScript" -ForegroundColor Yellow
+        return 0
+    }
+
+    $lintArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $LintScript)
+    if ($Path) { $lintArgs += @('-Path', $Path) }
+
+    if ($script:Show -or $script:DryRun) {
+        $showLabel = if ($script:Show) { '[SHOW] Would execute:' } else { '[DRY RUN] Executing:' }
+        Write-CommandBanner -Label $showLabel -Subtitle "  pwsh $($lintArgs -join ' ')"
+        return 0
+    }
+
+    Write-CommandBanner -Label 'Skill document conformance (methodology M1-M8)...'
+    # The report goes to the host on purpose: a child's stdout would otherwise be
+    # captured by the caller's assignment (`$exit = Invoke-SkillDocConformance`),
+    # which hides the issues and turns `$exit -ne 0` into an array comparison that
+    # is true for every result.  The success stream carries the exit code alone.
+    & pwsh @lintArgs | ForEach-Object { Write-Host $_ }
+    return [int]$LASTEXITCODE
+}
+
 function Invoke-PowerShellTests([string[]]$additionalArgs) {
     <#
     .SYNOPSIS
@@ -3569,6 +3624,9 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
             $runner = if ($usesPester) { 'Invoke-Pester' } else { 'pwsh -File' }
             Write-Host "  - $relativePath [$runner]"
         }
+        # The conformance check travels with these tests: CI runs it as the next
+        # step of the same job, so the listing names it too.
+        Write-Host '  - skill-doc-lint.ps1 [skills/ document conformance, methodology M1-M8]'
         return
     }
 
@@ -3711,11 +3769,17 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         }
     }
 
+    # -- Skill document conformance (methodology M1-M8) -------------------
+    # CI runs the linter as its own step right after this group, so it runs here
+    # too: a skills/ document that drifted fails locally in ~1s instead of in CI
+    # after the push.  Its result joins the group's verdict below.
+    $conformanceExit = Invoke-SkillDocConformance
+
     $swTotal.Stop()
     $total = $passed + $failed.Count
     $totalSec = [math]::Round($swTotal.Elapsed.TotalSeconds, 1)
-    $overallStatus = if ($failed.Count -eq 0) { 'pass' } else { 'fail' }
-    $overallExit   = if ($failed.Count -gt 0) { 1 } else { 0 }
+    $overallExit   = if ($failed.Count -gt 0 -or $conformanceExit -ne 0) { 1 } else { 0 }
+    $overallStatus = if ($overallExit -eq 0) { 'pass' } else { 'fail' }
 
     Write-Host ''
     Write-Rule
@@ -3729,6 +3793,12 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         foreach ($f in $failed) {
             Write-Host "  [FAIL] $($f.Path) (exit $($f.ExitCode))" -ForegroundColor Red
         }
+    }
+
+    if ($conformanceExit -ne 0) {
+        Write-Host ''
+        Write-Host '[FAIL] Skill document conformance: the issues above are in skills/ documents,' -ForegroundColor Red
+        Write-Host '       not in a test file.  Reproduce with: pwsh bin/skill-doc-lint.ps1' -ForegroundColor Red
     }
     Write-Rule
 
@@ -3744,7 +3814,7 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
     # Restore the console encoding we saved before running child processes.
     [Console]::OutputEncoding = $originalOutputEncoding
 
-    if ($failed.Count -gt 0) { exit 1 }
+    if ($failed.Count -gt 0 -or $conformanceExit -ne 0) { exit 1 }
 }
 
 # Read the parent POM's <modules> section to get the reactor build order.
@@ -4399,6 +4469,19 @@ $launchTargets = $launchTargets | Select-Object -Unique
 if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($psTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
     Write-Error "mock-site (or server) must be run by itself. Pass any Maven properties after it, for example: test.ps1 mock-site -Dmock.site.port=18080"
     exit 1
+}
+
+# -- Skills documentation conformance ---------------------------------
+# `skills` and `mcp-contract` own the skills/ documents as much as the code they
+# exercise — "a tool whose docs, lint or schema drifted is not shippable either"
+# — so the conformance linter runs first and drift fails in ~1s instead of after
+# a build.  `ps` runs it too, mirroring the CI job that pairs it with these tests.
+if (@($mavenTests | Where-Object { $_ -in 'skills', 'mcp-contract' }).Count -gt 0) {
+    $docConformanceExit = Invoke-SkillDocConformance
+    if ($docConformanceExit -ne 0) {
+        Write-CommandBanner -Label 'Skill document conformance failed — aborting test run' -Icon '[FAIL]'
+        exit $docConformanceExit
+    }
 }
 
 # -- Build backend (if requested) ------------------------------------

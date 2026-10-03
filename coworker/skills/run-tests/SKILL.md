@@ -108,7 +108,7 @@ to write to a custom location.
 # Pass extra cargo test args to CLI tests
 ./bin/test.ps1 cli -- --help
 
-# Run all PowerShell test files
+# Run all PowerShell test files (+ the skills/ document conformance check)
 ./bin/test.ps1 ps
 
 # Run all PS tests quietly

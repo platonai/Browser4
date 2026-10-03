@@ -194,6 +194,25 @@ AND NOT ManualOnly
 
   过滤后先看 `Running <类名>` 行确认真的跑起来了。
 
+### PowerShell / skills 文档门禁（`ps1-tests.yml` 的两步）
+
+`PowerShell Tests` job 就是两步：`./bin/test.ps1 ps`（Pester 测试）→ `./bin/skill-doc-lint.ps1`
+（skills/ 文档合规 M1-M8）。这两步现在一条命令就能在本地跑完：
+
+```powershell
+pwsh bin/test.ps1 ps          # Pester 测试 + 紧随其后的 skills/ 合规检查
+pwsh bin/test.ps1 skills      # 先跑合规检查（约 1s），再跑 Maven 的 *Skill* 测试
+pwsh bin/skill-doc-lint.ps1   # 只跑合规检查（与 CI 那一步等价的原文）
+```
+
+* 挂进 `ps` / `skills` / `mcp-contract` 的原因：`crawl.md` 的 M6（procedure 上限 500 行，
+  当时 512 行）在 13 小时内**三次**把 `ps1-tests` 打红，而本地没有任何入口跑这个 linter ——
+  CI 是它唯一的读者。现在文档漂移在推送前失败，而不是在 CI 里失败。
+* `skills` / `mcp-contract` 组里合规检查跑在**最前面**：文档不合规就 1 秒失败，不浪费一次构建。
+* `pr.yml` / `ci.yml` 仍各自显式跑 `./bin/skill-doc-lint.ps1`（步骤名
+  `Skill document conformance (methodology M1-M8)`）；本地挂载不改变 CI 的判定。
+* 挂载本身的回归保护在 `bin/tests/test.ps1.tests.ps1`（退出码契约 + 三个组的 `-Show` 可达性）。
+
 ---
 
 ## CI 门禁实际覆盖（实测盘点）

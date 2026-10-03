@@ -57,6 +57,14 @@ Also in this sweep: `references/quickstart.md` translated from Chinese to Englis
   - `.github/workflows/pr.yml` — PR quality gate (after PowerShell script validation)
   - `.github/workflows/ci.yml` — release-tag pipeline (after PowerShell script validation)
   - `.github/workflows/ps1-tests.yml` — nightly scheduled check
+- **Wired into the local gates (2026-10-03):** that `ps1-tests.yml` job is exactly
+  `test.ps1 ps` + the linter, so the linter now runs inside the groups that own the
+  documents — `test.ps1 ps` (right after the PowerShell tests) and `test.ps1 skills` /
+  `test.ps1 mcp-contract` (before the Maven run, so drift fails in ~1s instead of after a
+  build).  Background: `crawl.md` sat at the M6 cap (512 > 500) and reddened that job three
+  times in 13 hours (2026-10-02 17:01Z → 2026-10-03 05:57Z) because no local entry point ran
+  the linter — CI was its only reader.  The wiring is pinned by
+  `bin/tests/test.ps1.tests.ps1` (exit-code contract + reachability from the three groups).
 
 ## Re-run
 
@@ -64,4 +72,6 @@ Also in this sweep: `references/quickstart.md` translated from Chinese to Englis
 ./bin/skill-doc-lint.ps1            # whole tree
 ./bin/skill-doc-lint.ps1 -Path skills/browser4-cli   # one skill
 ./bin/skill-doc-lint.ps1 -PassThru  # machine-readable JSON
+./bin/test.ps1 ps                   # the same check, inside the gate CI runs
+./bin/test.ps1 skills               # or as the first step of the skills gate
 ```

@@ -967,6 +967,94 @@ Assert-Returns -Label 'Relay fallback: reports no captured log' -Actual $fallbac
 Remove-Item -LiteralPath $fallbackChild -Force -ErrorAction SilentlyContinue
 
 # ═══════════════════════════════════════════════════════════════════
+# TESTS: Invoke-SkillDocConformance (skills/ gate of ps + skills + mcp-contract)
+# ═══════════════════════════════════════════════════════════════════
+# A skills/ document that drifted past the M6 cap reached CI because nothing
+# local ran bin/skill-doc-lint.ps1 — CI was its first reader.  These tests pin
+# the exit-code contract the groups rely on (0 = conformant, 1 = issues) and the
+# wiring that makes the check reachable locally, both against throwaway fixtures.
+Write-Host "━━━ Invoke-SkillDocConformance: exit-code contract ━━━" -ForegroundColor Cyan
+
+$lintScriptAbs = (Resolve-Path (Join-Path $ScriptDir '..' 'skill-doc-lint.ps1')).Path
+
+function New-ConformanceFixture {
+    param(
+        [Parameter(Mandatory)][string]$Tier,
+        [Parameter(Mandatory)][int]$Lines
+    )
+
+    $root = Join-Path $relayTmpRoot ("b4-conformance-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $doc = Join-Path $root 'fixture' 'references' 'doc-under-test.md'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $doc) -Force | Out-Null
+
+    $body = @(
+        '---'
+        'title: "doc-under-test"'
+        'description: "fixture document for the conformance gate tests"'
+        "tier: $Tier"
+        '---'
+        ''
+        '# doc-under-test'
+    )
+    if ($Tier -eq 'catalog') {
+        # The catalog template is the cheapest fully conformant fixture: two
+        # required sections, unbounded length, no flag tables to satisfy.
+        $body += @('', '## Overview', '', '## Quick Index')
+    }
+    while ($body.Count -lt $Lines) { $body += 'Padding line for the line-count fixture.' }
+
+    Set-Content -Path $doc -Value $body
+    return $root
+}
+
+# The linter's report is written to the host (stream 6), so merge that stream in
+# to assert on it; the returned exit code is the last object either way.
+function Invoke-ConformanceCapture {
+    param([Parameter(Mandatory)][string]$Root)
+
+    $captured = @(Invoke-SkillDocConformance -LintScript $lintScriptAbs -Path $Root 6>&1)
+    return [pscustomobject]@{
+        ExitCode = $captured[-1]
+        Output   = (($captured | Select-Object -First ($captured.Count - 1)) | Out-String)
+    }
+}
+
+$conformantRoot = New-ConformanceFixture -Tier 'catalog' -Lines 20
+$conformant = Invoke-ConformanceCapture -Root $conformantRoot
+Assert-Returns -Label 'Conformance: conformant fixture exits 0' -Actual $conformant.ExitCode -Expected 0
+Assert-ContainsString -Label 'Conformance: conformant fixture was scanned' -Haystack $conformant.Output -Needle 'checked 1 files, 0 issue(s)'
+
+# Regression guard: the exit code must be the ONLY thing on the success stream.
+# A child's stdout leaking there makes the callers' `$exit -ne 0` an array
+# comparison that is true even for a clean tree, and swallows the report.
+$successStream = @(Invoke-SkillDocConformance -LintScript $lintScriptAbs -Path $conformantRoot)
+Assert-Returns -Label 'Conformance: success stream carries only the exit code' -Actual $successStream.Count -Expected 1
+Assert-Returns -Label 'Conformance: the returned value is 0 for a clean tree' -Actual ($successStream[-1] -eq 0) -Expected $true
+Remove-Item -LiteralPath $conformantRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+$overCapRoot = New-ConformanceFixture -Tier 'procedure' -Lines 501
+$overCap = Invoke-ConformanceCapture -Root $overCapRoot
+Assert-Returns -Label 'Conformance: over-cap fixture exits 1' -Actual $overCap.ExitCode -Expected 1
+Assert-ContainsString -Label 'Conformance: over-cap fixture reports M6' -Haystack $overCap.Output -Needle '[M6] procedure doc is 501 lines (cap 500)'
+Remove-Item -LiteralPath $overCapRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+Write-Host "━━━ Invoke-SkillDocConformance: a missing linter never fails a run ━━━" -ForegroundColor Cyan
+
+$missingLintExit = Invoke-SkillDocConformance -LintScript (Join-Path $relayTmpRoot 'no-such-skill-doc-lint.ps1')
+Assert-Returns -Label 'Conformance: missing linter exits 0' -Actual $missingLintExit -Expected 0
+
+Write-Host "━━━ Group wiring: the gates reach the conformance check ━━━" -ForegroundColor Cyan
+
+$psShow = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession -Show ps *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Wiring: ps -Show lists the conformance check' -Haystack $psShow -Needle 'skill-doc-lint.ps1 [skills/ document conformance'
+
+$skillsShow = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession -Show skills *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Wiring: skills -Show runs the conformance check' -Haystack $skillsShow -Needle 'skill-doc-lint.ps1'
+
+$contractShow = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession -Show mcp-contract *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Wiring: mcp-contract -Show runs the conformance check' -Haystack $contractShow -Needle 'skill-doc-lint.ps1'
+
+# ═══════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════
 Write-Host ''
