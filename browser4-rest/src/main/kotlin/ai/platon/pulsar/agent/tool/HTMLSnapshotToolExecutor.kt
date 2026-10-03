@@ -13,7 +13,9 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.rest.api.service.ScrapeService
 import ai.platon.pulsar.rest.mcp.controller.*
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryAlgorithmRegistry
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
+import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryInput
 import ai.platon.pulsar.skeleton.workflow.parse.html.ReadabilityExtractor
 import ai.platon.pulsar.skeleton.workflow.parse.html.ReadabilityResult
 import com.fasterxml.jackson.annotation.JsonInclude
@@ -82,7 +84,8 @@ import kotlin.reflect.KClass
  * - `scrape_all(sessionId, field, selector?, attrName?, offset?, limit?)` — Extract from all matching elements
  * - `query(sessionId?, sql, url?)` — Execute an X-SQL query against the active page, or against a stored url
  * - `export(sessionId)` — Export the full HTML of the current page
- * - `summary(sessionId)` — Generate a page summary with link groups
+ * - `summary(sessionId, algorithm?)` — Generate a page summary (built-in WPSI YAML by default; plugin algorithms selectable)
+ * - `algorithms(sessionId?)` — List available summary algorithm ids (no session required)
  * - `inspect(sessionId, selector?, max?, depth?)` — Inspect the HTML snapshot for selector suggestions
  * - `readability(sessionId, url?)` — Extract the readable article text of the active page, or of a stored url
  */
@@ -250,13 +253,43 @@ class HTMLSnapshotToolExecutor(
             arguments = listOf(
                 ToolSpec.Arg("sessionId", "String", null),
                 ToolSpec.Arg("expires", "String", DEFAULT_EXPIRES, EXPIRES_ARG_DESCRIPTION),
+                ToolSpec.Arg(
+                    "algorithm", "String?", "null",
+                    "Summary algorithm id. Defaults to the server-configured default ('wpsi' unless overridden " +
+                        "via browser4.htmlsnapshot.summary.algorithm). Additional algorithms can be contributed " +
+                        "by plugins; list them with the algorithms method (CLI: htmlsnapshot algorithms)."
+                ),
             ),
             returnType = "String",
-            description = "Generate a page summary including title, statistics, and detected link groups from a FRESH " +
-                "snapshot of the active page (the live tab is captured first, so the summary is the page as it is now). " +
-                "Pass expires=1d to summarize the stored snapshot instead when it is younger than that.",
+            description = "Generate a compressed page summary from a FRESH snapshot of the active page " +
+                "(the live tab is captured first, so the summary is the page as it is now). The default " +
+                "'wpsi' algorithm returns YAML containing page type, landmarks, scored key content nodes " +
+                "with selector hints, repeated lists, link groups, tables and statistics. Pass expires=1d " +
+                "to summarize the stored snapshot instead when it is younger than that. Use the algorithm " +
+                "argument to select a plugin-contributed summary algorithm.",
             examples = listOf(
                 ToolExample(title = "Summarise the current page", args = mapOf("sessionId" to "<session-id>")),
+                ToolExample(
+                    title = "Summarise with a specific algorithm",
+                    args = mapOf("sessionId" to "<session-id>", "algorithm" to "wpsi"),
+                ),
+            ),
+        )
+
+        toolSpec["algorithms"] = ToolSpec(
+            domain = domain,
+            method = "algorithms",
+            arguments = listOf(
+                ToolSpec.Arg("sessionId", "String?", "null"),
+            ),
+            returnType = "String",
+            description = "List the page summary algorithms available to html_snapshot.summary as a JSON " +
+                "array. Each entry has id, displayName, description, version, builtin and default. The built-in " +
+                "'wpsi' algorithm is always present; other algorithms are contributed by installed plugins; " +
+                "default marks the effective server-side default (overridable via " +
+                "browser4.htmlsnapshot.summary.algorithm). Does not require a session or an active page.",
+            examples = listOf(
+                ToolExample(title = "List available summary algorithms", args = mapOf<String, String>()),
             ),
         )
 
@@ -320,6 +353,7 @@ class HTMLSnapshotToolExecutor(
             "query" -> query(args, receiver)
             "export" -> export(args, receiver)
             "summary" -> summary(args, receiver)
+            "algorithms" -> algorithms()
             "inspect" -> inspect(args, receiver)
             "readability" -> readability(args, receiver)
             else -> throw IllegalArgumentException("Unsupported html_snapshot method: $functionName")
@@ -1030,8 +1064,47 @@ class HTMLSnapshotToolExecutor(
             val pulsarSession = managed.agenticSession
             val page = snapshotPageFor(managed, requestedUrl = null, expires)
             val document = pulsarSession.parse(page, noCache = true)
-            PageSummaryIndexService.generate(document, page.url, document.title)
+
+            val registry = PageSummaryAlgorithmRegistry.instance
+            val algorithmId = paramString(args, "algorithm", "summary", required = false)
+                ?.trim()?.takeIf { it.isNotEmpty() }
+            val algorithm = registry.resolve(algorithmId)
+                ?: throw IllegalArgumentException(
+                    if (algorithmId != null) {
+                        "Unknown summary algorithm '$algorithmId'. " +
+                            "Available: ${registry.availableIds().joinToString(", ")}"
+                    } else {
+                        "Default summary algorithm '${registry.defaultId()}' " +
+                            "(configured via ${PageSummaryAlgorithmRegistry.CONFIG_KEY_DEFAULT_ALGORITHM}) " +
+                            "is not registered. Available: ${registry.availableIds().joinToString(", ")}"
+                    }
+                )
+            algorithm.generate(PageSummaryInput(document, page.url, document.title))
         }
+    }
+
+    /**
+     * List the page summary algorithms available to [summary] as a JSON array.
+     *
+     * Reads only the global [PageSummaryAlgorithmRegistry], so it neither needs
+     * nor resolves a session — the CLI `htmlsnapshot algorithms` subcommand and
+     * MCP clients without an active page can call it directly.
+     */
+    private fun algorithms(): String {
+        val mapper = pulsarObjectMapper()
+        val array = mapper.createArrayNode()
+        val registry = PageSummaryAlgorithmRegistry.instance
+        registry.list().forEach { algorithm ->
+            array.addObject().apply {
+                put("id", algorithm.id)
+                put("displayName", algorithm.displayName)
+                put("description", algorithm.description)
+                put("version", algorithm.version)
+                put("builtin", algorithm.builtin)
+                put("default", algorithm.id == registry.defaultId())
+            }
+        }
+        return mapper.writeValueAsString(array)
     }
 
     private suspend fun inspect(args: Map<String, Any?>, receiver: Any = Any()): String {

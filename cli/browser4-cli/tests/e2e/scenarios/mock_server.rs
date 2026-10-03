@@ -6791,6 +6791,74 @@ pub(super) fn test_htmlsnapshot_summary(ctx: &mut E2ECtx) {
         "expected expires=2h in html_snapshot_summary arguments, got: {:?}",
         flagged_call.arguments
     );
+
+    // `--algorithm <id>` is forwarded to the server as the `algorithm` argument.
+    let with_algorithm = run_command(ctx, &["htmlsnapshot", "summary", "--algorithm", "wpsi"]);
+    assert_eq!(
+        with_algorithm.exit_code, 0,
+        "expected htmlsnapshot summary --algorithm to succeed:\n{}",
+        with_algorithm.stderr
+    );
+    let snapshot = mock_server.snapshot();
+    let algo_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| {
+            call.tool == "html_snapshot_summary"
+                && call
+                    .arguments
+                    .get("algorithm")
+                    .and_then(|v| v.as_str())
+                    == Some("wpsi")
+        })
+        .expect("expected html_snapshot_summary call with algorithm=wpsi");
+    assert!(
+        algo_call.arguments.get("sessionId").is_some(),
+        "expected sessionId alongside algorithm, got: {:?}",
+        algo_call.arguments
+    );
+}
+
+/// `htmlsnapshot algorithms` sends `html_snapshot_algorithms` without a
+/// session and renders the returned list.
+pub(super) fn test_htmlsnapshot_algorithms(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Deliberately no `open` first: algorithm listing must not need a page.
+    let result = run_command(ctx, &["htmlsnapshot", "algorithms"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot algorithms to succeed:\n{}",
+        result.stderr
+    );
+
+    let snapshot = mock_server.snapshot();
+    let call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_algorithms")
+        .expect("expected html_snapshot_algorithms tool call");
+    assert!(
+        call.arguments
+            .as_object()
+            .map(|args| args.is_empty())
+            .unwrap_or(true),
+        "expected no arguments for html_snapshot_algorithms, got: {:?}",
+        call.arguments
+    );
+    assert!(
+        result.stdout.contains("wpsi"),
+        "expected built-in wpsi algorithm in output:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("mock-algo"),
+        "expected plugin-contributed algorithm in output:\n{}",
+        result.stdout
+    );
 }
 
 /// `htmlsnapshot inspect` sends `html_snapshot_inspect`.

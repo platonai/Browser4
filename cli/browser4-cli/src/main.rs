@@ -506,6 +506,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "htmlsnapshot-query",
         "htmlsnapshot-export",
         "htmlsnapshot-summary",
+        "htmlsnapshot-algorithms",
         "htmlsnapshot-grep",
         "htmlsnapshot-inspect",
         "htmlsnapshot-readability",
@@ -9106,6 +9107,15 @@ async fn handle_html_snapshot_export(
     Ok(())
 }
 
+/// Returns true when the summary content looks like WPSI YAML (the only format
+/// the outline renderer understands). Non-wpsi algorithm output — including
+/// output produced when the server-side default algorithm was overridden via
+/// `browser4.htmlsnapshot.summary.algorithm` — fails this check and is printed
+/// verbatim instead.
+fn is_wpsi_summary(yaml: &str) -> bool {
+    yaml.lines().any(|line| line == "page:")
+}
+
 /// Parse the WPSI YAML summary and produce a compact outline for stdout display.
 /// The full summary is always saved to file; this extracts the key structure.
 fn format_summary_outline(yaml: &str, verbose: bool) -> String {
@@ -9556,6 +9566,15 @@ async fn handle_html_snapshot_summary(
         .get("expires")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    // Server-side summary algorithm selection (default on the server is the
+    // configured default, wpsi unless overridden). Whether the result needs
+    // verbatim printing is detected from the output itself (is_wpsi_summary),
+    // since the client cannot know when the server default was changed.
+    let algorithm_id = tool_params
+        .get("algorithm")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let combined = {
         let client = client.clone();
@@ -9568,6 +9587,7 @@ async fn handle_html_snapshot_summary(
         let inner_base_url = base_url.clone();
         let inner_tool_name = tool_name.clone();
         let inner_expires = expires.clone();
+        let inner_algorithm_id = algorithm_id.clone();
         // Run on a dedicated 16 MB-stack thread: the concurrent summary
         // futures can overflow the 1 MB Windows main-thread stack in debug
         // builds (silent exit code 0).  See `run_on_big_stack`.
@@ -9577,11 +9597,15 @@ async fn handle_html_snapshot_summary(
                 let base_url = inner_base_url.clone();
                 let tool_name = inner_tool_name.clone();
                 let expires = inner_expires.clone();
+                let algorithm_id = inner_algorithm_id.clone();
 
                 async move {
                     let mut summary_params = json!({ "sessionId": session_id });
                     if let Some(expires) = expires {
                         summary_params["expires"] = json!(expires);
+                    }
+                    if let Some(id) = algorithm_id {
+                        summary_params["algorithm"] = json!(id);
                     }
                     let (url_res, title_res, summary_res) = tokio::join!(
                         call_tool(
@@ -9630,6 +9654,11 @@ async fn handle_html_snapshot_summary(
 
     if raw {
         println!("{}", summary);
+    } else if !is_wpsi_summary(summary) {
+        // The server-side default algorithm may have been overridden via
+        // `browser4.htmlsnapshot.summary.algorithm`; non-WPSI output is
+        // printed verbatim (the full content is already saved to file).
+        println!("{}", summary);
     } else {
         let outline = format_summary_outline(summary, verbose);
         cli_println!("### Page");
@@ -9639,6 +9668,63 @@ async fn handle_html_snapshot_summary(
         cli_println!("");
         cli_println!("💾 Full summary saved to {}", out_path.display());
     }
+    Ok(())
+}
+
+/// `htmlsnapshot algorithms` — lists page summary algorithms registered on the
+/// server (built-in wpsi plus any contributed by plugins). This call does not
+/// need a browser session.
+async fn handle_html_snapshot_algorithms(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+) -> Result<(), String> {
+    let response = call_tool(client, base_url, tool_name, json!({})).await?;
+    let parsed: Value = serde_json::from_str(&response)
+        .map_err(|e| format!("Failed to parse algorithm list response: {}", e))?;
+
+    if let Some(algorithms) = parsed.as_array() {
+        if algorithms.is_empty() {
+            cli_println!("No summary algorithms installed.");
+        } else {
+            cli_println!("Available summary algorithms ({}):", algorithms.len());
+            for algo in algorithms {
+                let id = algo.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                let display = algo
+                    .get("displayName")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("-");
+                let description = algo
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let version = algo
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("-");
+                let builtin = algo.get("builtin").and_then(|v| v.as_bool()).unwrap_or(false);
+                let default = algo.get("default").and_then(|v| v.as_bool()).unwrap_or(false);
+                let marker = if default { " (default)" } else { "" };
+                let origin = if builtin { "built-in" } else { "plugin" };
+                cli_println!(
+                    "  {:<20} {:<24} v{:<10} [{}]{}",
+                    id,
+                    display,
+                    version,
+                    origin,
+                    marker
+                );
+                if !description.is_empty() {
+                    cli_println!("    {}", description);
+                }
+            }
+        }
+    } else {
+        cli_println!("{}", response);
+    }
+    json_field("algorithms", parsed);
     Ok(())
 }
 
@@ -23500,6 +23586,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "htmlsnapshot-query" => Some("htmlsnapshot query"),
         "htmlsnapshot-export" => Some("htmlsnapshot export"),
         "htmlsnapshot-summary" => Some("htmlsnapshot summary"),
+        "htmlsnapshot-algorithms" => Some("htmlsnapshot algorithms"),
         "htmlsnapshot-grep" => Some("htmlsnapshot grep"),
         "htmlsnapshot-inspect" => Some("htmlsnapshot inspect"),
         "doctor-log" => Some("doctor log"),
@@ -26244,6 +26331,9 @@ async fn run(
             )
             .await?;
         }
+        "htmlsnapshot-algorithms" => {
+            handle_html_snapshot_algorithms(&client, &base_url, &tool_name).await?;
+        }
         "htmlsnapshot-grep" => {
             let grep_options = parse_grep_options(&tool_params)?;
             handle_html_snapshot_grep(
@@ -27560,9 +27650,26 @@ mod tests {
         assert!(no_snapshot_commands().contains("htmlsnapshot-query"));
         assert!(no_snapshot_commands().contains("htmlsnapshot-export"));
         assert!(no_snapshot_commands().contains("htmlsnapshot-summary"));
+        assert!(no_snapshot_commands().contains("htmlsnapshot-algorithms"));
         assert!(no_snapshot_commands().contains("htmlsnapshot-grep"));
         assert!(no_snapshot_commands().contains("htmlsnapshot-inspect"));
         assert!(no_snapshot_commands().contains("htmlsnapshot-readability"));
+    }
+
+    #[test]
+    fn htmlsnapshot_algorithms_is_not_page_dependent() {
+        // Listing algorithms only reads the server registry — no browser page.
+        assert!(!is_page_dependent_command("htmlsnapshot-algorithms"));
+    }
+
+    #[test]
+    fn is_wpsi_summary_detects_wpsi_yaml() {
+        assert!(is_wpsi_summary("page:\n  type: article\nstructure:\n"));
+        assert!(is_wpsi_summary("---\npage:\n  type: other\n"));
+        // Indented or partial matches do not count — only the top-level key.
+        assert!(!is_wpsi_summary("  page:\n"));
+        assert!(!is_wpsi_summary("url: https://example.com\ntitle: Hi\n"));
+        assert!(!is_wpsi_summary(""));
     }
 
     #[test]
@@ -29483,6 +29590,18 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_prefixed_command_handles_htmlsnapshot_algorithms() {
+        let rewritten = rewrite_prefixed_command(&[
+            "htmlsnapshot".to_string(),
+            "algorithms".to_string(),
+            "--json".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "htmlsnapshot-algorithms");
+        assert_eq!(rewritten[1], "--json");
+    }
+
+    #[test]
     fn rewrite_prefixed_command_handles_plugin_domain_spaced_form() {
         // `plugin <domain> [method] ...` must rewrite to the flat
         // `plugin-<domain>` form so the dynamic plugin dispatch handles it —
@@ -29990,6 +30109,10 @@ mod tests {
         assert_eq!(
             preferred_spaced_command_form("htmlsnapshot-get-all"),
             Some("htmlsnapshot get all")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("htmlsnapshot-algorithms"),
+            Some("htmlsnapshot algorithms")
         );
         assert_eq!(
             preferred_spaced_command_form("config-list"),

@@ -2040,6 +2040,25 @@ fn mock_browser_tool_text(
             r#"{"importDir":"/mock/imports/chrome-Default-20260825","profileDir":"/mock/imports/chrome-Default-20260825/profile/Default","browser":"chrome","sourceProfile":"chrome:Default","filesCopied":42,"data":["bookmarks","cookies"],"warnings":["Passwords were not imported (disabled by default)."],"nextStep":"browser4-cli open --profile /mock/imports/chrome-Default-20260825/profile/Default"}"#
                 .to_string()
         }
+        "html_snapshot_algorithms" => serde_json::json!([
+            {
+                "id": "wpsi",
+                "displayName": "Web Page Summary Index",
+                "description": "Built-in compressed page summary (WPSI)",
+                "version": null,
+                "builtin": true,
+                "default": true
+            },
+            {
+                "id": "mock-algo",
+                "displayName": "Mock Algorithm",
+                "description": "A plugin-contributed summary algorithm",
+                "version": "1.0.0",
+                "builtin": false,
+                "default": false
+            }
+        ])
+        .to_string(),
         other => format!("mock response for {other}"),
     }
 }
@@ -5151,6 +5170,7 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "htmlsnapshot-query",
         "htmlsnapshot-export",
         "htmlsnapshot-summary",
+        "htmlsnapshot-algorithms",
         "htmlsnapshot-grep",
         "htmlsnapshot-inspect",
         "htmlsnapshot-readability",

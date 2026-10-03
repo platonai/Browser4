@@ -243,7 +243,28 @@ Generates a deterministic, AI-readable compressed page summary (typically <1% of
 
 ```bash
 browser4-cli htmlsnapshot summary
+browser4-cli htmlsnapshot summary --algorithm wpsi   # explicit built-in algorithm (default)
+browser4-cli htmlsnapshot summary --expires 1d       # summarize the stored snapshot instead of the live page
+browser4-cli htmlsnapshot summary --raw              # print the summary content, not the outline
+browser4-cli htmlsnapshot summary -v                 # outline with internal scores and legend
 ```
+
+The summarization algorithm is **pluggable**. The built-in algorithm is `wpsi`; installed Browser4 plugins can contribute additional algorithm ids. List what is installed with:
+
+```bash
+browser4-cli htmlsnapshot algorithms          # human-readable table, the default is marked
+browser4-cli htmlsnapshot algorithms --json   # raw JSON array (id/displayName/description/version/builtin/default)
+```
+
+`htmlsnapshot algorithms` needs no open page or session. An unknown `--algorithm <id>` fails with the list of available ids. Output of non-`wpsi` algorithms is printed verbatim (the full content is still saved to a file).
+
+**Overriding the default algorithm:**
+The server-side default can be changed with the Spring property
+`browser4.htmlsnapshot.summary.algorithm=<id>` (e.g. in
+`application.properties` or as a `-D` system property). After plugins are
+wired, `PluginManager` applies the configured value so that plain
+`htmlsnapshot summary` (no `--algorithm`) runs your algorithm. If the id
+is not registered, summary calls fail fast with the available list.
 
 ## Export
 

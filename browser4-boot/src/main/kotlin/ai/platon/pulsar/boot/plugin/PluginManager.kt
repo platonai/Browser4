@@ -12,8 +12,10 @@ import ai.platon.pulsar.skeleton.plugin.BrowseEventMount
 import ai.platon.pulsar.skeleton.plugin.Browser4Plugin
 import ai.platon.pulsar.skeleton.plugin.CrawlEventMount
 import ai.platon.pulsar.skeleton.plugin.LoadEventMount
+import ai.platon.pulsar.skeleton.plugin.PageSummaryAlgorithmMount
 import ai.platon.pulsar.skeleton.plugin.PluginManifest
 import ai.platon.pulsar.skeleton.plugin.PluginMount
+import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryAlgorithmRegistry
 import jakarta.annotation.PreDestroy
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.ApplicationRunner
@@ -35,7 +37,8 @@ import java.util.jar.JarFile
  * - [CrawlEventMount] → `PulsarEventBus.pageEventHandlers.crawlEventHandlers` (2 hooks)
  * - [ToolMount] → [CustomToolRegistry]
  * - [SwarmFacadeMount] → [SwarmFacadeRegistry]
- * - [PageSnifferMount] → [BrowserResponseHandler.pageCategorySniffer]
+ * - [PageSnifferMount] → `BrowserResponseHandler.pageCategorySniffer`
+ * - [PageSummaryAlgorithmMount] → [PageSummaryAlgorithmRegistry]
  */
 class PluginManager(
     private val applicationContext: ApplicationContext,
@@ -58,6 +61,10 @@ class PluginManager(
             }
             wireAllMounts(mountBeans.values.toList())
         }
+
+        // Apply the configured default summary algorithm AFTER all mounts are
+        // wired, so plugin-contributed ids are already registered.
+        applyConfiguredDefaultSummaryAlgorithm()
 
         // Discover and initialize Browser4Plugin beans
         val pluginBeans = applicationContext.getBeansOfType(Browser4Plugin::class.java)
@@ -205,6 +212,11 @@ class PluginManager(
             if (mount is PageSnifferMount) {
                 wirePageSnifferMount(mount)
             }
+
+            // --- Page summary algorithm mount ---
+            if (mount is PageSummaryAlgorithmMount) {
+                wirePageSummaryAlgorithmMount(mount)
+            }
         }
     }
 
@@ -233,6 +245,43 @@ class PluginManager(
             }
         } catch (e: Exception) {
             logger.warn("  ! Failed to register page sniffers: {}", e.message)
+        }
+    }
+
+    private fun wirePageSummaryAlgorithmMount(mount: PageSummaryAlgorithmMount) {
+        mount.getPageSummaryAlgorithms().forEach { algorithm ->
+            try {
+                val registered = PageSummaryAlgorithmRegistry.instance.register(algorithm)
+                if (registered) {
+                    logger.info("  + Registered page summary algorithm: '{}'", algorithm.id)
+                }
+            } catch (e: Exception) {
+                logger.warn(
+                    "  ! Failed to register page summary algorithm '{}': {}",
+                    runCatching { algorithm.id }.getOrDefault("<invalid>"), e.message
+                )
+            }
+        }
+    }
+
+    /**
+     * Applies the configured default summary algorithm
+     * (`browser4.htmlsnapshot.summary.algorithm`) to the registry. Called after
+     * all plugin mounts are wired so plugin-contributed ids can be selected.
+     * An unregistered configured id is kept: summary calls without an explicit
+     * `algorithm` then fail fast with the list of available ids.
+     */
+    private fun applyConfiguredDefaultSummaryAlgorithm() {
+        val configured = applicationContext.environment
+            .getProperty(PageSummaryAlgorithmRegistry.CONFIG_KEY_DEFAULT_ALGORITHM)
+            ?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        try {
+            PageSummaryAlgorithmRegistry.instance.setDefaultId(configured)
+        } catch (e: IllegalArgumentException) {
+            logger.warn(
+                "  ! Invalid value '{}' for {}: {}",
+                configured, PageSummaryAlgorithmRegistry.CONFIG_KEY_DEFAULT_ALGORITHM, e.message
+            )
         }
     }
 

@@ -4203,6 +4203,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "stdout", description: "Print summary content directly to stdout", is_bool: true, short: None },
                 OptionDef { name: "verbose", short: Some("v"), description: "Show internal scoring details and score legend", is_bool: true },
                 OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) captures the live page, a positive value reads the stored snapshot while it is younger than the window, without touching the tab" },
+                OptionDef { name: "algorithm", short: None, description: "Summary algorithm id (default: the server-configured default, wpsi unless overridden). List installed algorithms with 'browser4-cli htmlsnapshot algorithms'; plugins can contribute additional ids", is_bool: false },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_summary".to_string(),
@@ -4213,8 +4214,26 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // Pass through CLI-side flag for outline rendering in main.rs handler
                 if let Some(true) = get_bool(args, "verbose") { p["verbose"] = json!(true); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
+                // Server-side algorithm selection (stripped from CLI-side flags below in main.rs)
+                if let Some(a) = get_opt_str(args, "algorithm") {
+                    if !a.is_empty() { p["algorithm"] = json!(a); }
+                }
                 p
             },
+        },
+        CommandDef {
+            name: "htmlsnapshot-algorithms",
+            description: "List page summary algorithms available to 'htmlsnapshot summary'. The built-in wpsi algorithm is always listed; plugins contribute additional algorithm ids.",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "json", description: "Print the raw JSON array returned by the server", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "html_snapshot_algorithms".to_string(),
+            tool_params_fn: |_args| json!({}),
         },
         CommandDef {
             name: "htmlsnapshot-grep",
@@ -7543,6 +7562,7 @@ mod tests {
             "htmlsnapshot-query",
             "htmlsnapshot-export",
             "htmlsnapshot-summary",
+            "htmlsnapshot-algorithms",
             "htmlsnapshot-grep",
             "htmlsnapshot-inspect",
             "htmlsnapshot-readability",
@@ -7561,6 +7581,42 @@ mod tests {
         assert!(
             params.as_object().unwrap().is_empty(),
             "readability params should be empty without a url"
+        );
+    }
+
+    #[test]
+    fn test_html_snapshot_summary_algorithm_param() {
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-summary").unwrap();
+        let empty = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&empty), "html_snapshot_summary");
+
+        // No --algorithm: the parameter must be omitted so the server picks its default.
+        let params = (cmd.tool_params_fn)(&empty);
+        assert!(params.get("algorithm").is_none());
+
+        let mut args = HashMap::new();
+        args.insert("algorithm".to_string(), json!("my-algo"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["algorithm"], json!("my-algo"));
+
+        // An empty value is treated the same as "not provided".
+        let mut args = HashMap::new();
+        args.insert("algorithm".to_string(), json!(""));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("algorithm").is_none());
+    }
+
+    #[test]
+    fn test_html_snapshot_algorithms_command_mapping() {
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-algorithms").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_algorithms");
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(
+            params.as_object().unwrap().is_empty(),
+            "algorithms takes no server parameters"
         );
     }
 
@@ -7709,6 +7765,7 @@ mod tests {
             "htmlsnapshot-query",
             "htmlsnapshot-export",
             "htmlsnapshot-summary",
+            "htmlsnapshot-algorithms",
             "htmlsnapshot-grep",
             "htmlsnapshot-inspect",
             "htmlsnapshot-readability",

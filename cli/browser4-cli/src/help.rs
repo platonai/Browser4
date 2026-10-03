@@ -33,6 +33,7 @@ pub fn public_command_name(name: &str) -> &str {
         "htmlsnapshot-query" => "htmlsnapshot query",
         "htmlsnapshot-export" => "htmlsnapshot export",
         "htmlsnapshot-summary" => "htmlsnapshot summary",
+        "htmlsnapshot-algorithms" => "htmlsnapshot algorithms",
         "htmlsnapshot-grep" => "htmlsnapshot grep",
         "htmlsnapshot-inspect" => "htmlsnapshot inspect",
         "htmlsnapshot-readability" => "htmlsnapshot readability",
@@ -1877,8 +1878,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             50,
         ));
         lines.push(format_with_gap(
-            "  htmlsnapshot summary",
-            "Summarize: produce a compressed Web Page Summary Index (WPSI) from that fresh snapshot",
+            "  htmlsnapshot summary [--algorithm <id>]",
+            "Summarize: produce a compressed Web Page Summary Index (WPSI) from that fresh snapshot. --algorithm selects an installed summary algorithm.",
+            50,
+        ));
+        lines.push(format_with_gap(
+            "  htmlsnapshot algorithms",
+            "List summary algorithms available to 'htmlsnapshot summary' (built-in wpsi plus plugin-contributed ids) — no page required",
             50,
         ));
         lines.push(format_with_gap(
@@ -1966,7 +1972,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(wrap_text(
-            "Generate a compressed page summary (WPSI) from a fresh snapshot of the active page with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size.",
+            "Generate a compressed page summary (WPSI) from a fresh snapshot of the active page with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size. The summarization algorithm is pluggable: the built-in default is `wpsi`, and installed plugins can contribute additional algorithm ids. Run `htmlsnapshot algorithms` to list them and pass `--algorithm <id>` to choose one; output from non-wpsi algorithms is printed verbatim.",
             "  - ",
             4,
         ));
@@ -2060,6 +2066,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Generate a compressed page summary from the active page's fresh snapshot".to_string());
         lines.push("  browser4-cli htmlsnapshot summary".to_string());
+        lines.push(String::new());
+        lines.push("  # List installed summary algorithms (built-in wpsi plus plugins)".to_string());
+        lines.push("  browser4-cli htmlsnapshot algorithms".to_string());
+        lines.push(String::new());
+        lines.push("  # Generate the summary with a plugin-contributed algorithm".to_string());
+        lines.push("  browser4-cli htmlsnapshot summary --algorithm my-algorithm".to_string());
         lines.push(String::new());
         lines.push("  # Search for 'error' case-insensitively".to_string());
         lines.push("  browser4-cli htmlsnapshot grep -i error".to_string());

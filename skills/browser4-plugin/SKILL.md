@@ -44,6 +44,10 @@ Scaffold with `mountPoints=["ToolMount"]` and `hasCustomTools=true`, implement a
 
 Model it on the first-party plugins — `browser4-plugins/browser4-images/` implements BrowseEventMount + ToolMount + Browser4Plugin + Config + Service + BrowseEventHandler + ToolExecutor.
 
+### 4. Summary algorithm plugin (PageSummaryAlgorithmMount)
+
+Scaffold with `mountPoints=["PageSummaryAlgorithmMount"]`, implement `PageSummaryAlgorithm` (id/displayName/description + `generate(PageSummaryInput)`), and expose it via the mount bean. The algorithm becomes selectable with `browser4-cli htmlsnapshot summary --algorithm <id>` and visible in `browser4-cli htmlsnapshot algorithms` — see [Contributing a summary algorithm](references/summary-algorithm.md).
+
 ## Flags
 
 The archetype takes named parameters — there are no CLI flags:
@@ -55,7 +59,7 @@ The archetype takes named parameters — there are no CLI flags:
 | `version` | String | No | `1.0.0-SNAPSHOT` | Plugin version |
 | `pluginName` | String | Yes | — | Human-readable plugin name (e.g., `"My Feature Plugin"`) |
 | `pluginDescription` | String | No | `"A Browser4 plugin that provides custom functionality"` | One-line description |
-| `mountPoints` | String[] | No | `["BrowseEventMount"]` | Which `PluginMount` interfaces to implement. Options: `BrowseEventMount`, `LoadEventMount`, `CrawlEventMount`, `ToolMount`, `PageSnifferMount` |
+| `mountPoints` | String[] | No | `["BrowseEventMount"]` | Which `PluginMount` interfaces to implement. Options: `BrowseEventMount`, `LoadEventMount`, `CrawlEventMount`, `ToolMount`, `PageSnifferMount`, `PageSummaryAlgorithmMount` |
 | `hasCustomTools` | Boolean | No | `false` | Whether the plugin registers LLM agent tool executors |
 | `hasLifecycle` | Boolean | No | `false` | Whether the plugin implements the `Browser4Plugin` lifecycle interface |
 | `features` | String[] | No | — | List of concrete capabilities to implement (e.g., `"detect media on page"`, `"download files"`, `"expose LLM tool"`) |
@@ -69,6 +73,7 @@ Create a plugin when you need to:
 - **Hook into the crawl lifecycle** — accept or reject URLs during crawling. Examples: domain allowlists, duplicate URL filtering, paywall detection and skip.
 - **Register custom tools for LLM agents** — expose new capabilities as callable functions. Examples: image download, PPTX generation, database queries, API integrations.
 - **Add page category sniffers** — teach Browser4 to recognize new page types so it can adapt its behavior. Examples: CAPTCHA pages, login pages, paywalls, shopping carts.
+- **Contribute page summary algorithms** — add alternative `htmlsnapshot summary` generators (domain-specific, readability-focused, LLM-based) selected via `--algorithm <id>`.
 
 ## Errors & Recovery
 
@@ -123,7 +128,8 @@ Key source files to read for patterns and examples:
 |----------|------|---------------------|
 | Canonical test plugin | `browser4-pdk/browser4-pdk-test-plugin/` | All three event-phase mount points (BrowseEventMount, LoadEventMount, CrawlEventMount) — the compatibility canary |
 | Plugin archetype | `browser4-pdk/browser4-plugin-archetype/src/main/resources/archetype-resources/` | Scaffolded project structure, templates for all required files |
-| PluginMount interfaces | `browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/plugin/MountPoints.kt` | `PluginMount`, `BrowseEventMount`, `LoadEventMount`, `CrawlEventMount` interface definitions |
+| PluginMount interfaces | `browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/plugin/MountPoints.kt` | `PluginMount`, `BrowseEventMount`, `LoadEventMount`, `CrawlEventMount`, `PageSummaryAlgorithmMount` interface definitions |
+| Summary algorithm SPI | `browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/workflow/parse/html/` (`PageSummaryAlgorithm.kt`, `PageSummaryAlgorithmRegistry.kt`) | Algorithm interface, input type, registry; walkthrough: [summary-algorithm.md](references/summary-algorithm.md) |
 | Event lifecycle | `browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/event/PageEvents.kt` | `LoadEventHandlers`, `BrowseEventHandlers`, `CrawlEventHandlers` — all 28 hooks |
 | Event handler types | `browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/event/EventHandlers.kt` | Chainable handler function types (`WebPageWebDriverEventHandler`, etc.) |
 | Plugin manifest | `browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/plugin/PluginManifest.kt` | `PluginManifest` data class schema |

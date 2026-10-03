@@ -435,7 +435,8 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 | `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from a fresh snapshot of the active page. Supports `--offset`, `--limit`, and `--expires <dur>`. |
 | `htmlsnapshot query [url]` | Run X-SQL against a fresh snapshot of the active page, or against an explicit URL's stored page. Supports `--sql <query\|@file>`, `--sql-stdin`, `--sql-base64`, `--expires <dur>`, result pagination, and extraction-focused output flags. |
 | `htmlsnapshot export` | Export a fresh snapshot's HTML to a file. Supports positional file path or `--file <path>` plus `--clean` and `--expires <dur>`. |
-| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from a fresh snapshot of the active page. Supports `--expires <dur>`. |
+| `htmlsnapshot summary [--algorithm <id>]` | Generate a compressed Web Page Summary Index (WPSI) from a fresh snapshot of the active page; plugins may contribute additional algorithm ids. Supports `--expires <dur>`. |
+| `htmlsnapshot algorithms` | List installed summary algorithms (built-in `wpsi` plus plugin-contributed ids). No page required. |
 | `htmlsnapshot grep <pattern>` | Search a fresh snapshot's HTML with grep-style flags. Supports `--expires <dur>`. |
 | `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates in a fresh snapshot of the active page. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`, `--expires <dur>`. |
 | `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic — no LLM, no tokens. Without a URL: the active page; with one: that URL's own stored copy. Supports `--text-only`, `--expires <dur>`, and pagination. |

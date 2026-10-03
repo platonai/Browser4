@@ -159,6 +159,22 @@ browser4-cli htmlsnapshot summary
 
 Use `--raw` or `--stdout` to print the YAML directly to stdout instead of saving to a file.
 
+**Pluggable algorithms:** The summarization step is an SPI on the server. The built-in algorithm id is `wpsi` (the default); installed Browser4 plugins can contribute additional algorithms. List them and select one explicitly:
+
+```bash
+browser4-cli htmlsnapshot algorithms                  # installed algorithm ids, default marked
+browser4-cli htmlsnapshot summary --algorithm wpsi    # explicit default
+browser4-cli htmlsnapshot summary --algorithm <id>    # a plugin-contributed algorithm
+```
+
+An unknown id fails with the list of available ids. Non-`wpsi` output is printed verbatim (and still saved to a file). Plugin development: implement `ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryAlgorithm`, expose it via a `PageSummaryAlgorithmMount` Spring bean, and drop the plugin JAR into `plugins/` — see the Browser4 plugin development guide for details.
+
+The default algorithm can also be overridden server-wide with the Spring
+property `browser4.htmlsnapshot.summary.algorithm=<id>`. When set (in
+`application.properties` or via `-D`), plain `htmlsnapshot summary` without
+`--algorithm` uses the configured id. An unregistered configured value fails
+fast with the available list rather than silently falling back to `wpsi`.
+
 **Output** is saved to `.browser4-cli/snapshot/htmlsnapshot-summary-<timestamp>.yml`:
 
 ```yaml

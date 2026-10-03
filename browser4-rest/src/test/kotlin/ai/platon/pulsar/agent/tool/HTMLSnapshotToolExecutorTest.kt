@@ -13,8 +13,13 @@ import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.NormURL
+import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryAlgorithm
+import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryAlgorithmRegistry
+import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryInput
+import ai.platon.pulsar.skeleton.workflow.parse.html.WpsiPageSummaryAlgorithm
 import kotlinx.coroutines.runBlocking
 import org.jsoup.Jsoup
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -62,6 +67,26 @@ class HTMLSnapshotToolExecutorTest {
     private val h2HexError = "Hexadecimal string contains non-hex character: \"899.99\" (SQL 90004-197)"
 
     private val mapper = pulsarObjectMapper()
+
+    /** Test-contributed algorithm; the global registry is restored after every test. */
+    private class MarkerAlgorithm(
+        override val id: String = "rest-marker",
+        private val marker: String = "MARKER-SUMMARY",
+    ) : PageSummaryAlgorithm {
+        override val displayName = "Marker Algorithm"
+        override val description = "test-only summary algorithm"
+        var calls = 0
+        override fun generate(input: PageSummaryInput): String {
+            calls++
+            return "$marker|${input.pageUrl}|${input.title}"
+        }
+    }
+
+    @AfterEach
+    fun resetAlgorithmRegistry() {
+        PageSummaryAlgorithmRegistry.instance.clear()
+        PageSummaryAlgorithmRegistry.instance.register(WpsiPageSummaryAlgorithm)
+    }
 
     /** The two urls the contract tests work with: what the tab shows, and what the caller asks for. */
     private val liveUrl = "https://example.com/form"
@@ -956,5 +981,143 @@ class HTMLSnapshotToolExecutorTest {
                     "DOM_LOAD_AND_SELECT(@url, 'body')"
             )
         )
+    }
+
+    // =========================================================================
+    // summary algorithms (pluggable PageSummaryAlgorithm SPI)
+    // =========================================================================
+
+    private fun sessionWithSnapshot(html: String, address: String = "https://example.com/article"):
+        ManagedSession {
+        val driver = tab(address)
+        val captured = page(address)
+        val session = sessionShowing(driver) {
+            onBlocking { capture(driver, "$address -expires 0s") } doReturn captured
+            on { parse(captured, true) } doReturn document(html, address)
+        }
+        return ManagedSession("s", session, null)
+    }
+
+    @Test
+    @DisplayName("summary defaults to the built-in wpsi algorithm and accepts it explicitly")
+    fun summaryDefaultsToWpsi() = runBlocking<Unit> {
+        val managed = sessionWithSnapshot(articleHtml)
+
+        val defaultOut = executor().call(
+            "summary", mapOf("sessionId" to "s"), managed
+        ) as String
+        val explicitOut = executor().call(
+            "summary", mapOf("sessionId" to "s", "algorithm" to "wpsi"), managed
+        ) as String
+
+        assertTrue(defaultOut.contains("page:"), "wpsi output should be YAML, got: $defaultOut")
+        assertEquals(defaultOut, explicitOut)
+    }
+
+    @Test
+    @DisplayName("summary invokes a plugin-contributed algorithm with the fresh snapshot input")
+    fun summaryUsesContributedAlgorithm() = runBlocking<Unit> {
+        val algorithm = MarkerAlgorithm()
+        PageSummaryAlgorithmRegistry.instance.register(algorithm)
+        val managed = sessionWithSnapshot(articleHtml)
+
+        val out = executor().call(
+            "summary", mapOf("sessionId" to "s", "algorithm" to "rest-marker"), managed
+        ) as String
+
+        assertEquals(1, algorithm.calls)
+        assertEquals(
+            "MARKER-SUMMARY|https://example.com/article|How Rust Conquered the Kernel", out
+        )
+    }
+
+    @Test
+    @DisplayName("summary with an unknown algorithm fails and the message lists available ids")
+    fun summaryUnknownAlgorithmFailsWithAvailableIds() = runBlocking<Unit> {
+        val managed = sessionWithSnapshot(articleHtml)
+
+        val exception = assertThrows<IllegalArgumentException> {
+            runBlocking {
+                executor().call(
+                    "summary", mapOf("sessionId" to "s", "algorithm" to "nope"), managed
+                )
+            }
+        }
+        assertTrue(exception.message!!.contains("nope"), exception.message)
+        assertTrue(exception.message!!.contains("wpsi"), exception.message)
+    }
+
+    @Test
+    @DisplayName("algorithms lists built-in and contributed algorithms and needs no session")
+    fun algorithmsListsRegisteredOnesWithoutSession() = runBlocking<Unit> {
+        PageSummaryAlgorithmRegistry.instance.register(MarkerAlgorithm())
+
+        // A bare placeholder receiver (what CustomToolTargets passes when there is no session):
+        // the method must read only the registry.
+        val raw = HTMLSnapshotToolExecutor(mock<PulsarSessionManager>())
+            .callFunctionOn("html_snapshot", "algorithms", emptyMap(), Any()) as String
+
+        val array = mapper.readTree(raw)
+        assertTrue(array.isArray)
+        assertEquals(2, array.size())
+
+        val byId = array.associateBy { it.get("id").asText() }
+        val wpsi = byId.getValue("wpsi")
+        assertTrue(wpsi.get("builtin").asBoolean())
+        assertTrue(wpsi.get("default").asBoolean())
+        assertTrue(wpsi.get("displayName").asText().isNotBlank())
+
+        val marker = byId.getValue("rest-marker")
+        assertFalse(marker.get("builtin").asBoolean())
+        assertFalse(marker.get("default").asBoolean())
+    }
+
+    @Test
+    @DisplayName("summary without algorithm uses the configured default algorithm")
+    fun summaryUsesConfiguredDefaultAlgorithm() = runBlocking<Unit> {
+        val algorithm = MarkerAlgorithm(id = "rest-default")
+        PageSummaryAlgorithmRegistry.instance.register(algorithm)
+        PageSummaryAlgorithmRegistry.instance.setDefaultId("rest-default")
+        val managed = sessionWithSnapshot(articleHtml)
+
+        val out = executor().call(
+            "summary", mapOf("sessionId" to "s"), managed
+        ) as String
+
+        assertEquals(1, algorithm.calls)
+        assertTrue(out.startsWith("MARKER-SUMMARY|"), out)
+    }
+
+    @Test
+    @DisplayName("summary without algorithm fails fast when the configured default is not registered")
+    fun summaryConfiguredDefaultMissingFailsFast() = runBlocking<Unit> {
+        PageSummaryAlgorithmRegistry.instance.setDefaultId("not-installed")
+        val managed = sessionWithSnapshot(articleHtml)
+
+        val exception = assertThrows<IllegalArgumentException> {
+            runBlocking {
+                executor().call("summary", mapOf("sessionId" to "s"), managed)
+            }
+        }
+        assertTrue(exception.message!!.contains("not-installed"), exception.message)
+        assertTrue(
+            exception.message!!.contains("browser4.htmlsnapshot.summary.algorithm"),
+            exception.message
+        )
+        assertTrue(exception.message!!.contains("wpsi"), exception.message)
+    }
+
+    @Test
+    @DisplayName("algorithms marks the configured default instead of hardcoded wpsi")
+    fun algorithmsMarksConfiguredDefault() = runBlocking<Unit> {
+        PageSummaryAlgorithmRegistry.instance.register(MarkerAlgorithm(id = "rest-default"))
+        PageSummaryAlgorithmRegistry.instance.setDefaultId("rest-default")
+
+        val raw = HTMLSnapshotToolExecutor(mock<PulsarSessionManager>())
+            .callFunctionOn("html_snapshot", "algorithms", emptyMap(), Any()) as String
+
+        val byId = mapper.readTree(raw).associateBy { it.get("id").asText() }
+        assertFalse(byId.getValue("wpsi").get("default").asBoolean())
+        assertTrue(byId.getValue("rest-default").get("default").asBoolean())
     }
 }

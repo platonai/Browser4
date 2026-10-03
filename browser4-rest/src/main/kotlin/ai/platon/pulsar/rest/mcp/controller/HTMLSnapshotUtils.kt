@@ -4,7 +4,6 @@ package ai.platon.pulsar.rest.mcp.controller
 
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.dom.FeaturedDocument
-import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 

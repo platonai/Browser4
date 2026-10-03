@@ -302,7 +302,8 @@ Details: [Crawl checkpoint & resume](../../docs/crawl-checkpoint-resume.md).
 | `htmlsnapshot get <field> [selector] [name]` | Extract elements from a FRESH snapshot of the active page (text, textcontent, html, attr) — the tab is captured first, then read. `--expires <dur>` serves the stored snapshot instead while it is younger than the window |
 | `htmlsnapshot query [url]` | Run X-SQL against a fresh snapshot of the active page (captured first), or against an explicit URL's stored page — a URL the tab does not show is never captured. `--expires <dur>` queries the stored snapshot of the active page instead |
 | `htmlsnapshot export` | Export a fresh snapshot of the active page to a local file (--clean strips scripts/styles/non-standard attrs; --expires <dur> exports the stored snapshot instead) |
-| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from a fresh snapshot of the active page (--expires <dur> for the stored snapshot) |
+| `htmlsnapshot summary [--algorithm <id>]` | Generate a compressed Web Page Summary Index (WPSI) from a fresh snapshot of the active page — `--algorithm` selects an installed algorithm (--expires <dur> for the stored snapshot) |
+| `htmlsnapshot algorithms` | List installed summary algorithms (built-in `wpsi` plus plugin-contributed ids); no page required |
 | `htmlsnapshot grep [OPTIONS] <pattern>` | Search a fresh snapshot of the active page's HTML with regex patterns and grep-style output (--expires <dur> searches the stored snapshot) |
 | `htmlsnapshot inspect [selector]` | Discover CSS selectors over a fresh snapshot of the active page (--expires <dur> inspects the stored snapshot) |
 | `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic (no LLM) — the active page, or that URL's own stored copy (--expires <dur> for the active page's stored snapshot) |

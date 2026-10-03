@@ -442,7 +442,8 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 | `htmlsnapshot get all <field> [selector] [name]` | 从活动页的最新快照中提取全部匹配值。支持 `--offset`、`--limit` 和 `--expires <dur>`。 |
 | `htmlsnapshot query [url]` | 对活动页的最新快照（先 capture 再查询）或指定 URL 的库内页面运行 X-SQL。支持 `--sql <query\|@file>`、`--sql-stdin`、`--sql-base64`、`--expires <dur>`、结果分页和提取导向输出选项。 |
 | `htmlsnapshot export` | 把活动页的最新快照的 HTML 导出到文件。支持位置参数文件路径或 `--file <path>`，以及 `--clean` 和 `--expires <dur>`。 |
-| `htmlsnapshot summary` | 基于活动页的最新快照生成压缩版 Web Page Summary Index（WPSI）。支持 `--expires <dur>`。 |
+| `htmlsnapshot summary [--algorithm <id>]` | 基于活动页的最新快照生成压缩版 Web Page Summary Index（WPSI）；插件可贡献额外的算法 id。支持 `--expires <dur>`。 |
+| `htmlsnapshot algorithms` | 列出已安装的摘要算法（内置 `wpsi` 及插件贡献的 id）。无需打开页面。 |
 | `htmlsnapshot grep <pattern>` | 用 grep 风格参数搜索活动页最新快照的 HTML。支持 `--expires <dur>`。 |
 | `htmlsnapshot inspect [selector]` | 在活动页的最新快照上发现重复 DOM 模式和候选选择器。支持 `--max`、`--depth`、`--stdin`、`--selector-base64`、`--expires <dur>`。 |
 | `htmlsnapshot readability [url]` | 用 Readability 式启发式算法提取正文：不给 URL 时读活动页的最新快照；给了 URL 则读该 URL 自己的库内副本，绝不会把当前标签页的文档记到该 URL 名下。支持 `--text-only`、`--expires <dur>` 与分页。 |

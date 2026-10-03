@@ -3,6 +3,7 @@ package ai.platon.pulsar.skeleton.plugin
 import ai.platon.pulsar.skeleton.event.BrowseEventHandlers
 import ai.platon.pulsar.skeleton.event.CrawlEventHandlers
 import ai.platon.pulsar.skeleton.event.LoadEventHandlers
+import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryAlgorithm
 
 /**
  * Marker interface for plugin mount points.
@@ -21,6 +22,7 @@ import ai.platon.pulsar.skeleton.event.LoadEventHandlers
  *
  * - `ToolMount` (in browser4-agentic) — register custom tool executors
  * - `PageSnifferMount` (in browser4-protocol) — register page category sniffers
+ * - [PageSummaryAlgorithmMount] — register `htmlsnapshot summary` algorithms
  */
 interface PluginMount
 
@@ -140,4 +142,35 @@ interface CrawlEventMount : PluginMount {
      * @param handlers  the active crawl event handlers chain (never null at call time)
      */
     fun configureCrawlHandlers(handlers: CrawlEventHandlers)
+}
+
+/**
+ * Mount point for **page summary algorithms** used by the `htmlsnapshot summary`
+ * command.
+ *
+ * The `PluginManager` registers every returned algorithm in the global
+ * `PageSummaryAlgorithmRegistry`. The built-in `wpsi` algorithm is always
+ * present; contributed algorithms become selectable through the `algorithm`
+ * argument of the `html_snapshot.summary` MCP tool
+ * (`browser4-cli htmlsnapshot summary --algorithm <id>`) and are listed by
+ * `htmlsnapshot algorithms`.
+ *
+ * Algorithm ids must match `[a-z0-9][a-z0-9-]*` and must be unique; an attempt
+ * to register an already-registered id is skipped with a warning.
+ *
+ * ## Example
+ *
+ * ```kotlin
+ * @AutoConfiguration
+ * class MySummaryAutoConfiguration : PageSummaryAlgorithmMount {
+ *     override fun getPageSummaryAlgorithms(): List<PageSummaryAlgorithm> =
+ *         listOf(MyLlmSummaryAlgorithm())
+ * }
+ * ```
+ */
+interface PageSummaryAlgorithmMount : PluginMount {
+    /**
+     * Page summary algorithms contributed by this plugin.
+     */
+    fun getPageSummaryAlgorithms(): List<PageSummaryAlgorithm>
 }
