@@ -424,7 +424,14 @@ open class SwarmService(
      */
     override fun abortPendingTasks(reason: String): Int {
         val now = Instant.now()
-        val pending = responseCache.asMap().entries.filter { !it.value.isDone }
+        // A task whose result was already published is not pending, whatever
+        // isDone still says: the X-SQL stage writes statusCode and resultSet
+        // before the terminal transition lands, and aborting inside that window
+        // flipped a task the user had just seen as completed (with its rows in
+        // hand) to failed with "Swarm session was closed; task dropped".
+        val all = responseCache.asMap().entries
+        val pending = all.filter { !it.value.isDone && it.value.resultSet == null }
+        val delivered = all.count { !it.value.isDone && it.value.resultSet != null }
 
         for ((id, response) in pending) {
             responseStatusIndex[response.statusCode]?.remove(id)
@@ -440,6 +447,12 @@ open class SwarmService(
 
         if (pending.isNotEmpty()) {
             logger.info("Aborted {} pending swarm task(s): {}", pending.size, reason)
+        }
+        if (delivered > 0) {
+            logger.info(
+                "Left {} task(s) untouched while aborting: their results were already delivered",
+                delivered
+            )
         }
         return pending.size
     }

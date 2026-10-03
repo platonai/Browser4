@@ -82,16 +82,22 @@ class ListPageRenderer {
             "<div class=\"product-rating\" id=\"product-rating-${p.id}\" data-rating=\"${p.rating}\">${p.rating} (${p.ratingCount})</div>"
         } else ""
         val imageUrl = resolveImage(p)
+        // The card markup deliberately matches HtmlRenderer's server-rendered
+        // variant of the same page: tag-qualified X-SQL selectors such as
+        // `article.product-card` and `h2.product-title` used to match 0 rows
+        // against this div-based card while working on the other renderer, so a
+        // documented selector looked broken depending on which handler served
+        // /ec/b.  Class-only selectors (`.product-card`) work either way.
         return """
-            <div class="product-card" id="product-${p.id}" data-category-id="${p.categoryId}">
+            <article class="product-card" id="product-${p.id}" data-category-id="${p.categoryId}">
               <a class="product-link" href="/ec/dp/${p.id}" style="text-decoration:none;color:inherit;display:block;">
                 <img src="$imageUrl" alt="${escapeHtml(p.name)}" class="product-img" />
-                <div class="product-title">${escapeHtml(p.name)}</div>
+                <h2 class="product-title">${escapeHtml(p.name)}</h2>
               </a>
               <div class="product-price" id="product-price-${p.id}">$price</div>
               $rating
               $badgesDiv
-            </div>
+            </article>
         """.trimIndent()
     }
 

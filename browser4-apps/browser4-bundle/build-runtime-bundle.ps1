@@ -854,6 +854,13 @@ if (-not $SkipMavenInstall) {
     if (-not $ShowMavenOutput) {
         $installArgs += '-q'
     }
+    # Clean the code modules first: `install` alone keeps orphaned .class files
+    # in target/classes, so a class deleted or moved between builds is still
+    # packaged and can shadow a plugin bean at startup.  The clean runs without
+    # the bundle profiles so the bundle's own work directory — and the jlink
+    # image inside it — is preserved.
+    & $mvnCmd clean -q -DskipTests
+    if ($LASTEXITCODE -ne 0) { throw "Core modules clean failed with exit code $LASTEXITCODE" }
     & $mvnCmd @installArgs
     if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
 }

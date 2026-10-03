@@ -7035,6 +7035,29 @@ async fn try_build_local_runtime_bundle(
             let mvn_program = mvn_program.clone();
             let root = root.to_path_buf();
             move || {
+                // Clean the code modules before installing.  `install` alone
+                // keeps orphaned .class files in target/classes, so a class
+                // deleted or moved between builds (for example a
+                // @Configuration that moved into a plugin) is still packaged
+                // and can win a bean race at startup — that is how a stale
+                // SwarmToolMountConfiguration made every swarm call answer
+                // "503 Swarm not installed" while the plugin jar was present.
+                // The clean deliberately runs without the bundle profiles so
+                // the bundle's own work directory (its jlink image) survives.
+                let clean_status = std::process::Command::new(&mvn_program)
+                    .args(["clean", "-q", "-DskipTests"])
+                    .current_dir(&root)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::piped())
+                    .status();
+
+                match clean_status {
+                    Ok(status) if status.success() => {}
+                    Ok(status) => return Ok(status),
+                    Err(error) => return Err(error),
+                }
+
                 std::process::Command::new(&mvn_program)
                     .args([
                         "install",

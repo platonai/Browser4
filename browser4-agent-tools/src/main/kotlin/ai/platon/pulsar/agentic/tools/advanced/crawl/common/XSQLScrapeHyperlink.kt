@@ -169,6 +169,24 @@ open class XSQLHyperlink(
      * or reports the real failure reason.
      * */
     open fun fail(page: WebPage, pageWasNull: Boolean = false) {
+        // A page whose content arrived is selectable, and the X-SQL has already
+        // run against those bytes by the time the load handlers decide the
+        // outcome.  When it produced rows, the task succeeded and only the fetch
+        // status is worth reporting: forcing 417 here discarded delivered data
+        // and made `swarm --wait` report failure while the resultSet held the
+        // rows it had just been given.
+        val deliveredRows = response.resultSet
+        if (!deliveredRows.isNullOrEmpty()) {
+            response.pageContentBytes = page.contentLength.toInt().coerceAtLeast(0)
+            response.pageStatusCode = page.protocolStatus.minorCode
+            response.statusCode = ResourceStatus.SC_OK
+            response.message = "Page fetch ended with protocol status ${page.protocolStatus.minorCode} " +
+                "(${page.protocolStatus.reason ?: "unknown"}), but the X-SQL extracted " +
+                "${deliveredRows.size} row(s) from the content that arrived; the result is usable."
+            complete(page)
+            return
+        }
+
         val status = page.protocolStatus
         val reason = status.reason?.toString()?.takeIf { it.isNotBlank() } ?: "unknown"
         response.pageContentBytes = page.contentLength.toInt().coerceAtLeast(0)

@@ -49,6 +49,16 @@ abstract class AbstractScrapeHyperlink(
     open fun complete(page: WebPage) {
         response.id = uuid
         val now = Instant.now()
+        // A worker that finishes after the swarm reaper already declared a
+        // timeout (or after the session was closed) carries real rows but kept
+        // the terminal failure message: the result then looked like a failure
+        // whose payload happened to be populated.  Clear that message when the
+        // task actually completes successfully.
+        if (response.statusCode == ResourceStatus.SC_OK &&
+            STALE_TERMINAL_MESSAGE_PREFIXES.any { response.message?.startsWith(it) == true }
+        ) {
+            response.message = null
+        }
         response.isDone = true
         response.lastModifiedTime = now
         response.finishTime = now
@@ -61,6 +71,21 @@ abstract class AbstractScrapeHyperlink(
         }
 
         // logger.info("Completed | {}", page.url)
+    }
+
+    companion object {
+        /**
+         * Message prefixes written by a *terminal transition that raced the
+         * task*, not by the task itself: the swarm reaper's timeout notices and
+         * the session-close abort.  [complete] clears them, because a task that
+         * finishes with SC_OK contradicts them — see the swarm reaper in
+         * `SwarmService.reapStaleTasks` and `abortPendingTasks`.
+         */
+        private val STALE_TERMINAL_MESSAGE_PREFIXES = listOf(
+            "Task timed out: no progress for",
+            "Task was never picked up: the swarm pipeline made no progress for",
+            "Swarm session was closed",
+        )
     }
 
     /**
