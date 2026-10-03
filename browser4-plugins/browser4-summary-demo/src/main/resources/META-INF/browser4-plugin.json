@@ -1,7 +1,7 @@
 {
   "name": "browser4-summary-demo",
   "version": "1.0.0",
-  "sdkVersion": "4.14.0-rc.6",
+  "sdkVersion": "${project.version}",
   "description": "Demo plugin: contributes the outline-demo page summary algorithm",
   "dependsOn": ["browser4-skeleton"],
   "autoConfigurationClasses": ["ai.platon.pulsar.summarydemo.SummaryDemoAutoConfiguration"]
