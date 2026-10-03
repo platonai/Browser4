@@ -6464,6 +6464,44 @@ pub(super) fn test_htmlsnapshot_query(ctx: &mut E2ECtx) {
         "expected sql='SELECT h1 FROM page', got: {:?}",
         query_call.arguments
     );
+    assert!(
+        query_call.arguments.get("expires").is_none(),
+        "a query without --expires must not invent one, got: {:?}",
+        query_call.arguments
+    );
+
+    // `--expires` chooses between the live page and the stored snapshot, so it is a backend
+    // argument, not CLI-side presentation: the CLI builds the query params by hand, which is
+    // exactly where the option can get lost.
+    let result = run_command(
+        ctx,
+        &[
+            "htmlsnapshot",
+            "query",
+            "--sql",
+            "SELECT h1 FROM page",
+            "--expires",
+            "1d",
+        ],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot query --expires to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let flagged_call = tool_calls
+        .iter()
+        .filter(|call| call.tool == "html_snapshot_query")
+        .next_back()
+        .expect("expected a second html_snapshot_query tool call");
+    assert_eq!(
+        flagged_call.arguments.get("expires"),
+        Some(&serde_json::json!("1d")),
+        "expected expires=1d in html_snapshot_query arguments, got: {:?}",
+        flagged_call.arguments
+    );
 }
 
 /// `htmlsnapshot query --format table` renders rows from the response
@@ -6640,6 +6678,64 @@ pub(super) fn test_htmlsnapshot_export(ctx: &mut E2ECtx) {
         "expected sessionId in html_snapshot_export arguments, got: {:?}",
         export_call.arguments
     );
+    assert!(
+        export_call.arguments.get("clean").is_none() && export_call.arguments.get("expires").is_none(),
+        "a plain export must not invent --clean/--expires, got: {:?}",
+        export_call.arguments
+    );
+
+    // `--clean` and `--expires` are the backend's job (it strips the markup, and it is what owns the
+    // live-vs-stored decision), so both must reach the tool call.  `--clean` used to be dropped here,
+    // which made `htmlsnapshot export --clean` silently export raw HTML.
+    let result = run_command(
+        ctx,
+        &["htmlsnapshot", "export", "--clean", "--expires", "1d"],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot export --clean --expires to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let flagged_call = tool_calls
+        .iter()
+        .filter(|call| call.tool == "html_snapshot_export")
+        .next_back()
+        .expect("expected a second html_snapshot_export tool call");
+    assert_eq!(
+        flagged_call.arguments.get("clean"),
+        Some(&serde_json::json!(true)),
+        "expected clean=true in html_snapshot_export arguments, got: {:?}",
+        flagged_call.arguments
+    );
+    assert_eq!(
+        flagged_call.arguments.get("expires"),
+        Some(&serde_json::json!("1d")),
+        "expected expires=1d in html_snapshot_export arguments, got: {:?}",
+        flagged_call.arguments
+    );
+
+    // `-expires` (the LoadOptions spelling users see in `goto "url -expires 1d"`) is the same option.
+    let result = run_command(ctx, &["htmlsnapshot", "export", "-expires", "30m"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot export -expires 30m to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let dashed_call = tool_calls
+        .iter()
+        .filter(|call| call.tool == "html_snapshot_export")
+        .next_back()
+        .expect("expected a third html_snapshot_export tool call");
+    assert_eq!(
+        dashed_call.arguments.get("expires"),
+        Some(&serde_json::json!("30m")),
+        "expected -expires to be the same option as --expires, got: {:?}",
+        dashed_call.arguments
+    );
 }
 
 /// `htmlsnapshot summary` sends `html_snapshot_summary`.
@@ -6667,6 +6763,33 @@ pub(super) fn test_htmlsnapshot_summary(ctx: &mut E2ECtx) {
         summary_call.arguments.get("sessionId").is_some(),
         "expected sessionId in html_snapshot_summary arguments, got: {:?}",
         summary_call.arguments
+    );
+    assert!(
+        summary_call.arguments.get("expires").is_none(),
+        "a summary without --expires must not invent one, got: {:?}",
+        summary_call.arguments
+    );
+
+    // The summary runs three tool calls concurrently and builds the summary one's arguments by
+    // hand, so `--expires` has to be threaded through explicitly.
+    let result = run_command(ctx, &["htmlsnapshot", "summary", "--expires", "2h"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot summary --expires to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let flagged_call = tool_calls
+        .iter()
+        .filter(|call| call.tool == "html_snapshot_summary")
+        .next_back()
+        .expect("expected a second html_snapshot_summary tool call");
+    assert_eq!(
+        flagged_call.arguments.get("expires"),
+        Some(&serde_json::json!("2h")),
+        "expected expires=2h in html_snapshot_summary arguments, got: {:?}",
+        flagged_call.arguments
     );
 }
 

@@ -715,15 +715,16 @@ Examples:
 ### `html_snapshot_export`
 
 ```
-html_snapshot.export(sessionId: String, clean: Boolean = false)
+html_snapshot.export(sessionId: String, clean: Boolean = false, expires: String = 0s)
 ```
 
-Export the full, pretty-printed HTML of a FRESH snapshot of the active page (the live tab is captured first, so the export is the page as it is now). Set clean=true to strip <script>, <style>, and non-standard attributes (keeps the vi attribute).
+Export the full, pretty-printed HTML of a FRESH snapshot of the active page (the live tab is captured first, so the export is the page as it is now). Set clean=true to strip <script>, <style>, and non-standard attributes (keeps the vi attribute). Pass expires=1d to export the stored snapshot instead when it is younger than that.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `sessionId` | String | yes |  | sessionId: String |
 | `clean` | Boolean | no | false | clean: Boolean = false |
+| `expires` | String | no | 0s | How old a stored snapshot of the ACTIVE page may be before the read replaces it, e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. 0s never reuses a stored copy, so the read captures the live page; a positive value serves the stored snapshot while it is younger than the window and captures only when it is older or missing. Used to work on the previous snapshot version without touching the tab. |
 
 Returns: `String`
 
@@ -734,10 +735,10 @@ Examples:
 ### `html_snapshot_inspect`
 
 ```
-html_snapshot.inspect(sessionId: String, selector: String = :root, max: Int = 20, depth: Int = 5)
+html_snapshot.inspect(sessionId: String, selector: String = :root, max: Int = 20, depth: Int = 5, expires: String = 0s)
 ```
 
-Inspect the HTML snapshot and suggest CSS selectors for recurring patterns. Operates on a FRESH snapshot of the active page: the live tab is captured first, then inspected.
+Inspect the HTML snapshot and suggest CSS selectors for recurring patterns. Operates on a FRESH snapshot of the active page: the live tab is captured first, then inspected. Pass expires=1d to inspect the stored snapshot instead when it is younger than that.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -745,6 +746,7 @@ Inspect the HTML snapshot and suggest CSS selectors for recurring patterns. Oper
 | `selector` | String | no | :root | selector: String = :root |
 | `max` | Int | no | 20 | max: Int = 20 |
 | `depth` | Int | no | 5 | depth: Int = 5 |
+| `expires` | String | no | 0s | How old a stored snapshot of the ACTIVE page may be before the read replaces it, e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. 0s never reuses a stored copy, so the read captures the live page; a positive value serves the stored snapshot while it is younger than the window and captures only when it is older or missing. Used to work on the previous snapshot version without touching the tab. |
 
 Returns: `String`
 
@@ -763,16 +765,17 @@ Examples:
 ### `html_snapshot_query`
 
 ```
-html_snapshot.query(sql: String, url: String? = null, sessionId: String)
+html_snapshot.query(sql: String, url: String? = null, sessionId: String, expires: String = 0s)
 ```
 
-Execute an X-SQL query against a FRESH snapshot of the active page (the live tab is captured first, then queried, so the query sees the page as it is now). With a url argument instead: the query targets THAT url's stored page — a url the tab does not show cannot be captured — and it runs without a session, so offline corpus queries keep working. IMPORTANT: CSS selectors in X-SQL must use single quotes (SQL syntax); double quotes mean SQL identifiers.
+Execute an X-SQL query against a FRESH snapshot of the active page (the live tab is captured first, then queried, so the query sees the page as it is now). With a url argument instead: the query targets THAT url's stored page — a url the tab does not show cannot be captured — and it runs without a session, so offline corpus queries keep working. Pass expires=1d to query the stored snapshot of the active page instead when it is younger than that (the tab is not touched). IMPORTANT: CSS selectors in X-SQL must use single quotes (SQL syntax); double quotes mean SQL identifiers.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `sql` | String | yes |  | sql: String |
 | `url` | String? | no | null | Page to query; defaults to the session's current page. |
 | `sessionId` | String | yes |  | sessionId: String |
+| `expires` | String | no | 0s | How old a stored snapshot of the ACTIVE page may be before the read replaces it, e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. 0s never reuses a stored copy, so the read captures the live page; a positive value serves the stored snapshot while it is younger than the window and captures only when it is older or missing. Used to work on the previous snapshot version without touching the tab. |
 
 Returns: `String`
 
@@ -791,15 +794,16 @@ Examples:
 ### `html_snapshot_readability`
 
 ```
-html_snapshot.readability(sessionId: String, url: String? = null)
+html_snapshot.readability(sessionId: String, url: String? = null, expires: String = 0s)
 ```
 
-Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) with a Readability-style heuristic. Without url it reads a FRESH snapshot of the active page (the live tab is captured first). With url it reads THAT url's own stored page — or loads it read-only on the shared scrape session, never on the caller's tab, when the store has nothing — because a url the tab does not show cannot be captured, so the tab's document is never filed under it.
+Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) with a Readability-style heuristic. Without url it reads a FRESH snapshot of the active page (the live tab is captured first). With url it reads THAT url's own stored page — or loads it read-only on the shared scrape session, never on the caller's tab, when the store has nothing — because a url the tab does not show cannot be captured, so the tab's document is never filed under it. Pass expires=1d to read the stored snapshot of the active page instead when it is younger than that.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `sessionId` | String | yes |  | sessionId: String |
 | `url` | String? | no | null | Read this URL's stored page instead of the active page. |
+| `expires` | String | no | 0s | How old a stored snapshot of the ACTIVE page may be before the read replaces it, e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. 0s never reuses a stored copy, so the read captures the live page; a positive value serves the stored snapshot while it is younger than the window and captures only when it is older or missing. Used to work on the previous snapshot version without touching the tab. |
 
 Returns: `String`
 
@@ -818,10 +822,10 @@ Examples:
 ### `html_snapshot_scrape`
 
 ```
-html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null)
+html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null, expires: String = 0s)
 ```
 
-Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture.
+Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that, so the read works on the previous snapshot version without touching the tab.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -829,6 +833,7 @@ Extract text, textcontent, html, or an attribute value from a single element mat
 | `field` | String | yes |  | field: String |
 | `selector` | String | no | :root | selector: String = :root |
 | `attrName` | String? | no | null | Attribute to read when field=attr. |
+| `expires` | String | no | 0s | How old a stored snapshot of the ACTIVE page may be before the read replaces it, e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. 0s never reuses a stored copy, so the read captures the live page; a positive value serves the stored snapshot while it is younger than the window and captures only when it is older or missing. Used to work on the previous snapshot version without touching the tab. |
 
 Returns: `String`
 
@@ -841,10 +846,10 @@ Examples:
 ### `html_snapshot_scrape_all`
 
 ```
-html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, offset: Int = 0, limit: Int = -1)
+html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, offset: Int = 0, limit: Int = -1, expires: String = 0s)
 ```
 
-Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture.
+Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -854,6 +859,7 @@ Extract text, textcontent, html, or attribute values from ALL elements matching 
 | `attrName` | String? | no | null | Attribute to read when field=attr. |
 | `offset` | Int | no | 0 | offset: Int = 0 |
 | `limit` | Int | no | -1 | limit: Int = -1 |
+| `expires` | String | no | 0s | How old a stored snapshot of the ACTIVE page may be before the read replaces it, e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. 0s never reuses a stored copy, so the read captures the live page; a positive value serves the stored snapshot while it is younger than the window and captures only when it is older or missing. Used to work on the previous snapshot version without touching the tab. |
 
 Returns: `String`
 
@@ -872,14 +878,15 @@ Examples:
 ### `html_snapshot_summary`
 
 ```
-html_snapshot.summary(sessionId: String)
+html_snapshot.summary(sessionId: String, expires: String = 0s)
 ```
 
-Generate a page summary including title, statistics, and detected link groups from a FRESH snapshot of the active page (the live tab is captured first, so the summary is the page as it is now).
+Generate a page summary including title, statistics, and detected link groups from a FRESH snapshot of the active page (the live tab is captured first, so the summary is the page as it is now). Pass expires=1d to summarize the stored snapshot instead when it is younger than that.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `sessionId` | String | yes |  | sessionId: String |
+| `expires` | String | no | 0s | How old a stored snapshot of the ACTIVE page may be before the read replaces it, e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. 0s never reuses a stored copy, so the read captures the live page; a positive value serves the stored snapshot while it is younger than the window and captures only when it is older or missing. Used to work on the previous snapshot version without touching the tab. |
 
 Returns: `String`
 

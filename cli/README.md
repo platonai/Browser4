@@ -393,25 +393,26 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 
 #### HTML snapshot and X-SQL extraction
 
-`htmlsnapshot` is the center of Browser4's structured extraction workflow. Every command in it works on a **fresh snapshot of the active page**: the tab is captured first — serializing the document it already shows, without navigating — and the command then operates on that snapshot. A command aimed at another URL (`readability <url>`, `query <url>`) reads *that URL's* stored copy instead, and never files the tab's document under it.
+`htmlsnapshot` is the center of Browser4's structured extraction workflow. Every command in it works on a **fresh snapshot of the active page**: the tab is captured first — serializing the document it already shows, without navigating — and the command then operates on that snapshot. A read can be asked for the stored snapshot instead: `--expires <dur>` (default `0s`, the live page) serves the stored copy of the active page while it is younger than the window (`--expires 1d`), leaving the tab untouched. A command aimed at another URL (`readability <url>`, `query <url>`) reads *that URL's* stored copy instead, and never files the tab's document under it.
 
 | Command | Description |
 |---|---|
 | `htmlsnapshot` | Short form of `htmlsnapshot capture`. |
 | `htmlsnapshot capture` | Capture the active tab into the page store and return metadata about the page and interactive elements. |
-| `htmlsnapshot get <field> [selector] [name]` | Extract the first matching `text`, `textcontent`, `html`, or `attr` from a fresh snapshot of the active page. |
-| `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from that fresh snapshot. Supports `--offset` and `--limit`. |
-| `htmlsnapshot query [url]` | Run X-SQL over a fresh snapshot of the active page, or over an explicit URL's stored page. Supports `--sql <query\|@file>`, `--sql-stdin`, `--sql-base64`, result pagination, and extraction-focused output flags. |
-| `htmlsnapshot export` | Export a fresh snapshot's HTML to a file. Supports positional file path or `--file <path>` plus `--clean`. |
-| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from a fresh snapshot. |
-| `htmlsnapshot grep <pattern>` | Search a fresh snapshot's HTML with grep-style flags. |
-| `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates in a fresh snapshot. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`. |
-| `htmlsnapshot readability [url]` | Extract the main article with a Readability-style heuristic — no LLM, no selectors, no tokens. |
+| `htmlsnapshot get <field> [selector] [name]` | Extract the first matching `text`, `textcontent`, `html`, or `attr` from a fresh snapshot of the active page. Supports `--expires <dur>`. |
+| `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from that fresh snapshot. Supports `--offset`, `--limit`, and `--expires <dur>`. |
+| `htmlsnapshot query [url]` | Run X-SQL over a fresh snapshot of the active page, or over an explicit URL's stored page. Supports `--sql <query\|@file>`, `--sql-stdin`, `--sql-base64`, `--expires <dur>`, result pagination, and extraction-focused output flags. |
+| `htmlsnapshot export` | Export a fresh snapshot's HTML to a file. Supports positional file path or `--file <path>` plus `--clean` and `--expires <dur>`. |
+| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from a fresh snapshot. Supports `--expires <dur>`. |
+| `htmlsnapshot grep <pattern>` | Search a fresh snapshot's HTML with grep-style flags. Supports `--expires <dur>`. |
+| `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates in a fresh snapshot. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`, `--expires <dur>`. |
+| `htmlsnapshot readability [url]` | Extract the main article with a Readability-style heuristic — no LLM, no selectors, no tokens. Supports `--expires <dur>`. |
 
 Important rules:
 
 - use `snapshot` when you need refs and interaction
 - use `htmlsnapshot` when you need repeated DOM extraction — every read captures the active page first, so rerunning it sees the page as it is now
+- use `--expires <dur>` on a read to work on the snapshot already in the store instead of the live page (`--expires 0s`, the default, is the live page)
 - `htmlsnapshot query --sql @query.sql` is the recommended way to avoid shell quoting issues
 - for correlated list extraction, prefer `htmlsnapshot query` over repeated `get all`
 - for one-step article extraction (no selectors needed), use `htmlsnapshot readability`

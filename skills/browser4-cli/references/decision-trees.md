@@ -24,13 +24,13 @@ tier: decision
 
 | Command | Captures? | Notes |
 |---------|-----------|-------|
-| `htmlsnapshot` (capture) | **Yes** | Serializes the live page into the page store under the tab's normalized URL (overwrites the stored copy — the `-refresh` load option bypasses the page cache so the write is real; it is **not** a page reload) and returns page metadata. Same capture the reads run; use it when the metadata itself is what you need |
-| `htmlsnapshot get` / `get all` | Yes | `text` / `textcontent` / `html` / `attr` via CSS selectors, from the snapshot taken a moment ago — so tab-only changes (forms, SPA, `eval`) are visible |
+| `htmlsnapshot` (capture) | **Yes** | Serializes the live page into the page store under the tab's normalized URL (overwrites the stored copy — the `-expires 0s` load option bypasses the page cache so the write is real; it is **not** a page reload) and returns page metadata. Same capture the reads run; use it when the metadata itself is what you need |
+| `htmlsnapshot get` / `get all` | Yes, unless `--expires <dur>` finds a fresh stored copy | `text` / `textcontent` / `html` / `attr` via CSS selectors, from the snapshot taken a moment ago — so tab-only changes (forms, SPA, `eval`) are visible. `--expires 1d` serves the stored snapshot instead while it is younger than a day and never touches the tab (the previous snapshot version); `--expires 0s` (the default) is the live page |
 | `htmlsnapshot inspect` | Yes | Recurring-pattern / selector discovery over the fresh snapshot |
 | `htmlsnapshot summary` | Yes | Visual-clustering page summary of the fresh snapshot |
 | `htmlsnapshot grep` | Yes | Regex search over the fresh snapshot's HTML |
 | `htmlsnapshot export` | Yes | Exports the fresh snapshot's HTML to a file |
-| `htmlsnapshot query` | Yes, unless an explicit other URL is given | No URL (or the URL the session is showing) → captures the tab, then queries that snapshot. Another URL → that URL's stored copy (fetched read-only when absent, no session state) — a URL the tab does not show cannot be captured |
+| `htmlsnapshot query` | Yes, unless an explicit other URL is given | No URL (or the URL the session is showing) → captures the tab, then queries that snapshot. Another URL → that URL's stored copy (fetched read-only when absent, no session state) — a URL the tab does not show cannot be captured. `--expires <dur>` queries the stored snapshot of the active page instead of capturing |
 | `htmlsnapshot readability` | Yes, unless an explicit other URL is given | Article extraction from the fresh snapshot (no URL), or from *that URL's* stored copy (URL given) — the tab's document is never filed under a URL you pass |
 
 > The precondition is a **loaded, archivable page** (navigable http(s)/file document in the active tab);

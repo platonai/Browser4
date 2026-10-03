@@ -26,6 +26,8 @@ No other SQL syntax is supported — no CTEs (`WITH`), no subqueries in `FROM`, 
 
 **CLI output:** `htmlsnapshot query` / `swarm query` default to the **raw JSON response envelope** (machine-readable). For human-readable results add `--format table` (or `--format csv`); `--result-only` prints just the resultSet. Exit code is `0` on success — an **empty** resultSet still exits `0` ("no rows matched" is not an error) — and nonzero when the server returns an error envelope (`417`/`5xx`). See [htmlsnapshot.md](htmlsnapshot.md#output-format-and-exit-codes).
 
+**Which snapshot is queried:** by default `htmlsnapshot query` captures the active page first and queries that fresh snapshot (live state included). `--expires <dur>` (default `0s`) queries the **stored** snapshot of the active page instead while it is younger than the window — `--expires 1d` re-runs against one fixed page version without touching the tab. See [`--expires`](htmlsnapshot.md#--expires--read-the-tab-or-read-the-store).
+
 X-SQL uses the **H2 database** SQL dialect.
 
 ---

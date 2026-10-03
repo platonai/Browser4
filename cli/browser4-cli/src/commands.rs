@@ -4022,7 +4022,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get",
-            description: "Extract elements from a FRESH snapshot of the active tab's page (text, textcontent, html, attr). The live tab is captured first, then read, so changes that exist only in the tab (forms, SPA updates, `eval`) are visible without a separate capture. Supports batch mode for multi-step workflows.",
+            description: "Extract elements from a FRESH snapshot of the active tab's page (text, textcontent, html, attr). The live tab is captured first, then read, so changes that exist only in the tab (forms, SPA updates, `eval`) are visible without a separate capture. Use --expires <dur> to serve the snapshot already in the store instead when it is younger than <dur>, which reads the previous snapshot version without touching the tab. Supports batch mode for multi-step workflows.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -4035,6 +4035,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page <n>", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
                 OptionDef { name: "page-size <n>", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
+                OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) captures the live page, a positive value reads the stored snapshot while it is younger than the window, without touching the tab" },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_scrape".to_string(),
@@ -4043,12 +4044,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let selector = get_opt_str(args, "selector").unwrap_or(":root");
                 let mut p = json!({ "field": field, "selector": selector });
                 if let Some(name) = get_opt_str(args, "name") { p["attrName"] = json!(name); }
+                if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 p
             },
         },
         CommandDef {
             name: "htmlsnapshot-get-all",
-            description: "Extract ALL matching elements from a FRESH snapshot of the active tab's page (querySelectorAll semantics): the live tab is captured first, then read, so changes that exist only in the tab are visible without a separate capture; supports --offset and --limit for pagination. Supports batch mode.",
+            description: "Extract ALL matching elements from a FRESH snapshot of the active tab's page (querySelectorAll semantics): the live tab is captured first, then read, so changes that exist only in the tab are visible without a separate capture; supports --offset and --limit for pagination. Use --expires <dur> to serve the stored snapshot instead when it is younger than <dur>. Supports batch mode.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -4063,6 +4065,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page <n>", short: None, is_bool: false, description: "Page number for paginated output (default: 1)" },
                 OptionDef { name: "page-size <n>", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
+                OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) captures the live page, a positive value reads the stored snapshot while it is younger than the window, without touching the tab" },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_scrape_all".to_string(),
@@ -4077,6 +4080,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(lim) = get_opt_str(args, "limit") {
                     if let Ok(n) = lim.parse::<i32>() { p["limit"] = json!(n); }
                 }
+                if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 p
             },
         },
@@ -4126,6 +4130,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: false,
                     short: None,
                 },
+                OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) captures the live page, a positive value reads the stored snapshot while it is younger than the window, without touching the tab" },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_query".to_string(),
@@ -4140,6 +4145,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(true) = get_bool(args, "result-only") { p["resultOnly"] = json!(true); }
                 if let Some(f) = get_opt_str(args, "output-file") { p["outputFile"] = json!(f); }
                 if let Some(f) = get_opt_str(args, "format") { p["format"] = json!(f); }
+                if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 p
             },
         },
@@ -4171,6 +4177,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: true,
                     short: None,
                 },
+                OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) captures the live page, a positive value reads the stored snapshot while it is younger than the window, without touching the tab" },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_export".to_string(),
@@ -4180,6 +4187,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
                 else if let Some(f) = get_opt_str(args, "filename") { p["file"] = json!(f); }
                 if let Some(true) = get_bool(args, "clean") { p["clean"] = json!(true); }
+                if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 p
             },
         },
@@ -4194,6 +4202,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "raw", description: "Print summary content directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print summary content directly to stdout", is_bool: true, short: None },
                 OptionDef { name: "verbose", short: Some("v"), description: "Show internal scoring details and score legend", is_bool: true },
+                OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) captures the live page, a positive value reads the stored snapshot while it is younger than the window, without touching the tab" },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_summary".to_string(),
@@ -4203,6 +4212,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
                 // Pass through CLI-side flag for outline rendering in main.rs handler
                 if let Some(true) = get_bool(args, "verbose") { p["verbose"] = json!(true); }
+                if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 p
             },
         },
@@ -4235,6 +4245,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size <n>", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
                 OptionDef { name: "raw-html", short: None, is_bool: true, description: "Search the raw HTML including <script> and <style> content. By default, script/style tags are stripped to avoid false positives from JavaScript code." },
+                OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) searches the live page, a positive value searches the stored snapshot while it is younger than the window, without touching the tab" },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_export".to_string(),
@@ -4415,6 +4426,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "depth <n>", description: "Max descendant depth for selector suggestions (default: 5). If the DOM under the selector is shallower than --depth, the actual DOM depth is used and output is identical for higher depth values.", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read the CSS selector from stdin instead of an inline argument (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "selector-base64 <base64>", description: "Base64-encoded CSS selector (avoids shell quoting issues on Windows)", is_bool: false, short: None },
+                OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) inspects the live page, a positive value inspects the stored snapshot while it is younger than the window, without touching the tab" },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_inspect".to_string(),
@@ -4430,6 +4442,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // Pass through CLI-side flags for selector resolution in main.rs dispatch
                 if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
                 if let Some(v) = get_opt_str(args, "selector-base64") { p["selectorBase64"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 p
             },
         },
@@ -4447,12 +4460,14 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
+                OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) reads the live page, a positive value reads the stored snapshot while it is younger than the window, without touching the tab" },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_readability".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(url) = get_opt_str(args, "url") { p["url"] = json!(url); }
+                if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 p
             },
         },
@@ -7786,6 +7801,118 @@ mod tests {
             params.get("limit").is_none(),
             "non-numeric limit should be ignored"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // htmlsnapshot --expires (read the stored snapshot instead of the live page)
+    // -------------------------------------------------------------------
+
+    /// Every read of the family exposes `--expires`, by its long name and its `-expires` alias.
+    #[test]
+    fn test_every_htmlsnapshot_read_command_accepts_expires() {
+        let map = commands_map();
+        for name in &[
+            "htmlsnapshot-get",
+            "htmlsnapshot-get-all",
+            "htmlsnapshot-query",
+            "htmlsnapshot-export",
+            "htmlsnapshot-summary",
+            "htmlsnapshot-grep",
+            "htmlsnapshot-inspect",
+            "htmlsnapshot-readability",
+        ] {
+            let cmd = map.get(*name).unwrap();
+            let option = cmd
+                .options
+                .iter()
+                .find(|o| o.key() == "expires")
+                .unwrap_or_else(|| panic!("{name} must expose --expires"));
+            assert!(!option.is_bool, "{name}: --expires takes a value");
+            let (short_map, _) = crate::args::build_short_option_map(cmd.options);
+            assert_eq!(
+                short_map.get("expires").map(String::as_str),
+                Some("expires"),
+                "{name}: `-expires 1d` must resolve to the same option as `--expires 1d`"
+            );
+        }
+    }
+
+    /// The capture command always writes the live document — `--expires` has no meaning there.
+    #[test]
+    fn test_htmlsnapshot_capture_has_no_expires_option() {
+        let map = commands_map();
+        for name in &["htmlsnapshot", "htmlsnapshot-capture"] {
+            let cmd = map.get(*name).unwrap();
+            assert!(
+                !cmd.options.iter().any(|o| o.key() == "expires"),
+                "{name} captures by definition and must not advertise --expires"
+            );
+        }
+    }
+
+    /// `grep` runs its search through `scrape` / `scrape_all` / `export`, so its option map is a
+    /// pass-through and `expires` must survive it.
+    #[test]
+    fn test_htmlsnapshot_grep_forwards_expires() {
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-grep").unwrap();
+        let args = HashMap::from([
+            ("pattern".to_string(), json!("price")),
+            ("expires".to_string(), json!("1d")),
+        ]);
+        assert_eq!((cmd.tool_params_fn)(&args)["expires"], json!("1d"));
+    }
+
+    /// `--expires` reaches the tool call as the backend's `expires` argument, and stays absent when
+    /// the caller did not pass it (the backend's own default is `0s`).
+    #[test]
+    fn test_htmlsnapshot_read_commands_forward_expires() {
+        let map = commands_map();
+        let cases: Vec<(&str, HashMap<String, Value>)> = vec![
+            (
+                "htmlsnapshot-get",
+                HashMap::from([
+                    ("field".to_string(), json!("text")),
+                    ("selector".to_string(), json!("h1")),
+                ]),
+            ),
+            (
+                "htmlsnapshot-get-all",
+                HashMap::from([
+                    ("field".to_string(), json!("text")),
+                    ("selector".to_string(), json!("h1")),
+                ]),
+            ),
+            (
+                "htmlsnapshot-query",
+                HashMap::from([("sql".to_string(), json!("SELECT 1"))]),
+            ),
+            ("htmlsnapshot-export", HashMap::new()),
+            ("htmlsnapshot-summary", HashMap::new()),
+            (
+                "htmlsnapshot-inspect",
+                HashMap::from([("selector".to_string(), json!(".card"))]),
+            ),
+            ("htmlsnapshot-readability", HashMap::new()),
+        ];
+
+        for (name, base_args) in cases {
+            let cmd = map.get(name).unwrap();
+
+            let mut without = base_args.clone();
+            without.insert("expires".to_string(), json!("1d"));
+            assert_eq!(
+                (cmd.tool_params_fn)(&without)["expires"],
+                json!("1d"),
+                "{name} must forward --expires"
+            );
+
+            let with_default = (cmd.tool_params_fn)(&base_args);
+            assert!(
+                with_default.get("expires").is_none(),
+                "{name} must not invent an expires value when the caller passed none"
+            );
+        }
     }
 
     // -------------------------------------------------------------------

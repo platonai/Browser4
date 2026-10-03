@@ -21,6 +21,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import ai.platon.pulsar.rest.session.ManagedSession
 import org.slf4j.LoggerFactory
+import java.time.Duration
+import java.time.Instant
 import kotlin.reflect.KClass
 
 /**
@@ -39,6 +41,22 @@ import kotlin.reflect.KClass
  *  - every read (`get`, `get all`, `export`, `summary`, `inspect`, `readability`, `query`)
  *    *consumes* it, so a read sees the tab as it is right now — form submissions, SPA updates,
  *    `eval` mutations, login state — with no separate capture step.
+ *
+ * ## `expires`: how old a stored snapshot may be before a read replaces it
+ *
+ * Every read takes an `expires` duration (default `0`, i.e. [DEFAULT_EXPIRES]) with the
+ * `LoadOptions.expires` meaning: the maximum age of a stored snapshot the read is allowed to serve.
+ *
+ *  - `expires = 0s` (the default) — no stored copy is ever reused, because every stored copy is
+ *    already older than 0: the read captures the live page, exactly as it always has.
+ *  - `expires = 1d` — the stored snapshot of the **active page** is served when it is younger than
+ *    a day *and the tab is not touched at all*; the read then answers from the previous snapshot
+ *    version.  When the store has nothing, or its copy is older than the window, the read captures
+ *    the live page as usual — the same "expired → fetch" rule the load pipeline applies.
+ *
+ * A read of a **url the tab does not show** is unaffected: that target is already store-first (and
+ * otherwise read-only loaded), because a url the tab does not show cannot be captured — so an
+ * offline corpus query keeps answering from the store with no browser at all.
  *
  * Two consequences, and both are deliberate:
  *
@@ -119,11 +137,14 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("field", "String", null),
                 ToolSpec.Arg("selector", "String", ":root"),
                 ToolSpec.Arg("attrName", "String?", "null", "Attribute to read when field=attr."),
+                ToolSpec.Arg("expires", "String", DEFAULT_EXPIRES, EXPIRES_ARG_DESCRIPTION),
             ),
             returnType = "String",
             description = "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. " +
                 "Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form " +
-                "submissions, SPA updates and `eval` mutations are visible without a separate capture.",
+                "submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d " +
+                "to serve the stored snapshot instead when it is younger than that, so the read works on the previous " +
+                "snapshot version without touching the tab.",
             examples = listOf(
                 ToolExample(
                     title = "Read one field",
@@ -152,12 +173,14 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("attrName", "String?", "null", "Attribute to read when field=attr."),
                 ToolSpec.Arg("offset", "Int", "0"),
                 ToolSpec.Arg("limit", "Int", "-1"),
+                ToolSpec.Arg("expires", "String", DEFAULT_EXPIRES, EXPIRES_ARG_DESCRIPTION),
             ),
             returnType = "String",
             outputSchema = ToolResultSchemas.HTML_SNAPSHOT_SCRAPE_ALL,
             description = "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. " +
                 "Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form " +
-                "submissions, SPA updates and `eval` mutations are visible without a separate capture.",
+                "submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d " +
+                "to serve the stored snapshot instead when it is younger than that.",
             examples = listOf(
                 ToolExample(
                     title = "Read every product title",
@@ -178,13 +201,16 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("sql", "String", null),
                 ToolSpec.Arg("url", "String?", "null", "Page to query; defaults to the session's current page."),
                 ToolSpec.Arg("sessionId", "String", null),
+                ToolSpec.Arg("expires", "String", DEFAULT_EXPIRES, EXPIRES_ARG_DESCRIPTION),
             ),
             returnType = "String",
             outputSchema = ToolResultSchemas.HTML_SNAPSHOT_QUERY,
             description = "Execute an X-SQL query against a FRESH snapshot of the active page (the live tab is captured " +
                 "first, then queried, so the query sees the page as it is now). With a url argument instead: the query " +
                 "targets THAT url's stored page — a url the tab does not show cannot be captured — and it runs " +
-                "without a session, so offline corpus queries keep working. IMPORTANT: CSS selectors in X-SQL must use " +
+                "without a session, so offline corpus queries keep working. Pass expires=1d to query the stored " +
+                "snapshot of the active page instead when it is younger than that (the tab is not touched). " +
+                "IMPORTANT: CSS selectors in X-SQL must use " +
                 "single quotes (SQL syntax); double quotes mean SQL identifiers.",
             examples = listOf(
                 ToolExample(
@@ -203,11 +229,13 @@ class HTMLSnapshotToolExecutor(
             arguments = listOf(
                 ToolSpec.Arg("sessionId", "String", null),
                 ToolSpec.Arg("clean", "Boolean", "false"),
+                ToolSpec.Arg("expires", "String", DEFAULT_EXPIRES, EXPIRES_ARG_DESCRIPTION),
             ),
             returnType = "String",
             description = "Export the full, pretty-printed HTML of a FRESH snapshot of the active page (the live tab is " +
                 "captured first, so the export is the page as it is now). Set clean=true to strip <script>, <style>, and " +
-                "non-standard attributes (keeps the vi attribute).",
+                "non-standard attributes (keeps the vi attribute). Pass expires=1d to export the stored snapshot " +
+                "instead when it is younger than that.",
             examples = listOf(
                 ToolExample(
                     title = "Export the page HTML",
@@ -221,10 +249,12 @@ class HTMLSnapshotToolExecutor(
             method = "summary",
             arguments = listOf(
                 ToolSpec.Arg("sessionId", "String", null),
+                ToolSpec.Arg("expires", "String", DEFAULT_EXPIRES, EXPIRES_ARG_DESCRIPTION),
             ),
             returnType = "String",
             description = "Generate a page summary including title, statistics, and detected link groups from a FRESH " +
-                "snapshot of the active page (the live tab is captured first, so the summary is the page as it is now).",
+                "snapshot of the active page (the live tab is captured first, so the summary is the page as it is now). " +
+                "Pass expires=1d to summarize the stored snapshot instead when it is younger than that.",
             examples = listOf(
                 ToolExample(title = "Summarise the current page", args = mapOf("sessionId" to "<session-id>")),
             ),
@@ -238,11 +268,13 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("selector", "String", ":root"),
                 ToolSpec.Arg("max", "Int", "20"),
                 ToolSpec.Arg("depth", "Int", "5"),
+                ToolSpec.Arg("expires", "String", DEFAULT_EXPIRES, EXPIRES_ARG_DESCRIPTION),
             ),
             returnType = "String",
             outputSchema = ToolResultSchemas.HTML_SNAPSHOT_INSPECT,
             description = "Inspect the HTML snapshot and suggest CSS selectors for recurring patterns. Operates on a FRESH " +
-                "snapshot of the active page: the live tab is captured first, then inspected.",
+                "snapshot of the active page: the live tab is captured first, then inspected. Pass expires=1d to " +
+                "inspect the stored snapshot instead when it is younger than that.",
             examples = listOf(
                 ToolExample(
                     title = "Find selectors for repeated cards",
@@ -257,6 +289,7 @@ class HTMLSnapshotToolExecutor(
             arguments = listOf(
                 ToolSpec.Arg("sessionId", "String", null),
                 ToolSpec.Arg("url", "String?", "null", "Read this URL's stored page instead of the active page."),
+                ToolSpec.Arg("expires", "String", DEFAULT_EXPIRES, EXPIRES_ARG_DESCRIPTION),
             ),
             returnType = "String",
             outputSchema = ToolResultSchemas.HTML_SNAPSHOT_READABILITY,
@@ -264,7 +297,8 @@ class HTMLSnapshotToolExecutor(
                 "Readability-style heuristic. Without url it reads a FRESH snapshot of the active page (the live tab is " +
                 "captured first). With url it reads THAT url's own stored page — or loads it read-only on the shared " +
                 "scrape session, never on the caller's tab, when the store has nothing — because a url the tab does not " +
-                "show cannot be captured, so the tab's document is never filed under it.",
+                "show cannot be captured, so the tab's document is never filed under it. Pass expires=1d to read the " +
+                "stored snapshot of the active page instead when it is younger than that.",
             examples = listOf(
                 ToolExample(
                     title = "Extract the article of the current page",
@@ -387,8 +421,9 @@ class HTMLSnapshotToolExecutor(
         runCatching { managed.agenticSession.normalize(url).urlString }.getOrNull()
 
     /**
-     * The snapshot a command operates on: **the active page, captured a moment ago**, or — for a url
-     * the tab does not show — that url's stored page.
+     * The snapshot a command operates on: **the active page, captured a moment ago**, the active
+     * page's **stored snapshot** when [expires] allows it, or — for a url the tab does not show —
+     * that url's stored page.
      *
      * [requestedUrl] is what the caller asked for (`readability` and `query` accept one); null means
      * "whatever the tab is showing".
@@ -398,12 +433,24 @@ class HTMLSnapshotToolExecutor(
      * contract, and it is why a read sees form submissions, SPA updates and `eval` mutations without a
      * capture of its own — no read ever serves an older copy of the page on screen.
      *
+     * [expires] relaxes exactly that last clause, on the caller's explicit request: a stored snapshot
+     * younger than the window is served **without touching the tab**, so the read operates on the
+     * previous snapshot version instead of the live one.  The default `0` never reuses a stored copy
+     * (every copy is older than nothing), which keeps the contract above the default behavior; see
+     * [storedSnapshotOrNull] for the rule and [parseExpires] for the accepted values.
+     *
      * A url the tab does *not* show cannot be captured — a capture labels the document with the tab's
      * own url, never with an argument — so that target stays on the read-only path
      * ([storedPageOrIndependentLoad]).  Nothing is ever filed under the requested url; that is the
-     * invariant this branch exists for.
+     * invariant this branch exists for.  That path is deliberately **not** governed by [expires]: it is
+     * already store-only, and a corpus query of a url the tab does not show must keep answering from
+     * the store (never by fetching the network) for offline queries to work at all.
      */
-    private suspend fun snapshotPageFor(managed: ManagedSession, requestedUrl: String?): WebPage {
+    private suspend fun snapshotPageFor(
+        managed: ManagedSession,
+        requestedUrl: String?,
+        expires: Duration,
+    ): WebPage {
         if (requestedUrl != null) {
             val requestedKey = normalizeOrNull(managed, requestedUrl) ?: requestedUrl
             if (requestedKey != activePageKeyOrNull(managed)) {
@@ -415,7 +462,38 @@ class HTMLSnapshotToolExecutor(
             runCatching { managed.driver.currentUrl() }.getOrNull(),
             action = "read",
         )
+        storedSnapshotOrNull(managed, address, expires)?.let { return it }
         return captureActivePage(managed, address)
+    }
+
+    /**
+     * The **stored** snapshot of the active page, when [expires] allows serving it — or null, which
+     * means "capture the live page".
+     *
+     * Two guards, and both must hold:
+     *
+     *  * [expires] is positive — `0s` (the default) never reuses a stored copy, because every stored
+     *    copy is already older than 0 seconds.  This is the whole difference between `expires 0s`
+     *    ("the live page, now") and `expires 1d` ("the page as the store has it, if it is fresh"):
+     *    the first is the family's live-snapshot contract, the second is a store-only read.
+     *  * the stored page is **not** expired under the same rule the load pipeline uses
+     *    ([isExpiredFromStore]) — a copy older than the window is treated exactly like a missing one,
+     *    and the read captures the live page as usual (the pipeline's "expired → fetch" rule).
+     *
+     * The lookup goes through `getOrNull`, the page-store read: it never loads, never navigates and
+     * never creates a browser, so serving a stored snapshot touches no page at all.  Nothing is
+     * written either — a store-only read is a read.
+     */
+    private suspend fun storedSnapshotOrNull(
+        managed: ManagedSession,
+        address: String,
+        expires: Duration,
+    ): WebPage? {
+        if (expires <= Duration.ZERO) return null
+
+        val key = normalizeOrNull(managed, address) ?: return null
+        val stored = managed.agenticSession.getOrNull(key) ?: return null
+        return stored.takeIf { !isExpiredFromStore(it.prevFetchTime, expires) }
     }
 
     /**
@@ -424,7 +502,9 @@ class HTMLSnapshotToolExecutor(
      *
      * Without [explicitUrl] the target *is* the active page: it is captured first (the family's
      * contract) and the normalized identity that was just written is returned, so
-     * `load_and_select(@url, ...)` serves the document the tab shows now.
+     * `load_and_select(@url, ...)` serves the document the tab shows now.  [expires] relaxes that the
+     * same way it does for the other reads: a stored snapshot younger than the window is queried
+     * **without capturing**, so the query runs over the previous snapshot version.
      *
      * With [explicitUrl] the query may be about a page the session is not showing — an offline corpus
      * query, say — which no capture can produce.  Such a query stays session-optional: the session is
@@ -436,6 +516,7 @@ class HTMLSnapshotToolExecutor(
         args: Map<String, Any?>,
         receiver: Any,
         explicitUrl: String?,
+        expires: Duration,
     ): String {
         if (explicitUrl == null) {
             val managed = resolveSession(args, receiver)
@@ -443,7 +524,12 @@ class HTMLSnapshotToolExecutor(
                 runCatching { managed.driver.currentUrl() }.getOrNull(),
                 action = "query",
             )
-            // Capture, then query the identity that was just written — the same snapshot a read sees.
+            // A fresh store hit is the query target — the page the caller asked to query as the store
+            // has it.  Otherwise capture, then query the identity that was just written — the same
+            // snapshot a read sees.
+            storedSnapshotOrNull(managed, address, expires)?.let { stored ->
+                return stored.url.ifBlank { normalizeOrNull(managed, address) ?: address }
+            }
             val page = captureActivePage(managed, address)
             return page.url.ifBlank { normalizeOrNull(managed, address) ?: address }
         }
@@ -453,7 +539,9 @@ class HTMLSnapshotToolExecutor(
         val requestedKey = normalizeOrNull(managed, explicitUrl) ?: return explicitUrl
         if (normalizeOrNull(managed, address) != requestedKey) return explicitUrl
 
-        // The caller named the very page the session is showing: refresh it like any other read.
+        // The caller named the very page the session is showing: refresh it like any other read —
+        // unless the store already has a copy the caller declared fresh enough to query.
+        storedSnapshotOrNull(managed, address, expires)?.let { return requestedKey }
         captureActivePage(managed, address)
         return requestedKey
     }
@@ -507,6 +595,7 @@ class HTMLSnapshotToolExecutor(
         val field = paramString(args, "field", "scrape")!!
         val selector = paramString(args, "selector", "scrape", required = false, default = ":root")?.ifEmpty { ":root" } ?: ":root"
         val attrName = paramString(args, "attrName", "scrape", required = false)
+        val expires = parseExpires(args, "scrape")
 
         if (field !in setOf("text", "textcontent", "html", "attr")) {
             throw IllegalArgumentException("Unknown field '$field'. Use text, textcontent, html, or attr.")
@@ -534,9 +623,10 @@ class HTMLSnapshotToolExecutor(
             }
 
             // The active page's FRESH snapshot: the live tab is captured first, then read — see the
-            // contract at the bottom of this file.
+            // contract at the bottom of this file.  With `expires` the caller may instead serve the
+            // stored snapshot, keyed by the tab's own url, when it is younger than the window.
             val pulsarSession = managed.agenticSession
-            extractFrom(pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null), noCache = true))
+            extractFrom(pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null, expires), noCache = true))
         }
     }
 
@@ -546,6 +636,7 @@ class HTMLSnapshotToolExecutor(
         val attrName = paramString(args, "attrName", "scrape_all", required = false)
         val offset = paramInt(args, "offset", "scrape_all", required = false, default = 0) ?: 0
         val limit = paramInt(args, "limit", "scrape_all", required = false, default = -1) ?: -1
+        val expires = parseExpires(args, "scrape_all")
 
         if (field !in setOf("text", "textcontent", "html", "attr")) {
             throw IllegalArgumentException("Unknown field '$field'. Use text, textcontent, html, or attr.")
@@ -579,7 +670,7 @@ class HTMLSnapshotToolExecutor(
             // The active page's FRESH snapshot, as `get` does — see the contract at the bottom of this
             // file.
             val pulsarSession = managed.agenticSession
-            extractAllFrom(pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null), noCache = true))
+            extractAllFrom(pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null, expires), noCache = true))
         }
 
         @Suppress("UNCHECKED_CAST")
@@ -608,7 +699,8 @@ class HTMLSnapshotToolExecutor(
         }
 
         val explicitUrl = paramString(args, "url", "query", required = false)?.takeIf { it.isNotBlank() }
-        val url = resolveQueryTarget(args, receiver, explicitUrl)
+        val expires = parseExpires(args, "query")
+        val url = resolveQueryTarget(args, receiver, explicitUrl, expires)
 
         // The query runs against what [resolveQueryTarget] just captured whenever it is about the
         // active page, so `load_and_select(@url, ...)` serves the live document without the caller
@@ -676,12 +768,13 @@ class HTMLSnapshotToolExecutor(
 
     private suspend fun export(args: Map<String, Any?>, receiver: Any = Any()): String {
         val clean = paramBool(args, "clean", "export", required = false, default = false) ?: false
+        val expires = parseExpires(args, "export")
         val managed = resolveSession(args, receiver)
 
         return managed.withLock {
             // The active page's FRESH snapshot — see the contract at the bottom of this file.
             val pulsarSession = managed.agenticSession
-            val document = pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null), noCache = true)
+            val document = pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null, expires), noCache = true)
 
             if (clean) {
                 // --clean must change the serialized OUTPUT, not just the parsed
@@ -737,14 +830,36 @@ class HTMLSnapshotToolExecutor(
     }
 
     companion object {
+        /** The `expires` value every read defaults to: never reuse a stored snapshot. */
+        internal const val DEFAULT_EXPIRES = "0s"
+
+        /** The `expires` tool argument, documented once for every read that accepts it. */
+        internal const val EXPIRES_ARG_DESCRIPTION =
+            "How old a stored snapshot of the ACTIVE page may be before the read replaces it, " +
+                "e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. " +
+                "0s never reuses a stored copy, so the read captures the live page; a positive " +
+                "value serves the stored snapshot while it is younger than the window and captures " +
+                "only when it is older or missing. Used to work on the previous snapshot version " +
+                "without touching the tab."
+
         /**
-         * The load option that makes a capture actually **write**: `-refresh`.
+         * The load option that makes a capture actually **write**: `-expires 0s`.
          *
          * ### What it does
          *
-         * It makes the load pipeline build a fresh page shell instead of reusing the process-wide
-         * page-cache copy (`LoadComponent.getCachedPageOrNull` returns null for a refreshing url), and
-         * marks the fetch state as `REFRESH` (retry counter reset).
+         * `-expires 0s` is `LoadOptions`' own spelling for "no stored copy is current": it makes the
+         * load pipeline build a fresh page shell instead of reusing the process-wide page-cache copy
+         * (`LoadComponent.getCachedPageOrNull` rejects a cached page whose `prevFetchTime + expires`
+         * has passed, which `0s` makes true of every page).
+         *
+         * The option used to be `-refresh`, which sets the same `expires = 0s` plus
+         * `ignoreFailure` and `expireAt = epoch`.  `-expires 0s` says what the capture actually needs
+         * — *write the snapshot that was just taken, do not serve the stored one* — while `-refresh`
+         * reads like "reload the page", which is exactly what a capture must **not** do.  The two
+         * spellings differ only in paths a capture never takes: `ignoreFailure` and the reset retry
+         * counter (`fetchRetries = 0`) affect the load/navigate branch selected by
+         * `LoadComponent.fetchContentIfNecessaryDeferred`, while a capture is dispatched by
+         * `page.hasVar(VAR_CAPTURE)` regardless of the fetch state.
          *
          * ### What it does NOT do
          *
@@ -769,23 +884,90 @@ class HTMLSnapshotToolExecutor(
          *  2. `persist` deliberately drops the CONTENT field of a cached page
          *     (`if (page.isCached) page.unbox().clearDirty(GWebPage.Field.CONTENT.index)`), so the
          *     store keeps the previous bytes as well — with a fresh `prevFetchTime` on top, and
-         *     served for the whole default `EXPIRES` window (decades).
+         *     served for the whole default `EXPIRES` window.
          *
          * `HtmlSnapshotScenariosE2ETest#test1f` is the regression test: it captures, mutates the tab,
          * captures again, and reads the store back.  As a negative control, dropping this option from
          * the call below makes it fail (the second capture returns the first capture's document).
          *
-         * Every command of the family captures — that is the contract (`captureActivePage` is the one
-         * place that loads the tab) — so every one of them inherits this option, reads included.
+         * Every command of the family captures at least once — that is the contract
+         * (`captureActivePage` is the one place that loads the tab) — so every one of them inherits
+         * this option.  A read *may* skip the capture when the caller asked it to serve a stored
+         * snapshot ([storedSnapshotOrNull]); whenever it does capture, this option rides along.
          *
          * ### Why it travels inside the url string
          *
          * `PulsarSession.capture(driver, url)` has no `LoadOptions` parameter, and the normalizer
          * splits trailing arguments off the url (`URLUtils.splitUrlArgs`, see
-         * `CombinedUrlNormalizer.normalize`), so `"$url -refresh"` is the supported spelling —
+         * `CombinedUrlNormalizer.normalize`), so `"$url -expires 0s"` is the supported spelling —
          * the same one `AbstractPulsarSession.open` uses.
          */
-        internal const val MUST_WRITE_OPTION = "-refresh"
+        internal const val MUST_WRITE_OPTION = "-expires $DEFAULT_EXPIRES"
+
+        /**
+         * The duration grammar `expires` accepts — the one `LoadOptions`' `DurationConverter`
+         * understands, minus the values it silently swallows.
+         *
+         * `LoadOptions.parse("-expires …")` maps anything it cannot parse to
+         * `Duration.ofSeconds(Int.MIN_VALUE)` — an always-expired sentinel — so a typo would look like
+         * the default "live page" behavior instead of an error.  The value is therefore parsed by
+         * [parseExpiresValue], which rejects anything outside this grammar (plus a bare `0`) by name.
+         */
+        private val SIMPLE_EXPIRES_PATTERN = Regex("""^\d+(ms|s|m|h|d)$""", RegexOption.IGNORE_CASE)
+
+        /**
+         * Parse the `expires` tool argument into the duration it names.
+         *
+         * Accepted spellings (case-insensitive): `0s`, `500ms`, `30s`, `10m`, `2h`, `1d`, or an
+         * ISO-8601 duration such as `PT30S` / `P1D`.  A bare `0` is accepted too — it is how the
+         * option's default is usually spelled — but no other bare number is, because `LoadOptions`
+         * does not read `5` as five seconds.  The empty value and an absent argument both mean
+         * [DEFAULT_EXPIRES].
+         *
+         * @throws IllegalArgumentException when the value is not a duration — failing here keeps a
+         *   typo from silently behaving like `0s` (or, worse, like a decades-long window).
+         */
+        internal fun parseExpiresValue(raw: String?, functionName: String): Duration {
+            val value = raw?.trim().orEmpty()
+            if (value.isEmpty() || value == "0") return Duration.ZERO
+
+            return runCatching {
+                if (SIMPLE_EXPIRES_PATTERN.matches(value)) {
+                    val unit = value.takeLastWhile { it.isLetter() }.lowercase()
+                    val amount = value.dropLast(unit.length).toLong()
+                    when (unit) {
+                        "ms" -> Duration.ofMillis(amount)
+                        "s" -> Duration.ofSeconds(amount)
+                        "m" -> Duration.ofMinutes(amount)
+                        "h" -> Duration.ofHours(amount)
+                        else -> Duration.ofDays(amount)
+                    }
+                } else {
+                    Duration.parse(value.uppercase())
+                }
+            }.getOrElse {
+                throw IllegalArgumentException(
+                    "Invalid expires value '$value' for $functionName. Expected a duration such as " +
+                        "0s, 30s, 10m, 2h or 1d (or an ISO-8601 duration such as PT30S); outside `0`, a " +
+                        "bare number is not a duration. 0s (the default) reads the live page, a " +
+                        "positive value serves the stored snapshot while it is younger than the window."
+                )
+            }
+        }
+
+        /**
+         * True when a snapshot fetched at [prevFetchTime] is too old for an [expires] window.
+         *
+         * This is the `expires` clause of `LoadOptions.isExpired` — the rule the load pipeline
+         * applies when it decides whether a page-store copy may be served, so `expires` behaves the
+         * same here as it does in `goto "<url> -expires 1d"`.  The other two clauses of that method
+         * (`refresh`, `expireAt`) cannot apply: this family sets neither (see [MUST_WRITE_OPTION]).
+         *
+         * A page that was never fetched carries the epoch as its `prevFetchTime`, so it is expired
+         * for every window and the read captures the live page.
+         */
+        internal fun isExpiredFromStore(prevFetchTime: Instant, expires: Duration): Boolean =
+            Instant.now() >= prevFetchTime + expires
 
         internal fun shouldAppendSelectorQuoteHint(message: String, sql: String): Boolean =
             message.contains("not found") &&
@@ -840,24 +1022,26 @@ class HTMLSnapshotToolExecutor(
     }
 
     private suspend fun summary(args: Map<String, Any?>, receiver: Any = Any()): String {
+        val expires = parseExpires(args, "summary")
         val managed = resolveSession(args, receiver)
 
         return managed.withLock {
             // The active page's FRESH snapshot — see the contract at the bottom of this file.
             val pulsarSession = managed.agenticSession
-            val page = snapshotPageFor(managed, requestedUrl = null)
+            val page = snapshotPageFor(managed, requestedUrl = null, expires)
             val document = pulsarSession.parse(page, noCache = true)
             PageSummaryIndexService.generate(document, page.url, document.title)
         }
     }
 
     private suspend fun inspect(args: Map<String, Any?>, receiver: Any = Any()): String {
+        val expires = parseExpires(args, "inspect")
         val managed = resolveSession(args, receiver)
 
         return managed.withLock {
             // The active page's FRESH snapshot — see the contract at the bottom of this file.
             val pulsarSession = managed.agenticSession
-            val document = pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null), noCache = true)
+            val document = pulsarSession.parse(snapshotPageFor(managed, requestedUrl = null, expires), noCache = true)
 
             val selector = paramString(args, "selector", "inspect", required = false, default = ":root")?.ifEmpty { ":root" } ?: ":root"
             val maxMatches = paramInt(args, "max", "inspect", required = false, default = 20) ?: 20
@@ -892,8 +1076,9 @@ class HTMLSnapshotToolExecutor(
             val pulsarSession = managed.agenticSession
             val requestedUrl = paramString(args, "url", "readability", required = false)
                 ?.takeIf { it.isNotBlank() }
+            val expires = parseExpires(args, "readability")
 
-            val page = snapshotPageFor(managed, requestedUrl)
+            val page = snapshotPageFor(managed, requestedUrl, expires)
             val document = pulsarSession.parse(page, noCache = true)
 
             val result = ReadabilityExtractor().extract(document.document)
@@ -936,6 +1121,19 @@ class HTMLSnapshotToolExecutor(
         return args["sessionId"]?.toString()
             ?: throw IllegalArgumentException("Missing required parameter: sessionId")
     }
+
+    /**
+     * The `expires` window of a read: how old a stored snapshot of the active page may be before the
+     * read captures the live page instead ([DEFAULT_EXPIRES] when the caller passed nothing).
+     *
+     * Read by every method of the read half of the family, so the option means the same thing
+     * everywhere; see [parseExpiresValue] for the accepted values.
+     */
+    private fun parseExpires(args: Map<String, Any?>, functionName: String): Duration =
+        parseExpiresValue(
+            paramString(args, "expires", functionName, required = false, default = DEFAULT_EXPIRES),
+            functionName,
+        )
 }
 
 // =========================================================================
@@ -964,6 +1162,12 @@ class HTMLSnapshotToolExecutor(
 // could return the tab's document as if it were `<other-url>` and poison that
 // url's store row.  The fix is not "never capture on a read" — a read must see
 // the page as it is now — it is "capture, keyed by the tab's own url".
+//
+// The one caller-requested exception is `expires`: a read told that a stored
+// snapshot may be up to N old serves that snapshot WITHOUT capturing, because
+// the caller asked for the previous snapshot version rather than the live page.
+// `expires 0s` (the default) reuses nothing, so the live-snapshot contract above
+// is what every read does unless it is asked otherwise.
 // =========================================================================
 
 /**

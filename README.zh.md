@@ -432,25 +432,26 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 
 #### HTML 快照与 X-SQL 提取
 
-`htmlsnapshot` 会把活动标签页正在显示的页面序列化并生成快照，是 Browser4 结构化提取工作流的核心。**htmlsnapshot 家族中每条命令都先 capture 活动页取得最新快照，然后在这份快照上操作**：capture 返回元数据，读命令消费这份快照——所以读取看到的已经是页面此刻的状态（表单提交结果、SPA 更新、`eval` 改动），无需额外先执行一次 capture。指向别的 URL 的命令（`readability <url>`、`query --url <url>`）读的是该 URL 自己的库内副本，库里没有时做独立只读加载；标签页没有打开的 URL 无法 capture，因此该标签页的文档绝不会被记到它名下。
+`htmlsnapshot` 会把活动标签页正在显示的页面序列化并生成快照，是 Browser4 结构化提取工作流的核心。**htmlsnapshot 家族中每条命令都先 capture 活动页取得最新快照，然后在这份快照上操作**：capture 返回元数据，读命令消费这份快照——所以读取看到的已经是页面此刻的状态（表单提交结果、SPA 更新、`eval` 改动），无需额外先执行一次 capture。读命令也可以用 `--expires <dur>`（默认 `0s`，即活动页）改读**页面库中的快照**：只要库内副本比该时间窗更新就读它，完全不碰标签页——`htmlsnapshot get text ".price" --expires 1d` 就是在上一版快照上操作。指向别的 URL 的命令（`readability <url>`、`query --url <url>`）读的是该 URL 自己的库内副本，库里没有时做独立只读加载；标签页没有打开的 URL 无法 capture，因此该标签页的文档绝不会被记到它名下（`--expires` 不管这条路径——它本来就是只读库的）。
 
 | 命令 | 说明 |
 |---|---|
 | `htmlsnapshot` | `htmlsnapshot capture` 的简写。 |
 | `htmlsnapshot capture` | 序列化活动标签页的页面并写入页面库，同时返回页面和交互元素的元数据（覆盖该标签页规范化 URL 对应的旧记录）。 |
-| `htmlsnapshot get <field> [selector] [name]` | 从活动页的最新快照中提取第一个匹配项的 `text`、`textcontent`、`html` 或 `attr`。 |
-| `htmlsnapshot get all <field> [selector] [name]` | 从活动页的最新快照中提取全部匹配值。支持 `--offset` 和 `--limit`。 |
-| `htmlsnapshot query [url]` | 对活动页的最新快照（先 capture 再查询）或指定 URL 的库内页面运行 X-SQL。支持 `--sql <query\|@file>`、`--sql-stdin`、`--sql-base64`、结果分页和提取导向输出选项。 |
-| `htmlsnapshot export` | 把活动页的最新快照的 HTML 导出到文件。支持位置参数文件路径或 `--file <path>`，以及 `--clean`。 |
-| `htmlsnapshot summary` | 基于活动页的最新快照生成压缩版 Web Page Summary Index（WPSI）。 |
-| `htmlsnapshot grep <pattern>` | 用 grep 风格参数搜索活动页最新快照的 HTML。 |
-| `htmlsnapshot inspect [selector]` | 在活动页的最新快照上发现重复 DOM 模式和候选选择器。支持 `--max`、`--depth`、`--stdin`、`--selector-base64`。 |
-| `htmlsnapshot readability [url]` | 用 Readability 式启发式算法提取正文：不给 URL 时读活动页的最新快照；给了 URL 则读该 URL 自己的库内副本，绝不会把当前标签页的文档记到该 URL 名下。支持 `--text-only` 与分页。 |
+| `htmlsnapshot get <field> [selector] [name]` | 从活动页的最新快照中提取第一个匹配项的 `text`、`textcontent`、`html` 或 `attr`。支持 `--expires <dur>`。 |
+| `htmlsnapshot get all <field> [selector] [name]` | 从活动页的最新快照中提取全部匹配值。支持 `--offset`、`--limit` 和 `--expires <dur>`。 |
+| `htmlsnapshot query [url]` | 对活动页的最新快照（先 capture 再查询）或指定 URL 的库内页面运行 X-SQL。支持 `--sql <query\|@file>`、`--sql-stdin`、`--sql-base64`、`--expires <dur>`、结果分页和提取导向输出选项。 |
+| `htmlsnapshot export` | 把活动页的最新快照的 HTML 导出到文件。支持位置参数文件路径或 `--file <path>`，以及 `--clean` 和 `--expires <dur>`。 |
+| `htmlsnapshot summary` | 基于活动页的最新快照生成压缩版 Web Page Summary Index（WPSI）。支持 `--expires <dur>`。 |
+| `htmlsnapshot grep <pattern>` | 用 grep 风格参数搜索活动页最新快照的 HTML。支持 `--expires <dur>`。 |
+| `htmlsnapshot inspect [selector]` | 在活动页的最新快照上发现重复 DOM 模式和候选选择器。支持 `--max`、`--depth`、`--stdin`、`--selector-base64`、`--expires <dur>`。 |
+| `htmlsnapshot readability [url]` | 用 Readability 式启发式算法提取正文：不给 URL 时读活动页的最新快照；给了 URL 则读该 URL 自己的库内副本，绝不会把当前标签页的文档记到该 URL 名下。支持 `--text-only`、`--expires <dur>` 与分页。 |
 
 重要规则：
 
 - 需要 ref 和交互时用 `snapshot`
 - 需要重复 DOM 提取时用 `htmlsnapshot`；读命令每次都会先捕获活动页，所以页面在标签页里变化后直接重跑读命令即可
+- 想在库里已有的快照上操作（而不是活动页）时，给读命令加 `--expires <dur>`：`--expires 1d` 读库内副本且不序列化标签页，`--expires 0s`（默认）就是活动页
 - 推荐使用 `htmlsnapshot query --sql @query.sql`，避免 shell 转义问题
 - 需要关联型列表提取时，优先使用 `htmlsnapshot query`，而不是多次 `get all`
 - 需要一步提取正文（无需手写选择器）时，用 `htmlsnapshot readability`

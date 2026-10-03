@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.api.WebDriver
+import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
@@ -31,6 +32,7 @@ import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
+import java.time.Duration
 import java.time.Instant
 
 /**
@@ -123,12 +125,15 @@ class HTMLSnapshotToolExecutorTest {
         href: String? = url,
         contentLength: Long = 2048L,
         contentType: String = "text/html",
+        // The `expires` tests need control over how old a stored copy is; every other test keeps the
+        // fixed timestamp the capture-metadata assertions read back.
+        fetchedAt: Instant = Instant.parse("2026-09-03T10:00:00Z"),
     ): WebPage = mock {
         on { this.url } doReturn url
         on { this.href } doReturn href
         on { this.contentLength } doReturn contentLength
         on { this.contentType } doReturn contentType
-        on { this.prevFetchTime } doReturn Instant.parse("2026-09-03T10:00:00Z")
+        on { this.prevFetchTime } doReturn fetchedAt
     }
 
     private fun document(html: String, baseUri: String = "https://example.com/") =
@@ -155,15 +160,17 @@ class HTMLSnapshotToolExecutorTest {
             // field of a cached shell — a capture would then report the new document while the store
             // kept the old one (see HTMLSnapshotToolExecutor.MUST_WRITE_OPTION).  The stub below spells
             // the flag out as a literal on purpose: what has to keep working is the option *string*
-            // that LoadOptions.parse understands, not a constant's value.
-            onBlocking { capture(driver, "$address -refresh") } doReturn page
+            // that LoadOptions.parse understands, not a constant's value.  `-expires 0s` is the
+            // spelling — "no stored copy is current, write this one" — where `-refresh` used to be,
+            // because `-refresh` reads like "reload the page", which a capture never does.
+            onBlocking { capture(driver, "$address -expires 0s") } doReturn page
             on { parse(page, true) } doReturn document(html, "https://example.com/product/1")
         }
 
         val payload = executor().call("capture", mapOf("sessionId" to "s"), ManagedSession("s", session, null)) as String
 
         // The write happened, through the driver the tab belongs to, with must-write semantics.
-        verify(session).capture(driver, "$address -refresh", null)
+        verify(session).capture(driver, "$address -expires 0s", null)
 
         val json = mapper.readTree(payload)
         assertEquals("https://example.com/product/1", json["url"].asText(), "the store key is the normalized url")
@@ -206,7 +213,7 @@ class HTMLSnapshotToolExecutorTest {
         val session = sessionShowing(driver) {
             // The must-write option is pinned as a literal on purpose — see
             // HTMLSnapshotToolExecutor.MUST_WRITE_OPTION.
-            onBlocking { capture(driver, "$address -refresh") } doReturn captured
+            onBlocking { capture(driver, "$address -expires 0s") } doReturn captured
             on { parse(captured, true) } doReturn
                 document("<html><body><h1>Live after submit</h1></body></html>", address)
         }
@@ -220,7 +227,7 @@ class HTMLSnapshotToolExecutorTest {
 
         assertEquals("Live after submit", payload)
         // Captured first, with must-write semantics: the snapshot is the tab as it is now.
-        verify(session).capture(driver, "$address -refresh", null)
+        verify(session).capture(driver, "$address -expires 0s", null)
         // And then read from that snapshot — the store is never consulted for the active page.
         verify(session, never()).getOrNull(any<String>())
         verify(session, never()).load(any<String>())
@@ -244,7 +251,7 @@ class HTMLSnapshotToolExecutorTest {
             val driver = tab(address)
             val captured = page(address)
             val session = sessionShowing(driver) {
-                onBlocking { capture(driver, "$address -refresh") } doReturn captured
+                onBlocking { capture(driver, "$address -expires 0s") } doReturn captured
                 on { parse(captured, true) } doReturn document(articleHtml, address)
             }
             val scrapeService = mock<ScrapeService> { on { executeQuery(any()) } doReturn response }
@@ -269,7 +276,7 @@ class HTMLSnapshotToolExecutorTest {
             )
 
             try {
-                verify(session).capture(driver, "$address -refresh", null)
+                verify(session).capture(driver, "$address -expires 0s", null)
             } catch (e: AssertionError) {
                 throw AssertionError("read '$method' must capture the active page first: ${e.message}", e)
             }
@@ -418,7 +425,7 @@ class HTMLSnapshotToolExecutorTest {
         val driver = tab(address)
         val captured = page(address)
         val session = sessionShowing(driver) {
-            onBlocking { capture(driver, "$address -refresh") } doReturn captured
+            onBlocking { capture(driver, "$address -expires 0s") } doReturn captured
         }
         // The session is found through the manager's NON-recovering lookup: a query may ask "is the
         // session on this url?" without resurrecting a browser to answer it.
@@ -435,7 +442,7 @@ class HTMLSnapshotToolExecutorTest {
         ) as String
 
         assertTrue(mapper.readTree(payload)["isDone"].asBoolean())
-        verify(session).capture(driver, "$address -refresh", null)
+        verify(session).capture(driver, "$address -expires 0s", null)
         // The X-SQL was pointed at the url that was just written — the same snapshot a read serves.
         val request = argumentCaptor<ScrapeRequest>()
         verify(scrapeService).executeQuery(request.capture())
@@ -444,6 +451,303 @@ class HTMLSnapshotToolExecutorTest {
             "the query must target the captured page's url, got: ${request.firstValue.sql}",
         )
         verify(sessionManager, never()).getOrRecoverSession(any())
+    }
+
+    // =========================================================================
+    // expires — how old a stored snapshot a read may serve
+    // =========================================================================
+
+    /** The live document the tab shows, distinct from anything in the store. */
+    private val liveHtml = "<html><body><h1>Live</h1></body></html>"
+
+    /** The stored snapshot of the same url — the previous version a store-only read must serve. */
+    private val storedHtml = "<html><body><h1>Stored</h1></body></html>"
+
+    @Test
+    @DisplayName("expires defaults to 0s: a read ignores even a fresh stored copy and captures the live page")
+    fun expiresDefaultsToZeroAndNeverServesAStoredCopy() = runBlocking<Unit> {
+        val address = liveUrl
+        val driver = tab(address)
+        val captured = page(address)
+        // The store HAS a copy of the active page, captured a minute ago — a store-first read would
+        // find it perfectly fresh, which is exactly what the default must not do.
+        val stored = page(address, fetchedAt = Instant.now().minusSeconds(60))
+        val session = sessionShowing(driver) {
+            on { getOrNull(address) } doReturn stored
+            onBlocking { capture(driver, "$address -expires 0s") } doReturn captured
+            on { parse(captured, true) } doReturn document(liveHtml, address)
+            on { parse(stored, true) } doReturn document(storedHtml, address)
+        }
+
+        for (expires in listOf(null, "0s", "0m", "0ms")) {
+            val args = buildMap<String, Any?> {
+                put("sessionId", "s")
+                put("field", "text")
+                put("selector", "h1")
+                if (expires != null) put("expires", expires)
+            }
+            assertEquals(
+                "Live",
+                executor().call("scrape", args, ManagedSession("s", session, null)) as String,
+                "expires='$expires' must read the live page, not the stored copy",
+            )
+        }
+
+        verify(session, never()).getOrNull(any<String>())
+    }
+
+    @Test
+    @DisplayName("a positive expires serves the stored snapshot while it is fresh, without touching the tab")
+    fun aPositiveExpiresServesTheFreshStoredSnapshot() = runBlocking<Unit> {
+        val address = liveUrl
+        val driver = tab(address)
+        val stored = page(address, fetchedAt = Instant.now().minusSeconds(60))
+        val session = sessionShowing(driver) {
+            on { getOrNull(address) } doReturn stored
+            on { parse(stored, true) } doReturn document(storedHtml, address)
+        }
+
+        val payload = executor().call(
+            "scrape",
+            mapOf("sessionId" to "s", "field" to "text", "selector" to "h1", "expires" to "1d"),
+            ManagedSession("s", session, null),
+        ) as String
+
+        assertEquals("Stored", payload, "expires=1d must serve the snapshot the store has")
+        // Store-only, on purpose: the point of the option is to work on the PREVIOUS snapshot version,
+        // so neither the tab (capture) nor the network (load) may be touched.
+        verify(session, never()).capture(any(), anyOrNull(), anyOrNull())
+        verify(session, never()).load(any<String>())
+    }
+
+    @Test
+    @DisplayName("a stored snapshot older than the expires window is replaced: the read captures the live page")
+    fun aStaleStoredSnapshotIsReplaced() = runBlocking<Unit> {
+        val address = liveUrl
+        val driver = tab(address)
+        val captured = page(address)
+        // Two days old against a one-day window: expired, i.e. as good as missing.
+        val stored = page(address, fetchedAt = Instant.now().minusSeconds(2 * 24 * 3600))
+        val session = sessionShowing(driver) {
+            on { getOrNull(address) } doReturn stored
+            onBlocking { capture(driver, "$address -expires 0s") } doReturn captured
+            on { parse(captured, true) } doReturn document(liveHtml, address)
+        }
+
+        val payload = executor().call(
+            "scrape",
+            mapOf("sessionId" to "s", "field" to "text", "selector" to "h1", "expires" to "1d"),
+            ManagedSession("s", session, null),
+        ) as String
+
+        assertEquals("Live", payload)
+        verify(session).getOrNull(address)
+        verify(session).capture(driver, "$address -expires 0s", null)
+    }
+
+    @Test
+    @DisplayName("an empty store falls back to the live page when expires is positive")
+    fun anEmptyStoreFallsBackToTheLivePage() = runBlocking<Unit> {
+        val address = liveUrl
+        val driver = tab(address)
+        val captured = page(address)
+        val session = sessionShowing(driver) {
+            on { getOrNull(address) } doReturn null
+            onBlocking { capture(driver, "$address -expires 0s") } doReturn captured
+            on { parse(captured, true) } doReturn document(liveHtml, address)
+        }
+
+        val payload = executor().call(
+            "scrape",
+            mapOf("sessionId" to "s", "field" to "text", "selector" to "h1", "expires" to "1d"),
+            ManagedSession("s", session, null),
+        ) as String
+
+        assertEquals("Live", payload)
+        verify(session).capture(driver, "$address -expires 0s", null)
+    }
+
+    @Test
+    @DisplayName("every read honours expires: a fresh stored snapshot means no read captures")
+    fun everyReadHonoursExpires() = runBlocking<Unit> {
+        val response = ScrapeResponse(
+            id = "task-1",
+            statusCode = 200,
+            pageStatusCode = 200,
+            pageContentBytes = 64,
+            isDone = true,
+            resultSet = listOf(mapOf("title" to "Stored")),
+            event = "completed",
+        )
+
+        for (method in listOf("scrape", "scrape_all", "export", "summary", "inspect", "readability", "query")) {
+            val address = "https://example.com/article"
+            val driver = tab(address)
+            val stored = page(address, fetchedAt = Instant.now().minusSeconds(60))
+            val session = sessionShowing(driver) {
+                on { getOrNull(address) } doReturn stored
+                on { parse(stored, true) } doReturn document(articleHtml, address)
+            }
+            val scrapeService = mock<ScrapeService> { on { executeQuery(any()) } doReturn response }
+            val args = buildMap<String, Any?> {
+                put("sessionId", "s")
+                put("expires", "1d")
+                when (method) {
+                    "scrape", "scrape_all" -> {
+                        put("field", "text")
+                        put("selector", "h1")
+                    }
+
+                    "query" -> put(
+                        "sql", "SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, 'body')"
+                    )
+                }
+            }
+
+            assertNotNull(
+                HTMLSnapshotToolExecutor(mock<PulsarSessionManager>(), scrapeService)
+                    .call(method, args, ManagedSession("s", session, null)),
+                "read '$method' must return a result",
+            )
+
+            try {
+                verify(session, never()).capture(any(), anyOrNull(), anyOrNull())
+            } catch (e: AssertionError) {
+                throw AssertionError("read '$method' must not capture with expires=1d: ${e.message}", e)
+            }
+            verify(session, never()).load(any<String>())
+        }
+    }
+
+    @Test
+    @DisplayName("a url-targeted query of the page on screen honours expires as well")
+    fun aQueryOfTheSessionsOwnPageHonoursExpires() = runBlocking<Unit> {
+        val address = "https://example.com/article"
+        val response = ScrapeResponse(
+            id = "task-1",
+            statusCode = 200,
+            pageStatusCode = 200,
+            pageContentBytes = 64,
+            isDone = true,
+            resultSet = listOf(mapOf("title" to "Stored")),
+            event = "completed",
+        )
+        val scrapeService = mock<ScrapeService> { on { executeQuery(any()) } doReturn response }
+        val stored = page(address, fetchedAt = Instant.now().minusSeconds(60))
+        val session = sessionShowing(tab(address)) {
+            on { getOrNull(address) } doReturn stored
+        }
+        val sessionManager = mock<PulsarSessionManager> {
+            on { getSession("s") } doReturn ManagedSession("s", session, null)
+        }
+        val sql = "SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, 'body')"
+
+        val payload = HTMLSnapshotToolExecutor(sessionManager, scrapeService).callFunctionOn(
+            "html_snapshot", "query",
+            mapOf("sessionId" to "s", "url" to address, "sql" to sql, "expires" to "1d"),
+            Unit,
+        ) as String
+
+        assertTrue(mapper.readTree(payload)["isDone"].asBoolean())
+        verify(session, never()).capture(any(), anyOrNull(), anyOrNull())
+        // The query is still pointed at the page's store identity, which is what it queried before.
+        val request = argumentCaptor<ScrapeRequest>()
+        verify(scrapeService).executeQuery(request.capture())
+        assertTrue(
+            request.firstValue.sql.contains("'$address'"),
+            "the query must target the stored page's url, got: ${request.firstValue.sql}",
+        )
+    }
+
+    @Test
+    @DisplayName("expires never governs a url the tab does not show: that path stays store-first")
+    fun expiresDoesNotGovernAForeignUrl() = runBlocking<Unit> {
+        val stored = page(otherUrl)
+        val session = sessionShowing(tab(liveUrl)) {
+            on { getOrNull(otherUrl) } doReturn stored
+            on { parse(stored, true) } doReturn document(articleHtml, otherUrl)
+        }
+
+        val payload = executor().call(
+            "readability",
+            mapOf("sessionId" to "s", "url" to otherUrl, "expires" to "1d"),
+            ManagedSession("s", session, null),
+        ) as String
+
+        assertTrue(
+            mapper.readTree(payload)["textContent"].asText().contains("Rust brings memory safety"),
+            "the article must come from the requested url's stored copy",
+        )
+        // The foreign-url path reads the store whatever the age of the copy — an offline corpus
+        // query must not start fetching the network because a window passed — and never captures.
+        verify(session).getOrNull(otherUrl)
+        verify(session, never()).capture(any(), anyOrNull(), anyOrNull())
+        verify(session, never()).load(any<String>())
+    }
+
+    @Test
+    @DisplayName("an unparsable expires value is rejected by name instead of silently meaning 0s")
+    fun anUnparsableExpiresValueIsRejected() {
+        for (bad in listOf("5", "1x", "abc", "1w", "1 y", "soon")) {
+            val exception = assertThrows<IllegalArgumentException>("expires='$bad' must be rejected") {
+                HTMLSnapshotToolExecutor.parseExpiresValue(bad, "scrape")
+            }
+            assertTrue(
+                exception.message!!.contains(bad),
+                "the refusal must name the value it refused, got: ${exception.message}",
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("expires values are read with the LoadOptions duration grammar")
+    fun expiresValuesUseTheLoadOptionsGrammar() {
+        // Absent and empty mean the default: never reuse a stored copy.
+        assertEquals(Duration.ZERO, HTMLSnapshotToolExecutor.parseExpiresValue(null, "scrape"))
+        assertEquals(Duration.ZERO, HTMLSnapshotToolExecutor.parseExpiresValue("", "scrape"))
+
+        val expected = mapOf(
+            "0s" to Duration.ZERO,
+            "0" to Duration.ZERO, // "0" is read as "0s" by the CLI, and `Duration.ZERO` here
+            "500ms" to Duration.ofMillis(500),
+            "30s" to Duration.ofSeconds(30),
+            "10m" to Duration.ofMinutes(10),
+            "2h" to Duration.ofHours(2),
+            "1d" to Duration.ofDays(1),
+            "PT30S" to Duration.ofSeconds(30),
+            "P1D" to Duration.ofDays(1),
+            "PT1H30M" to Duration.ofMinutes(90),
+            "1D" to Duration.ofDays(1),
+        )
+        for ((raw, duration) in expected) {
+            assertEquals(
+                duration,
+                HTMLSnapshotToolExecutor.parseExpiresValue(raw, "scrape"),
+                "expires='$raw'",
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("isExpiredFromStore applies exactly the expires rule of LoadOptions.isExpired")
+    fun isExpiredFromStoreMatchesLoadOptions() {
+        val now = Instant.now()
+        // Ages chosen away from the window boundaries, so the two `Instant.now()` calls inside the
+        // implementations can never disagree about a boundary case.
+        val ages = listOf(0L, 30L, 900L, 7200L, 2 * 86400L)
+
+        for (expires in listOf("0s", "1s", "1h", "1d", "30d")) {
+            val duration = HTMLSnapshotToolExecutor.parseExpiresValue(expires, "scrape")
+            val options = LoadOptions.parse("-expires $expires", VolatileConfig.UNSAFE)
+            for (age in ages) {
+                val prevFetchTime = now.minusSeconds(age)
+                assertEquals(
+                    options.isExpired(prevFetchTime),
+                    HTMLSnapshotToolExecutor.isExpiredFromStore(prevFetchTime, duration),
+                    "expires=$expires age=${age}s",
+                )
+            }
+        }
     }
 
     // =========================================================================

@@ -8365,14 +8365,28 @@ async fn handle_html_snapshot_get(
         } else {
             selector
         };
+        // A store-only read has a different reason for an empty answer: the stored snapshot is fixed,
+        // so waiting and re-reading cannot make the element appear — only a live read (or a larger
+        // `--expires` window) can.
+        let store_only = tool_params
+            .get("expires")
+            .and_then(|v| v.as_str())
+            .map(htmlsnapshot_expires_is_store_only)
+            .unwrap_or(false);
         cli_println!("{}", text);
         cli_println!("No elements matched \"{}\".", display_selector);
-        cli_println!(
-            "  The read captured the page as the tab shows it now, so the element is simply not there — check the selector, the current URL, and that the page has finished loading."
-        );
-        cli_println!(
-            "  If the content arrives asynchronously, wait for it (`wait \"<css>\"`) and then read again — every read re-captures the page first."
-        );
+        if store_only {
+            cli_println!(
+                "  The read served the snapshot already in the store (--expires), so the element is not in that stored version — re-read without --expires to look at the page the tab shows now."
+            );
+        } else {
+            cli_println!(
+                "  The read captured the page as the tab shows it now, so the element is simply not there — check the selector, the current URL, and that the page has finished loading."
+            );
+            cli_println!(
+                "  If the content arrives asynchronously, wait for it (`wait \"<css>\"`) and then read again — every read re-captures the page first."
+            );
+        }
         cli_println!(
             "  Verify the selector with `htmlsnapshot grep \"{}\"`, or discover valid selectors with `htmlsnapshot inspect`.",
             display_selector
@@ -8767,6 +8781,12 @@ async fn handle_html_snapshot_query(
     if !url.is_empty() {
         params["url"] = json!(url);
     }
+    // `--expires` decides which snapshot the query runs over (live page vs the stored copy), so it
+    // belongs to the tool call.  The rest of `tool_params` is CLI-side presentation (--format,
+    // --result-only, --output-file, …) and is consumed below.
+    if let Some(expires) = tool_params.get("expires").and_then(|v| v.as_str()) {
+        params["expires"] = json!(expires);
+    }
 
     let result = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
@@ -9055,14 +9075,26 @@ async fn handle_html_snapshot_export(
         let client = client.clone();
         let base_url = base_url.to_string();
         let tool_name = tool_name.to_string();
+        // `clean` and `expires` belong to the tool call: the backend is what strips scripts/styles
+        // and what decides between the live page and a stored snapshot.  Dropping them here made
+        // `htmlsnapshot export --clean` silently export raw HTML.
+        let clean = tool_params
+            .get("clean")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let expires = tool_params
+            .get("expires")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         async move {
-            call_tool(
-                &client,
-                &base_url,
-                &tool_name,
-                json!({ "sessionId": session_id }),
-            )
-            .await
+            let mut params = json!({ "sessionId": session_id });
+            if clean {
+                params["clean"] = json!(true);
+            }
+            if let Some(expires) = expires {
+                params["expires"] = json!(expires);
+            }
+            call_tool(&client, &base_url, &tool_name, params).await
         }
     })
     .await?;
@@ -9518,6 +9550,13 @@ async fn handle_html_snapshot_summary(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    // `--expires` decides whether the summary describes the live page or the stored snapshot, so it
+    // goes to the summary tool call (`raw`/`stdout` are CLI-side presentation only).
+    let expires = tool_params
+        .get("expires")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
     let combined = {
         let client = client.clone();
         let base_url = base_url.to_string();
@@ -9528,6 +9567,7 @@ async fn handle_html_snapshot_summary(
         let inner_client = client.clone();
         let inner_base_url = base_url.clone();
         let inner_tool_name = tool_name.clone();
+        let inner_expires = expires.clone();
         // Run on a dedicated 16 MB-stack thread: the concurrent summary
         // futures can overflow the 1 MB Windows main-thread stack in debug
         // builds (silent exit code 0).  See `run_on_big_stack`.
@@ -9536,8 +9576,13 @@ async fn handle_html_snapshot_summary(
                 let client = inner_client.clone();
                 let base_url = inner_base_url.clone();
                 let tool_name = inner_tool_name.clone();
+                let expires = inner_expires.clone();
 
                 async move {
+                    let mut summary_params = json!({ "sessionId": session_id });
+                    if let Some(expires) = expires {
+                        summary_params["expires"] = json!(expires);
+                    }
                     let (url_res, title_res, summary_res) = tokio::join!(
                         call_tool(
                             &client,
@@ -9555,7 +9600,7 @@ async fn handle_html_snapshot_summary(
                             &client,
                             &base_url,
                             &tool_name,
-                            json!({ "sessionId": session_id })
+                            summary_params
                         ),
                     );
                     let url = url_res?;
@@ -10352,6 +10397,14 @@ async fn handle_html_snapshot_grep(
     session_name: Option<&str>,
     grep_options: &GrepOptions,
 ) -> Result<(), String> {
+    // `--expires` decides which snapshot the search runs over, so it must reach the read the CLI
+    // dispatches for the source (`scrape_all` / `scrape` / `export`) — a grep that silently searched
+    // the live page after being asked to search the stored one would report the wrong document.
+    let expires = tool_params
+        .get("expires")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
     let source = if let Some(selector) = &grep_options.selector_all {
         // Scoped search across ALL matching elements (querySelectorAll semantics).
         // Uses html_snapshot_scrape_all to get inner HTML of every matched element,
@@ -10360,18 +10413,17 @@ async fn handle_html_snapshot_grep(
             let client = client.clone();
             let base_url = base_url.to_string();
             let sel = selector.clone();
+            let expires = expires.clone();
             async move {
-                call_tool(
-                    &client,
-                    &base_url,
-                    "html_snapshot_scrape_all",
-                    json!({
-                        "sessionId": session_id,
-                        "field": "html",
-                        "selector": sel,
-                    }),
-                )
-                .await
+                let mut params = json!({
+                    "sessionId": session_id,
+                    "field": "html",
+                    "selector": sel,
+                });
+                if let Some(expires) = expires {
+                    params["expires"] = json!(expires);
+                }
+                call_tool(&client, &base_url, "html_snapshot_scrape_all", params).await
             }
         })
         .await?;
@@ -10385,18 +10437,17 @@ async fn handle_html_snapshot_grep(
             let client = client.clone();
             let base_url = base_url.to_string();
             let sel = selector.clone();
+            let expires = expires.clone();
             async move {
-                call_tool(
-                    &client,
-                    &base_url,
-                    "html_snapshot_scrape",
-                    json!({
-                        "sessionId": session_id,
-                        "field": "html",
-                        "selector": sel,
-                    }),
-                )
-                .await
+                let mut params = json!({
+                    "sessionId": session_id,
+                    "field": "html",
+                    "selector": sel,
+                });
+                if let Some(expires) = expires {
+                    params["expires"] = json!(expires);
+                }
+                call_tool(&client, &base_url, "html_snapshot_scrape", params).await
             }
         })
         .await?
@@ -10406,14 +10457,13 @@ async fn handle_html_snapshot_grep(
             let client = client.clone();
             let base_url = base_url.to_string();
             let tool_name = tool_name.to_string();
+            let expires = expires.clone();
             async move {
-                call_tool(
-                    &client,
-                    &base_url,
-                    &tool_name,
-                    json!({ "sessionId": session_id }),
-                )
-                .await
+                let mut params = json!({ "sessionId": session_id });
+                if let Some(expires) = expires {
+                    params["expires"] = json!(expires);
+                }
+                call_tool(&client, &base_url, &tool_name, params).await
             }
         })
         .await?
@@ -23077,7 +23127,97 @@ fn validate_command_semantics(
             }
         }
     }
+    if is_htmlsnapshot_read_command(command) {
+        // The backend rejects an unparsable `expires` too, but the round-trip hides *which*
+        // command's option was wrong and needs a session first — fail here instead.
+        match parsed.get("expires") {
+            None => {}
+            Some(Value::String(value)) => validate_htmlsnapshot_expires(value)?,
+            // `parse_raw_args` stores a boolean when the flag carries no value
+            // (`htmlsnapshot get --expires --all`); a non-string would be sent as-is.
+            Some(_) => {
+                return Err(
+                    "invalid --expires for htmlsnapshot: expected a duration value (e.g. --expires 1d)"
+                        .to_string(),
+                );
+            }
+        }
+    }
     Ok(())
+}
+
+/// The htmlsnapshot commands whose snapshot a caller may take from the store instead of the live
+/// page — the reads.  `htmlsnapshot` (capture) is deliberately absent: it always writes the live
+/// document, which is its whole purpose.
+fn is_htmlsnapshot_read_command(command: &str) -> bool {
+    matches!(
+        command,
+        "htmlsnapshot-get"
+            | "htmlsnapshot-get-all"
+            | "htmlsnapshot-query"
+            | "htmlsnapshot-export"
+            | "htmlsnapshot-summary"
+            | "htmlsnapshot-grep"
+            | "htmlsnapshot-inspect"
+            | "htmlsnapshot-readability"
+    )
+}
+
+/// Whether [value] is a duration the backend accepts for `--expires`.
+///
+/// The grammar is the one `LoadOptions -expires` understands — `0s`, `500ms`, `30s`, `10m`, `2h`,
+/// `1d`, or an ISO-8601 duration such as `PT30S` / `P1D` — plus a bare `0`, which is how the
+/// option's default is usually spelled.  A bare non-zero number is **rejected**: the engine's
+/// `SParser` turns anything it cannot parse (a bare `5` included) into an always-expired sentinel,
+/// so accepting it would silently mean "0s" instead of "5 seconds".
+fn is_htmlsnapshot_expires_value(value: &str) -> bool {
+    let value = value.trim();
+    if value == "0" {
+        return true;
+    }
+
+    // ISO-8601 first: such a value *starts* with a letter, so the amount+unit branch below would
+    // read `PT30S` as "unit PT30S" and reject a perfectly valid duration.  Its exact shape is
+    // validated by the backend, which parses it with `Duration.parse`.
+    let upper = value.strip_prefix('-').unwrap_or(value).to_ascii_uppercase();
+    if upper.starts_with('P') {
+        return upper.len() > 1
+            && upper
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, 'P' | 'T' | 'H' | 'M' | 'S' | 'D' | 'W' | '.'));
+    }
+
+    // `<digits><unit>`: the amount is required, the unit is one of ms/s/m/h/d.
+    match value.find(|c: char| !c.is_ascii_digit()) {
+        Some(index) if index > 0 => {
+            matches!(value[index..].to_ascii_lowercase().as_str(), "ms" | "s" | "m" | "h" | "d")
+        }
+        _ => false,
+    }
+}
+
+/// Reject an `--expires` value the backend would refuse, with the accepted grammar spelled out.
+fn validate_htmlsnapshot_expires(value: &str) -> Result<(), String> {
+    if is_htmlsnapshot_expires_value(value) {
+        return Ok(());
+    }
+    Err(format!(
+        "invalid --expires value '{}' for htmlsnapshot. Expected a duration such as 0s, 30s, 10m, 2h or 1d \
+         (or an ISO-8601 duration such as PT30S); outside `0`, a bare number is not a duration. 0s (the \
+         default) reads the live page; a positive value reads the stored snapshot while it is younger \
+         than the window.",
+        value.trim()
+    ))
+}
+
+/// Whether an `--expires` value asks the read for the **stored** snapshot (a positive window) instead
+/// of the live page.
+///
+/// Only used to pick the right guidance when a read matches nothing; a value that is not a duration at
+/// all counts as "live page", which is what the read does by default (and the backend rejects such a
+/// value anyway).
+fn htmlsnapshot_expires_is_store_only(value: &str) -> bool {
+    is_htmlsnapshot_expires_value(value) && value.chars().any(|c| matches!(c, '1'..='9'))
 }
 
 /// Validate that all required (non-optional) positional arguments are present
@@ -30256,6 +30396,88 @@ mod tests {
 
         // Other commands are not touched by this check.
         assert!(validate_command_semantics("click", &bad_method).is_ok());
+    }
+
+    #[test]
+    fn is_htmlsnapshot_expires_value_accepts_durations_and_bare_zero() {
+        for value in [
+            "0", "0s", "0m", "0d", "500ms", "30s", "10m", "2h", "1d", "30D", "PT30S", "P1D", "PT1H30M",
+            " 1d ",
+        ] {
+            assert!(
+                is_htmlsnapshot_expires_value(value),
+                "'{value}' must be accepted as a duration"
+            );
+        }
+    }
+
+    #[test]
+    fn is_htmlsnapshot_expires_value_rejects_bare_numbers_and_garbage() {
+        for value in ["", "5", "1x", "1w", "abc", "s", "-1d", "5s5", "1.5h", "--"] {
+            assert!(
+                !is_htmlsnapshot_expires_value(value),
+                "'{value}' must be rejected: a bare number is not a duration, and the engine reads a \
+                 value it cannot parse as its always-expired sentinel"
+            );
+        }
+    }
+
+    #[test]
+    fn htmlsnapshot_expires_is_store_only_only_for_positive_windows() {
+        // A positive window means "serve the stored snapshot", which needs different guidance when the
+        // read matches nothing (waiting and re-reading cannot change a stored document).
+        for value in ["1d", "30m", "500ms", "PT30S", "P1D", " 2h "] {
+            assert!(
+                htmlsnapshot_expires_is_store_only(value),
+                "'{value}' asks for the stored snapshot"
+            );
+        }
+        for value in ["0", "0s", "0m", "PT0S", "1x", "abc", ""] {
+            assert!(
+                !htmlsnapshot_expires_is_store_only(value),
+                "'{value}' is the live-page read (or an invalid value the backend rejects)"
+            );
+        }
+    }
+
+    #[test]
+    fn htmlsnapshot_expires_fast_fails_with_the_accepted_grammar() {
+        let bad = HashMap::from([("expires".to_string(), json!("1x"))]);
+        let err = validate_command_semantics("htmlsnapshot-get", &bad).unwrap_err();
+        assert!(err.contains("invalid --expires value '1x'"), "err: {err}");
+        assert!(err.contains("0s, 30s, 10m, 2h or 1d"), "err: {err}");
+
+        // A flag without a value parses as a boolean and must be rejected, not forwarded.
+        let missing_value = HashMap::from([("expires".to_string(), json!(true))]);
+        let err = validate_command_semantics("htmlsnapshot-query", &missing_value).unwrap_err();
+        assert!(err.contains("expected a duration value"), "err: {err}");
+
+        // Every read of the family is covered; `capture` deliberately is not (it always writes).
+        for command in [
+            "htmlsnapshot-get",
+            "htmlsnapshot-get-all",
+            "htmlsnapshot-query",
+            "htmlsnapshot-export",
+            "htmlsnapshot-summary",
+            "htmlsnapshot-grep",
+            "htmlsnapshot-inspect",
+            "htmlsnapshot-readability",
+        ] {
+            let good = HashMap::from([("expires".to_string(), json!("1d"))]);
+            assert!(
+                validate_command_semantics(command, &good).is_ok(),
+                "{command} must accept --expires 1d"
+            );
+            assert!(
+                validate_command_semantics(command, &bad).is_err(),
+                "{command} must reject --expires 1x"
+            );
+        }
+        assert!(validate_command_semantics("htmlsnapshot", &bad).is_ok());
+        assert!(validate_command_semantics("htmlsnapshot-capture", &bad).is_ok());
+
+        // Absent option: nothing to validate.
+        assert!(validate_command_semantics("htmlsnapshot-get", &HashMap::new()).is_ok());
     }
 
     #[test]

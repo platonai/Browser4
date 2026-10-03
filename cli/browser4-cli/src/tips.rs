@@ -48,6 +48,9 @@ const TIPS_HTMLSNAPSHOT_GET: &[Tip] = &[
         text: "Reads capture the active page first and then serve that snapshot, so `htmlsnapshot get` / `query` / `export` always see what the tab shows right now (form results, SPA updates, `eval` mutations) — no capture needed first",
     },
     Tip {
+        text: "Add `--expires 1d` (also `-expires 1d`) to a read to serve the snapshot already in the store while it is younger than a day, leaving the tab untouched — the way to work on the previous snapshot version. `--expires 0s` (the default) means the live page, and is the explicit spelling of what `-refresh` used to say",
+    },
+    Tip {
         text: "Use PowerCSS `:expr()` selectors: `htmlsnapshot get all attr \"img:expr(width>400)\" src` to get large images only",
     },
     Tip {
@@ -94,6 +97,9 @@ const TIPS_HTMLSNAPSHOT_QUERY: &[Tip] = &[
     },
     Tip {
         text: "Use `:expr()` pseudo-selectors in X-SQL CSS queries to filter by size, position, and content density",
+    },
+    Tip {
+        text: "`htmlsnapshot query --expires 1d` runs the query over the snapshot already in the store (younger than a day) instead of capturing the tab — deterministic re-runs over one fixed page version",
     },
 ];
 
@@ -403,6 +409,9 @@ const TIPS_HTMLSNAPSHOT_GREP: &[Tip] = &[
     },
     Tip {
         text: "Use `htmlsnapshot grep --selector-all \".product-card\" <pattern>` to search within every matching element, each annotated with its index",
+    },
+    Tip {
+        text: "Add `--expires 1d` to grep inside the snapshot already in the store instead of the live page — the tab is not captured, so the search runs over the previous snapshot version",
     },
 ];
 

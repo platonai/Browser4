@@ -217,6 +217,7 @@ pub fn generate_help() -> String {
     lines.push("    htmlsnapshot                             # the capture every htmlsnapshot command runs".to_string());
     lines.push("    htmlsnapshot get text \"<css>\"           # single field (captures the tab first)".to_string());
     lines.push("    htmlsnapshot query --sql @query.sql       # structured extraction (also captures first)".to_string());
+    lines.push("    htmlsnapshot get text \"<css>\" --expires 1d  # read the stored snapshot instead (tab untouched)".to_string());
     lines.push("  Form interaction:".to_string());
     lines.push("    fill <ref> \"<text>\" --submit              # fill + press Enter".to_string());
     lines.push("  Handle dialogs (two-step):".to_string());
@@ -1984,6 +1985,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - ",
             4,
         ));
+        lines.push(wrap_text(
+            "Every read accepts --expires <dur> (also -expires, default 0s) — the same meaning as the load option: how old the stored snapshot of the active page may be before the read takes a new one. `--expires 0s` never reuses a stored copy, so the read captures the page the tab shows right now; a positive value (e.g. `--expires 1d`) serves the stored snapshot while it is younger than that and leaves the tab untouched, which is how you work on the PREVIOUS snapshot version. When the store has nothing, or its copy is older than the window, the read captures the live page as usual. Prefer --expires 0s over the older -refresh spelling: it says what it means and never implies the page is re-fetched.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "A read of a URL the tab does not show (`readability <url>`, `query <url>`) is not governed by --expires: that target is already read from the store, or loaded read-only when the store has nothing, and is never captured.",
+            "  - ",
+            4,
+        ));
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  # Capture a HTML snapshot and display metadata".to_string());
@@ -2019,6 +2030,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Get full HTML (disable pagination)".to_string());
         lines.push("  browser4-cli htmlsnapshot get html --all".to_string());
+        lines.push(String::new());
+        lines.push("  # Read the snapshot already in the store instead of the live page".to_string());
+        lines.push("  browser4-cli htmlsnapshot get text \"h1\" --expires 1d      # stored copy if younger than 1 day".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --expires 30m".to_string());
         lines.push(String::new());
         lines.push("  # Run an X-SQL query against the current page URL".to_string());
         lines.push(wrap_text(

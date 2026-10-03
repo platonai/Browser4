@@ -447,6 +447,134 @@ private val createdSessions = mutableListOf<String>()
     }
 
     @Test
+    @DisplayName("1i — expires=1d reads the stored snapshot; the default read reads the live page")
+    fun test1i_expiresReadsTheStoredSnapshotInsteadOfTheLivePage() {
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        // File the live document in the store: after this capture the store's copy of the tab's url is
+        // the page as it was at this moment — and it is young, which is what `expires` weighs.
+        assertNotError(callTool("html_snapshot_capture", mapOf("sessionId" to sessionId)))
+        val storedTitle = scrapeField(sessionId, "text", "#productTitle")
+        assertTrue(storedTitle.isNotBlank(), "the captured page must have a title, got: '$storedTitle'")
+
+        // Mutate the LIVE DOM only.  Nothing was navigated and nothing was re-fetched, so only the tab
+        // differs from the stored snapshot now — exactly the difference `expires` decides between.
+        val marker = "EXPIRES-READ-${System.currentTimeMillis()}"
+        assertNotError(
+            callTool(
+                "browser_evaluate",
+                mapOf(
+                    "sessionId" to sessionId,
+                    "expression" to "document.querySelector('#productTitle').textContent = '$marker'"
+                )
+            )
+        )
+
+        // expires=1d: the stored snapshot is minutes old, so the read serves it and must NOT capture —
+        // the marker cannot appear, because the tab was never serialized.
+        for (window in listOf("1d", "30m")) {
+            val fromStore = callTool(
+                "html_snapshot_scrape",
+                mapOf(
+                    "sessionId" to sessionId,
+                    "field" to "text",
+                    "selector" to "#productTitle",
+                    "expires" to window,
+                )
+            )
+            assertNotError(fromStore)
+            val value = textContent(fromStore)
+            assertFalse(
+                value.contains(marker),
+                "expires=$window must serve the stored snapshot, not the live page — got: $value"
+            )
+            assertTrue(
+                value.contains(storedTitle),
+                "expires=$window must serve the captured snapshot, got: $value"
+            )
+        }
+
+        // The tab is untouched, so the live page still carries the mutation.
+        val liveTitle = scrapeField(sessionId, "text", "#productTitle")
+        assertTrue(
+            liveTitle.contains(marker),
+            "a store-only read must not navigate or re-serialize the tab, got: $liveTitle"
+        )
+
+        // And the default (expires=0s) reads the live page: it captures the tab first, so the marker
+        // that `expires=1d` could not see is right there — and the stored copy has been replaced.
+        val afterDefaultRead = callTool(
+            "html_snapshot_scrape",
+            mapOf("sessionId" to sessionId, "field" to "text", "selector" to "#productTitle")
+        )
+        assertNotError(afterDefaultRead)
+        assertTrue(
+            textContent(afterDefaultRead).contains(marker),
+            "the default read must capture the live page, got: ${textContent(afterDefaultRead)}"
+        )
+    }
+
+    @Test
+    @DisplayName("1j — a read with expires=0s is the explicit spelling of the live-page read")
+    fun test1j_expiresZeroIsTheLivePageRead() {
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        assertNotError(callTool("html_snapshot_capture", mapOf("sessionId" to sessionId)))
+
+        val marker = "EXPIRES-ZERO-${System.currentTimeMillis()}"
+        assertNotError(
+            callTool(
+                "browser_evaluate",
+                mapOf(
+                    "sessionId" to sessionId,
+                    "expression" to "document.querySelector('#productTitle').textContent = '$marker'"
+                )
+            )
+        )
+
+        // `-expires 0s` says "no stored copy is current" without the `-refresh` wording, which reads
+        // like a page reload — the capture this read runs never reloads anything.
+        val result = callTool(
+            "html_snapshot_scrape",
+            mapOf(
+                "sessionId" to sessionId,
+                "field" to "text",
+                "selector" to "#productTitle",
+                "expires" to "0s",
+            )
+        )
+        assertNotError(result)
+        assertTrue(
+            textContent(result).contains(marker),
+            "expires=0s must read the live page, got: ${textContent(result)}"
+        )
+    }
+
+    @Test
+    @DisplayName("1k — an unparsable expires value fails the read instead of silently meaning 0s")
+    fun test1k_anInvalidExpiresValueIsRejectedByName() {
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+
+        // A bare number is not a duration: `LoadOptions` reads `5` as its always-expired sentinel, so
+        // accepting it would silently mean "the live page" instead of "5 seconds".
+        val response = callTool(
+            "html_snapshot_scrape",
+            mapOf(
+                "sessionId" to sessionId,
+                "field" to "text",
+                "selector" to "#productTitle",
+                "expires" to "5",
+            )
+        )
+        assertTrue(response.isError, "an invalid expires value must fail the read")
+        val message = textContent(response)
+        assertTrue(message.contains("Invalid expires value '5'"), "got: $message")
+        assertTrue(message.contains("30s, 10m, 2h or 1d"), "the message must spell out the grammar: $message")
+    }
+
+    @Test
     @DisplayName("1h — A read of another URL loads it read-only and leaves the active tab alone")
     fun test1h_aReadOfAnotherUrlDoesNotTouchTheActiveTab() {
         val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
