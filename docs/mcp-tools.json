@@ -549,6 +549,24 @@
     "outputSchema" : "{\"type\":\"object\",\"required\":[\"saved\",\"domain\",\"outcome\",\"confidence\",\"retrieval_tier\"],\"properties\":{\"saved\":{\"type\":\"boolean\"},\"domain\":{\"type\":\"string\"},\"intent\":{\"type\":\"string\"},\"task_type\":{\"type\":\"string\"},\"outcome\":{\"type\":\"string\"},\"trace_path\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\"},\"retrieval_tier\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"},\"facts_merged\":{\"type\":\"boolean\"},\"facts_status\":{\"type\":\"string\"},\"facts_rejected\":{\"type\":\"boolean\"},\"facts_message\":{\"type\":\"string\"}}}"
   }, {
     "domain" : "html_snapshot",
+    "method" : "algorithms",
+    "mcpNames" : [ "html_snapshot_algorithms" ],
+    "signature" : "html_snapshot.algorithms(sessionId: String? = null)",
+    "description" : "List the page summary algorithms available to html_snapshot.summary as a JSON array. Each entry has id, displayName, description, version, builtin and default. The built-in 'wpsi' algorithm is always present; other algorithms are contributed by installed plugins; default marks the effective server-side default (overridable via browser4.htmlsnapshot.summary.algorithm). Does not require a session or an active page.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "sessionId",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "sessionId: String? = null"
+    } ],
+    "examples" : [ {
+      "title" : "List available summary algorithms",
+      "expectsError" : false
+    } ]
+  }, {
+    "domain" : "html_snapshot",
     "method" : "capture",
     "mcpNames" : [ "html_snapshot_capture" ],
     "signature" : "html_snapshot.capture(sessionId: String)",
@@ -845,8 +863,8 @@
     "domain" : "html_snapshot",
     "method" : "summary",
     "mcpNames" : [ "html_snapshot_summary" ],
-    "signature" : "html_snapshot.summary(sessionId: String, expires: String = 0s)",
-    "description" : "Generate a page summary including title, statistics, and detected link groups from a FRESH snapshot of the active page (the live tab is captured first, so the summary is the page as it is now). Pass expires=1d to summarize the stored snapshot instead when it is younger than that.",
+    "signature" : "html_snapshot.summary(sessionId: String, expires: String = 0s, algorithm: String? = null)",
+    "description" : "Generate a compressed page summary from a FRESH snapshot of the active page (the live tab is captured first, so the summary is the page as it is now). The default 'wpsi' algorithm returns YAML containing page type, landmarks, scored key content nodes with selector hints, repeated lists, link groups, tables and statistics. Pass expires=1d to summarize the stored snapshot instead when it is younger than that. Use the algorithm argument to select a plugin-contributed summary algorithm.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "sessionId",
@@ -859,11 +877,25 @@
       "required" : false,
       "default" : "0s",
       "description" : "How old a stored snapshot of the ACTIVE page may be before the read replaces it, e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. 0s never reuses a stored copy, so the read captures the live page; a positive value serves the stored snapshot while it is younger than the window and captures only when it is older or missing. Used to work on the previous snapshot version without touching the tab."
+    }, {
+      "name" : "algorithm",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Summary algorithm id. Defaults to the server-configured default ('wpsi' unless overridden via browser4.htmlsnapshot.summary.algorithm). Additional algorithms can be contributed by plugins; list them with the algorithms method (CLI: htmlsnapshot algorithms)."
     } ],
     "examples" : [ {
       "title" : "Summarise the current page",
       "args" : {
         "sessionId" : "<session-id>"
+      },
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Summarise with a specific algorithm",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "algorithm" : "wpsi"
       },
       "expectsError" : false,
       "executable" : true
