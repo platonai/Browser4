@@ -997,11 +997,21 @@ function Finish-TestSession {
             Write-Host ''
         }
 
-        # Write structured failure report to disk
-        Write-FailureReport
+        # Write structured failure report to disk.
+        #
+        # NOTE: every call below is explicitly discarded with `$null =`.
+        # `Get-FailureCount` already drives the exit code, but these helpers
+        # return values of their own (Write-FailureReport returns the report
+        # path, Invoke-CopilotAnalysis the analysis text).  Letting them reach
+        # the pipeline makes THIS function return an array, and a scenario that
+        # does `$code = Finish-TestSession ...; exit $code` then runs
+        # `exit @('…\\failures.json', 1)` — which PowerShell silently turns into
+        # exit code 0.  That is how a scenario with failed commands was being
+        # counted as a pass by multi-scenarios.ps1 / test-production.ps1.
+        $null = Write-FailureReport
 
         # Copilot analysis
-        Invoke-CopilotAnalysis -ExtraPrompt $ExtraCopilotPrompt
+        $null = Invoke-CopilotAnalysis -ExtraPrompt $ExtraCopilotPrompt
     } else {
         Write-Host "`n  ✅ ALL $total COMMANDS PASSED" -ForegroundColor Green
     }
@@ -1021,8 +1031,10 @@ function Finish-TestSession {
                 $durationSec = [math]::Round((Get-Date).Subtract($script:TestStartTime).TotalSeconds, 1)
                 $failureReportPath = Join-Path $script:LogDir 'failures.json'
                 $failureReportParam = if (Test-Path $failureReportPath) { $failureReportPath } else { '' }
-                Update-TestTraceSystem -RepoRoot $repoRoot
-                Update-TestTraceResult -RepoRoot $repoRoot -TestKey $testKey `
+                # Discarded for the same reason as the helpers above: this
+                # function must return the exit code and nothing else.
+                $null = Update-TestTraceSystem -RepoRoot $repoRoot
+                $null = Update-TestTraceResult -RepoRoot $repoRoot -TestKey $testKey `
                     -Status $(if ($exitCode -eq 0) { 'pass' } else { 'fail' }) `
                     -ExitCode $exitCode -DurationSec $durationSec `
                     -LogDir $script:LogDir -FailureReport $failureReportParam
