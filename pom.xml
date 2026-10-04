@@ -753,7 +753,9 @@
         <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
 
         <spring-boot.version>4.0.6</spring-boot.version>
-        <browser4-base.version>4.11.23</browser4-base.version>
+        <!-- browser4-base.version is declared in browser4-dependencies, next to the pulsar-bom
+             import that consumes it.  Do not re-declare it here: this pom used to carry a second
+             copy that nothing read, so bumping it changed nothing. -->
 
         <mcp-sdk.version>0.8.1</mcp-sdk.version>
         <git-commit-id-maven-plugin.version>9.0.1</git-commit-id-maven-plugin.version>

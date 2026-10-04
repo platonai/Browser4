@@ -3,6 +3,7 @@ package ai.platon.pulsar.rest.api.service
 import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.*
 import ai.platon.pulsar.common.LinkExtractors
+import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.common.ai.llm.PromptTemplateLoader
@@ -21,6 +22,8 @@ class ConversationService(
     val sessionManager: PulsarSessionManager,
     val loadService: LoadService,
 ) {
+    private val logger = getLogger(ConversationService::class)
+
     val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
 
     suspend fun chat(prompt: String): String {
@@ -65,7 +68,21 @@ class ConversationService(
 
         val url = urls.first()
 
-        val json = convertPlainCommandToJSON(request, url)
+        // A plain command that only LOOKS like a URL command (e.g. an agent
+        // task mentioning dotted package names or file paths) must fall back
+        // to agent execution instead of failing the whole submission.
+        val json = try {
+            convertPlainCommandToJSON(request, url)
+        } catch (e: Exception) {
+            // Name the url and the reason: this fallback is by design (a command that only *looks*
+            // like a url command must still reach the agent), but "Failed to normalize plain command
+            // as URL request" with no url in it cannot be told apart from a real extraction bug.
+            logger.warn(
+                "Failed to convert the plain command as a url request for <{}> (falling back to agent execution): {}",
+                url, e.message
+            )
+            null
+        }
         if (json.isNullOrBlank()) {
             return null
         }
@@ -76,7 +93,9 @@ class ConversationService(
     }
 
     suspend fun convertPlainCommandToJSON(plainCommand: String, url: String): String? {
-        require(URLUtils.isStandard(url)) { "URL must not be blank" }
+        // The message used to say "URL must not be blank" for a url that is not blank but not a
+        // standard url either, which sends the reader looking for the wrong problem.
+        require(URLUtils.isStandard(url)) { "Not a standard url: <$url>" }
 
         // Replace the URL in the request with a placeholder, so the result from the LLM can be cached.
         val processedRequest = plainCommand.replace(url, PLACEHOLDER_URL)

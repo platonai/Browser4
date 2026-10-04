@@ -256,6 +256,23 @@ class CrawlLedgerTest {
     }
 
     @Test
+    @DisplayName("a page served under another URL settles its submitted identity too")
+    fun recordSuccessSettlesTheSubmittedIdentity() {
+        val ledger = CrawlLedger("t-served-elsewhere")
+        assertTrue(ledger.submit("https://example.com/a", 0))
+
+        // The document was served at /b (a redirect, or a `<base href>`), so the row reports /b
+        // while the round queued /a.  Settling only the served url left /a in outstanding() beside
+        // its own successful row — breaking `pages + failed + outstanding == pagesExpected` — and
+        // made a resumed crawl fetch it a second time.
+        ledger.recordSuccess("https://example.com/b", "https://example.com/a")
+
+        assertTrue(ledger.outstanding().isEmpty(), "no URL may be recorded and outstanding at once")
+        assertTrue(ledger.isRecordedSuccess("https://example.com/a"))
+        assertTrue(ledger.isRecordedSuccess("https://example.com/b"))
+    }
+
+    @Test
     @DisplayName("outstanding URLs are reportable when the round is abandoned")
     fun outstandingListsUrlsThatNeverSettled() {
         val ledger = CrawlLedger("t-timeout")

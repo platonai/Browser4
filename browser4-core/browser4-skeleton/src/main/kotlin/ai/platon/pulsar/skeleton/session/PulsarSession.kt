@@ -304,10 +304,19 @@ interface PulsarSession : AutoCloseable {
     /**
      * Normalize a url.
      *
+     * **This is the one definition of "the same resource":** two urls are one page exactly when this
+     * returns the same string, and the result is what the page store, the page cache and every other
+     * url-keyed lookup use.  If two spellings of one page do not agree here, extend *this* policy
+     * rather than keying something by a different spelling somewhere else.
+     *
+     * It is an identity, **not an address**: normalization drops the fragment — and on request the
+     * query and the trailing argument list — so navigating by it would break a same-document jump.
+     * Navigate by the url or href the caller gave (see [NormURL.href]); normalize to look a page up.
+     *
      * @param url The url to normalize
      * @param options The LoadOptions applied to the url
      * @param toItemOption If the LoadOptions is converted to item load options
-     * @return The normalized url
+     * @return The normalized url — an identity, not an address
      * */
     fun normalize(url: String, options: LoadOptions, toItemOption: Boolean = false): NormURL
 

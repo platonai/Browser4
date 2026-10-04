@@ -156,6 +156,29 @@ class SwarmControllerTest {
         )
     }
 
+    @Test
+    fun submitWithMalformedUrlIsRefusedBeforeATaskIdIsHandedOut() {
+        // `checkSql` only checks *syntax*, and a url is syntactically valid inside
+        // `load_and_select('...')`, so the "empty host" family used to come back as a uuid and then
+        // fail in the job — or fetch the fetcher's default search-engine url for the page asked for.
+        //
+        // Note this only sees payloads that *start* like a url (`startsWith("http")`): a typo'd
+        // scheme such as `htps://exmple.com` is not treated as a url payload at all and is refused
+        // by `checkSql` instead, with the same status — it is the space-in-the-host family
+        // (`http://exa mple.com`) that neither check can see, because `splitUrlArgs` truncates the
+        // payload at the first whitespace.
+        val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
+        val swarmService = Mockito.mock(SwarmService::class.java)
+        val controller = SwarmController(sessionManager, swarmService)
+
+        val exception = assertThrows<IllegalArgumentException> {
+            controller.submit("http://")
+        }
+
+        assertEquals("Malformed url: <http://>", exception.message)
+        verify(swarmService, never()).submit(any<ScrapeRequest>(), anyOrNull())
+    }
+
     // -----------------------------------------------------------------
     // submit() batch id tests
     // -----------------------------------------------------------------
