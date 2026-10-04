@@ -154,6 +154,17 @@ const CURRENT_TAG_FILE_NAME: &str = "current.tag";
 const BROWSER4_LIB_DIR_NAME: &str = "lib";
 /// Name of the directory inside each versioned install that holds the bundled JRE.
 const BROWSER4_RUNTIME_DIR_NAME: &str = "runtime";
+/// Name of the directory inside each versioned install that holds launcher scripts.
+const BROWSER4_BIN_DIR_NAME: &str = "bin";
+/// Name of the directory inside each versioned install that holds plugin JARs.
+///
+/// Load-bearing: the bundled server enhances its classpath with
+/// `Path.of("plugins")` relative to its working directory — which the CLI sets
+/// to the install dir — so a plugin shipped in the archive must be copied here
+/// or the backend it provides reports itself as not installed.
+const BROWSER4_PLUGINS_DIR_NAME: &str = "plugins";
+/// Build manifest shipped at the root of every runtime bundle.
+const BROWSER4_BUNDLE_MANIFEST_FILE_NAME: &str = "runtime-bundle.json";
 /// Subdirectory of the runtime data dir for cached downloads.
 const DOWNLOADS_DIR_NAME: &str = "downloads";
 const BROWSER4_MAIN_CLASS: &str = "ai.platon.pulsar.apps.Browser4BundleApplicationKt";
@@ -3521,6 +3532,50 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Copy the optional — but load-bearing — top-level members of a freshly
+/// extracted bundle into an install directory (or its staging area).
+///
+/// `runtime/` and `lib/` are mandatory and validated by the caller.  The
+/// members handled here are not validated, because older bundles may
+/// legitimately lack them, but they must never be dropped silently:
+///
+/// * `plugins/` — `Browser4BundleApplication` runs
+///   `PluginClasspathEnhancer.enhance(Path.of("plugins"))` with a path relative
+///   to the server's working directory, which the CLI sets to the install dir.
+///   A plugin shipped in the archive but not copied here is simply absent at
+///   runtime, so the backend it provides answers "not installed": v4.14.0-rc.7
+///   shipped `plugins/browser4-swarm-*.jar` and lost it exactly this way,
+///   making every `/api/swarm/**` call return `503 Swarm not installed`.
+/// * `bin/` — the launcher scripts (`start.sh`, `start.bat`).
+/// * `runtime-bundle.json` — the bundle build manifest, kept so the install
+///   directory stays self-describing.
+///
+/// Returns the names that were actually copied.
+fn copy_optional_bundle_members(
+    extracted_root: &Path,
+    target_dir: &Path,
+) -> Result<Vec<String>, String> {
+    let mut copied = Vec::new();
+
+    for name in [BROWSER4_BIN_DIR_NAME, BROWSER4_PLUGINS_DIR_NAME] {
+        let source = extracted_root.join(name);
+        if !source.is_dir() {
+            continue;
+        }
+        copy_dir_recursive(&source, &target_dir.join(name))?;
+        copied.push(name.to_string());
+    }
+
+    let manifest = extracted_root.join(BROWSER4_BUNDLE_MANIFEST_FILE_NAME);
+    if manifest.is_file() {
+        fs::copy(&manifest, target_dir.join(BROWSER4_BUNDLE_MANIFEST_FILE_NAME))
+            .map_err(|e| e.to_string())?;
+        copied.push(BROWSER4_BUNDLE_MANIFEST_FILE_NAME.to_string());
+    }
+
+    Ok(copied)
+}
+
 fn write_installed_browser4_runtime_metadata(
     metadata: &InstalledBrowser4RuntimeMetadata,
 ) -> Result<(), String> {
@@ -3545,7 +3600,6 @@ fn commit_installed_browser4_runtime(
     let install_dir = versioned_install_dir(&metadata.tag);
     let source_runtime = extracted_root.join(BROWSER4_RUNTIME_DIR_NAME);
     let source_lib = extracted_root.join(BROWSER4_LIB_DIR_NAME);
-    let source_bin = extracted_root.join("bin");
 
     if !source_runtime.is_dir() {
         return Err(format!(
@@ -3574,12 +3628,11 @@ fn commit_installed_browser4_runtime(
 
     let stage_runtime = staging_dir.join(BROWSER4_RUNTIME_DIR_NAME);
     let stage_lib = staging_dir.join(BROWSER4_LIB_DIR_NAME);
-    let stage_bin = staging_dir.join("bin");
     copy_dir_recursive(&source_runtime, &stage_runtime)?;
     copy_dir_recursive(&source_lib, &stage_lib)?;
-    if source_bin.is_dir() {
-        copy_dir_recursive(&source_bin, &stage_bin)?;
-    }
+    // bin/, plugins/ and the bundle manifest are optional, but a plugin
+    // shipped in the archive MUST land here — see copy_optional_bundle_members.
+    copy_optional_bundle_members(extracted_root, &staging_dir)?;
     // Write the metadata file into staging so the directory is fully
     // populated before it becomes visible.
     let meta_path = staging_dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME);
@@ -3608,13 +3661,10 @@ fn commit_installed_browser4_runtime(
         let _ = remove_path_if_exists(&staging_dir);
         let target_runtime = install_dir.join(BROWSER4_RUNTIME_DIR_NAME);
         let target_lib = install_dir.join(BROWSER4_LIB_DIR_NAME);
-        let target_bin = install_dir.join("bin");
         fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
         copy_dir_recursive(&source_runtime, &target_runtime)?;
         copy_dir_recursive(&source_lib, &target_lib)?;
-        if source_bin.is_dir() {
-            copy_dir_recursive(&source_bin, &target_bin)?;
-        }
+        copy_optional_bundle_members(extracted_root, &install_dir)?;
         write_installed_browser4_runtime_metadata(&metadata)?;
         // Also save release metadata in the fallback path.
         if let Some(info) = release_info {
@@ -9244,6 +9294,91 @@ mod tests {
         // No metadata file — is_runtime_bundle_root should still detect the bundle.
         assert!(is_runtime_bundle_root(tmp.path()));
         assert_eq!(resolve_runtime_bundle_root(tmp.path()).unwrap(), tmp.path());
+    }
+
+    /// Regression test for the v4.14.0-rc.7 packaging defect: the installer
+    /// copied only `runtime/`, `lib/` and `bin/` out of the archive and
+    /// silently dropped `plugins/`.  The published rc.7 bundle ships
+    /// `plugins/browser4-swarm-4.14.0-rc.7.jar`, so every runtime it installed
+    /// lost the swarm backend and `/api/swarm/**` answered
+    /// `503 Swarm not installed`.
+    #[test]
+    fn test_commit_installed_runtime_carries_plugins_directory() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let tag = "v4.14.0-rc.7";
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        // Lay out a bundle exactly like the published archive.
+        let extracted_root = tmp.path().join("extracted");
+        let lib_dir = extracted_root.join(BROWSER4_LIB_DIR_NAME);
+        let runtime_bin_dir = extracted_root
+            .join(BROWSER4_RUNTIME_DIR_NAME)
+            .join(BROWSER4_BIN_DIR_NAME);
+        let plugins_dir = extracted_root.join(BROWSER4_PLUGINS_DIR_NAME);
+        let bin_dir = extracted_root.join(BROWSER4_BIN_DIR_NAME);
+        fs::create_dir_all(&lib_dir).unwrap();
+        fs::create_dir_all(&runtime_bin_dir).unwrap();
+        fs::create_dir_all(&plugins_dir).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+        write(lib_dir.join("Browser4Bundle.jar"), "jar").unwrap();
+        write(
+            runtime_bin_dir.join(browser4_java_executable_name()),
+            "java",
+        )
+        .unwrap();
+        write(
+            plugins_dir.join("browser4-swarm-4.14.0-rc.7.jar"),
+            "jar",
+        )
+        .unwrap();
+        write(bin_dir.join("start.sh"), "sh").unwrap();
+        write(extracted_root.join(BROWSER4_BUNDLE_MANIFEST_FILE_NAME), "{}").unwrap();
+
+        let metadata = InstalledBrowser4RuntimeMetadata {
+            tag: tag.to_string(),
+            asset_name: "browser4-bundle-runtime-windows-x64.zip".to_string(),
+            download_url:
+                "https://example.com/releases/download/v4.14.0-rc.7/bundle-windows-x64.zip"
+                    .to_string(),
+            installed_at: "2026-10-03T00:00:00Z".to_string(),
+        };
+        commit_installed_browser4_runtime(&extracted_root, metadata, None).unwrap();
+
+        let install_dir = versioned_install_dir(tag);
+        assert!(
+            install_dir
+                .join(BROWSER4_PLUGINS_DIR_NAME)
+                .join("browser4-swarm-4.14.0-rc.7.jar")
+                .is_file(),
+            "plugins/ must survive the install — dropping it makes every \
+             bundled plugin (notably the swarm backend) unavailable"
+        );
+        assert!(install_dir.join(BROWSER4_BIN_DIR_NAME).join("start.sh").is_file());
+        assert!(install_dir
+            .join(BROWSER4_BUNDLE_MANIFEST_FILE_NAME)
+            .is_file());
+        assert!(install_dir
+            .join(BROWSER4_LIB_DIR_NAME)
+            .join("Browser4Bundle.jar")
+            .is_file());
+    }
+
+    #[test]
+    fn test_copy_optional_bundle_members_tolerates_bundle_without_optional_members() {
+        // Older bundles may ship neither plugins/ nor a manifest; the copy
+        // must stay a no-op rather than fail the install.
+        let tmp = test_temp_dir();
+        let extracted_root = tmp.path().join("extracted");
+        fs::create_dir_all(&extracted_root).unwrap();
+        let target = tmp.path().join("install");
+        fs::create_dir_all(&target).unwrap();
+
+        let copied = copy_optional_bundle_members(&extracted_root, &target).unwrap();
+
+        assert!(copied.is_empty(), "expected nothing to copy, got {copied:?}");
+        assert!(!target.join(BROWSER4_PLUGINS_DIR_NAME).exists());
+        assert!(!target.join(BROWSER4_BUNDLE_MANIFEST_FILE_NAME).exists());
     }
 
     #[test]
