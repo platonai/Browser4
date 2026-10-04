@@ -147,7 +147,14 @@ impl Default for CliState {
     fn default() -> Self {
         Self {
             session_id: None,
-            base_url: "http://localhost:8182".to_string(),
+            // The documented production port.  This used to be 8182 — the
+            // legacy `browser4-resources` value — which meant a fresh install
+            // with no `config.json` started its backend on a port that neither
+            // the docs, the Docker image, the bundle's own
+            // `application-bundle.properties` (18182) nor `extract_port()`'s
+            // fallback agreed with.  Dev checkouts are unaffected: they
+            // allocate their own port from `DEV_SERVER_PORT_START` (8282).
+            base_url: "http://localhost:18182".to_string(),
             active_selector: None,
             session_name: None,
             last_mouse_position: None,
@@ -1730,7 +1737,11 @@ mod tests {
     fn test_read_state_missing_file() {
         let tmp = test_temp_dir();
         let state = read_state(Some(tmp.path()), None);
-        assert_eq!(state.base_url, "http://localhost:8182");
+        // A missing state file yields the default endpoint.  Compare against
+        // the default rather than a second hardcoded literal so the two can
+        // never drift apart (see
+        // test_default_base_url_uses_the_documented_production_port).
+        assert_eq!(state.base_url, CliState::default().base_url);
         assert!(state.session_id.is_none());
     }
 
@@ -1742,6 +1753,20 @@ mod tests {
         assert!(state_file(tmp.path(), None).exists());
         clear_state(Some(tmp.path()), None);
         assert!(!state_file(tmp.path(), None).exists());
+    }
+
+    /// A fresh install with no `config.json` launches its backend on this
+    /// port, so the docs, the Docker image, the bundle's own
+    /// `application-bundle.properties` and `daemon::extract_port()`'s fallback
+    /// all depend on it staying at the documented production value.
+    #[test]
+    fn test_default_base_url_uses_the_documented_production_port() {
+        assert_eq!(
+            CliState::default().base_url,
+            "http://localhost:18182",
+            "default backend port must stay 18182 (AGENTS.md, \
+             docs/metadata-files.md, application-bundle.properties, Dockerfile)"
+        );
     }
 
     #[test]
