@@ -168,14 +168,15 @@ class SwarmControllerTest {
         // (`http://exa mple.com`) that neither check can see, because `splitUrlArgs` truncates the
         // payload at the first whitespace.
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val controller = newController(sessionManager)
+        val swarmService = Mockito.mock(SwarmService::class.java)
+        val controller = SwarmController(sessionManager, swarmService)
 
         val exception = assertThrows<IllegalArgumentException> {
             controller.submit("http://")
         }
 
         assertEquals("Malformed url: <http://>", exception.message)
-        verify(facade, never()).submit(any<ScrapeRequest>(), anyOrNull())
+        verify(swarmService, never()).submit(any<ScrapeRequest>(), anyOrNull())
     }
 
     // -----------------------------------------------------------------
