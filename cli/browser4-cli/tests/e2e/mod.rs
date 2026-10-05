@@ -4586,6 +4586,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "eval",
         // test_cdp_command
         "cdp",
+        // test_tool_call_command
+        "tool-call",
         // test_htmlsnapshot_*
         "htmlsnapshot",
         "htmlsnapshot-capture",
