@@ -116,6 +116,80 @@ class BrowserToolExecutorTest {
     }
 
     @Test
+    @DisplayName("closeTab by GUID succeeds when the tab is gone on the first check")
+    fun closeTabByGuidVerifiedGoneImmediately() = runBlocking {
+        val executor = BrowserToolExecutor(
+            closeVerifyPollMs = 10L,
+            closeVerifyPollsPerAttempt = 2,
+            closeMaxAttempts = 2,
+        )
+        val target = mockk<AbstractWebDriver>(relaxed = true)
+        every { target.guid } returns "TAB-GUID"
+        every { browser.findDriverByGUID("TAB-GUID") } returns target
+        // Relaxed listDrivers() returns an empty list: the close took effect.
+
+        val result = executor.callFunctionOn(
+            ToolCall("browser", "closeTab", mutableMapOf("tabId" to "TAB-GUID")),
+            browser
+        )
+
+        assertNull(result.exception)
+        verify(exactly = 1) { browser.destroyDriver(target) }
+    }
+
+    @Test
+    @DisplayName("closeTab retries when page recovery resurrects the tab, then succeeds")
+    fun closeTabRetriesAfterResurrection() = runBlocking {
+        val executor = BrowserToolExecutor(
+            closeVerifyPollMs = 10L,
+            closeVerifyPollsPerAttempt = 2,
+            closeMaxAttempts = 3,
+        )
+        val target = mockk<AbstractWebDriver>(relaxed = true)
+        every { target.guid } returns "TAB-GUID"
+        every { browser.findDriverByGUID("TAB-GUID") } returns target
+        // Attempt 0's two polls still see the tab (close not committed yet);
+        // the first poll of attempt 1 (after the retry destroy) sees it gone.
+        coEvery { browser.listDrivers() } returnsMany listOf(
+            listOf(target), listOf(target), emptyList()
+        )
+
+        val result = executor.callFunctionOn(
+            ToolCall("browser", "closeTab", mutableMapOf("tabId" to "TAB-GUID")),
+            browser
+        )
+
+        assertNull(result.exception)
+        // Initial destroy plus one retry against the resurrected driver.
+        verify(exactly = 2) { browser.destroyDriver(target) }
+    }
+
+    @Test
+    @DisplayName("closeTab fails loudly when the tab survives every attempt")
+    fun closeTabFailsLoudlyWhenTabSurvives() = runBlocking {
+        val executor = BrowserToolExecutor(
+            closeVerifyPollMs = 10L,
+            closeVerifyPollsPerAttempt = 2,
+            closeMaxAttempts = 2,
+        )
+        val target = mockk<AbstractWebDriver>(relaxed = true)
+        every { target.guid } returns "TAB-GUID"
+        every { browser.findDriverByGUID("TAB-GUID") } returns target
+        coEvery { browser.listDrivers() } returns listOf(target)
+
+        val result = executor.callFunctionOn(
+            ToolCall("browser", "closeTab", mutableMapOf("tabId" to "TAB-GUID")),
+            browser
+        )
+
+        assertNotNull(result.exception)
+        val message = result.exception?.cause?.message.orEmpty() + result.exception?.message.orEmpty()
+        assertTrue(message.contains("TAB-GUID"), "failure must name the tab: $message")
+        // One destroy per attempt — never reported as a phantom success.
+        verify(exactly = 2) { browser.destroyDriver(target) }
+    }
+
+    @Test
     @DisplayName("switchTab records the switch on the browser even when bringToFront fails")
     fun switchTabRecordsSwitchWhenBringToFrontFails() = runBlocking {
         val tabDriver = mockk<AbstractWebDriver>(relaxed = true)
