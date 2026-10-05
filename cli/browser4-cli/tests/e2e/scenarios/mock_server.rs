@@ -1536,7 +1536,10 @@ pub(super) fn test_open_reconnect_warns_when_display_flag_ignored(ctx: &mut E2EC
         first_open.stderr
     );
 
-    let second_open = run_command(
+    // The display mode is fixed at creation and the first open used the
+    // default (headless), so asking for --headless again is a no-op that must
+    // stay silent — warning here would be noise on every reconnect.
+    let matching_open = run_command(
         ctx,
         &[
             "open",
@@ -1546,18 +1549,44 @@ pub(super) fn test_open_reconnect_warns_when_display_flag_ignored(ctx: &mut E2EC
         ],
     );
     assert!(
-        second_open
+        matching_open
             .stdout
             .contains("Using existing session"),
         "Expected second open to reconnect to the existing session:\n{}",
-        second_open.stdout
+        matching_open.stdout
     );
     assert!(
-        second_open
+        !matching_open
             .stderr
-            .contains("--headless ignored: reconnecting to existing session"),
-        "Expected a stderr warning that --headless was ignored on reconnect:\n{}",
-        second_open.stderr
+            .contains("ignored: reconnecting to existing session"),
+        "Expected no warning when the requested mode matches the active one:\n{}",
+        matching_open.stderr
+    );
+
+    // A flag that DIFFERS from the active mode is dropped at reconnect — the
+    // mode cannot change without a new session — so it must be surfaced.
+    let mismatched_open = run_command(
+        ctx,
+        &[
+            "open",
+            "--headed",
+            "https://example.com/",
+            OPEN_PROFILE_MODE_ARG,
+        ],
+    );
+    assert!(
+        mismatched_open
+            .stdout
+            .contains("Using existing session"),
+        "Expected third open to reconnect to the existing session:\n{}",
+        mismatched_open.stdout
+    );
+    assert!(
+        mismatched_open
+            .stderr
+            .contains("--headed ignored: reconnecting to existing session"),
+        "Expected a stderr warning that --headed was ignored on reconnect:\n{}",
+        mismatched_open.stderr
     );
 
     // No new session should have been created by the reconnect.
@@ -4090,9 +4119,9 @@ pub(super) fn test_crawl_foreground(ctx: &mut E2ECtx) {
         "Expected submission confirmation in:\n{}",
         stdout
     );
+    // The completion line is pluralized: one page reads "1 page found.".
     assert!(
-        stdout.contains("Crawl completed. 1 pages found.")
-            || stdout.contains("Crawl completed. 1 pages found"),
+        stdout.contains("Crawl completed. 1 page found."),
         "Expected foreground completion message in:\n{}",
         stdout
     );
@@ -4170,7 +4199,7 @@ pub(super) fn test_crawl_foreground_no_links_discovered(ctx: &mut E2ECtx) {
     let stdout = &result.stdout;
     assert_eq!(result.exit_code, 0, "Expected exit 0, got:\n{}", result.stdout);
     assert!(
-        stdout.contains("Crawl completed. 1 pages found."),
+        stdout.contains("Crawl completed. 1 page found."),
         "Expected seed-only completion message in:\n{}",
         stdout
     );
@@ -5300,11 +5329,25 @@ pub(super) fn test_snapshot_grep(ctx: &mut E2ECtx) {
         result.stdout
     );
 
-    // Grep for non-existent pattern should produce no output but succeed
-    let no_match_result = run_command(ctx, &["snapshot", "grep", "nonexistent-pattern-xyz"]);
+    // GNU grep semantics: zero matches is "not found", not a CLI failure —
+    // stdout still reports the count ("0 matches found") and the process
+    // exits 1 so scripts can branch without parsing the output.
+    let no_match_result =
+        run_command_allowing_failure(ctx, &["snapshot", "grep", "nonexistent-pattern-xyz"]);
     assert_eq!(
-        no_match_result.exit_code, 0,
-        "expected snapshot grep (no match) to succeed:\n{}",
+        no_match_result.exit_code, 1,
+        "expected snapshot grep (no match) to exit 1:\nstdout:>>>\n{}\n<<<\nstderr:>>>\n{}\n<<<",
+        no_match_result.stdout,
+        no_match_result.stderr
+    );
+    assert!(
+        no_match_result.stdout.contains("0 matches found"),
+        "expected an explicit zero-match count on stdout, got:\n{}",
+        no_match_result.stdout
+    );
+    assert!(
+        no_match_result.stderr.trim().is_empty(),
+        "a no-match grep is not an error — it must stay silent on stderr, got:\n{}",
         no_match_result.stderr
     );
 
@@ -5460,10 +5503,12 @@ pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
     assert!(result.stdout.contains("mock snapshot"),
         "Expected -F 'mock snap' to match:\n{}", result.stdout);
 
-    // -F with regex special chars should treat them literally (no match)
-    let result = run_command(ctx, &["snapshot", "grep", "-F", "mock*shot"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -F with special chars to succeed:\n{}", result.stderr);
+    // -F with regex special chars should treat them literally (no match).
+    // No match → GNU grep semantics: exit 1, "0 matches found" on stdout.
+    let result = run_command_allowing_failure(ctx, &["snapshot", "grep", "-F", "mock*shot"]);
+    assert_eq!(result.exit_code, 1,
+        "expected snapshot-grep -F with special chars to exit 1 on no match:\nstdout:>>>\n{}\n<<<\nstderr:>>>\n{}\n<<<",
+        result.stdout, result.stderr);
     assert!(!result.stdout.contains("mock snapshot"),
         "Expected -F 'mock*shot' NOT to match 'mock snapshot' (literal):\n{}", result.stdout);
 
@@ -5474,10 +5519,11 @@ pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
     assert!(result.stdout.contains("mock snapshot"),
         "Expected -w mock to match whole word:\n{}", result.stdout);
 
-    // --word-regexp (-w): partial word should NOT match
-    let result = run_command(ctx, &["snapshot", "grep", "-w", "moc"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -w (no match) to succeed:\n{}", result.stderr);
+    // --word-regexp (-w): partial word should NOT match (→ exit 1)
+    let result = run_command_allowing_failure(ctx, &["snapshot", "grep", "-w", "moc"]);
+    assert_eq!(result.exit_code, 1,
+        "expected snapshot-grep -w (no match) to exit 1:\nstdout:>>>\n{}\n<<<\nstderr:>>>\n{}\n<<<",
+        result.stdout, result.stderr);
     assert!(!result.stdout.contains("mock snapshot"),
         "Expected -w moc NOT to match 'mock' (partial word):\n{}", result.stdout);
 
@@ -5495,10 +5541,12 @@ pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
     assert!(numbered.iter().any(|l| l.starts_with(|c: char| c.is_ascii_digit())),
         "Expected -n output lines to carry line-number prefixes:\n{}", result.stdout);
 
-    // Combined flags: -i -v (invert case-insensitive match)
-    let result = run_command(ctx, &["snapshot", "grep", "-i", "-v", "MOCK"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -i -v to succeed:\n{}", result.stderr);
+    // Combined flags: -i -v (invert case-insensitive match). Every line
+    // matches, so the inversion leaves nothing → exit 1 (no matches).
+    let result = run_command_allowing_failure(ctx, &["snapshot", "grep", "-i", "-v", "MOCK"]);
+    assert_eq!(result.exit_code, 1,
+        "expected snapshot-grep -i -v to exit 1 when the inversion leaves no line:\nstdout:>>>\n{}\n<<<\nstderr:>>>\n{}\n<<<",
+        result.stdout, result.stderr);
     assert!(!result.stdout.contains("mock snapshot"),
         "Expected -i -v MOCK to exclude matching line:\n{}", result.stdout);
 }
@@ -5547,10 +5595,11 @@ pub(super) fn test_snapshot_grep_unicode(ctx: &mut E2ECtx) {
     assert!(result.stdout.contains("汉口江滩"),
         "Expected -i for Chinese text to match:\n{}", result.stdout);
 
-    // Text NOT in the snapshot
-    let result = run_command(ctx, &["snapshot", "grep", "不存在的文本"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep for absent Chinese text to succeed:\n{}", result.stderr);
+    // Text NOT in the snapshot → no match → GNU grep semantics: exit 1.
+    let result = run_command_allowing_failure(ctx, &["snapshot", "grep", "不存在的文本"]);
+    assert_eq!(result.exit_code, 1,
+        "expected snapshot-grep for absent Chinese text to exit 1:\nstdout:>>>\n{}\n<<<\nstderr:>>>\n{}\n<<<",
+        result.stdout, result.stderr);
     assert!(!result.stdout.contains("不存在的文本"),
         "Expected absent Chinese text NOT to match:\n{}", result.stdout);
 
@@ -5890,10 +5939,19 @@ pub(super) fn test_htmlsnapshot_query_table_format(ctx: &mut E2ECtx) {
         "expected the table to list both result rows, got:\n{}",
         result.stdout
     );
+    // The table payload on stdout stays pure (so `--output-file` and shell
+    // redirects produce a parseable file); the human-facing row-count footer
+    // is written to stderr, exactly like the CSV branch.
     assert!(
-        result.stdout.contains("2 rows returned."),
-        "expected row-count summary in table output, got:\n{}",
+        !result.stdout.contains("2 rows returned."),
+        "row-count summary must not pollute the stdout table payload, got:\n{}",
         result.stdout
+    );
+    assert!(
+        result.stderr.contains("2 rows returned."),
+        "expected row-count summary on stderr, got:\nstdout:>>>\n{}\n<<<\nstderr:>>>\n{}\n<<<",
+        result.stdout,
+        result.stderr
     );
 
     // Default output (no --format) remains the raw JSON envelope, exit 0.
