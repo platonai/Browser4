@@ -41,6 +41,8 @@ class PptxConfigTest {
         assertEquals(6, config.maxContentBlocksPerSlide)
         assertTrue(config.skipSvg)
         assertTrue(config.skipDataUris)
+        // proxy defaults to null — falls back to HTTPS_PROXY/HTTP_PROXY env vars.
+        assertNull(config.proxy)
     }
 
     @Test

@@ -124,13 +124,10 @@ open class MarkdownConverter(
 
         val internalUrls = pageLinks.mapNotNull { it.resolvedUrl }.distinct()
 
-        // 4. Count images
-        val imageCount = try {
-            val count = driver.evaluate("document.querySelectorAll('img').length")
-            count.toString().toIntOrNull() ?: 0
-        } catch (e: Exception) {
-            0
-        }
+        // 4. Count images actually referenced in the generated markdown.
+        // (Counting every DOM <img> would include header/footer logos and other
+        // excluded chrome, and miss nothing the reader can actually see.)
+        val imageCount = countMarkdownImages(rawMarkdown)
 
         // 5. Assemble final markdown with optional front matter and source URL
         val finalMarkdown = buildString {
@@ -171,7 +168,18 @@ open class MarkdownConverter(
         }
     }
 
+    /**
+     * Count image references (`![alt](src)`) present in generated markdown.
+     */
+    internal fun countMarkdownImages(markdown: String): Int {
+        if (markdown.isBlank()) return 0
+        return MARKDOWN_IMAGE_REGEX.findAll(markdown).count()
+    }
+
     companion object {
+        /** Matches markdown image references: `![alt](src)` */
+        private val MARKDOWN_IMAGE_REGEX = Regex("""!\[[^]]*]\([^)]*\)""")
+
         /**
          * JavaScript probe that converts the current page DOM to Markdown.
          *
@@ -249,6 +257,15 @@ open class MarkdownConverter(
                 result += child.textContent || '';
             } else if (child.nodeType === Node.ELEMENT_NODE) {
                 var tag = child.tagName.toUpperCase();
+                if (isExcluded(child)) continue;
+                if (tag === 'IMG') {
+                    var src = child.src || child.getAttribute('src') || child.getAttribute('data-src') || '';
+                    var alt = (child.alt || child.title || '').trim();
+                    if (src && !/^data:/i.test(src) && !/^blob:/i.test(src)) {
+                        result += '![' + (alt || 'image') + '](' + src + ')';
+                    }
+                    continue;
+                }
                 var innerText = inlineFormatting(child);
                 if (tag === 'STRONG' || tag === 'B') {
                     result += '**' + innerText + '**';
@@ -306,7 +323,7 @@ open class MarkdownConverter(
             var headingText = getText(node);
             if (!isEmptyText(headingText)) {
                 var level = parseInt(tag.charAt(1));
-                output.push('##'.repeat(level) + ' ' + headingText);
+                output.push('#'.repeat(level) + ' ' + headingText);
                 output.push('');
             }
             node = walker.nextNode(); continue;
@@ -330,6 +347,12 @@ open class MarkdownConverter(
 
         // Images
         if (tag === 'IMG' && isVisible(node)) {
+            // Skip images already emitted via an ancestor's inline formatting
+            // (paragraph, list item, table cell, blockquote, figcaption) or by
+            // the FIGURE branch; otherwise they appear twice in the output.
+            if (node.closest && node.closest('p,li,td,th,blockquote,figcaption,figure')) {
+                node = walker.nextNode(); continue;
+            }
             var src = node.src || node.getAttribute('src') || node.getAttribute('data-src') || '';
             var alt = (node.alt || node.title || '').trim();
             if (src && !/^data:/i.test(src) && !/^blob:/i.test(src)) {

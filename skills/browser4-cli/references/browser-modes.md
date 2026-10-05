@@ -28,8 +28,10 @@ isolation) → display (whether a human must participate) → secondary knobs.
 >    an existing browser — `swarm create` only accepts
 >    `--profile-mode`/`--max-open-tabs`/`--max-browser-contexts`/`--display-mode`.
 > 2. **The display mode is fixed when the session is created.** Reconnecting with
->    `open --headed` on an existing session warns and ignores the flag; use
->    `close` + `open`, or `open --fresh`.
+>    `open --headed` on an existing session ignores the flag; the CLI warns only
+>    when the requested mode differs from the active session's (re-running
+>    `open --headed` on a headed session stays silent). Use `close` + `open`, or
+>    `open --fresh` to change mode.
 
 ---
 
@@ -134,9 +136,9 @@ visible **for exactly one retry**:
    browser4-cli -s <name> open --headed "<url>"        # retry the same step
    ```
 
-   `--headed` cannot be applied to a live session (the flag is ignored with a
-   warning) and `goto` never changes the mode — `close` or `open --fresh` is
-   mandatory.
+   `--headed` cannot be applied to a live session (the flag is ignored, with a
+   warning only when the requested mode differs from the active session's) and
+   `goto` never changes the mode — `close` or `open --fresh` is mandatory.
 3. **Notify the user** that the mode changed and why — a visible window must never
    appear silently: *"The site blocked the headless browser (bot detection), so I
    switched to headed mode and retried."*
@@ -168,7 +170,19 @@ instead of Chrome directly. Therefore:
 - After `open --headed`, the CLI verifies that a visible window actually exists
   and warns when the session was launched headless anyway, or when the process is
   headed but no window is detected. If you see that warning, `close` and retry
-  `open --headed` once.
+  `open --headed` once. The check runs only for a **freshly created** session —
+  reconnecting to an existing session never runs it (the mode is already fixed),
+  which also prevents false "display-mode bug" alerts when a headless session is
+  reopened with `--headed`.
+- **The visibility check is Windows-only and machine-wide.** It enumerates every
+  `chrome.exe` launched with a remote-debugging port and a `PULSAR_CHROME`
+  profile marker; it cannot attribute a process to the CLI session that launched
+  it (the session→browser PID mapping lives inside the backend). A *visible*
+  result is trustworthy; a *negative* result can be skewed by other concurrent
+  Browser4 sessions — e.g. a headless session running alongside the headed one
+  just launched — which is why the warning states its detection is machine-wide.
+  On Unix the check is a stub that can never warn; verify window visibility
+  visually on Linux/macOS/CI.
 - Browser4 passes plain `--headless` (never `--headless=new`), forces
   `--disable-blink-features=AutomationControlled`, and leaves user-agent rotation
   off by default because rotation itself is detectable.
@@ -337,7 +351,7 @@ use `state-save` / `state-load`.
 | Browser channel | managed = Chrome; attach = chrome*/msedge* | Need Edge/Canary/Electron/cloud → attach only. |
 | Platform | GUI-less envs force headless; sandboxed shells need writable `BROWSER4_RUNTIME_DIR` / `BROWSER4_CLI_STATE_DIR` | Determines whether headed is even possible and whether the backend can start. |
 | Lifecycle | `close` (one session) · `close-all` · `swarm close` | `swarm close` also aborts pending tasks; forgetting it holds contexts and the worker pool. |
-| Observability | `list` (Connection column shows the **actual** browser, flagging channel mismatches) · `status` · `screenshot` | Always confirm the real browser after an attach — driving the wrong profile looks like "lost login state". |
+| Observability | `list` (Connection column shows the **actual** browser, flagging channel mismatches; Display column shows the creation-time mode — Headed/Headless/Supervised/Attached) · `status` · `screenshot` | Always confirm the real browser after an attach — driving the wrong profile looks like "lost login state". |
 | Cold start | first `open` starts the runtime; first swarm jobs wait 30–60 s | Do not diagnose a cold start as a hang. |
 | Per-session concurrency | commands on one session are serialized | Parallelism comes from multiple sessions/contexts, not from issuing commands concurrently to one session. |
 

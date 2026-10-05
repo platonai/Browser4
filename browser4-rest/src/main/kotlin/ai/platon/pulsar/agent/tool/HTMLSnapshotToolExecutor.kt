@@ -74,9 +74,10 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("field", "String", null),
                 ToolSpec.Arg("selector", "String", ":root"),
                 ToolSpec.Arg("attrName", "String", null),
+                ToolSpec.Arg("absoluteUrls", "Boolean", "false"),
             ),
             returnType = "String",
-            description = "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector."
+            description = "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. text is normalized inner text; textcontent is the raw textContent (whitespace kept). With field=attr and absoluteUrls=true, URL-valued attributes (href, src, …) are resolved against the page URL."
         )
 
         toolSpec["scrape_all"] = ToolSpec(
@@ -87,11 +88,12 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("field", "String", null),
                 ToolSpec.Arg("selector", "String", ":root"),
                 ToolSpec.Arg("attrName", "String", null),
+                ToolSpec.Arg("absoluteUrls", "Boolean", "false"),
                 ToolSpec.Arg("offset", "Int", "0"),
                 ToolSpec.Arg("limit", "Int", "-1"),
             ),
             returnType = "String",
-            description = "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector."
+            description = "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. With field=attr and absoluteUrls=true, URL-valued attributes are resolved against the page URL."
         )
 
         toolSpec["query"] = ToolSpec(
@@ -247,9 +249,22 @@ class HTMLSnapshotToolExecutor(
         return parseLiveDocumentBundle(raw.toString())
     }
 
-    /** Parse a live serialized document into a [FeaturedDocument] (jsoup-backed, base URL = the live URL). */
-    private fun parseLiveDocument(live: LiveDocumentSnapshot): FeaturedDocument =
-        FeaturedDocument(org.jsoup.Jsoup.parse(live.html, live.url))
+    /**
+     * Parse a live serialized document into a [FeaturedDocument] (jsoup-backed,
+     * base URL = the live URL).
+     *
+     * The Pulsar runtime's visual-information pass writes text-analysis markers
+     * (`lz`/`tp`) onto the LIVE DOM, so the serialized HTML carries them even
+     * though they are not the page's own markup; they are removed before the
+     * document reaches every extraction path (see [stripRuntimeTextMarkers]).
+     * The `vi` boxes and the `normalizedURI` link, by contrast, are wanted
+     * annotations and stay.
+     */
+    private fun parseLiveDocument(live: LiveDocumentSnapshot): FeaturedDocument {
+        val document = org.jsoup.Jsoup.parse(live.html, live.url)
+        stripRuntimeTextMarkers(document)
+        return FeaturedDocument(document)
+    }
 
     /**
      * Serve an html snapshot read from the LIVE document of the session's
@@ -265,6 +280,7 @@ class HTMLSnapshotToolExecutor(
         val field = paramString(args, "field", "scrape")!!
         val selector = paramString(args, "selector", "scrape", required = false, default = ":root")?.ifEmpty { ":root" } ?: ":root"
         val attrName = paramString(args, "attrName", "scrape", required = false)
+        val absoluteUrls = paramBool(args, "absoluteUrls", "scrape", required = false, default = false) ?: false
 
         if (field !in setOf("text", "textcontent", "html", "attr")) {
             throw IllegalArgumentException("Unknown field '$field'. Use text, textcontent, html, or attr.")
@@ -279,28 +295,16 @@ class HTMLSnapshotToolExecutor(
         val managed = resolveSession(args, receiver)
 
         return managed.withLock {
-            fun extractFrom(document: FeaturedDocument): String {
-                // `get` follows querySelector semantics: return the first match only.
-                // (`get all` — scrapeAll — returns the full array via querySelectorAll.)
-                return when (field) {
-                    "text" -> document.selectFirstOrNull(selector)?.text() ?: ""
-                    "textcontent" -> document.selectFirstOrNull(selector)?.text() ?: ""
-                    "html" -> document.selectFirstOrNull(selector)?.html() ?: ""
-                    "attr" -> document.selectFirstOrNull(selector)?.attr(attrName!!) ?: ""
-                    else -> ""
-                }
-            }
-
             // Read the LIVE document when the tab shows one — never silently
             // serve a stored copy that predates session interactions.
             val liveDocument = liveDocumentOrNull(managed)
             if (liveDocument != null) {
-                extractFrom(liveDocument)
+                extractSnapshotField(liveDocument, field, selector, attrName, absoluteUrls)
             } else {
                 val pulsarSession = managed.agenticSession
                 val url = pulsarSession.normalize(managed.driver.currentUrl())
                 val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
-                extractFrom(pulsarSession.parse(page))
+                extractSnapshotField(pulsarSession.parse(page), field, selector, attrName, absoluteUrls)
             }
         }
     }
@@ -309,6 +313,7 @@ class HTMLSnapshotToolExecutor(
         val field = paramString(args, "field", "scrape_all")!!
         val selector = paramString(args, "selector", "scrape_all", required = false, default = ":root")?.ifEmpty { ":root" } ?: ":root"
         val attrName = paramString(args, "attrName", "scrape_all", required = false)
+        val absoluteUrls = paramBool(args, "absoluteUrls", "scrape_all", required = false, default = false) ?: false
         val offset = paramInt(args, "offset", "scrape_all", required = false, default = 0) ?: 0
         val limit = paramInt(args, "limit", "scrape_all", required = false, default = -1) ?: -1
 
@@ -325,32 +330,16 @@ class HTMLSnapshotToolExecutor(
         val managed = resolveSession(args, receiver)
 
         val results = managed.withLock {
-            fun extractAllFrom(document: FeaturedDocument): List<String> {
-                val elements = document.select(selector)
-                val paginated = if (offset > 0) elements.drop(offset) else elements
-                val limited = if (limit > 0) paginated.take(limit) else paginated
-
-                return limited.map { element ->
-                    when (field) {
-                        "text" -> element.text()
-                        "textcontent" -> element.text()
-                        "html" -> element.html()
-                        "attr" -> element.attr(attrName!!)
-                        else -> ""
-                    }
-                }
-            }
-
             // Read the LIVE document when the tab shows one — never silently
             // serve a stored copy that predates session interactions.
             val liveDocument = liveDocumentOrNull(managed)
             if (liveDocument != null) {
-                extractAllFrom(liveDocument)
+                extractSnapshotFields(liveDocument, field, selector, attrName, absoluteUrls, offset, limit)
             } else {
                 val pulsarSession = managed.agenticSession
                 val url = pulsarSession.normalize(driver.currentUrl())
                 val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(driver)
-                extractAllFrom(pulsarSession.parse(page))
+                extractSnapshotFields(pulsarSession.parse(page), field, selector, attrName, absoluteUrls, offset, limit)
             }
         }
 
@@ -691,6 +680,126 @@ class HTMLSnapshotToolExecutor(
     private fun requireSessionId(args: Map<String, Any?>): String {
         return args["sessionId"]?.toString()
             ?: throw IllegalArgumentException("Missing required parameter: sessionId")
+    }
+}
+
+// =========================================================================
+// Field extraction (text / textcontent / html / attr)
+//
+// File-level so the exact field semantics are unit-testable against a plain
+// jsoup document, without a browser session.
+// =========================================================================
+
+/**
+ * Read ONE field from the first element matching [selector] (querySelector
+ * semantics). Returns "" when nothing matches.
+ *
+ * - `text` — jsoup `text()`: whitespace-normalized combined text.
+ * - `textcontent` — jsoup `wholeText()`: the RAW, unnormalized textContent
+ *   (original whitespace/newlines kept). Neither field can recover text the
+ *   site itself truncated in the HTML source; an attribute (e.g. `title`) or
+ *   the detail page is the only source for that.
+ * - `html` — the element's inner HTML.
+ * - `attr` — an attribute value; with [absoluteUrls], URL-valued attributes
+ *   are resolved against the document base URI.
+ */
+internal fun extractSnapshotField(
+    document: FeaturedDocument,
+    field: String,
+    selector: String,
+    attrName: String?,
+    absoluteUrls: Boolean
+): String {
+    val element = document.selectFirstOrNull(selector) ?: return ""
+    return when (field) {
+        "text" -> element.text()
+        "textcontent" -> element.wholeText().trim()
+        "html" -> element.html()
+        "attr" -> readSnapshotAttribute(element, attrName!!, absoluteUrls)
+        else -> ""
+    }
+}
+
+/** All-elements (querySelectorAll) variant of [extractSnapshotField], paginated. */
+internal fun extractSnapshotFields(
+    document: FeaturedDocument,
+    field: String,
+    selector: String,
+    attrName: String?,
+    absoluteUrls: Boolean,
+    offset: Int,
+    limit: Int
+): List<String> {
+    val elements = document.select(selector)
+    val paginated = if (offset > 0) elements.drop(offset) else elements
+    val limited = if (limit > 0) paginated.take(limit) else paginated
+    return limited.map { element ->
+        when (field) {
+            "text" -> element.text()
+            "textcontent" -> element.wholeText().trim()
+            "html" -> element.html()
+            "attr" -> readSnapshotAttribute(element, attrName!!, absoluteUrls)
+            else -> ""
+        }
+    }
+}
+
+/**
+ * HTML/SVG attributes whose value is a URL reference (HTML living standard,
+ * plus a few deprecated-but-still-encountered ones). jsoup's `absUrl()` makes
+ * NO such distinction itself — it happily resolves `new URL(base, "51.77")`
+ * into `https://host/51.77` — so the caller must restrict resolution to this
+ * set or `--absolute` corrupts non-URL attributes.
+ */
+private val URL_VALUED_ATTRIBUTES: Set<String> = setOf(
+    "href", "xlink:href",
+    "src", "action", "formaction", "data", "cite", "poster",
+    "background", "longdesc", "manifest", "profile", "codebase", "archive"
+)
+
+/**
+ * Read an attribute value. By default jsoup returns the RAW, often relative
+ * value (`catalogue/x/index.html`); [absoluteUrls] resolves URL-valued
+ * attributes (see [URL_VALUED_ATTRIBUTES]) against the document base URI (the
+ * live page URL for live reads). Non-URL attributes are returned verbatim,
+ * and values jsoup cannot resolve fall back to the raw value, so the flag
+ * never corrupts or blanks out a legitimate attribute.
+ */
+private fun readSnapshotAttribute(
+    element: org.jsoup.nodes.Element,
+    attrName: String,
+    absoluteUrls: Boolean
+): String {
+    val raw = element.attr(attrName)
+    if (!absoluteUrls || attrName.lowercase() !in URL_VALUED_ATTRIBUTES) return raw
+    return element.absUrl(attrName).ifBlank { raw }
+}
+
+/**
+ * Text-analysis marker attributes the Pulsar browser runtime
+ * (`js/__pulsar_utils__.js` in the pulsar-browser dependency) writes onto
+ * LIVE DOM elements while computing visual information:
+ *
+ * - `lz` — `"1"` marks a text-bearing element whose type was first seen on a
+ *   non-initial pass (i.e. the text appeared after load — "lazy").
+ * - `tp` — `"st"` (short text) or `"nm"` (number-like short text), the
+ *   element's classified text type.
+ *
+ * Unlike `vi` (which the serializer emits without touching the DOM), these
+ * are real attributes on the live page and therefore leak into serialized
+ * HTML and every read derived from it. They are runtime bookkeeping, not the
+ * site's markup, so the html snapshot family strips them at parse time.
+ */
+internal val RUNTIME_TEXT_MARKER_ATTRIBUTES: Set<String> = setOf("lz", "tp")
+
+/**
+ * Remove Pulsar runtime text-analysis markers ([RUNTIME_TEXT_MARKER_ATTRIBUTES])
+ * from a parsed document. In place; preserves every other attribute,
+ * including the wanted `vi` boxes and the `normalizedURI` head link.
+ */
+internal fun stripRuntimeTextMarkers(document: org.jsoup.nodes.Document) {
+    for (name in RUNTIME_TEXT_MARKER_ATTRIBUTES) {
+        document.select("[$name]").forEach { it.removeAttr(name) }
     }
 }
 

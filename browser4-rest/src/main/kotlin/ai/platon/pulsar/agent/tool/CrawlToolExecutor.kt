@@ -31,9 +31,13 @@ class CrawlToolExecutor(
                 ToolSpec.Arg("url", "String", null),
                 ToolSpec.Arg("depth", "Int", "1"),
                 ToolSpec.Arg("args", "String", ""),
+                ToolSpec.Arg("parallelTabs", "Int", null),
+                ToolSpec.Arg("taskTimeoutMillis", "Long", null),
             ),
             returnType = "String",
-            description = "Submit a crawl task. Returns a task ID for status polling."
+            description = "Submit a crawl task. Returns a task ID for status polling. " +
+                "parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task " +
+                "budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default."
         )
 
         toolSpec["status"] = ToolSpec(
@@ -69,7 +73,28 @@ class CrawlToolExecutor(
                 val depth = paramInt(args, "depth", functionName, required = false, default = 1) ?: 1
                 val crawlArgs = paramString(args, "args", functionName, required = false, default = "") ?: ""
                 val sql = paramString(args, "sql", functionName, required = false, default = null)
-                crawlService.submit(CrawlRequest(url = url, args = crawlArgs, depth = depth, sql = sql, urls = urls))
+                // The REST controller honors these, but the MCP path used to drop
+                // them — the CLI echoed the requested parallel/timeout while the
+                // crawl ran with server defaults. Non-positive means "no
+                // preference" and falls back to the server default (CrawlService
+                // performs the actual clamping), matching CrawlRequest's contract.
+                val parallelTabs = paramInt(
+                    args, "parallelTabs", functionName, required = false, default = null
+                )?.takeIf { it > 0 }
+                val taskTimeoutMillis = paramLong(
+                    args, "taskTimeoutMillis", functionName, required = false, default = null
+                )?.takeIf { it > 0 }
+                crawlService.submit(
+                    CrawlRequest(
+                        url = url,
+                        args = crawlArgs,
+                        depth = depth,
+                        sql = sql,
+                        urls = urls,
+                        parallelTabs = parallelTabs,
+                        taskTimeoutMillis = taskTimeoutMillis,
+                    )
+                )
             }
             "status" -> {
                 val id = paramString(args, "id", functionName)!!

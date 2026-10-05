@@ -2020,6 +2020,86 @@ pub(super) fn test_cdp_command(ctx: &mut E2ECtx) {
     );
 }
 
+/// `tool call <mcp-name> [--json '{...}']` — generic MCP tool passthrough.
+pub(super) fn test_tool_call_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result.stdout.contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    // Test 1: bare tool call, no arguments
+    let result = run_command(ctx, &["tool", "call", "captcha_detect"]);
+    assert!(
+        result.stdout.contains("mock response for captcha_detect"),
+        "tool call output should contain the mock tool result, got:\n{}",
+        result.stdout
+    );
+
+    // Test 2: tool call with --json arguments (must be forwarded as-is)
+    let result_json = run_command(
+        ctx,
+        &[
+            "tool",
+            "call",
+            "captcha_solve",
+            "--json",
+            r#"{"type":"RECAPTCHA_V2","siteKey":"abc"}"#,
+        ],
+    );
+    assert!(
+        result_json.stdout.contains("mock response for captcha_solve"),
+        "tool call --json output should contain the mock tool result, got:\n{}",
+        result_json.stdout
+    );
+
+    // Test 3: malformed --json fails client-side before any request
+    let bad_json =
+        run_command_expecting_failure(ctx, &["tool", "call", "captcha_solve", "--json", "{oops"], "Invalid --json payload");
+    assert_ne!(bad_json.exit_code, 0);
+
+    // Test 4: non-object --json fails client-side with a clear message
+    let non_object = run_command_expecting_failure(
+        ctx,
+        &["tool", "call", "captcha_solve", "--json", "[1,2]"],
+        "must be a JSON object",
+    );
+    assert_ne!(non_object.exit_code, 0);
+
+    // Test 5: missing tool name fails with a usage error
+    let missing_name = run_command_expecting_failure(ctx, &["tool", "call"], "Missing required argument");
+    assert_ne!(missing_name.exit_code, 0);
+
+    // Verify the mock server recorded exactly the two successful passthrough calls
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let passthrough_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "captcha_detect" || call.tool == "captcha_solve")
+        .collect();
+    assert_eq!(
+        passthrough_calls.len(),
+        2,
+        "expected 2 passthrough tool calls, got {}",
+        passthrough_calls.len()
+    );
+
+    // First call: no extra arguments, but the session id is injected
+    assert_eq!(passthrough_calls[0].tool, "captcha_detect");
+    assert_eq!(passthrough_calls[0].arguments["sessionId"], "swarm-session-1");
+
+    // Second call: JSON arguments are forwarded verbatim alongside sessionId
+    assert_eq!(passthrough_calls[1].tool, "captcha_solve");
+    assert_eq!(passthrough_calls[1].arguments["type"], "RECAPTCHA_V2");
+    assert_eq!(passthrough_calls[1].arguments["siteKey"], "abc");
+    assert_eq!(passthrough_calls[1].arguments["sessionId"], "swarm-session-1");
+}
+
 pub(super) fn test_eval_css_selector_passthrough(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

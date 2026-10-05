@@ -53,26 +53,35 @@ When you pass a channel name (`attach --cdp chrome`), the CLI gathers every cand
 probes them in order until one can host a page — a candidate that answers `/json/version` but exposes
 no page target never wins over one that does:
 
-1. **Published by the browser itself** — `<user-data-dir>/DevToolsActivePort` (the port file Chrome
+1. **Channel default port** — the channel's conventional port (9222 for Chrome) is probed first. A
+   browser you deliberately start with `chrome --remote-debugging-port=9222` expresses the clearest
+   intent and always wins over a leftover Browser4-managed browser running on a random port. When
+   nothing answers there, discovery continues below.
+2. **Published by the browser itself** — `<user-data-dir>/DevToolsActivePort` (the port file Chrome
    writes in every remote-debugging mode, including the built-in `chrome://inspect` toggle, **with
    the browser-level WebSocket path on its second line**), followed by the `--remote-debugging-port=N`
    value from the browser's command line. The `--user-data-dir` of each running browser process is
    checked first, then the channel's conventional user data directory (a browser on its default
    profile carries no `--user-data-dir` on the command line). A stale file left behind by an exited
    browser is harmless: the port no longer answers, so the candidate is dropped.
-2. **Process scan** — enumerates running processes whose command line contains `--remote-debugging-port=N`:
+3. **Process scan** — enumerates running processes whose command line contains `--remote-debugging-port=N`:
    - `N != 0` (e.g. `chrome --remote-debugging-port=9222`): use that port directly.
-   - `N == 0` (Browser4-launched browsers use this — Chrome picks a free port at random): the requested value is not a usable endpoint, so the real port comes from the browser's own `DevToolsActivePort` (tier 1). Only when that file cannot be located does the CLI fall back to asking the process which ports it is listening on — Windows only (`Get-NetTCPConnection` keyed to the process id) — probing each listener for a page target. This is what makes Browser4-managed browsers (random debug port) discoverable via `attach --cdp chrome`.
-     > **⚠ The listening-port tier is Windows-only.** Only *tier 1* above is platform-independent:
+   - `N == 0` (Browser4-launched browsers use this — Chrome picks a free port at random): the requested value is not a usable endpoint, so the real port comes from the browser's own `DevToolsActivePort` (tier 2). Only when that file cannot be located does the CLI fall back to asking the process which ports it is listening on — Windows only (`Get-NetTCPConnection` keyed to the process id) — probing each listener for a page target. This is what makes Browser4-managed browsers (random debug port) discoverable via `attach --cdp chrome`.
+     > **⚠ The listening-port tier is Windows-only.** Only *tier 2* above is platform-independent:
      > a browser started with `--remote-debugging-port=0` (which is what Browser4-managed browsers
      > use) is still resolved from its `<user-data-dir>/DevToolsActivePort`, because the CLI reads
      > that `--user-data-dir` from the running process — on Linux and macOS too. Only when that file
      > cannot be located (a default profile, or an install root the CLI does not know) does
-     > resolution fall through to the default port and the 9222–9333 scan; there, pass an explicit
+     > resolution fall back to the default port and the 9222–9333 scan; there, pass an explicit
      > endpoint (`--cdp http://localhost:9222`, `--cdp host:port`, `--cdp 9222`) or start the target
      > browser with a fixed `--remote-debugging-port`.
-3. **Channel default port** — probes the channel's conventional port (9222 for Chrome), for browsers started manually with the documented flag.
 4. **Port-range scan** — concurrently probes 9222–9333 for any CDP endpoint that exposes a page target, as a last resort.
+
+> **Several Chrome instances at once?** A channel name (`attach --cdp chrome`) binds the first
+> attachable candidate in the order above, which may be any running Chrome of that channel — it does
+> not know which instance "belongs" to this terminal. The CLI prints the browser, its version and
+> the resolved endpoint/URL after attaching, so verify the port. To target a specific instance
+> deterministically, pass its endpoint explicitly (`--cdp http://localhost:9222`).
 
 Resolution returns an `http://localhost:<port>` endpoint when a candidate lists page targets over
 `/json`. For a **WebSocket-only** browser (built-in remote debugging) it returns the browser-level
@@ -112,7 +121,7 @@ Always **check the printed browser** right after attaching — the silent failur
 **Session listings also show the real browser:**
 
 - `list` — the Connection column prefers the backend-reported actual browser over the locally requested channel and annotates conflicts, e.g. `Extension (requested msedge · actual Google Chrome 138.0.0.0)` or `CDP (requested msedge · actual Google Chrome 138)`; without a conflict it reads `Extension (Google Chrome 138)` / `CDP: http://localhost:9222 (Google Chrome 138)`.
-- `status` — when a session is active it prints a current-session block: Name / Session ID / Status / Connection / Next open.
+- `status` — when a session is active it prints a current-session block: Name / Session ID / Status / Display / Connection / Next open.
 
 **Disconnected attached sessions are never silently replaced.** If an attached session goes stale (extension relay dropped, browser closed), subsequent commands fail with an explicit error instead of quietly launching a fresh Browser4 browser (which would have no profile or login state):
 
@@ -177,6 +186,13 @@ browser4-cli -s debug-session screenshot --filename state.png
 ```
 
 > **Important:** When the default (unnamed) session slot is already occupied (e.g., by a prior `open` or `attach`), `attach --extension` without `-s <name>` will fail with "An unnamed session already exists." Use `-s <name>` to create a named session instead, or `close` the existing unnamed session first.
+
+> **Session-slot semantics:** each distinct `-s <name>` (and the unnamed default slot)
+> resolves to its OWN backend session id; attaching the same browser under two names
+> creates two independent sessions rather than aliasing one. Re-attaching an EXISTING
+> name to an endpoint reuses that name's session (an idempotent re-attach to the same
+> port keeps the existing driver; attaching to a different port rebinds it and logs a
+> warning). Closing one name never tears down a different name's session.
 
 ### 5. Attach via Browser4 Extension
 
@@ -254,7 +270,7 @@ browser4-cli screenshot --filename remote-state.png
 | No matching channel found | Verify channel name spelling; try a CDP URL or port instead |
 | No CDP endpoint listening | Verify the port is correct and not blocked by a firewall |
 | `CDP endpoint ... is not reachable` | Start the target browser with `--remote-debugging-port` and retry; the endpoint named in the error is not answering |
-| `... is not reachable: GET /json/version → HTTP 404` | The endpoint answers but publishes no `/json` discovery — that is Chrome's built-in remote debugging (`chrome://inspect/#remote-debugging`). Pass its browser-level socket instead: `attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>` (second line of `DevToolsActivePort`), or use `attach --extension` |
+| `... is reachable but is not a Chrome DevTools discovery endpoint (GET /json/version → HTTP 404)` | Something answered HTTP but not on the CDP discovery path — any ordinary (non-CDP) web server returns the same 404. One possibility is Chrome's built-in remote debugging (`chrome://inspect/#remote-debugging`); if that is the target, pass its browser-level socket instead: `attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>` (second line of `DevToolsActivePort`), or use `attach --extension` |
 | `Found a running chrome browser, but it serves no CDP HTTP discovery endpoint ... port 9222 (no /json)` | Built-in-mode endpoint whose socket URL could not be discovered automatically (it was found by the port sweep, not by `DevToolsActivePort`). Pass the browser-level WebSocket explicitly, or attach through the extension |
 | `CDP endpoint ws://… is not usable over its browser-level WebSocket` | The socket URL is stale or the browser is gone. Re-read the profile's `DevToolsActivePort` (the file survives the browser), or start a browser with `--remote-debugging-port` |
 | `... reachable but has no page targets` / `... it lists no page target` | Open a tab in the target browser, then retry attach — the browser has nothing to navigate yet; `attach --extension` also works |
@@ -278,10 +294,16 @@ browser4-cli close       # or: browser4-cli disconnect
 |-------------|----------|
 | Browser4-launched (via `open`) | `close` terminates the browser process |
 | Extension-attached (via `attach --extension`) | `close` disconnects from the extension relay — Chrome keeps running. **The tab(s) Browser4 drove are removed** (`chrome.tabs.remove`); tabs you opened yourself and never touched through the session stay open |
-| CDP-attached (via `attach --cdp`) | `close` disconnects from the remote debugging port — the browser process continues running. **The tab Browser4 was bound to is closed** with the session |
+| CDP-attached (via `attach --cdp`) | `close` disconnects from the remote debugging port — the browser process continues running. The tab(s) the session held drivers for are closed. To stop the headed Chrome from exiting when those were its last tabs, Browser4 first opens a standalone `about:blank` tab (never driven by the session), so a window always survives. The command then probes the endpoint and reports whether the browser is actually still running. |
 
 > **Keep the page you were working on:** `close` on an attached session closes the
-> tab the session was driving (the browser process itself survives). Save the URL
-> first (`page-url`) if you need to reopen it after re-attaching.
+> tab the session was driving (the browser process itself survives, kept alive by a
+> fresh `about:blank` tab). Save the URL first (`page-info`) if you need to reopen
+> it after re-attaching.
+>
+> **Exceptions where the browser can still exit:** WebSocket-only endpoints (the
+> built-in `chrome://inspect` mode, which answers 404 on `/json`) cannot be kept
+> alive over HTTP, and a browser that was already closed obviously cannot survive —
+> in those cases `close` says so instead of claiming the browser is still running.
 
 The `disconnect` alias is available as a more accurate command name for attached sessions, but it's identical to `close` in behavior.

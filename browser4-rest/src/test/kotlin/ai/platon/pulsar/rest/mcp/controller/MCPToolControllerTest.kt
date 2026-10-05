@@ -22,6 +22,7 @@ import kotlinx.coroutines.sync.Mutex
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
 import org.mockito.Mock
@@ -131,6 +132,10 @@ class MCPToolControllerTest {
         `when`(managedSession.ownsBrowser).thenReturn(true)
         `when`(managedSession.createdAt).thenReturn(1720000000000L)
         `when`(managedSession.lastAccessedAt).thenReturn(1720086400000L)
+        // No capabilities stub → null capabilities → displayMode resolves to
+        // the server default (empty); pulsarObjectMapper omits empty-string
+        // map entries, so the key must be absent rather than serialized null.
+        `when`(managedSession.capabilities).thenReturn(null)
 
         val result = controller.callTool(request, response)
 
@@ -139,6 +144,39 @@ class MCPToolControllerTest {
         assertTrue(result.body!!.content[0].text.contains("https://example.com"))
         assertTrue(result.body!!.content[0].text.contains(""""createdAt":1720000000000"""))
         assertTrue(result.body!!.content[0].text.contains(""""lastAccessedAt":1720086400000"""))
+        assertFalse(result.body!!.content[0].text.contains("displayMode"))
+    }
+
+    @Test
+    @DisplayName("list_sessions derives displayMode from the headed capability flag")
+    fun testListSessionsDerivesDisplayModeFromHeadedFlag() = runBlocking {
+        val request = MCPToolCallRequest(tool = "list_sessions")
+        `when`(sessionManager.getAllSessions()).thenReturn(listOf(managedSession))
+        `when`(managedSession.sessionId).thenReturn(sessionId)
+        `when`(managedSession.kind).thenReturn(SessionKind.BROWSER4_LAUNCHED)
+        `when`(managedSession.capabilities).thenReturn(mapOf("headed" to "false"))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.content[0].text.contains(""""displayMode":"HEADLESS""""))
+        Unit
+    }
+
+    @Test
+    @DisplayName("list_sessions honours an explicit displayMode capability string")
+    fun testListSessionsHonoursExplicitDisplayModeString() = runBlocking {
+        val request = MCPToolCallRequest(tool = "list_sessions")
+        `when`(sessionManager.getAllSessions()).thenReturn(listOf(managedSession))
+        `when`(managedSession.sessionId).thenReturn(sessionId)
+        `when`(managedSession.kind).thenReturn(SessionKind.BROWSER4_LAUNCHED)
+        `when`(managedSession.capabilities).thenReturn(mapOf("displayMode" to "SUPERVISED"))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.content[0].text.contains(""""displayMode":"SUPERVISED""""))
+        Unit
     }
 
     @Test

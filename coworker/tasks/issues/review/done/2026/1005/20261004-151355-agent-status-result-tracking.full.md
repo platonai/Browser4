@@ -1,0 +1,119 @@
+Ignoring 13 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["D:/workspace/Browser4/Browser4-4.13"].hasTrustDialogAccepted: true in C:\Users\pereg\.claude.json.
+"deepseek-v4-flash" isn't described by this version's model catalog; update Claude Code, or map it with behavesAs on a modelPicker row (or modelOverrides, if it is a provider id of a model this version knows). Until then auto-compact keeps this session within 200k tokens (the context window it assumes); if the model accepts more, append [1m] to the model name for 1M, or set CLAUDE_CODE_MAX_CONTEXT_TOKENS to its real window; CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1 restores the previous wait-for-the-API behavior.
+[claude-code:unrecognized_model] {"model":"deepseek-v4.1-flash-expires-on-0910","query_source":"generate_session_title"}
+[claude-code:unrecognized_model] {"model":"deepseek-v4-flash","query_source":"sdk"}
+## A. Task Result
+
+All 11 steps of the `agent run` → `agent status` → `agent result` → `agent list` lifecycle were verified successfully against the local dev backend (CLI 4.13.27, backend 4.13.27-SNAPSHOT, DeepSeek LLM key configured on the backend).
+
+- **Step 1-2:** `agent run "Navigate to https://en.wikipedia.org/wiki/Li_group …"` returned task ID `779c38e7-8a1a-4d41-9e0e-47e18f958834` (exit 0). `agent list` immediately showed it with COMMAND=`agent` and STATUS=`processing` — a standard lifecycle label, not `done`.
+- **Step 3-4:** `agent status <id>` returned valid JSON, exit 0, with `"statusCode":200` as an integer, `"processState":"completed"` present, and `"isDone":true` (boolean). The task finished in ~4.5 s, so no polling iterations were needed (note: `processState` is `completed`, matching the current SKILL.md — the older `done` value is only accepted for legacy payloads; `isDone:true` is the documented reliable check).
+- **Step 5:** `agent result <id>` returned `{"pageSummary":"Based on the provided page content, there is no description of a Lie group…"}` — non-null, non-empty, exit 0.
+- **Steps 6-7:** Two more `agent list` calls showed the task with terminal label `completed` (never `done`); terminal tasks persist — no auto-prune.
+- **Steps 8-9:** Two additional tasks (`8fb05d29…` Rust, `56de2460…` monads) submitted; all three tasks appeared in `agent list` with correct labels.
+- **Steps 10-11:** `agent list --clear` printed `Cleared 3 tracked agent task(s).` (exit 0); the final `agent list` printed `No tracked async tasks.`
+
+**One major obstacle had to be cleared first:** the very first `agent list` invocation crashed with a Rust panic (exit 101) because the local task store already contained Chinese-language task descriptions. That is Issue 1 below.
+
+## B. Execution Trace
+
+**Preparation**
+1. `pwd` confirmed repo root; `./b4w.ps1 help` and `skills/browser4-cli/SKILL.md` (plus `references/agent.md`) read in full.
+2. `./b4w.ps1 doctor` — dev bundle matches checkout; backend healthy; `✓ LLM is configured` (`DEEPSEEK_API_KEY`, model `deepseek-v4-flash`). First command also confirmed the daemon/backend were already running from a previous scenario in this run.
+
+**Baseline failure and recovery (key decision point)**
+3. `./b4w.ps1 agent list` → **exit 101, panic**: `src\state.rs:1209:40: end byte index 39 is not a char boundary; it is inside '到'` (stdout had only `Status: 66 total, 2 completed, 64 queued`).
+4. Root-caused by source inspection: `format_async_task_list` truncates descriptions with `&desc[..desc_w - 1]`, a byte slice; `~/.browser4/async-tasks.json` held 47 agent tasks with Chinese descriptions, one of which straddles byte 39.
+5. Backed up the store to the scratch dir, then used the documented `agent list --clear` (display-independent, so it worked) → `Cleared 66 tracked agent task(s).` → list clean. This was the main **workaround** required.
+
+**Scenario execution** — steps 1-11 above, each captured to `.test-sessions/20261004T1433038523034Z/stepN-*.txt`. Agent tasks used the default session (no `-s` documented for `agent run`; scenario used plain commands). `--wait` was deliberately not used — the scenario requires manual polling.
+
+**Follow-up verification and probes**
+6. Deterministic repro of the crash through a normal user path: `agent run "简述: 请用中文介绍李群的数学定义与几何意义"` (description 62 bytes, `学` at bytes 38..41) → `agent list` panicked again, exit 101. Verified `agent status` on that same task still worked (exit 0) — the failure is list-render-only.
+7. Unknown-ID probes: `agent status`/`agent result` with an all-zero UUID print `null`, exit 0; `--json` reports `"status":"ok"` (Issue 2).
+8. Discoverability probes: `agent list --help` documents `--clear`, `--limit`, `--offset` with examples (good); `help agent` is only a one-line-per-subcommand list.
+9. Cleanup: `agent list --clear` + `agent list` → `No tracked async tasks.` (restores the scenario's end state).
+
+Evidence files, the state-file backup, and repro outputs all live under `.test-sessions/20261004T1433038523034Z/`.
+
+```json
+{
+  "issues": [
+    {
+      "title": "agent list panics (exit 101) when a tracked task description contains multi-byte UTF-8 crossing the truncation boundary",
+      "severity": "Critical",
+      "category": "Reliability",
+      "reproduction": "1. ./b4w.ps1 agent run \"简述: 请用中文介绍李群的数学定义与几何意义\"  (any description >40 bytes whose byte 39 falls inside a multi-byte char)\n2. ./b4w.ps1 agent list\nObserved twice: first against pre-existing tracked tasks accumulated by earlier runs, then deterministically with the crafted task above. Backup of the poisoned store: .test-sessions/20261004T1433038523034Z/async-tasks.backup-231024.json.",
+      "expected": "agent list renders the table, truncating overly long descriptions at a character boundary (ellipsis, e.g. '…').",
+      "actual": "Exit code 101 and no table: \"thread 'main' panicked at src\\state.rs:1209:40: end byte index 39 is not a char boundary; it is inside '学' (bytes 38..41 of string)\". The command stays broken on every invocation until `agent list --clear`, because the offending record persists in ~/.browser4/async-tasks.json.",
+      "rootCause": "format_async_task_list computes desc_w as a byte length capped at 40 and then truncates with `&desc[..desc_w - 1]` — a raw byte slice. Rust panics when the slice index is not a UTF-8 char boundary; CJK text makes this near-certain once the description exceeds 40 bytes. The identical unsafe pattern exists at state.rs:1523 in Table::render (used by `list` for browser sessions), and format_async_task_list is also shared by `crawl list` (main.rs:13178) and `swarm list` (main.rs:12443), so those commands carry the same defect.",
+      "codePointer": "cli/browser4-cli/src/state.rs:1209 (format_async_task_list) and cli/browser4-cli/src/state.rs:1523 (Table::render)",
+      "suggestion": "- Replace byte slicing with a char-boundary-safe truncator (walk char_indices and cut at the last boundary <= max bytes, or chars().take(n) if a char count is acceptable).\n- Extract the helper and use it in both format_async_task_list (state.rs:1209) and Table::render (state.rs:1523).\n- Add unit tests with mixed ASCII+CJK descriptions (e.g. \"AI: 请用中文介绍李群的数学定义\") asserting no panic and a correct ellipsis.\n- Consider computing column widths in characters rather than bytes so CJK columns also align."
+    },
+    {
+      "title": "agent status/result for an unknown task ID print the literal 'null' and exit 0",
+      "severity": "Medium",
+      "category": "Reliability",
+      "reproduction": "./b4w.ps1 agent status 00000000-0000-0000-0000-000000000000\n./b4w.ps1 agent result 00000000-0000-0000-0000-000000000000\n./b4w.ps1 agent status 00000000-0000-0000-0000-000000000000 --json",
+      "expected": "A clear error naming the unknown task id (e.g. 'No agent task found with id …') and a non-zero exit code (and an error envelope in --json mode).",
+      "actual": "Plain mode prints the literal string null with exit code 0. JSON mode reports success for a nonexistent task: {\"status\":\"ok\",\"command\":\"agent-status\",\"output\":{\"task_id\":\"…\",\"raw\":null}}. Scripts cannot distinguish 'task not found' from a legitimate null payload.",
+      "rootCause": "handle_agent_status (main.rs:10978) and handle_agent_result (main.rs:11018) treat a null/absent backend response as a successful result and print it verbatim; there is no not-found classification (the backend returns null rather than a 404-style error for unknown ids). Note also an inconsistency: agent status --json emits raw:null (JSON null) while agent result --json emits raw:\"null\" (the string).",
+      "codePointer": "cli/browser4-cli/src/main.rs:10978 (handle_agent_status), cli/browser4-cli/src/main.rs:11018 (handle_agent_result)",
+      "suggestion": "- Detect a null/absent result for a syntactically valid task id and emit a human-readable 'task not found' error with a non-zero exit code.\n- In --json mode set status:'error' with an error field instead of status:'ok' with raw:null.\n- Normalize the raw:null vs raw:\"null\" inconsistency between the two commands."
+    },
+    {
+      "title": "agent status <id> returns agent history from unrelated tasks; agentState.instruction can name a different task",
+      "severity": "Medium",
+      "category": "UX",
+      "reproduction": "./b4w.ps1 agent run \"简述: 请用中文介绍李群的数学定义\"   # note id A\n./b4w.ps1 agent status <A>   # run immediately, inspect agentHistory.states and agentState",
+      "expected": "The status payload for task A describes task A's own progress (its instruction and steps), or any session-scoped history is explicitly labeled as such.",
+      "actual": "The fresh task's payload contained complete histories of earlier unrelated tasks — e.g. 'What is the birth date of Guido van Rossum?' (a task from a previous session) and 'summarize the key features of Rust' — and agentState.instruction was 'summarize the key features of Rust' while the queried id was the new task. An automation consumer reading agentState/agentHistory gets another task's data.",
+      "rootCause": "Inferred: the backend reuses one stateful agent per browser session and serializes its accumulated history into every CommandStatus. CommandStatus.toCommandStatus copies agentHistory verbatim (browser4-rest CommandStatus.kt:212) and agentState is derived as agentHistory.lastOrNull() (CommandStatus.kt:80). Where exactly agentHistory is attached per command (StatefulAgentRunner / UserCommandExecutor) needs backend investigation.",
+      "codePointer": "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/entities/CommandStatus.kt:212 (toCommandStatus) and the agent-runner code populating agentHistory",
+      "suggestion": "- Scope agentHistory to the queried command/task (filter states by the task's own run/instruction), or expose cross-task history under an explicitly named session-level field.\n- If retention is intentional as LLM context, at least ensure agentState points at the queried task's latest state so agentState.instruction is never another task's.\n- Add a regression test asserting a fresh task's agent status contains no other task's instruction."
+    },
+    {
+      "title": "agent list --clear silently removes in-flight (non-terminal) tasks from tracking",
+      "severity": "Low",
+      "category": "UX",
+      "reproduction": "./b4w.ps1 agent run \"summarize the key features of Rust\"\n./b4w.ps1 agent run \"explain monads in functional programming\"\n./b4w.ps1 agent list          # both show processing\n./b4w.ps1 agent list --clear  # 'Cleared 3 tracked agent task(s).'\n./b4w.ps1 agent list          # 'No tracked async tasks.'",
+      "expected": "Either only terminal tasks are cleared, or the output warns that N tasks are still running and will continue server-side.",
+      "actual": "All tracked agent tasks are removed regardless of state. The Rust task was still at step 5 minutes later (its history appeared in a subsequent agent status payload) while agent list reported 'No tracked async tasks.' The user loses list-based monitoring of running work; agent status <id> still works only if the id was saved.",
+      "rootCause": "handle_agent_list's --clear branch (main.rs:11062-11076) retains only `t.command != \"agent\"` — unconditional removal with no status inspection and no warning. Compare the terminal-only prune semantics available elsewhere (state.rs:1080 prune_async_tasks).",
+      "codePointer": "cli/browser4-cli/src/main.rs:11062 (handle_agent_list --clear branch); compare cli/browser4-cli/src/state.rs:1080 (prune_async_tasks)",
+      "suggestion": "- Skip non-terminal tasks by default and report counts by state; add --force/--all to remove running ones.\n- If removing running tasks stays the default, print a warning listing the in-flight ids that continue running server-side.\n- Add a --status filter so users can clear only completed/failed entries."
+    },
+    {
+      "title": "agent list table columns misalign because the TASK ID width is capped at 12 while ids are 36-char UUIDs",
+      "severity": "Low",
+      "category": "UX",
+      "reproduction": "./b4w.ps1 agent run \"summarize the key features of Rust\"\n./b4w.ps1 agent list",
+      "expected": "Data columns line up under their headers, as in a conventional table.",
+      "actual": "Every data row is shifted right relative to the header and separator rows: the 36-char UUID overflows the 12-char TASK ID column, so STARTED/FINISHED/DURATION/STATUS values no longer sit under their headers. (The header itself is also narrower than the separator dashes for some columns.)",
+      "rootCause": "format_async_task_list caps the id column width with .min(12) (state.rs, id_w computation around line 1158) but task ids are 36-char UUIDs; the {:<id_w$} format pads to 12 and the longer value shifts all subsequent columns.",
+      "codePointer": "cli/browser4-cli/src/state.rs:1126 (format_async_task_list, id_w = ….max(8).min(12))",
+      "suggestion": "- Drop the .min(12) cap or raise it to 36 so the column fits UUIDs.\n- Alternatively display a short id prefix (first 8 chars) with a note that the full id is available from agent status.\n- Add a rendered-table snapshot test using a real UUID."
+    },
+    {
+      "title": "Duplicate task-count lines with inconsistent vocabulary between the summary and the table ('queued' vs 'pending')",
+      "severity": "Low",
+      "category": "UX",
+      "reproduction": "./b4w.ps1 agent list",
+      "expected": "One status summary using the documented lifecycle vocabulary (queued / processing / completed / failed (<code>)).",
+      "actual": "Two counts are printed for the same data set: 'Status: N total, …' followed by 'N tracked task(s) (showing a-b):'. Additionally, a task not yet polled is counted as 'queued' by the summary but displayed as 'pending' in the STATUS column — a fifth label outside the documented lifecycle set.",
+      "rootCause": "handle_agent_list prints summarize_async_tasks(&filtered) (main.rs:11118) and then format_async_task_list(&display, …) (main.rs:11124), each rendering its own count line; summarize_async_tasks maps an empty last_status to 'queued' (state.rs:1281) while format_async_task_list maps it to 'pending' (state.rs, around line 1201).",
+      "codePointer": "cli/browser4-cli/src/main.rs:11118-11124; cli/browser4-cli/src/state.rs:1268 (summarize_async_tasks) and cli/browser4-cli/src/state.rs:1126 (format_async_task_list)",
+      "suggestion": "- Print only one summary line (let the second line show pagination only, without re-counting).\n- Use one vocabulary everywhere: map an empty status to 'queued' in the table, or document 'pending' as an alias.\n- Add a test asserting the STATUS label set stays within {queued, processing, completed, failed (<code>)}."
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Successful — all 11 scenario steps verified end-to-end after recovering from a pre-existing crash in the local task store",
+    "successRate": "100% of the 11 scenario steps after the workaround; the very first agent list invocation failed with a panic (exit 101) until the poisoned store was cleared",
+    "issuesFound": 6,
+    "majorBlockers": "The initial `agent list` crashed with a Rust panic (exit 101) because the local store already contained non-ASCII (Chinese) agent-task descriptions from earlier runs — the same failure occurs deterministically for any user who submits a >40-byte non-ASCII task. Recovery required the documented `agent list --clear` (which works because it never renders the table); after that the full lifecycle passed.",
+    "mostConfusingAspects": "Two different count lines for the same task list ('Status: 1 total, 1 processing' vs '1 tracked task(s)'); unknown task IDs yielding the literal null with exit 0 and JSON status 'ok'; a new task's status payload embedding other tasks' instructions and steps, with agentState.instruction naming a different task; and --clear removing tasks that are still running while the list then reports 'No tracked async tasks.'",
+    "mostValuableImprovements": "Fix the byte-boundary truncation crash (the same unsafe slice is latent in Table::render and shared with crawl/swarm list); return a proper not-found error with a non-zero exit for unknown agent task ids; scope or clearly label agent history per task; warn when --clear removes in-flight tasks; fix the UUID column width so the table aligns.",
+    "usabilityRating": 6
+  }
+}
+```

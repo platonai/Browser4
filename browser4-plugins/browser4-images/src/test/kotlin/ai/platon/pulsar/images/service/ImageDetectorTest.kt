@@ -177,6 +177,66 @@ class ImageDetectorTest {
     }
 
     @Test
+    @DisplayName("parseResult parses the loaded flag and tolerates its absence")
+    fun testParseResultParsesLoadedFlag() {
+        val json = """
+        [
+            {
+                "tagName": "img",
+                "srcUrl": "lazy.jpg",
+                "resolvedUrl": "https://example.com/lazy.jpg",
+                "type": null,
+                "width": 250, "height": 150,
+                "naturalWidth": null, "naturalHeight": null,
+                "alt": "Lazy", "isDataUri": false, "isSvg": false,
+                "loaded": false
+            },
+            {
+                "tagName": "img",
+                "srcUrl": "ready.jpg",
+                "resolvedUrl": "https://example.com/ready.jpg",
+                "type": null,
+                "width": 250, "height": 150,
+                "naturalWidth": 800, "naturalHeight": 480,
+                "alt": "Ready", "isDataUri": false, "isSvg": false,
+                "loaded": true
+            }
+        ]
+        """.trimIndent()
+
+        val result = detector.parseResult(json)
+
+        assertEquals(2, result.size)
+        assertEquals(false, result[0].loaded)
+        assertNull(result[0].naturalWidth)
+        assertEquals(true, result[1].loaded)
+        assertEquals(800, result[1].naturalWidth)
+    }
+
+    @Test
+    @DisplayName("parseResult defaults loaded to null when the field is absent")
+    fun testParseResultLoadedDefaultsNullWhenAbsent() {
+        val json = """
+        [
+            {
+                "tagName": "img",
+                "srcUrl": "photo.jpg",
+                "resolvedUrl": "https://example.com/photo.jpg",
+                "type": null,
+                "width": 100, "height": 100,
+                "naturalWidth": null, "naturalHeight": null,
+                "alt": "Legacy", "isDataUri": false, "isSvg": false
+            }
+        ]
+        """.trimIndent()
+
+        val result = detector.parseResult(json)
+
+        assertEquals(1, result.size)
+        assertNull(result[0].loaded)
+    }
+
+    @Test
     @DisplayName("parseResult handles malformed JSON gracefully")
     fun testParseResultMalformedJson() {
         val result = detector.parseResult("{not valid json}")

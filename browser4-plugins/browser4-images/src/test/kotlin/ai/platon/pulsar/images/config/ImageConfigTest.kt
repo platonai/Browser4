@@ -16,9 +16,11 @@
 package ai.platon.pulsar.images.config
 
 import ai.platon.pulsar.common.config.ImmutableConfig
+import ai.platon.pulsar.common.config.MutableConfig
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import java.nio.file.Path
 
 /**
  * Tests for [ImageConfig] data class and [ImageConfig.fromConfig] factory method.
@@ -30,7 +32,10 @@ class ImageConfigTest {
     fun testDefaultConfig() {
         val config = ImageConfig()
 
-        assertEquals("downloads/images", config.downloadDir)
+        // The default download dir is absolute and anchored under the user's
+        // ~/.browser4 state dir, never a CWD-relative "downloads/images".
+        assertEquals(ImageConfig.defaultDownloadDir(), config.downloadDir)
+        assertTrue(Path.of(config.downloadDir).isAbsolute)
         assertEquals(50 * 1024 * 1024L, config.maxDownloadSize)
         assertEquals(60, config.downloadTimeoutSeconds)
         assertFalse(config.autoDetectEnabled)
@@ -40,6 +45,14 @@ class ImageConfigTest {
         assertEquals(0, config.minHeight)
         assertFalse(config.skipSvg)
         assertTrue(config.skipDataUris)
+        assertNull(config.proxy)
+    }
+
+    @Test
+    @DisplayName("defaultDownloadDir is anchored at ~/.browser4/downloads/images")
+    fun testDefaultDownloadDirIsUnderUserHome() {
+        val expected = Path.of(System.getProperty("user.home"), ".browser4", "downloads", "images")
+        assertEquals(expected.toString(), ImageConfig.defaultDownloadDir())
     }
 
     @Test
@@ -114,6 +127,30 @@ class ImageConfigTest {
         assertEquals(defaultConfig.minHeight, config.minHeight)
         assertEquals(defaultConfig.skipSvg, config.skipSvg)
         assertEquals(defaultConfig.skipDataUris, config.skipDataUris)
+    }
+
+    @Test
+    @DisplayName("fromConfig reads image.download.proxy and image.download.dir overrides")
+    fun testFromConfigReadsProxyAndDownloadDir() {
+        val conf = MutableConfig()
+        conf.set("image.download.proxy", "127.0.0.1:10808")
+        conf.set("image.download.dir", "/var/tmp/images")
+
+        val config = ImageConfig.fromConfig(conf)
+
+        assertEquals("127.0.0.1:10808", config.proxy)
+        assertEquals("/var/tmp/images", config.downloadDir)
+    }
+
+    @Test
+    @DisplayName("fromConfig maps blank proxy to null")
+    fun testFromConfigMapsBlankProxyToNull() {
+        val conf = MutableConfig()
+        conf.set("image.download.proxy", "   ")
+
+        val config = ImageConfig.fromConfig(conf)
+
+        assertNull(config.proxy)
     }
 
     @Test

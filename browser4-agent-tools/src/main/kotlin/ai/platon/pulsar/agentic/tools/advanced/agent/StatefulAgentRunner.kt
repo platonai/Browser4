@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.advanced.agent
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
+import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
@@ -203,7 +204,15 @@ open class StatefulAgentRunner(
         // getting results for the right task (prevents cross-talk confusion).
         status.submittedTask = plainCommand
 
-        // Set agent history reference to allow real-time state tracking
+        // The companion agent keeps ONE cumulative stateHistory across every task
+        // executed in the session. Remember where this task's states begin so the
+        // published history never leaks states from earlier tasks (a fresh task's
+        // payload must not contain complete histories of previous tasks).
+        val startIndex = agent.stateHistory.size
+
+        // Set agent history reference to allow real-time state tracking. This points
+        // at the live cumulative history while the task is running; it is replaced
+        // by a task-scoped snapshot as soon as `agent.run()` returns (see below).
         status.agentHistory = agent.stateHistory
 
         // Save the user's current page URL so we can restore it after the agent
@@ -211,7 +220,13 @@ open class StatefulAgentRunner(
         val savedUrl = runCatching { session.boundDriver?.currentUrl() }.getOrNull()
         logger.debug("Agent task {}: saved user page URL before agent run: {}", status.id, savedUrl)
 
-        val history = agent.run(plainCommand)
+        val history = try {
+            agent.run(plainCommand)
+        } finally {
+            // Replace the live cumulative reference with a copy holding only states
+            // produced by THIS task, on both success and failure paths.
+            status.agentHistory = taskScopedHistory(agent.stateHistory, startIndex)
+        }
 
         // Restore the user's page if the agent navigated away from it
         try {
@@ -229,7 +244,8 @@ open class StatefulAgentRunner(
             logger.warn("Agent task {}: failed to restore user page: {}", status.id, e.message)
         }
 
-        status.agentHistory = history
+        // status.agentHistory is already the task-scoped snapshot set in the
+        // `finally` block above; do NOT reassign it to the cumulative `history`.
         val finalState = history.finalResult
 
         if (finalState == null) {
@@ -296,5 +312,22 @@ open class StatefulAgentRunner(
             System.getProperty("browser4.data.dir", System.getProperty("user.home")),
             ".browser4", "data", "agent", "agent-tasks.jsonl"
         )
+
+        /**
+         * Returns an independent [AgentHistory] containing only the states produced
+         * by the current task.
+         *
+         * The companion agent's history is cumulative for the whole session and is
+         * shared by every task, so handing it out directly leaks prior tasks' steps
+         * into a fresh task's status payload. [startIndex] is the history size
+         * captured before this task's `agent.run()` call.
+         */
+        internal fun taskScopedHistory(history: AgentHistory, startIndex: Int): AgentHistory {
+            val safeStart = startIndex.coerceIn(0, history.size)
+            val states = history.states
+                .subList(safeStart, history.size)
+                .toMutableList() // detached copy: immune to later appends/trimming
+            return AgentHistory(states)
+        }
     }
 }

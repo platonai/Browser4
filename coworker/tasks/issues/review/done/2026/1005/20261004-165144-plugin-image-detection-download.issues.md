@@ -1,0 +1,640 @@
+# Issues: plugin-image-detection-download
+
+> **Source:** `20261004-165144-plugin-image-detection-download.full.md` | **Date:** 20261004-165144 | **Mode:** dev
+
+## Scenario Background
+
+### Task
+
+**Setup.** The `browser4-images` plugin is not shipped in the dev runtime bundle, so I installed the locally-built JAR (`browser4-plugins/browser4-images/target/browser4-images-4.13.27-SNAPSHOT.jar`) with `./b4w.ps1 plugin install` and restarted the backend with `./b4w.ps1 stop` + `goto`. The page `https://en.wikipedia.org/wiki/Gallery_of_sovereign_state_flags` redirected to `List_of_national_flags_of_sovereign_states` and loaded successfully.
+
+**Detection (`image.detectImages`, minWidth=100, minHeight=60).**
+- **Total detected (unfiltered): 493** unique sources — `img` 247, `<a>` links to image-like URLs 241, `<picture><source>` 2, `<link>` favicons 2, `<meta>` og:image 1, **CSS backgrounds 0**.
+- **231 pass the 100×60 filter** (all `img` tags; 16 fail — wordmark/tagline strips and small/lazy icons). A 200×120 filter passes **226**.
+- **Top 5 largest**: Flag of Nepal 250×305, Banner of the Qulla Suyu 250×250, Flag of Switzerland 250×250, Flag of Vatican City 250×250, Flag of Belgium 250×217. Caveat: 226 of 231 images are lazy-loaded and report `naturalWidth/Height = null`, so this ranking uses HTML layout dimensions, not true source resolution (only 5 images expose natural dimensions).
+
+**Single downloads (`image.download`) — 3/3 succeeded**, verified on disk and decoded with PIL:
+- Switzerland 250×250 (158 B WebP), Belgium 250×217 (148 B WebP), Denmark 250×190 (168 B WebP) — all valid, correct colors, `success=true`.
+
+**Bulk download (`image.downloadAll`, minWidth=200, minHeight=120):** totalAttempted **226**, successful **226**, failed **0**, totalBytesDownloaded **499,434** (~488 KB) in ~10.6 s. On disk: 226 files / 499,434 bytes (exact match to the report), 121 files > 1 KB, 105 ≤ 1 KB (min 54 B — lossless WebP of flat-color flags, not corruption; all 226 decode to ≥250×125). Note: the `< 1 KB` cases exist because Wikimedia returns **WebP** (content negotiation) while files are named `.png`/`.svg.png`.
+
+**Blocker worked around:** the machine has a WinINET proxy (127.0.0.1:10808) that Chrome uses, but the backend JVM does not (`java.net.useSystemProxies=false` in the shipped `net.properties`), so every download initially failed with `IO error: Connection reset` after ~64 s. Restarting the backend with `JAVA_TOOL_OPTIONS="-Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=10808 -Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=10808"` fixed all downloads.
+
+### Execution Context
+
+1. `./b4w.ps1 help`, read `skills/browser4-cli/SKILL.md`; found no image/plugin-tool commands (also absent from `--help-json`, 91 KB).
+2. `./b4w.ps1 plugin list` → only captcha loaded. `./b4w.ps1 plugin install browser4-plugins/browser4-images/target/browser4-images-4.13.27-SNAPSHOT.jar`; `./b4w.ps1 stop`; `./b4w.ps1 -s imgtest goto <url>` (auto-started backend; session `imgtest`).
+3. Discovered exact tool names via `GET http://localhost:18182/mcp/tools`: `image_detect_images`, `image_download`, `image_download_all`, `image_download_batch`. Since no CLI command can invoke plugin tools (documented as `image.detectImages` etc.), all calls used the backend's own MCP endpoint: `POST /mcp/call-tool {"tool":"image_detect_images","arguments":{"sessionId":"...","minWidth":100,"minHeight":60}}`.
+4....
+
+(truncated — see full.md for complete trace)
+
+---
+
+## Issues Found (12 issues)
+
+### Issue 1: Plugin agent tools have no CLI entry point, and documented tool names don't match the MCP names
+
+**Severity:** High
+**Category:** Discoverability
+
+#### Reproduction
+
+Install the plugin, then run: ./b4w.ps1 help | grep -i image  (no output)  and  ./b4w.ps1 --help-json  (contains neither image_detect_images nor image.detectImages). Try any documented name such as image.detectImages as a CLI command — there is none. The tools can only be reached by POSTing to http://localhost:18182/mcp/call-tool with the snake_case name (image_detect_images) plus a sessionId.
+
+#### Expected Behavior
+
+Either a documented CLI command to invoke plugin/MCP tools (e.g. 'browser4-cli tool image.detectImages --args ...' or a call-tool command), or the plugin tools listed in help/--help-json so they are discoverable, with the documented dotted name mapping to the MCP snake_case name.
+
+#### Actual Behavior
+
+help and --help-json (91 KB) contain zero references to image tools; 'plugin --help' only lists list/info/install/remove. The README documents image.detectImages/image.download/image.downloadAll, but the backend registers image_detect_images/image_download/image_download_all/image_download_batch. Discovery required probing the undocumented GET /mcp/tools endpoint and hand-crafting raw HTTP calls, bypassing the CLI entirely.
+
+#### Root Cause Analysis
+
+The CLI command surface has no generic MCP tool-call passthrough; plugin ToolMount executors are registered in the backend's CustomToolRegistry but never surfaced through CLI help or command dispatch. The documented dotted (domain.method) name is converted to snake_case server-side (AgenticCliRunner domain+method → snake_case), and no user-facing mapping is published.
+
+#### Code Pointer
+
+`cli/browser4-cli/src/args.rs (command definitions) + cli/browser4-cli/src/main.rs (dispatch); backend browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt (GET /mcp/tools, POST /mcp/call-tool)`
+
+#### AI Suggested Improvement
+
+- Add a generic CLI passthrough, e.g. 'browser4-cli tool <name> --args @args.json' that POSTs to /mcp/call-tool with the active session id
+- Add 'browser4-cli tool-list' that renders GET /mcp/tools, and mention it in help
+- Publish the dotted→snake_case name mapping (e.g. image.detectImages → image_detect_images) in --help-json or SKILL.md so plugin docs and CLI names agree
+- Surface installed-plugin tools in help output after the backend reports them loaded
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 2: Image downloads ignore the OS system proxy; failure is a cryptic 64-second 'Connection reset'
+
+**Severity:** High
+**Category:** Reliability
+
+#### Reproduction
+
+On a Windows machine with a user proxy (WinINET ProxyEnable=1, ProxyServer=127.0.0.1:10808), call image_download on https://thumb.wikimedia.org/... with the backend started normally. Direct 'curl <url>' also times out (exit 35), while 'curl -x http://127.0.0.1:10808 <url>' returns HTTP 200 and Chrome (managed by the backend) loads the page fine.
+
+#### Expected Behavior
+
+Either the downloader honors the same system proxy the browser uses, or the failure message explains that outbound HTTP is blocked/no proxy is configured, and docs describe how to configure a proxy for the backend.
+
+#### Actual Behavior
+
+Every download failed after ~63.8 s with 'IO error: Connection reset' (success=false, bytesDownloaded=0). No mention of proxy, connectivity, or configuration anywhere in the plugin README, SKILL.md, or error text. Only restarting the backend with JAVA_TOOL_OPTIONS='-Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=10808 -Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=10808' made all 226 bulk downloads succeed.
+
+#### Root Cause Analysis
+
+The runtime bundle ships runtime/conf/net.properties with java.net.useSystemProxies=false and no http(s).proxyHost properties. OkHttpClient built in ImageAutoConfiguration.imageDownloadClient() (OkHttpClient.Builder().build(), no explicit proxySelector) therefore falls back to Java's DefaultProxySelector, which returns NO_PROXY. Chrome reads WinINET settings and works; the JVM does not, so OkHttp connects directly and the connection is reset by the network.
+
+#### Code Pointer
+
+`browser4-plugins/browser4-images/src/main/kotlin/ai/platon/pulsar/images/config/ImageAutoConfiguration.kt:imageDownloadClient() ; runtime conf net.properties; ImageDownloader.kt:download() error mapping`
+
+#### AI Suggested Improvement
+
+- Ship java.net.useSystemProxies=true in the runtime net.properties (JDK reads WinINET on Windows), or derive an OkHttp proxy from HTTPS_PROXY/http_proxy env vars
+- Add an 'image.download.proxy' config key (README documents other image.* keys) so operators can set a proxy without JVM flags
+- Improve the error text: distinguish connection-reset/timeout and hint at proxy/firewall ('network unreachable; if this host uses a proxy, configure image.download.proxy or JVM -Dhttps.proxyHost')
+- Document the proxy requirement in the plugin README and the CLI troubleshooting reference
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 3: image.download reports success=true and saves non-image content (HTML) under an image filename
+
+**Severity:** High
+**Category:** Product
+
+#### Reproduction
+
+curl -X POST http://localhost:18182/mcp/call-tool -H 'Content-Type: application/json' -d '{"tool":"image_download","arguments":{"sessionId":"<sid>","url":"https://en.wikipedia.org/wiki/File:Flag_of_the_Taliban.svg","outputPath":"<dir>","filename":"probe.svg"}}'
+
+#### Expected Behavior
+
+The tool validates that the response is an image (Content-Type image/*) and fails with a clear error for non-image content, or at least flags the mismatch instead of reporting success.
+
+#### Actual Behavior
+
+success=true, bytesDownloaded=137007, contentType=text/html; charset=UTF-8, file written as 'probe_file_page.svg' containing a full HTML document. ImageUtils.isImageMimeType() exists but is never called in ImageDownloader.download(). This URL came from the tool's own detectImages output (the 241 <a> entries), so a downloadAll/downloadBatch over detected URLs can silently save HTML pages as .svg images.
+
+#### Root Cause Analysis
+
+ImageDownloader.download() checks HTTP success, content-length and max-size, but never validates response.contentType() against ImageUtils.IMAGE_MIME_TYPES. Combined with the detector's extension-only <a> heuristic (see separate issue), false-positive URLs round-trip as successful image downloads.
+
+#### Code Pointer
+
+`browser4-plugins/browser4-images/src/main/kotlin/ai/platon/pulsar/images/service/ImageDownloader.kt:download() (after response.body/contentType resolution); ImageUtils.isImageMimeType() is defined but unused`
+
+#### AI Suggested Improvement
+
+- After a successful response, call ImageUtils.isImageMimeType(contentType) and fail the result (or mark it warning=true) when false, deleting the partially written file
+- Optionally sniff magic bytes (PNG/JPEG/GIF/WEBP/SVG) before committing the file
+- Include the observed contentType in a clearer error message so callers can diagnose wrong URLs
+- Add a test covering an image URL that returns text/html
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 4: Downloaded file extension doesn't match content: WebP bytes saved as .png / .svg.png
+
+**Severity:** Medium
+**Category:** Product
+
+#### Reproduction
+
+Call image_download with filename 'flag_switzerland.png' (or rely on the URL-derived name, e.g. 250px-Flag_of_X.svg.png) for a Wikimedia thumbnail URL. Then inspect the file: PIL reports format=WEBP while the extension is .png — 225 of 226 bulk-downloaded files had this mismatch.
+
+#### Expected Behavior
+
+The saved filename extension reflects the actual content type (e.g. .webp), or the downloader requests a format consistent with the filename extension.
+
+#### Actual Behavior
+
+The downloader sends 'Accept: image/avif,image/webp,...' so Wikimedia returns image/webp, but the filename is taken verbatim from the caller or the URL path, leaving PNG-extension files with WebP content. Downstream tools that trust extensions (image editors, uploaders, MIME-by-extension) will mis-handle these files.
+
+#### Root Cause Analysis
+
+In ImageDownloader.download(), finalName = filename ?: ImageUtils.suggestFilename(url, contentType) — ImageUtils.suggestFilename prefers the URL's filename extension and only uses contentType for the generated fallback name; nothing reconciles extension vs Content-Type. This also explains why 105 of 226 files are < 1 KB: lossless WebP of flat-color flags is far smaller than the PNG equivalent.
+
+#### Code Pointer
+
+`browser4-plugins/browser4-images/src/main/kotlin/ai/platon/pulsar/images/service/ImageDownloader.kt:download() (filename resolution ~lines 182-184); ImageUtils.suggestFilename()/guessExtension()`
+
+#### AI Suggested Improvement
+
+- After receiving the response, correct the extension from the actual Content-Type when they disagree (rename .png→.webp), logging the change
+- Alternatively drop image/webp from the Accept header (request the URL's native format) or expose an image.download.accept config
+- Document that files are saved in the server-negotiated format, and reflect the actual extension in ImageDownloadResult.filePath
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 5: CSS background image detection only scans inline styles, so the advertised feature finds nothing on real sites
+
+**Severity:** Medium
+**Category:** Product
+
+#### Reproduction
+
+On https://en.wikipedia.org/wiki/List_of_national_flags_of_sovereign_states run image_detect_images — background count is 0 — then verify with eval: Array.from(document.querySelectorAll('*')).filter(e => { const b=getComputedStyle(e).backgroundImage; return b && b !== 'none' && b.includes('url(') }).length  → 1016 elements.
+
+#### Expected Behavior
+
+The tool description and README promise detection of 'CSS background images'; stylesheet-defined background-image URLs should be found (or the limitation should be documented).
+
+#### Actual Behavior
+
+0 background entries detected while the page carries 1016 elements with computed background-image URLs (e.g. the tablesorter sort icons). The 2 elements with inline background-image are literally 'initial' and are correctly skipped, so the inline path yields nothing in practice.
+
+#### Root Cause Analysis
+
+DETECTION_SCRIPT section 4 iterates all elements but reads elem.style.backgroundImage (inline style attribute only) and never getComputedStyle(el).backgroundImage. Since almost all real CSS backgrounds come from stylesheets, the branch is effectively dead code on production pages.
+
+#### Code Pointer
+
+`browser4-plugins/browser4-images/src/main/kotlin/ai/platon/pulsar/images/service/ImageDetector.kt — DETECTION_SCRIPT section 4 (lines ~283-318)`
+
+#### AI Suggested Improvement
+
+- Use getComputedStyle(el).backgroundImage for a targeted subset (elements with a background-image class hint or non-zero size), since computing style for every element is expensive
+- Cap and dedupe results, and record the element's offsetWidth/offsetHeight so dimension filters can apply
+- If the limitation is intentional for performance, say 'inline background-image only' in the tool description/README instead of claiming full CSS background detection
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 6: naturalWidth/naturalHeight are null for lazy-loaded images, making dimension filters and 'largest image' rankings unreliable
+
+**Severity:** Medium
+**Category:** Product
+
+#### Reproduction
+
+Run image_detect_images (no filter) on the Wikipedia flags page, then count entries with naturalWidth == null: 226 of 231 below-the-fold images report null in both natural dimensions; only 5 have real values. The 'top 5 largest' ranking is therefore based on HTML width/height layout attributes (all thumbnails are 250 px wide), not source resolution.
+
+#### Expected Behavior
+
+Dimension data should reflect the true source resolution where possible, or the result should flag that natural dimensions are unavailable (e.g. naturalDimensionsKnown=false), so consumers know the filter used rendered size.
+
+#### Actual Behavior
+
+The detection script maps naturalWidth: el.naturalWidth || null; images not yet loaded (loading='lazy') report null and are silently absent from the natural-dimension data. Filtering falls back to the HTML width/height attributes, which is a rendered size (e.g. 114x57 mini-flags and 250x167 thumbnails), not the intrinsic image size. This makes 'top largest images' impossible to answer accurately for ~98% of the images on this page.
+
+#### Root Cause Analysis
+
+Detection runs a single DOM probe without scrolling; lazy images that have not been fetched have naturalWidth/naturalHeight == 0 → null. There is no post-load re-probe or 'decode' step, and the ImageSource model cannot express 'natural size unknown' versus 'unknown because unloaded'.
+
+#### Code Pointer
+
+`browser4-plugins/browser4-images/src/main/kotlin/ai/platon/pulsar/images/service/ImageDetector.kt — DETECTION_SCRIPT section 1 (lines ~169-222) and passesFilter()`
+
+#### AI Suggested Improvement
+
+- Add an option to scroll/trigger lazy-load (or await Promise.all of img.decode()) before probing when the caller asks for natural dimensions
+- Read data-src/srcset candidates for unloaded lazy images instead of only currentSrc
+- Include a flag (e.g. loaded=false) and document that width/height then represent rendered size
+- In the tool help, state that dimension filters may use rendered dimensions for lazy content
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 7: Detector's <a> entries are File: description pages, not direct image files
+
+**Severity:** Medium
+**Category:** Product
+
+#### Reproduction
+
+Run image_detect_images on the Wikipedia flags page and inspect the 241 tagName='a' entries: their resolvedUrl values are https://en.wikipedia.org/wiki/File:Flag_of_the_Taliban.svg etc. Downloading one returns an HTML page (see the success=true HTML issue).
+
+#### Expected Behavior
+
+An 'a' entry should point at an actual image resource (or be classified as a page link), so consumers can safely bulk-download detected URLs.
+
+#### Actual Behavior
+
+The regex test on the full href treats /wiki/File:Name.svg pages as image files because the path ends with an image extension. These are HTML pages; they dominate the detection results (241 of 493 entries, 49%) and are unusable as image downloads.
+
+#### Root Cause Analysis
+
+DETECTION_SCRIPT section 3 applies IMAGE_EXTENSIONS to a.href without checking the response type, host path semantics (e.g. /wiki/File:), or link relation. MediaWiki file-description pages collide with the naive extension heuristic.
+
+#### Code Pointer
+
+`browser4-plugins/browser4-images/src/main/kotlin/ai/platon/pulsar/images/service/ImageDetector.kt — DETECTION_SCRIPT section 3 (lines ~261-281)`
+
+#### AI Suggested Improvement
+
+- Exclude URLs whose path contains '/wiki/File:' (or more generally, verify the Content-Type before download)
+- Mark such entries with a distinct type so callers can filter them
+- Consider only classifying <a> hrefs as images when they are on the same origin as the img src set, or drop <a> entries from downloadAll candidate lists
+- Add a test asserting a File: description page is not classified as a downloadable image
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 8: detectImages returns one giant unpaginated JSON string with no limit/summary/file option
+
+**Severity:** Medium
+**Category:** UX
+
+#### Reproduction
+
+Call image_detect_images with no filters on the Wikipedia flags page: a single content.text JSON string of ~110 KB (493 images) is returned, with no parameters to bound it.
+
+#### Expected Behavior
+
+An option to bound/stream the output (limit/offset, summary-only counts by tag type, or outputPath to write the full list to a file and return a reference), similar to htmlsnapshot's --limit/--offset and extract's --stdout patterns.
+
+#### Actual Behavior
+
+The entire list is serialized into one MCP text content block. For an LLM agent this consumes a large fraction of context, and tool-side parameters (minWidth/minHeight) are the only way to reduce it. There is no count-only mode, so answering 'how many images are there' requires receiving the whole payload.
+
+#### Root Cause Analysis
+
+ImageToolExecutor.detectImages returns List<ImageSource> directly; ToolSpec defines only minWidth/minHeight and no pagination/summary/output options.
+
+#### Code Pointer
+
+`browser4-plugins/browser4-images/src/main/kotlin/ai/platon/pulsar/images/tools/ImageToolExecutor.kt — detectImages ToolSpec and handler`
+
+#### AI Suggested Improvement
+
+- Add a 'summaryOnly' (or 'limit') parameter that returns counts by tagName plus a bounded sample
+- Add an 'outputPath' parameter to write the full JSON to disk and return the path and count
+- Return a compact array-of-arrays or tabular form instead of verbose per-object JSON
+- Document the expected payload size in the tool help
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 9: Default download directory resolves inside the backend runtime build tree
+
+**Severity:** Low
+**Category:** UX
+
+#### Reproduction
+
+Call image_download without outputPath (image.download(url) as documented). The result's filePath is D:\workspace\Browser4\Browser4-4.13\browser4-apps\browser4-bundle\target\runtime-bundle\_work\browser4-bundle-runtime-windows-x64\browser4-bundle-runtime-windows-x64\downloads\images\<name>.
+
+#### Expected Behavior
+
+Files land in a stable, user-visible location (e.g. ~/.browser4/downloads/images or a session workspace), like the CLI's documented state directory.
+
+#### Actual Behavior
+
+The default image.download.dir ('downloads/images') is resolved relative to the backend process CWD, which is the runtime bundle's _work directory inside the Maven build output — a location users won't find, and one that a bundle rebuild/clean can wipe. The result does report the absolute path, so it is recoverable but surprising.
+
+#### Root Cause Analysis
+
+ImageDownloader.download() does Path.of(config.downloadDir) with a relative default; the backend is launched from the runtime bundle work dir, so relative paths resolve there.
+
+#### Code Pointer
+
+`browser4-plugins/browser4-images/src/main/kotlin/ai/platon/pulsar/images/config/ImageConfig.kt (downloadDir default) and ImageDownloader.kt (Path.of(config.downloadDir))`
+
+#### AI Suggested Improvement
+
+- Default to an absolute path anchored at the Browser4 runtime/state dir (BROWSER4_RUNTIME_DIR or ~/.browser4), as the CLI does for its own state
+- Print/log the resolved absolute directory when a tool call omits outputPath
+- Document the default location in the README
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 10: 'Total images detected' counts unique URLs, not elements — undocumented deduplication
+
+**Severity:** Low
+**Category:** Documentation
+
+#### Reproduction
+
+Run image_detect_images on the Wikipedia flags page: it reports 247 img entries, while document.images.length is 438 and all 438 elements have a src. The difference is exactly the unique-src count (247).
+
+#### Expected Behavior
+
+The docs/tool description explain that results are distinct image sources (deduped by resolved URL), not DOM elements, so 'how many images' results are interpretable.
+
+#### Actual Behavior
+
+The tool description says 'Detect all image elements on the current page', but parseResult() applies distinctBy { resolvedUrl ?: srcUrl }, collapsing 438 elements to 247 sources with no indication in the output. Users comparing against document.images.length will think 191 images were missed.
+
+#### Root Cause Analysis
+
+ImageDetector.parseResult() deduplicates by URL as a product decision to avoid duplicate downloads; the semantics are not stated in the ToolSpec description, README, or help text.
+
+#### Code Pointer
+
+`browser4-plugins/browser4-images/src/main/kotlin/ai/platon/pulsar/images/service/ImageDetector.kt:parseResult()`
+
+#### AI Suggested Improvement
+
+- Reword the tool description to 'distinct image sources (deduplicated by resolved URL)'
+- Optionally include an elementCount or duplicates field in the result so counts reconcile with the DOM
+- Mention deduplication in the README's detectImages return-value section
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 11: Plugin manifest version (4.12.0-rc.1) is inconsistent with the artifact/backend version (4.13.27-SNAPSHOT)
+
+**Severity:** Low
+**Category:** Product
+
+#### Reproduction
+
+./b4w.ps1 plugin list and ./b4w.ps1 plugin info browser4-images show 'browser4-images-4.13.27-SNAPSHOT.jar v4.12.0-rc.1'.
+
+#### Expected Behavior
+
+The manifest version reflects the built artifact version (4.13.27-SNAPSHOT), or the displayed version and the JAR name are explained separately.
+
+#### Actual Behavior
+
+plugin list/info display v4.12.0-rc.1 from META-INF/browser4-plugin.json while the file and build are 4.13.27-SNAPSHOT. Users cannot tell which plugin version is actually loaded, which matters when the backend checks version compatibility.
+
+#### Root Cause Analysis
+
+The manifest is hand-maintained and was not kept in sync with the Maven version (the module has no resource filtering for browser4-plugin.json).
+
+#### Code Pointer
+
+`browser4-plugins/browser4-images/src/main/resources/META-INF/browser4-plugin.json`
+
+#### AI Suggested Improvement
+
+- Enable Maven resource filtering (or a build step) to substitute ${project.version} into the manifest
+- Alternatively drop the version from the manifest and always derive it from the artifact
+- Validate at install/list time that manifest and file versions agree, warning on skew
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 12: HTTP error messages for failed downloads have an empty reason ('HTTP 404: ')
+
+**Severity:** Low
+**Category:** Reliability
+
+#### Reproduction
+
+Call image_download with https://en.wikipedia.org/static/images/does-not-exist-xyz.png — result: error='HTTP 404: '.
+
+#### Expected Behavior
+
+A complete error message such as 'HTTP 404 Not Found (url)' — especially for non-technical users, the empty trailing colon looks like truncation.
+
+#### Actual Behavior
+
+error='HTTP 404: ' with no reason phrase and no guidance. Under HTTP/2 responses OkHttp's Response.message() is empty, so the format string yields a dangling colon.
+
+#### Root Cause Analysis
+
+ImageDownloader.download() builds 'HTTP ${response.code}: ${response.message}'; HTTP/2 has no reason phrase, so message() is empty.
+
+#### Code Pointer
+
+`browser4-plugins/browser4-images/src/main/kotlin/ai/platon/pulsar/images/service/ImageDownloader.kt:download() (non-successful response branch)`
+
+#### AI Suggested Improvement
+
+- Omit the colon when message is blank and append a short code description (e.g. 'HTTP 404 (Not Found)')
+- Include the final URL (after redirects) in the message
+- For 403/429 responses, hint at rate limiting or user-agent/proxy causes
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+## Overall Assessment
+
+**Completion Status:** Successful — all six task steps completed: detection with filters, breakdown, top-5, 3 verified single downloads, a 226-file bulk download with summary, and on-disk verification. Completion required two undocumented workarounds: installing the plugin JAR and restarting the backend (documented in plugin help), and routing the backend JVM through the OS proxy for outbound downloads. No CLI command can invoke plugin tools, so all tool calls had to be made against the backend's raw /mcp/call-tool endpoint.
+
+**Success Rate:** 85% — every requested outcome was produced and verified; the single-download step initially failed for 64s due to the proxy gap and tool invocation had to bypass the CLI entirely. One expectation (every file > 1 KB) was not met for 105 files, explained by WebP-negotiated content rather than download failure (all 226 files decode as valid images).
+
+**Issues Found:** 12
+
+**Major Blockers:** 1) No CLI surface for plugin tools: documented names (image.detectImages) don't exist as commands and don't match the MCP names (image_detect_images), forcing hand-written HTTP calls to /mcp/call-tool. 2) Backend JVM ignores the Windows system proxy while Chrome uses it, so all image downloads failed with a cryptic 'IO error: Connection reset' until JAVA_TOOL_OPTIONS with -Dhttps.proxyHost/-Dhttp.proxyPort was set.
+
+**Most Confusing Aspects:** How to invoke plugin tools at all (no CLI command, undocumented endpoint, dotted vs snake_case name mismatch); why the browser could load Wikimedia pages while image downloads failed (system proxy used by Chrome but not by the JVM); where files go when outputPath is omitted (inside the runtime bundle build tree); whether the 226 attempted vs 493 detected counts mean images were missed (they don't — dedup by URL plus dimension filters); and why downloaded .png files are actually WebP and sometimes only 54 bytes.
+
+**Most Valuable Improvements:** Add a generic CLI passthrough/tool-list command so plugin tools are discoverable and callable without raw HTTP; make the downloader proxy-aware (or document image.download.proxy / JVM proxy flags) and improve network error messages; validate downloaded Content-Type against image/* so success=true always means a real image; align file extensions with actual content; replace inline-only background detection with a bounded getComputedStyle scan or document the limitation; add limit/summary/outputPath options to detectImages to keep payloads bounded.
+
+**Usability Rating:** 5/10
+
+---
+
+## How to Reproduce
+
+### Common Setup
+
+1. Clone the repository and `cd` to the repo root.
+2. The CLI is invoked via `./b4w.ps1` (PowerShell) or `./b4w.sh` (Bash / Git Bash), which auto-build from source when needed.
+3. The backend server starts automatically in dev mode.
+4. All commands from repo root:
+
+   - **PowerShell:** `./b4w.ps1 <command>`
+   - **Bash / Git Bash:** `./b4w.sh <command>`
+   - **Direct:** `browser4-cli <command>` (if installed globally)
+
+   > **Note:** `$(./b4w.ps1)` is command substitution in bash — do NOT use it.
+
+### Per-Issue Reproduction Steps
+
+#### Issue 1: Plugin agent tools have no CLI entry point, and documented tool names don't match the MCP names
+
+Install the plugin, then run: ./b4w.ps1 help | grep -i image  (no output)  and  ./b4w.ps1 --help-json  (contains neither image_detect_images nor image.detectImages). Try any documented name such as image.detectImages as a CLI command — there is none. The tools can only be reached by POSTing to http://localhost:18182/mcp/call-tool with the snake_case name (image_detect_images) plus a sessionId.
+
+#### Issue 2: Image downloads ignore the OS system proxy; failure is a cryptic 64-second 'Connection reset'
+
+On a Windows machine with a user proxy (WinINET ProxyEnable=1, ProxyServer=127.0.0.1:10808), call image_download on https://thumb.wikimedia.org/... with the backend started normally. Direct 'curl <url>' also times out (exit 35), while 'curl -x http://127.0.0.1:10808 <url>' returns HTTP 200 and Chrome (managed by the backend) loads the page fine.
+
+#### Issue 3: image.download reports success=true and saves non-image content (HTML) under an image filename
+
+curl -X POST http://localhost:18182/mcp/call-tool -H 'Content-Type: application/json' -d '{"tool":"image_download","arguments":{"sessionId":"<sid>","url":"https://en.wikipedia.org/wiki/File:Flag_of_the_Taliban.svg","outputPath":"<dir>","filename":"probe.svg"}}'
+
+#### Issue 4: Downloaded file extension doesn't match content: WebP bytes saved as .png / .svg.png
+
+Call image_download with filename 'flag_switzerland.png' (or rely on the URL-derived name, e.g. 250px-Flag_of_X.svg.png) for a Wikimedia thumbnail URL. Then inspect the file: PIL reports format=WEBP while the extension is .png — 225 of 226 bulk-downloaded files had this mismatch.
+
+#### Issue 5: CSS background image detection only scans inline styles, so the advertised feature finds nothing on real sites
+
+On https://en.wikipedia.org/wiki/List_of_national_flags_of_sovereign_states run image_detect_images — background count is 0 — then verify with eval: Array.from(document.querySelectorAll('*')).filter(e => { const b=getComputedStyle(e).backgroundImage; return b && b !== 'none' && b.includes('url(') }).length  → 1016 elements.
+
+#### Issue 6: naturalWidth/naturalHeight are null for lazy-loaded images, making dimension filters and 'largest image' rankings unreliable
+
+Run image_detect_images (no filter) on the Wikipedia flags page, then count entries with naturalWidth == null: 226 of 231 below-the-fold images report null in both natural dimensions; only 5 have real values. The 'top 5 largest' ranking is therefore based on HTML width/height layout attributes (all thumbnails are 250 px wide), not source resolution.
+
+#### Issue 7: Detector's <a> entries are File: description pages, not direct image files
+
+Run image_detect_images on the Wikipedia flags page and inspect the 241 tagName='a' entries: their resolvedUrl values are https://en.wikipedia.org/wiki/File:Flag_of_the_Taliban.svg etc. Downloading one returns an HTML page (see the success=true HTML issue).
+
+#### Issue 8: detectImages returns one giant unpaginated JSON string with no limit/summary/file option
+
+Call image_detect_images with no filters on the Wikipedia flags page: a single content.text JSON string of ~110 KB (493 images) is returned, with no parameters to bound it.
+
+#### Issue 9: Default download directory resolves inside the backend runtime build tree
+
+Call image_download without outputPath (image.download(url) as documented). The result's filePath is D:\workspace\Browser4\Browser4-4.13\browser4-apps\browser4-bundle\target\runtime-bundle\_work\browser4-bundle-runtime-windows-x64\browser4-bundle-runtime-windows-x64\downloads\images\<name>.
+
+#### Issue 10: 'Total images detected' counts unique URLs, not elements — undocumented deduplication
+
+Run image_detect_images on the Wikipedia flags page: it reports 247 img entries, while document.images.length is 438 and all 438 elements have a src. The difference is exactly the unique-src count (247).
+
+#### Issue 11: Plugin manifest version (4.12.0-rc.1) is inconsistent with the artifact/backend version (4.13.27-SNAPSHOT)
+
+./b4w.ps1 plugin list and ./b4w.ps1 plugin info browser4-images show 'browser4-images-4.13.27-SNAPSHOT.jar v4.12.0-rc.1'.
+
+#### Issue 12: HTTP error messages for failed downloads have an empty reason ('HTTP 404: ')
+
+Call image_download with https://en.wikipedia.org/static/images/does-not-exist-xyz.png — result: error='HTTP 404: '.
+

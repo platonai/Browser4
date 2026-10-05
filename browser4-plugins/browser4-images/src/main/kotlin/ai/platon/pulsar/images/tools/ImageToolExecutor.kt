@@ -52,18 +52,27 @@ open class ImageToolExecutor(
             arguments = listOf(
                 ToolSpec.Arg("minWidth", "Int?", "null"),
                 ToolSpec.Arg("minHeight", "Int?", "null"),
+                ToolSpec.Arg("limit", "Int?", "null"),
+                ToolSpec.Arg("offset", "Int?", "null"),
             ),
             returnType = "List<ImageSource>",
-            description = "Detect all image elements on the current page, including <img> tags, <picture>/<source> elements, CSS background images, <a> links to image files, favicons, and OG/Twitter meta images.",
+            description = "Detect distinct image sources on the current page (deduplicated by resolved URL — NOT one entry per DOM element): <img> tags, <picture>/<source> elements, CSS background images (bounded computed-style scan), <a> links to image files, favicons, and OG/Twitter meta images. Can be large on image-heavy pages — bound with limit/offset.",
             help = """
                 image.detectImages()
                 image.detectImages(minWidth: Int?)
                 image.detectImages(minWidth: Int?, minHeight: Int?)
+                image.detectImages(minWidth: Int?, minHeight: Int?, limit: Int?, offset: Int?)
 
-                Scans the current page DOM for image sources. Returns a list of detected image sources
-                with metadata (URL, dimensions, alt text, etc.). Does NOT download any images.
+                Scans the current page DOM for image sources. Returns DISTINCT image sources
+                (deduplicated by resolved URL — fewer entries than document.images.length when
+                the same image repeats). Does NOT download any images.
 
                 Use minWidth/minHeight to filter out small images (e.g., tracking pixels, icons).
+                Use limit/offset to bound the payload on image-heavy pages.
+
+                Note: lazy-loaded images that have not been fetched report loaded=false and
+                naturalWidth/naturalHeight=null; width/height are then rendered (layout) sizes,
+                so dimension filters use rendered dimensions for those images.
             """.trimIndent()
         )
 
@@ -76,14 +85,20 @@ open class ImageToolExecutor(
                 ToolSpec.Arg("filename", "String?", "null"),
             ),
             returnType = "ImageDownloadResult",
-            description = "Download a single image from a URL using direct HTTP. Supports jpg, png, gif, webp, svg, bmp, and more.",
+            description = "Download a single image from a URL using direct HTTP. Supports jpg, png, gif, webp, svg, bmp, and more. Non-image responses (e.g. text/html) are rejected; the saved extension is corrected to match the actual Content-Type.",
             help = """
                 image.download(url: String)
                 image.download(url: String, outputPath: String?)
                 image.download(url: String, outputPath: String?, filename: String?)
 
-                Downloads an image file to the configured download directory (default: downloads/images/)
+                Downloads an image file to the configured download directory
+                (default: ~/.browser4/downloads/images, configurable via image.download.dir)
                 or a custom outputPath. Returns ImageDownloadResult with filePath, bytesDownloaded, etc.
+
+                Responses whose Content-Type is clearly not an image (e.g. text/html) fail
+                instead of being saved. When the server negotiates a different format than
+                the filename suggests (e.g. WebP bytes for a .png URL), the extension is
+                corrected to match the actual content (the result's filePath reflects it).
             """.trimIndent()
         )
 
@@ -96,14 +111,15 @@ open class ImageToolExecutor(
                 ToolSpec.Arg("minHeight", "Int?", "null"),
             ),
             returnType = "BulkDownloadSummary",
-            description = "Detect all images on the current page and download them in bulk with concurrent downloads (default 5). Automatically skips data URIs.",
+            description = "Detect all images on the current page and download them in bulk with concurrent downloads (default 5). Automatically skips data URIs. Detection is deduplicated by resolved URL.",
             help = """
                 image.downloadAll()
                 image.downloadAll(outputPath: String?)
                 image.downloadAll(outputPath: String?, minWidth: Int?)
                 image.downloadAll(outputPath: String?, minWidth: Int?, minHeight: Int?)
 
-                Scans the current page for all images and downloads them concurrently.
+                Scans the current page for all images (distinct sources, deduplicated by
+                resolved URL) and downloads them concurrently.
                 Returns a BulkDownloadSummary with counts, total bytes, and per-image results.
 
                 Use minWidth/minHeight to skip small images (e.g., tracking pixels, icons < 100px).
@@ -147,11 +163,18 @@ open class ImageToolExecutor(
                 val minW = paramInt(args, "minWidth", functionName, required = false)
                 val minH = paramInt(args, "minHeight", functionName, required = false)
 
-                images.filter { img ->
+                val filtered = images.filter { img ->
                     val passesWidth = minW == null || (img.naturalWidth ?: img.width ?: 0) >= minW
                     val passesHeight = minH == null || (img.naturalHeight ?: img.height ?: 0) >= minH
                     passesWidth && passesHeight
                 }
+
+                // Bound the payload: results are deduplicated by resolved URL, so
+                // counts reconcile with unique sources, not DOM elements.
+                val offset = (paramInt(args, "offset", functionName, required = false) ?: 0).coerceAtLeast(0)
+                val limit = paramInt(args, "limit", functionName, required = false)?.takeIf { it >= 0 }
+                val bounded = filtered.drop(offset)
+                if (limit != null) bounded.take(limit) else bounded
             }
 
             "download" -> {

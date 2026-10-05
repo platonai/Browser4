@@ -255,7 +255,17 @@ pub fn generate_help() -> String {
     lines.push("    plugin-<name>              invoke the default tool for a plugin domain".to_string());
     lines.push("    plugin-<name> <method>     invoke a specific method (e.g. plugin-media download --url ...)".to_string());
     lines.push("    plugin                     list all available plugin tool domains".to_string());
+    lines.push("    tool call <mcp-name>       invoke any MCP tool directly (e.g. tool call captcha_detect)".to_string());
     lines.push("  Use `plugin list` to see installed plugins and their status.".to_string());
+
+    // Server plugins (first-party)
+    lines.push("\n── Server plugins ───────────────────────────────────────────────────".to_string());
+    lines.push("  First-party plugins ship as JARs under browser4-plugins/<name>/target/*.jar".to_string());
+    lines.push("  (e.g. browser4-captcha). They are optional and not bundled by default.".to_string());
+    lines.push("    browser4-cli plugin install browser4-plugins/<name>/target/*.jar".to_string());
+    lines.push("    browser4-cli stop                    # next command auto-restarts the dev backend".to_string());
+    lines.push("  After restart, plugin tools are callable via: browser4-cli tool call <mcp-name>".to_string());
+    lines.push("  Tool names are snake_case (captcha.detect -> captcha_detect); see docs/config.md §CAPTCHA.".to_string());
 
     // Global options
     lines.push("\n── Global options ───────────────────────────────────────────────────".to_string());
@@ -424,6 +434,22 @@ pub fn generate_help_json(sub_command: Option<&str>) -> String {
                 "cli": "browser4-cli",
                 "version": VERSION,
                 "command": entry,
+            }))
+            .unwrap_or_else(|_| "{}".to_string());
+        }
+        // Plugin tool domains (e.g. "plugin-pptx") are not statically
+        // registered — they are discovered at runtime from installed plugin
+        // manifests. Surface a hint instead of a bare "Unknown command".
+        if name.starts_with("plugin-") {
+            let domain = &name["plugin-".len()..];
+            return serde_json::to_string_pretty(&serde_json::json!({
+                "error": format!("Unknown command: {}", name),
+                "hint": format!(
+                    "Plugin tool domain '{}' is discovered dynamically. \
+                     Run `browser4-cli plugin` to list installed plugins, \
+                     or `browser4-cli tool call <mcp-tool-name>` to invoke directly.",
+                    domain
+                ),
             }))
             .unwrap_or_else(|_| "{}".to_string());
         }
@@ -771,7 +797,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    search results, article lists) across the entire page."
+            "    search results, article lists) across the entire page — it answers \"what repeats?\""
+                .to_string(),
+        );
+        lines.push(
+            "    For a page landmark outline (header/nav/main/aside/footer), use `htmlsnapshot summary`."
                 .to_string(),
         );
         lines.push(
@@ -791,7 +821,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    (default: 5). If the DOM under the selector is shallower, the actual depth is used."
+            "    (default: 5). It deepens the \"Suggested selectors\" list only — the printed"
+                .to_string(),
+        );
+        lines.push(
+            "    \"Sample structure\" tree always shows direct children (one level). If the DOM"
+                .to_string(),
+        );
+        lines.push(
+            "    under the selector is shallower, the actual depth is used."
                 .to_string(),
         );
         lines.push(
@@ -1380,14 +1418,25 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(wrap_text(
+            "Display shows the display mode fixed when the session was created: Headed, Headless, Supervised, or Attached (a user-owned browser); '-' means neither the backend nor local state recorded it.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
             "Next open shows whether `browser4-cli open <url>` will Reuse the saved session or Refresh it (a new session is created only when a URL is provided).",
             "  - ",
             4,
         ));
-        lines.push(
-            "  - Use --verbose to show full session IDs without truncation (UUIDs are 36 chars, truncated to 40 by default)."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "URL shows each session's current page URL as reported by the backend ('-' when the backend is unreachable or the session is stale). It is capped to 48 characters in the plain table.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Use --verbose to remove the width caps on the URL and Session ID columns. The Session ID cap is 40 characters; current UUIDs are 36 characters and already fit, so for IDs the flag is effectively a no-op today, but it always reveals the full untruncated URL.",
+            "  - ",
+            4,
+        ));
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli list".to_string());
@@ -1899,16 +1948,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(
-            "  - The `get` subcommand supports four fields: `text` (inner text, may be clipped by CSS overflow), `textcontent` (full text content), `html` (inner HTML), and `attr` (attribute value)."
+            "  - The `get` subcommand supports four fields: `text` (normalized inner text), `textcontent` (raw textContent — original whitespace/newlines kept; includes hidden text), `html` (inner HTML), and `attr` (attribute value). Note: neither text field can recover text that the page itself truncated in its HTML source (e.g. a clipped link label) — use `attr` (often the `title` attribute) or open the detail page for that."
                 .to_string(),
         );
         lines.push(wrap_text(
-            "Argument order: `get <field:text|html|attr> <css-selector> [attribute-name]`.  When using `attr`, the third argument is the attribute name (e.g. `href`, `src`, `class`).",
+            "Argument order: `get <field:text|textcontent|html|attr> <css-selector> [attribute-name]`.  When using `attr`, the third argument is the attribute name (e.g. `href`, `src`, `class`).",
             "  - ",
             4,
         ));
         lines.push(wrap_text(
-            "Tip: `htmlsnapshot get attr \"div\" class` → extracts the class attribute from the first matching div.  Use `get all attr \"img\" src` for every image's src.",
+            "Tip: `htmlsnapshot get attr \"div\" class` → extracts the class attribute from the first matching div.  Use `get all attr \"img\" src` for every image's src. Attribute values are returned RAW (href/src are often relative); add `--absolute` to resolve them against the page URL, e.g. `get all attr \"a[href]\" href --absolute`.",
             "  - ",
             4,
         ));
@@ -1922,11 +1971,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Unlike top-level `get` (accessibility tree), `htmlsnapshot get` uses CSS selectors on stored HTML."
+            "  - Unlike top-level `get` (accessibility tree + element refs), `htmlsnapshot get` takes CSS selectors and reads the LIVE page directly — no prior `htmlsnapshot` capture is required."
                 .to_string(),
         );
         lines.push(
-            "    For live page queries (AXTree-based), use `get text <ref>`. For CSS extraction, capture with `htmlsnapshot` first."
+            "    For AXTree/ref-based live queries, use `get text <ref>`."
                 .to_string(),
         );
         lines.push(wrap_text(
@@ -1956,7 +2005,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(wrap_text(
-            "Generate a compressed page summary (WPSI) from the LIVE page with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size.",
+            "Generate a page summary (WPSI) from the LIVE page with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats. Its size depends on page structure — far smaller than the HTML for large, boilerplate-heavy pages, but on dense listing pages (many repeated items, each with a link and bounding box) it can approach the HTML size.",
             "  - ",
             4,
         ));

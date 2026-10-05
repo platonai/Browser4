@@ -23,6 +23,29 @@
     <name>Browser4 Images</name>
     <description>Image detection and bulk download for Browser4</description>
 
+    <!-- Substitute @project.version@ into META-INF/browser4-plugin.json so the
+         plugin manifest version always matches the built artifact (the manifest
+         used to be hand-maintained and drifted from the Maven version). Only the
+         manifest is filtered; all other resources are copied verbatim. -->
+    <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>META-INF/browser4-plugin.json</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>META-INF/browser4-plugin.json</exclude>
+                </excludes>
+            </resource>
+        </resources>
+    </build>
+
     <dependencies>
 
         <!-- ================================================================

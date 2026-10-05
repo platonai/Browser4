@@ -25,11 +25,11 @@ The `htmlsnapshot` family operates on a **static HTML snapshot** — the raw HTM
 
 ```bash
 browser4-cli htmlsnapshot                                # capture fresh static HTML snapshot + metadata
-browser4-cli htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract text/html/attr via CSS; html paginated at 2K lines, text not paginated
+browser4-cli htmlsnapshot get <field> [selector] [name] [--absolute] [--page N] [--page-size N] [--all]  # field = text|textcontent|html|attr; html paginated at 2K lines, text/textcontent not paginated
 browser4-cli htmlsnapshot query [url] --sql <query> [--format json|csv|table]  # X-SQL; current page = live DOM, other URLs = independent fetch (see Query below)
 browser4-cli htmlsnapshot summary                        # compressed page summary (WPSI)
 browser4-cli htmlsnapshot export [--file <path>] [--clean]  # save snapshot HTML to file
-browser4-cli htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]  # extract ALL matches; html paginated at 2K lines, text not paginated
+browser4-cli htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--absolute] [--page N] [--page-size N] [--all]  # extract ALL matches; html paginated at 2K lines, text/textcontent not paginated
 browser4-cli htmlsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [--all]  # search snapshot HTML with regex; paginated by default (2K lines)
 browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]  # analyze DOM structure, suggest CSS selectors
 ```
@@ -44,17 +44,20 @@ Only CSS selectors are accepted — element refs (`e5`) are rejected.
 
 ```bash
 # First match only (querySelector semantics)
-browser4-cli htmlsnapshot get <text|html|attr> <selector> [name]
+browser4-cli htmlsnapshot get <text|textcontent|html|attr> <selector> [name] [--absolute]
 
 # All matches (querySelectorAll semantics)
-browser4-cli htmlsnapshot get all <text|html|attr> <selector> [name] [--offset N] [--limit N]
+browser4-cli htmlsnapshot get all <text|textcontent|html|attr> <selector> [name] [--offset N] [--limit N] [--absolute]
 ```
 
 | Field | Description | Requires `name`? |
 |---|---|---|
-| `text` | Visible text of matched element(s) | No |
+| `text` | Normalized visible text of matched element(s) — jsoup-style whitespace normalization (collapsed, trimmed) | No |
+| `textcontent` | Raw `textContent` — original whitespace and line breaks preserved, only end-trimmed | No |
 | `html` | Inner HTML of matched element(s) | No |
-| `attr` | Value of a named attribute | **Yes** (3rd argument) |
+| `attr` | Raw value of a named attribute (often a *relative* URL for `href`/`src`); add `--absolute` to resolve URL-valued attributes against the page URL | **Yes** (3rd argument) |
+
+Neither `text` nor `textcontent` can recover text that is truncated in the page HTML itself (e.g. ellipsized titles); read the full value from the attribute holding it (e.g. `htmlsnapshot get attr h3 a title`). `--absolute` only affects URL-valued attributes (`href`, `src`, `action`, …); other attributes such as `title` are always returned verbatim.
 
 **`get` returns only the first match.** For multiple results, use `htmlsnapshot get all` (returns a JSON array) or `htmlsnapshot query`.
 
@@ -71,9 +74,13 @@ browser4-cli htmlsnapshot get attr ".product-image" data-src
 
 Returns a JSON array of strings.  Supports `--offset` (skip first N) and `--limit` (max results).
 
+**Element counts:** human output ends with a count line (`N elements matched.`; a single match gets a narrower-selector hint instead), and `--json` adds a `match_count` field. Use that count to verify a selector matches exactly N elements. Do **not** use `grep -c` for this — it counts matching *lines* of HTML, which coincides with the element count only on pretty-printed one-element-per-line markup and returns 1 for minified HTML.
+
 ```bash
 browser4-cli htmlsnapshot get all text "h2 a"                  # all product titles
-browser4-cli htmlsnapshot get all attr ".product-image" src    # all image URLs
+browser4-cli htmlsnapshot get all attr "h2 a" href             # raw, often relative links
+browser4-cli htmlsnapshot get all attr "h2 a" href --absolute  # links resolved against the page URL
+browser4-cli htmlsnapshot get all attr ".product-image" src --absolute  # all absolute image URLs
 browser4-cli htmlsnapshot get all text ".result" --limit 5     # first 5 results
 browser4-cli htmlsnapshot get all text ".result" --offset 10   # skip first 10
 ```
@@ -83,7 +90,7 @@ browser4-cli htmlsnapshot get all text ".result" --offset 10   # skip first 10
 If `htmlsnapshot get` returns an empty string when the page clearly has matching elements:
 
 1. **Check the page and selector first** — reads use the live DOM, so an empty result means the selector did not match the current document (re-running `htmlsnapshot` does not change that)
-2. **Verify the CSS selector** with `htmlsnapshot grep <pattern>` to search the HTML
+2. **Verify the CSS selector** with `htmlsnapshot inspect "<selector>"` (shows the match count) or bare `htmlsnapshot inspect` (auto-discovers patterns). Use `htmlsnapshot grep <pattern>` only to search raw HTML *text* — its pattern is a Rust regex, not a CSS selector
 3. **Use `htmlsnapshot query` or `htmlsnapshot get all`** for multiple results or complex queries
 4. **Check page load:** ensure the page finished loading (AJAX content may take time)
 
@@ -194,18 +201,19 @@ Exit codes (for scripts — don't parse stdout to detect errors):
 
 - `0` — the response envelope reports success (`200`). An **empty** resultSet
   is still exit `0`: "no rows matched" is not an error.
-- Nonzero — the server returned an **error envelope**: `417 Expectation
-  Failed` (a query/SQL error or the scrape session closed before the query
-  executed — re-run, or use `htmlsnapshot get` / `eval` for simple
-  extractions) or a `5xx` with an empty resultSet (backend scrape engine
-  error). The envelope still prints to stdout (or `--output-file`) so you can
-  inspect it; key off the exit code.
+- Nonzero — the server returned an **error envelope** with `statusCode >= 400`:
+  `400 Bad Request` (X-SQL syntax error — the server `message` carries the H2
+  parser detail), `417 Expectation Failed` (a query/SQL error or the scrape
+  session closed before the query executed — re-run, or use `htmlsnapshot get`
+  / `eval` for simple extractions), or any `5xx` with an empty resultSet
+  (backend scrape engine error). The envelope still prints to stdout (or
+  `--output-file`) so you can inspect it; key off the exit code.
 
 To control caching or rendering, append load options to the URL (e.g. `https://example.com/page -i 1d -njr 3`).
 
 ## Summary — Web Page Summary Index (WPSI)
 
-Generates a deterministic, AI-readable compressed page summary (typically <1% of original HTML) as a YAML file. Includes page metadata, structure landmarks, key content nodes with CSS selector hints, list/table detection, and stats. Reads the live page — no prior capture required.
+Generates a deterministic, AI-readable compressed page summary as a YAML file. The compression ratio depends on page structure: text-heavy pages surrounded by lots of boilerplate collapse dramatically, while compact, dense listing pages (many short repeated items with little surrounding markup) can leave the summary at a sizeable fraction of the original HTML — no fixed ratio is guaranteed. Includes page metadata, structure landmarks, key content nodes with CSS selector hints, list/table detection, and stats. Reads the live page — no prior capture required.
 
 ```bash
 browser4-cli htmlsnapshot summary
@@ -236,7 +244,7 @@ browser4-cli htmlsnapshot grep [OPTIONS] <pattern>
 | `-B N` | Show N lines before each match |
 | `-C N` | Show N lines before and after each match |
 | `-v` | Invert match (select non-matching lines) |
-| `-c` | Print only the count of matching lines |
+| `-c` | Print only the count of matching **lines** (NOT a count of matched elements — against minified/single-line HTML it returns 1; use `htmlsnapshot get all`'s `N elements matched.` line / `match_count` for element counts) |
 | `-l` | Print only whether matches exist (grep-style "files-with-matches"; exits 0 if found) |
 | `-F` | Treat pattern as a literal string, not regex |
 | `-w` | Match only whole words (wraps pattern with `\b` word boundaries) |
@@ -264,7 +272,7 @@ Patterns are **Rust regex** (`regex` crate) matched **per line** — not POSIX/P
 
 `snapshot grep` shares the same Rust-regex dialect and flag set (it searches the AX-tree YAML instead of HTML); the HTML grep adds `--selector-all` and `--raw-html`, which only make sense over raw HTML.
 
-For CI pass/fail checks, use `-l` (prints "htmlsnapshot" if matches exist) or `-c` (prints match count). Check the CLI exit code (`browser4-cli ... && echo PASS || echo FAIL`) — a non-zero exit means the backend call failed, not that matches were absent. `-l` always exits 0 when the backend call succeeds; the match/no-match result is in the output text.
+For CI pass/fail checks, use `-l` (prints "htmlsnapshot" if matches exist) or `-c` (prints the count of matching **lines** — not elements; do not use it to assert "the selector matches N elements", use `htmlsnapshot get all` and its `N elements matched.` line / `match_count` JSON field for that). Check the CLI exit code (`browser4-cli ... && echo PASS || echo FAIL`) — a non-zero exit means the backend call failed, not that matches were absent. `-l` always exits 0 when the backend call succeeds; the match/no-match result is in the output text.
 
 
 ### Examples
@@ -310,6 +318,8 @@ Matches are printed with `N:` (line number + colon) followed by the line content
 
 When `--no-line-number` is passed, the line-number prefix is omitted entirely. Match and context lines are then distinguished only by the `-` prefix on context lines.
 
+Only match output is written to **stdout** — the freshness note (`# live page HTML @ <timestamp>` for `htmlsnapshot grep`, `# snapshot content @ <timestamp>` for `snapshot grep`) goes to **stderr**, so piped stdout stays pure grep output (e.g. `... | wc -l` or `... > out.txt` is never contaminated by a header line).
+
 ## Inspect — Discover CSS selectors for recurring patterns
 
 Analyzes the HTML snapshot and suggests CSS selectors for recurring content patterns. Essential for complex pages where you don't know the right selectors ahead of time (e.g., e-commerce search results, news listings).
@@ -321,8 +331,8 @@ browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]
 | Parameter | Default | Description |
 |---|---|---|
 | `selector` | `:root` | CSS selector to scope inspection. When it matches multiple elements (e.g. `.product-card`), the command compares child structures across matches to find recurring patterns. |
-| `--max N` | 10 | Max matching elements to analyze. |
-| `--depth D` | 5 | Max descendant depth for selector suggestions. |
+| `--max N` | 20 | Max matching elements to analyze. |
+| `--depth D` | 5 | Max descendant depth for **selector suggestions** only. It does NOT deepen the printed "Sample structure" tree, which always shows the matched elements' direct children (one level). |
 
 ### How it works
 
@@ -342,7 +352,7 @@ When `selector` matches only **1 element** (e.g. default `:root`, or `body`), **
 ### Output
 
 ```
-### Inspect: ".product_pod" (20 matches, 10 analyzed)
+### Inspect: ".product_pod" (20 matches, 20 analyzed)
 
   Sample structure (3 of 20):
   -- Element 1: article.product_pod
@@ -354,19 +364,23 @@ When `selector` matches only **1 element** (e.g. default `:root`, or `body`), **
   ...
 
   Suggested selectors (recurring across matches):
-   10/10 (100%)  h3 a                                         → "A Light in the..."
-   10/10 (100%)  img.thumbnail                                → ""
-   10/10 (100%)  p.price_color                                → "£51.77"
-    8/10 ( 80%)  p.instock.availability                       → "In stock"
+   20/20 (100%)  h3 a                                         → "A Light in the..."
+   20/20 (100%)  img.thumbnail                                → ""
+   20/20 (100%)  p.price_color                                → "£51.77"
+   16/20 ( 80%)  p.instock.availability                       → "In stock"
 ```
+
+The "Sample structure" tree lists each match's **direct children only** (one level), regardless of `--depth`; `--depth` only deepens the descendant walk behind the "Suggested selectors" list.
 
 ### Tips
 
 - **List pages vs detail pages:** `inspect` finds **recurring** patterns — it shines on list/grid pages (search results, product cards, tables). A single product/article/detail page has no repeating block, so inspect may surface nothing (or an unrelated side rail). For detail pages use `htmlsnapshot summary` (visual clustering) to discover the main content selectors, then read them with explicit selectors (`htmlsnapshot get text "h1"`). When inspect finds nothing recurring it prints "No recurring pattern found" and points to `summary`.
-- **Start without arguments:** `htmlsnapshot inspect` (no selector) triggers auto-discovery and finds the page's most prominent repeating content pattern. This is the quickest way to discover selectors on an unfamiliar page.
-- **Start broad, then narrow:** First run without a selector to see page landmarks. Then target a repeating container (e.g. `.product_pod`, `.s-result-item`).
+- **Start without arguments:** `htmlsnapshot inspect` (no selector) triggers auto-discovery and finds the page's most prominent repeating content pattern. This answers **"what repeats on this page?"** (product cards, article lists) — it does NOT show page landmarks. For a header/nav/main/aside/footer outline, run `htmlsnapshot summary`.
+- **Start broad, then narrow:** First run bare `inspect` to find the repeating container (e.g. `.product_pod`, `.s-result-item`), then inspect that container explicitly.
 - **No capture required:** `inspect` analyzes the **live page** of the active tab — there is no cached document to load first.
 - **Use with `get`:** Take the suggested selectors and use them with `htmlsnapshot get all` or `htmlsnapshot query` for batch extraction.
+- **Clipped sample values:** when a `→ "..."` sample ends with `…`/`...`, the full value may be truncated in the page's own markup — no `text`/`textcontent` field can recover it. inspect points at the carrying attribute (`title`/`aria-label`/`alt`) with a ready `htmlsnapshot get all attr "<selector>" <attribute>` line when it detects one.
+- **Copy-paste quoting:** the "Try these next" commands quote selectors so they survive both PowerShell and POSIX shells (selectors with embedded double quotes, like `[data-loading-text="Adding..."]`, are single-quoted). The rare selector containing BOTH quote styles is printed as two labeled variants — or pass it to inspect itself via `--stdin` / `--selector-base64` / `@file`.
 - **Avoid quoting hell:** Use `--sql @file.sql` (file), `--sql-stdin` (piped), or `--sql-base64` (encoded) instead of inline `--sql "..."` on Windows — quoted CSS selectors and `!=` operators break inline SQL.
 - **Base64 for portability:** `--sql "$(base64 -w0 query.sql)" --sql-base64` passes SQL safely through any shell, CI pipeline, or HTTP transport with zero quoting issues.
 - **`@file` paths resolve against the Browser4 repo root first**, then fall back to the current working directory — so `cargo run` from `cli/browser4-cli` still finds `query.sql` at the workspace root, while a file that exists only relative to the CWD is picked up by the fallback.
@@ -375,7 +389,7 @@ When `selector` matches only **1 element** (e.g. default `:root`, or `body`), **
 
 - `htmlsnapshot` capture fails if backend is unreachable or page cannot be loaded.
 - `htmlsnapshot get` / `get all` print a diagnostic ("No elements matched …") and exit `0` when the CSS selector matches nothing — consistent with `query`'s "no rows matched is not an error". A non-zero exit means the backend call failed (e.g. an invalid selector or an element ref like `e5`, which `get` does not accept).
-- `htmlsnapshot query` exits nonzero on invalid X-SQL syntax, a missing `--sql`, or a server error envelope (`417 Expectation Failed` or a `5xx` with an empty resultSet). A `200` envelope with an empty resultSet ("no rows matched") is exit 0.
+- `htmlsnapshot query` exits nonzero on invalid X-SQL syntax (`400 Bad Request`), a missing `--sql`, or a server error envelope (any `4xx`, including `417 Expectation Failed`, or a `5xx` with an empty resultSet). A `200` envelope with an empty resultSet ("no rows matched") is exit 0.
 - `htmlsnapshot export` / `summary` / `inspect` read the **live page**, so they do not fail for a missing capture — they fail only when there is no loaded, navigable page (about:blank, a non-http(s) document, or a dead session).
 
 ## Notes
@@ -384,8 +398,9 @@ When `selector` matches only **1 element** (e.g. default `:root`, or `body`), **
 - X-SQL queries through `htmlsnapshot query` follow the same constraints as `swarm query`. See [X-SQL reference](x-sql.md) for full function documentation.
 - The stored capture from `htmlsnapshot` (capture) is metadata plus an archived copy; it is **not** the source for any read. Every read command — `get`, `get all`, `inspect`, `summary`, `grep`, `export`, `query` — serializes the **live DOM of the active tab** at call time (falling back to the page store / a fresh capture only when there is no usable live document), so the page is always read as it is right now.
 - `htmlsnapshot grep` performs matching **entirely client-side** in the CLI — the full HTML is fetched from the backend once, then all regex matching happens locally. No backend round-trips for the search itself.
-- For CI pass/fail checks with grep, use `-l` (prints "htmlsnapshot" if matches found) or `-c` (prints match count). A `browser4-cli` non-zero exit code means the backend call itself failed, not that matches were absent.
-- `htmlsnapshot` capture now returns enriched metadata: `imageCount`, `linkCount`, and `interactiveElements` (tag, class, id, aria attributes, bounding-box). The bounding box comes from the `vi` (visual-information) data the Browser4 runtime computes from the live layout and injects **while serializing** the HTML — `vi` is deliberately not a DOM attribute (the live page stays untouched), so it only exists in HTML the driver serialized. The capture produces that data on demand, so a session that only navigated (`goto`, tab switch, form submission) still gets boxes, and `htmlsnapshot export` writes `vi` attributes for offline consumers.
+- For CI pass/fail checks with grep, use `-l` (prints "htmlsnapshot" if matches found) or `-c` (prints the number of matching **lines**, not elements — element counts come from `get all`'s count line / `match_count`). A `browser4-cli` non-zero exit code means the backend call itself failed, not that matches were absent.
+- `htmlsnapshot` capture now returns enriched metadata: `imageCount`, `linkCount`, and `interactiveElements` (tag, class, id, aria attributes, bounding-box). The bounding box comes from the `vi` (visual-information) data the Browser4 runtime computes from the live layout and injects **while serializing** the HTML — `vi` itself is deliberately not a DOM attribute, so it only exists in HTML the driver serialized. The capture produces that data on demand, so a session that only navigated (`goto`, tab switch, form submission) still gets boxes, and `htmlsnapshot export` writes `vi` attributes for offline consumers.
+- The same visual-information compute pass does write two small **text-analysis markers onto the live DOM** (in the runtime's `__pulsar_utils__.js`, shipped inside the `pulsar-browser` dependency): `tp="st"` / `tp="nm"` classifies a short-text / number-like element, and `lz="1"` marks text first seen on a later pass (lazy-loaded). They are runtime bookkeeping, not the site's own markup, so the html snapshot read path strips both at parse time — `get` / `get all` (including `field=html`), `inspect`, and `summary` never return them, and `export --clean` removes them with the other non-standard attributes. A raw `export` (no `--clean`) is a faithful archive and may still contain them, exactly as it contains `vi`; a page's own scripts can also observe `lz`/`tp` after the first annotated read.
 - Exported HTML also carries `<link rel="normalizedURI" href="…">` in `<head>`: the page URL after `PulsarSession.normalize()`, injected during serialization the same way. Together with `vi`, it makes the exported artifact self-describing — an offline consumer can tell both *where* each element sits and *which page* the document is. (A subtree read through the driver, e.g. `outerHTML(selector)`, intentionally has no such link: the URL describes the document, not a fragment.)
 - `htmlsnapshot inspect` computes relative CSS selectors using tag + class + id. It does not use AI — the algorithm is fully deterministic and based on structural recurrence across matching elements. When run without a selector (or any single-match selector like `:root`), **auto-discovery** finds the page's most prominent repeating content pattern automatically — no prior knowledge of the page's markup is needed.
 - **Output pagination:** `get html` and `grep` paginate output by default at 2000 lines per page. `get all …` (any field) and the `text` / `textcontent` fields print in full, unpaginated. Use `--page N` for subsequent pages, `--page-size N` to change the page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes. Use `--all` when piping output to external tools.

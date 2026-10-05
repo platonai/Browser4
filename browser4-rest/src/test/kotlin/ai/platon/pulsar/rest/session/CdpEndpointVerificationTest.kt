@@ -95,7 +95,7 @@ class CdpEndpointVerificationTest {
     }
 
     @Test
-    @DisplayName("describeAttachFailure explains HTTP 404 as Chrome's built-in remote debugging")
+    @DisplayName("describeAttachFailure treats HTTP 404 as a non-CDP endpoint, built-in mode only a possibility")
     fun describeAttachFailureExplainsBuiltInRemoteDebugging() {
         server.createContext("/json/version") { exchange ->
             exchange.sendResponseHeaders(404, -1)
@@ -104,12 +104,53 @@ class CdpEndpointVerificationTest {
         val endpoint = "http://127.0.0.1:$port"
         val result = PulsarSessionManager.verifyCdpEndpoint(endpoint)
         val failure = PulsarSessionManager.describeAttachFailure(endpoint, result)
+            ?: error("an endpoint without CDP discovery must produce a failure message")
+
+        // The certain fact: something answered HTTP but it is not a CDP endpoint.
+        assertTrue(failure.contains("reachable but is not a Chrome DevTools"), failure)
+        assertTrue(failure.contains("HTTP 404"), failure)
+        // A plain web server returns the same 404 — it must not be claimed to BE Chrome.
+        assertTrue(failure.contains("Any non-CDP web server answers the same way"), failure)
+        // Built-in remote debugging is offered only as ONE possibility.
+        assertTrue(failure.contains("One possibility"), failure)
+        assertTrue(failure.contains("chrome://inspect/#remote-debugging"), failure)
+        assertTrue(failure.contains("attach --extension"), failure)
+    }
+
+    @Test
+    @DisplayName("describeAttachFailure translates a raw ConnectException into plain language")
+    fun describeAttachFailureHumanizesConnectionRefused() {
+        // Simulate the transport failure verifyCdpEndpoint records when nothing
+        // is listening — its detail is the raw exception class name.
+        val endpoint = "http://127.0.0.1:19999"
+        val result = PulsarSessionManager.CdpEndpointVerification(
+            reachable = false,
+            browser = null,
+            pageTargetCount = 0,
+            detail = "ConnectException",
+            versionStatus = null,
+        )
+        val failure = PulsarSessionManager.describeAttachFailure(endpoint, result)
             ?: error("an unreachable endpoint must produce a failure message")
 
         assertTrue(failure.contains("is not reachable"), failure)
-        assertTrue(failure.contains("HTTP 404"), failure)
-        assertTrue(failure.contains("chrome://inspect/#remote-debugging"), failure)
-        assertTrue(failure.contains("attach --extension"), failure)
+        assertTrue(failure.contains("nothing is listening"), failure)
+        // The raw Java class name must not leak to the user.
+        assertFalse(failure.contains("ConnectException"), failure)
+        assertTrue(failure.contains("--remote-debugging-port"), failure)
+    }
+
+    @Test
+    @DisplayName("humanizeConnectionFailure keeps unknown causes verbatim")
+    fun humanizeConnectionFailureKeepsUnknownCause() {
+        assertEquals(
+            "SSL handshake failed: certificate expired",
+            PulsarSessionManager.humanizeConnectionFailure("SSL handshake failed: certificate expired"),
+        )
+        assertTrue(
+            PulsarSessionManager.humanizeConnectionFailure("Connection refused: /127.0.0.1:1")
+                .contains("nothing is listening"),
+        )
     }
 
     @Test

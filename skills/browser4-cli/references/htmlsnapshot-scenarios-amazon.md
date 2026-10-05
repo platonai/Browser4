@@ -33,7 +33,7 @@ Use these recipes for Amazon product research, price/availability tracking, or a
 
 ## How It Works
 
-`summary` compresses a page into a Web Page Summary Index (WPSI) — headings, form/table/list counts and the most text-dense content blocks, typically under 1% of the original HTML. `inspect` then samples the elements matching a candidate selector and ranks their child selectors by how many of those elements each one recurs in, so you commit to a selector only after seeing its coverage. Extraction follows one of two shapes everywhere: `get` / `get all` for individual fields, and `query` with `DOM_LOAD_AND_SELECT` for per-row correlated fields. Because Amazon lazy-loads prices and images with JavaScript and A/B-tests its layouts, the loop is re-run per locale and per product category instead of trusting a stored selector list.
+`summary` compresses a page into a Web Page Summary Index (WPSI) — headings, form/table/list counts and the most text-dense content blocks, usually a small fraction of the original HTML (the ratio varies with page structure; dense listing pages compress far less). `inspect` then samples the elements matching a candidate selector and ranks their child selectors by how many of those elements each one recurs in, so you commit to a selector only after seeing its coverage. Extraction follows one of two shapes everywhere: `get` / `get all` for individual fields, and `query` with `DOM_LOAD_AND_SELECT` for per-row correlated fields. Because Amazon lazy-loads prices and images with JavaScript and A/B-tests its layouts, the loop is re-run per locale and per product category instead of trusting a stored selector list.
 
 ## Patterns
 
@@ -178,7 +178,7 @@ browser4-cli snapshot | grep -i search
 
 **Why `summary` + `inspect` before extraction:** On a page as large as Amazon's home page (2000+ text nodes, 18 tables), manually reading HTML or guessing selectors is impractical. `summary` condenses the page to its skeleton — you see that there are 2 forms and the search bar lives inside `#nav-search-bar-form`. `inspect` then reveals the exact selectors for the search input (`input#twotabsearchtextbox`) and the Go button (`input.nav-input[type="submit"]`). Once you know these selectors, you can either fill the form or — more reliably — navigate directly to search results using URL injection (see Scenario 15).
 
-> **Note:** Amazon's home page is notoriously heavy (often >2 MB of HTML, 2000+ DOM nodes). The WPSI summary is typically <1% of the original HTML size, making it practical for LLM consumption even on the largest pages.
+> **Note:** Amazon's home page is notoriously heavy (often >2 MB of HTML, 2000+ DOM nodes). The WPSI summary collapses boilerplate-heavy pages like this to a small fraction of the HTML, making them practical for LLM consumption; the exact ratio depends on page structure, and dense listing pages compress far less.
 
 ---
 

@@ -120,6 +120,45 @@ object ImageUtils {
     }
 
     /**
+     * Align a filename's extension with the actual Content-Type of the response.
+     *
+     * Servers may negotiate a different image format than the URL/filename suggests
+     * (e.g. Wikimedia content negotiation returning WebP bytes for a .png URL).
+     * When the Content-Type is a known image MIME type and the filename extension
+     * disagrees with it, the extension is replaced so the saved filename reflects
+     * the actual bytes. jpg/jpeg are treated as equivalent. Returns the filename
+     * unchanged when the Content-Type is null/unknown, or the filename has no
+     * extension to replace.
+     */
+    fun alignFilenameExtension(filename: String, contentType: String?): String {
+        if (!isImageMimeType(contentType)) return filename
+        val ext = guessExtension(contentType)
+        val dotIndex = filename.lastIndexOf('.')
+        if (dotIndex < 0) return "$filename.$ext"
+        val currentExt = filename.substring(dotIndex + 1).lowercase()
+        val equivalent = currentExt == ext ||
+            (currentExt == "jpeg" && ext == "jpg") || (currentExt == "jpg" && ext == "jpeg")
+        return if (equivalent) filename else filename.substring(0, dotIndex) + "." + ext
+    }
+
+    /**
+     * A short human-readable reason phrase for common HTTP status codes.
+     * HTTP/2 responses carry no reason phrase, so OkHttp's Response.message()
+     * is often empty — this keeps error messages complete.
+     */
+    fun defaultHttpReason(code: Int): String = when (code) {
+        400 -> "Bad Request"
+        401 -> "Unauthorized"
+        403 -> "Forbidden"
+        404 -> "Not Found"
+        405 -> "Method Not Allowed"
+        410 -> "Gone"
+        429 -> "Too Many Requests"
+        in 500..599 -> "Server Error"
+        else -> ""
+    }
+
+    /**
      * Sanitize a filename to prevent path traversal and illegal characters.
      */
     fun sanitizeFilename(name: String): String {

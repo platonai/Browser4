@@ -311,6 +311,36 @@ impl ServerPaginationMeta {
     }
 }
 
+/// Probe whether a Browser4 server answers at `base_url` BEFORE mutating any
+/// local session state. Used by `attach --endpoint` so an unreachable remote
+/// server fails with friendly guidance and leaves the local state untouched.
+///
+/// Returns `Ok(())` when the health endpoint answers 2xx, or an `Err` carrying
+/// a user-facing explanation (never a raw reqwest/Java token).
+pub async fn probe_server_reachable(client: &Client, base_url: &str) -> Result<(), String> {
+    let url = format!("{}/actuator/health", base_url.trim_end_matches('/'));
+    let outcome = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await;
+    match outcome {
+        Ok(response) if response.status().is_success() => Ok(()),
+        Ok(response) => Err(format!(
+            "Browser4 server at {base_url} answered but is not ready (HTTP {}). \
+             Verify the server is fully started and retry.",
+            response.status()
+        )),
+        Err(e) if e.is_connect() => Err(format!(
+            "Cannot reach Browser4 server at {base_url} — nothing is listening there \
+             (connection refused). Is the server running? Check the --endpoint URL and retry."
+        )),
+        Err(e) => Err(format!(
+            "Cannot reach Browser4 server at {base_url} — is it running? ({e})"
+        )),
+    }
+}
+
 pub async fn call_tool(
     client: &Client,
     base_url: &str,
@@ -442,6 +472,10 @@ async fn call_tool_with_timeout(
             .and_then(|item| item.get("text"))
             .and_then(|t| t.as_str())
             .unwrap_or("Unknown MCP error");
+        // The backend's errorResponse prefixes every error text with "ERROR: ".
+        // The CLI renders errors with its own "Error: " prefix, so strip the
+        // backend marker here to avoid "Error: ERROR: tool failed: …".
+        let msg = msg.strip_prefix("ERROR:").unwrap_or(msg).trim();
         return Err(msg.to_string());
     }
 
@@ -807,13 +841,26 @@ fn build_endpoint_url(base_url: &str, path: &str) -> String {
 fn format_http_error(status: reqwest::StatusCode, response_text: &str) -> String {
     let message = response_text.trim();
     if message.is_empty() {
-        format!(
+        return format!(
             "HTTP request failed with status {} and an empty response body.",
             status
-        )
-    } else {
-        format!("HTTP request failed with status {}: {}", status, message)
+        );
     }
+
+    // Many controllers (and the GlobalExceptionHandler) return a JSON body
+    // like {"error": "...", "message": "..."}. Prefer the human-readable
+    // "message" field so the user doesn't see raw JSON on a 413 / 504.
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(message) {
+        if value.is_object() {
+            if let Some(msg) = value.get("message").and_then(|v| v.as_str()) {
+                return format!("HTTP request failed with status {}: {}", status, msg);
+            }
+            // Fall back to the whole JSON object if it has no message field.
+            return format!("HTTP request failed with status {}: {}", status, message);
+        }
+    }
+
+    format!("HTTP request failed with status {}: {}", status, message)
 }
 
 async fn send_rest_request(

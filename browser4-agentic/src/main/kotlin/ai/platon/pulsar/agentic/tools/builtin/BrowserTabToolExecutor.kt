@@ -1260,6 +1260,19 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 val boxes = paramBool(args, "boxes", functionName, required = false) ?: true
                 val maxNodes = paramInt(args, "limit", functionName, required = false) ?: -1
 
+                // Fail loudly when the requested CSS selector matches nothing —
+                // the downstream AX renderer would otherwise silently return the
+                // full page tree, which is indistinguishable from a successful
+                // scoped capture (Issue 1).
+                if (selector != null) {
+                    val found = driver.evaluateValue(
+                        "!!document.querySelector(${Browser4WebDriver.escapeJsSelector(selector)})"
+                    ) as? Boolean ?: false
+                    require(found) {
+                        "ariaSnapshot: CSS selector '$selector' matched no element on the page"
+                    }
+                }
+
                 val options = AriaSnapshotOptions(
                     interactive = interactive,
                     urls = urls,

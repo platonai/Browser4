@@ -79,8 +79,28 @@ pub fn diff_snapshots(before_path: &PathBuf, after_path: &PathBuf) -> String {
     format_diff_output(&diffs, before_path, after_path)
 }
 
+/// Run a diff between a previous snapshot file and in-memory content,
+/// returning a formatted string.  Used when `--stdout` captures don't write
+/// a file: the new content exists only in memory, so we parse it directly.
+pub fn diff_snapshot_content(before_path: &PathBuf, after_content: &str) -> String {
+    let before_content = match std::fs::read_to_string(before_path) {
+        Ok(c) => c,
+        Err(e) => return format!("# Cannot read {}: {}", before_path.display(), e),
+    };
+
+    let before_nodes = parse_snapshot(&before_content);
+    let after_nodes = parse_snapshot(after_content);
+
+    let diffs = compute_diff(&before_nodes, &after_nodes);
+    format_diff_output(&diffs, before_path, &PathBuf::from("<stdout>"))
+}
+
 /// Find the most recent snapshot file in the snapshot directory that isn't the
 /// given one. Returns `None` if no other snapshot exists.
+///
+/// Files whose name starts with `auto-` are post-command interaction
+/// snapshots; they are excluded so the diff baseline tracks deliberate
+/// `snapshot` captures, not transient auto-snapshots (Issue 6).
 pub fn find_previous_snapshot(exclude: &PathBuf) -> Option<PathBuf> {
     let dir = exclude.parent()?;
     if !dir.is_dir() {
@@ -91,8 +111,14 @@ pub fn find_previous_snapshot(exclude: &PathBuf) -> Option<PathBuf> {
         .ok()?
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.path().extension().map_or(false, |ext| ext == "yml")
-                && e.path() != *exclude
+            let path = e.path();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            path.extension().map_or(false, |ext| ext == "yml")
+                && !name.starts_with("auto-")
+                && path != *exclude
         })
         .filter_map(|e| {
             let modified = e.metadata().ok()?.modified().ok()?;

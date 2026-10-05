@@ -122,6 +122,26 @@
     </dependencies>
 
     <build>
+        <!-- Substitute @project.version@ into META-INF/browser4-plugin.json so the
+             plugin manifest version always matches the built artifact (the manifest
+             used to be hand-maintained and drifted from the Maven version). Only the
+             manifest is filtered; all other resources are copied verbatim. -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>META-INF/browser4-plugin.json</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>META-INF/browser4-plugin.json</exclude>
+                </excludes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

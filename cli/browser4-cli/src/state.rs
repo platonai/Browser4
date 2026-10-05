@@ -133,10 +133,33 @@ pub struct CliState {
     /// Used as fallback for display when the backend is unreachable.
     #[serde(rename = "lastAccessedAt", skip_serializing_if = "Option::is_none")]
     pub last_accessed_at: Option<String>,
+    /// Display mode fixed when the session was created: `"headed"` or
+    /// `"headless"`. The browser's display mode cannot change afterwards, so a
+    /// later `open --headed/--headless` only reconnects and the flag is
+    /// ignored — persisting the creation-time value lets the CLI tell the user
+    /// which mode the active session actually uses and suppress the reconnect
+    /// warning when the requested mode already matches. `None` for sessions
+    /// recorded by older CLI versions and for attached sessions.
+    #[serde(rename = "displayMode", default, skip_serializing_if = "Option::is_none")]
+    pub display_mode: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
-    !b
+    !*b
+}
+
+/// Truncate `s` so the result (including the ellipsis) is at most `max_chars`
+/// characters wide, always cutting on a UTF-8 char boundary. Returns the
+/// string unchanged when it already fits.
+fn truncate_display(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    if max_chars <= 1 {
+        return "…".to_string();
+    }
+    let kept: String = s.chars().take(max_chars - 1).collect();
+    format!("{}…", kept)
 }
 
 impl Default for CliState {
@@ -154,6 +177,7 @@ impl Default for CliState {
             browser_channel: None,
             created_at: None,
             last_accessed_at: None,
+            display_mode: None,
         }
     }
 }
@@ -287,32 +311,70 @@ fn state_file(state_dir: &Path, session_name: Option<&str>) -> PathBuf {
     }
 }
 
+/// Whether the primary state directory exists and is accessible on disk.
+///
+/// The workspace-relative fallback (`./.browser4-cli-state`) is only a
+/// substitute for an unusable primary (`~/.browser4` that could never be
+/// created, e.g. under a file sandbox). When the primary directory exists,
+/// a missing state file means "no persisted state" — reading the fallback in
+/// that case would resurrect a stale session from months ago (or from a
+/// different working directory, since the fallback is CWD-relative).
+fn primary_state_dir_usable(dir: &Path) -> bool {
+    match fs::metadata(dir) {
+        Ok(m) if m.is_dir() => {
+            // Metadata succeeds even for a read-denied directory on Unix, so
+            // additionally verify entries can be listed — a permission-denied
+            // primary is a real reason to consult the fallback.
+            fs::read_dir(dir).is_ok()
+        }
+        _ => false,
+    }
+}
+
 /// Read the persisted CLI state from disk, falling back to defaults.
 /// Auto-migrates old state files that lack the `kind` field by inferring it
 /// from the legacy `is_attached` / `attach_type` fields.
 ///
-/// When the implicit default directory (`~/.browser4`) is not readable (e.g.
-/// after a fallback write landed in `./.browser4-cli-state`), the fallback
-/// directory is checked so sessions survive across invocations.
+/// When the implicit default directory (`~/.browser4`) does not exist / is
+/// not accessible (e.g. under a file sandbox where fallback writes landed in
+/// `./.browser4-cli-state`), the fallback directory is checked so sessions
+/// survive across invocations.
 pub fn read_state(state_dir: Option<&Path>, session_name: Option<&str>) -> CliState {
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
 
+    // Only consult the fallback when the primary directory is genuinely
+    // unusable. If the primary dir merely lacks the state file (normal after
+    // `close`), the fallback must NOT be read — otherwise a stale fallback
+    // file is resurrected forever and `close-all` can never report 0.
+    let fallback = if is_implicit_default_dir(state_dir) && !primary_state_dir_usable(&dir) {
+        Some(fallback_state_dir())
+    } else {
+        None
+    };
+
+    read_state_with_fallback(&dir, fallback.as_deref(), session_name)
+}
+
+/// Core read logic with explicit primary/fallback directories (split out so
+/// the fallback-gating behaviour is unit-testable without touching HOME/CWD).
+fn read_state_with_fallback(
+    primary: &Path,
+    fallback: Option<&Path>,
+    session_name: Option<&str>,
+) -> CliState {
     let try_read = |d: &Path| -> Option<CliState> {
         let path = state_file(d, session_name);
         fs::read_to_string(&path).ok().map(|raw| parse_state(&raw))
     };
 
-    if let Some(state) = try_read(&dir) {
+    if let Some(state) = try_read(primary) {
         return state;
     }
 
-    // If we used the implicit default dir and the file wasn't found, also
-    // check the fallback directory so sessions created after a fallback write
-    // are found on the next invocation.
-    if is_implicit_default_dir(state_dir) {
-        if let Some(state) = try_read(&fallback_state_dir()) {
+    if let Some(fb) = fallback {
+        if let Some(state) = try_read(fb) {
             return state;
         }
     }
@@ -411,12 +473,19 @@ fn write_state_to_dir(
 }
 
 /// Clear all persisted CLI state (called on `close`).
+///
+/// Also removes the corresponding file in the workspace-relative fallback
+/// directory (`./.browser4-cli-state`) when the implicit default dir is in
+/// use, so a stale fallback copy cannot be resurrected on the next read.
 pub fn clear_state(state_dir: Option<&Path>, session_name: Option<&str>) {
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
-    let path = state_file(&dir, session_name);
-    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(state_file(&dir, session_name));
+
+    if is_implicit_default_dir(state_dir) {
+        let _ = fs::remove_file(state_file(&fallback_state_dir(), session_name));
+    }
 }
 
 /// Clear the default CLI state plus all named session state files.
@@ -425,8 +494,32 @@ pub fn clear_all_state(state_dir: Option<&Path>) {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
 
-    clear_state(Some(&dir), None);
+    // Belt-and-suspenders: wipe any fallback copies written by older versions
+    // (or while the primary dir was temporarily unwritable). Without this, a
+    // stale fallback cli-state.json is re-counted by `close-all` forever.
+    let fallback = if is_implicit_default_dir(state_dir) {
+        Some(fallback_state_dir())
+    } else {
+        None
+    };
 
+    clear_all_state_in_dirs(&dir, fallback.as_deref());
+}
+
+/// Core clear logic with explicit primary/fallback directories (split out so
+/// the fallback cleanup is unit-testable without touching HOME/CWD).
+fn clear_all_state_in_dirs(primary: &Path, fallback: Option<&Path>) {
+    clear_state(Some(primary), None);
+    clear_session_files_in_dir(primary);
+
+    if let Some(fb) = fallback {
+        let _ = fs::remove_file(state_file(fb, None));
+        clear_session_files_in_dir(fb);
+    }
+}
+
+/// Remove every `*.json` file directly under `{dir}/sessions` (best-effort).
+fn clear_session_files_in_dir(dir: &Path) {
     let sessions_dir = dir.join("sessions");
     if !sessions_dir.exists() {
         return;
@@ -1128,6 +1221,20 @@ pub fn format_async_task_list(
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> String {
+    format_async_task_list_opts(list, limit, offset, true)
+}
+
+/// Variant of [format_async_task_list] that controls whether the first line
+/// carries its own task count. When a status-distribution summary (which
+/// already states the total) is printed above the table, pass
+/// `include_count = false` so the count is not rendered twice; the header
+/// then shows pagination only.
+pub fn format_async_task_list_opts(
+    list: &AsyncTaskList,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    include_count: bool,
+) -> String {
     if list.tasks.is_empty() {
         return "No tracked async tasks.".to_string();
     }
@@ -1145,22 +1252,33 @@ pub fn format_async_task_list(
     let mut out = Vec::new();
     let showing = (offset + page.len()).min(total);
     let from = if total > 0 { offset + 1 } else { 0 };
-    out.push(format!(
-        "{} tracked task(s) (showing {}-{}):\n",
-        total, from, showing
-    ));
     let paginated = limit < total || offset > 0;
+    if include_count {
+        out.push(format!(
+            "{} tracked task(s) (showing {}-{}):\n",
+            total, from, showing
+        ));
+    } else {
+        // The count lives in the "Status: N total, …" summary printed above;
+        // this header carries pagination only to avoid double-counting.
+        let header = if paginated {
+            format!("Showing {}-{} of {} tracked task(s):\n", from, showing, total)
+        } else {
+            "Tracked tasks:\n".to_string()
+        };
+        out.push(header);
+    }
 
     // Column widths (capped for readability)
-    let id_w = page.iter().map(|t| t.task_id.len()).max().unwrap_or(8).max(8).min(12);
+    let id_w = page.iter().map(|t| t.task_id.chars().count()).max().unwrap_or(8).max(8).min(36);
     let cmd_w = page.iter().map(|t| t.command.len()).max().unwrap_or(7).max(7);
-    let desc_w = page.iter().map(|t| t.description.len()).max().unwrap_or(11).min(40);
+    let desc_w = page.iter().map(|t| t.description.chars().count()).max().unwrap_or(11).min(40);
     let desc_w = desc_w.max(11);
     let status_w = page
         .iter()
         .map(|t| {
             if t.last_status.is_empty() {
-                7 // "pending"
+                6 // "queued"
             } else {
                 t.last_status.len()
             }
@@ -1205,11 +1323,13 @@ pub fn format_async_task_list(
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        if desc.len() > desc_w {
-            desc = format!("{}…", &desc[..desc_w - 1]);
+        if desc.chars().count() > desc_w {
+            desc = truncate_display(&desc, desc_w);
         };
         let status = if entry.last_status.is_empty() {
-            "pending".to_string()
+            // Share summarize_async_tasks' lifecycle vocabulary — an
+            // unpolled task is "queued", never a fifth label ("pending").
+            "queued".to_string()
         } else {
             entry.last_status.clone()
         };
@@ -1225,9 +1345,17 @@ pub fn format_async_task_list(
         let duration = task_duration_ms(entry)
             .map(format_duration_ms)
             .unwrap_or_else(|| "-".to_string());
+        // Rust's width specifier pads but never truncates, so an id longer than
+        // id_w would print in full and shift every following column out of the
+        // header grid. Cap the cell (ellipsis) — standard 36-char UUIDs fit.
+        let id_cell = if entry.task_id.chars().count() > id_w {
+            truncate_display(&entry.task_id, id_w)
+        } else {
+            entry.task_id.clone()
+        };
         out.push(format!(
             "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<dur_w$}  {:<status_w$}",
-            entry.task_id,
+            id_cell,
             entry.command,
             desc,
             started,
@@ -1446,12 +1574,12 @@ impl Table {
     /// min/max caps. Returns one width per column.
     fn compute_widths(&self) -> Vec<usize> {
         let n = self.headers.len();
-        let mut widths: Vec<usize> = self.headers.iter().map(|h| h.len()).collect();
+        let mut widths: Vec<usize> = self.headers.iter().map(|h| h.chars().count()).collect();
 
         for row in &self.rows {
             for (i, cell) in row.iter().enumerate() {
                 if i < n {
-                    widths[i] = widths[i].max(cell.len());
+                    widths[i] = widths[i].max(cell.chars().count());
                 }
             }
         }
@@ -1519,8 +1647,8 @@ impl Table {
                 if i > 0 {
                     out.push_str(col_sep);
                 }
-                let display = if self.truncate && cell.len() > widths[i] && widths[i] > 1 {
-                    format!("{}\u{2026}", &cell[..widths[i] - 1])
+                let display = if self.truncate && cell.chars().count() > widths[i] && widths[i] > 1 {
+                    truncate_display(cell, widths[i])
                 } else {
                     cell.clone()
                 };
@@ -1556,6 +1684,49 @@ mod tests {
         assert_eq!(resolve_ref("e15"), "backend:15");
         assert_eq!(resolve_ref("E42"), "backend:42");
         assert_eq!(resolve_ref("  e7  "), "backend:7");
+    }
+
+    #[test]
+    fn test_truncate_display_ascii() {
+        assert_eq!(truncate_display("hello", 10), "hello");
+        assert_eq!(truncate_display("hello world", 8), "hello w…");
+    }
+
+    #[test]
+    fn test_truncate_display_cjk() {
+        // CJK chars are 3 bytes each; byte-slicing these would panic.
+        let s = "AI: 请用中文介绍李群的数学定义与几何意义";
+        let out = truncate_display(s, 10);
+        assert_eq!(out.chars().count(), 10);
+        assert!(out.ends_with('…'));
+        // No truncation needed
+        assert_eq!(truncate_display("中文", 10), "中文");
+    }
+
+    #[test]
+    fn test_truncate_display_edge() {
+        assert_eq!(truncate_display("abcdef", 1), "…");
+        assert_eq!(truncate_display("", 5), "");
+    }
+
+    #[test]
+    fn test_format_async_task_list_cjk_no_panic() {
+        let list = AsyncTaskList {
+            tasks: vec![AsyncTaskEntry {
+                task_id: "779c38e7-8a1a-4d41-9e0e-47e18f958834".to_string(),
+                command: "agent".to_string(),
+                description: "简述: 请用中文介绍李群的数学定义与几何意义，并给出两个应用实例，以及它们在物理学中的重要性".to_string(),
+                submitted_at: "2026-10-04T15:00:00Z".to_string(),
+                last_status: "completed".to_string(),
+                completed_at: Some("2026-10-04T15:01:00Z".to_string()),
+                batch_id: None,
+                started_at: None,
+                duration_ms: None,
+            }],
+        };
+        let rendered = format_async_task_list(&list, None, None);
+        assert!(rendered.contains('…'));
+        assert!(rendered.contains("agent"));
     }
 
     #[test]
@@ -1603,6 +1774,93 @@ mod tests {
         assert!(state_file(tmp.path(), None).exists());
         clear_state(Some(tmp.path()), None);
         assert!(!state_file(tmp.path(), None).exists());
+    }
+
+    #[test]
+    fn test_primary_state_dir_usable() {
+        let tmp = test_temp_dir();
+        // An existing readable directory is usable.
+        assert!(primary_state_dir_usable(tmp.path()));
+        // A nonexistent directory is not.
+        let missing = tmp.path().join("does-not-exist");
+        assert!(!primary_state_dir_usable(&missing));
+        // A regular file is not a usable state dir.
+        let file_path = tmp.path().join("a-file");
+        fs::write(&file_path, b"x").unwrap();
+        assert!(!primary_state_dir_usable(&file_path));
+    }
+
+    #[test]
+    fn test_read_state_does_not_resurrect_fallback_when_primary_exists() {
+        // Regression: a stale CWD-relative fallback cli-state.json was read
+        // whenever the primary dir merely lacked the file, producing a phantom
+        // default session that `close-all` counted forever.
+        let primary = test_temp_dir();
+        let fallback = test_temp_dir();
+        let stale = CliState {
+            session_id: Some("phantom-session".to_string()),
+            ..Default::default()
+        };
+        write_state(&stale, Some(fallback.path()), None).unwrap();
+
+        // Primary dir exists, no state file, no fallback consulted → default.
+        let read = read_state_with_fallback(primary.path(), None, None);
+        assert!(read.session_id.is_none());
+
+        // Explicitly passing the fallback simulates the sandbox case (primary
+        // genuinely unusable) — then the stale state is expected to surface.
+        let read = read_state_with_fallback(primary.path(), Some(fallback.path()), None);
+        assert_eq!(read.session_id.as_deref(), Some("phantom-session"));
+    }
+
+    #[test]
+    fn test_read_state_uses_fallback_when_primary_missing() {
+        let primary = test_temp_dir();
+        let missing_primary = primary.path().join("never-created");
+        let fallback = test_temp_dir();
+        let state = CliState {
+            session_id: Some("fallback-session".to_string()),
+            ..Default::default()
+        };
+        write_state(&state, Some(fallback.path()), None).unwrap();
+
+        let read = read_state_with_fallback(&missing_primary, Some(fallback.path()), None);
+        assert_eq!(read.session_id.as_deref(), Some("fallback-session"));
+    }
+
+    #[test]
+    fn test_clear_all_state_removes_fallback_files() {
+        let primary = test_temp_dir();
+        let fallback = test_temp_dir();
+        let stale = CliState {
+            session_id: Some("phantom-session".to_string()),
+            ..Default::default()
+        };
+        write_state(&stale, Some(primary.path()), None).unwrap();
+        write_state(&stale, Some(fallback.path()), None).unwrap();
+        // A named session file in each dir must also be swept.
+        write_state(
+            &stale,
+            Some(primary.path()),
+            Some("named-primary"),
+        )
+        .unwrap();
+        write_state(
+            &stale,
+            Some(fallback.path()),
+            Some("named-fallback"),
+        )
+        .unwrap();
+
+        clear_all_state_in_dirs(primary.path(), Some(fallback.path()));
+
+        assert!(!state_file(primary.path(), None).exists());
+        assert!(!state_file(fallback.path(), None).exists());
+        assert!(!state_file(primary.path(), Some("named-primary")).exists());
+        assert!(!state_file(fallback.path(), Some("named-fallback")).exists());
+        // Nothing left behind — a subsequent read yields no session.
+        let read = read_state_with_fallback(primary.path(), None, None);
+        assert!(read.session_id.is_none());
     }
 
     #[test]
@@ -1998,6 +2256,127 @@ mod tests {
         let output = format_async_task_list(&list, None, None);
         assert!(output.contains("showing 1-25"));
         assert!(output.contains("Hint: Use --limit N to paginate"));
+    }
+
+    fn make_listed_task(id: &str, submitted: &str, status: &str) -> AsyncTaskEntry {
+        AsyncTaskEntry {
+            task_id: id.to_string(),
+            command: "agent".to_string(),
+            description: format!("desc-{}", id),
+            submitted_at: submitted.to_string(),
+            last_status: status.to_string(),
+            completed_at: None,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_format_async_task_list_opts_omits_count_in_header() {
+        let list = AsyncTaskList {
+            tasks: vec![make_listed_task("a", "2026-07-22T12:00:00+00:00", "completed")],
+        };
+        // A Status summary printed by the caller already states the total, so the
+        // table header must not carry a second count.
+        let output = format_async_task_list_opts(&list, None, None, false);
+        assert!(output.contains("Tracked tasks:"), "output:\n{}", output);
+        assert!(!output.contains("tracked task(s) (showing"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_opts_shows_pagination_without_total_count() {
+        let mut tasks = Vec::new();
+        for i in 0..5 {
+            tasks.push(make_listed_task(
+                &format!("t{}", i),
+                &format!("2026-07-22T1{}:00:00+00:00", i),
+                "queued",
+            ));
+        }
+        let list = AsyncTaskList { tasks };
+        let output = format_async_task_list_opts(&list, Some(3), None, false);
+        assert!(output.contains("Showing 1-3 of 5 tracked task(s)"), "output:\n{}", output);
+        assert!(!output.contains("tracked task(s) (showing"));
+        assert!(output.contains("more task(s)"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_opts_empty_list_message() {
+        let list = AsyncTaskList { tasks: vec![] };
+        let output = format_async_task_list_opts(&list, None, None, false);
+        assert_eq!(output, "No tracked async tasks.");
+    }
+
+    #[test]
+    fn test_format_async_task_list_renders_empty_status_as_queued() {
+        let list = AsyncTaskList {
+            tasks: vec![make_listed_task("fresh", "2026-07-22T12:00:00+00:00", "")],
+        };
+        let output = format_async_task_list(&list, None, None);
+        assert!(output.contains("queued"), "unpolled task must show 'queued':\n{}", output);
+        assert!(!output.contains("pending"));
+    }
+
+    /// Regression: a full-width UUID id must not push the data columns to the
+    /// right of the header grid; and an over-long id must be capped, not printed
+    /// in full (Rust's width spec pads but never truncates).
+    #[test]
+    fn test_format_async_task_list_id_column_aligns_with_header() {
+        let uuid36 = "01234567-89ab-cdef-0123-456789abcdef";
+        assert_eq!(uuid36.chars().count(), 36);
+        let oversized = "x".repeat(60);
+
+        for id in [uuid36.to_string(), oversized.clone()] {
+            let list = AsyncTaskList {
+                tasks: vec![make_listed_task(&id, "2026-07-22T12:00:00+00:00", "queued")],
+            };
+            let output = format_async_task_list(&list, None, None);
+            let lines: Vec<&str> = output.lines().collect();
+            let header = lines.iter().find(|l| l.contains("TASK ID")).unwrap_or_else(|| {
+                panic!("missing header:\n{output}")
+            });
+            let data = lines
+                .iter()
+                .find(|l| l.contains("  agent"))
+                .unwrap_or_else(|| panic!("missing data row:\n{output}"));
+            // The COMMAND column must begin at the same CHARACTER column in the
+            // header and in the (long-id) data row. Compare char columns, not
+            // byte offsets: the truncation ellipsis is a multi-byte char yet is
+            // one terminal column wide.
+            let char_col = |line: &str, needle: &str| -> usize {
+                let byte = line.find(needle).unwrap_or_else(|| panic!("{needle:?} in {line:?}"));
+                line[..byte].chars().count()
+            };
+            let header_cmd = char_col(header, "COMMAND");
+            let data_cmd = char_col(data, "agent");
+            assert_eq!(
+                header_cmd, data_cmd,
+                "COMMAND column shifted for id len {}:\n{output}",
+                id.chars().count()
+            );
+        }
+    }
+
+    #[test]
+    fn test_cdp_attach_kind_survives_state_roundtrip() {
+        // Regression: `attach --cdp` persisted sessionKind=browser4Launched
+        // because the handler never set kind and write_state_to_dir derives the
+        // legacy flags from kind, clobbering them back.
+        let dir = test_temp_dir();
+        let state = CliState {
+            kind: SessionKind::CdpAttached,
+            cdp_endpoint: Some("http://localhost:9222".to_string()),
+            ..Default::default()
+        };
+        write_state(&state, Some(dir.path()), Some("good")).unwrap();
+
+        let raw = fs::read_to_string(state_file(dir.path(), Some("good"))).unwrap();
+        assert!(raw.contains("cdpAttached"), "raw state:\n{}", raw);
+
+        let loaded = read_state(Some(dir.path()), Some("good"));
+        assert_eq!(loaded.kind, SessionKind::CdpAttached);
+        assert!(loaded.is_attached);
+        assert_eq!(loaded.attach_type.as_deref(), Some("cdp"));
+        assert_eq!(loaded.cdp_endpoint.as_deref(), Some("http://localhost:9222"));
     }
 
     #[test]

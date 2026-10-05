@@ -3724,11 +3724,13 @@ fn probe_candidates(candidates: &[CdpCandidate], seen: &mut Vec<u16>) -> Vec<Cdp
 /// running browser, probed in order, and the first candidate that can host a
 /// page wins:
 ///
-/// 1. `<user-data-dir>/DevToolsActivePort` plus `--remote-debugging-port=N` —
+/// 1. The channel's conventional port (9222/…) — a browser deliberately started
+///    with `--remote-debugging-port=<default>` expresses the clearest intent and
+///    must not lose to a leftover Browser4-managed browser on a random port.
+/// 2. `<user-data-dir>/DevToolsActivePort` plus `--remote-debugging-port=N` —
 ///    the two places a browser itself publishes its debug endpoint.
-/// 2. Other ports the browser process listens on (Windows) — this is what makes
+/// 3. Other ports the browser process listens on (Windows) — this is what makes
 ///    a browser started with `--remote-debugging-port=0` discoverable.
-/// 3. The channel's conventional port (9222/…).
 /// 4. A 9222–9333 scan, as a last resort.
 ///
 /// The result is an `http://localhost:<port>` endpoint when the candidate lists
@@ -3754,6 +3756,19 @@ pub fn resolve_channel_to_endpoint(channel: &str) -> Result<String, String> {
     let command_lines = browser_process_command_lines(executable_name);
     let mut seen: Vec<u16> = Vec::new();
     let mut probes: Vec<CdpProbe> = Vec::new();
+
+    // Stage 0 — the channel's conventional port (9222/…). A browser the user
+    // deliberately started with `--remote-debugging-port=<default>` expresses
+    // the clearest intent, so it must win over a leftover Browser4-managed
+    // browser on a RANDOM port that DevToolsActivePort discovery would
+    // otherwise find first. When nothing answers on the conventional port we
+    // fall through to the broader discovery below (the port is recorded in
+    // `seen`, so it is not probed twice).
+    let conventional = [CdpCandidate::new(default_port, CdpCandidateSource::DefaultPort)];
+    probes.extend(probe_candidates(&conventional, &mut seen));
+    if let Some(endpoint) = first_attachable_endpoint(&probes) {
+        return Ok(endpoint);
+    }
 
     // Stage 1 — what the browser itself publishes: DevToolsActivePort (written
     // in every remote-debugging mode, including Chrome's built-in
@@ -3785,12 +3800,8 @@ pub fn resolve_channel_to_endpoint(channel: &str) -> Result<String, String> {
         return Ok(endpoint);
     }
 
-    // Stage 3 — the channel's conventional port.
-    let conventional = [CdpCandidate::new(default_port, CdpCandidateSource::DefaultPort)];
-    probes.extend(probe_candidates(&conventional, &mut seen));
-    if let Some(endpoint) = first_attachable_endpoint(&probes) {
-        return Ok(endpoint);
-    }
+    // Stage 3 — the channel's conventional port was already probed first
+    // (Stage 0) and recorded in `seen`, so there is nothing to do here.
 
     // Stage 4 — scan a range of ports concurrently: a localhost
     // connection-refused is near-instant, but sequential scanning would still
@@ -4446,6 +4457,23 @@ pub struct Browser4WindowState {
 ///   even though the session asked for headed mode (launch-mode regression).
 /// - `headed_browser=true, headed_window_visible=false` — the classic silent
 ///   no-window failure: process alive, navigation works, window never appeared.
+///
+/// ## Scope: machine-wide, not per-session
+///
+/// The check enumerates EVERY `chrome.exe` carrying a
+/// `--remote-debugging-port` argument and a `PULSAR_CHROME` profile marker on
+/// the machine. There is no mapping back to the CLI session that triggered
+/// the launch: the session→browser association lives inside the backend
+/// (`browser4-browser`), and the CLI only knows the session id, not the
+/// browser PID or its debug port. Consequences:
+/// - A *visible* result is reliable for the warning's purpose (a headed
+///   Browser4 window really exists), but a *negative* result can be skewed by
+///   OTHER concurrent Browser4 sessions (e.g. a headless session running
+///   alongside the headed one just launched). User messages must state this
+///   limitation rather than asserting the fault belongs to this session.
+/// - On Unix (`#[cfg(not(target_os = "windows"))]`) no portable
+///   window-visibility check exists; the stub reports a state that can never
+///   trigger the warning, so CI/Linux/macOS never see these diagnostics.
 pub fn browser4_window_state() -> Browser4WindowState {
     #[cfg(target_os = "windows")]
     {

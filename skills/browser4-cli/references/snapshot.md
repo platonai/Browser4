@@ -104,17 +104,17 @@ The diff marks elements as added (`+`), removed (`-`), or modified (`~`), making
 
 ## Snapshot Grep
 
-`snapshot grep` searches the accessibility tree content with regex — no need to read the full snapshot file:
+`snapshot grep` captures a **fresh, live, full-page AX tree** from the server and searches it with regex — it does not read the most recently saved snapshot file, and it cannot see auto-diff markers (`+`/`-`/`~`) because those exist only in the `--auto-diff` response text, never in a persisted file:
 
 ```bash
-browser4-cli snapshot grep "See also"             # search for text in the full AX tree
+browser4-cli snapshot grep "See also"             # search live full-page tree
 browser4-cli snapshot grep -i "price|rating"      # case-insensitive regex alternation
 browser4-cli snapshot grep -A 3 -B 1 "Checkout"   # show surrounding context lines
 browser4-cli snapshot grep --page N <pattern>     # paginate grep results
 browser4-cli snapshot grep --all <pattern>        # disable pagination (default: 2K lines)
 ```
 
-Grep operates on the most recent snapshot. If no snapshot exists yet, run `snapshot` first.
+> **Zero matches = exit code 1** (GNU grep semantics). Use `browser4-cli snapshot grep -c <pattern>` to get the count and check `$LASTEXITCODE` / `$?` — no stdout parsing needed.
 
 | Option | Description |
 |---|---|
@@ -149,7 +149,7 @@ Refs are **ephemeral** — they become invalid after commands that change the DO
 
 `--interactive` (`-i`) switches the snapshot into **interactive-oriented rendering**: the AX capture aggregates inner text into the enclosing element's name, so each ref line reads as a self-contained target (e.g. a `<header>`/`banner` line carries the text of everything inside it).
 
-> **`-i` is not a strict filter.** Despite the name, the tree is **not** reduced to buttons, links, inputs and other interactive controls: any addressable element (headings, paragraphs, list items, generic `<div>` containers — they all carry refs) stays in the output. Do not use `-i` expecting a smaller tree.
+> **`-i` removes refs from structural elements.** Headings, paragraphs and list items that carry refs in default mode are rendered as plain `text:` lines without refs in `-i` mode. Use `-i` when you need compact, readable ref lines for interactive controls (links, buttons, inputs); use default mode when you need refs on structural elements too.
 
 ```bash
 browser4-cli snapshot -i        # interactive-oriented rendering (text merged into names)
@@ -240,8 +240,8 @@ browser4-cli snapshot -v 0 --json   # clean JSON for scripts/agents
 | `--viewport N`, `-v N` | Capture viewport N (0 = current visible screen; negative = above). Paginates long pages into fixed-height chunks. |
 | `--stdout` | Print snapshot to stdout instead of saving to file. Large trees are paginated (default 2000 lines/page); when truncated, a hint is appended to stdout when piped and the full footer goes to stderr. |
 | `--raw` | Alias of `--stdout` — strip page info and print only snapshot content. |
-| `--auto-diff` | Diff against the previous snapshot — shows added/removed/changed elements. |
-| `--interactive`, `-i` | Interactive-oriented rendering: inner text is aggregated into the enclosing element's name so ref lines read as self-contained targets. This is **not** a strict interactive-only filter — addressable headings, paragraphs and generic containers remain in the tree. |
+| `--auto-diff` | Diff against the previous **deliberate** snapshot (skips auto-snapshots after interactions). After a navigation or interaction that changes the page, `click <ref> --no-snapshot` preserves the pre-interaction baseline for a clean diff. |
+| `--interactive`, `-i` | Interactive-oriented rendering: inner text is aggregated into the enclosing element's name so ref lines read as self-contained targets. In `-i` mode headings, paragraphs and list items lose their refs and become plain `text:` lines; use default mode when you need refs on structural elements. |
 | `--json` | Single-line JSON envelope on stdout only. All tips, hints, and warnings are suppressed. |
 | `--quiet`, `-q` | Suppress all normal output; only errors appear on stderr. |
 | `--page N` | When used with `--stdout`, show only page N of the output (1-based). |
@@ -253,8 +253,9 @@ browser4-cli snapshot -v 0 --json   # clean JSON for scripts/agents
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `snapshot --stdout` dumps a huge tree | Full page captured; stdout output is paginated at 2000 lines/page by default, but a single page is still large | Use `-v 0` viewport chunks, or `--stdout --page N` / `--page-size N`; `--all` / `--page-size 0` for the complete tree; `snapshot grep` for targeted reads |
-| `snapshot grep` finds nothing | Pattern doesn't match the accessibility tree (refs/labels, not raw HTML) | Match against element names and labels; use `htmlsnapshot grep` for raw HTML |
-| Missing elements in `-i` mode | Interactive mode strips generic `<div>` containers | Use `--viewport 0` or `htmlsnapshot` for shopping/search pages |
+| `snapshot grep` finds nothing | Pattern doesn't match the accessibility tree (refs/labels, not raw HTML) | Match against element names and labels; use `htmlsnapshot grep` for raw HTML; check exit code (`1` = no matches) |
+| `snapshot --selector` returns an error | The CSS selector matched no element on the page | Verify the selector with `htmlsnapshot get text "<sel>"` first |
+| Missing elements in `-i` mode | Interactive mode strips refs from headings/paragraphs/list items (renders them as plain `text:` lines) | Use default mode for structural refs, or `htmlsnapshot` for CSS-based extraction |
 | Stale refs after interaction | Refs are single-use handles | Re-snapshot after any interaction — see [SKILL.md §5](../SKILL.md#5-critical-warnings) |
 
 ## Critical Warnings
@@ -263,7 +264,7 @@ browser4-cli snapshot -v 0 --json   # clean JSON for scripts/agents
 
 > **Note:** Warning: refs are single-use — re-snapshot after any interaction — see [SKILL.md §5](../SKILL.md#5-critical-warnings)
 
-> **Warning:** Interactive mode (`snapshot -i`) does **not** strip generic `<div>` containers or other non-interactive elements — any addressable element remains in the tree. Prefer `-v 0` viewport pagination or `htmlsnapshot` for shopping/search pages where you need small, focused output.
+> **Warning:** Interactive mode (`snapshot -i`) strips refs from headings, paragraphs and list items (they become plain `text:` lines). Prefer `-v 0` viewport pagination or `htmlsnapshot` for shopping/search pages where you need small, focused output.
 
 ## See Also
 

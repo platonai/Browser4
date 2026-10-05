@@ -24,7 +24,7 @@ No other SQL syntax is supported — no CTEs (`WITH`), no subqueries in `FROM`, 
 
 **URL parameter:** When used through `htmlsnapshot query` or `swarm query`, use the **unquoted** `@url` placeholder to reference the target page URL. Do NOT use `'.'` as a literal URL — it is not valid and will cause a 500 error. The `@url` placeholder is replaced with the actual page URL by `SQLTemplate.createSQL()`.
 
-**CLI output:** `htmlsnapshot query` / `swarm query` default to the **raw JSON response envelope** (machine-readable). For human-readable results add `--format table` (or `--format csv`); `--result-only` prints just the resultSet. Exit code is `0` on success — an **empty** resultSet still exits `0` ("no rows matched" is not an error) — and nonzero when the server returns an error envelope (`417`/`5xx`). See [htmlsnapshot.md](htmlsnapshot.md#output-format-and-exit-codes).
+**CLI output:** `htmlsnapshot query` / `swarm query` default to the **raw JSON response envelope** (machine-readable). For human-readable results add `--format table` (or `--format csv`); `--result-only` prints just the resultSet. Exit code is `0` on success — an **empty** resultSet still exits `0` ("no rows matched" is not an error) — and nonzero when the server returns any error envelope (`statusCode >= 400`: `400` for X-SQL syntax errors, `417` for scrape-session/H2 engine errors, `5xx` for backend failures). See [htmlsnapshot.md](htmlsnapshot.md#output-format-and-exit-codes).
 
 X-SQL uses the **H2 database** SQL dialect.
 
@@ -61,6 +61,17 @@ FROM DOM_LOAD_AND_SELECT(
 WHERE DOM_IS_NOT_NIL(DOM)
   AND STR_IS_NOT_BLANK(DOM_FIRST_TEXT(DOM, '.title'));
 ```
+
+> ⚠ **Truncated link text pitfall:** many listing pages render `<a title="Full title">Truncated title…</a>` — the visible link text is clipped by the site itself. `DOM_FIRST_TEXT(DOM, 'h3 a')` then returns the site's ellipsized text (e.g. `"A Light in the ..."`) with no error, and the extraction silently loses information. When the visible sample ends in `…`/`...`, read the full value from the attribute that carries it instead:
+>
+> ```sql
+> -- Wrong — silently truncated (site-side ellipsis):
+> --   DOM_FIRST_TEXT(DOM, 'h3 a')          → "A Light in the ..."
+> -- Correct — full value from the title attribute:
+> DOM_FIRST_ATTR(DOM, 'h3 a', 'title') AS title
+> ```
+>
+> `htmlsnapshot inspect` flags clipped samples and prints a ready `htmlsnapshot get all attr "<sel>" <attr>` line when it detects the pattern; you can also compare `get all text "h3 a"` with `get all attr "h3 a" title` to confirm.
 
 ### Extract page metadata
 
@@ -331,7 +342,7 @@ Scalar functions (input: DOM + selector string, output: scalar)
 
 > **Note on `DOM_FIRST_HREF`:** For href extraction, `DOM_FIRST_HREF(DOM, sel)` can return an empty string for a class-only selector (e.g. `.product-link`) while the tag-qualified form (`a.product-link`) works. Prefer `DOM_FIRST_ATTR(DOM, sel, 'href')` — it accepts any selector and returns the href consistently (relative; use `DOM_ABS_HREF` or `abs:href` for the absolute URL).
 
-> **Number-extraction functions take a default argument:** the registered form of `DOM_FIRST_FLOAT` is `(DOM, sel, default)` — likewise `DOM_NTH_FLOAT(DOM, sel, n, default)`, `DOM_FIRST_INTEGER(DOM, sel, default)`, `DOM_NTH_INTEGER(DOM, sel, n, default)` and `DOM_ALL_FLOATS(DOM, sel, default)`. The 2-argument forms are **not registered** — calls without the default fail with `Method "DOMFIRSTFLOAT … parameter count: 2" not found` (HTTP 417). Pass the default explicitly in every call (`DOM_FIRST_FLOAT(DOM, '.price', 0.0)`); it is also the value returned when the selector matches nothing.
+> **Number-extraction functions accept an optional default:** the registered forms of `DOM_FIRST_FLOAT(DOM, sel [, default])`, `DOM_FIRST_INTEGER(DOM, sel [, default])`, `DOM_NTH_FLOAT(DOM, sel, n [, default])`, `DOM_NTH_INTEGER(DOM, sel, n [, default])`, and `DOM_ALL_FLOATS(DOM, sel [, default])` all work with or without the explicit default. When the default is omitted, `0.0` (or `0` for integers) is used — and it is also the value returned when the selector matches nothing. Passing the default explicitly (`DOM_FIRST_FLOAT(DOM, '.price', 0.0)`) is recommended because it documents intent and protects against silent zero-rows in aggregate math.
 
 > **Numeric predicates need a CAST:** `DOM_FIRST_FLOAT` (and `DOM_FIRST_INTEGER`) return a custom H2 value type. Selecting/ordering by them works, but comparing one to a numeric literal in `WHERE`/`ORDER BY` makes H2 hex-decode the value's string form and fail with an opaque `Hexadecimal string contains non-hex character: "899.99"` error (H2 90004-197, HTTP 417). Wrap the function in a numeric cast, or parse through the STR namespace:
 >
