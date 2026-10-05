@@ -282,6 +282,42 @@ class PulsarSessionManager(
         return runBlocking { checkHealthy(session) }
     }
 
+    /**
+     * Liveness gate for tool calls against an externally **CDP-attached** session.
+     *
+     * A CDP-attached browser is owned by the user, not by Browser4, so
+     * [resolveHealthySession] never recreates it when it dies. Tool dispatch
+     * (`MCPToolController`) looks the session up with [getSession], which does
+     * NOT run [resolveHealthySession] — so without this gate it would still
+     * hold the stale driver and happily return cached data with exit status 0:
+     * the last-known URL from `currentUrl`, `null` from `evaluate`, etc. That
+     * hides the fact that the target browser is gone.
+     *
+     * Returns a user-facing error string when the bound browser is no longer
+     * reachable (the caller must turn it into an `isError` tool response), or
+     * `null` when the call may proceed. Browser4-launched and
+     * extension-attached sessions always return `null` here: they have their
+     * own recreation / readiness paths.
+     */
+    fun cdpAttachedSessionUnavailable(session: ManagedSession): String? {
+        if (session.kind != SessionKind.CDP_ATTACHED) return null
+        // Nothing was ever bound — let the normal tool path report its own
+        // error instead of masking it with a liveness message.
+        if (session.agenticSession.boundBrowser == null) return null
+
+        if (checkHealthyBlocking(session).isOK) return null
+
+        markSessionInactive(session)
+        val label = session.browserIdentity
+            ?.let { listOfNotNull(it.name, it.version).joinToString(" ").ifBlank { null } }
+            ?.let { " ($it)" }
+            .orEmpty()
+        return "The CDP-attached browser$label for session '${session.sessionId}' is no longer " +
+            "reachable — it was closed or crashed. Browser4 does not own this browser, so it is " +
+            "not restarted automatically. Re-attach to reconnect: " +
+            "browser4-cli attach --cdp <endpoint> (or attach --extension)."
+    }
+
     suspend fun checkHealthy(session: ManagedSession): CheckState {
         val s = session.agenticSession
         val browser = s.boundBrowser
@@ -444,7 +480,9 @@ class PulsarSessionManager(
      * Instead, it connects to an existing browser at the given CDP endpoint or port
      * and binds it to the newly created session.
      *
-     * @param cdpEndpoint A CDP HTTP endpoint URL (e.g. "http://localhost:9222").
+     * @param cdpEndpoint A CDP HTTP endpoint URL (e.g. "http://localhost:9222") or a
+     *   browser-level WebSocket URL (e.g. "ws://127.0.0.1:9222/devtools/browser/<uuid>",
+     *   the form Chrome's built-in remote debugging publishes in `DevToolsActivePort`).
      * @param cdpPort A CDP port number. Used when [cdpEndpoint] is null.
      * @param capabilities Optional session capabilities.
      * @return The created managed session with the external browser bound.
@@ -467,6 +505,20 @@ class PulsarSessionManager(
             else -> throw IllegalArgumentException("No CDP endpoint or port provided")
         }
 
+        // A browser-level WebSocket is a first-class endpoint: it is the only one
+        // Chrome's built-in remote debugging (chrome://inspect/#remote-debugging)
+        // publishes — that mode answers every /json* request with 404 — so it must
+        // be driven over the socket instead of probed over HTTP.
+        val browserWebSocketUrl = cdpEndpoint?.let { browserLevelWebSocketUrl(it) }
+        if (browserWebSocketUrl != null) {
+            return createWebSocketAttachedSession(
+                sessionId = sessionId,
+                capabilities = normalizedCapabilities,
+                port = port,
+                browserWebSocketUrl = browserWebSocketUrl,
+            )
+        }
+
         // Verify the CDP endpoint is actually reachable and hosts a page target
         // BEFORE binding it to a session. Previously this step was skipped: a
         // `PulsarBrowser(port)` wrapper was bound unconditionally, so attach
@@ -476,17 +528,8 @@ class PulsarSessionManager(
         val normalizedEndpoint = cdpEndpoint?.let { normalizeCdpEndpoint(it, port) }
             ?: "http://127.0.0.1:$port"
         val verification = verifyCdpEndpoint(normalizedEndpoint)
-        if (!verification.reachable) {
-            throw IllegalArgumentException(
-                "CDP endpoint $normalizedEndpoint is not reachable: ${verification.detail}. " +
-                    "Start the target browser with --remote-debugging-port and retry attach."
-            )
-        }
-        if (verification.pageTargetCount == 0) {
-            throw IllegalArgumentException(
-                "CDP endpoint $normalizedEndpoint is reachable but has no page targets " +
-                    "(${verification.detail}). Open a tab in the target browser, then retry attach."
-            )
+        describeAttachFailure(normalizedEndpoint, verification)?.let { failure ->
+            throw IllegalArgumentException(failure)
         }
         logger.info(
             "CDP attach verification OK | {} | browser={} | pageTargets={}",
@@ -521,6 +564,17 @@ class PulsarSessionManager(
             return session
         }
 
+        // An explicit attach by the SAME session id to a DIFFERENT port is a
+        // deliberate re-attach; rebind rather than fail, but say so loudly — it
+        // must never look like the previous binding silently moved.
+        if (existingDriver != null) {
+            val previousPort = (existingDriver.browser as? PulsarBrowser)?.port
+            logger.warn(
+                "Session {} is explicitly re-attaching from browser port {} to port {}; rebinding now",
+                sessionId, previousPort, port
+            )
+        }
+
 
         // Bind the external browser to the session
         val browser = PulsarBrowser(port = port, settings = BrowserSettings())
@@ -535,13 +589,120 @@ class PulsarSessionManager(
     }
 
     /**
+     * Bind a session to a browser reached through its **browser-level CDP
+     * WebSocket**.
+     *
+     * This is the endpoint Chrome's built-in remote debugging
+     * (`chrome://inspect/#remote-debugging`) publishes: the port file
+     * `DevToolsActivePort` names the socket while every `/json*` path answers
+     * HTTP 404, so the HTTP verification path can never see a page target.
+     * Providers that hand out a `ws://…/devtools/browser/<uuid>` URL directly
+     * (cloud browsers, Electron shells) are served by the same path.
+     *
+     * Verification happens over the socket itself — connect, `Browser.getVersion`,
+     * `Target.getTargets` — so an unusable endpoint fails here, loudly, instead of
+     * producing a session that drives nothing.
+     */
+    private fun createWebSocketAttachedSession(
+        sessionId: String,
+        capabilities: Map<String, String?>,
+        port: Int,
+        browserWebSocketUrl: String,
+    ): ManagedSession {
+        // Constructing the wrapper must not leak a raw platform exception: the
+        // caller needs the endpoint and what to do about it.
+        val browser = try {
+            PulsarBrowser(
+                browserWebSocketUrl = browserWebSocketUrl,
+                settings = BrowserSettings()
+            )
+        } catch (e: Exception) {
+            throw IllegalArgumentException(webSocketAttachFailure(browserWebSocketUrl, e))
+        }
+
+        val tabs = try {
+            browser.chrome.listTabs()
+        } catch (e: Exception) {
+            runCatching { browser.close() }
+            throw IllegalArgumentException(webSocketAttachFailure(browserWebSocketUrl, e))
+        }
+        if (tabs.isEmpty()) {
+            runCatching { browser.close() }
+            throw IllegalArgumentException(
+                "CDP endpoint $browserWebSocketUrl is reachable but lists no page target. " +
+                    "Open a tab in that browser, then retry attach — or attach through the extension: " +
+                    "browser4-cli attach --extension"
+            )
+        }
+
+        // Identity comes from Browser.getVersion over the same socket: the CLI
+        // cannot infer which browser a socket URL drives.
+        val browserIdentity = runCatching { browser.chrome.version.browser }.getOrNull()
+        logger.info(
+            "CDP WebSocket attach verification OK | {} | browser={} | pageTargets={}",
+            browserWebSocketUrl, browserIdentity, tabs.size
+        )
+
+        // Mark the session CDP_ATTACHED (non-owned), exactly like the HTTP path:
+        // resolveHealthySession must never silently replace it with a fresh
+        // Browser4-launched Chrome.
+        val session = sessions.computeIfAbsent(sessionId) {
+            createManagedSession(sessionId, capabilities, SessionKind.CDP_ATTACHED)
+        }
+        session.browserIdentity = BrowserIdentity.parse(browserIdentity)
+
+        // Idempotent re-attach: keep a healthy driver already bound to this port
+        // rather than leaking one more DevTools connection. The probe wrapper is
+        // discarded — closing it only drops connections, never the browser.
+        val existingDriver = session.agenticSession.boundDriver
+        if (existingDriver != null && (existingDriver.browser as? PulsarBrowser)?.port == port &&
+            runCatching { runBlocking { existingDriver.healthy().isOK } }.getOrDefault(false)
+        ) {
+            runCatching { browser.close() }
+            (existingDriver.browser as? AbstractBrowser)?.frontDriver = existingDriver
+            logger.info(
+                "Re-attached session {} to the browser WebSocket {} (existing driver kept)",
+                sessionId, browserWebSocketUrl
+            )
+            return session
+        }
+
+        session.agenticSession.bindBrowser(browser)
+        runCatching { bindToExistingPageTab(browser, session.agenticSession) }
+            .onFailure {
+                logger.warn("attach --cdp: no existing page tab bound for {}; {}", sessionId, it.message)
+            }
+
+        logger.info(
+            "Attached session {} to the browser WebSocket {} (port {})",
+            sessionId, browserWebSocketUrl, port
+        )
+        return session
+    }
+
+    /**
+     * The loud, actionable message for a browser WebSocket that cannot be
+     * attached to, keeping the underlying cause visible.
+     */
+    private fun webSocketAttachFailure(browserWebSocketUrl: String, cause: Exception): String =
+        "CDP endpoint $browserWebSocketUrl could not be attached over its browser-level WebSocket: " +
+            "${cause.message ?: cause.javaClass.simpleName}. Check that the browser is still running and " +
+            "that DevToolsActivePort still names this socket, then retry attach."
+
+    /**
      * Result of a CDP endpoint verification probe.
+     *
+     * @property versionStatus HTTP status of `GET /json/version` when an HTTP
+     *   response was received, `null` when the request never completed. Chrome's
+     *   built-in remote debugging (chrome://inspect/#remote-debugging) answers
+     *   every `/json*` path with 404 and is diagnosed from this field.
      */
     data class CdpEndpointVerification(
         val reachable: Boolean,
         val browser: String?,
         val pageTargetCount: Int,
         val detail: String,
+        val versionStatus: Int? = null,
     )
 
     /**
@@ -560,6 +721,27 @@ class PulsarSessionManager(
 
         /** The context group that holds dedicated named-session profiles. */
         private const val NAMED_CONTEXT_GROUP = "named"
+
+        /**
+         * Status Chrome's built-in remote debugging answers every `/json*` path
+         * with — the signature of a WebSocket-only CDP endpoint.
+         */
+        private const val HTTP_NOT_FOUND = 404
+
+        /**
+         * The endpoint when it is a browser-level CDP WebSocket URL
+         * (`ws://host:port/devtools/browser/<uuid>`), else `null`.
+         *
+         * Page-level sockets (`ws://…/devtools/page/<id>`) are deliberately
+         * excluded: they carry a single tab and cannot answer browser-level
+         * commands such as `Target.getTargets`. They keep going through the
+         * HTTP-discovery path, which reuses their host:port.
+         */
+        fun browserLevelWebSocketUrl(endpoint: String): String? {
+            val trimmed = endpoint.trim()
+            if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) return null
+            return trimmed.takeIf { it.contains("/devtools/browser") }
+        }
 
         fun normalizeCdpEndpoint(endpoint: String, port: Int): String {
             val trimmed = endpoint.trim()
@@ -608,7 +790,8 @@ class PulsarSessionManager(
                     reachable = false,
                     browser = null,
                     pageTargetCount = 0,
-                    detail = "GET /json/version → HTTP ${version.statusCode()}"
+                    detail = "GET /json/version → HTTP ${version.statusCode()}",
+                    versionStatus = version.statusCode()
                 )
             }
 
@@ -629,7 +812,8 @@ class PulsarSessionManager(
                         reachable = true,
                         browser = browser,
                         pageTargetCount = 0,
-                        detail = "GET /json → HTTP ${response.statusCode()}"
+                        detail = "GET /json → HTTP ${response.statusCode()}",
+                        versionStatus = version.statusCode()
                     )
                 }
                 val array = com.fasterxml.jackson.databind.ObjectMapper().readTree(response.body())
@@ -644,7 +828,8 @@ class PulsarSessionManager(
                     reachable = true,
                     browser = browser,
                     pageTargetCount = 0,
-                    detail = "GET /json failed: ${e.message ?: e.javaClass.simpleName}"
+                    detail = "GET /json failed: ${e.message ?: e.javaClass.simpleName}",
+                    versionStatus = version.statusCode()
                 )
             }
 
@@ -652,8 +837,69 @@ class PulsarSessionManager(
                 reachable = true,
                 browser = browser,
                 pageTargetCount = pageTargets,
-                detail = "browser=$browser pages=$pageTargets"
+                detail = "browser=$browser pages=$pageTargets",
+                versionStatus = version.statusCode()
             )
+        }
+
+        /**
+         * Describe why a probed CDP endpoint cannot host an attached session, or
+         * `null` when it can.
+         *
+         * Kept separate from [createAttachedSession] so the guidance for the
+         * WebSocket-only endpoint Chrome's built-in remote debugging exposes
+         * (chrome://inspect/#remote-debugging) is unit-testable without a browser.
+         */
+        fun describeAttachFailure(
+            normalizedEndpoint: String,
+            verification: CdpEndpointVerification,
+        ): String? {
+            if (!verification.reachable) {
+                // An HTTP 404 means SOMETHING answered HTTP, just not on the
+                // CDP discovery path. A plain file server returns exactly this
+                // 404, so we must not claim it IS Chrome's built-in remote
+                // debugging. State the certain fact first; mention built-in
+                // mode only as one possible cause.
+                if (verification.versionStatus == HTTP_NOT_FOUND) {
+                    return "CDP endpoint $normalizedEndpoint is reachable but is not a Chrome DevTools " +
+                        "discovery endpoint (GET /json/version → HTTP 404). Any non-CDP web server answers " +
+                        "the same way. One possibility is Chrome's built-in remote debugging " +
+                        "(chrome://inspect/#remote-debugging), which exposes only a browser-level WebSocket " +
+                        "with no /json page targets; if that is the browser you mean, attach through the " +
+                        "extension instead: browser4-cli attach --extension"
+                }
+                // Transport-level failure: surface plain language instead of a raw
+                // Java exception class name (e.g. "ConnectException").
+                val cause = humanizeConnectionFailure(verification.detail)
+                return "CDP endpoint $normalizedEndpoint is not reachable: $cause. " +
+                    "Start the target browser with --remote-debugging-port and retry attach."
+            }
+            if (verification.pageTargetCount == 0) {
+                return "CDP endpoint $normalizedEndpoint is reachable but has no page targets " +
+                    "(${verification.detail}). Open a tab in the target browser, then retry attach — " +
+                    "or attach through the extension: browser4-cli attach --extension"
+            }
+            return null
+        }
+
+        /**
+         * Translate transport-level failure detail (often a raw Java exception
+         * name such as "ConnectException") into plain language. Unknown causes
+         * are returned unchanged so real diagnostics are never lost.
+         */
+        fun humanizeConnectionFailure(detail: String): String {
+            val d = detail.lowercase()
+            val nothingListening = d.contains("connection refused") ||
+                d.contains("connectexception") ||
+                d.contains("no route to host") ||
+                d.contains("host is down") ||
+                d.contains("unknownhostexception") ||
+                d.contains("failed to connect")
+            return if (nothingListening) {
+                "nothing is listening on that address (connection refused)"
+            } else {
+                detail
+            }
         }
     }
 
@@ -1319,6 +1565,16 @@ class PulsarSessionManager(
                 }
             // Close the companion browser if it exists
             if (browser != null) {
+                // A CDP-attached browser is OWNED BY THE USER, not by Browser4.
+                // closeBrowser() below closes every tab the session holds a
+                // driver for; when those are the browser's only tabs the headed
+                // Chrome exits with its last window. To honour the documented
+                // "close disconnects, the browser keeps running" contract, open
+                // a standalone about:blank tab (not enrolled as a session
+                // driver) BEFORE tearing down, so a window always survives.
+                if (session.kind == SessionKind.CDP_ATTACHED) {
+                    (browser as? PulsarBrowser)?.let { preserveAttachedBrowserWithBlankTab(it) }
+                }
                 // might be already closed by the session, but we ensure it's closed here to release resources
                 // TODO: remove this redundant close call after confirming that session.close() always closes the browser
                 pulsarSession.context.browserManager.closeBrowser(browser)
@@ -1341,6 +1597,54 @@ class PulsarSessionManager(
         }
 
         return true
+    }
+
+    /**
+     * Open a standalone `about:blank` tab in a CDP-attached browser BEFORE the
+     * session's own tabs are closed, so the headed browser does not exit with
+     * its last window.
+     *
+     * The new tab is created over Chrome's HTTP CDP endpoint
+     * (`PUT /json/new?about:blank`) and is never bound to a session driver, so
+     * the subsequent `closeBrowser()` does not close it. This is what makes
+     * `close` on an attached session a disconnect that leaves the user's
+     * browser running, as documented.
+     *
+     * Best-effort: WebSocket-only endpoints (built-in `chrome://inspect`, which
+     * answers 404 on `/json`) and already-dead browsers are skipped; the caller
+     * then proceeds with normal teardown and the CLI reports actual survival.
+     */
+    private fun preserveAttachedBrowserWithBlankTab(browser: PulsarBrowser) {
+        val port = browser.port
+        if (port <= 0) return
+        val endpoint = "http://127.0.0.1:$port/json/new?about:blank"
+        try {
+            val client = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(java.time.Duration.ofSeconds(2))
+                .build()
+            val request = java.net.http.HttpRequest.newBuilder(java.net.URI.create(endpoint))
+                .PUT(java.net.http.HttpRequest.BodyPublishers.noBody())
+                .timeout(java.time.Duration.ofSeconds(3))
+                .build()
+            val response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() in 200..299) {
+                logger.info(
+                    "Opened about:blank before closing CDP-attached session so the browser at port {} survives",
+                    port
+                )
+            } else {
+                logger.info(
+                    "Could not open keep-alive about:blank on attached browser port {} (HTTP {}); " +
+                        "the browser may exit when its last tab closes",
+                    port, response.statusCode()
+                )
+            }
+        } catch (e: Exception) {
+            logger.info(
+                "CDP /json/new unavailable on attached browser port {} ({}); skipping keep-alive",
+                port, e.message
+            )
+        }
     }
 
     /**
@@ -1388,5 +1692,25 @@ class PulsarSessionManager(
         is Browser4WebDriver -> rawDriver
         is PulsarWebDriver -> Browser4WebDriver.from(rawDriver)
         else -> rawDriver
+    }
+
+    /**
+     * Binds a driver to an existing page tab on [browser], preferring a
+     * non-about:blank tab. Sets [AbstractBrowser.frontDriver] so switchTab /
+     * listTabs track the active tab correctly after attach or reconnect.
+     *
+     * Returns the bound driver, or null when the browser has no page tab yet.
+     */
+    private fun bindToExistingPageTab(
+        browser: PulsarBrowser,
+        agenticSession: AgenticSession,
+    ): WebDriver? {
+        val tabs = runCatching { browser.listTabs() }.getOrNull()?.toList().orEmpty()
+        val chosen = choosePageTab(tabs) ?: return null
+
+        val b4Driver = toBrowser4Driver(browser.newDriverForTab(chosen))
+        agenticSession.bindDriver(b4Driver)
+        (browser as? AbstractBrowser)?.frontDriver = b4Driver
+        return b4Driver
     }
 }

@@ -4,25 +4,37 @@ import ai.platon.pulsar.agentic.tools.TaskEnvelopes
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.service.crawl.CrawlPageResult
+import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlService
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.mockito.Mockito.`when`
+import org.mockito.kotlin.any
+import org.mockito.kotlin.argumentCaptor
 
 /**
  * The crawl domain is the reference implementation of the async contract: JSON
  * status envelopes, a cancel tool, and an `outputSchema` that the produced text
  * actually satisfies.
+ *
+ * The REST controller and the MCP tool are two entry points into the same
+ * [CrawlService]; the last three tests guard the parallel/timeout arguments so
+ * that path cannot silently drop them again (the CLI used to echo the requested
+ * values while the crawl ran with server defaults).
  */
 @DisplayName("crawl async contract")
+@Tag("Unit")
+@Tag("Fast")
 class CrawlToolExecutorTest {
 
     private lateinit var service: CrawlService
@@ -150,5 +162,67 @@ class CrawlToolExecutorTest {
             "the submit envelope must admit every status a task can end in",
         )
         assertTrue(TaskEnvelopes.STATUSES.all { spec.outputSchema!!.contains("\"$it\"") })
+    }
+
+    private fun executor(service: CrawlService) = CrawlToolExecutor(service)
+
+    @Test
+    @DisplayName("submit forwards parallelTabs and taskTimeoutMillis to the crawl request")
+    fun submitForwardsParallelAndTimeout() = runBlocking {
+        val service = Mockito.mock(CrawlService::class.java)
+        Mockito.`when`(service.submit(any<CrawlRequest>())).thenReturn("task-1")
+
+        executor(service).callFunctionOn(
+            "crawl",
+            "submit",
+            mapOf(
+                "url" to "https://example.com",
+                "depth" to 0,
+                "parallelTabs" to 2,
+                "taskTimeoutMillis" to 120000L,
+            ),
+            service
+        )
+
+        val captor = argumentCaptor<CrawlRequest>()
+        Mockito.verify(service).submit(captor.capture())
+        val request = captor.firstValue
+        assertEquals(2, request.parallelTabs)
+        assertEquals(120000L, request.taskTimeoutMillis)
+    }
+
+    @Test
+    @DisplayName("a missing or non-positive parallel/timeout falls back to the server default (null)")
+    fun submitTreatsNonPositiveAsNoPreference() = runBlocking {
+        val service = Mockito.mock(CrawlService::class.java)
+        Mockito.`when`(service.submit(any<CrawlRequest>())).thenReturn("task-1")
+
+        executor(service).callFunctionOn(
+            "crawl",
+            "submit",
+            mapOf(
+                "url" to "https://example.com",
+                "parallelTabs" to 0,
+                "taskTimeoutMillis" to -5,
+            ),
+            service
+        )
+
+        val captor = argumentCaptor<CrawlRequest>()
+        Mockito.verify(service).submit(captor.capture())
+        val request = captor.firstValue
+        assertNull(request.parallelTabs, "0 must mean 'no preference', not sequential-by-force")
+        assertNull(request.taskTimeoutMillis)
+    }
+
+    @Test
+    @DisplayName("the submit tool spec advertises parallelTabs and taskTimeoutMillis")
+    fun toolSpecExposesParallelAndTimeout() {
+        val specs = executor(Mockito.mock(CrawlService::class.java)).getToolSpecs()
+        val submitArgs = specs["submit"]!!.arguments.map { it.name }
+        assertTrue(submitArgs.contains("parallelTabs"), "submit should advertise parallelTabs: $submitArgs")
+        assertTrue(submitArgs.contains("taskTimeoutMillis"), "submit should advertise taskTimeoutMillis: $submitArgs")
+        assertNotNull(specs["status"])
+        assertNotNull(specs["result"])
     }
 }

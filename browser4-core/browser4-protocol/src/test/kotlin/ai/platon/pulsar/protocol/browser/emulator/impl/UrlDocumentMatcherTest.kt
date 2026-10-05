@@ -147,11 +147,74 @@ class UrlDocumentMatcherTest {
     }
 
     @Test
-    @DisplayName("a different scheme is rejected")
-    fun differentSchemeIsRejected() {
+    @DisplayName("an https->http downgrade is rejected even on the same host")
+    fun downgradeIsRejected() {
+        // Argument order is (committed, requested): an https request that the
+        // browser committed as plain http is a downgrade and must be refused.
+        assertFalse(
+            UrlDocumentMatcher.referToSamePageIgnoringQuery(
+                "http://example.com/p/1",
+                "https://example.com/p/1"
+            )
+        )
+    }
+
+    @Test
+    @DisplayName("a same-host default-port http->https 301 upgrade is the requested page")
+    fun httpToHttpsUpgradeIsAccepted() {
+        // books.toscrape.com answers its http URL with a 301 to the https page
+        // on the same host/path. The guard used to reject the committed https
+        // document, retiring the driver and losing the content. Call order is
+        // (committed=https, requested=http).
+        assertTrue(
+            UrlDocumentMatcher.referToSameDocument(
+                "https://books.toscrape.com/",
+                "http://books.toscrape.com/"
+            )
+        )
+        assertTrue(
+            UrlDocumentMatcher.referToSamePageIgnoringQuery(
+                "https://books.toscrape.com/catalogue/category/books/classics_6/index.html",
+                "http://books.toscrape.com/catalogue/category/books/classics_6/index.html"
+            )
+        )
+        // Query identity still applies on the upgraded document.
+        assertTrue(
+            UrlDocumentMatcher.referToSameDocument(
+                "https://example.com/p?a=1&b=2",
+                "http://example.com/p?b=2&a=1"
+            )
+        )
+    }
+
+    @Test
+    @DisplayName("the http->https upgrade exception requires default ports and same host/path")
+    fun upgradeRequiresDefaultPortsAndSameOrigin() {
+        // An explicit port on the requested http URL is not a bare default-port
+        // upgrade: http://host:8080 must not silently match https://host.
         assertFalse(
             UrlDocumentMatcher.referToSamePageIgnoringQuery(
                 "https://example.com/p/1",
+                "http://example.com:8080/p/1"
+            )
+        )
+        // An explicit https port on the committed side is refused as well.
+        assertFalse(
+            UrlDocumentMatcher.referToSamePageIgnoringQuery(
+                "https://example.com:8443/p/1",
+                "http://example.com/p/1"
+            )
+        )
+        // The upgrade never relaxes the host or path check.
+        assertFalse(
+            UrlDocumentMatcher.referToSamePageIgnoringQuery(
+                "https://evil.example.net/p/1",
+                "http://example.com/p/1"
+            )
+        )
+        assertFalse(
+            UrlDocumentMatcher.referToSamePageIgnoringQuery(
+                "https://example.com/p/2",
                 "http://example.com/p/1"
             )
         )

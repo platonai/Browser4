@@ -47,9 +47,21 @@ class CrawlToolExecutor(
                     "Extra crawl arguments as a CLI-style string, e.g. " +
                         "`-outLinkSelector=a[href]` or an X-SQL query.",
                 ),
+                ToolSpec.Arg(
+                    "parallelTabs", "Int?", "null",
+                    "Cap on concurrent fetch tabs for this task. Clamped server-side; " +
+                        "a missing or non-positive value uses the server default.",
+                ),
+                ToolSpec.Arg(
+                    "taskTimeoutMillis", "Long?", "null",
+                    "Whole-task budget in ms. Clamped server-side; a missing or " +
+                        "non-positive value uses the server default.",
+                ),
             ),
             returnType = "String",
-            description = "Submit a crawl task. Returns a task ID for status polling.",
+            description = "Submit a crawl task. Returns a task ID for status polling. " +
+                "parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task " +
+                "budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default.",
             help = """
                 Starts a recursive crawl in the background and returns the task id
                 immediately. Poll it with `crawl.status`, read the payload with
@@ -161,7 +173,28 @@ class CrawlToolExecutor(
                 val depth = paramInt(args, "depth", functionName, required = false, default = 1) ?: 1
                 val crawlArgs = paramString(args, "args", functionName, required = false, default = "") ?: ""
                 val sql = paramString(args, "sql", functionName, required = false, default = null)
-                crawlService.submit(CrawlRequest(url = url, args = crawlArgs, depth = depth, sql = sql, urls = urls))
+                // The REST controller honors these, but the MCP path used to drop
+                // them — the CLI echoed the requested parallel/timeout while the
+                // crawl ran with server defaults. Non-positive means "no
+                // preference" and falls back to the server default (CrawlService
+                // performs the actual clamping), matching CrawlRequest's contract.
+                val parallelTabs = paramInt(
+                    args, "parallelTabs", functionName, required = false, default = null
+                )?.takeIf { it > 0 }
+                val taskTimeoutMillis = paramLong(
+                    args, "taskTimeoutMillis", functionName, required = false, default = null
+                )?.takeIf { it > 0 }
+                crawlService.submit(
+                    CrawlRequest(
+                        url = url,
+                        args = crawlArgs,
+                        depth = depth,
+                        sql = sql,
+                        urls = urls,
+                        parallelTabs = parallelTabs,
+                        taskTimeoutMillis = taskTimeoutMillis,
+                    )
+                )
             }
             "status" -> envelopeOf(paramString(args, "id", functionName)!!, withPages = false)
             "result" -> envelopeOf(paramString(args, "id", functionName)!!, withPages = true)

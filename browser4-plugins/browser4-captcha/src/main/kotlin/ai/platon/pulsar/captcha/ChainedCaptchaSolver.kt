@@ -108,4 +108,10 @@ open class ChainedCaptchaSolver(val conf: ImmutableConfig) : CaptchaSolver {
      * Number of solvers in the chain.
      */
     val size: Int get() = solvers.size
+
+    /**
+     * The providers of the solvers currently in the chain, in priority order.
+     * An empty list means no CAPTCHA solving provider is configured.
+     */
+    val providers: List<CaptchaServiceProvider> get() = solvers.map { it.serviceProvider }
 }

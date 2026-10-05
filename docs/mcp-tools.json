@@ -82,8 +82,8 @@
     "method" : "listTabs",
     "mcpNames" : [ "browser_list_tabs" ],
     "signature" : "browser.listTabs()",
-    "description" : "List all tabs with index, guid, title, and url",
-    "returnType" : "List<Map<String, String>>",
+    "description" : "List all tabs with index, guid, title, url, and a boolean active marker",
+    "returnType" : "List<Map<String, Any>>",
     "examples" : [ {
       "title" : "List every tab",
       "expectsError" : false,
@@ -339,8 +339,8 @@
     "domain" : "crawl",
     "method" : "submit",
     "mcpNames" : [ "crawl_submit" ],
-    "signature" : "crawl.submit(url: String, depth: Int = 1, args: String = \"\")",
-    "description" : "Submit a crawl task. Returns a task ID for status polling.",
+    "signature" : "crawl.submit(url: String, depth: Int = 1, args: String = \"\", parallelTabs: Int? = null, taskTimeoutMillis: Long? = null)",
+    "description" : "Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "url",
@@ -358,6 +358,18 @@
       "type" : "String",
       "required" : false,
       "description" : "Extra crawl arguments as a CLI-style string, e.g. `-outLinkSelector=a[href]` or an X-SQL query."
+    }, {
+      "name" : "parallelTabs",
+      "type" : "Int?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Cap on concurrent fetch tabs for this task. Clamped server-side; a missing or non-positive value uses the server default."
+    }, {
+      "name" : "taskTimeoutMillis",
+      "type" : "Long?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Whole-task budget in ms. Clamped server-side; a missing or non-positive value uses the server default."
     } ],
     "examples" : [ {
       "title" : "Crawl one link level from a seed URL",
@@ -746,8 +758,8 @@
     "domain" : "html_snapshot",
     "method" : "scrape",
     "mcpNames" : [ "html_snapshot_scrape" ],
-    "signature" : "html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null, expires: String = 0s)",
-    "description" : "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that, so the read works on the previous snapshot version without touching the tab.",
+    "signature" : "html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null, absoluteUrls: Boolean = false, expires: String = 0s)",
+    "description" : "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. text is normalized inner text; textcontent is the raw textContent (whitespace kept). Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that, so the read works on the previous snapshot version without touching the tab. With field=attr and absoluteUrls=true, URL-valued attributes (href, src, …) are resolved against the page URL.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "sessionId",
@@ -771,6 +783,12 @@
       "required" : false,
       "default" : "null",
       "description" : "Attribute to read when field=attr."
+    }, {
+      "name" : "absoluteUrls",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "false",
+      "description" : "With field=attr, resolve URL-valued attributes (href, src, action, …) against the page URL and return the absolute URL; without it the raw (often relative) attribute value is returned. Non-URL attributes are always returned verbatim."
     }, {
       "name" : "expires",
       "type" : "String",
@@ -803,8 +821,8 @@
     "domain" : "html_snapshot",
     "method" : "scrape_all",
     "mcpNames" : [ "html_snapshot_scrape_all" ],
-    "signature" : "html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, offset: Int = 0, limit: Int = -1, expires: String = 0s)",
-    "description" : "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that.",
+    "signature" : "html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, absoluteUrls: Boolean = false, offset: Int = 0, limit: Int = -1, expires: String = 0s)",
+    "description" : "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. text is normalized inner text; textcontent is the raw textContent (whitespace kept). Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that. With field=attr and absoluteUrls=true, URL-valued attributes are resolved against the page URL.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "sessionId",
@@ -828,6 +846,12 @@
       "required" : false,
       "default" : "null",
       "description" : "Attribute to read when field=attr."
+    }, {
+      "name" : "absoluteUrls",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "false",
+      "description" : "With field=attr, resolve URL-valued attributes (href, src, action, …) against the page URL and return the absolute URL; without it the raw (often relative) attribute value is returned. Non-URL attributes are always returned verbatim."
     }, {
       "name" : "offset",
       "type" : "Int",

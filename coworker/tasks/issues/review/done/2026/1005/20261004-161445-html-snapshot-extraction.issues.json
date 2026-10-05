@@ -1,0 +1,226 @@
+{
+  "meta": {
+    "source": "20261004-161445-html-snapshot-extraction.full.md",
+    "scenario": "html-snapshot-extraction",
+    "date": "20261004-161445",
+    "mode": "dev"
+  },
+  "background": {
+    "executionContext": "**Commands used (in order):**\n1. `./b4w.ps1 help`, `help htmlsnapshot`, `help htmlsnapshot get`, `help htmlsnapshot summary`, `help open`, `help goto`\n2. `./b4w.ps1 -s books-eval open --headless \"http://books.toscrape.com/\"` → session created, page loaded (http→https redirect)\n3. `./b4w.ps1 -s books-eval htmlsnapshot` → capture + metadata (step 2)\n4. `./b4w.ps1 -s books-eval htmlsnapshot inspect` → **auto-discovered `.product_pod`** (20 matches) and suggested `h3`, `p.price_color`, `img.thumbnail`, etc. — this is how selectors were discovered\n5. `htmlsnapshot get text \"h3 a\"` / `get textcontent \"h3 a\"` (error) / `get attr \"h3 a\" title` (workaround) (step 3)\n6. `htmlsnapshot get html \"article.product_pod\"` (step 4)\n7. `htmlsnapshot get attr \"h3 a\" href` (step 5)\n8. `htmlsnapshot get all text \"h3 a\"` (step 6)\n9. `htmlsnapshot get all text \"h3 a\" --offset 5 --limit 5` (step 7)\n10. `htmlsnapshot export --file \"<scratch>/books-page.html\"` (step 8)\n11. `htmlsnapshot summary --stdout` (step 9)\n12. `htmlsnapshot grep -c price`, `-c -i price`, `--all price` (step 10)\n\n**Important decisions / workarounds:**\n- Used a dedicated `-s books-eval` session per documented concurrency guidance; opened headless (AI default).\n- Selector discovery via `htmlsnapshot inspect` instead of guessing (worked first try).\n- `textcontent` unavailable → used `get attr … title` for the full title; used `eval` for the absolute URL.\n- Diagnostics (non-task, for root cause): `curl` of the raw page (proved truncation is server-side), byte-exact Python string counts, source inspection of `main.rs` / `help.rs` / `commands.rs` / `HTMLSnapshotToolExecutor.kt`, and `lz`-injection bisection in two temporary sessions (both closed afterwards; `books-eval` left active per `list`).\n\n**Reliability:** all repeats were deterministic (identical title arrays, identical grep counts); exit codes 0 on all working reads, 1 on the rejected `textcontent`. No flakes, no backend/startup problems (bundle was already built; zero manual setup). Full logs are in `.test-sessions/20261004T1433038523034Z/`.\n\n---",
+    "task": "All 10 requested steps were executed against the live site **in a named session (`books-eval`)** via `./b4w.ps1`, headless.\n\n**1. Navigation** — `http://books.toscrape.com/` opened and redirected to `https://books.toscrape.com/`; title: *\"All products | Books to Scrape - Sandbox\"*.\n\n**2. Fresh HTML snapshot** — `htmlsnapshot` capture: **62 KB**, 20 images, 94 links, 100 interactive elements (20× \"Add to basket\" buttons, 80 links).\n\n**3. First book title text** — `htmlsnapshot get text \"h3 a\"` → **`A Light in the ...`**\n⚠️ This is the *page's own* DOM text — the site truncates titles server-side (verified byte-exact against the raw HTTP response with `curl`: `>A Light in the ...<` while `title=\"A Light in the Attic\"`). The documented remedy `textcontent` **fails** (see Issue 1); the full title is available via `htmlsnapshot get attr \"h3 a\" title` → **`A Light in the Attic`**.\n\n**4. First product container HTML** — `htmlsnapshot get html \"article.product_pod\"` (selector auto-discovered by `htmlsnapshot inspect`) returned the `<article class=\"product_pod\">` block:\n```html\n<div class=\"image_container\" ...><a href=\"catalogue/a-light-in-the-attic_1000/index.html\" ...>\n  <img src=\"media/cache/2c/da/2cdad67c44b002e7ead0cc35693c0e8b.jpg\" alt=\"A Light in the Attic\" ...></a></div>\n<p class=\"star-rating Three\" ...>…</p>\n<h3 ...><a href=\"catalogue/a-light-in-the-attic_1000/index.html\" title=\"A Light in the Attic\" ...>A Light in the ...</a></h3>\n<div class=\"product_price\" ...><p class=\"price_color\" ...>£51.77</p> <p class=\"instock availability\" ...>…In stock</p>\n  <form ...><button type=\"submit\" class=\"btn btn-primary btn-block\" data-loading-text=\"Adding...\" ...>Add to basket</button></form></div>\n```\n(full output in `.test-sessions/20261004T1433038523034Z/05-get-first-product-html.log`)\n\n**5. First book link href** — `htmlsnapshot get attr \"h3 a\" href` → **`catalogue/a-light-in-the-attic_1000/index.html`** (relative; absolute = `https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html` via `eval \"() => document.querySelector('h3 a').href\"`).\n\n**6. All book titles** — `htmlsnapshot get all text \"h3 a\"` → JSON array of 20:\n`[\"A Light in the ...\",\"Tipping the Velvet\",\"Soumission\",\"Sharp Objects\",\"Sapiens: A Brief History ...\",\"The Requiem Red\",\"The Dirty Little Secrets ...\",\"The Coming Woman: A ...\",\"The Boys in the ...\",\"The Black Maria\",\"Starving Hearts (Triangular Trade ...\",\"Shakespeare's Sonnets\",\"Set Me Free\",\"Scott Pilgrim's Precious Little ...\",\"Rip it Up and ...\",\"Our Band Could Be ...\",\"Olio\",\"Mesaerion: The Best Science ...\",\"Libertarianism for Beginners\",\"It's Only the Himalayas\"]`\n\n**7. Titles 6–10** — `htmlsnapshot get all text \"h3 a\" --offset 5 --limit 5` → **`[\"The Requiem Red\",\"The Dirty Little Secrets ...\",\"The Coming Woman: A ...\",\"The Boys in the ...\",\"The Black Maria\"]`** (offset/limit semantics correct).\n\n**8. Export** — `htmlsnapshot export --file .test-sessions/20261004T1433038523034Z/books-page.html` → **43,184 bytes**, pretty-printed and self-describing (`<link rel=\"normalizedURI\" href=\"https://books.toscrape.com/\">`, `vi` boxes, all 20 products).\n\n**9. Summary** — `htmlsnapshot summary --stdout` → 1,626-line / **57,752-byte** WPSI YAML: page metadata, structure landmarks, per-product list (href + box), stats (516 nodes, 94 links, 20 buttons, 21 forms, 20 images). Note: \"compressed\" claim does not hold here (Issue 4).\n\n**10. Grep \"price\"** — `htmlsnapshot grep -c price` → **40** matching lines; `-ci` → **41** (the extra line is \"**Prices** and ratings here were randomly assigned\"); an occurrence-level cross-check of the CLI's own `--all` output confirmed 40/41 actual occurrences (no matched line contained more than one).\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "htmlsnapshot get textcontent is documented in help and SKILL.md but rejected by the CLI",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1) ./b4w.ps1 -s books-eval open --headless \"http://books.toscrape.com/\"\n2) ./b4w.ps1 -s books-eval htmlsnapshot get text \"h3 a\"   -> \"A Light in the ...\" (clipped)\n3) ./b4w.ps1 -s books-eval htmlsnapshot get textcontent \"h3 a\"   -> error, exit code 1"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Per `help htmlsnapshot get` ('What to extract: text, textcontent, html, or attr. text returns visible text (may be truncated by CSS overflow); textcontent returns the full text content') and SKILL.md section 3 ('Prefer textcontent when text looks truncated'), the command should extract the full text content."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Error: Unknown field 'textcontent'. Use text, html, or attr. Exit code 1; no backend call is made. The documented fallback for clipped text is unusable, so users must know the undocumented-in-context workaround (get attr <sel> title / get html)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "CLI-side validation in handle_html_snapshot_get hard-codes the allowed set [\"text\", \"html\", \"attr\"] and rejects the documented value before dispatching. The backend tool executor already accepts textcontent (its own error message reads 'Use text, textcontent, html, or attr'), and both help.rs and commands.rs advertise it, so the CLI gate is stale drift between CLI and backend."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:handle_html_snapshot_get() (field validation around line 7585)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add \"textcontent\" to the allowed field list in handle_html_snapshot_get and forward it to the backend tool\n- Align the CLI error message with the backend's ('Use text, textcontent, html, or attr')\n- Add a CLI regression test asserting every field documented in help is accepted\n- Audit other documented fields/flags for the same CLI-vs-backend drift"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "Documented text vs textcontent semantics do not exist, and the documented clipped-text remedy cannot work here",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Read SKILL.md:181 and references/htmlsnapshot.md (Troubleshooting) / `help htmlsnapshot get`; then compare ./b4w.ps1 -s books-eval htmlsnapshot get text \"h3 a\" (£clipped title) with the promised textcontent behavior; inspect browser4-rest/src/main/kotlin/ai/platon/pulsar/agent/tool/HTMLSnapshotToolExecutor.kt:285-287 and 335-336."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "text returns visible text (possibly clipped by CSS overflow); textcontent returns full text content — the docs present textcontent as the way to recover 'A Light in the Attic' instead of 'A Light in the ...'."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Even after fixing Issue 1, no different result would be produced: the backend maps textcontent to exactly the same extraction as text (`element.text()` in both branches). Worse, the truncation on this page is not CSS-driven at all — the site's own HTML contains 'A Light in the ...' (byte-verified against the raw HTTP response), so no DOM text API can recover the full title; only the title attribute (or the detail page) has it."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The docs describe an innerText-vs-textContent distinction that was never implemented in the backend, and the failure mode they attach it to (server-side truncation in the source HTML) is not solvable by either field. The troubleshooting guidance sends users down a dead end twice over."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/agent/tool/HTMLSnapshotToolExecutor.kt:scrape()/scrapeAll(); skills/browser4-cli/references/htmlsnapshot.md:81-89; skills/browser4-cli/SKILL.md:181"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Either implement genuine textContent semantics (raw text nodes incl. hidden content) or delete the claim from help.rs, commands.rs, SKILL.md and htmlsnapshot.md\n- Replace the troubleshooting hint with the working recovery paths: `htmlsnapshot get attr <sel> title`, `htmlsnapshot get html <sel>`, or fetching the detail page\n- Document that titles truncated server-side cannot be recovered by any text-extraction field\n- Add an end-to-end test using books.toscrape.com asserting the documented recovery path actually works"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "SKILL.md says htmlsnapshot get all attr \"a[href]\" href yields absolute URLs, but output is relative",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s books-eval htmlsnapshot get all attr \"a[href]\" href --limit 5\n(compare with SKILL.md:84: 'For absolute URLs after redirect resolution use htmlsnapshot get all attr \"a[href]\" href')"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Absolute URLs, e.g. https://books.toscrape.com/catalogue/... per the skill note."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "[\"index.html\",\"index.html\",\"catalogue/category/books_1/index.html\",\"catalogue/category/books/travel_2/index.html\",\"catalogue/category/books/mystery_3/index.html\"] — raw relative attribute values. Absolute URLs are only obtainable via a property read, e.g. eval \"() => document.querySelector('h3 a').href\". The sibling example in references/htmlsnapshot.md ('get attr \"img[src]\" src # all image URLs') has the same problem — img src values are relative on this page too."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "`get attr` intentionally returns the raw attribute value (standard attribute semantics); the driver performs no URL resolution. The SKILL note overpromises a resolution step that does not exist, silently misdirecting scripts that follow it."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/SKILL.md:84 (Element Refs note)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Reword the note: the command returns raw (often relative) attribute values; use eval (element => element.href/.src) for resolved absolute URLs\n- Optionally add a --resolve-urls/--absolute flag to htmlsnapshot get for href/src attributes\n- Fix the matching examples in references/htmlsnapshot.md"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "htmlsnapshot summary advertised as '<1% of original HTML size' measures ~93-113% and exceeds the exported HTML",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s books-eval htmlsnapshot summary --stdout > summary.log\nwc -c summary.log   # 57752 bytes, 1626 lines\nwc -c books-page.html   # 43184 bytes (same page, exported)"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A compressed overview, 'typically <1% of the original HTML size' (help htmlsnapshot; references/htmlsnapshot.md:208)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "57,752-byte YAML for a 62 KB captured page (~93%) and ~134% of the 43 KB exported HTML. It enumerates every one of the 20 product boxes and every link with href and bounding box. Additionally page.type is reported as 'Article / Content' for a product-listing page."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The WPSI generator emits per-item detail with no size cap; the '<1%' figure is an unvalidated claim in the help/docs. Page-type heuristic does not distinguish listing pages."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/help.rs:1959 (claim); browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/workflow/parse/html/PageSummaryIndexService.kt (generator)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Correct or qualify the '<1%' claim in help.rs and references/htmlsnapshot.md (state it depends on page size/structure, or give a measured range)\n- Add a brief/top-N mode (omit per-item box/href) so summary can serve as a cheap compressed overview\n- Improve page-type detection for product/search listing pages"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Undocumented `lz` attribute injected into the live page by a read, then leaked into extracted HTML",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1) ./b4w.ps1 -s probe goto \"https://books.toscrape.com/\"\n2) ./b4w.ps1 -s probe eval \"() => document.querySelectorAll('[lz]').length\"   -> 0\n3) ./b4w.ps1 -s probe htmlsnapshot get text \"h3 a\"\n4) ./b4w.ps1 -s probe eval \"() => document.querySelectorAll('[lz]').length\"   -> 80\n5) ./b4w.ps1 -s books-eval htmlsnapshot get html \"article.product_pod\"   # output carries lz=\"1\""
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Extracted/serialized HTML reflects the page's own markup; injected attributes such as `vi` are documented, and (per the docs about vi) the live page should stay untouched. An unknown attribute in extraction output should at least be explained."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The first htmlsnapshot get read injects lz=\"1\" into 80 live-DOM elements (35 a, 40 p, 4 strong, 1 form). The raw HTTP response and every script the page loads contain zero occurrences of 'lz'; the same command sequence on example.com injects nothing. The attribute then appears in get html and export output (80 occurrences) with no documentation anywhere in the skill docs (vi and normalizedURI are documented; lz is not)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "A side effect of the driver's read/serialization pipeline (not the site's scripts) that marks text-bearing elements in the live DOM; the trigger criteria differ per page — not yet located in this repository's tracked sources (no file here contains the literal 'lz'), so the injector most likely lives in the browser-driver dependency used by browser4-core/browser4-browser. Needs follow-up investigation there."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Locate the injector in the driver/serializer and either document `lz` next to `vi` or stop persisting it into the live DOM\n- Strip `lz` (like formatting noise) in extraction/`--clean` export, or make it opt-out\n- If read commands intentionally mutate page attributes, correct the 'live page stays untouched' statement and add a regression test documenting the intended behavior"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "grep output header calls the live page a 'snapshot captured at ...' and pollutes piped output",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s books-eval htmlsnapshot grep -i --all price | head -1\n-> '# htmlsnapshot snapshot captured at 2026-10-04T16:10:33Z'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "grep-style output begins with matching lines (as the docs' examples show); if a freshness note is needed it should not be the first line of stdout."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every non-count grep run prepends a comment header '# htmlsnapshot snapshot captured at <ts>', although grep searches the LIVE page and needs no capture (docs say so explicitly). Scripts piping `htmlsnapshot grep ... | ...` receive a spurious non-match first line."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The output header is constructed from a source label plus current timestamp to convey freshness (comment in code: 'Show timestamp so users know when this live snapshot was captured'), but the 'snapshot captured' wording collides with the capture concept and it is emitted unconditionally for match output."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:~9800 (grep output header construction, format!(\"# {} snapshot captured at {}\"))"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Reword to make clear it is the live page, e.g. '# live page HTML @ <ts>'\n- Emit the header on stderr or behind --verbose so stdout stays pipe-clean\n- Keep -c/-l output as-is (already clean)"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

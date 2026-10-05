@@ -1,0 +1,302 @@
+{
+  "meta": {
+    "mode": "dev",
+    "source": "20261004-163201-loop-monitoring.full.md",
+    "date": "20261004-163201",
+    "scenario": "loop-monitoring"
+  },
+  "background": {
+    "executionContext": "**Setup:** Verified repo root, created/used `.test-sessions/20261004T1433038523034Z/` for scratch logs, ran `./b4w.ps1 help`, read `skills/browser4-cli/SKILL.md`, `references/loop.md`, and `help loop`. `doctor` confirmed the LLM is configured (DEEPSEEK_API_KEY, deepseek-v4-flash) — required for plain-text loop mode.\n\n**Steps executed:**\n1. Started `loop --name health-check --count 2 --interval 10 \"<plain-text task>\"` in the background; all iteration logs redirected to the scratch dir. Both iterations completed (iteration 1 took ~21 s > 10 s interval, so iteration 2 started immediately — matches documented start-to-start interval semantics).\n2. `loop --list` while running → `▶ health-check 0/2 running` ✅\n3. `loop --status --name health-check` → Running, 0/2, mode plain, timeout remaining ✅ (later saw 1/2)\n4. `loop --shell --name shell-test --count 2 --interval 5 \"time /T\"` → two iterations at 00:22:40 / 00:22:45 ✅\n5. `loop --name cli-test --count 2 --interval 5 -- status` → two full status outputs ✅\n6. `loop --list` → only health-check (running); `--history` showed shell-test and cli-test as `count reached` (auto-cleaned from `--list`)\n7. `loop --pause --name paused-test --shell --count 5 --interval 10 \"echo paused-check\"` → `⏸ Created as paused`; list showed `⏸ paused-test 0/5` ✅\n8. `--resume` → spawned background PID 51556, `--status` showed Running 1/5; `--pause` → `⏸ Paused 1/5` ✅\n9. `--stop --name paused-test` → \"stopped. 1 iteration(s) completed. State cleared.\" — **but PID 51556 stayed alive indefinitely** (killed manually later)\n10. `loop --name timeout-test --timeout 30 --interval 5 --count 100 --shell \"echo tick\"` — did not stop at 30 s; still running after 300 s, state file showed `\"timeoutSecs\": 604800`. Stopped it with `--stop` (reported 62 iters, but process continued to 82). Re-verified root cause with paused loops: `--timeout 30` → `timeoutSecs 604800`, `-t 30` → `timeoutSecs 30`. Re-ran the timeout test with `-t 30` → stopped after 6 iterations in 30.6 s with \"Timeout reached (30s)\" ✅\n11. `--stop-all` → claimed to stop 3 loops including timeout-test \"was running\" (71 iters) — but 12 s later `--list` showed it running again at 75/100 and the state file was back. Killed PIDs 28376 and 51556 via `Stop-Process`, then re-ran `--stop-all` (cleared resurrected 82-iter state) ✅ after workaround\n12. Final `--list` → \"No persisted loops\"; zero stray loop processes ✅\n\n**Extra verification:** created a paused loop with `-t 12`, resumed it — after the first iteration the state file's `timeoutSecs` had become `604800`, proving resumed loops silently lose their timeout (the resume spawn re-emits `--timeout`, which is globally swallowed). Root causes were confirmed by reading `cli/browser4-cli/src/args.rs` (`parse_global_flags`, unconditional `--timeout` consumption at ~lines 114–126), `main.rs` `handle_loop` (`--stop`/`--stop-all` delete the file; the checks for `status == \"stopped\"` at lines ~16464/16696 are dead code because nothing writes that status; the pause-poll loop at ~16486 loops forever on a missing file), and `spawn_detached` (~15805, `Stdio::null()` for all three streams, so resumed loops' output is discarded).\n\n**Workarounds required:** (a) manual `Stop-Process` to kill orphaned loops; (b) `-t` instead of `--timeout`; (c) reading `~/.browser4/loops/*.json` and `--history` to track loops that `--list` had hidden.",
+    "task": "All 12 steps were executed end-to-end with `./b4w.ps1`. The `loop` command itself works well in its core execution modes: a plain-text LLM task ran twice (navigated to `https://httpbin.org/get`, produced a page summary and status), shell mode printed the time twice, and subcommand mode ran `status` twice — all with correct interval pacing and persisted progress (`--list`, `--status`, follow-up iterations). Pause/resume/start-paused worked as documented.\n\nHowever, three of the twelve steps did not achieve their stated intent without manual intervention:\n\n- **Step 9/11 failed**: `--stop` and `--stop-all` report success and delete the state file, but the running loop process is never signalled. It keeps iterating and **re-creates** the state file, so the loop \"resurrects\"; a paused loop's spawned process becomes a **permanent orphan**. I had to kill two orphaned `browser4-cli.exe` processes manually with PowerShell `Stop-Process` to clean up.\n- **Step 10 failed as specified**: `loop --timeout 30` silently ignored the flag (swallowed by the *global* HTTP `--timeout` parser); the loop ran 82 iterations over ~7 minutes instead of stopping at 30 s. The short form `-t 30` works correctly (stopped after exactly 6 iterations / 30.6 s).\n- **Step 6 partially**: only 1 of the expected 3 loops appeared in `--list`, because completed loops auto-delete their state immediately (documented, but easy to misread as \"loop never existed\").\n\nServer health remained UP throughout, and `--stop-all` after the manual kills left zero persisted loops and zero loop processes."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "--stop/--stop-all report success but do not stop running loops (state resurrects)",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "1) ./b4w.ps1 loop --name timeout-test -t 600 --interval 5 --count 100 --shell \"echo tick\" (or any long-running loop)\n2) ./b4w.ps1 loop --stop --name timeout-test   # prints 'stopped. 62 iteration(s) completed. State cleared.'\n3) wait ~60s, then ./b4w.ps1 loop --list      # loop shows as running again with MORE iterations and the state file is back\n4) ./b4w.ps1 loop --stop-all                  # same result: file recreated (observed 71 -> 75 -> 82 iterations)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The running loop process receives a stop signal, exits at the next iteration boundary, and the state file stays gone.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Only the state file is deleted; the running process never sees a signal, keeps executing iterations (observed 62 -> 71 -> 75 -> 82 iterations over ~2 minutes) and re-persists status 'running' after each iteration, resurrecting the loop. The success message ('stopped... State cleared') is false, and --stop-all had to be re-run after manually killing the process.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "handle_loop's --stop branch (main.rs ~15998-16046) calls state::clear_loop_state and --stop-all (~16048-16068) calls state::clear_all_loop_states; both only unlink the JSON file. The worker's only stop channel is a persisted state with status == 'stopped' (checked at main.rs ~16464 top-of-iteration and ~16696 during sleep), but no code path ever writes status 'stopped' - the writes are dead code. Deleting the file is interpreted as 'no signal', and the per-iteration persist() then rewrites the file.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs: handle_loop --stop branch (~15998-16046), --stop-all branch (~16048-16068), worker signal checks (~16462-16520); cli/browser4-cli/src/state.rs: clear_loop_state/clear_all_loop_states",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Make --stop persist status 'stopped' (state::set_loop_status / write_loop_state) instead of deleting the file; the worker already detects that status and exits, and it clears state on exit.\n- Keep --stop clearing the file immediately only when no worker process is alive (add pid/liveness info to LoopState), or garbage-collect stale 'stopped' entries on the next --list/--status.\n- Avoid double history entries: the control op writes a 'stopped' history entry now while the worker would also write one on exit.\n- Add an integration test that starts a real loop subprocess, runs --stop, and asserts the process exits and the state file does not reappear (current tests only exercise parse_loop_args).\n- Report a nonzero exit or warning if a running process could not actually be signaled.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "loop --timeout (long form) is silently swallowed by the global HTTP timeout; resumed loops lose their timeout",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "1) ./b4w.ps1 loop --pause --name t-long --shell --count 100 --interval 5 --timeout 30 \"echo t\"  -> header says 'up to 100 iterations or 604800s'; ~/.browser4/loops/t-long.json has \"timeoutSecs\": 604800\n2) ./b4w.ps1 loop --pause --name t-short --shell --count 100 --interval 5 -t 30 \"echo t\"          -> header says 'or 30s'; state has \"timeoutSecs\": 30\n3) ./b4w.ps1 loop --name timeout-test --timeout 30 --interval 5 --count 100 --shell \"echo tick\"    -> runs past 300s (82 iterations, ~7 min) instead of stopping at ~30s\n4) Create paused loop with '-t 12', then ./b4w.ps1 loop --resume --name <n>; after one iteration the state file's timeoutSecs becomes 604800",
+          "label": "Reproduction"
+        },
+        {
+          "body": "loop --timeout 30 (documented as '-t, --timeout') bounds the loop to 30 seconds, exactly like -t 30.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "--timeout is consumed by the global flag parser as the per-call HTTP timeout and never reaches the loop parser; the loop keeps the 1-week default and runs to --count. The CLI's own --resume spawn path re-emits '--timeout', so every resumed loop also reverts to 604800 even when originally created with -t.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "In cli/browser4-cli/src/args.rs, parse_global_flags consumes '--timeout <v>' and '--timeout=<v>' unconditionally (~lines 114-126) with no '!seen_command' guard (unlike --json, -q, --session, --proxy); the tokens are stripped before dispatch, so parse_loop_args (main.rs ~15574-15577) never sees them. '-t' is not a global flag, so it survives. The resume spawner emits the long form at main.rs ~16213-16216, making the same mistake internally.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/args.rs: parse_global_flags (~114-126); cli/browser4-cli/src/main.rs:16213-16216 (resume spawn args); cli/browser4-cli/src/main.rs:15574-15577 (loop parser, currently unreachable for the long form)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add the same '!seen_command' guard to --timeout/--timeout= that --json/-q/--proxy have, so after a command name it is forwarded to the subcommand; document that global flags go before the command.\n- Audit commands that legitimately accept --timeout after the command (e.g. plugin tools) to parse it themselves, so the guard does not regress them.\n- As defense in depth, emit '-t' from the resume spawner instead of '--timeout'.\n- Add a regression test through the real path (parse_global_flags + parse_loop_args); the existing test at main.rs:26470 calls parse_loop_args directly with '--timeout' and passes while the shipped path is broken.\n- Consider warning when loop finds a numeric --timeout-looking value in argv that was consumed elsewhere.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "--stop on a paused loop orphans its background process forever",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "1) ./b4w.ps1 loop --pause --name paused-test --shell --count 5 --interval 10 \"echo paused-check\"\n2) ./b4w.ps1 loop --resume --name paused-test        # spawns detached PID\n3) ./b4w.ps1 loop --pause --name paused-test         # loop now paused, process alive\n4) ./b4w.ps1 loop --stop --name paused-test          # prints 'stopped... State cleared'\n5) powershell Get-CimInstance Win32_Process ...      # the loop PID is still alive minutes later",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The paused loop's process exits when --stop clears it.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Observed PID 51556 still alive ~7 minutes after --stop (it had to be killed with Stop-Process). A paused worker never exits and keeps consuming a process slot indefinitely.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The pause-wait inner loop (main.rs ~16486-16515) only exits when read_loop_state returns a state with status 'stopped' or 'running'. --stop deletes the file, so read_loop_state returns None and neither branch fires; the process polls every 2 s forever. Compounded by the stop bug above (nothing writes 'stopped').",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:16486-16515 (pause-wait poll loop); 15998-16046 (--stop deletes state)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Treat a missing state file while paused as a stop signal (print a message and exit), or keep the file and write status 'stopped' (fixed naturally by the --stop fix).\n- Record the worker PID (and/or heartbeat timestamp) in LoopState so control ops can detect and terminate orphaned workers.\n- Have --stop attempt process termination (or at least warn) when a live worker is detected.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "Resumed (background) loops run invisibly - iteration output is discarded",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "1) ./b4w.ps1 loop --pause --name demo --shell --count 3 --interval 5 \"echo hello\"\n2) ./b4w.ps1 loop --resume --name demo   # prints 'Spawned background process (PID: ...). Use --list to monitor'\n3) Observation: iteration output is never visible anywhere; --status only shows counters",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A way to see what the resumed loop produced (log file path, --logs command, or documented sink).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "spawn_detached sets stdout/stderr/stdin to Stdio::null(), so all iteration output is discarded. Neither the resume output nor --list/--status names any log file, and no 'loop --logs' exists.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs spawn_detached (~15805-15826) redirects all three streams to null and nothing writes a per-loop log.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs: spawn_detached (~15805); --resume spawn (~16218-16237)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Redirect the detached process's stdout/stderr to ~/.browser4/loops/<name>.log and print that path in the --resume output.\n- Add 'loop --logs [--name] [--tail]' (or extend --status to show the log path and last output line).\n- If output is intentionally discarded, say so explicitly in the resume message and docs.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "loop help text for --pause (start-paused) is inaccurate and contradicts the reference",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.ps1 help loop  -> '--pause ... With a task: create the loop in paused state (use --resume then re-run to start execution).'",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The help should state that --resume alone changes the state to running and spawns a background process that starts executing immediately (as references/loop.md and observed behavior show).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "'use --resume then re-run to start execution' suggests the user must re-run the loop command; in practice --resume alone started execution immediately (spawned PID, iterations began within seconds).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Stale help string in commands.rs left over from an earlier design; references/loop.md already describes the current behavior.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs:900",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Reword to: 'create the loop in paused state; --resume changes it to running and spawns a background process that starts executing immediately.'\n- Align the help output and references/loop.md wording, and add the point that the resumed process's output is not shown (see related issue).",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Control ops on a non-existent loop print a 'State file:' path that does not exist",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 loop --status --name nonexistent-xyz   and   ./b4w.ps1 loop --stop --name nonexistent-xyz",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A clear 'no such loop' message, ideally with a hint (e.g. 'Use --list to see persisted loops') and a nonzero exit code.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Prints 'No loop named \"nonexistent-xyz\".' followed by 'State file: C:\\Users\\pereg\\.browser4\\loops\\nonexistent-xyz.json' (a file that does not exist), exit code 0. The same pattern exists for --pause/--resume.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The None branches print the computed path unconditionally instead of checking existence or implying nothing was found.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:15986-15992 (status), 16036-16043 (stop), ~16150 (pause), ~16246-16254 (resume)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Only print 'State file:' when the state file exists; otherwise print a hint to --list (and consider exiting 1 for control ops on a missing loop).\n- Report whether the loop may have completed and been auto-cleaned (point to --history).",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Plain-text loop iterations dump a raw, duplicated JSON envelope",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 loop --name health-check --count 2 --interval 10 \"navigate to https://httpbin.org/get, take a snapshot, and report the page status\"",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A concise per-iteration result line suitable for monitoring (e.g. status + summary), with the full envelope available via --json.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Each iteration prints one very long single-line JSON object containing the whole command_run envelope; the page summary text appears twice (commandResult.pageSummary and instructResults[0].result), and a completed result still carries \"message\":\"Task is in progress\" (isDone:true), which is confusing without inside knowledge.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The plain-text execution path prints the server's command_run payload verbatim (main.rs ~16601-16613); the envelope itself duplicates the summary and carries an outdated message field.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs: handle_loop plain-mode result printing (~16601-16613)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Print a short human-readable line per iteration by default (ok/fail + summary or first line), and reserve the full envelope for --json/--verbose.\n- De-duplicate: don't show both commandResult and instructResults in the human view.\n- Consider surfacing 'isDone' rather than the stale 'message' field in summaries.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "Completed loops vanish from --list immediately; no pointer to --history",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "1) ./b4w.ps1 loop --shell --count 2 --interval 5 \"time /T\"   # completes\n2) ./b4w.ps1 loop --list   -> 'No persisted loops. Start one with `browser4-cli loop <task>`.'",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Either completed loops remain visible (e.g. as 'completed') or the empty-state message points to --history so the user can find them.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The completed loop's state is auto-cleaned, so it is invisible in --list seconds later; the only trace is --history, which is not mentioned in the empty-state or the list footer. In this session the task expected to see three named loops and only one appeared.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Auto-clean on normal completion (main.rs ~16754) removes the state file without adding completed entries to --list; the empty-state message and footer don't reference --history.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs: --list branch (~15840-15900), auto-clean on completion (~16751-16765)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add 'Recently completed loops: use `loop --history`' to the empty-state and list footer.\n- Optionally show recently completed loops in --list (from loop-history.jsonl) with a 'completed' marker.\n- Mention --keep-state in the completion summary for users who want the state retained.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

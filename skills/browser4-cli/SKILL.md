@@ -55,8 +55,9 @@ browser4-cli fill <ref> "<value>"         # interact
 browser4-cli press Enter
 browser4-cli wait --load networkidle   # prove the network settled — nothing more
 browser4-cli wait "<result-selector>"  # poll the element carrying the result (late-rendered pages)
-browser4-cli snapshot -v 0 --auto-diff --stdout  # verify what changed
-browser4-cli htmlsnapshot                     # snapshot metadata for the page the tab is showing
+browser4-cli click <ref> --no-snapshot    # interact without overwriting the diff baseline
+browser4-cli snapshot -v 0 --auto-diff --stdout  # verify what changed vs pre-interaction page
+browser4-cli htmlsnapshot                 # snapshot metadata for the page the tab is showing
 browser4-cli htmlsnapshot get all text "<css-selector>"   # extract from the tab's fresh snapshot
 ```
 
@@ -77,7 +78,7 @@ After commands that modify browser state, browser4-cli saves an **accessibility-
 
 Each interactive element has a **ref** (`e5`, `e12`) — the element's Chrome DevTools Protocol backend node ID prefixed with `e` (so `e12345` refers to backend node 12345). Use refs to target elements in `click`, `fill`, `type`, `get attr`, etc.
 
-> **Note:** `/url` fields may be **relative** (e.g. `/url: news`). The snapshot output includes the page URL at the top for resolution. Add `-u` / `--urls` to include link hrefs, and `-b` / `--brief` when you only need the page URL and title. For absolute URLs after redirect resolution use `htmlsnapshot get all attr "a[href]" href`.
+> **Note:** `/url` fields may be **relative** (e.g. `/url: news`) — the snapshot output includes the page URL at the top for resolution. Add `-u` / `--urls` to include link hrefs (they are omitted by default), and `-b` / `--brief` when you only need the page URL and title. `htmlsnapshot get [all] attr` returns the RAW attribute value (hrefs are often relative); add `--absolute` to resolve href/src against the page URL, e.g. `htmlsnapshot get all attr "a[href]" href --absolute` — that is how you get absolute URLs after redirect resolution.
 
 ### Ref Lifecycle
 
@@ -113,7 +114,7 @@ Use `--headed` for exactly three reasons: (1) the user explicitly asks for a vis
 
 **Rule for AI agents: always use `--headless` by default.** Use `--headed` only when the user **explicitly** requests a visible browser ("show me the browser", "I want to see", "open visibly", "headed", "watch what happens"). If user participation in the page interaction is required — e.g., logging in or entering a verification code (CAPTCHA) — open a **headed** browser so the user can see and act on the page.
 
-**Anti-bot escalation — retry once:** when a page looks blocked (CAPTCHA/verification widget, Cloudflare/DataDome/Akamai/PerimeterX challenge, Google `/sorry/`, "unusual traffic" / "access denied", or an implausibly empty body), `close` then `open --headed` **with the same `-s <name>`** so profile and cookies survive, retry the same step **once**, and **tell the user the mode was switched**. If the headed retry is blocked too, stop — the block is fingerprint/IP-level: prefer `attach --cdp` / `attach --extension` (a real logged-in profile), raise `--interact-level`, or report the site as unreachable. GUI-less environments (CI, Docker) degrade `--headed` to headless — say the retry ran headless instead of claiming a visible window. `goto`/`open` run a one-call probe after a successful navigation and print this escalation as an **advisory stderr warning** (naming the signature that fired) when the landed page matches a challenge URL or body marker; the command still succeeds, so act on the warning yourself rather than waiting for a failure (`--json` reports it as `challenge_detected` / `challenge_signature`).
+**Anti-bot escalation — retry once:** when a page looks blocked (CAPTCHA/verification widget, Cloudflare/DataDome/Akamai/PerimeterX challenge, Google `/sorry/`, "unusual traffic" / "access denied"), `close` then `open --headed` **with the same `-s <name>`** so profile and cookies survive, retry the same step **once**, and **tell the user the mode was switched**. If the headed retry is blocked too, stop — the block is fingerprint/IP-level: prefer `attach --cdp` / `attach --extension` (a real logged-in profile), raise `--interact-level`, or report the site as unreachable. GUI-less environments (CI, Docker) degrade `--headed` to headless — say the retry ran headless instead of claiming a visible window. `goto`/`open` run a one-call probe after a successful navigation and print this escalation as an **advisory stderr warning** (naming the signature that fired) when the landed page matches a challenge URL or body marker; the command still succeeds, so act on the warning yourself rather than waiting for a failure (`--json` reports it as `challenge_detected` / `challenge_signature`). The weaker "implausibly empty body" signal (few visible chars and **no iframes** — widget/demo pages are exempt, as are content paths like `/wiki/…`) only advises a retry and a `snapshot` inspection, **not** a mode switch — do not pay a session teardown for that signal alone.
 
 Set the display mode with `open` when starting a **new** session; `goto` does not accept `--headless`/`--headed` — it inherits the session's mode:
 
@@ -141,7 +142,13 @@ Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedica
 > Other ways to pin the session: `BROWSER4_CLI_SESSION=job-42` (per-invocation env var, overridden
 > by `-s` / `--session`), `browser4-cli config set session job-42` (persisted default), or
 > `browser4-cli session-default <name>` (promote an existing named session to the default).
-> `browser4-cli list` shows every session and its current page URL.
+> `browser4-cli list` shows every session and its current page URL (a **URL** column from the
+> backend, capped to 48 chars — run `list --verbose` or `list --json` for the untruncated URL;
+> `-` means the backend is unreachable or the saved session is stale). A locally-saved session
+> the backend no longer recognizes is listed as **Stale / Refresh** (the same row `close-all`
+> counts), rather than being hidden.
+
+The `list` command also has a **Display** column with the mode fixed at session creation — Headed / Headless / Supervised / Attached (`-` when unrecorded).
 
 Two on-disk locations — don't confuse them:
 
@@ -150,7 +157,17 @@ Two on-disk locations — don't confuse them:
 
 ### Configuration
 
-CLI defaults (`config.json`: `server`, `timeout`, `proxy`, `session`) and server-side runtime overrides are managed by the `config` command family — `config list` prints every value, `config set server <url>` pins a backend; see **[config.md](references/config.md)** for the full key reference.
+CLI defaults (`config.json`: `server`, `timeout`, `proxy`, `session`, `extension_id`) and server-side runtime overrides are managed by the `config` command family — `config list` prints every value, `config set server <url>` pins a backend; see **[config.md](references/config.md)** for the full key reference.
+
+```bash
+browser4-cli config                       # list values + config file path
+browser4-cli config set server http://localhost:18182
+browser4-cli config set timeout 45        # positive integer; 0 and unknown keys are rejected
+browser4-cli config set extension_id <id> # id of a locally loaded ("Load unpacked") extension
+browser4-cli config delete session        # reset a key to its default
+```
+
+Use the spaced form (`config get server`), not `config-get server`.
 
 ### Development Mode (one backend per checkout)
 
@@ -169,14 +186,14 @@ Element commands (`click`, `fill`, `type`, …) resolve CSS selectors against th
 | Command family | Purpose | When to use | Full reference |
 |---------------|---------|-------------|----------------|
 | `goto`, `open`, `close`, `close-all`, `reload` | Navigation & session management | Every session starts here; `close-all` cleans up every session | — |
-| `snapshot` | Capture accessibility tree (AXTree) with element refs | **Page structure & interaction** — find elements to click, fill, etc. Use `snapshot` when you need refs (e5, e36) to interact with. | [snapshot.md](references/snapshot.md) |
-| `snapshot grep` | Search the page's AX tree with regex (live, no prior capture) | Find elements by text or pattern. Patterns are **Rust regex** — `\|` is alternation, and a literal `$` is safest written `[$]` (`-i`, `-A/-B/-C`, `-F`, `-v`, `-c`, `-l` supported) | — |
+| `snapshot` | Capture accessibility tree (AXTree) with element refs; `/url` lines for links are opt-in via `-u`/`--urls`; `--selector` fails loudly when the CSS selector matches nothing | **Page structure & interaction** — find elements to click, fill, etc. Use `snapshot` when you need refs (e5, e36) to interact with. | [snapshot.md](references/snapshot.md) |
+| `snapshot grep` | Search the live full-page AX tree with regex (not the last saved file; auto-diff markers are not greppable) | Find elements by text or pattern. Patterns are **Rust regex** — `\|` is alternation, and a literal `$` is safest written `[$]` (`-i`, `-A/-B/-C`, `-F`, `-v`, `-c`, `-l` supported). Zero matches = exit 1 | — |
 | `click`, `dblclick`, `drag`, `hover`, `mousemove`, `fill`, `type`, `press`, `select`, `check`, `generate-locator` | Page interaction | Form filling, button clicks, mouse actions, navigation. Clicks/hovers move the pointer onto the element first; `mousemove 5 5` clears a lingering `:hover`. `type --method auto\|chars\|exec` (needs a target ref) bulk-inserts long (>150 chars) or multi-line text in one `execCommand('insertText')` instead of typing per character | — |
 | `upload <ref> <file> [file...]` | Upload local files to a page file input | Send attachments/photos/documents to an `<input type="file">`; the target must be a file input, paths must be readable on the machine running the browser | [upload.md](references/upload.md) |
 | `focus`, `key`, `keyboard` | Focus an element / press a key (key & keyboard alias `press`) | Explicit focus before typing, agent-browser-style keypresses | — |
 | `is visible\|enabled\|checked <sel>` | Element state assertions | Verify visibility, enabled-ness, or checked state before acting | — |
 | `dialog-accept`, `dialog-dismiss`, `dialog-status` | Native JS dialog handling | After clicking buttons that trigger alert/confirm/prompt; `dialog-status` inspects the pending dialog. The triggering click parks server-side until the dialog is handled, so run the dialog command in a **separate** invocation — `dialog-accept "text"` fills a prompt, or `click --auto-dismiss-dialogs <ref>` auto-accepts in one step | — |
-| `htmlsnapshot get`, `get all` | Extract `text` / `textcontent` / `html` / `attr` via CSS selectors from a **fresh snapshot of the active page** (the tab is captured first, then read); `--expires <dur>` serves the stored snapshot instead while it is younger than the window | **Page content & text extraction** — get article text, headings, attributes, including content that only exists in the tab (form results, SPA updates, `eval` mutations); `--expires 1d` reads the previous snapshot version without touching the tab. `text` and `textcontent` are currently equivalent: both return the element's whitespace-normalized text content, and neither is a rendered-text read | [htmlsnapshot.md](references/htmlsnapshot.md) |
+| `htmlsnapshot get`, `get all` | Extract `text` / `textcontent` / `html` / `attr` via CSS selectors from a **fresh snapshot of the active page** (the tab is captured first, then read); `--expires <dur>` serves the stored snapshot instead while it is younger than the window | **Page content & text extraction** — get article text, headings, attributes, including content that only exists in the tab (form results, SPA updates, `eval` mutations); `--expires 1d` reads the previous snapshot version without touching the tab. `text` is the normalized element text; `textcontent` is the raw `textContent` (original whitespace/newlines, hidden text included). `attr` returns the RAW attribute value (href/src are often relative) — add `--absolute` to resolve it against the page URL. Neither text field recovers text the page itself truncated in its HTML source — use `attr` (often `title`) or the detail page | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `get <mode> <selector> [name]` | **Live-DOM single-element read** (`text`, `html`, `box`, `styles`, `property`, `attr`) — capture-free, works on the current live page with refs or CSS selectors (`--raw` keeps text verbatim) | **Post-interaction verification & quick reads** — "did the submit work?" without a capture round-trip. Value contract: a matched element returns its value — or `""` when the attribute/property is absent; `null` means the selector matched nothing; an unresolvable `eN` ref errors explicitly | — |
 | `htmlsnapshot` (capture) | Serialize the page the active tab is showing into the page store and return metadata — the same capture every htmlsnapshot command runs before it works | Get the snapshot's metadata (title, size, timestamps, interactive elements, link groups) | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `htmlsnapshot readability` | One-step article extraction via a Readability-style heuristic (no LLM, no selectors) | Get the main article (title, byline, text) from the active page in one call; `htmlsnapshot readability <url>` reads that URL's own stored copy (never the tab's document) | [htmlsnapshot.md](references/htmlsnapshot.md) |
@@ -207,9 +224,10 @@ Element commands (`click`, `fill`, `type`, …) resolve CSS selectors against th
 | `profiler start`, `profiler stop` | V8 CPU profiling via CDP | Profile page interactions and save `.cpuprofile` (Chrome DevTools / speedscope compatible) | — |
 | `profiles list` | List browser profile directories | See what profiles exist under `~/.browser4/browser/chrome` before `open --profile` | — |
 | `profile-import` | Import bookmarks/history/passwords/cookies/extensions from system Chrome/Edge/Safari (requires the browser4-profile-import plugin) | `profile-import --list-sources` to discover browsers; `profile-import --source chrome --data bookmarks,cookies` copies a whole profile snapshot to `~/.browser4/imports/`; `--into prototype|default` seeds a managed profile dir; then `open --profile <dir>` mounts it | [browser-state-import.md](references/browser-state-import.md) |
-| `config` | Persistent CLI defaults (server, timeout, proxy, session) | Set default server URL, timeout, proxy, or session name | [config.md](references/config.md) |
+| `config` | Persistent CLI defaults (server, timeout, proxy, session, extension_id) | Set default server URL, timeout, proxy, session name, or the id of a locally loaded extension | [config.md](references/config.md) |
 | `status`, `doctor`, `doctor log`, `doctor metrics`, `doctor status` | Server health & diagnostics | `doctor status` prints the aggregated status report (health, build, runtime, LLM, sessions, browsers, swarm, plugins, skills, metrics, logs) in layers: summary by default, `--verbose` for full detail, `--section <name>` for one report, `--json` for machine-readable output. `status` prints the web status panel URL (`http://<server>:18182/status`) — a live dashboard of the same reports; `http://<server>:18182/pages.html` shows every open page | — |
 | `batch` | Run several commands in one invocation | Scripted multi-step flows, fewer round-trips | [quickstart.md](references/quickstart.md) |
+| `tool call <mcp-name> [--json '{...}']` | Generic MCP tool passthrough | Invoke any MCP tool that has no dedicated CLI command — most notably plugin-provided agent tools. Tool names are snake_case: `captcha.detect` → `tool call captcha_detect`; args as JSON: `tool call captcha_solve --json '{"type": "RECAPTCHA_V2", "siteKey": "..."}'`. List tools via `plugin list` or GET /mcp/tools | — |
 | `console`, `cdp`, `pdf`, `page-info`, `go-back`, `go-forward`, `keydown`, `keyup`, `mousedown`, `mouseup`, `mousewheel`, `snapshot list`, `snapshot clean`, `crawl status\|result\|cancel\|resume\|clear\|list`, `swarm submit\|status\|result\|list\|close`, `chat`, `session-default`, `delete-data`, `kill-all`, `stop`, `uninstall`, `plugin-*` | Remaining command families (not covered here) | Discover with `browser4-cli help` / `browser4-cli help <command>` | — |
 | `experience save`, `experience query`, `experience list`, `experience deep learn` | Progressive experience memory | Reuse selectors, extraction patterns and blocker awareness across sessions — see the sibling skill | [browser4-experience](../browser4-experience/SKILL.md) |
 

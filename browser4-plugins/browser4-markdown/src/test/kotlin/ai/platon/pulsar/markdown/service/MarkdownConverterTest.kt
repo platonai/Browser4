@@ -58,6 +58,65 @@ class MarkdownConverterTest {
         assertTrue(result[0].isInternal)
         assertFalse(result[1].isInternal)
     }
+
+    @Test
+    fun `countMarkdownImages returns zero for blank input`() {
+        assertEquals(0, converter.countMarkdownImages(""))
+        assertEquals(0, converter.countMarkdownImages("   "))
+    }
+
+    @Test
+    fun `countMarkdownImages counts markdown image references only`() {
+        val md = """
+            # Title
+
+            ![logo](https://example.com/logo.png)
+
+            Some text with a [link](https://example.com) and an inline ![icon](icon.svg) image.
+
+            | cell | ![table image](https://example.com/t.jpg) |
+        """.trimIndent()
+        assertEquals(3, converter.countMarkdownImages(md))
+    }
+
+    @Test
+    fun `extraction script emits heading hashes matching the html level`() {
+        // Regression: h2 must become "## ..." (not "#### ..." from doubling).
+        // The script must repeat a single '#' character by the heading level.
+        assertTrue(
+            MarkdownConverter.MARKDOWN_EXTRACTION_SCRIPT.contains("'#'.repeat(level)"),
+            "heading emission should repeat a single '#' by level"
+        )
+        assertFalse(
+            MarkdownConverter.MARKDOWN_EXTRACTION_SCRIPT.contains("'##'.repeat(level)"),
+            "heading emission must not double the level"
+        )
+    }
+
+    @Test
+    fun `extraction script skips excluded elements inside inline formatting`() {
+        // Regression: a <style> block nested in a paragraph/list item must not
+        // leak its CSS text into the markdown output.
+        val script = MarkdownConverter.MARKDOWN_EXTRACTION_SCRIPT
+        val inlineIdx = script.indexOf("function inlineFormatting")
+        assertTrue(inlineIdx >= 0, "inlineFormatting function should exist")
+        val body = script.substring(inlineIdx, script.indexOf("// ---- Main extraction ----"))
+        assertTrue(
+            body.contains("isExcluded(child)"),
+            "inlineFormatting should skip excluded elements such as style/script"
+        )
+    }
+
+    @Test
+    fun `extraction script does not double-emit images inside figures or containers`() {
+        // Regression: an <img> inside <figure>/<p>/<td> was emitted once by the
+        // IMG walker branch and again via the container's inline formatting.
+        val script = MarkdownConverter.MARKDOWN_EXTRACTION_SCRIPT
+        assertTrue(
+            script.contains("node.closest('p,li,td,th,blockquote,figcaption,figure')"),
+            "IMG branch should skip images handled by an ancestor container"
+        )
+    }
 }
 
 class MarkdownUtilsTest {

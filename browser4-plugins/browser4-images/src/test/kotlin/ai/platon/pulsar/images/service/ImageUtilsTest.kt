@@ -381,4 +381,81 @@ class ImageUtilsTest {
         assertFalse(ImageUtils.isSvg("https://example.com/photo.jpg"))
         assertFalse(ImageUtils.isSvg("https://example.com/photo.png"))
     }
+
+    // ---- alignFilenameExtension ----
+
+    @Test
+    @DisplayName("alignFilenameExtension replaces mismatched extension with content type extension")
+    fun testAlignReplacesMismatchedExtension() {
+        assertEquals("photo.webp", ImageUtils.alignFilenameExtension("photo.png", "image/webp"))
+        assertEquals("flag.gif", ImageUtils.alignFilenameExtension("flag.jpg", "image/gif"))
+    }
+
+    @Test
+    @DisplayName("alignFilenameExtension keeps matching extension")
+    fun testAlignKeepsMatchingExtension() {
+        assertEquals("photo.png", ImageUtils.alignFilenameExtension("photo.png", "image/png"))
+    }
+
+    @Test
+    @DisplayName("alignFilenameExtension treats jpg and jpeg as equivalent")
+    fun testAlignTreatsJpgJpegEquivalent() {
+        assertEquals("photo.jpg", ImageUtils.alignFilenameExtension("photo.jpg", "image/jpeg"))
+        assertEquals("photo.jpeg", ImageUtils.alignFilenameExtension("photo.jpeg", "image/jpeg"))
+    }
+
+    @Test
+    @DisplayName("alignFilenameExtension appends extension when filename has none")
+    fun testAlignAppendsExtensionWhenNoDot() {
+        assertEquals("photo.webp", ImageUtils.alignFilenameExtension("photo", "image/webp"))
+    }
+
+    @Test
+    @DisplayName("alignFilenameExtension leaves filename unchanged for null or non-image content type")
+    fun testAlignLeavesUnchangedForUnknownContentType() {
+        assertEquals("photo.png", ImageUtils.alignFilenameExtension("photo.png", null))
+        assertEquals("photo.bin", ImageUtils.alignFilenameExtension("photo.bin", "application/octet-stream"))
+        assertEquals("photo.html", ImageUtils.alignFilenameExtension("photo.html", "text/html; charset=utf-8"))
+    }
+
+    @Test
+    @DisplayName("alignFilenameExtension ignores charset parameter in content type")
+    fun testAlignIgnoresCharsetParameter() {
+        assertEquals("photo.png", ImageUtils.alignFilenameExtension("photo.png", "image/png; charset=utf-8"))
+    }
+
+    @Test
+    @DisplayName("alignFilenameExtension corrects extension case-insensitively")
+    fun testAlignIsCaseInsensitive() {
+        assertEquals("photo.PNG", ImageUtils.alignFilenameExtension("photo.PNG", "image/png"))
+    }
+
+    // ---- defaultHttpReason ----
+
+    @Test
+    @DisplayName("defaultHttpReason returns standard phrases for common client error codes")
+    fun testDefaultHttpReasonReturnsCommonPhrases() {
+        assertEquals("Bad Request", ImageUtils.defaultHttpReason(400))
+        assertEquals("Unauthorized", ImageUtils.defaultHttpReason(401))
+        assertEquals("Forbidden", ImageUtils.defaultHttpReason(403))
+        assertEquals("Not Found", ImageUtils.defaultHttpReason(404))
+        assertEquals("Method Not Allowed", ImageUtils.defaultHttpReason(405))
+        assertEquals("Gone", ImageUtils.defaultHttpReason(410))
+        assertEquals("Too Many Requests", ImageUtils.defaultHttpReason(429))
+    }
+
+    @Test
+    @DisplayName("defaultHttpReason covers every 5xx code")
+    fun testDefaultHttpReasonCovers5xx() {
+        assertEquals("Server Error", ImageUtils.defaultHttpReason(500))
+        assertEquals("Server Error", ImageUtils.defaultHttpReason(502))
+        assertEquals("Server Error", ImageUtils.defaultHttpReason(503))
+    }
+
+    @Test
+    @DisplayName("defaultHttpReason returns empty phrase for unmapped codes")
+    fun testDefaultHttpReasonReturnsEmptyForUnmappedCodes() {
+        assertEquals("", ImageUtils.defaultHttpReason(200))
+        assertEquals("", ImageUtils.defaultHttpReason(418))
+    }
 }

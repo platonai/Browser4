@@ -217,4 +217,33 @@ class BrowserToolExecutorTest {
         assertNull(result.exception)
         verify(exactly = 1) { browser.frontDriver = tabDriver }
     }
+
+    @Test
+    @DisplayName("listTabs emits a real Boolean for the active marker")
+    fun listTabsEmitsRealBooleanActiveMarker() = runBlocking {
+        val tab0 = mockk<AbstractWebDriver>(relaxed = true)
+        every { tab0.guid } returns "GUID-0"
+        val tab1 = mockk<AbstractWebDriver>(relaxed = true)
+        every { tab1.guid } returns "GUID-1"
+        coEvery { browser.listDrivers() } returns listOf(tab0, tab1)
+        every { browser.frontDriver } returns tab1
+
+        val result = executor.callFunctionOn(
+            ToolCall("browser", "listTabs", mutableMapOf()),
+            browser
+        )
+
+        assertNull(result.exception)
+        @Suppress("UNCHECKED_CAST")
+        val tabs = result.value as? List<Map<String, Any?>>
+        assertNotNull(tabs)
+        assertEquals(2, tabs!!.size)
+        // The active marker must be a JSON-serializable Boolean: the legacy
+        // string "true"/"false" was silently read as false by every boolean
+        // consumer (tab-list --json, the ▶ marker, page-info).
+        assertTrue(tabs[0]["active"] is Boolean)
+        assertTrue(tabs[1]["active"] is Boolean)
+        assertEquals(false, tabs[0]["active"])
+        assertEquals(true, tabs[1]["active"])
+    }
 }

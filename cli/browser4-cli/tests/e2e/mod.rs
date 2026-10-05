@@ -5162,6 +5162,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "network-unroute",
         "har-start",
         "har-stop",
+        // test_tool_call_command
+        "tool-call",
         // test_htmlsnapshot_*
         "htmlsnapshot",
         "htmlsnapshot-capture",

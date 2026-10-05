@@ -1,0 +1,123 @@
+Ignoring 13 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["D:/workspace/Browser4/Browser4-4.13"].hasTrustDialogAccepted: true in C:\Users\pereg\.claude.json.
+"deepseek-v4-flash" isn't described by this version's model catalog; update Claude Code, or map it with behavesAs on a modelPicker row (or modelOverrides, if it is a provider id of a model this version knows). Until then auto-compact keeps this session within 200k tokens (the context window it assumes); if the model accepts more, append [1m] to the model name for 1M, or set CLAUDE_CODE_MAX_CONTEXT_TOKENS to its real window; CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1 restores the previous wait-for-the-API behavior.
+[claude-code:unrecognized_model] {"model":"deepseek-v4.1-flash-expires-on-0910","query_source":"generate_session_title"}
+[claude-code:unrecognized_model] {"model":"deepseek-v4-flash","query_source":"sdk"}
+# A. Task Result
+
+All four scenario checks (A–D) behaved as the acceptance criteria require, and cleanup (E) completed with no state leaks. The CDP verification this scenario guards (attach verify + random-port discovery) is present and working in build 4.13.27:
+
+- **A — Unreachable endpoint fails loudly:** exit 1, error names the endpoint, says it is not reachable, and gives a start/retry hint. No page header, no "Session opened", and no session state was created.
+- **B — Reachable-but-page-less endpoint fails:** both a mock CDP endpoint (valid `/json/version`, zero `page` targets) and a plain HTTP server were rejected with exit 1 and precise messages.
+- **C — Successful attach reports the real current page:** `Attached to Google Chrome 154.0.8037.93 at http://127.0.0.1:2512` + `Current page: https://example.com/`, confirmed against `page-info` in two sessions, `tab-list`, and a raw endpoint probe.
+- **D — Random-port discovery works:** `attach --cdp chrome` attached to a Browser4-managed browser at `http://localhost:1576` (launched with `--remote-debugging-port=0`) and the session returned its real page. It never printed "Could not find a running chrome browser".
+
+However, boundary probing surfaced two **Critical** reliability defects adjacent to the tested behavior: attaching a second named session silently hijacks the first session's browser, and a CDP-attached session whose browser has died reports success (exit 0) with stale/empty data instead of the documented "re-attach" error. Details in the JSON below.
+
+# B. Execution Trace
+
+**Commands used (all via `./b4w.ps1` from the repo root):** `help`, `help attach`, `status`, `list`, `open --headless`, `attach --cdp <url>` (×6, incl. failures), `page-info`, `tab-list`, `eval`, `goto`, `close` (×9), `session list` (invalid, tested), `doctor log`. Evidence captured in `.test-sessions/20261004T1433038523034Z/` (A.\*, B1.\*, B2a.\*, B2b.\*, C-\*, D-\*, E-\*, F-\* files, plus `mock_cdp_server.py` and `probe-chrome.ps1` fixtures).
+
+**Major steps:**
+1. Prep: read `help`, `skills/browser4-cli/SKILL.md`, `references/attach.md`; verified port 19999 free and Java 17 present; backend already UP (bundle matches checkout 4.13.27-SNAPSHOT).
+2. Step A: `-s bad attach --cdp http://127.0.0.1:19999` → exit 1, loud error (exact text recorded). Confirmed no session file/dangling session afterward.
+3. Step B: started a managed browser (`-s main open --headless https://example.com`). Found its real port (2512) via a PowerShell process/`DevToolsActivePort` probe. Built two page-less fixtures: a mock CDP server (200 on `/json/version`, only `browser_ui`/`service_worker` targets) and a plain HTTP server (404s). Both attaches failed loudly with distinct, accurate messages.
+4. Step C: `-s good attach --cdp http://127.0.0.1:2512` → reported the real page; verified with `page-info` in both `good` and `main`, `tab-list`, and a raw `/json` probe.
+5. Step D: `-s ch attach --cdp chrome` → attached to random-port browser 1576, real page reported.
+6. **Anomaly investigation:** `list` showed `good` and `ch` sharing one session ID; `-s good page-info` had flipped from example.com to the `ch` browser's page. Read the CLI state files (`~/.browser4/sessions/{good,ch}.json` share `sessionId 6b653cae…`, both `sessionKind: browser4Launched`), then traced the code: CLI attach sends no sessionId (`main.rs:2379-2383`) and never sets `state.kind` (`main.rs:2414-2425`), while `write_state_to_dir` (`state.rs:404-407`) overwrites the legacy flags from the default kind; backend `handleAttachBrowser` strips any `sessionId` from attach args (`MCPToolController.kt:472-478`) and `normalizeCapabilities` falls back to the default session slot (`PulsarSessionManager.kt:1129-1136,1252-1256`), whose `createAttachedSession` silently rebinds the existing session to the new port (`PulsarSessionManager.kt:357-385`).
+7. **Stale-session experiment:** opened `-s staleobj` (port 26214) → `-s staleattach attach` → `-s staleobj close` (browser verified dead) → `page-info`/`eval`/`tab-list`/`goto` all exit 0 with stale data (empty snapshot; `eval` hint blames the page). Raw backend calls confirmed `isError:false` with `"https://example.com"`/`""`/`"null"` even though the log says "session … is unhealthy … Re-attach to reconnect".
+8. Step E: closed `bad`, `pageless`, `plainattach` (correctly reported "Session required"), then `good`, `ch`, `main`, `staleattach`. Verified 1576 survived (only its bound tab closed) while the CLI printed "Browser terminated"; confirmed `list` retains only the pre-existing `pywiki` session; killed both mock servers; repo working tree unchanged.
+
+**Workarounds required:** none blocking — the scenario steps all worked. Investigation required reading source and CLI state files to explain the session-ID collision, since nothing in the CLI output flags it.
+
+```json
+{
+  "issues": [
+    {
+      "title": "Second attach silently hijacks a previously attached named session (shared default-session ID)",
+      "severity": "Critical",
+      "category": "Product",
+      "reproduction": "1) ./b4w.ps1 -s good attach --cdp http://127.0.0.1:2512   # 'Session opened: good (6b653cae-704b-49fb-ae79-830966359666)'; -s good page-info => https://example.com/\n2) ./b4w.ps1 -s ch attach --cdp chrome                # 'Session opened: ch (6b653cae-704b-49fb-ae79-830966359666)' — SAME id, no warning\n3) ./b4w.ps1 -s good page-info                         # now returns the ch browser's page (https://en.wikipedia.org/wiki/Guido_van_Rossum), not example.com\nAlso visible in: ./b4w.ps1 list (both names, same Session ID) and ~/.browser4/sessions/good.json vs ch.json (same sessionId, different cdpEndpoint).",
+      "expected": "Each named attach session is isolated (docs: named sessions isolate browser state; attach.md documents multiple named attach sessions). A second attach to a different endpoint must either create a distinct session or fail loudly, never rebind an existing named session's browser.",
+      "actual": "Every attach without an explicit session id lands on the backend's single default session slot; the second attach rebinds that session to the new browser, so all commands sent via -s good silently drive the browser that -s ch attached to. The only trace is the repeated session id in the two 'Session opened' lines.",
+      "rootCause": "Two contributing defects. CLI: the attach request carries only cdpEndpoint (cli/browser4-cli/src/main.rs handle_attach, attach_params built at ~line 2379) — unlike open, which passes capabilities.sessionId = session name (build_open_session_request, main.rs:918-930). Backend: handleAttachBrowser explicitly filters 'sessionId' out of the attach capabilities (MCPToolController.kt:472-478), so PulsarSessionManager.createAttachedSession -> normalizeCapabilities falls back to generateDefaultSessionId() (PulsarSessionManager.kt:1129-1136 and 1252-1256), the stable DEFAULT-slot UUID. createAttachedSession then keeps the already-present session entry and rebinds it to the new port because the 'idempotent re-attach' guard only preserves the binding when the port is unchanged (PulsarSessionManager.kt:357-385).",
+      "codePointer": "cli/browser4-cli/src/main.rs (handle_attach, attach_params ~2379-2385); browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:472 (capabilities filter); browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/session/PulsarSessionManager.kt:357 (createAttachedSession rebind)",
+      "suggestion": "- Pass the -s/--session name (or 'default') through to attach_browser the way open_session does, so named attach sessions resolve to distinct IDs\n- Stop filtering 'sessionId' out of attach capabilities in handleAttachBrowser; feed it to normalizeCapabilities\n- In createAttachedSession, when an existing session's healthy driver is bound to a DIFFERENT port, fail with an explicit error (or create a distinct session) instead of silently rebinding\n- Add a regression test: two named attaches to two endpoints must yield distinct sessionIds and the first session's page-info must be unchanged"
+    },
+    {
+      "title": "CDP-attached sessions persisted as browser4Launched: list mislabels them and close falsely says 'Browser terminated'",
+      "severity": "High",
+      "category": "Product",
+      "reproduction": "1) ./b4w.ps1 -s good attach --cdp http://127.0.0.1:2512\n2) ./b4w.ps1 list            # Connection column shows 'Browser4' (docs promise 'CDP: http://127.0.0.1:2512 (Google Chrome 154.0.8037.93)')\n3) ./b4w.ps1 -s good close   # prints 'Session closed. Browser terminated.'\n4) curl http://127.0.0.1:2512/json/version  # browser still answers; only the bound tab was closed\nInspecting ~/.browser4/sessions/good.json shows sessionKind=browser4Launched with no isAttached/attachType fields.",
+      "expected": "Attach sessions persist kind=cdpAttached; list shows the CDP endpoint + actual browser; close prints 'Disconnected from attached browser. The browser remains running.' (attach.md). The never-silently-replaced guard (main.rs:1152) must apply to attached sessions.",
+      "actual": "Persisted sessionKind is browser4Launched, so list shows 'Browser4', close claims the browser was terminated (it survived), and the attached-session guard at main.rs:1152 (state.kind.is_attached()) is bypassed — stale attached sessions don't get the documented 'no longer reachable, re-attach' error path.",
+      "rootCause": "The CDP attach branch (cli/browser4-cli/src/main.rs:2414-2425) sets state.is_attached=true and state.attach_type='cdp' but never state.kind = SessionKind::CdpAttached (the extension branch at main.rs:2187 does set kind). write_state_to_dir (cli/browser4-cli/src/state.rs:404-407) then unconditionally overwrites is_attached/attach_type from the unchanged default kind and serializes sessionKind=browser4Launched; migrate_legacy_kind (state.rs:333-342) cannot repair it on read because is_attached was written back as false. connection_label_full (main.rs:4285-4301) and close (main.rs:3073-3091) dispatch on state.kind/is_attached.",
+      "codePointer": "cli/browser4-cli/src/main.rs:2414 (handle_attach CDP branch); cli/browser4-cli/src/state.rs:404 (write_state_to_dir)",
+      "suggestion": "- Set state.kind = crate::state::SessionKind::CdpAttached in the CDP attach branch, mirroring the extension branch at main.rs:2187\n- Make write_state_to_dir derive kind from the legacy is_attached/attach_type fields (or refuse to clobber an explicitly-attached state) so older writers cannot silently downgrade the kind\n- Add tests asserting persisted sessionKind, the list Connection label, and the close message for attach --cdp sessions"
+    },
+    {
+      "title": "Dead CDP-attached session reports success (exit 0) with stale/empty data instead of a re-attach error",
+      "severity": "Critical",
+      "category": "Reliability",
+      "reproduction": "1) ./b4w.ps1 -s staleobj open --headless https://example.com   # port 26214\n2) ./b4w.ps1 -s staleattach attach --cdp http://127.0.0.1:26214\n3) ./b4w.ps1 -s staleobj close                                  # kills the browser; curl confirms port refused\n4) ./b4w.ps1 -s staleattach page-info    # EXIT 0: 'Title: (no title) / URL: https://example.com/'\n5) ./b4w.ps1 -s staleattach eval \"document.title\"  # EXIT 0: 'null' + a hint blaming the page selector\n6) ./b4w.ps1 -s staleattach tab-list     # EXIT 0: one tab '(no title)' with the stale URL\n7) ./b4w.ps1 -s staleattach goto https://example.com  # EXIT 0: 'Already at https://example.com — page unchanged'; auto-snapshot YAML contains only the header comment\nRaw backend responses for the same session: page_url => {\"text\":\"https://example.com\",\"isError\":false}; page_title => \"\"; browser_evaluate => \"null\". Backend log simultaneously reports: 'Session e7667be1… is unhealthy: … 503 Browser service unavailable … Non-owned session … keeping as inactive (will not recreate). Re-attach to reconnect.'",
+      "expected": "attach.md: 'Disconnected attached sessions are never silently replaced… subsequent commands fail with an explicit error instead of quietly launching a fresh Browser4 browser', with the message naming the session and telling the user how to re-attach.",
+      "actual": "All browser-domain commands against the dead session return HTTP 200 / isError:false with stale or empty values, so the CLI exits 0. An agent or user sees a successful command with a blank title/empty snapshot and may continue working against a browser that no longer exists; the eval hint actively misdirects ('The queried element or property may not exist on this page').",
+      "rootCause": "The session health check detects the dead driver server-side (PulsarSessionManager logs 503/WebDriver-not-open and 'Re-attach to reconnect') but its result is not propagated into the tool responses: the tab executor returns cached/last-known values (e.g. BrowserTabToolExecutor.kt:2008 'currentUrl' -> driver.currentUrl() returns the stale URL; driver.evaluate returns null) and MCPToolController wraps them as a success envelope. On the CLI side, goto short-circuits when the requested URL equals the session's cached URL ('Already at … page unchanged') without probing the live browser, and the eval null hint blames the page. The exact point where the health-check result is dropped (session-manager gate vs controller wrapping) needs a follow-up pass.",
+      "codePointer": "browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/BrowserTabToolExecutor.kt:2008 (currentUrl handler); browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt (tool dispatch/wrapping); cli/browser4-cli/src/main.rs (goto 'already at' short-circuit)",
+      "suggestion": "- Gate browser-domain tool calls on the session health check and return an MCP error (isError:true) carrying the existing 'session no longer reachable — re-attach' message for non-owned sessions\n- Never serve cached page state (URL/title/tabs/evaluate) for an unhealthy session; make the read fail loudly instead of returning ''/null\n- CLI: do not treat 'requested URL == cached session URL' as success without a live probe on attached sessions\n- Make an empty auto-snapshot a command failure when the driver is unreachable, and change the eval null hint to consider driver/session health first\n- Add an integration test: attach -> kill target browser -> every read command must exit non-zero with the re-attach guidance"
+    },
+    {
+      "title": "Any reachable non-CDP HTTP server is misdiagnosed as Chrome's built-in remote debugging",
+      "severity": "Medium",
+      "category": "UX",
+      "reproduction": "python -m http.server 19996 &   # any plain HTTP server\n./b4w.ps1 -s plainattach attach --cdp http://127.0.0.1:19996",
+      "expected": "A message stating the endpoint is reachable but is not a CDP browser (no CDP discovery), leaving open whether it is a non-CDP service or Chrome's built-in mode.",
+      "actual": "Error says: '…GET /json/version → HTTP 404. … The endpoint answers /json/version with HTTP 404, which is what Chrome's built-in remote debugging (chrome://inspect/#remote-debugging) exposes… Attach to that browser through the extension instead: browser4-cli attach --extension'. For a plain file server this diagnosis is wrong and the suggested recovery leads nowhere.",
+      "rootCause": "describeAttachFailure in PulsarSessionManager maps every HTTP 404 on /json/version to the built-in-remote-debugging signature without corroborating evidence (e.g. a resolvable DevToolsActivePort/browser-level socket).",
+      "codePointer": "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/session/PulsarSessionManager.kt (describeAttachFailure / verifyCdpEndpoint, called at ~line 346)",
+      "suggestion": "- Reword the 404 branch to first say 'reachable but not a CDP discovery endpoint', then mention built-in Chrome debugging as one possibility with the extension fallback\n- Only claim 'this is Chrome's built-in remote debugging' when a browser-level WebSocket URL can actually be resolved (DevToolsActivePort or an explicit ws:// endpoint)"
+    },
+    {
+      "title": "Error hint points at a nonexistent command ('session list')",
+      "severity": "Low",
+      "category": "Documentation",
+      "reproduction": "./b4w.ps1 -s bad close       # no such session\n# hint: 'check available sessions with `session list`.'\n./b4w.ps1 session list        # 'Error: Unknown command: 'session'', exit 2",
+      "expected": "The hint names a valid command — 'browser4-cli list'.",
+      "actual": "The suggested command does not exist; it prints the top-level help and exits 2.",
+      "rootCause": "Stale hint string in the Session-required error path.",
+      "codePointer": "cli/browser4-cli/src/main.rs:609",
+      "suggestion": "- Replace 'session list' with 'list' in the hint text\n- Add a unit test that every command named in user-facing hints exists in the command table"
+    },
+    {
+      "title": "Attach failures print a double error prefix and raw exception token",
+      "severity": "Low",
+      "category": "UX",
+      "reproduction": "./b4w.ps1 -s bad attach --cdp http://127.0.0.1:19999",
+      "expected": "One 'Error:' prefix and a human-readable reason, e.g. 'nothing is listening on 127.0.0.1:19999'.",
+      "actual": "'Error: ERROR: attach_browser failed: CDP endpoint http://127.0.0.1:19999 is not reachable: ConnectException. Start the target browser with --remote-debugging-port and retry attach.'",
+      "rootCause": "The CLI top-level handler prefixes backend errors with 'Error: ' while the backend envelope already starts with 'ERROR: <tool> failed:'; the transport failure is surfaced as the raw Java class name 'ConnectException'.",
+      "codePointer": "cli/browser4-cli/src/main.rs (top-level error rendering) and browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt (errorResponse)",
+      "suggestion": "- Strip the duplicated 'ERROR: … failed:' wrapper when the CLI adds its own prefix, or drop the CLI prefix for backend envelopes\n- Map transport exceptions to plain language ('connection refused — nothing is listening on this port')"
+    },
+    {
+      "title": "Channel-name attach picks among multiple running Chrome instances unpredictably and is not tied to the current session",
+      "severity": "Low",
+      "category": "UX",
+      "reproduction": "With several Chrome instances running (verified endpoints on ports 2512, 31010, 1231, 1576), run ./b4w.ps1 -s ch attach --cdp chrome. It attached to http://localhost:1576 (an unrelated Wikipedia page) rather than the browser this run created moments earlier on 2512.",
+      "expected": "Either prefer the browser belonging to the current Browser4 session, or make the choice steerable; at minimum keep the documented candidate order deterministic and obvious.",
+      "actual": "The first viable candidate wins (documented resolution order), which here was an unrelated instance; the user cannot influence the pick except by passing an explicit endpoint. The CLI does print the actual browser and current page, which mitigates the surprise.",
+      "rootCause": "resolve_cdp_endpoint probes candidates produced by process enumeration/DevToolsActivePort discovery in enumeration order; there is no preference for the browser owned by the invoking session and no deterministic ordering guarantee on Windows.",
+      "codePointer": "cli/browser4-cli/src/main.rs (resolve_cdp_endpoint channel-name resolution, ~1579-1650)",
+      "suggestion": "- Prefer the current session's browser when its CDP endpoint is known and healthy before falling back to the candidate scan\n- Expose a selector among candidates (e.g. --pid/--port filter) or print the candidate list when more than one is found\n- Document explicitly that channel attach may bind any running Chrome of that channel"
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Successful — all four acceptance checks (A: unreachable fails loudly; B: page-less endpoint fails; C: real page reported; D: random-port discovery) passed, and cleanup completed with no test state leaked. Two Critical defects were found adjacent to the tested boundary (cross-session hijack on second attach; false success on a dead attached session).",
+    "successRate": "90% — every scenario step executed and met its acceptance criteria; the deduction is for silent, misleading side effects encountered during D and the follow-up boundary probe (session hijack, stale-data false successes).",
+    "issuesFound": 7,
+    "majorBlockers": "None for the scenario itself. The most serious findings are: (1) a second attach silently rebinds the first named session's browser (shared default-session ID), and (2) a dead attached browser yields exit-0 successes with stale/empty data instead of the documented re-attach error.",
+    "mostConfusingAspects": "Two different named sessions printing the same session ID with no warning; 'Session closed. Browser terminated.' while the attached browser is still running; eval returning null with a hint that blames the page when the real cause is a dead browser; an error hint recommending the nonexistent 'session list' command.",
+    "mostValuableImprovements": "1) Thread the -s name/id into attach_browser so named sessions get distinct backend session ids, and reject/warn on rebinding an existing session to a different endpoint. 2) Set SessionKind::CdpAttached in the CDP attach branch so kind-derived behavior (list label, close message, never-silently-replaced guard) is correct. 3) Propagate the session-unhealthy state into browser-domain tool responses so dead attached sessions fail loudly with the existing re-attach guidance.",
+    "usabilityRating": 6
+  }
+}
+```

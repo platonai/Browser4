@@ -16,6 +16,7 @@
 package ai.platon.pulsar.images.config
 
 import ai.platon.pulsar.common.config.ImmutableConfig
+import java.nio.file.Path
 
 /**
  * Configuration holder for the browser4-images plugin.
@@ -23,8 +24,8 @@ import ai.platon.pulsar.common.config.ImmutableConfig
  * All properties are read from [ImmutableConfig] with sensible defaults.
  */
 data class ImageConfig(
-    /** Base directory for downloaded images */
-    val downloadDir: String = "downloads/images",
+    /** Base directory for downloaded images (absolute by default, anchored under ~/.browser4) */
+    val downloadDir: String = defaultDownloadDir(),
 
     /** Maximum allowed download size in bytes (default: 50 MB) */
     val maxDownloadSize: Long = 50 * 1024 * 1024L,
@@ -52,16 +53,30 @@ data class ImageConfig(
 
     /** Skip data URI images */
     val skipDataUris: Boolean = true,
+
+    /** HTTP proxy for image downloads, e.g. "127.0.0.1:10808" or "http://127.0.0.1:10808".
+     * Null means no explicit proxy (the download client also falls back to the
+     * HTTPS_PROXY / HTTP_PROXY environment variables). */
+    val proxy: String? = null,
 ) {
     companion object {
         private const val PREFIX = "image."
+
+        /**
+         * Default download directory, anchored at the user's Browser4 state dir
+         * (~/.browser4/downloads/images) instead of the backend process CWD —
+         * a relative default would resolve inside the runtime bundle build tree,
+         * where users cannot find it and a bundle rebuild can wipe it.
+         */
+        fun defaultDownloadDir(): String =
+            Path.of(System.getProperty("user.home"), ".browser4", "downloads", "images").toString()
 
         /**
          * Build an [ImageConfig] from the application configuration.
          */
         fun fromConfig(conf: ImmutableConfig): ImageConfig {
             return ImageConfig(
-                downloadDir = conf.get("${PREFIX}download.dir", "downloads/images"),
+                downloadDir = conf.get("${PREFIX}download.dir", defaultDownloadDir()),
                 maxDownloadSize = conf.getLong("${PREFIX}download.max-size", 50 * 1024 * 1024L),
                 downloadTimeoutSeconds = conf.getLong("${PREFIX}download.timeout.seconds", 60),
                 autoDetectEnabled = conf.getBoolean("${PREFIX}auto-detect.enabled", false),
@@ -71,6 +86,7 @@ data class ImageConfig(
                 minHeight = conf.getInt("${PREFIX}detect.min-height", 0),
                 skipSvg = conf.getBoolean("${PREFIX}detect.skip-svg", false),
                 skipDataUris = conf.getBoolean("${PREFIX}detect.skip-data-uris", true),
+                proxy = conf.get("${PREFIX}download.proxy", "")?.takeIf { it.isNotBlank() },
             )
         }
     }

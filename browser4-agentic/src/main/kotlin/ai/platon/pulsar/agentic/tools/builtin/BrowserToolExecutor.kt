@@ -61,8 +61,8 @@ class BrowserToolExecutor : AbstractToolExecutor() {
             domain = domain,
             method = "listTabs",
             arguments = emptyList(),
-            returnType = "List<Map<String, String>>",
-            description = "List all tabs with index, guid, title, and url",
+            returnType = "List<Map<String, Any>>",
+            description = "List all tabs with index, guid, title, url, and a boolean active marker",
             examples = listOf(ToolExample(title = "List every tab", runnable = true)),
         )
     }
@@ -158,7 +158,9 @@ class BrowserToolExecutor : AbstractToolExecutor() {
                         "guid" to driver.guid,
                         "title" to driver.title(),
                         "url" to driver.currentUrl(),
-                        "active" to (driver.guid == frontGuid).toString()
+                        // Emit a real Boolean so JSON consumers parse `active` without
+                        // string-to-bool coercion.
+                        "active" to (driver.guid == frontGuid)
                     )
                 }
             }

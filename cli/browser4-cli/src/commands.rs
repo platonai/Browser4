@@ -959,8 +959,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef {
                     name: "pause",
                     description: "Without a task: pause a running loop at the next iteration \
-                                  boundary. With a task: create the loop in paused state \
-                                  (use --resume then re-run to start execution). \
+                                  boundary. With a task: create the loop in paused state; \
+                                  --resume alone starts execution (it changes the state to \
+                                  running and spawns a background process immediately). \
                                   Optionally specify --name to target a named loop.",
                     is_bool: true,
                     short: None,
@@ -2113,6 +2114,26 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "tool-call",
+            description: "Invoke any MCP tool by name (generic passthrough) and print the JSON result. Use this for plugin-provided agent tools that have no dedicated CLI command, e.g. `tool call captcha_detect`, `tool call captcha_get_balance`. Tool names use snake_case (captcha.detect -> captcha_detect); list available tools with `plugin list` or GET /mcp/tools. Arguments can be passed as a JSON object via --json.",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "MCP tool name in snake_case, e.g. \"captcha_detect\", \"captcha_solve\"", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "json", description: "Tool arguments as a JSON object string, e.g. '{\"type\": \"RECAPTCHA_V2\", \"siteKey\": \"...\"}'", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |args| get_str(args, "name").unwrap_or_default().to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({ "name": get_str(args, "name").unwrap_or_default() });
+                if let Some(js) = get_opt_str(args, "json") { p["json"] = json!(js); }
+                p
+            },
+        },
+        CommandDef {
             name: "dialog-accept",
             description: "Accept a dialog",
             category: Category::Core,
@@ -3043,7 +3064,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "all", description: "List all browser sessions across all workspaces", is_bool: true, short: None },
-                OptionDef { name: "verbose", description: "Show full session IDs without truncation", is_bool: true, short: None },
+                OptionDef { name: "verbose", description: "Show full page URLs and session IDs without column width truncation", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
@@ -3532,7 +3553,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "clear", description: "Remove all tracked agent tasks from the list", is_bool: true, short: None },
+                OptionDef { name: "clear", description: "Remove terminal (completed/failed) tracked agent tasks; in-flight tasks are kept unless --all is given", is_bool: true, short: None },
+                OptionDef { name: "all", description: "With --clear, also remove in-flight (queued/processing) tasks, which keep running server-side", is_bool: true, short: None },
                 OptionDef { name: "limit", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
                 OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
             ],
@@ -3541,6 +3563,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(b) = get_bool(args, "clear") { p["clear"] = json!(b); }
+                if let Some(b) = get_bool(args, "all") { p["all"] = json!(b); }
                 if let Some(v) = get_str(args, "limit").and_then(|s| s.parse::<usize>().ok()) { p["limit"] = json!(v); }
                 if let Some(v) = get_str(args, "offset").and_then(|s| s.parse::<usize>().ok()) { p["offset"] = json!(v); }
                 p
@@ -3802,10 +3825,20 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // Build the LoadOptions args string from individual flags
                 let mut load_opts = Vec::new();
                 if let Some(v) = get_opt_str(args, "out-link-selector") {
-                    load_opts.push(format!("-outLink \"{}\"", v));
+                    // The backend LoadOptions tokenizer only honors
+                    // double-quoted tokens and does NOT unescape, so an embedded
+                    // `"` can neither be backslash-escaped (it would survive as
+                    // a literal `\"` and break the CSS parser) nor wrapped in
+                    // single quotes (single quotes are not token delimiters).
+                    // CSS attribute values accept `'` and `"` interchangeably,
+                    // so rewrite [x="y"] into [x='y'] to pass the selector
+                    // intact — otherwise a[href*="catalogue"] was truncated to
+                    // a[href*= and silently matched zero elements.
+                    let selector = v.replace('"', "'");
+                    load_opts.push(format!("-outLink \"{}\"", selector));
                     // Store in tool_params so main.rs can check for it in the
                     // warning about "no --out-link-selector".
-                    p["out-link-selector"] = json!(v);
+                    p["out-link-selector"] = json!(selector);
                 }
                 if let Some(v) = get_opt_str(args, "out-link-pattern") {
                     load_opts.push(format!("-outLinkPattern \"{}\"", v));
@@ -4027,7 +4060,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text and textcontent are currently equivalent — both return the element's whitespace-normalized text content, and neither is a rendered-text read, so CSS overflow does not clip them", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text = whitespace-normalized inner text; textcontent = the raw textContent (whitespace and newlines kept). Neither is a rendered-text read, so CSS overflow does not clip them, and neither recovers text already truncated in the page's own HTML — use attr (e.g. the title attribute) for that", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -4036,6 +4069,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size <n>", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
                 OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) captures the live page, a positive value reads the stored snapshot while it is younger than the window, without touching the tab" },
+                OptionDef { name: "absolute", short: None, is_bool: true, description: "With field=attr, resolve URL-valued attributes (href, src, …) against the page URL and return absolute URLs; without it the raw (often relative) attribute value is returned" },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_scrape".to_string(),
@@ -4045,6 +4079,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({ "field": field, "selector": selector });
                 if let Some(name) = get_opt_str(args, "name") { p["attrName"] = json!(name); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
+                if get_bool(args, "absolute") == Some(true) { p["absoluteUrls"] = json!(true); }
                 p
             },
         },
@@ -4055,7 +4090,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text and textcontent are currently equivalent — both return the element's whitespace-normalized text content, and neither is a rendered-text read, so CSS overflow does not clip them", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text = whitespace-normalized inner text; textcontent = the raw textContent (whitespace and newlines kept). Neither is a rendered-text read, so CSS overflow does not clip them, and neither recovers text already truncated in the page's own HTML — use attr (e.g. the title attribute) for that", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -4066,6 +4101,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size <n>", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
                 OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) captures the live page, a positive value reads the stored snapshot while it is younger than the window, without touching the tab" },
+                OptionDef { name: "absolute", short: None, is_bool: true, description: "With field=attr, resolve URL-valued attributes (href, src, …) against the page URL and return absolute URLs; without it the raw (often relative) attribute value is returned" },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_scrape_all".to_string(),
@@ -4074,6 +4110,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let selector = get_opt_str(args, "selector").unwrap_or(":root");
                 let mut p = json!({ "field": field, "selector": selector });
                 if let Some(name) = get_opt_str(args, "name") { p["attrName"] = json!(name); }
+                if get_bool(args, "absolute") == Some(true) { p["absoluteUrls"] = json!(true); }
                 if let Some(off) = get_opt_str(args, "offset") {
                     if let Ok(n) = off.parse::<i32>() { p["offset"] = json!(n); }
                 }
@@ -4193,7 +4230,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-summary",
-            description: "Summarize: produce a compressed Web Page Summary Index (WPSI) from a FRESH snapshot of the active tab's page — preserves page structure, key nodes, and stats in <1% of original HTML size. The live tab is captured first, so the summary is the page as it is right now.",
+            description: "Summarize: produce a compressed Web Page Summary Index (WPSI) from a FRESH snapshot of the active tab's page — preserves page structure, key nodes, and stats in a fraction of the original HTML size (ratio varies with page structure; dense listing pages compress far less). The live tab is captured first, so the summary is the page as it is right now, with no prior `htmlsnapshot` capture needed.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -4656,7 +4693,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to get (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
+                    description: "The config key to get (server, timeout, proxy, session, extension_id) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
                 },
             ],
             options: &[],
@@ -4677,7 +4714,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to set (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
+                    description: "The config key to set (server, timeout, proxy, session, extension_id) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
                 },
                 ArgDef {
                     name: "value",
@@ -4704,7 +4741,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to delete (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
+                    description: "The config key to delete (server, timeout, proxy, session, extension_id) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
                 },
             ],
             options: &[],
@@ -8376,6 +8413,30 @@ mod tests {
     }
 
     #[test]
+    fn test_crawl_params_rewrites_double_quoted_css_selector_values() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert(
+            "out-link-selector".to_string(),
+            json!("a[href*=\"catalogue\"]"),
+        );
+        let params = (cmd.tool_params_fn)(&args);
+        let args_str = params["args"].as_str().unwrap_or("");
+        // Inner double quotes are rewritten to the CSS-equivalent single quotes
+        // so the token survives the backend's quote-only, no-unescape tokenizer.
+        assert!(
+            args_str.contains("-outLink \"a[href*='catalogue']\""),
+            "unexpected args: {args_str}"
+        );
+        assert!(
+            !args_str.contains("a[href*=") || args_str.contains("a[href*='catalogue']"),
+            "selector must not be truncated at the inner quote: {args_str}"
+        );
+    }
+
+    #[test]
     fn test_crawl_params_boolean_flags() {
         let map = commands_map();
         let cmd = map.get("crawl").unwrap();
@@ -9084,6 +9145,64 @@ mod tests {
         // Empty method is passed through; validation happens in main.rs
         assert_eq!(params["method"], json!(""));
         assert!(params.get("stdin").is_none());
+    }
+
+    // ---- Generic MCP tool passthrough (`tool call`) tests ----
+
+    #[test]
+    fn test_tool_call_tool_name_fn_uses_positional_name() {
+        let cmds = commands_map();
+        let cmd = cmds.get("tool-call").unwrap();
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), json!("captcha_detect"));
+        assert_eq!((cmd.tool_name_fn)(&args), "captcha_detect");
+    }
+
+    #[test]
+    fn test_tool_call_tool_name_fn_empty_without_name() {
+        let cmds = commands_map();
+        let cmd = cmds.get("tool-call").unwrap();
+        let args = HashMap::new();
+        // No name provided → empty tool name; main.rs dispatch rejects with
+        // a usage error before any request is sent.
+        assert_eq!((cmd.tool_name_fn)(&args), "");
+    }
+
+    #[test]
+    fn test_tool_call_tool_params_fn_name_only() {
+        let cmds = commands_map();
+        let cmd = cmds.get("tool-call").unwrap();
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), json!("captcha_get_balance"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["name"], json!("captcha_get_balance"));
+        assert!(params.get("json").is_none());
+    }
+
+    #[test]
+    fn test_tool_call_tool_params_fn_with_json() {
+        let cmds = commands_map();
+        let cmd = cmds.get("tool-call").unwrap();
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), json!("captcha_solve"));
+        args.insert(
+            "json".to_string(),
+            json!("{\"type\": \"RECAPTCHA_V2\", \"siteKey\": \"abc\"}"),
+        );
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["name"], json!("captcha_solve"));
+        assert_eq!(
+            params["json"],
+            json!("{\"type\": \"RECAPTCHA_V2\", \"siteKey\": \"abc\"}")
+        );
+    }
+
+    #[test]
+    fn test_tool_call_is_devtools_category_not_batch() {
+        let cmds = commands_map();
+        let cmd = cmds.get("tool-call").unwrap();
+        assert_eq!(cmd.category.as_str(), "devtools");
+        assert!(!cmd.batch_supported);
     }
 
     // ---- Skill management command tests ----

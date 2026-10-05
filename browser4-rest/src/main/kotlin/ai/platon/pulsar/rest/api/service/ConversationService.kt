@@ -23,6 +23,7 @@ class ConversationService(
     val loadService: LoadService,
 ) {
     private val logger = getLogger(ConversationService::class)
+
     val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
 
     suspend fun chat(prompt: String): String {

@@ -63,13 +63,16 @@ open class PptxBrowseEventHandler(
             @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
             GlobalScope.launch {
                 try {
-                    val outputPath = pptxGenerator.generate(
+                    val output = pptxGenerator.generate(
                         blocks = blocks,
                         pageUrl = pageUrl,
                         pageTitle = pageTitle,
                         outputDir = Path.of(config.outputDir)
                     )
-                    logger.info("Auto-generated PPTX for {}: {}", pageUrl, outputPath)
+                    logger.info(
+                        "Auto-generated PPTX for {}: {} ({} images embedded)",
+                        pageUrl, output.path, output.embeddedImageCount
+                    )
                 } catch (e: Exception) {
                     logger.warn("Auto-generate PPTX error on {}: {}", pageUrl, e.message)
                 }

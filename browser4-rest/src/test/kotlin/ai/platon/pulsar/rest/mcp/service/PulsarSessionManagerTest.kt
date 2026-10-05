@@ -10,6 +10,8 @@ import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.session.SessionKind
 import ai.platon.pulsar.rest.session.SessionStatus
+import ai.platon.pulsar.rest.session.ManagedSession
+import ai.platon.pulsar.rest.session.BrowserIdentity
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.api.Browser
 import ai.platon.pulsar.api.WebDriver
@@ -625,6 +627,26 @@ class PulsarSessionManagerTest {
     }
 
     @Test
+    fun attachOverADeadBrowserWebSocketFailsLoudly() {
+        // The browser-level WebSocket path (Chrome's built-in remote debugging)
+        // must fail at attach time when nothing answers on the socket — never
+        // bind a browser that drives nothing.
+        val deadPort = java.net.ServerSocket(0).use { it.localPort }
+        val endpoint = "ws://127.0.0.1:$deadPort/devtools/browser/8b91cacf-d8aa-4fa3-8b45-687c7de7af8a"
+
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            sessionManager.createAttachedSession(cdpEndpoint = endpoint)
+        }
+
+        val message = failure.message ?: ""
+        assertTrue(message.contains("could not be attached over its browser-level WebSocket"), message)
+        assertTrue(message.contains(endpoint), message)
+        assertTrue(message.contains("retry attach"), message)
+        // No session may be registered: the attach never succeeded.
+        assertNull(sessionManager.getSession(endpoint))
+    }
+
+    @Test
     fun sessionWithLostDriverLinkIsRecoveredViaInPlaceDriverReconnect() {
         // pulsar 4.11.5+: the driver can reconnect to the same tab in place.
         // Recovery must prefer that over creating a new driver on the browser.
@@ -697,6 +719,70 @@ class PulsarSessionManagerTest {
         verify(agenticContext, times(1)).createSession(
             Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
         )
+    }
+
+    @Test
+    fun cdpAttachedGateReturnsNullForHealthyAttachedSession() {
+        val browser = Mockito.mock(Browser::class.java)
+        runBlocking {
+            Mockito.`when`(browser.healthy()).thenReturn(CheckState())
+        }
+        val session = ManagedSession(
+            sessionId = "alive-attached",
+            agenticSession = mockAgenticSession(isActive = true, browser = browser),
+            capabilities = mapOf(),
+            kind = SessionKind.CDP_ATTACHED,
+        )
+
+        assertNull(sessionManager.cdpAttachedSessionUnavailable(session))
+    }
+
+    @Test
+    fun cdpAttachedGateReportsDeadAttachedBrowserAndMarksInactive() {
+        val browser = Mockito.mock(Browser::class.java)
+        val session = ManagedSession(
+            sessionId = "dead-attached",
+            agenticSession = mockAgenticSession(isActive = false, browser = browser),
+            capabilities = mapOf(),
+            kind = SessionKind.CDP_ATTACHED,
+            browserIdentity = BrowserIdentity("chrome", "Google Chrome", "138.0.0.0"),
+        )
+
+        val error = sessionManager.cdpAttachedSessionUnavailable(session)
+        assertNotNull(error)
+        val message = error!!
+        assertTrue(message.contains("dead-attached"), "message should name the session: $message")
+        assertTrue(message.contains("Google Chrome 138.0.0.0"), "message should identify the browser: $message")
+        assertTrue(message.contains("Re-attach", ignoreCase = true), "message should advise re-attach: $message")
+        assertEquals(SessionStatus.STOPPED, session.status, "dead attached session must be marked inactive")
+    }
+
+    @Test
+    fun cdpAttachedGateIgnoresOwnedSessionsEvenWhenUnhealthy() {
+        val browser = Mockito.mock(Browser::class.java)
+        val session = ManagedSession(
+            sessionId = "owned",
+            agenticSession = mockAgenticSession(isActive = false, browser = browser),
+            capabilities = mapOf(),
+            kind = SessionKind.BROWSER4_LAUNCHED,
+        )
+
+        // Owned sessions have their own recovery/recreation path; the gate must
+        // never block them with an attach-specific message.
+        assertNull(sessionManager.cdpAttachedSessionUnavailable(session))
+    }
+
+    @Test
+    fun cdpAttachedGateIgnoresAttachedSessionThatNeverBoundABrowser() {
+        val session = ManagedSession(
+            sessionId = "unbound-attached",
+            agenticSession = mockAgenticSession(isActive = true, browser = null),
+            capabilities = mapOf(),
+            kind = SessionKind.CDP_ATTACHED,
+        )
+
+        // Nothing bound yet — let the normal tool path report its own error.
+        assertNull(sessionManager.cdpAttachedSessionUnavailable(session))
     }
 
     private fun mockAgenticSession(

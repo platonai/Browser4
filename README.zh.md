@@ -299,14 +299,14 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | 命令 | 说明 |
 |---|---|
 | `open [url]` | 打开浏览器会话，或重新连接已有会话。**默认为无头模式。** 支持 `--headed`（可视窗口）、`--headless`、`--profile <path>`、`--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`、`--interact-level <FASTEST\|FAST\|DEFAULT>`。**注意：** `SYSTEM_DEFAULT` 已废弃，Chrome ≥ 143 不支持——复用系统浏览器状态请用 `attach` + `state-save`/`state-load`（见 [browser-state-import.md](skills/browser4-cli/references/browser-state-import.md)）。 |
-| `attach` | 通过 CDP 或 Browser4 扩展附加到现有浏览器。支持 `--cdp <url\|port\|channel>` 与远程 endpoint 选项。成功附加后 CLI 会打印实际连接的浏览器（`Connected browser: …` / `Attached to … at …`），当实际浏览器与请求的 channel 不符（如请求 msedge 却连到 Chrome）时会输出 ⚠ 告警——请在驱动会话前核对。 |
+| `attach` | 通过 CDP 或 Browser4 扩展附加到现有浏览器。支持 `--cdp <url\|port\|channel>` 与远程 endpoint 选项。channel 名会依次从浏览器的 `DevToolsActivePort`、`--remote-debugging-port` 与监听端口收集候选，并绑定第一个能承载页面的端点——走 `/json`，或走 Chrome 内置 `chrome://inspect/#remote-debugging` 开关发布的浏览器级 WebSocket（也可直接 `attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>`）。成功附加后 CLI 会打印实际连接的浏览器（`Connected browser: …` / `Attached to … at …`），当实际浏览器与请求的 channel 不符（如请求 msedge 却连到 Chrome）时会输出 ⚠ 告警——请在驱动会话前核对。 |
 | `close` | 关闭当前活动浏览器会话。 |
 | `list` | 列出浏览器会话及其状态和下次打开行为。Connection 列优先显示后端上报的真实浏览器，并在 channel 冲突时标注（如 `requested msedge · actual Google Chrome`）。支持 `--all`。 |
 | `session-default <name>` | 把一个命名会话设为默认未命名会话。 |
 | `close-all` | 关闭所有会话，但不停止后端。 |
 | `kill-all` | 强制停止后端以及 Browser4 管理的浏览器进程。 |
 | `stop` | 优雅停止 Browser4 服务。 |
-| `status` | 显示服务版本、端口、健康状态，以及 Web 状态面板地址（`http://<server>:18182/status`）。存在活动会话时还会打印当前会话小节：Name / Session ID / Status / Connection / Next open。 |
+| `status` | 显示服务版本、端口、健康状态，以及 Web 状态面板地址（`http://<server>:18182/status`）。存在活动会话时还会打印当前会话小节：Name / Session ID / Status / Display / Connection / Next open。 |
 | `doctor` | 运行诊断：构建信息、LLM 状态（含实际读取的配置文件、生效的 provider key 与实际请求的模型）、陈旧 daemon 清理、可选修复。支持 `--verbose` 与 `--fix`；`--fix` 还会写入一份带注释的 LLM 配置模板。 |
 | `doctor log [name]` | 列出、查看、tail 或 grep 后端日志文件。支持 `--tail`、grep 风格参数，以及 `doctor log <name> grep <pattern>`。 |
 | `doctor metrics [filter]` | 列出、过滤或 grep 后端指标。支持 `doctor metrics grep <pattern>`。 |

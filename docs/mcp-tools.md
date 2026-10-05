@@ -101,9 +101,9 @@ Examples:
 browser.listTabs()
 ```
 
-List all tabs with index, guid, title, and url
+List all tabs with index, guid, title, url, and a boolean active marker
 
-Returns: `List<Map<String, String>>`
+Returns: `List<Map<String, Any>>`
 
 Examples:
 
@@ -520,16 +520,18 @@ poll, read and cancel with. An unknown id reports `status=failed`.
 ### `crawl_submit`
 
 ```
-crawl.submit(url: String, depth: Int = 1, args: String = "")
+crawl.submit(url: String, depth: Int = 1, args: String = "", parallelTabs: Int? = null, taskTimeoutMillis: Long? = null)
 ```
 
-Submit a crawl task. Returns a task ID for status polling.
+Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `url` | String | yes |  | Seed URL to start from. Required unless the seed list is supplied through `args`. |
 | `depth` | Int | no | 1 | How many link levels to follow from the seed. `0` processes the seed page only. |
 | `args` | String | no |  | Extra crawl arguments as a CLI-style string, e.g. `-outLinkSelector=a[href]` or an X-SQL query. |
+| `parallelTabs` | Int? | no | null | Cap on concurrent fetch tabs for this task. Clamped server-side; a missing or non-positive value uses the server default. |
+| `taskTimeoutMillis` | Long? | no | null | Whole-task budget in ms. Clamped server-side; a missing or non-positive value uses the server default. |
 
 Returns: `String`
 
@@ -839,10 +841,10 @@ Examples:
 ### `html_snapshot_scrape`
 
 ```
-html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null, expires: String = 0s)
+html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null, absoluteUrls: Boolean = false, expires: String = 0s)
 ```
 
-Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that, so the read works on the previous snapshot version without touching the tab.
+Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. text is normalized inner text; textcontent is the raw textContent (whitespace kept). Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that, so the read works on the previous snapshot version without touching the tab. With field=attr and absoluteUrls=true, URL-valued attributes (href, src, …) are resolved against the page URL.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -850,6 +852,7 @@ Extract text, textcontent, html, or an attribute value from a single element mat
 | `field` | String | yes |  | field: String |
 | `selector` | String | no | :root | selector: String = :root |
 | `attrName` | String? | no | null | Attribute to read when field=attr. |
+| `absoluteUrls` | Boolean | no | false | With field=attr, resolve URL-valued attributes (href, src, action, …) against the page URL and return the absolute URL; without it the raw (often relative) attribute value is returned. Non-URL attributes are always returned verbatim. |
 | `expires` | String | no | 0s | How old a stored snapshot of the ACTIVE page may be before the read replaces it, e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. 0s never reuses a stored copy, so the read captures the live page; a positive value serves the stored snapshot while it is younger than the window and captures only when it is older or missing. Used to work on the previous snapshot version without touching the tab. |
 
 Returns: `String`
@@ -863,10 +866,10 @@ Examples:
 ### `html_snapshot_scrape_all`
 
 ```
-html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, offset: Int = 0, limit: Int = -1, expires: String = 0s)
+html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, absoluteUrls: Boolean = false, offset: Int = 0, limit: Int = -1, expires: String = 0s)
 ```
 
-Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that.
+Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. text is normalized inner text; textcontent is the raw textContent (whitespace kept). Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that. With field=attr and absoluteUrls=true, URL-valued attributes are resolved against the page URL.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -874,6 +877,7 @@ Extract text, textcontent, html, or attribute values from ALL elements matching 
 | `field` | String | yes |  | field: String |
 | `selector` | String | no | :root | selector: String = :root |
 | `attrName` | String? | no | null | Attribute to read when field=attr. |
+| `absoluteUrls` | Boolean | no | false | With field=attr, resolve URL-valued attributes (href, src, action, …) against the page URL and return the absolute URL; without it the raw (often relative) attribute value is returned. Non-URL attributes are always returned verbatim. |
 | `offset` | Int | no | 0 | offset: Int = 0 |
 | `limit` | Int | no | -1 | limit: Int = -1 |
 | `expires` | String | no | 0s | How old a stored snapshot of the ACTIVE page may be before the read replaces it, e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. 0s never reuses a stored copy, so the read captures the live page; a positive value serves the stored snapshot while it is younger than the window and captures only when it is older or missing. Used to work on the previous snapshot version without touching the tab. |

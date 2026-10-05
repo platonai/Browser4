@@ -47,15 +47,19 @@ open class PptxToolExecutor(
             domain = domain,
             method = "generate",
             arguments = listOf(
-                ToolSpec.Arg("outputPath", "String?", "null"),
+                ToolSpec.Arg("outputDir", "String?", "null"),
             ),
             returnType = "PptxGenerationResult",
-            description = "Extract structured content (headings, paragraphs, images, tables, lists, code blocks) from the current web page and generate a PowerPoint (PPTX) file. Images are downloaded and embedded in the slides. The PPTX contains a title slide followed by content slides grouped by heading sections.",
+            description = "Extract structured content (headings, paragraphs, images, tables, lists, code blocks) from the current web page and generate a PowerPoint (PPTX) file. Images are downloaded and embedded in the slides. The PPTX contains a title slide followed by content slides grouped by heading sections. The generated filename is <sanitized-title>_<timestamp>.pptx.",
             help = """
                 pptx.generate()
-                pptx.generate(outputPath: String?)
+                pptx.generate(outputDir: String?)
 
                 Extracts structured content from the current page DOM and generates a PPTX file.
+                outputDir is the DIRECTORY where the file is written (NOT a file path); the
+                generator always names the file <sanitized-page-title>_<timestamp>.pptx.
+                If a .pptx-looking path is passed, its parent directory is used.
+
                 Content is organized into slides:
                 - Title slide (page title + URL)
                 - Section slides grouped by heading hierarchy
@@ -66,7 +70,10 @@ open class PptxToolExecutor(
                 - filePath: absolute path to the generated PPTX file
                 - slideCount: number of slides created
                 - blockCount: number of content blocks extracted
-                - imageCount: number of images embedded
+                - imageCount: number of images actually embedded
+                - downloadedImages: images successfully downloaded
+                - failedImages: images that failed to download
+                - skippedImages: images dropped (per-slide cap / slide overflow)
                 - durationMs: generation time in milliseconds
 
                 The output file is saved to pptx.output.dir (default: downloads/pptx/).
@@ -87,8 +94,12 @@ open class PptxToolExecutor(
                 requireNotNull(driver) { "pptx.generate requires a WebDriver receiver (current page context)" }
 
                 val startTime = System.currentTimeMillis()
-                val outputPath = paramString(args, "outputPath", functionName, required = false)
-                val dir = if (!outputPath.isNullOrBlank()) Path.of(outputPath) else Path.of(config.outputDir)
+                // outputDir is the canonical name; outputPath is kept as a
+                // backward-compatible alias (the argument used to be named that
+                // way even though it always meant a directory).
+                val outputArg = paramString(args, "outputDir", functionName, required = false)
+                    ?: paramString(args, "outputPath", functionName, required = false)
+                val dir = resolveOutputDir(outputArg)
 
                 // Extract content blocks from the page
                 val blocks = contentExtractor.extract(driver)
@@ -103,6 +114,9 @@ open class PptxToolExecutor(
                         "slideCount" to 0,
                         "blockCount" to 0,
                         "imageCount" to 0,
+                        "downloadedImages" to 0,
+                        "failedImages" to 0,
+                        "skippedImages" to 0,
                         "durationMs" to (System.currentTimeMillis() - startTime),
                         "pageUrl" to driver.currentUrl(),
                         "error" to "No content blocks extracted from page",
@@ -114,7 +128,7 @@ open class PptxToolExecutor(
                 val pageUrl = driver.currentUrl()
 
                 // Generate PPTX
-                val resultPath = pptxGenerator.generate(
+                val result = pptxGenerator.generate(
                     blocks = blocks,
                     pageUrl = pageUrl,
                     pageTitle = pageTitle,
@@ -124,25 +138,35 @@ open class PptxToolExecutor(
                 // Compute statistics
                 val slideCount = try {
                     org.apache.poi.xslf.usermodel.XMLSlideShow(
-                        java.io.FileInputStream(resultPath.toFile())
+                        java.io.FileInputStream(result.path.toFile())
                     ).use { it.slides.size }
                 } catch (e: Exception) {
                     -1
                 }
 
-                val imageCount = blocks.count { it.type == "image" }
+                // imageCount reflects images actually embedded on slides, not
+                // the number of image blocks (which can differ due to per-slide
+                // caps, slide overflow, or download failures).
+                val imageCount = result.embeddedImageCount
 
                 val durationMs = System.currentTimeMillis() - startTime
                 logger.info(
-                    "pptx.generate complete: {} slides, {} blocks, {} images, {}ms",
-                    slideCount, blocks.size, imageCount, durationMs
+                    "pptx.generate complete: {} slides, {} blocks, {} embedded images " +
+                        "({} downloaded, {} failed, {} skipped), {}ms",
+                    slideCount, blocks.size, imageCount,
+                    result.embeddedImageCount + result.skippedImageCount - result.failedImageCount,
+                    result.failedImageCount, result.skippedImageCount,
+                    durationMs
                 )
 
                 mapOf(
-                    "filePath" to resultPath.toString(),
+                    "filePath" to result.path.toString(),
                     "slideCount" to slideCount,
                     "blockCount" to blocks.size,
                     "imageCount" to imageCount,
+                    "downloadedImages" to (result.embeddedImageCount + result.skippedImageCount),
+                    "failedImages" to result.failedImageCount,
+                    "skippedImages" to result.skippedImageCount,
                     "durationMs" to durationMs,
                     "pageUrl" to pageUrl,
                 )
@@ -151,6 +175,25 @@ open class PptxToolExecutor(
             else -> throw IllegalArgumentException(
                 "Unsupported pptx method: $functionName. Supported: generate."
             )
+        }
+    }
+
+    /**
+     * Resolve the output directory for the generated PPTX.
+     *
+     * The generator always names the file `<sanitized-title>_<timestamp>.pptx`,
+     * so [outputArg] must be a directory. If the user passed a `.pptx`-looking
+     * path (the old `outputPath` name suggested a file), its parent directory is
+     * used instead of creating an oddly-named directory. Falls back to
+     * [PptxConfig.outputDir] when no argument is supplied.
+     */
+    private fun resolveOutputDir(outputArg: String?): Path {
+        if (outputArg.isNullOrBlank()) return Path.of(config.outputDir)
+        val p = Path.of(outputArg)
+        return if (p.toString().endsWith(".pptx", ignoreCase = true)) {
+            p.parent ?: Path.of(".")
+        } else {
+            p
         }
     }
 }
