@@ -8,6 +8,7 @@ import ai.platon.pulsar.skeleton.workflow.format.PageFormatContributorRegistry
 import ai.platon.pulsar.skeleton.workflow.format.PageFormats
 import ai.platon.pulsar.skeleton.workflow.format.ScrapeMetadata
 import ai.platon.pulsar.skeleton.workflow.format.ScrapedDocument
+import java.time.Duration
 
 /**
  * Runs a [PageFormatPlan]: capture once, read many, assemble one document.
@@ -73,21 +74,16 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
         val options = FormatOptions(onlyMainContent = request.onlyMainContent)
 
         var document = ScrapedDocument(
-            url = request.url,
-            metadata = ScrapeMetadata(
-                url = request.url,
-                sourceURL = request.url,
-                formatsRequested = plan.requested,
-            ),
+            metadata = ScrapeMetadata(formatsRequested = plan.requested),
         )
         plan.warnings.forEach { document = document.withWarning(it) }
 
-        val snapshot = acquireSnapshot(plan, request)?.also { captured ->
+        val snapshot = acquireSnapshot(plan)?.also { captured ->
             document = document.copy(
                 url = captured.href,
                 metadata = document.metadata.copy(
                     url = captured.key,
-                    sourceURL = request.url ?: captured.href,
+                    sourceURL = captured.href,
                     captureId = captured.key,
                     captureTime = captured.capturedAt,
                     cacheState = captured.cacheState,
@@ -119,10 +115,15 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
      * A plan with no snapshot-scoped step (a hypothetical tab-only request) does
      * not capture at all — capture-once also means "never more than the plan
      * needs".
+     *
+     * [Duration.ZERO] is not a placeholder: it is the honest window, and it means
+     * "do not reuse a stored capture". A positive window (Firecrawl's `maxAge`)
+     * cannot be honoured until some method reports a *stored* snapshot's identity —
+     * see [FormatStepRunner.acquireSnapshot].
      */
-    private suspend fun acquireSnapshot(plan: PageFormatPlan, request: PageScrapeRequest): FormatSnapshot? {
+    private suspend fun acquireSnapshot(plan: PageFormatPlan): FormatSnapshot? {
         if (!plan.needsSnapshot) return null
-        return runner.acquireSnapshot(request.expires)
+        return runner.acquireSnapshot(Duration.ZERO)
     }
 
     private suspend fun runSnapshotSteps(
@@ -215,7 +216,7 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
                 return@forEach
             }
 
-            val context = contributorContext(format, snapshot, request, result)
+            val context = contributorContext(format, snapshot, result)
             val missing = contributor.requires.filterNot { isProvided(it, context) }
             if (missing.isNotEmpty()) {
                 result = result.withWarning(
@@ -258,11 +259,10 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
     private fun contributorContext(
         format: PageFormat,
         snapshot: FormatSnapshot?,
-        request: PageScrapeRequest,
         document: ScrapedDocument,
     ): FormatContext = FormatContext(
         snapshotKey = snapshot?.key.orEmpty(),
-        url = document.url ?: request.url.orEmpty(),
+        url = document.url.orEmpty(),
         rawHtml = document.rawHtml,
         html = document.html,
         markdown = document.markdown,

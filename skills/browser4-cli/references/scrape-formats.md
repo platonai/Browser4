@@ -101,10 +101,12 @@ reproducible rather than model-generated:
 browser4-cli scrape --formats '["markdown",{"type":"deterministicJson","sql":"select dom_first_text(dom, \'h1\') as title"}]'
 ```
 
-**Scrape a URL other than the current page:**
+**Scrape a page other than the one you are on** — load it first; `scrape` always reads
+the active page:
 
 ```bash
-browser4-cli scrape --url "https://example.com/post" --formats "markdown"
+browser4-cli open "https://example.com/post"
+browser4-cli scrape --formats "markdown"
 ```
 
 **Discover before you ask** — `scrape formats` lists every accepted id, whether this
@@ -127,8 +129,22 @@ browser4-cli scrape --formats "markdown,links" | grep -o '"formatsDelivered":\[[
 | Flag | Meaning |
 |---|---|
 | `--formats <list>` | The outputs to produce, in request order. Accepts a comma-separated string (`"markdown,links"`), a JSON array (`'["markdown","links"]'`) or a single name. An entry may be an object carrying that format's options. Omitted or empty means `["markdown"]` |
-| `--url <url>` | Scrape this URL instead of the session's current page. Same slot as the positional form: `scrape "https://…"` and `scrape --url "https://…"` are the same request |
 | `--no-main-content` | Derive markdown from the whole cleaned page instead of the readable article. A flag, not a value: the default is already `true`, so only turning it off needs spelling |
+
+`scrape` takes **no URL argument**, and that is deliberate rather than an omission.
+Every read in this family targets the session's *active* page — `html_snapshot
+export` does not even accept a URL — so a request-level URL could only be recorded
+in `metadata.sourceURL` while the content came from whatever page the tab was
+showing. It returned a plausible document about the wrong page. To scrape a
+particular page, `open` it first:
+
+```bash
+browser4-cli open "https://example.com/post"
+browser4-cli scrape --formats "markdown"
+```
+
+Per-request URL targeting arrives with Stage 0 (loading the page read-only on the
+shared scrape session); until then the argument is refused rather than ignored.
 
 `scrape formats` takes no flags. `sessionId` is not a flag you pass — the CLI adds it
 to every call it makes.
@@ -150,6 +166,8 @@ exist only once a plugin provides them, and `scrape formats` reports
 | `Unknown format 'markdwon'. Known formats: …` | A format id this build does not accept. Nothing was captured | Check the spelling against the printed list, or run `scrape formats` |
 | `Missing required parameter: sessionId` | Called over raw HTTP without a session | Use the CLI (it injects one), or pass `sessionId` in the JSON body. There is no "auto-open a session" mode yet |
 | Only the first format came back, and the exit code was 0 | Your shell split the comma list: in PowerShell an *unquoted* `a,b,c` is three arguments, so `--formats` received only `a` | Quote it: `--formats "markdown,links,images"`. `formatsRequested` in the response shows what the server actually received |
+| `unexpected positional argument` | `scrape` takes no URL: every read targets the active page | `open <url>` first, then scrape |
+| `'url' is not supported yet` (REST/MCP callers) | A request-level URL was rejected by name rather than ignored — the reads would have answered from the active page | `open` the page first; per-request targeting needs Stage 0 |
 | The field you asked for is absent | Either the format produced nothing, or it is unavailable here | Read `formatsDelivered`: listed means it ran; `warning` names the ones that did not and why |
 | `warning` names a format you did want | That format is unavailable or failed; the rest still succeeded | Install the plugin named in the message, or drop the format |
 | `Unsupported page method: scrape links` | A `tool call page_scrape` invocation with an unquoted list: `links` became part of the method name | Use `scrape`, or `tool call page_scrape --json '{"formats":["markdown","links"]}'` |

@@ -76,13 +76,23 @@ class PageScrapeController(
      */
     @PostMapping
     suspend fun scrape(@RequestBody request: PageScrapeRequestBody): Map<String, Any?> {
+        // Kept in the DTO only so this can be refused by name. The field cannot be
+        // quietly dropped: Jackson ignores unknown properties here, so removing it
+        // would make `{"url": …}` silently scrape the *active* page instead — the
+        // exact failure this guard exists to prevent.
+        require(request.url == null) {
+            "'url' is not supported yet: a request-level URL was forwarded but the reads always " +
+                "targeted the session's active page, which returned a document about the wrong page. " +
+                "Open the page first (`open <url>`), then scrape it. Per-request URL targeting arrives " +
+                "with Stage 0 (read-only load on the shared scrape session)."
+        }
+
         val formats = FormatOptionSchema.parse(request.formats.orEmpty()).requireValid()
 
         val document = pageScrapeService.scrape(
             formats = formats,
             sessionId = request.sessionId,
             onlyMainContent = request.onlyMainContent ?: true,
-            url = request.url,
         )
 
         return mapOf(
@@ -128,7 +138,10 @@ class PageScrapeController(
  * - `strict`: the three-state degradation contract is not implemented, so every
  *   unavailable format degrades with a `warning`.
  *
- * @property url scrape this URL instead of the session's current page.
+ * @property url **not supported yet** — passing it is refused with an explanation
+ *   rather than silently ignored (the reads target the session's active page, so
+ *   honouring it would have returned a document about the wrong page). Kept in the
+ *   DTO so the refusal can name the field; `open <url>` first is the way today.
  * @property sessionId the session to scrape; null means the bound session.
  * @property formats format names, or objects carrying their options.
  * @property onlyMainContent derive markdown from the readable article.

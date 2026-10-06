@@ -69,7 +69,6 @@ class PageScrapeToolExecutor(
                 // optional argument spells its default as the literal "null" — the
                 // convention the rest of the tool layer already uses.
                 ToolSpec.Arg("sessionId", "String?", "null", "The session whose page to scrape; omit to use the session the call is bound to."),
-                ToolSpec.Arg("url", "String?", "null", "Scrape this URL instead of the session's current page."),
                 ToolSpec.Arg(
                     "formats", "List<Any>", "null",
                     "The outputs to produce, in request order. A string names a format (`markdown`); " +
@@ -140,7 +139,6 @@ class PageScrapeToolExecutor(
      */
     private suspend fun scrape(args: Map<String, Any?>): Map<String, Any?> {
         val sessionId = args["sessionId"]?.toString()?.takeIf { it.isNotBlank() }
-        val url = args["url"]?.toString()?.takeIf { it.isNotBlank() }
         val onlyMainContent = args["onlyMainContent"]?.let { toBoolean(it, "onlyMainContent") } ?: true
         val formats = FormatOptionSchema.parse(formatArgs(args)).requireValid()
 
@@ -148,7 +146,6 @@ class PageScrapeToolExecutor(
             formats = formats,
             sessionId = sessionId,
             onlyMainContent = onlyMainContent,
-            url = url,
         )
 
         @Suppress("UNCHECKED_CAST")

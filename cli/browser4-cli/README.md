@@ -277,8 +277,14 @@ cannot disagree about what the page said:
 ```bash
 browser4-cli scrape --formats "markdown,links,images"
 browser4-cli scrape --formats '["markdown",{"type":"deterministicJson","sql":"select dom_first_text(dom, \'h1\') as title"}]'
-browser4-cli scrape "https://example.com/post" --formats "markdown"    # or: scrape --url ...
+browser4-cli open "https://example.com/post" && browser4-cli scrape --formats "markdown"
 ```
+
+`scrape` takes **no URL argument**: every read in this family targets the session's
+active page (`html_snapshot export` does not even accept one), so a request-level URL
+could only have been recorded in `metadata.sourceURL` while the content came from
+whatever the tab was showing — a document about the wrong page. `open` the page you
+mean, then scrape it.
 
 The response is one document whose `metadata` carries `captureId` and `captureTime`
 — there is exactly one of each per response, which is how you can tell the capture

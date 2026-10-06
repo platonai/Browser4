@@ -48,8 +48,16 @@ interface FormatStepRunner {
      *
      * @param expires reuse a stored capture younger than this instead of
      *   capturing again; [Duration.ZERO] means "capture the live page".
-     *   A positive window is how a caller says "this page has not changed,
-     *   spend nothing" — the analogue of Firecrawl's `maxAge`.
+     *
+     *   **Every caller passes [Duration.ZERO] today, and that is not a gap in the
+     *   caller.** A positive window is the analogue of Firecrawl's `maxAge` — "this
+     *   page has not changed, spend nothing" — but honouring it requires the
+     *   *stored* capture's identity (its key, href and timestamp). No
+     *   `html_snapshot` method reports that: `capture` always serialises the live
+     *   tab and is the only method returning those values, while the store-reading
+     *   methods return content rather than identity. The parameter is kept because
+     *   [Duration.ZERO] is a truthful instruction; a positive value cannot yet be
+     *   satisfied by any implementation.
      */
     suspend fun acquireSnapshot(expires: Duration): FormatSnapshot
 

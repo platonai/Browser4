@@ -9,7 +9,6 @@ import ai.platon.pulsar.skeleton.workflow.format.PageFormatContributor
 import ai.platon.pulsar.skeleton.workflow.format.PageFormatContributorRegistry
 import ai.platon.pulsar.skeleton.workflow.format.PageFormats
 import ai.platon.pulsar.skeleton.workflow.format.ScrapedDocument
-import java.time.Duration
 
 /**
  * Runs one `page_scrape` request: parse → plan → execute → assemble.
@@ -27,12 +26,18 @@ class PageScrapeService(private val runnerFactory: FormatStepRunnerFactory) {
     /**
      * Produce the document for one request.
      *
+     * There is no `url` parameter: a request-level URL used to be forwarded, recorded
+     * in `metadata.sourceURL` and otherwise ignored — the steps read the session's
+     * *active* page, and only `readability`/`query` accept a URL at all (`export`
+     * hardcodes the active page). That produced a plausible document about the wrong
+     * page. Targeting another page needs the design's Stage 0 (ENSURE: load it
+     * read-only on the shared scrape session, then read that), and the parameter
+     * comes back with it; until then `open <url>` first is the only honest way.
+     *
      * @param formats the requested formats, already normalized and validated.
      * @param sessionId the addressed session, or null when the caller named none.
      * @param onlyMainContent whether markdown should come from the readable article
      *   rather than the whole cleaned page.
-     * @param url the requested URL, recorded in metadata and used as the link base
-     *   when the page redirects; null means "the page the session is on".
      * @return one document carrying every format that was delivered.
      * @throws Exception the original failure of a REQUIRED step.
      */
@@ -40,16 +45,10 @@ class PageScrapeService(private val runnerFactory: FormatStepRunnerFactory) {
         formats: List<PageFormat>,
         sessionId: String? = null,
         onlyMainContent: Boolean = true,
-        url: String? = null,
     ): ScrapedDocument = PageFormatEngine(runnerFactory.create(sessionId)).scrape(
         PageScrapeRequest(
             formats = formats,
-            // Not exposed to callers yet: the capture step always captures (see
-            // SnapshotFormatStepRunner), so a maxAge-shaped window would promise a
-            // reuse this deployment cannot deliver.
-            expires = Duration.ZERO,
             onlyMainContent = onlyMainContent,
-            url = url,
         )
     )
 

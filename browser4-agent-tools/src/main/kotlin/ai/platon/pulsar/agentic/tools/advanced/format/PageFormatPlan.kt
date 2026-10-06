@@ -1,7 +1,5 @@
 package ai.platon.pulsar.agentic.tools.advanced.format
 
-import java.time.Duration
-
 /**
  * When a plan step runs, and therefore what it is allowed to touch.
  *
@@ -127,16 +125,27 @@ data class AssemblyContext(
 /**
  * The per-request options a `page_scrape` caller supplies.
  *
+ * ## Why there is no `url` and no `expires` here
+ *
+ * Both were removed rather than half-honoured, because neither could be populated
+ * without lying about what happens:
+ *
+ * - **`url`** — the steps read the session's active page, and no `html_snapshot`
+ *   read except `readability`/`query` accepts a URL at all (`export` hardcodes the
+ *   active page). A request-level URL therefore produced the *active* page's content
+ *   while `metadata.sourceURL` reported the requested one: a plausible document about
+ *   the wrong page. Targeting another page needs Stage 0 (ENSURE) from the design —
+ *   load it read-only on the shared scrape session, then read that — and the field
+ *   comes back with it.
+ * - **`expires`** (Firecrawl's `maxAge`) — reusing a stored capture needs that
+ *   capture's *identity* (key, href, timestamp), and no method reports a stored
+ *   snapshot's identity: `capture` always serialises the live tab and is the only
+ *   one returning those values. See [FormatStepRunner.acquireSnapshot].
+ *
  * @property formats the formats to produce, in request order.
- * @property expires reuse a stored capture younger than this; zero means capture
- *   the live page.
  * @property onlyMainContent see [FormatOptions.onlyMainContent].
- * @property url the requested URL, recorded in metadata and used as the base for
- *   relative links when the page redirects.
  */
 data class PageScrapeRequest(
     val formats: List<ai.platon.pulsar.skeleton.workflow.format.PageFormat>,
-    val expires: Duration = Duration.ZERO,
     val onlyMainContent: Boolean = true,
-    val url: String? = null,
 )

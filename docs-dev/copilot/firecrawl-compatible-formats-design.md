@@ -561,6 +561,7 @@ class BrandingFormatContributor : PageFormatContributor {
 - **Java**：`JAVA_HOME` = GraalVM JDK 25.0.3；CLI 解析顺序是 `JAVA_HOME` → bundle 自带 JRE → 常见安装路径（`cli/browser4-cli/src/java.rs:107`），所以 PATH 上的 JDK 17 不影响后端启动。
 - **运行时 bundle 版本必须与检出一致**，否则 dev 模式拒绝启动（本次是 bundle `4.14.0-rc.6` vs 检出 `4.14.0-rc.8`）。用 `$env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = "1"` 重建后：`Server ready in 9.7s`，真实浏览器成功加载 `https://example.com`（title `Example Domain`），MCP 链路端到端可用。**真机 e2e 因此是可行的，1c 必须走到这一步。**
 - **`--expires` 就是 capture-once 的物理载体，且已确认**：`export` / `query` / `readability` / `scrape_all` 都接受 `-expires/--expires <dur>`，help 原文写着 "a positive value reads the stored snapshot while it is younger than the window, **without touching the tab**"。这正是 A1 需要的行为，不需要靠 KDoc 推断——`htmlsnapshot capture` 落盘后用带正数 `expires` 的读即可复用同一份快照。
+- **改了 Kotlin 之后，真机 e2e 必须带 `--force-rebuild-bundle`**。harness 的 pre-build 看到 `browser4-apps/browser4-bundle/target/Browser4Bundle.jar` 存在就打印 "skipping Maven"，而 dev 模式会因源码比 bundle 新而**拒绝启动**——报出来的却是一句和"过期"毫无关系的通用断言 `Expected CLI-managed Browser4 startup to succeed`，场景耗时从 28s 涨到 2m23s。我因此白跑了两轮。**症状与原因完全不匹配，是本项目最容易误判为"环境抖动"的坑之一**；`FORCE_REBUILD_BUNDLE_CLI_ENV` 常量就在 `tests/e2e/constants.rs`。
 
 #### A1 ✅ `SnapshotFormatStepRunner`
 
@@ -678,6 +679,18 @@ POST 未知格式 "markdwon"   → 400  {"success":false,"error":"Bad Request",
 
 这套断言是**渲染质量的第一道真实门禁**：在它之前，`HtmlToMarkdown` 的 26 个单测用的是各自构造的小片段，没有任何测试看过一张真实页面的整体输出。
 
+#### `url` 与 `expires` 已从请求面移除（都是"静默给错"或"承诺给不出"）
+
+**`url` —— 曾经静默给出错误答案。** 逐跳核实的结果：`PageScrapeRequest.url` 只被用在 `metadata.sourceURL` 上；三个步骤构造器（`exportStep`/`readabilityStep`/`scrapeAllStep`）**都不传 url**；而 `html_snapshot.export` 内部硬编码 `requestedPage = null`，**根本不接受 url 参数**（只有 `readability`/`query` 接受）。所以 `scrape --url X` / `POST /api/scrape {"url":X}` 返回的是**当前页**的内容，而 `metadata.sourceURL` 写着 X —— 一份看起来正常、讲的却是另一张页面的文档。
+
+处置：CLI 的位置参数与 `--url` 选项删除；MCP spec 的 `url` 参数删除；`PageScrapeRequest.url` 删除；REST DTO **保留** `url` 字段并**显式拒绝**（`require(request.url == null)`）——因为 Jackson 在这里会静默忽略未知属性，删掉字段反而会把静默错答放回去。CLI 上多出的位置 token 现在是明确的 `unexpected positional argument`。
+
+**设计稿 §3.2/§3.3/§3.4 里的 `url` 参数因此暂时不存在**，等 §4.1 的 **Stage 0（ENSURE）** 落地时一起回来：命中当前 tab 就用它，否则在**共享 scrape 会话**上只读加载（`storedPageOrIndependentLoad` 已有这条路径），再读那一页。届时 `export`/`scrape_all` 也需要一条能指向另一页的通道——它们现在只能读活动页。
+
+**`expires`（Firecrawl `maxAge`）—— 曾经承诺给不出。** `PageScrapeRequest.expires` 被引擎转发给 `acquireSnapshot`，而 runner 丢弃它并把 `cacheState` 硬编码为 `"miss"`。要复用已存快照，runner 必须报出那份快照的**身份**（key/href/timestamp），而**没有任何方法能只读地给出已存快照的身份**：`capture` 总是序列化活体 tab，且它是唯一返回这三个值的方法。处置：字段删除，引擎显式传 `Duration.ZERO`（"不复用"是个真实指令，不是占位），`FormatStepRunner.acquireSnapshot` 的 KDoc 写明"正数窗口目前没有实现能满足"。
+
+> 一个让这件事降温的事实：**`capture` 不导航**——它序列化 tab 当前的文档。所以 `maxAge` 复用省下的是**一次序列化 + 一次落库**，不是一次网络抓取。真正值得在意的是**迁移预期**（调用方传 `maxAge` 或什么都不传时预期命中缓存），见 R6。
+
 #### 文档族已同步
 
 - `skills/browser4-cli/references/scrape-formats.md`（新增，`procedure` tier，159 行）：快速上手、何时用、一次抓取如何扇出、模式、参数、错误与恢复。其中"一次 capture 供全部格式共用"由 `captureId`/`captureTime` 每个响应恰好一个来证明；"请求了但产出为空"与"没请求"的区别写进了 `formatsDelivered` 的读法；PowerShell 引号坑单独成条（它长得和"静默丢格式"一模一样）。
@@ -698,8 +711,9 @@ POST 未知格式 "markdwon"   → 400  {"success":false,"error":"Bad Request",
 
 #### 仍待交付
 
-- `strict` 三态契约（§6.2 的 503/502/504）。因此 `page.scrape` 与 `POST /api/scrape` **刻意不接受** `strict` 参数——接受了却只降级就是撒谎。
-- `expires` / `maxAge`：同上，见 A1 的已知偏差。
+- **`strict` 三态契约**（§6.2 的 503/502/504）。因此 `page.scrape` 与 `POST /api/scrape` **刻意不接受** `strict` 参数——接受了却只降级就是撒谎。
+- **请求级 `url`（Stage 0 ENSURE）**：见上面的"`url` 与 `expires` 已从请求面移除"。这是三个缺口里最影响可用性的一个——`open` 先行的替代方案在多页场景下会不断切换 tab。
+- **`expires` / `maxAge`**：字段已删（见上）。实现需要一条"只读地报出已存快照身份"的通道；倾向新增一个方法（如 `stored`）而不是给 `capture` 加条件语义——保留 `capture` 的纯粹性。
 - **`sessionId` 目前是必需的**（`requiresReceiver = true`）。设计稿 §3.2 写的是"不需要 sessionId"，但 §12 的开放问题 **Q1**（无 url 且无会话时自动开临时会话，还是要求先 `open`）至今未拍板，所以在拍板前要求会话是唯一诚实的选择。CLI 会自动注入 sessionId，所以 `scrape` 用户体验上无感；REST 调用方需要显式给。
 - 异步面（`/api/scrape/submit` + `/{id}/status|result|stream`），理由见 A5。
 - ~~**§11 的夹具页**仍未建~~ **已建并已用于真机断言**：`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/formats-fixture.html` + CLI 真机场景 `test_e2e_scrape_formats`（`requires_browser4: true`）。§11 的详细说明见下。

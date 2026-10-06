@@ -119,7 +119,6 @@ class PageFormatEngineTest {
         PageScrapeRequest(
             formats = formats(*raw),
             onlyMainContent = onlyMainContent,
-            url = HREF,
         )
 
     // ---- capture-once -------------------------------------------------------
@@ -313,8 +312,8 @@ class PageFormatEngineTest {
     }
 
     @Test
-    @DisplayName("the expires window is handed to the capture")
-    fun expiresIsForwarded() = runBlocking {
+    @DisplayName("the capture is asked for no reuse, and its cache state reaches the metadata")
+    fun captureAsksForNoReuse() = runBlocking {
         val runner = object : FormatStepRunner {
             var seen: Duration? = null
             override suspend fun acquireSnapshot(expires: Duration): FormatSnapshot {
@@ -329,11 +328,13 @@ class PageFormatEngineTest {
             override suspend fun runOnTab(domain: String, method: String, args: Map<String, Any?>): String = ""
             override fun supports(domain: String, method: String): Boolean = true
         }
-        val document = PageFormatEngine(runner).scrape(
-            PageScrapeRequest(formats("html"), expires = Duration.ofDays(1), url = HREF)
-        )
+        val document = PageFormatEngine(runner).scrape(PageScrapeRequest(formats("html")))
 
-        assertEquals(Duration.ofDays(1), runner.seen)
+        // `ZERO` is the truthful instruction — reuse nothing, capture the live page.
+        // A positive window is Firecrawl's `maxAge`, and nothing may ask for one until
+        // some method can report a *stored* snapshot's identity; the request type no
+        // longer has a field to carry it, so this asserts the remaining contract.
+        assertEquals(Duration.ZERO, runner.seen)
         assertEquals("hit", document.metadata.cacheState)
     }
 

@@ -96,6 +96,28 @@ class PageScrapeControllerTest {
     }
 
     @Test
+    @DisplayName("a request-level url is refused by name, not silently ignored")
+    fun urlIsRefusedByName() {
+        // The reads target the session's *active* page, so honouring `url` used to
+        // return a document about the wrong page while metadata.sourceURL claimed
+        // otherwise. The field stays in the DTO purely so this refusal can name it:
+        // Jackson ignores unknown properties here, so dropping the field would put the
+        // silent behaviour back.
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            runBlocking {
+                controller().scrape(
+                    PageScrapeRequestBody(
+                        url = "https://other.example/page",
+                        formats = listOf("markdown"),
+                    ),
+                )
+            }
+        }
+        assertTrue(error.message!!.contains("'url' is not supported"), error.message)
+        assertEquals(0, runner.captures, "a refused request must not capture anything")
+    }
+
+    @Test
     @DisplayName("a per-format options object is accepted alongside plain names")
     fun formatObjectsAreAccepted() = runBlocking {
         val response = controller().scrape(

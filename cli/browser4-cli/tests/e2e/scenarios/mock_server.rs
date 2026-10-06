@@ -2248,11 +2248,9 @@ pub(super) fn test_scrape_commands(ctx: &mut E2ECtx) {
         open_result.stdout
     );
 
-    // The bare command with a positional URL and the formats list.
-    let scrape = run_command(
-        ctx,
-        &["scrape", "https://example.com/p", "--formats", "markdown,links"],
-    );
+    // The bare command with the formats list. No URL argument exists — every read in
+    // this family targets the active page — so the caller opens the page first.
+    let scrape = run_command(ctx, &["scrape", "--formats", "markdown,links"]);
     assert!(
         scrape.stdout.contains("mock response for page_scrape"),
         "scrape should dispatch to page_scrape, got:\n{}",
@@ -2267,16 +2265,11 @@ pub(super) fn test_scrape_commands(ctx: &mut E2ECtx) {
         formats.stdout
     );
 
-    // An unknown second token is a URL, not a subcommand: `scrape` is a bare command
-    // too, so `scrape <anything>` must reach it as the positional url — the same
-    // contract `crawl <url>` has. (The consequence worth knowing: a mistyped
-    // subcommand is sent as a url, which fails at the backend rather than here.)
-    let as_url = run_command(ctx, &["scrape", "not-a-subcommand"]);
-    assert!(
-        as_url.stdout.contains("mock response for page_scrape"),
-        "an unknown second token should be treated as a url, got:\n{}",
-        as_url.stdout
-    );
+    // A stray positional is refused, not ignored: with no URL argument there is
+    // nothing a bare token could mean, and swallowing it would turn a mistyped
+    // invocation into a successful scrape of the current page.
+    let stray = run_command_expecting_failure(ctx, &["scrape", "not-a-subcommand"], "positional");
+    assert_ne!(stray.exit_code, 0);
 
     let called: Vec<String> = mock_server
         .snapshot()

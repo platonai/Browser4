@@ -27,16 +27,19 @@ import java.time.Duration
  *   runner is built rather than producing a request that loads the page eight
  *   times.
  *
- * ## `expires` on the capture step is not honoured yet
+ * ## The capture step has no `maxAge` mode
  *
- * [acquireSnapshot] always captures, and reports `cacheState = "miss"`. The
- * engine's `expires` means Firecrawl's `maxAge` ("reuse a stored capture younger
- * than this instead of capturing again"), but no `html_snapshot` tool exposes a
- * **stored** snapshot's identity — `capture` always serialises the live tab and is
- * the only method that returns the store key, href and capture time. Honouring it
- * therefore needs a store-only metadata path, which changes an existing tool's
- * contract and deserves its own review; see the Phase 1c notes in
- * `docs-dev/copilot/firecrawl-compatible-formats-design.md`. The invariant that
+ * [acquireSnapshot] always captures, and reports `cacheState = "miss"`. Reusing a
+ * stored capture (Firecrawl's `maxAge`) would need that capture's **identity** —
+ * `capture` always serialises the live tab and is the only method returning the
+ * store key, href and capture time. Honouring it therefore needs a store-only
+ * metadata path, which changes an existing tool's contract and deserves its own
+ * review; see the Phase 1c notes in
+ * `docs-dev/copilot/firecrawl-compatible-formats-design.md`.
+ *
+ * Nothing can ask for it in the meantime: `PageScrapeRequest` no longer carries a
+ * window, and the CLI/REST/MCP surfaces never accepted one, because a field that
+ * promises reuse nobody can deliver is worse than an absent one. The invariant that
  * matters for correctness — **one** capture per request — holds either way.
  *
  * @property dispatcher the tool dispatch, bound to the session the request runs on.
@@ -64,8 +67,12 @@ class SnapshotFormatStepRunner(
      * Capture the active page once and return the identity every snapshot-scoped
      * format is derived from.
      *
-     * See the class KDoc for why [expires] does not yet make this reuse a stored
-     * capture.
+     * The engine passes [Duration.ZERO], and this implementation would not know what
+     * to do with a positive one: reusing a stored capture needs that capture's
+     * identity, and no `html_snapshot` method reports a *stored* snapshot's identity
+     * (see [FormatStepRunner.acquireSnapshot]). Nothing can ask for a positive
+     * window any more either — the field that carried it was removed rather than
+     * half-honoured — so this parameter documents a contract rather than a choice.
      */
     override suspend fun acquireSnapshot(expires: Duration): FormatSnapshot {
         val raw = dispatcher.call(HTML_SNAPSHOT_DOMAIN, CAPTURE, emptyMap())

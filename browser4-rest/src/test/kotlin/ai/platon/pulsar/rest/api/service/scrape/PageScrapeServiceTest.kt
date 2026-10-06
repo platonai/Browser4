@@ -78,11 +78,14 @@ class PageScrapeServiceTest {
         val document = service(runner).scrape(
             formats = formats("markdown", "html"),
             sessionId = "s1",
-            url = "https://example.com/p",
         )
 
         assertEquals(listOf("s1"), requestedSessionIds)
         assertEquals(KEY, document.metadata.captureId)
+        // The capture's own address is the only one there is: with no request URL in
+        // play, sourceURL must be the captured href rather than something the caller
+        // asked for and never got.
+        assertEquals(KEY, document.metadata.sourceURL)
         assertTrue(document.markdown!!.contains("Title"), document.markdown)
         assertTrue(document.html!!.contains("Title"), document.html)
         // Both formats read the one capture, and nothing was requested that would
