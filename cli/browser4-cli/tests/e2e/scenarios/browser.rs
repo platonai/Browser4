@@ -4903,6 +4903,48 @@ pub(super) fn test_scrape_formats(ctx: &mut E2ECtx) {
         &pdf_bytes[..pdf_bytes.len().min(8)]
     );
 
+    // ── 4c. The artifact is fetchable by name over HTTP ───────────────────
+    // The endpoint exists because the path above is on the *backend's* machine: a caller
+    // anywhere else cannot dereference it. Only a name is accepted, never a path.
+    let name = std::path::Path::new(&pdf_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_else(|| panic!("no file name in {pdf_path}"));
+    let http = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("reqwest client build failed");
+
+    let url = format!("{}/api/scrape/media/{}", ctx.browser4_base_url, name);
+    let response = http.get(&url).send().unwrap_or_else(|e| panic!("GET {url} failed: {e}"));
+    assert_eq!(response.status().as_u16(), 200, "GET {url}");
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/pdf"),
+        "the media type must follow the artifact kind",
+    );
+    let fetched = response.bytes().expect("media response body").to_vec();
+    assert_eq!(
+        fetched, pdf_bytes,
+        "the bytes fetched over HTTP must be the file the path pointed at"
+    );
+
+    // A name that is really a path is never resolved. The exact status is the servlet
+    // container's business (it may refuse the URL before the handler sees it), so the
+    // assertion is the property that matters: nothing is served.
+    let traversal = http
+        .get(format!("{}/api/scrape/media/..%5C..%5Csecret.pdf", ctx.browser4_base_url))
+        .send()
+        .expect("traversal request failed");
+    assert_ne!(
+        traversal.status().as_u16(),
+        200,
+        "a name carrying a path must never be served"
+    );
+
     // ── 5. A live-only request does not capture at all ────────────────────
     // "Capture once" also means "never more than the plan needs": with no
     // snapshot-scoped step there is nothing to serialize into the page store.

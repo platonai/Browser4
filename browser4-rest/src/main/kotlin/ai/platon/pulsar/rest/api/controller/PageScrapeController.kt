@@ -1,22 +1,27 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.rest.api.service.scrape.ArtifactStore
 import ai.platon.pulsar.rest.api.service.scrape.PageScrapeService
 import ai.platon.pulsar.skeleton.workflow.format.FormatOptionSchema
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.core.type.TypeReference
 import org.slf4j.LoggerFactory
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.CrossOrigin
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.ResponseStatus
 import org.springframework.web.bind.annotation.RestController
+import java.nio.file.Files
 
 /**
  * The Firecrawl-compatible formats layer over HTTP.
@@ -28,6 +33,7 @@ import org.springframework.web.bind.annotation.RestController
  *
  * `POST /api/scrape` — one request, one capture, many outputs.
  * `GET  /api/scrape/formats` — capability discovery.
+ * `GET  /api/scrape/media/{name}` — the bytes of an artifact the document pointed at.
  *
  * ## Not here yet
  *
@@ -50,6 +56,15 @@ class PageScrapeController(
     private val pageScrapeService: PageScrapeService,
 ) {
     private val logger = LoggerFactory.getLogger(PageScrapeController::class.java)
+
+    /**
+     * The artifact layout, shared with the runner that writes the files.
+     *
+     * A second instance rather than an injected one, and not a second source of truth:
+     * [ArtifactStore] is stateless and derives its kind table from `AppPaths`, so
+     * instances are interchangeable by construction.
+     */
+    private val artifactStore = ArtifactStore()
 
     /**
      * A refused payload is the caller's mistake, not a server failure.
@@ -113,6 +128,67 @@ class PageScrapeController(
         "success" to true,
         "data" to pageScrapeService.formats(),
     )
+
+    /**
+     * Serve back the bytes of an artifact a scrape returned.
+     *
+     * A scrape answers with a **path on this host** — that is the artifact policy, and
+     * the honest shape for a self-hosted tool — but a caller on another machine cannot
+     * dereference it. This route is that caller's way in: take the file name out of the
+     * returned path and ask for it here.
+     *
+     * Only a **name** is ever accepted, never a path; [ArtifactStore] explains why the
+     * rules are refusals rather than sanitising. A string that cannot be an artifact name
+     * is the caller's mistake and comes back as 400 through the handler above, while a
+     * well-formed name that is not there is 404.
+     *
+     * The design draft had this as `/api/scrape/{id}/media/{name}`, which assumed the
+     * asynchronous face. There is no `{id}` to have: this request is synchronous and
+     * stateless, so the artifact's own name is its identity.
+     *
+     * @param name the artifact file name, e.g. `pdf-20261007-014500-123-ab12cd34.pdf`.
+     * @return the bytes, with the artifact's media type and a `Content-Disposition`
+     *   naming the file.
+     */
+    @GetMapping("media/{name}")
+    fun media(@PathVariable name: String): ResponseEntity<ByteArray> {
+        val path = artifactStore.resolve(name) ?: return artifactNotFound(name)
+
+        val bytes = runCatching { Files.readAllBytes(path) }.getOrElse { error ->
+            // It was readable a moment ago; answering "not found" keeps the reply about
+            // the artifact rather than about the server's internals.
+            logger.warn("Artifact is no longer readable | name={} | {}", name, error.message)
+            return artifactNotFound(name)
+        }
+
+        val contentType = artifactStore.kindOfName(name)?.contentType
+            ?: MediaType.APPLICATION_OCTET_STREAM_VALUE
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType(contentType))
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"$name\"")
+            .contentLength(bytes.size.toLong())
+            .body(bytes)
+    }
+
+    /**
+     * A missing artifact, as JSON.
+     *
+     * The same `{success, error, message}` envelope every other failure on this route
+     * uses, so a caller does not have to special-case this one status to find out why.
+     */
+    private fun artifactNotFound(name: String): ResponseEntity<ByteArray> {
+        val body = pulsarObjectMapper().writeValueAsBytes(
+            linkedMapOf(
+                "success" to false,
+                "error" to "Not Found",
+                "message" to "no artifact named '$name' on this host; artifact files are temporary " +
+                    "and are removed with the process temp tree",
+            )
+        )
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(body)
+    }
 
     private companion object {
         /**

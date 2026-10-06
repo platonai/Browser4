@@ -166,9 +166,20 @@ page with `--formats '[{"type":"screenshot","fullPage":true}]'`.
 ```
 
 That path is on the machine running the **backend**, under the project's temporary
-tree — usable from a CLI on the same host, and not dereferenceable by a remote
-caller (a download endpoint is not implemented). Ask for the bytes as well and the
-document carries both:
+tree — usable from a CLI on the same host. From another machine, take the **file name**
+out of that path and fetch it from the backend:
+
+```bash
+curl -o shot.png "http://<backend>:18182/api/scrape/media/screenshot-<ts>-<rand>.png"
+```
+
+Only the name is accepted, never a path. A string that cannot be an artifact name at all
+(one containing `/` or `\`, or starting with a dot) is refused with **400** rather than
+cleaned up, and a well-formed name that is not there is **404** with the usual
+`{success, error, message}` body. Artifacts are temporary: they live in the process temp
+tree and go away with it.
+
+Ask for the bytes as well and the document carries both:
 
 ```bash
 browser4-cli scrape --formats '[{"type":"screenshot","fullPage":true,"base64":true}]'

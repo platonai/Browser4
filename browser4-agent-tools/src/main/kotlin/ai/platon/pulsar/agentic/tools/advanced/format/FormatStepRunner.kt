@@ -102,7 +102,9 @@ interface FormatStepRunner {
      * the provider sees the result — so a provider never does I/O and can be tested
      * against a fake host. The host owns the location: it is a local path on the
      * machine running the backend, which is what makes it usable for a CLI on the
-     * same host and unusable for a remote caller without a download endpoint.
+     * same host. A remote caller fetches the bytes instead — the REST host serves them
+     * by name (`GET /api/scrape/media/{name}`), which is why the returned name is part
+     * of the contract rather than an incidental detail of the path.
      *
      * The default refuses, which degrades the dependent format with a warning rather
      * than failing the request — the same treatment as an unsupported tool, and the

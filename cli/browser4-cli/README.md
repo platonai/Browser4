@@ -320,6 +320,13 @@ browser4-cli scrape --formats '[{"type":"screenshot","fullPage":true,"base64":tr
 browser4-cli scrape --formats '[{"type":"pdf","base64":true}]'
 ```
 
+The path is on the **backend's** machine. From another host, take the file name out of
+it and fetch the bytes from the backend — only a name is accepted, never a path:
+
+```bash
+curl -o shot.png "http://backend:18182/api/scrape/media/screenshot-<ts>-<rand>.png"
+```
+
 **A format that produced nothing is not a failure.** A page with no `<img>` yields an
 empty `images`, which is omitted from the JSON while still appearing in
 `formatsDelivered` — that is how "requested, produced nothing" is told apart from

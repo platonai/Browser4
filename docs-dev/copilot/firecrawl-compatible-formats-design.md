@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | **Phase 0 + 1a/1b/1d 已实现；Phase 1c 主体已实现**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 8 个 provider / SPI 接线与 contributor 消费 / runner + `page` 域 + CLI `scrape`+`scrape formats` + REST `api/scrape` / §11 夹具页与真机渲染断言）；MCP、CLI、REST 三条路径均经真实后端 + 真实 Chrome 验证；剩余：`strict` 三态、`expires`/`maxAge`、异步面、Phase 2+ |
+| 状态 | **Phase 0 + 1a/1b/1c/1d + 2 已交付**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 10 个 provider（含 `screenshot`、`pdf` 两个活体格式）/ SPI 接线与 contributor 消费 / runner + `page` 域 + CLI `scrape`+`scrape formats` + REST `api/scrape`、`api/scrape/formats`、`api/scrape/media/{name}` / §11 夹具页与真机渲染断言）；MCP、CLI、REST 三条路径均经真实后端 + 真实 Chrome 验证；剩余：`strict` 三态、`expires`/`maxAge`、请求级 `url`、二进制 `--out`、异步面、Phase 3+ |
 | 目标仓库 | Browser4 `4.14.0-rc.8` @ `bacdf71ea2`（4.13.x 合并后的 4.14.x；设计起草时基线为 `d86b69fc8b`） |
 | 对照基线 | Firecrawl `ce8ed1233`（见 [对照表](firecrawl-vs-browser4-output-formats.md)） |
 | 一句话 | 给 Browser4 加一层「`formats[]` 请求 → 一次抓取扇出多种输出 → 返回 Firecrawl 形状 Document」的兼容面，并把它作为后续 branding/product/menu 等格式的**插件扩展点** |
@@ -641,13 +641,14 @@ $ ./b4w.ps1 scrape --formats '["markdown","links"]'      # JSON 数组形式同�
 
 **`images` 空而有记录不是矛盾**：example.com 没有 `<img>`，所以 `images` 是空列表，被共享 mapper 的 NON_EMPTY 语义从线上省略；但 `formatsDelivered` 仍列出它。这正是想要的区分——"请求了、产出为空" ≠ "没请求"，而后者才需要 `warning`。
 
-#### A5 ✅ `PageScrapeController`（`api/scrape` + `api/scrape/formats`）
+#### A5 ✅ `PageScrapeController`（`api/scrape` + `api/scrape/formats` + `api/scrape/media/{name}`）
 
 薄壳：请求体 → 调用 `PageScrapeService` → `{success, data}` 信封。放在这里的任何决策都会被决定两次，所以这里不做决策。
 
 - `POST /api/scrape` — 校验（`FormatOptionSchema.requireValid()`）在调用 service **之前**，所以拼错格式不需要付一次页面加载。
 - `GET /api/scrape/formats` — 能力发现，与 MCP 的 `page.formats` 同一份数据。
-- `IllegalArgumentException` → 400 的 `@ExceptionHandler`，照 `ScrapeController` 的既有形状。
+- `GET /api/scrape/media/{name}` — 产物字节（Phase 2c，决策 A3）。这个端点**不套信封**：二进制不能用 JSON 包。它的拒绝路径仍是 JSON 信封，所以调用方不必为某个状态码换一种解析方式。
+- `IllegalArgumentException` → 400 的 `@ExceptionHandler`，照 `ScrapeController` 的既有形状。产物名字不合法也走这条（错误是调用方的），而"名字合法但不存在"走 404。
 - 异步面（`/submit` + `/{id}/status|result|stream`）**未实现**：本 build 能交付的每个格式都在一次同步 capture 内答完，异步面是为媒体下载与 LLM 调用准备的（Phase 3）。现在加就是一个没有调用方的未测信封。
 
 **真机验证（同一后端，紧接上面的 e2e）**：
@@ -724,7 +725,7 @@ POST 未知格式 "markdwon"   → 400  {"success":false,"error":"Bad Request",
 - **请求级 `url`（Stage 0 ENSURE）**：见上面的"`url` 与 `expires` 已从请求面移除"。这是三个缺口里最影响可用性的一个——`open` 先行的替代方案在多页场景下会不断切换 tab。
 - **`expires` / `maxAge`**：字段已删（见上）。实现需要一条"只读地报出已存快照身份"的通道；倾向新增一个方法（如 `stored`）而不是给 `capture` 加条件语义——保留 `capture` 的纯粹性。
 - ~~**`sessionId` 目前是必需的**（`requiresReceiver = true`）~~ **已由决策 A2 定案为"要求先 `open`"**——它不再是一条"等拍板"的临时状态，而是设计意图。`sessionId` 在 spec 里同时改为**必需**（与 `html_snapshot` / `webdb` 的既有约定对齐），服务层在管道入口拒绝空白值并指名要 `open`。CLI 会自动注入 sessionId，所以 `scrape` 用户体验上无感；REST 调用方必须显式给。
-- **二进制产物的下载端点**（决策 A3 = 要）：远程调用方现在拿不到 `screenshot`/`pdf` 的字节——路径是**后端本地**的。**这已不是理论缺口**：`screenshot` 一交付它就真实存在。形状不能照抄设计稿的 `{id}` 版（同步无状态请求没有任务 id，见 §12 Q3）。
+- ~~**二进制产物的下载端点**（决策 A3）~~ **已交付**：`GET /api/scrape/media/{name}`（见 Phase 2c）。远程调用方从 `screenshot`/`pdf` 路径里取出**文件名**即可取回字节。
 - 异步面（`/api/scrape/submit` + `/{id}/status|result|stream`），理由见 A5。
 - ~~**§11 的夹具页**仍未建~~ **已建并已用于真机断言**：`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/formats-fixture.html` + CLI 真机场景 `test_e2e_scrape_formats`（`requires_browser4: true`）。§11 的详细说明见下。
 
@@ -857,7 +858,31 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 
 **顺带修掉两处测试腐化**：`PageFormatPlanBuilderTest` 与 `PageScrapeServiceTest` 都拿 `pdf` 当"本 build 交付不了"的例子——它一交付就会失败。这次换成 `audio`（Phase 3 的媒体服务），并加了一条 `assertFalse(FormatProviders.isImplemented(missing))` 守卫，让"例子本身变成可交付"这条失败读起来是人话。这个例子已经搬过两次（`screenshot` → `pdf` → `audio`），守卫是防止第三次搬得莫名其妙。
 
-**未做**：二进制产物的 `--out` 语义（§3.3 想要"必须落到 `--out` 目录"，而当前是服务端临时目录 + 返回路径）；**下载端点（决策 A3 = 要）**——顺序上它先于 `--out`，因为没有取字节的通道时，`--out` 只能靠"调用方与服务端共享文件系统"这个假设。
+### Phase 2c — 产物下载端点（✅ 已交付，决策 A3）
+
+**要解决的问题**：`screenshot`/`pdf` 返回的是**后端本机**的路径，另一台机器上的调用方无法解引用它。设计稿的 `/api/scrape/{id}/media/{name}` 假定了异步面，而这里是同步无状态请求——没有 `{id}`，硬造一个只是"过会儿再试"的同义词。所以端点形状是：
+
+```
+GET /api/scrape/media/{name}
+```
+
+**产物自己的文件名就是它的身份**：写入时已带时间戳 + 8 位随机后缀，本来就唯一（同一秒内并发两次也不会撞名，这条有单测）。调用方从 `screenshot`/`pdf` 路径里取出文件名即可。
+
+**布局只有一个所有者**：新增 `ArtifactStore`，把"扩展名 → 目录 + Content-Type"做成一张 `ArtifactKind` 表，**写入方与读取方共用**。这一点是刻意的——分成两处，"写进去的"和"取回来的"就会漂移，而失败模式是"能产出但取不回"或"按错误的类型取回"。runner 的 `persistArtifact` 现在只是解码 base64 后转调它。
+
+**安全规则是拒绝，不是清洗**（`ArtifactStore.resolve`）：
+
+1. **只接受一个路径段**：`/`、`\`、NUL 一律拒绝，所以任何拼写都无法命名目录之外的文件——这条规则让穿越**不可能**，而不只是不太可能；
+2. **扩展名必须已注册**：未注册的扩展名不是本层的产物，即使文件真的存在也不服务（可写集合与可服务集合**按构造相同**）；
+3. **解析后再查一次包含关系**，且必须是常规文件。这条在今天不可达（规则 1 已经挡住了），但保留它——当替代方案是"可能服务任意文件"时，"一条打不响的检查"是划算的。
+
+拒绝（`IllegalArgumentException`）→ 400 **按名字**报错；拼写正确但不存在 → 404，且**仍是** `{success, error, message}` 信封，调用方不必为这一个状态码特判解析方式。
+
+`Content-Type` 来自同一张表（`image/png` / `application/pdf`），并带 `Content-Disposition: attachment; filename="<name>"`，所以浏览器存下来的文件名就是调用方用的那个身份，而不是某个生成出来的默认名。
+
+**一个刻意的克制**：端点只接**文件名**，不接路径。让调用方把拿到的路径原样贴回来会更"方便"，但那意味着服务端要解析客户端给的路径——而方便不值得用一次路径解析去换。
+
+**未做**：二进制产物的 `--out` 语义（§3.3 想要"必须落到 `--out` 目录"，而当前是服务端临时目录 + 返回路径）。**现在它没有前置了**：取字节的通道已经就位。
 
 ### Phase 3 — 服务与 AI 格式（≈1.5 天）
 - `audio` / `video`（`media.*`）、`summary(LLM)` / `question`（`agent_*`）
@@ -890,7 +915,7 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 |---|---|
 | 单元 | 组合规则矩阵（每条规则一个反例）；别名归一；`page_formats` 的能力聚合；`retainRequested` 裁剪；contributor 注册（id 非法/重复/并发） |
 | 引擎 | **I1**：一次 `page_scrape` 只触发一次 `html_snapshot.capture`（用 mock executor 计数）；**I2**：Stage 2 步骤无 `LIVE_TAB` 输入；**I3**：截图失败时 markdown/links 仍返回且带 warning；**I6**：非法组合在编译期抛错 |
-| REST | MockMvc：`/api/scrape` 200/400/503；`/api/scrape/formats` 形状；异步面 `submit → status → result` |
+| REST | 控制器**直测**而非 MockMvc（理由见 Phase 1c：它是翻译器，每个值得断言的决定都不需要 servlet 容器才看得见）：`/api/scrape` 的信封与 400 路径、`/api/scrape/formats` 的形状、`/api/scrape/media/{name}` 的 200 + `Content-Type` + `Content-Disposition` + 字节、404、以及"名字其实是路径"的 400；另有 `ArtifactStore` 的 10 条单测锁住名字规则与包含关系。异步面 `submit → status → result` 仍未实现 |
 | MCP | `page_scrape` 参数归一化（`schemas` 别名、snake_case）、缺 sessionId 的行为、错误码透传 |
 | 夹具 | ✅ `formats-fixture.html` 已建（`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/`）：文章区 + 导航噪声 + 3 个重复卡片 + 表格 + 图片（含无 alt）+ `data-*` 属性 + 外链/内链 + 分页链接。每个元素的存在理由写在文件顶部的注释里 |
 | e2e | ✅ `cargo test --test e2e -- --scenario=test_e2e_scrape_formats`（`requires_browser4: true`）：真实浏览器验证 markdown 的标题/表格/代码块、links 的绝对化、images 含无 alt 那张、attributes 的三个值、以及全文档恰好一个 `captureId`（capture-once 的线上证据）。活体侧：`screenshot` 的 PNG 魔数与**文件确实存在**、`pdf` 的 `%PDF-` 魔数与**落在 `web/pdf`**、两者与 markdown 同请求仍只一个 `captureId`、纯活体请求**不产生** `captureId` |
@@ -917,12 +942,12 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 |---|---|---|---|
 | Q1 | 无 url 且无会话时，自动开临时会话还是要求先 `open`？ | **要求先 `open`** | ✅ 已实现（决策 A2）：服务层在管道入口拒绝空白 `sessionId` 并指名要 `open`；spec 同时改为必需 |
 | Q2 | `ScrapedDocument` 是否保留 Firecrawl v1 的 `extract` 字段名？ | **不保留** | 本来就没实现，记录为已决（决策 A5） |
-| Q3 | 二进制产物是否要下载端点，让远程调用方不必共享文件系统？ | **要** | ⏳ 待实现（决策 A3）。**注意形状**：设计稿的 `/api/scrape/{id}/media/{name}` 假定的是异步面，见下 |
+| Q3 | 二进制产物是否要下载端点，让远程调用方不必共享文件系统？ | **要** | ✅ 已实现（决策 A3）：`GET /api/scrape/media/{name}`，见 Phase 2c |
 | Q4 | `changeTracking` 的保留策略是否复用 `webdb` 的清理周期？ | **复用** | Phase 4 按此实现（决策 A6） |
 
-Q3 有一个必须先说清的设计前提：设计稿写的 `/api/scrape/{id}/media/{name}` 假定的是**异步**面（`submit` → `{id}`），而当前 `POST /api/scrape` 是**同步、无状态**的——服务端不保留任务 id。所以实现 A3 时不能照抄那个形状。诚实的候选是以**返回给调用方的产物标识**寻址，严格限定在 `AppPaths` 的产物目录内并拒绝路径穿越；等异步面落地再引入 `{id}` 版本。
+Q3 的设计前提（实现时确认过）：设计稿写的 `/api/scrape/{id}/media/{name}` 假定的是**异步**面（`submit` → `{id}`），而 `POST /api/scrape` 是**同步、无状态**的——服务端不保留任务 id，硬造一个只会返回一个"过会儿再试"的标识符。所以没有照抄那个形状：**产物自己的文件名就是它的身份**（写入时已带时间戳 + 随机后缀，本来就唯一），调用方从返回路径里取出文件名来取字节。等异步面落地再引入 `{id}` 版本。
 
-**顺序上有个依赖**：A3 是 B2 的**前置**。CLI 要把二进制产物落到调用方的 `--out` 目录，就必须有一条取字节的通道；没有它，CLI 只能共享服务端文件系统——而那正是 A3 要消灭的假设。
+**这一项同时解开了下一项**：A3 原本是 B2 的**前置**。CLI 现在有取字节的通道，就能把二进制产物落到调用方的 `--out` 目录，而不必假设双方共享文件系统。
 
 **待办清单（你要求显式留档的两项）**
 
@@ -934,12 +959,12 @@ Q3 有一个必须先说清的设计前提：设计稿写的 `/api/scrape/{id}/m
 
 ## 13. 验收清单（DoD，对齐 `AGENTS.md`）
 
-- [x] 构建与相关测试通过：Kotlin **205**（skeleton 83 / agent-tools 52 / boot 12 / rest 58）0 失败；Rust **1600** 单测；`-Pquality-gate` BUILD SUCCESS
-- [x] 新增/变更逻辑有测试：主路径 + 边界（未知格式、静态不可交付、非法组合、`viewport`/`quality` 被拒、无磁盘 host 降级、注册期拒绝陌生 id/字段）
+- [x] 构建与相关测试通过：**本轮改动涉及的测试类**全绿——skeleton 44、agent-tools 60、rest 73（均为选定类的运行：格式模型/Document/provider/计划/引擎/runner/服务/控制器/产物仓库 + 文档漂移门 + 契约矩阵）。**全模块回归与 `-Pquality-gate` 在本轮收尾统一跑**，结果回填于此行
+- [x] 新增/变更逻辑有测试：主路径 + 边界（未知格式、静态不可交付、非法组合、`viewport`/`quality` 被拒、无磁盘 host 降级、注册期拒绝陌生 id/字段、产物名字规则与包含关系、空 `sessionId` 被拒）
 - [x] 无新增高噪声日志/警告；降级路径用文档的 `warning` 字段而非日志刷屏
-- [x] **I1/I2/I3 有不变量测试**——`PageFormatEngineTest` 的三条：`I1: eight formats cost exactly one capture` / `I2: every snapshot read is bound to the captured snapshot` / `I3: a failing live step degrades without breaking snapshot formats`
-- [x] 夹具页 + 真实浏览器 e2e 覆盖格式层（`requires_browser4: true`，`test_e2e_scrape_formats`）；活体产物（`screenshot` 与 `pdf`）的真机覆盖已完成——包括读回文件验魔数、验 PDF 落在 `web/pdf`、验字节按 `base64` opt-in
-- [x] 无新增直接 CDP 方法：`screenshot` 复用了既有的 `tab.screenshot` 工具，没有新写 CDP 调用，故四条评审门不适用
+- [x] **I1/I2/I3 有不变量测试**——`PageFormatEngineTest`：`I1: eight formats cost exactly one capture` / `I2: every snapshot read is bound to the captured snapshot` / `I3: a failing live step degrades without breaking snapshot formats`；另有"两个活体步骤都在快照读之后"与"纯活体请求不 capture"
+- [x] 夹具页 + 真实浏览器 e2e 覆盖格式层（`requires_browser4: true`，`test_e2e_scrape_formats`）；活体产物（`screenshot` 与 `pdf`）的真机覆盖已完成——包括读回文件验魔数、验 PDF 落在 `web/pdf`、验字节按 `base64` opt-in，以及**经 HTTP 端点按名字取回字节并与磁盘文件逐字节比对**
+- [x] 无新增直接 CDP 方法：`screenshot` 与 `pdf` 都复用了既有的 `tab.*` 工具，没有新写 CDP 调用，故四条评审门不适用
 - [x] 文档同步：`SKILL.md` / `references/scrape-formats.md` / `help.rs` / `README.md` / `README.zh.md` / `cli/browser4-cli/README.md` / `docs/mcp-tools.md`+`.json`（145 工具）
 - [ ] `tips.rs` 未同步：`scrape` / `scrape formats` 目前落到 `TIPS_GENERAL`，没有专属提示（已在 §12 的待办清单第 3 条留档）
 - [x] 无密钥/私有端点入库；`page_formats` 不泄露服务地址

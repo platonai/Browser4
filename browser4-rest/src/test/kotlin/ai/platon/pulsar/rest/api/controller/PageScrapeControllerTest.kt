@@ -2,15 +2,20 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatSnapshot
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatStepRunner
+import ai.platon.pulsar.rest.api.service.scrape.ArtifactStore
 import ai.platon.pulsar.rest.api.service.scrape.FormatStepRunnerFactory
 import ai.platon.pulsar.rest.api.service.scrape.PageScrapeService
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpStatus
+import java.nio.file.Files
 import java.time.Duration
 
 private const val KEY = "https://example.com/p"
@@ -182,5 +187,64 @@ class PageScrapeControllerTest {
         assertEquals(false, body["success"])
         assertEquals("Bad Request", body["error"])
         assertTrue(body["message"].toString().contains("markdwon"), body.toString())
+    }
+
+    // ---- artifact download --------------------------------------------------
+
+    @Test
+    @DisplayName("an artifact a scrape returned can be fetched back by its name")
+    fun mediaServesAnArtifact() {
+        // Written through the same store the controller resolves with, into the real
+        // AppPaths directory: that pair is what the endpoint exists for, and a fake
+        // directory would not prove the wiring between writer and reader.
+        val store = ArtifactStore()
+        val payload = "%PDF-1.4 test".toByteArray()
+        val path = store.write("pdf", payload, "pdf")
+
+        try {
+            val name = path.fileName.toString()
+            val response = controller().media(name)
+
+            assertEquals(HttpStatus.OK, response.statusCode)
+            assertEquals("application/pdf", response.headers.contentType.toString())
+            // The name travels back in the header, so a browser saves the artifact under
+            // the identity the caller used rather than some generated default.
+            assertEquals(
+                "attachment; filename=\"$name\"",
+                response.headers.getFirst(HttpHeaders.CONTENT_DISPOSITION),
+            )
+            assertArrayEquals(payload, response.body!!)
+        } finally {
+            Files.deleteIfExists(path)
+        }
+    }
+
+    @Test
+    @DisplayName("a well-formed name that is not there is 404, in the usual envelope")
+    fun mediaAnswers404ForAMissingArtifact() {
+        val response = controller().media("pdf-20261007-010203-456-abcdef01.pdf")
+
+        assertEquals(HttpStatus.NOT_FOUND, response.statusCode)
+        assertEquals("application/json", response.headers.contentType.toString())
+        assertTrue(String(response.body!!).contains("no artifact named"), String(response.body!!))
+    }
+
+    @Test
+    @DisplayName("a name that is really a path is a bad request, not a lookup")
+    fun mediaRefusesAPath() {
+        // 400 rather than 404: the caller sent something that cannot be an artifact name
+        // at all, and nothing is resolved — so no reply can leak whether some file
+        // outside the artifact directories exists. `\` matters as much as `/`: a URL path
+        // does not treat it as a separator, so it arrives intact.
+        for (name in listOf("../secret.pdf", "..\\secret.pdf", "a/b.pdf", "a\\b.pdf", ".hidden.pdf")) {
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                controller().media(name)
+            }
+            assertTrue(
+                error.message!!.contains("path separator") ||
+                    error.message!!.contains("starts with a letter or a digit"),
+                "name='$name' gave: ${error.message}",
+            )
+        }
     }
 }
