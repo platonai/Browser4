@@ -556,6 +556,12 @@ class BrandingFormatContributor : PageFormatContributor {
 | 会话解析 | `PulsarSessionManager.getOrRecoverSession(sessionId)` / `ManagedSession.withLock` |
 | SPI 注册已通电 | `PluginManager` 已在启动时把 `PageFormatContributorMount` 的 contributor 注册进 `PageFormatContributorRegistry`；引擎已消费（见下面的 Phase 1d） |
 
+**环境与机制已实测（2026-10-06，不必再推导）**
+
+- **Java**：`JAVA_HOME` = GraalVM JDK 25.0.3；CLI 解析顺序是 `JAVA_HOME` → bundle 自带 JRE → 常见安装路径（`cli/browser4-cli/src/java.rs:107`），所以 PATH 上的 JDK 17 不影响后端启动。
+- **运行时 bundle 版本必须与检出一致**，否则 dev 模式拒绝启动（本次是 bundle `4.14.0-rc.6` vs 检出 `4.14.0-rc.8`）。用 `$env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = "1"` 重建后：`Server ready in 9.7s`，真实浏览器成功加载 `https://example.com`（title `Example Domain`），MCP 链路端到端可用。**真机 e2e 因此是可行的，1c 必须走到这一步。**
+- **`--expires` 就是 capture-once 的物理载体，且已确认**：`export` / `query` / `readability` / `scrape_all` 都接受 `-expires/--expires <dur>`，help 原文写着 "a positive value reads the stored snapshot while it is younger than the window, **without touching the tab**"。这正是 A1 需要的行为，不需要靠 KDoc 推断——`htmlsnapshot capture` 落盘后用带正数 `expires` 的读即可复用同一份快照。
+
 待交付：
 
 - `SnapshotFormatStepRunner` —— `FormatStepRunner` 的真实实现。**关键点**：它必须在每个 `readOnSnapshot` 调用里注入正数 `expires`（例如 `1d`），否则快照族读方法会各自重新 capture 活体页面，I1/I2 立刻失效；这一段必须有单测锁住（可用 fake `ToolExecutor` 断言 args）。
