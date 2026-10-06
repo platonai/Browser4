@@ -968,20 +968,20 @@ Q3 的设计前提（实现时确认过）：设计稿写的 `/api/scrape/{id}/m
 
 1. **删掉 `FormatInput.LIVE_TAB`**（决策 A1）——`branding` 不需要活体 DOM，所以这个值只会误导插件作者；连带删掉引擎里那条 warning 分支与它的单测。
 2. **真正的第三方格式 id 支持**（决策 A4，`@JsonAnyGetter` 泛化容器）——不做，理由是 API 形状的所有权不该被一次实现顺手决定。
-3. **`tips.rs` 里 `scrape` / `scrape formats` 没有专属提示**（落到 `TIPS_GENERAL`）——设计文档 §13 的文档门列了这一项，属于已知小缺口。
+
+> 曾列为第 3 条的 `tips.rs` 缺口**已关闭**：`scrape` / `scrape-formats` 现在有专属提示（一份"一次抓取扇出全部格式""`scrape formats` 是权威""没有 URL 参数，先 `open`""二进制格式用 `--output`""PowerShell 里要引号"的集合），并有单测断言它拿到的**不是**通用兜底集合——`!is_empty()` 证明不了这件事，因为兜底集合永远非空。
 
 ---
 
 ## 13. 验收清单（DoD，对齐 `AGENTS.md`）
 
-- [x] 构建与相关测试通过：**本轮改动涉及的测试类**全绿——skeleton 44、agent-tools 60、rest 73（均为选定类的运行：格式模型/Document/provider/计划/引擎/runner/服务/控制器/产物仓库 + 文档漂移门 + 契约矩阵）。**全模块回归与 `-Pquality-gate` 在本轮收尾统一跑**，结果回填于此行
+- [x] 构建与相关测试通过：`.\mvnw.cmd -o -Pquality-gate test` 全 **29** 模块 **BUILD SUCCESS**，0 失败 0 错误，每个模块的 JaCoCo 检查都报 `All coverage checks have been met.`。本轮模块级用例数（Maven 汇总行）：agentic 1483、rest 746、browser 354、coding 275、agent-tools 148、protocol 112、images 85、boot 66、markdown 46、common 40、profile-import 30、pptx 27、swarm 24、parse 3；skeleton 的汇总行未被本次日志过滤捕获，故不列数。Rust `cargo test --bin browser4-cli` **1605** 通过；真机 `test_e2e_scrape_formats` 通过
 - [x] 新增/变更逻辑有测试：主路径 + 边界（未知格式、静态不可交付、非法组合、`viewport`/`quality` 被拒、无磁盘 host 降级、注册期拒绝陌生 id/字段、产物名字规则与包含关系、空 `sessionId` 被拒）
 - [x] 无新增高噪声日志/警告；降级路径用文档的 `warning` 字段而非日志刷屏
 - [x] **I1/I2/I3 有不变量测试**——`PageFormatEngineTest`：`I1: eight formats cost exactly one capture` / `I2: every snapshot read is bound to the captured snapshot` / `I3: a failing live step degrades without breaking snapshot formats`；另有"两个活体步骤都在快照读之后"与"纯活体请求不 capture"
 - [x] 夹具页 + 真实浏览器 e2e 覆盖格式层（`requires_browser4: true`，`test_e2e_scrape_formats`）；活体产物（`screenshot` 与 `pdf`）的真机覆盖已完成——包括读回文件验魔数、验 PDF 落在 `web/pdf`、验字节按 `base64` opt-in，以及**经 HTTP 端点按名字取回字节并与磁盘文件逐字节比对**
 - [x] 无新增直接 CDP 方法：`screenshot` 与 `pdf` 都复用了既有的 `tab.*` 工具，没有新写 CDP 调用，故四条评审门不适用
-- [x] 文档同步：`SKILL.md` / `references/scrape-formats.md` / `help.rs` / `README.md` / `README.zh.md` / `cli/browser4-cli/README.md` / `docs/mcp-tools.md`+`.json`（145 工具）
-- [ ] `tips.rs` 未同步：`scrape` / `scrape formats` 目前落到 `TIPS_GENERAL`，没有专属提示（已在 §12 的待办清单第 3 条留档）
+- [x] 文档同步：`SKILL.md` / `references/scrape-formats.md` / `help.rs` / **`tips.rs`（`scrape` 与 `scrape-formats` 的专属提示，见 §12 待办清单后的说明）** / `README.md` / `README.zh.md` / `cli/browser4-cli/README.md` / `docs/mcp-tools.md`+`.json`（145 工具）
 - [x] 无密钥/私有端点入库；`page_formats` 不泄露服务地址
 - [x] 无版本号随意变更（走父 BOM）
 - [x] 性能影响评估：多格式请求零额外抓取、零额外 CDP 往返——真机断言了"全文恰好一个 `captureId`"与"纯活体请求不产生 `captureId`"

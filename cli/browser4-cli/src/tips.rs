@@ -461,9 +461,28 @@ thread_local! {
 // Map command name to its tip set
 // ---------------------------------------------------------------------------
 
+const TIPS_SCRAPE: &[Tip] = &[
+    Tip {
+        text: "One capture serves every format you ask for: `scrape --formats \"markdown,links,images\"` costs one page load, and because every field comes from that single capture they cannot disagree about what the page said",
+    },
+    Tip {
+        text: "Run `scrape formats` to see what this build can deliver right now. A format it cannot deliver is left out of the document and named in `warning`, and `metadata.formatsDelivered` tells \"not requested\" apart from \"requested but unavailable\"",
+    },
+    Tip {
+        text: "`scrape` takes no URL: every read targets the session's active page, so `open <url>` first is how you choose the page",
+    },
+    Tip {
+        text: "`screenshot` and `pdf` produce files, not text — pass `--output <dir>` (or `-o`) and the CLI fetches them and prints the document with the local paths. Without it you only get the backend's own path",
+    },
+    Tip {
+        text: "Quote a comma list: in PowerShell an unquoted `markdown,links` is three arguments and only the first reaches `--formats`",
+    },
+];
+
 fn tips_for_command(command: &str) -> &'static [Tip] {
     match command {
         "snapshot" | "snapshot-grep" => TIPS_SNAPSHOT,
+        "scrape" | "scrape-formats" => TIPS_SCRAPE,
         "htmlsnapshot" | "htmlsnapshot-export" => TIPS_HTMLSNAPSHOT_GET,
         "htmlsnapshot-get" => TIPS_HTMLSNAPSHOT_GET,
         "htmlsnapshot-query" => TIPS_HTMLSNAPSHOT_QUERY,
@@ -728,6 +747,33 @@ mod tests {
         assert!(!tips_for_command("select").is_empty());
         // General fallback
         assert!(!tips_for_command("some-unknown-command").is_empty());
+    }
+
+    #[test]
+    fn test_scrape_has_its_own_tips_not_the_general_fallback() {
+        // The fallback set is never empty, so `!is_empty()` proves nothing on its own.
+        // These assertions name what the scrape tips must actually say.
+        for command in ["scrape", "scrape-formats"] {
+            let tips = tips_for_command(command);
+            assert!(!tips.is_empty(), "{command}");
+            assert!(
+                tips.iter().any(|tip| tip.text.contains("scrape formats")),
+                "{command} should point at the capability listing",
+            );
+        }
+
+        // `--output` is the only way a binary format reaches the caller, so it has to be
+        // discoverable from the tips rather than only from --help.
+        assert!(
+            tips_for_command("scrape")
+                .iter()
+                .any(|tip| tip.text.contains("--output")),
+            "the scrape tips should mention --output",
+        );
+        // A suppressed command never shows tips at all, which would make the set dead
+        // code that no test notices.
+        assert!(!is_suppressed_command("scrape"));
+        assert!(!is_suppressed_command("scrape-formats"));
     }
 
     #[test]

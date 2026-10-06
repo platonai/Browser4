@@ -135,6 +135,8 @@ browser4-cli frame main
 ├─ 需要处理实时 JS / 复杂 DOM 逻辑？→ eval --json
 ├─ 一页要多种产出（正文 + 链接 + 图片 + 表格）？
 │  → scrape --formats "markdown,links,images"   # 一次抓取，全部产出
+├─ 要截图或 PDF **文件**落到本机？
+│  → scrape --formats "screenshot,pdf" --output ./out
 ├─ 自然语言需求（“找到商品价格”）？→ extract（需要 LLM key）
 └─ 大规模、多页面处理？→ crawl 或 swarm 搭配 --sql
 ```

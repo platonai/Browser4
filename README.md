@@ -120,6 +120,8 @@ Need to extract data from a page?
 ├─ Live JS / complex DOM logic? → eval --json
 ├─ Several outputs from one page (text + links + images + a table)?
 │  → scrape --formats "markdown,links,images"   # one capture for all of them
+├─ A screenshot or a PDF as a *file* on this machine?
+│  → scrape --formats "screenshot,pdf" --output ./out
 ├─ Natural language ("find the product price")? → extract (needs LLM key)
 └─ High volume, many pages? → crawl or swarm with --sql
 ```
