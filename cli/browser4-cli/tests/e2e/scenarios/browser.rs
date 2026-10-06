@@ -5043,6 +5043,32 @@ pub(super) fn test_scrape_formats(ctx: &mut E2ECtx) {
         strict_output.contains("audio"),
         "the failure must name the format:\n{strict_output}"
     );
+
+    // ── 7. The REST face refuses a request that names no session ──────────
+    // Decision A2 ("open first"): every step reads the page a session is already on, so a
+    // call that names none cannot be answered honestly — and picking one would read a
+    // different caller's page. The refusal must name the field *and* the fix, and it must
+    // arrive as 400 (a caller mistake) rather than as a 500 worth retrying.
+    let no_session = http
+        .post(format!("{}/api/scrape", ctx.browser4_base_url))
+        .header("Content-Type", "application/json")
+        .body(r#"{"formats":["markdown"]}"#)
+        .send()
+        .expect("REST scrape request failed");
+    assert_eq!(
+        no_session.status().as_u16(),
+        400,
+        "a request with no session is the caller's mistake"
+    );
+    let refusal = no_session.text().unwrap_or_default();
+    assert!(
+        refusal.contains("'sessionId' is required"),
+        "the refusal must name the argument:\n{refusal}"
+    );
+    assert!(
+        refusal.contains("open"),
+        "and the fix (`open` first):\n{refusal}"
+    );
 }
 
 /// Read a top-level string field out of a JSON document the CLI printed.

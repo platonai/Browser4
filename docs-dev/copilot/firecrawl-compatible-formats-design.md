@@ -1009,7 +1009,7 @@ Q3 的设计前提（实现时确认过）：设计稿写的 `/api/scrape/{id}/m
 - [x] 新增/变更逻辑有测试：主路径 + 边界（未知格式、静态不可交付、非法组合、`viewport`/`quality` 被拒、无磁盘 host 降级、注册期拒绝陌生 id/字段、产物名字规则与包含关系、空 `sessionId` 被拒）
 - [x] 无新增高噪声日志/警告；降级路径用文档的 `warning` 字段而非日志刷屏
 - [x] **I1/I2/I3 有不变量测试**——`PageFormatEngineTest`：`I1: eight formats cost exactly one capture` / `I2: every snapshot read is bound to the captured snapshot` / `I3: a failing live step degrades without breaking snapshot formats`；另有"两个活体步骤都在快照读之后"与"纯活体请求不 capture"
-- [x] 夹具页 + 真实浏览器 e2e 覆盖格式层（`requires_browser4: true`，`test_e2e_scrape_formats`）；活体产物（`screenshot` 与 `pdf`）的真机覆盖已完成——包括读回文件验魔数、验 PDF 落在 `web/pdf`、验字节按 `base64` opt-in，以及**经 HTTP 端点按名字取回字节并与磁盘文件逐字节比对**
+- [x] 夹具页 + 真实浏览器 e2e 覆盖格式层（`requires_browser4: true`，`test_e2e_scrape_formats`）；活体产物（`screenshot` 与 `pdf`）的真机覆盖已完成——包括读回文件验魔数、验 PDF 落在 `web/pdf`、验字节按 `base64` opt-in，以及**经 HTTP 端点按名字取回字节并与磁盘文件逐字节比对**；`--output` 的产物落在调用方目录且文档指向本地路径；`--strict` 在默认与严格下的两种行为；**REST 面缺 `sessionId` 按名字拒绝并给出 `open` 这一步**（决策 A2）
 - [x] 无新增直接 CDP 方法：`screenshot` 与 `pdf` 都复用了既有的 `tab.*` 工具，没有新写 CDP 调用，故四条评审门不适用
 - [x] `strict` 三态契约有单测 + 真机覆盖：`PageFormatEngineTest` 6 条（抓取前拒绝、502/504 分类、多降级取首个 code 且全部具名、无降级时不报错、缺插件 503）、`PageFormatPlanBuilderTest` 的 code 断言、控制器/服务/执行器的透传与状态映射；真机 `scrape --formats audio[,markdown]` 分别在默认与 `--strict` 下的两种行为
 - [x] 文档同步：`SKILL.md` / `references/scrape-formats.md` / `help.rs` / **`tips.rs`（`scrape` 与 `scrape-formats` 的专属提示，见 §12 待办清单后的说明）** / `README.md` / `README.zh.md` / `cli/browser4-cli/README.md` / `docs/mcp-tools.md`+`.json`（145 工具）
