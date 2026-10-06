@@ -10,6 +10,9 @@ import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolRateLimiter
 import ai.platon.pulsar.agentic.tools.ToolResultCache
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.advanced.format.FormatDegradation
+import ai.platon.pulsar.agentic.tools.advanced.format.FormatFailureException
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
@@ -2255,5 +2258,35 @@ class MCPToolControllerTest {
 
         assertEquals("tab", toolCall.domain)
         assertEquals("frameMain", toolCall.method)
+    }
+
+    @Test
+    @DisplayName("a failure that knows its own code is not reported as INTERNAL")
+    fun codedFailureKeepsItsCode() {
+        // Regression, found by a real-browser run of `scrape --strict`: the code was derived
+        // from the rendered message, so a failure whose type said TARGET_UNAVAILABLE reached
+        // the client as INTERNAL — the wrapper's prose matched no pattern, while the
+        // exception it wrapped was explicit about its code. The wording of an error must not
+        // decide its status.
+        val failure = FormatFailureException(
+            listOf(FormatDegradation("audio", "not available in this build", ToolErrorCode.TARGET_UNAVAILABLE)),
+        )
+
+        val response = controller.errorResponse("page_scrape failed: ${failure.message}", failure)
+
+        assertEquals("TARGET_UNAVAILABLE", response.errorCode)
+        assertTrue(response.content.first().text.contains("[TARGET_UNAVAILABLE]"), response.content.first().text)
+
+        // An unclassifiable failure still falls back to the message patterns, so the fix did
+        // not trade one blind spot for another.
+        val fromMessage = controller.errorResponse("page_scrape failed: Session not found: s1", null)
+        assertEquals("SESSION_NOT_FOUND", fromMessage.errorCode)
+
+        // And a timeout keeps its type even when the text says nothing about time.
+        val timeout = controller.errorResponse(
+            "page_scrape failed: boom",
+            java.util.concurrent.TimeoutException("nope"),
+        )
+        assertEquals("TIMEOUT", timeout.errorCode)
     }
 }

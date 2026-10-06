@@ -2824,6 +2824,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: false,
                     short: Some("o"),
                 },
+                OptionDef {
+                    name: "strict",
+                    description: "Fail instead of degrading when a requested format cannot be delivered — exit non-zero with the reason and the code to act on (unavailable here / ran and failed / not honourable). Without it the field is omitted, named in `warning`, and everything else still comes back",
+                    is_bool: true,
+                    short: None,
+                },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "page_scrape".to_string(),
@@ -2836,6 +2842,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // Sent only when the flag is present: the backend's default is true,
                 // and sending a value the caller did not ask for would freeze it.
                 if let Some(true) = get_bool(args, "no-main-content") { p["onlyMainContent"] = json!(false); }
+                // Same rule: only send `strict` when it was asked for, so the default
+                // (degrade with a warning) stays the server's decision to make.
+                if let Some(true) = get_bool(args, "strict") { p["strict"] = json!(true); }
                 // Client-side only: a destination on *this* machine is nothing the
                 // server could act on. The handler reads it and strips it before the
                 // call, which is also why the dispatch arm for it is guarded.
@@ -9640,7 +9649,7 @@ mod tests {
         let keys: Vec<&str> = cmd.options.iter().map(|o| o.key()).collect();
         // `output` is a destination on the *caller's* machine, so it is an option rather
         // than a server argument: the handler strips it before the tool call.
-        assert_eq!(keys, vec!["formats", "no-main-content", "output"]);
+        assert_eq!(keys, vec!["formats", "no-main-content", "output", "strict"]);
 
         // Even if a URL somehow reached the params map it would not be forwarded.
         let mut args = HashMap::new();
@@ -9688,6 +9697,19 @@ mod tests {
         // Not sent when the caller did not ask for a destination: the server has no
         // `output` argument, and inventing one would put an undeclared arg on the call.
         assert!((cmd.tool_params_fn)(&HashMap::new()).get("output").is_none());
+    }
+
+    #[test]
+    fn test_scrape_strict_is_sent_only_when_asked() {
+        let map = commands_map();
+        let cmd = map.get("scrape").unwrap();
+
+        // Only when set: the server's default (degrade with a warning) has to stay the
+        // server's decision, and a value the caller never asked for would freeze it.
+        let mut args = HashMap::new();
+        args.insert("strict".to_string(), json!(true));
+        assert_eq!((cmd.tool_params_fn)(&args)["strict"], true);
+        assert!((cmd.tool_params_fn)(&HashMap::new()).get("strict").is_none());
     }
 
     #[test]

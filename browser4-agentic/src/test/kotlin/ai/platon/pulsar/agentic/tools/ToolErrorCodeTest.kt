@@ -99,6 +99,38 @@ class ToolErrorCodeTest {
     }
 
     @Test
+    @DisplayName("an explicit code wins over every inference, including the message")
+    fun explicitCodeWins() {
+        // A layer that has already classified the failure must not have to word its message
+        // so the inference guesses right. The `formats` layer needs this: "this build cannot
+        // deliver the format" and "the tool ran and failed" are the same shape of exception
+        // with two very different answers (503 vs 502), and both read like ordinary prose.
+        val unavailable = coded(ToolErrorCode.TARGET_UNAVAILABLE, "zebra: unavailable in this build")
+        val failed = coded(ToolErrorCode.UPSTREAM_ERROR, "zebra: something went wrong")
+
+        assertEquals(ToolErrorCode.TARGET_UNAVAILABLE, ToolErrorMapper.classify(unavailable))
+        assertEquals(ToolErrorCode.UPSTREAM_ERROR, ToolErrorMapper.classify(failed))
+
+        // Even when the wording points elsewhere: "timed out" alone would be 504, and an
+        // explicit 503 must survive it.
+        assertEquals(
+            ToolErrorCode.TARGET_UNAVAILABLE,
+            ToolErrorMapper.classify(coded(ToolErrorCode.TARGET_UNAVAILABLE, "the call timed out")),
+        )
+        // And through a cause chain, so a wrapper cannot lose the classification.
+        assertEquals(
+            ToolErrorCode.UPSTREAM_ERROR,
+            ToolErrorMapper.classify(IllegalStateException("outer", failed)),
+        )
+    }
+
+    /** A failure that carries its own code; the shape a classifying layer produces. */
+    private fun coded(code: ToolErrorCode, message: String): Throwable =
+        object : RuntimeException(message), CodedFailure {
+            override val code: ToolErrorCode = code
+        }
+
+    @Test
     @DisplayName("codes carry retry and HTTP semantics, and RATE_LIMITED exists for Phase 4")
     fun codesCarrySemantics() {
         assertTrue(ToolErrorCode.RATE_LIMITED.retryable)

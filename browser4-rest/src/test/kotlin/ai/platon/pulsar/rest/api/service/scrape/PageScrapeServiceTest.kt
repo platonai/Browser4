@@ -1,5 +1,7 @@
 package ai.platon.pulsar.rest.api.service.scrape
 
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.advanced.format.FormatFailureException
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatProviders
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatSnapshot
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatStepRunner
@@ -113,6 +115,19 @@ class PageScrapeServiceTest {
             assertTrue(error.message!!.contains("open"), "sessionId='$blank'")
             assertEquals(emptyList<String?>(), requestedSessionIds, "sessionId='$blank'")
         }
+    }
+
+    @Test
+    @DisplayName("strict reaches the engine, so a degradation fails through the service")
+    fun strictIsForwarded() {
+        val error = assertThrows(FormatFailureException::class.java) {
+            runBlocking { service().scrape(formats = formats("audio"), sessionId = "s1", strict = true) }
+        }
+
+        // The session was accepted (the factory ran), so this refusal came from the format,
+        // not from the session check in front of it.
+        assertEquals(listOf("s1"), requestedSessionIds)
+        assertEquals(ToolErrorCode.TARGET_UNAVAILABLE, error.code)
     }
 
     @Test

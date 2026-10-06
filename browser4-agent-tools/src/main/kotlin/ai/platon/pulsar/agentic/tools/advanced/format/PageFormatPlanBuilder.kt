@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.advanced.format
 
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.skeleton.workflow.format.PageFormat
 import ai.platon.pulsar.skeleton.workflow.format.PageFormats
 
@@ -26,7 +27,7 @@ object PageFormatPlanBuilder {
      * @param options request-level options providers consult while planning.
      */
     fun build(formats: List<PageFormat>, options: FormatOptions = FormatOptions()): PageFormatPlan {
-        val warnings = mutableListOf<String>()
+        val degradations = mutableListOf<FormatDegradation>()
         val declared = mutableListOf<FormatStep>()
 
         formats.forEach { format ->
@@ -38,7 +39,7 @@ object PageFormatPlanBuilder {
                 // outcome. Everything else is a property of this build and is
                 // decided here. (Planning stays pure: no registry lookup.)
                 if (!PageFormats.isContributed(format.type)) {
-                    warnings += unavailableWarning(format.type)
+                    degradations += unavailableDegradation(format.type)
                 }
                 return@forEach
             }
@@ -49,11 +50,20 @@ object PageFormatPlanBuilder {
                 // An option this build cannot honour is refused by name rather than
                 // silently dropped — a 1280x800 request must not quietly become a
                 // 1920x1080 answer. The rest of the request still runs.
-                warnings += "${format.type}: ${e.message}"
+                //
+                // 400 rather than 503 under strict: the caller can fix this by dropping
+                // the option, and a 503 would tell them to wait for a different server.
+                degradations += FormatDegradation(
+                    format.type, e.message.orEmpty(), ToolErrorCode.INVALID_ARGUMENT,
+                )
                 return@forEach
             }
             if (steps.isEmpty()) {
-                warnings += "${format.type}: no steps to run (a required option is missing)"
+                degradations += FormatDegradation(
+                    format.type,
+                    NO_STEPS_REASON,
+                    ToolErrorCode.INVALID_ARGUMENT,
+                )
                 return@forEach
             }
             declared += steps
@@ -67,9 +77,11 @@ object PageFormatPlanBuilder {
         return PageFormatPlan(
             requested = formats.map { it.type },
             steps = ordered,
-            warnings = warnings,
+            degradations = degradations,
         )
     }
+
+    private const val NO_STEPS_REASON = "no steps to run (a required option is missing)"
 
     /**
      * Collapse identical steps and upgrade the shared policy.
@@ -105,10 +117,33 @@ object PageFormatPlanBuilder {
      * (`page.formats` / `GET /api/scrape/formats`) has to say the same words as the
      * per-request `warning`, and two copies of a user-facing sentence drift.
      */
-    fun unavailableWarning(id: String): String = when {
-        PageFormats.isDeprecated(id) -> "$id: deprecated and unavailable; use question or highlights"
-        else -> "$id: not available in this build"
+    fun unavailableWarning(id: String): String = unavailableDegradation(id).warning
+
+    /**
+     * The reason half of [unavailableWarning], without the `id: ` prefix.
+     *
+     * Public for the same reason as [unavailableWarning]: the capability listing reports
+     * this sentence, and a second copy of a user-facing string drifts.
+     */
+    fun unavailableReason(id: String): String = when {
+        PageFormats.isDeprecated(id) -> DEPRECATED_REASON
+        else -> NOT_IN_BUILD_REASON
     }
+
+    /**
+     * Why a valid-but-unavailable format produced no steps, with the code `strict` reports.
+     *
+     * The two cases take different codes, and the difference is what the caller does next:
+     * a **deprecated** id is theirs to change (`query` → `question`), so it is 400, while a
+     * format this **build** does not implement is nothing they can fix, so it is 503. The
+     * design draft's three-state table spells out the second case only; the split is
+     * recorded in the design document.
+     */
+    fun unavailableDegradation(id: String): FormatDegradation = FormatDegradation(
+        id,
+        unavailableReason(id),
+        if (PageFormats.isDeprecated(id)) ToolErrorCode.INVALID_ARGUMENT else ToolErrorCode.TARGET_UNAVAILABLE,
+    )
 
     /**
      * Why a requested format that needs a plugin contributor has none.
@@ -117,6 +152,19 @@ object PageFormatPlanBuilder {
      * can see stay in one place, even though only the engine and the capability
      * listing can decide when this one applies.
      */
-    fun missingContributorWarning(id: String): String =
-        "$id: unavailable (no plugin contributor installed)"
+    fun missingContributorWarning(id: String): String = missingContributorDegradation(id).warning
+
+    /**
+     * The engine's structured form of [missingContributorWarning].
+     *
+     * A plugin that was never installed is a property of the **deployment**, so `strict`
+     * reports 503 and the message already names the fix — which is what the contract asks
+     * a hint to do.
+     */
+    fun missingContributorDegradation(id: String): FormatDegradation =
+        FormatDegradation(id, MISSING_CONTRIBUTOR_REASON, ToolErrorCode.TARGET_UNAVAILABLE)
+
+    private const val NOT_IN_BUILD_REASON = "not available in this build"
+    private const val DEPRECATED_REASON = "deprecated and unavailable; use question or highlights"
+    private const val MISSING_CONTRIBUTOR_REASON = "unavailable (no plugin contributor installed)"
 }

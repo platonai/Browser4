@@ -1420,7 +1420,7 @@ class MCPToolController(
             val evaluate = result
             val exception = evaluate.exception
             if (exception != null) {
-                ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception)))
+                ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception), exception.cause))
             } else {
                 val text = ToolResultTextRenderer.render(evaluate)
 
@@ -1430,7 +1430,10 @@ class MCPToolController(
             }
         } catch (e: Exception) {
             logger.warn("Custom executor failed | tool={} | domain={} | {}", toolName, domain, e.message)
-            ResponseEntity.ok(errorResponse("$toolName failed: ${e.message}"))
+            // Classify from the exception: the wrapping text below is what the caller reads,
+            // but the code has to come from the failure, or a layer that knew it was, say,
+            // TARGET_UNAVAILABLE reports as INTERNAL.
+            ResponseEntity.ok(errorResponse("$toolName failed: ${e.message}", e))
         }
     }
 
@@ -1879,6 +1882,27 @@ class MCPToolController(
         isError = true,
         errorCode = code.wire,
     )
+
+    /**
+     * The same response, classified from the failure instead of from its rendered text.
+     *
+     * A throwable is the better input: [ToolErrorMapper.classify] checks types first (a
+     * `TimeoutException` is a timeout whatever its wording) and falls back to the very same
+     * message patterns. Classifying the text alone loses everything the type knew — which
+     * is how a failure that reported itself as `TARGET_UNAVAILABLE` came back to the client
+     * as `INTERNAL`: the wrapper's prose carried no pattern the mapper could match, while
+     * the exception it wrapped was explicit about its code.
+     *
+     * The message stays authoritative when the failure is unclassifiable, because the code
+     * and the text are read by the same caller and must not disagree.
+     */
+    internal fun errorResponse(message: String, error: Throwable?): MCPToolCallResponse =
+        errorResponse(
+            message,
+            error?.let { ToolErrorMapper.classify(it) }
+                ?.takeIf { it != ToolErrorCode.INTERNAL }
+                ?: ToolErrorMapper.classifyMessage(message),
+        )
 
     /**
      * Build an error message for a tool call failure, enriching it with

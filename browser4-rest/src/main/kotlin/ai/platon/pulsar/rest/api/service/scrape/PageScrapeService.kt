@@ -44,15 +44,23 @@ class PageScrapeService(private val runnerFactory: FormatStepRunnerFactory) {
      * @param sessionId the addressed session; null or blank is refused.
      * @param onlyMainContent whether markdown should come from the readable article
      *   rather than the whole cleaned page.
+     * @param strict turn every degradation into a failure
+     *   ([ai.platon.pulsar.agentic.tools.advanced.format.FormatFailureException]) instead of
+     *   a warning, carrying the code the caller acts on: 503 for a format this deployment
+     *   cannot deliver, 502/504 for one that ran and failed, 400 for a request this build
+     *   cannot honour. Default `false` — omit, note it in `warning`, keep the rest.
      * @return one document carrying every format that was delivered.
      * @throws IllegalArgumentException when no session is addressed — before a runner
      *   is built, so a refused request never touches a browser.
+     * @throws ai.platon.pulsar.agentic.tools.advanced.format.FormatFailureException when
+     *   [strict] is set and any requested format was not delivered.
      * @throws Exception the original failure of a REQUIRED step.
      */
     suspend fun scrape(
         formats: List<PageFormat>,
         sessionId: String? = null,
         onlyMainContent: Boolean = true,
+        strict: Boolean = false,
     ): ScrapedDocument {
         // Resolved explicitly rather than via `require`, so the non-blank session is a
         // `String` by construction and the check cannot be read as re-validating a
@@ -64,6 +72,7 @@ class PageScrapeService(private val runnerFactory: FormatStepRunnerFactory) {
             PageScrapeRequest(
                 formats = formats,
                 onlyMainContent = onlyMainContent,
+                strict = strict,
             )
         )
     }

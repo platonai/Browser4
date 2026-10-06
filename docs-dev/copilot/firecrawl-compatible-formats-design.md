@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | **Phase 0 + 1a/1b/1c/1d + 2 已交付**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 10 个 provider（含 `screenshot`、`pdf` 两个活体格式）/ SPI 接线与 contributor 消费 / runner + `page` 域 + CLI `scrape`+`scrape formats`+`--output` + REST `api/scrape`、`api/scrape/formats`、`api/scrape/media/{name}` / §11 夹具页与真机渲染断言）；MCP、CLI、REST 三条路径均经真实后端 + 真实 Chrome 验证；剩余：`strict` 三态、`expires`/`maxAge`、请求级 `url`、异步面、Phase 3+ |
+| 状态 | **Phase 0 + 1a/1b/1c/1d + 2 已交付**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 10 个 provider（含 `screenshot`、`pdf` 两个活体格式）/ SPI 接线与 contributor 消费 / runner + `page` 域 + CLI `scrape`+`scrape formats`+`--output`+`--strict` + REST `api/scrape`、`api/scrape/formats`、`api/scrape/media/{name}` / `strict` 三态契约 / §11 夹具页与真机渲染断言）；MCP、CLI、REST 三条路径均经真实后端 + 真实 Chrome 验证；剩余：`expires`/`maxAge`、请求级 `url`、异步面、Phase 3+ |
 | 目标仓库 | Browser4 `4.14.0-rc.8` @ `bacdf71ea2`（4.13.x 合并后的 4.14.x；设计起草时基线为 `d86b69fc8b`） |
 | 对照基线 | Firecrawl `ce8ed1233`（见 [对照表](firecrawl-vs-browser4-output-formats.md)） |
 | 一句话 | 给 Browser4 加一层「`formats[]` 请求 → 一次抓取扇出多种输出 → 返回 Firecrawl 形状 Document」的兼容面，并把它作为后续 branding/product/menu 等格式的**插件扩展点** |
@@ -93,7 +93,8 @@ GET  /api/scrape/formats            # 能力发现：本部署支持哪些格式
 
 > **实现偏差（Phase 1c）**
 >
-> - **`url` 与 `strict` 已从参数面移除**——不是"暂不支持"，是**不接受**。`url` 曾被转发、写进 `metadata.sourceURL`、然后被忽略：步骤读的是会话的**当前页**，所以它返回了一份关于**另一个页面**的貌似合理的文档；`strict` 的三态契约未实现，接受它只会把"降级"说成"严格"。两者在入口**按名字拒绝**（`'url' is not supported yet: …`），不静默吞掉。
+> - **`url` 已从参数面移除**——不是"暂不支持"，是**不接受**。`url` 曾被转发、写进 `metadata.sourceURL`、然后被忽略：步骤读的是会话的**当前页**，所以它返回了一份关于**另一个页面**的貌似合理的文档。它在入口**按名字拒绝**（`'url' is not supported yet: …`），不静默吞掉。
+> - **`strict` 曾经写在这里说"两者都按名字拒绝"，那是错的。** REST DTO 里根本没有 `strict` 字段，而 Jackson 会忽略未知属性，所以 `{"strict":true}` 当时是被**静默接受并忽略**的——比"拒绝"更糟。现在它被真正实现了（§6.2），这条更正保留在此以免下次又以为它当时是安全的。
 > - **`sessionId` 必需（决策 A2）**：设计稿写的是"无 url 时用会话当前页，有 url 时在共享 scrape 会话上只读加载"。**该分支已被否决**——`url` 不存在了，所以"读哪一页"只能由会话回答；而"自动挑一个会话"正是会读到**别人页面**的那类静默错误，也正是本轮要消灭的失败模式。因此调用方**先 `open`**，会话由 `sessionId` 显式给出；`PageScrapeService` 在管道入口拒绝空白 `sessionId`，消息指名要 `open`。
 >   - 这与仓库既有约定一致：`html_snapshot`、`webdb` 等域一律把 `sessionId` 声明为**必需**（`ToolSpec.Arg("sessionId", "String", null)`，`WebDbToolExecutor.kt:35` 的说明甚至直接写 "Required."）。本域原先的 `"String?"` + `"null"` 默认值（"省略即用绑定的会话"）是全仓库唯一的例外，现已改齐。
 >   - **一个必须知道的陷阱**：`ToolSpecValidator` 会把 `sessionId` 整个**跳过**（`DEFAULT_CONTEXT_ARGS`，`ToolSpecValidator.kt:65` 在必需性检查**之前** `continue`），而且 MCP 派发前 `normalizeToolArguments` 已经把它剥掉（`MCPToolController.kt:1844`），所以把 spec 声明成必需**不会**产生任何运行时校验——它只影响 `docs/mcp-tools.json` 与能力发现。**真正的拒绝发生在服务层**，别指望 spec 兜住。
@@ -303,6 +304,35 @@ data class ScrapedDocument(
 | 格式可用，但本次执行失败（超时 / 上游 5xx / 页面非商品页） | 字段省略 + `warning: "product: not a product page"`；HTTP 200 | 502 `UPSTREAM_ERROR` / 504 `TIMEOUT` |
 
 这与 Firecrawl 的行为一致（其 `product`/`menu`/`audio`/`video` 在服务未配时也只用 `warning` 降级，见 `transformers/product.ts`、`video.ts`）。
+
+> **实现说明（`strict` 已交付）**
+>
+> **分类发生在知道原因的地方，而不是从文案反推。** 三态里的"不可用"与"执行失败"可以写出同样像样的句子，所以从文本推状态码就是猜。改法是让降级点**同时**产出结构化原因与 code：`FormatDegradation(format, message, code)`，非 strict 的响应把它渲染成原来的 `warning`（文案逐字未变），strict 则把它变成带 code 的失败。`PageFormatPlan.warnings` 现在是从 `degradations` **派生**的 getter —— 两份事实会漂移，而失败模式是"warning 说的"与"strict 会报的"不一致。
+>
+> **接的是既有的 `ToolErrorCode` 表，不是新造一套。** 它已经有 `retryable` / `httpStatus` / `hint`，而且 REST 与 MCP 两条通道共用 `ToolErrorMapper.classify` —— 新造枚举就等于让同一个失败在两条通道上读起来不一样。为了让"已经知道 code 的那一层"不必把消息写得让推断器猜对，`classify` 新增**优先**检查 `CodedFailure`（显式 code 胜过一切推断）。
+>
+> **设计稿表格之外的两处扩展**（都在下面写清理由）：
+>
+> | 情形 | strict 的 code | 为什么 |
+> |---|---|---|
+> | **已废弃**的 id（`query`） | **400** | 设计稿那行只举了"插件未装/服务未配"这类**部署**事实；废弃 id 是**调用方自己**要改的（换 `question`）。用 503 会让人等一个不会有变化的服务器 |
+> | **provider 拒绝的选项**（如 `screenshot.quality`） | **400** | 同上：去掉该选项请求就能成功，fix 在调用方 |
+> | `LIVE_TAB` 这类**没有请求能满足**的 contributor 输入 | **503** | 反过来：任何请求都满足不了，那是本 build 的性质（也正是 A1 要删掉它的原因） |
+> | contributor **缺可请求的输入**（`needs markdown`） | **400** | 同请求里加上 `markdown` 就能满足，属请求形状问题 |
+> | contributor **抛异常** / **返回 null** | **502**（超时则 504） | 它**跑过了**："页面不是商品页"在设计稿里就归 502 |
+> | contributor 写了非 contributor 字段 | **500 INTERNAL** | 经注册表**不可达**（注册期就拒绝），能走到说明绕过了注册表 —— 那是插件的 bug，不是请求或部署问题 |
+>
+> **多个格式同时降级时取哪个 code**：**请求顺序里的第一个**。一个状态码必须选一个，而请求顺序是唯一既确定、又对调用方可见的顺序；**消息里列出全部**降级格式，所以一次往返就能看全，而不是每个格式一轮。
+>
+> **strict 在抓取之前就拒绝计划期已知的问题。** 最常见的情形（请求了一个本 build 不实现的 id）不需要付一次页面加载 —— 有断言 `captures == 0` 的单测把这条钉住。
+>
+> **一处如实记录的边界**：只有**超时**被单独识别为 504，依据是 `ToolErrorMapper` 的分类而不是消息文本；其余执行失败统一 502。理由是"内部原因导致的步骤失败"不该因为消息看起来像参数错误就被报成 400，而 502 是"工具跑了但没交付"的诚实默认值。两者都可重试，所以调用方的重试逻辑不受影响。
+>
+> **真机才发现的一个缺陷（已修，带回归测试）。** 第一次跑 `scrape --strict` 时，失败**确实发生了**、也点名了 `audio`，但报给客户端的 code 是 **`INTERNAL`** 而不是 `TARGET_UNAVAILABLE`。原因不在格式层，而在 MCP 层：`dispatchToCustomExecutor` 的 catch 用 `errorResponse(msg)`，而它的默认 code 来自**消息文本**（`classifyMessage`）——包装后的那句 `page_scrape failed: strict: …` 里没有任何 pattern 可匹配，于是退化成 INTERNAL，**尽管它包着的异常明确知道自己是 503**。
+>
+> 修法是给 `errorResponse` 加一个接受**异常对象**的重载：`classify` 先看类型、再回落到同一套消息 pattern，所以它严格强于只看文本；失败不可分类时仍以消息为准（code 与文本由同一个调用方读取，不能互相矛盾）。这是**既有缺陷**——任何自知 code 的执行器都会在这条路径上丢掉它，strict 只是第一个把它暴露出来。回归测试：`MCPToolControllerTest.codedFailureKeepsItsCode`（三条：显式 code 保住、不可分类时回落到消息 pattern、超时凭类型识别）。
+>
+> **一个验证纪律上的细节**：e2e harness 把这次失败记为 `ok (tolerated)`（默认容忍 5 个失败），所以**门禁没有红**——是我的断言抓住了它。容忍的失败仍然是失败。
 
 ### 6.3 错误码映射（复用 `ToolErrorCode`）
 
@@ -553,7 +583,7 @@ class BrandingFormatContributor : PageFormatContributor {
 | 降级可见 | 未实现格式 / 工具不支持 / X-SQL 报错各自产生不同文案；`formatsDelivered` 可区分"没请求"与"请求了没拿到" |
 | 字段裁剪 | 未请求格式的字段在响应中不存在（`retainRequested`） |
 
-### Phase 1c — REST/MCP 集成层（✅ A1 + A2 + A3 + A5 + A7 已交付并经真机验证；夹具页已建；`strict`/`expires`/异步面见"仍待交付"）
+### Phase 1c — REST/MCP 集成层（✅ A1 + A2 + A3 + A5 + A7 已交付并经真机验证；夹具页已建；`strict` 三态已交付，见 §6.2 的实现说明；`expires`/异步面见"仍待交付"）
 
 已核实的接入点（复用时不必再找）：
 
@@ -721,7 +751,7 @@ POST 未知格式 "markdwon"   → 400  {"success":false,"error":"Bad Request",
 
 #### 仍待交付
 
-- **`strict` 三态契约**（§6.2 的 503/502/504）。因此 `page.scrape` 与 `POST /api/scrape` **刻意不接受** `strict` 参数——接受了却只降级就是撒谎。
+- ~~**`strict` 三态契约**（§6.2 的 503/502/504）~~ **已交付**：`page.scrape`、`POST /api/scrape` 与 `scrape --strict` 都接受它，状态码来自失败自身的 `ToolErrorCode`。实现说明见 §6.2 下方。
 - **请求级 `url`（Stage 0 ENSURE）**：见上面的"`url` 与 `expires` 已从请求面移除"。这是三个缺口里最影响可用性的一个——`open` 先行的替代方案在多页场景下会不断切换 tab。
 - **`expires` / `maxAge`**：字段已删（见上）。实现需要一条"只读地报出已存快照身份"的通道；倾向新增一个方法（如 `stored`）而不是给 `capture` 加条件语义——保留 `capture` 的纯粹性。
 - ~~**`sessionId` 目前是必需的**（`requiresReceiver = true`）~~ **已由决策 A2 定案为"要求先 `open`"**——它不再是一条"等拍板"的临时状态，而是设计意图。`sessionId` 在 spec 里同时改为**必需**（与 `html_snapshot` / `webdb` 的既有约定对齐），服务层在管道入口拒绝空白值并指名要 `open`。CLI 会自动注入 sessionId，所以 `scrape` 用户体验上无感；REST 调用方必须显式给。
@@ -975,12 +1005,13 @@ Q3 的设计前提（实现时确认过）：设计稿写的 `/api/scrape/{id}/m
 
 ## 13. 验收清单（DoD，对齐 `AGENTS.md`）
 
-- [x] 构建与相关测试通过：`.\mvnw.cmd -o -Pquality-gate test` 全 **29** 模块 **BUILD SUCCESS**，0 失败 0 错误，每个模块的 JaCoCo 检查都报 `All coverage checks have been met.`。本轮模块级用例数（Maven 汇总行）：agentic 1483、rest 746、browser 354、coding 275、agent-tools 148、protocol 112、images 85、boot 66、markdown 46、common 40、profile-import 30、pptx 27、swarm 24、parse 3；skeleton 的汇总行未被本次日志过滤捕获，故不列数。Rust `cargo test --bin browser4-cli` **1605** 通过；真机 `test_e2e_scrape_formats` 通过
+- [x] 构建与相关测试通过：`.\mvnw.cmd -o -Pquality-gate test` 全 **29** 模块 **BUILD SUCCESS**，0 失败 0 错误，每个模块的 JaCoCo 检查都报 `All coverage checks have been met.`。本轮模块级用例数（Maven 汇总行）：agentic 1484、rest 751、browser 354、coding 275、agent-tools 156、protocol 112、images 85、boot 66、markdown 46、common 40、profile-import 30、pptx 27、swarm 24、parse 3；skeleton 的汇总行未被本次日志过滤捕获，故不列数。Rust `cargo test --bin browser4-cli` **1606** 通过；`pwsh bin/skill-doc-lint.ps1` 53 文件 0 问题；真机 `test_e2e_scrape_formats` **1 passed / 0 failed**
 - [x] 新增/变更逻辑有测试：主路径 + 边界（未知格式、静态不可交付、非法组合、`viewport`/`quality` 被拒、无磁盘 host 降级、注册期拒绝陌生 id/字段、产物名字规则与包含关系、空 `sessionId` 被拒）
 - [x] 无新增高噪声日志/警告；降级路径用文档的 `warning` 字段而非日志刷屏
 - [x] **I1/I2/I3 有不变量测试**——`PageFormatEngineTest`：`I1: eight formats cost exactly one capture` / `I2: every snapshot read is bound to the captured snapshot` / `I3: a failing live step degrades without breaking snapshot formats`；另有"两个活体步骤都在快照读之后"与"纯活体请求不 capture"
 - [x] 夹具页 + 真实浏览器 e2e 覆盖格式层（`requires_browser4: true`，`test_e2e_scrape_formats`）；活体产物（`screenshot` 与 `pdf`）的真机覆盖已完成——包括读回文件验魔数、验 PDF 落在 `web/pdf`、验字节按 `base64` opt-in，以及**经 HTTP 端点按名字取回字节并与磁盘文件逐字节比对**
 - [x] 无新增直接 CDP 方法：`screenshot` 与 `pdf` 都复用了既有的 `tab.*` 工具，没有新写 CDP 调用，故四条评审门不适用
+- [x] `strict` 三态契约有单测 + 真机覆盖：`PageFormatEngineTest` 6 条（抓取前拒绝、502/504 分类、多降级取首个 code 且全部具名、无降级时不报错、缺插件 503）、`PageFormatPlanBuilderTest` 的 code 断言、控制器/服务/执行器的透传与状态映射；真机 `scrape --formats audio[,markdown]` 分别在默认与 `--strict` 下的两种行为
 - [x] 文档同步：`SKILL.md` / `references/scrape-formats.md` / `help.rs` / **`tips.rs`（`scrape` 与 `scrape-formats` 的专属提示，见 §12 待办清单后的说明）** / `README.md` / `README.zh.md` / `cli/browser4-cli/README.md` / `docs/mcp-tools.md`+`.json`（145 工具）
 - [x] 无密钥/私有端点入库；`page_formats` 不泄露服务地址
 - [x] 无版本号随意变更（走父 BOM）

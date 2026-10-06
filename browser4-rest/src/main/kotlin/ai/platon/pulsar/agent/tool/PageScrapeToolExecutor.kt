@@ -51,13 +51,12 @@ import kotlin.reflect.KClass
  *   `SnapshotFormatStepRunner`), because no `html_snapshot` tool reports a *stored*
  *   snapshot's identity. Accepting a window here would promise a cache reuse this
  *   deployment cannot deliver, so the argument is absent rather than ignored.
- * - **`strict`.** The three-state degradation contract (unknown → 400, known but
- *   unavailable → `warning` or 503 under `strict`) is not implemented yet, so the
- *   argument would be a lie. Every unavailable format degrades with a `warning`
- *   today.
+ * - **`url`.** Every step reads the session's active page, so a request-level URL used to
+ *   produce a document about the wrong page; it is refused by name rather than accepted.
  *
- * Both are recorded in `docs-dev/copilot/firecrawl-compatible-formats-design.md`
- * as Phase 1c follow-ups.
+ * `strict` **is** exposed: the three-state degradation contract is implemented, and the
+ * code it fails with comes from the failure itself (503/502/504/400) rather than from a
+ * table here.
  *
  * ## Why the document is returned as a map
  *
@@ -103,6 +102,13 @@ class PageScrapeToolExecutor(
                 ToolSpec.Arg(
                     "onlyMainContent", "Boolean", "true",
                     "Derive markdown from the readable article instead of the whole cleaned page.",
+                ),
+                ToolSpec.Arg(
+                    "strict", "Boolean", "null",
+                    "Fail the request instead of degrading when a requested format cannot be delivered: " +
+                        "503 for a format this deployment cannot deliver, 502/504 for one that ran and failed, " +
+                        "400 for a request this build cannot honour. Default false, which omits the field, " +
+                        "notes the reason in `warning` and still returns every other format.",
                 ),
             ),
             returnType = "Map<String, Any?>",
@@ -164,12 +170,14 @@ class PageScrapeToolExecutor(
     private suspend fun scrape(args: Map<String, Any?>): Map<String, Any?> {
         val sessionId = args["sessionId"]?.toString()?.takeIf { it.isNotBlank() }
         val onlyMainContent = args["onlyMainContent"]?.let { toBoolean(it, "onlyMainContent") } ?: true
+        val strict = args["strict"]?.let { toBoolean(it, "strict") } ?: false
         val formats = FormatOptionSchema.parse(formatArgs(args)).requireValid()
 
         val document = pageScrapeService.scrape(
             formats = formats,
             sessionId = sessionId,
             onlyMainContent = onlyMainContent,
+            strict = strict,
         )
 
         @Suppress("UNCHECKED_CAST")

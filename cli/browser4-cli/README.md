@@ -339,7 +339,10 @@ curl -o shot.png "http://backend:18182/api/scrape/media/screenshot-<ts>-<rand>.p
 empty `images`, which is omitted from the JSON while still appearing in
 `formatsDelivered` — that is how "requested, produced nothing" is told apart from
 "not requested". A format this build cannot deliver appears in neither and is named
-in `warning`, and the rest of the response is still returned.
+in `warning`, and the rest of the response is still returned. Pass `--strict` when a
+missing format should stop the job instead: the exit code becomes non-zero and the
+message names the reason and the code to act on (503 unavailable here, 502/504 ran and
+failed, 400 not honourable).
 
 > **Quote a comma-separated list.** In PowerShell an unquoted `markdown,links,images`
 > is three arguments, so `--formats` receives only `markdown` and the request still

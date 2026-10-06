@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.advanced.format
 
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.skeleton.workflow.format.FormatContext
 import ai.platon.pulsar.skeleton.workflow.format.FormatInput
 import ai.platon.pulsar.skeleton.workflow.format.FormatOptionSchema
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.time.Duration
+import java.util.concurrent.TimeoutException
 
 private const val KEY = "https://example.com/p"
 private const val HREF = "https://example.com/p"
@@ -141,10 +143,15 @@ class PageFormatEngineTest {
     private fun formats(vararg raw: Any?): List<PageFormat> =
         FormatOptionSchema.parse(raw.toList()).requireValid()
 
-    private fun request(vararg raw: Any?, onlyMainContent: Boolean = true): PageScrapeRequest =
+    private fun request(
+        vararg raw: Any?,
+        onlyMainContent: Boolean = true,
+        strict: Boolean = false,
+    ): PageScrapeRequest =
         PageScrapeRequest(
             formats = formats(*raw),
             onlyMainContent = onlyMainContent,
+            strict = strict,
         )
 
     // ---- capture-once -------------------------------------------------------
@@ -491,6 +498,129 @@ class PageFormatEngineTest {
 
         assertNull(document.warning)
         assertFalse(document.metadata.formatsDelivered.isEmpty())
+    }
+
+    // ---- strict mode --------------------------------------------------------
+
+    @Test
+    @DisplayName("strict refuses a format this build cannot deliver, before anything is captured")
+    fun strictRefusesAFormatThisBuildCannotDeliver() {
+        val runner = FakeRunner(responses = responses())
+
+        val error = assertThrows(FormatFailureException::class.java) {
+            runBlocking { PageFormatEngine(runner).scrape(request("audio", strict = true)) }
+        }
+
+        assertEquals(ToolErrorCode.TARGET_UNAVAILABLE, error.code)
+        assertTrue(error.message!!.contains("audio"), error.message)
+        // The decision is taken at plan time on purpose: a caller must not pay for a page
+        // load to be told that an id this build does not implement cannot be produced.
+        assertEquals(0, runner.captures)
+    }
+
+    @Test
+    @DisplayName("without strict the same request degrades and keeps the rest")
+    fun withoutStrictTheSameRequestDegrades() = runBlocking {
+        // The contrast that makes strict worth having: one word different, two behaviours.
+        val document = PageFormatEngine(FakeRunner(responses = responses())).scrape(request("audio", "markdown"))
+
+        assertTrue(document.warning!!.contains("audio: not available in this build"), document.warning)
+        // Markdown still came back, from the readability read (the export fallback is only
+        // used when the article probe fails).
+        assertTrue(document.markdown!!.contains("Article"), document.markdown)
+        assertEquals(listOf("markdown"), document.metadata.formatsDelivered)
+    }
+
+    @Test
+    @DisplayName("strict reports a failed step as an upstream failure, not as the caller's mistake")
+    fun strictReportsAFailedStepAsUpstream() {
+        val runner = FakeRunner(
+            supported = ALL_TOOLS,
+            responses = responses() + ("tab.screenshot" to SCREENSHOT_BASE64),
+            failing = setOf("tab.screenshot"),
+        )
+
+        val error = assertThrows(FormatFailureException::class.java) {
+            runBlocking { PageFormatEngine(runner).scrape(request("markdown", "screenshot", strict = true)) }
+        }
+
+        // 502 rather than 400: the tool ran and failed, so an internal failure must not be
+        // reported as something the caller can fix by editing the request.
+        assertEquals(ToolErrorCode.UPSTREAM_ERROR, error.code)
+        assertTrue(error.message!!.contains("boom tab.screenshot"), error.message)
+    }
+
+    @Test
+    @DisplayName("strict reports a timeout as 504")
+    fun strictReportsATimeout() {
+        val runner = object : FormatStepRunner {
+            override suspend fun acquireSnapshot(expires: Duration): FormatSnapshot =
+                FormatSnapshot(KEY, HREF, CAPTURED_AT, "miss")
+
+            override suspend fun readOnSnapshot(
+                snapshot: FormatSnapshot, domain: String, method: String, args: Map<String, Any?>,
+            ): String = CLEAN_HTML
+
+            override suspend fun runOnTab(domain: String, method: String, args: Map<String, Any?>): String =
+                throw TimeoutException("the browser did not answer")
+
+            override fun supports(domain: String, method: String): Boolean = true
+        }
+
+        val error = assertThrows(FormatFailureException::class.java) {
+            runBlocking { PageFormatEngine(runner).scrape(request("screenshot", strict = true)) }
+        }
+
+        assertEquals(ToolErrorCode.TIMEOUT, error.code)
+        assertEquals(504, error.code.httpStatus, "the code carries the status the caller sees")
+    }
+
+    @Test
+    @DisplayName("strict names every degraded format and takes the code of the first in request order")
+    fun strictNamesEveryDegradedFormat() {
+        val runner = FakeRunner(responses = responses())
+
+        val error = assertThrows(FormatFailureException::class.java) {
+            runBlocking {
+                PageFormatEngine(runner).scrape(
+                    request("audio", mapOf("type" to "query", "prompt" to "p"), "markdown", strict = true)
+                )
+            }
+        }
+
+        // One status has to be chosen, and request order is the only ordering that is both
+        // deterministic and visible to the caller — it is the order they wrote.
+        assertEquals(ToolErrorCode.TARGET_UNAVAILABLE, error.code)
+        assertEquals(2, error.degradations.size, error.degradations.toString())
+        // Both are named, so one round trip shows everything wrong: stopping at the first
+        // would cost a round trip per format.
+        assertTrue(error.message!!.contains("audio"), error.message)
+        assertTrue(error.message!!.contains("query"), error.message)
+    }
+
+    @Test
+    @DisplayName("strict fails a contributed format that has no contributor installed")
+    fun strictRefusesAMissingContributor() {
+        val runner = FakeRunner(responses = responses())
+
+        val error = assertThrows(FormatFailureException::class.java) {
+            runBlocking { PageFormatEngine(runner).scrape(request("branding", strict = true)) }
+        }
+
+        // A plugin that was never installed is a property of the *deployment*, which is
+        // what 503 says — and no capture is needed to find out.
+        assertEquals(ToolErrorCode.TARGET_UNAVAILABLE, error.code)
+        assertEquals(0, runner.captures)
+    }
+
+    @Test
+    @DisplayName("a strict request where everything is delivered is an ordinary success")
+    fun strictIsSilentWhenNothingDegrades() = runBlocking {
+        val document = PageFormatEngine(FakeRunner(responses = responses()))
+            .scrape(request("markdown", "links", strict = true))
+
+        assertNull(document.warning)
+        assertEquals(listOf("markdown", "links"), document.metadata.formatsDelivered)
     }
 
     // ---- plugin contributors ------------------------------------------------

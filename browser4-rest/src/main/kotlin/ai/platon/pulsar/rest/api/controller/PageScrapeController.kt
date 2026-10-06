@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.pulsar.agentic.tools.advanced.format.FormatFailureException
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.service.scrape.ArtifactStore
 import ai.platon.pulsar.rest.api.service.scrape.PageScrapeService
@@ -81,6 +82,32 @@ class PageScrapeController(
     }
 
     /**
+     * A `strict` request that could not be satisfied.
+     *
+     * The status is taken from the failure's own `ToolErrorCode` — 503 for a format this
+     * deployment cannot deliver, 502/504 for one that ran and failed, 400 for a request
+     * this build cannot honour — rather than from a table here. The layer that classified
+     * the failure is the one that knows why, and a second mapping would drift away from
+     * `ToolErrorMapper`, which the MCP channel also reports through.
+     *
+     * `hint` and `retryable` travel with the code because a caller's next move depends on
+     * them: retrying a 503 is pointless, retrying a 502 is not.
+     */
+    @ExceptionHandler(FormatFailureException::class)
+    fun handleFormatFailure(e: FormatFailureException): ResponseEntity<Map<String, Any?>> {
+        logger.warn("Strict page scrape could not be satisfied: {}", e.message)
+        return ResponseEntity.status(e.code.httpStatus).body(
+            linkedMapOf(
+                "success" to false,
+                "error" to e.code.wire,
+                "retryable" to e.code.retryable,
+                "hint" to e.code.hint,
+                "message" to (e.message ?: ""),
+            )
+        )
+    }
+
+    /**
      * Scrape once and return every requested format.
      *
      * Validation happens before the service is called, so an unknown id or an
@@ -108,6 +135,7 @@ class PageScrapeController(
             formats = formats,
             sessionId = request.sessionId,
             onlyMainContent = request.onlyMainContent ?: true,
+            strict = request.strict ?: false,
         )
 
         return mapOf(
@@ -206,21 +234,23 @@ class PageScrapeController(
  * its payload. Every field is optional: omitting `formats` means `["markdown"]`,
  * omitting `url` means "the page the session is on".
  *
- * Deliberately absent, because this deployment cannot honour them yet — accepting
- * them would be a lie rather than a gap:
+ * Deliberately absent, because this deployment cannot honour it yet — accepting it would
+ * be a lie rather than a gap:
  *
  * - `maxAge` / `expires`: see `SnapshotFormatStepRunner`; the capture step always
  *   captures.
- * - `strict`: the three-state degradation contract is not implemented, so every
- *   unavailable format degrades with a `warning`.
  *
  * @property url **not supported yet** — passing it is refused with an explanation
  *   rather than silently ignored (the reads target the session's active page, so
  *   honouring it would have returned a document about the wrong page). Kept in the
  *   DTO so the refusal can name the field; `open <url>` first is the way today.
- * @property sessionId the session to scrape; null means the bound session.
+ * @property sessionId the session to scrape; required — see [PageScrapeService].
  * @property formats format names, or objects carrying their options.
  * @property onlyMainContent derive markdown from the readable article.
+ * @property strict fail instead of degrading when a requested format is not delivered.
+ *   The status comes from the failure itself (503/502/504/400), so a caller can act on
+ *   it; the default `false` keeps Firecrawl's behaviour of omitting the field, saying why
+ *   in `warning`, and returning everything else.
  *
  * Every property carries an explicit `@param:JsonProperty`, the convention every
  * request DTO in this module follows (`rest/mcp/controller/dto/McpDtos.kt`). Without
@@ -235,4 +265,5 @@ data class PageScrapeRequestBody(
     @param:JsonProperty("sessionId") val sessionId: String? = null,
     @param:JsonProperty("formats") val formats: List<Any?>? = null,
     @param:JsonProperty("onlyMainContent") val onlyMainContent: Boolean? = null,
+    @param:JsonProperty("strict") val strict: Boolean? = null,
 )

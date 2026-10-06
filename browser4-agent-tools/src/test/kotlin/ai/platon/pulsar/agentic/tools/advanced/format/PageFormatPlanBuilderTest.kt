@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.advanced.format
 
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.skeleton.workflow.format.FormatOptionSchema
 import ai.platon.pulsar.skeleton.workflow.format.PageFormat
 import ai.platon.pulsar.skeleton.workflow.format.PageFormats
@@ -128,6 +129,34 @@ class PageFormatPlanBuilderTest {
         )
         assertTrue(plan(missing).steps.isEmpty())
         assertFalse(plan(missing).needsSnapshot)
+    }
+
+    @Test
+    @DisplayName("a planned degradation carries the code a strict request would report")
+    fun degradationsCarryTheirCode() {
+        // The sentence and the code come from one record, so a warning can never describe a
+        // different situation than the status strict reports for it.
+        assertEquals(
+            ToolErrorCode.TARGET_UNAVAILABLE,
+            plan("audio").degradations.single().code,
+            "a format this build does not implement is a deployment limitation",
+        )
+        assertEquals(
+            ToolErrorCode.INVALID_ARGUMENT,
+            plan(mapOf("type" to "query", "prompt" to "p")).degradations.single().code,
+            "a retired id is the caller's to change, so it is their mistake",
+        )
+        assertEquals(
+            ToolErrorCode.INVALID_ARGUMENT,
+            plan(mapOf("type" to "screenshot", "quality" to 80)).degradations.single().code,
+            "an option this build cannot honour is fixed by dropping it",
+        )
+
+        // The rendered form is unchanged, and is derived rather than stored: two lists of
+        // the same facts would drift.
+        assertEquals(listOf("audio: not available in this build"), plan("audio").warnings)
+        assertEquals(plan("audio").degradations.map { it.warning }, plan("audio").warnings)
+        assertEquals(listOf("audio"), plan("audio").unavailable)
     }
 
     @Test

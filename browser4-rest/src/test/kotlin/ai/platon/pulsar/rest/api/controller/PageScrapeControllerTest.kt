@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.pulsar.agentic.tools.advanced.format.FormatFailureException
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatSnapshot
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatStepRunner
 import ai.platon.pulsar.rest.api.service.scrape.ArtifactStore
@@ -187,6 +188,43 @@ class PageScrapeControllerTest {
         assertEquals(false, body["success"])
         assertEquals("Bad Request", body["error"])
         assertTrue(body["message"].toString().contains("markdwon"), body.toString())
+    }
+
+    // ---- strict mode --------------------------------------------------------
+
+    @Test
+    @DisplayName("a strict failure answers with the failure's own status, code and hint")
+    fun strictFailureCarriesItsStatus() {
+        val thrown = assertThrows(FormatFailureException::class.java) {
+            runBlocking {
+                controller().scrape(
+                    PageScrapeRequestBody(sessionId = SESSION, formats = listOf("audio"), strict = true),
+                )
+            }
+        }
+
+        val response = controller().handleFormatFailure(thrown)
+
+        // 503: nothing about the caller's request would fix a format this build does not
+        // implement, and retrying is pointless — which is exactly what `retryable` says.
+        // The status comes from the failure's own code, not from a table here.
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.statusCode)
+        assertEquals("TARGET_UNAVAILABLE", response.body!!["error"])
+        assertEquals(false, response.body!!["retryable"])
+        assertTrue(response.body!!["hint"].toString().isNotBlank(), response.body.toString())
+        assertTrue(response.body!!["message"].toString().contains("audio"), response.body.toString())
+    }
+
+    @Test
+    @DisplayName("without strict the same request is an ordinary document with a warning")
+    fun withoutStrictTheSameRequestSucceeds() = runBlocking {
+        val response = controller().scrape(
+            PageScrapeRequestBody(sessionId = SESSION, formats = listOf("audio", "markdown")),
+        )
+
+        assertEquals(true, response["success"])
+        val data = response["data"] as Map<*, *>
+        assertTrue(data["warning"].toString().contains("audio"), data.toString())
     }
 
     // ---- artifact download --------------------------------------------------

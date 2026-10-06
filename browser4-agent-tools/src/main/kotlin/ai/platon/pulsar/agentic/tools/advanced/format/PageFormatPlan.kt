@@ -94,15 +94,27 @@ data class StepKey(
  *
  * @property requested the requested format ids, in request order.
  * @property steps the steps to execute, in stage order.
- * @property warnings notes to surface even when every step succeeds — an unknown
- *   or not-yet-implemented format, a deprecated one, a contributor that is not
- *   installed.
+ * @property degradations what the plan already knows will not be delivered — a
+ *   not-yet-implemented format, a deprecated one, an option a provider refuses. Each
+ *   carries the code a `strict` request reports for it.
  */
 data class PageFormatPlan(
     val requested: List<String>,
     val steps: List<FormatStep>,
-    val warnings: List<String> = emptyList(),
+    val degradations: List<FormatDegradation> = emptyList(),
 ) {
+    /**
+     * The per-format notes a non-strict document carries in its `warning`.
+     *
+     * Derived from [degradations] rather than stored beside it: two lists of the same
+     * facts drift, and the failure mode is a warning that no longer matches the code
+     * strict mode would have reported.
+     */
+    val warnings: List<String> get() = degradations.map { it.warning }
+
+    /** The requested formats this plan already knows it cannot deliver. */
+    val unavailable: List<String> get() = degradations.map { it.format }
+
     /** True when the plan needs a capture at all. */
     val needsSnapshot: Boolean get() = steps.any { it.stage == FormatStage.FROM_SNAPSHOT }
 
@@ -171,8 +183,15 @@ data class AssemblyContext(
  *
  * @property formats the formats to produce, in request order.
  * @property onlyMainContent see [FormatOptions.onlyMainContent].
+ * @property strict turn every degradation into a failure instead of a warning
+ *   ([FormatFailureException]), carrying the code the caller should act on: 503 for a
+ *   format this deployment cannot deliver, 502/504 for one that ran and failed, 400 for
+ *   a request this build cannot honour (a deprecated id, a refused option). Default
+ *   `false`, which is Firecrawl's behaviour: omit the field, note it in `warning`, and
+ *   still return everything else.
  */
 data class PageScrapeRequest(
     val formats: List<ai.platon.pulsar.skeleton.workflow.format.PageFormat>,
     val onlyMainContent: Boolean = true,
+    val strict: Boolean = false,
 )

@@ -131,6 +131,7 @@ browser4-cli scrape --formats "markdown,links" | grep -o '"formatsDelivered":\[[
 | `--formats <list>` | The outputs to produce, in request order. Accepts a comma-separated string (`"markdown,links"`), a JSON array (`'["markdown","links"]'`) or a single name. An entry may be an object carrying that format's options. Omitted or empty means `["markdown"]` |
 | `--no-main-content` | Derive markdown from the whole cleaned page instead of the readable article. A flag, not a value: the default is already `true`, so only turning it off needs spelling |
 | `-o`, `--output <dir>` | Fetch the files this request produced (`screenshot`, `pdf`) into `<dir>` and print the document with those local paths. Without it, a binary format can only report the backend's own path. The directory is created if it does not exist |
+| `--strict` | Fail instead of degrading when a requested format is not delivered: non-zero exit, and the message names the code to act on. Without it the field is omitted, the reason goes in `warning`, and everything else still comes back |
 
 `scrape` takes **no URL argument**, and that is deliberate rather than an omission.
 Every read in this family targets the session's *active* page — `html_snapshot
@@ -245,6 +246,36 @@ browser4-cli scrape --formats '[{"type":"pdf","base64":true}]'
 # → "pdf": "<path>", "pdfBase64": "JVBERi0xLjQ…"
 ```
 
+### `--strict`: all or nothing
+
+By default an undeliverable format is **omitted and named in `warning`**, and the rest of
+the document still comes back. That is Firecrawl's behaviour and the right default for a
+request that asks for several things.
+
+`--strict` turns any such degradation into a failure:
+
+| Situation | Default | `--strict` |
+|---|---|---|
+| A format id this build does not implement (`audio` today) | field omitted, `warning`, exit 0 | **503 `TARGET_UNAVAILABLE`** |
+| A plugin contributor that is not installed (`branding`) | same | **503 `TARGET_UNAVAILABLE`** |
+| A format that ran and failed (a live capture, a contributor that threw) | same | **502 `UPSTREAM_ERROR`**, or **504 `TIMEOUT`** when it was a timeout |
+| An option this build refuses (`screenshot.quality`), or a retired id (`query`) | same | **400 `INVALID_ARGUMENT`** — dropping it makes the request work |
+
+The split is about *who can fix it*: 503 means nothing about your request would help, 4xx
+means it would. That is also what `retryable` carries on the REST face.
+
+Every degraded format is named in the message, not only the first, so one round trip shows
+everything that is wrong. When several formats degrade, the status is the **first one's, in
+request order**.
+
+The common case fails *before the page is loaded*: a `--strict` request for a format this
+build does not implement never captures anything.
+
+```bash
+browser4-cli scrape --formats "audio,markdown"            # exit 0, markdown + a warning
+browser4-cli scrape --formats "audio,markdown" --strict    # non-zero, names audio
+```
+
 A request that asks for **only** live formats does not capture at all: with no
 snapshot-scoped step there is nothing to serialize into the page store, so
 `metadata.captureId` is absent. That is capture-once working in the other direction.
@@ -264,6 +295,8 @@ exist only once a plugin provides them, and `scrape formats` reports
 | `unexpected positional argument` | `scrape` takes no URL: every read targets the active page | `open <url>` first, then scrape |
 | `'url' is not supported yet` (REST/MCP callers) | A request-level URL was rejected by name rather than ignored — the reads would have answered from the active page | `open` the page first; per-request targeting needs Stage 0 |
 | The field you asked for is absent | Either the format produced nothing, or it is unavailable here | Read `formatsDelivered`: listed means it ran; `warning` names the ones that did not and why |
+| `TARGET_UNAVAILABLE` (with `--strict`) | A format this build cannot deliver — the message names it, and no change to the request would help | Drop the format, or install the plugin it names |
+| `UPSTREAM_ERROR` / `TIMEOUT` (with `--strict`) | The format ran and failed; both are retryable | Retry, or drop `--strict` to get the other formats plus a warning |
 | `warning` names a format you did want | That format is unavailable or failed; the rest still succeeded | Install the plugin named in the message, or drop the format |
 | `Unsupported page method: scrape links` | A `tool call page_scrape` invocation with an unquoted list: `links` became part of the method name | Use `scrape`, or `tool call page_scrape --json '{"formats":["markdown","links"]}'` |
 

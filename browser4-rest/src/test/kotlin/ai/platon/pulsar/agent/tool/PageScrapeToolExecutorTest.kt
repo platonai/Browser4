@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agent.tool
 
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.advanced.format.FormatFailureException
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatSnapshot
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatStepRunner
 import ai.platon.pulsar.rest.api.service.scrape.FormatStepRunnerFactory
@@ -134,6 +136,27 @@ class PageScrapeToolExecutorTest {
             // With onlyMainContent off, markdown comes from the cleaned export.
             assertTrue(document["markdown"].toString().contains("Title"), "onlyMainContent=$raw")
         }
+    }
+
+    @Test
+    @DisplayName("strict is parsed from a boolean or a string, and fails the call when set")
+    fun strictIsParsed() {
+        // Both spellings a client can send: MCP arguments arrive as JSON, and a CLI flag
+        // that reaches the backend as text must mean the same thing.
+        for (raw in listOf<Any>(true, "true")) {
+            val error = assertThrows(FormatFailureException::class.java) {
+                runBlocking {
+                    scrape("sessionId" to SESSION, "formats" to listOf("audio"), "strict" to raw)
+                }
+            }
+            assertEquals(ToolErrorCode.TARGET_UNAVAILABLE, error.code, "strict=$raw")
+        }
+
+        // `false` is the default, so it must behave exactly like omitting it.
+        val document = runBlocking {
+            scrape("sessionId" to SESSION, "formats" to listOf("audio", "markdown"), "strict" to false)
+        } as Map<*, *>
+        assertTrue(document["warning"].toString().contains("audio"), document.toString())
     }
 
     @Test

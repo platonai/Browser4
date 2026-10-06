@@ -1069,7 +1069,7 @@
     "domain" : "page",
     "method" : "scrape",
     "mcpNames" : [ "page_scrape" ],
-    "signature" : "page.scrape(sessionId: String, formats: List<Any> = null, onlyMainContent: Boolean = true)",
+    "signature" : "page.scrape(sessionId: String, formats: List<Any> = null, onlyMainContent: Boolean = true, strict: Boolean = null)",
     "description" : "Scrape a page once and return every requested format in one Firecrawl-compatible document. All formats are derived from a single capture, so `markdown` and `links` describe the same page state and eight formats cost one page load. Formats this deployment cannot deliver are omitted from the document and named in its `warning`; `metadata.formatsDelivered` tells 'not requested' from 'requested but unavailable'.",
     "returnType" : "Map<String, Any?>",
     "arguments" : [ {
@@ -1089,6 +1089,12 @@
       "required" : false,
       "default" : "true",
       "description" : "Derive markdown from the readable article instead of the whole cleaned page."
+    }, {
+      "name" : "strict",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "null",
+      "description" : "Fail the request instead of degrading when a requested format cannot be delivered: 503 for a format this deployment cannot deliver, 502/504 for one that ran and failed, 400 for a request this build cannot honour. Default false, which omits the field, notes the reason in `warning` and still returns every other format."
     } ],
     "examples" : [ {
       "title" : "Markdown and links from the current page",

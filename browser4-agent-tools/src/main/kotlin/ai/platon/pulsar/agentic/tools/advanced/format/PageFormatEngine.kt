@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.format
 
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.skeleton.workflow.format.FormatContext
 import ai.platon.pulsar.skeleton.workflow.format.FormatInput
 import ai.platon.pulsar.skeleton.workflow.format.PageFormat
@@ -72,6 +74,13 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
      */
     internal suspend fun scrape(request: PageScrapeRequest, plan: PageFormatPlan): ScrapedDocument {
         val options = FormatOptions(onlyMainContent = request.onlyMainContent)
+        val degradations = plan.degradations.toMutableList()
+
+        // Everything the plan already knows is decided *before* a page is loaded: a strict
+        // request that cannot be satisfied must not pay for a capture. This is the common
+        // case (an unavailable format id), so it is worth failing early rather than after
+        // the work.
+        if (request.strict && degradations.isNotEmpty()) throw FormatFailureException(degradations)
 
         var document = ScrapedDocument(
             metadata = ScrapeMetadata(formatsRequested = plan.requested),
@@ -93,13 +102,13 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
 
         val results = LinkedHashMap<StepKey, String>()
         val rawOutputs = LinkedHashMap<StepKey, String>()
-        document = runSnapshotSteps(plan, snapshot, results, rawOutputs, document)
-        document = runLiveSteps(plan, results, rawOutputs, document)
+        document = runSnapshotSteps(plan, snapshot, results, rawOutputs, document, degradations)
+        document = runLiveSteps(plan, results, rawOutputs, document, degradations)
 
         request.formats.forEach { format ->
             val provider = FormatProviders.find(format.type) ?: return@forEach
             // Re-planning here is how a provider recovers the steps it declared. An
-            // option it refuses was already turned into a warning while the plan was
+            // option it refuses was already recorded as a degradation while the plan was
             // built, so it must skip the format, not fail the request.
             val steps = try {
                 provider.steps(format, options)
@@ -115,7 +124,12 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
             document = provider.assemble(format, stepResults, AssemblyContext(snapshot, options), document)
         }
 
-        document = runContributors(request, snapshot, document)
+        document = runContributors(request, snapshot, document, degradations)
+
+        // Every degradation is reported, not only the first: `strict` means all-or-nothing,
+        // and one round trip should be enough for the caller to see everything that is
+        // wrong rather than discovering it one format at a time.
+        if (request.strict && degradations.isNotEmpty()) throw FormatFailureException(degradations)
 
         return document.retainRequested(plan.requested).withDeliveredFormats(plan.requested)
     }
@@ -143,13 +157,16 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
         results: MutableMap<StepKey, String>,
         rawOutputs: MutableMap<StepKey, String>,
         document: ScrapedDocument,
+        degradations: MutableList<FormatDegradation>,
     ): ScrapedDocument {
         var result = document
         plan.stepsOf(FormatStage.FROM_SNAPSHOT).forEach { step ->
             val key = step.key()
             if (results.containsKey(key)) return@forEach
             if (!runner.supports(step.domain, step.method)) {
-                result = result.withWarning(unsupportedWarning(step))
+                result = degrade(
+                    result, degradations, step.format, unsupportedReason(step), ToolErrorCode.TARGET_UNAVAILABLE,
+                )
                 return@forEach
             }
             val target = snapshot ?: return@forEach
@@ -158,7 +175,7 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
                     ?.let { results[key] = it }
             } catch (e: Exception) {
                 if (step.policy == StepPolicy.REQUIRED) throw e
-                result = result.withWarning(failureWarning(step, e))
+                result = degrade(result, degradations, step.format, failureReason(e), failureCode(e))
             }
         }
         return result
@@ -191,13 +208,16 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
         results: MutableMap<StepKey, String>,
         rawOutputs: MutableMap<StepKey, String>,
         document: ScrapedDocument,
+        degradations: MutableList<FormatDegradation>,
     ): ScrapedDocument {
         var result = document
         plan.stepsOf(FormatStage.LIVE_TAB).forEach { step ->
             val key = step.key()
             if (results.containsKey(key)) return@forEach
             if (!runner.supports(step.domain, step.method)) {
-                result = result.withWarning(unsupportedWarning(step))
+                result = degrade(
+                    result, degradations, step.format, unsupportedReason(step), ToolErrorCode.TARGET_UNAVAILABLE,
+                )
                 return@forEach
             }
             try {
@@ -205,19 +225,53 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
                     ?.let { results[key] = it }
             } catch (e: Exception) {
                 if (step.policy == StepPolicy.REQUIRED) throw e
-                result = result.withWarning(failureWarning(step, e))
+                result = degrade(result, degradations, step.format, failureReason(e), failureCode(e))
             }
         }
         return result
     }
 
-    /** "asked for something this deployment cannot run" — a configuration fix. */
-    private fun unsupportedWarning(step: FormatStep): String =
-        "${step.format}: unavailable (${step.domain}.${step.method} is not supported in this deployment)"
+    /**
+     * Record a degradation and render it into the document's `warning`.
+     *
+     * One call so the sentence a non-strict caller reads and the code a strict caller
+     * gets cannot disagree: both come from the same [FormatDegradation].
+     */
+    private fun degrade(
+        document: ScrapedDocument,
+        degradations: MutableList<FormatDegradation>,
+        format: String,
+        message: String,
+        code: ToolErrorCode,
+    ): ScrapedDocument {
+        degradations += FormatDegradation(format, message, code)
+        return document.withWarning("$format: $message")
+    }
+
+    /**
+     * "asked for something this deployment cannot run" — a configuration fix.
+     *
+     * 503 under strict: nothing the caller can change about their request would help,
+     * which is exactly what separates this from a refused option or a deprecated id.
+     */
+    private fun unsupportedReason(step: FormatStep): String =
+        "unavailable (${step.domain}.${step.method} is not supported in this deployment)"
 
     /** "the tool ran and failed" — a page/timing/service problem. */
-    private fun failureWarning(step: FormatStep, error: Exception): String =
-        "${step.format}: ${error.message ?: error.javaClass.simpleName}"
+    private fun failureReason(error: Exception): String = error.message ?: error.javaClass.simpleName
+
+    /**
+     * 504 when the failure was a timeout, 502 for everything else — the design's mapping
+     * for an execution failure.
+     *
+     * Only the timeout case is singled out, and it is read from [ToolErrorMapper] rather
+     * than from the message text: a step that failed for an *internal* reason must not be
+     * reported as 400 just because its message happened to look like a bad argument. A
+     * retryable 502 is the honest default for "the tool ran and did not deliver".
+     */
+    private fun failureCode(error: Exception): ToolErrorCode =
+        if (ToolErrorMapper.classify(error) == ToolErrorCode.TIMEOUT) ToolErrorCode.TIMEOUT
+        else ToolErrorCode.UPSTREAM_ERROR
 
     /**
      * Let plugin contributors fill the formats no core provider implements.
@@ -239,25 +293,32 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
         request: PageScrapeRequest,
         snapshot: FormatSnapshot?,
         document: ScrapedDocument,
+        degradations: MutableList<FormatDegradation>,
     ): ScrapedDocument {
         var result = document
         request.formats.filter { PageFormats.isContributed(it.type) }.forEach { format ->
             val id = format.type
             val contributor = PageFormatContributorRegistry.instance.get(id)
             if (contributor == null) {
-                result = result.withWarning(PageFormatPlanBuilder.missingContributorWarning(id))
+                val missing = PageFormatPlanBuilder.missingContributorDegradation(id)
+                result = degrade(result, degradations, missing.format, missing.message, missing.code)
                 return@forEach
             }
             if (!contributor.isAvailable()) {
-                result = result.withWarning(contributorUnavailableWarning(id, contributor))
+                result = degrade(
+                    result, degradations, id,
+                    contributorUnavailableReason(contributor), ToolErrorCode.TARGET_UNAVAILABLE,
+                )
                 return@forEach
             }
 
             val context = contributorContext(format, snapshot, result)
             val missing = contributor.requires.filterNot { isProvided(it, context) }
             if (missing.isNotEmpty()) {
-                result = result.withWarning(
-                    "$id: unavailable (needs ${missing.joinToString(", ") { inputName(it) }})"
+                result = degrade(
+                    result, degradations, id,
+                    "unavailable (needs ${missing.joinToString(", ") { inputName(it) }})",
+                    missingInputCode(missing),
                 )
                 return@forEach
             }
@@ -265,18 +326,26 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
             val value = try {
                 contributor.contribute(context)
             } catch (e: Exception) {
-                result = result.withWarning("$id: ${e.message ?: e.javaClass.simpleName}")
+                result = degrade(result, degradations, id, failureReason(e), failureCode(e))
                 return@forEach
             }
             if (value == null) {
-                result = result.withWarning("$id: nothing to report")
+                // The format ran and had nothing to report — the design's "not a product
+                // page" case, which it maps to an upstream failure rather than to
+                // something the caller or the deployment could have fixed.
+                result = degrade(result, degradations, id, "nothing to report", ToolErrorCode.UPSTREAM_ERROR)
                 return@forEach
             }
 
             val field = contributor.outputField
             if (field !in PageFormats.contributedFields()) {
-                result = result.withWarning(
-                    "$id: contributor writes '$field', which is not a contributor field"
+                // Unreachable through the registry — registration refuses a foreign field —
+                // so reaching it means a contributor was registered around the registry:
+                // a bug in the plugin, not a request or deployment problem.
+                result = degrade(
+                    result, degradations, id,
+                    "contributor writes '$field', which is not a contributor field",
+                    ToolErrorCode.INTERNAL,
                 )
                 return@forEach
             }
@@ -284,6 +353,19 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
         }
         return result
     }
+
+    /**
+     * An unsatisfied contributor input is 400 when the caller could have supplied it, and
+     * 503 when no request could.
+     *
+     * `needs markdown` is the caller's to fix — asking for `markdown` in the same request
+     * satisfies it — so a 503 would blame the deployment for a request shape. `LIVE_TAB` is
+     * the opposite case: no request can hand a contributor tab control, which is a property
+     * of this build (and the reason A1 has it slated for removal).
+     */
+    private fun missingInputCode(missing: List<FormatInput>): ToolErrorCode =
+        if (missing.all { it == FormatInput.LIVE_TAB }) ToolErrorCode.TARGET_UNAVAILABLE
+        else ToolErrorCode.INVALID_ARGUMENT
 
     /**
      * The inputs and options a contributor gets.
@@ -355,9 +437,9 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
     }
 
     /** A registered contributor that says it cannot run right now. */
-    private fun contributorUnavailableWarning(id: String, contributor: PageFormatContributor): String {
+    private fun contributorUnavailableReason(contributor: PageFormatContributor): String {
         val reason = contributor.unavailableReason()?.takeIf { it.isNotBlank() }
             ?: "the contributor reports itself unavailable"
-        return "$id: unavailable ($reason)"
+        return "unavailable ($reason)"
     }
 }

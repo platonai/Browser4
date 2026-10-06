@@ -5012,6 +5012,37 @@ pub(super) fn test_scrape_formats(ctx: &mut E2ECtx) {
         "a live-only request must not capture:\n{}",
         live_only.stdout
     );
+
+    // ── 6. `--strict` turns a degradation into a failure ──────────────────
+    // `audio` needs a media service this build does not ship, which makes it the one format
+    // that is *known* and *undeliverable* without any external setup — exactly the case the
+    // three-state contract exists for. The pair matters: the same request must degrade by
+    // default and fail under `--strict`, or one of the two behaviours is untested.
+    let lenient = run_command(ctx, &["scrape", "--formats", "audio,markdown"]);
+    assert!(
+        lenient.stdout.contains("audio: not available in this build"),
+        "the default degrades and says why:\n{}",
+        lenient.stdout
+    );
+    assert!(
+        lenient.stdout.contains("\"markdown\""),
+        "and the rest of the request still comes back:\n{}",
+        lenient.stdout
+    );
+
+    let strict = run_command_expecting_failure(
+        ctx,
+        &["scrape", "--formats", "audio", "--strict"],
+        "TARGET_UNAVAILABLE",
+    );
+    assert_ne!(strict.exit_code, 0, "strict must fail the call");
+    // The code alone is not enough: the caller has to learn *which* format, or the failure
+    // is a riddle. It travels in the message the engine built from the degradation.
+    let strict_output = format!("{}{}", strict.stdout, strict.stderr);
+    assert!(
+        strict_output.contains("audio"),
+        "the failure must name the format:\n{strict_output}"
+    );
 }
 
 /// Read a top-level string field out of a JSON document the CLI printed.
