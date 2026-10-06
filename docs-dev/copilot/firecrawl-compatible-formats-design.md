@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | **Phase 0 + 1a/1b/1c/1d + 2 已交付**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 10 个 provider（含 `screenshot`、`pdf` 两个活体格式）/ SPI 接线与 contributor 消费 / runner + `page` 域 + CLI `scrape`+`scrape formats` + REST `api/scrape`、`api/scrape/formats`、`api/scrape/media/{name}` / §11 夹具页与真机渲染断言）；MCP、CLI、REST 三条路径均经真实后端 + 真实 Chrome 验证；剩余：`strict` 三态、`expires`/`maxAge`、请求级 `url`、二进制 `--out`、异步面、Phase 3+ |
+| 状态 | **Phase 0 + 1a/1b/1c/1d + 2 已交付**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 10 个 provider（含 `screenshot`、`pdf` 两个活体格式）/ SPI 接线与 contributor 消费 / runner + `page` 域 + CLI `scrape`+`scrape formats`+`--output` + REST `api/scrape`、`api/scrape/formats`、`api/scrape/media/{name}` / §11 夹具页与真机渲染断言）；MCP、CLI、REST 三条路径均经真实后端 + 真实 Chrome 验证；剩余：`strict` 三态、`expires`/`maxAge`、请求级 `url`、异步面、Phase 3+ |
 | 目标仓库 | Browser4 `4.14.0-rc.8` @ `bacdf71ea2`（4.13.x 合并后的 4.14.x；设计起草时基线为 `d86b69fc8b`） |
 | 对照基线 | Firecrawl `ce8ed1233`（见 [对照表](firecrawl-vs-browser4-output-formats.md)） |
 | 一句话 | 给 Browser4 加一层「`formats[]` 请求 → 一次抓取扇出多种输出 → 返回 Firecrawl 形状 Document」的兼容面，并把它作为后续 branding/product/menu 等格式的**插件扩展点** |
@@ -882,7 +882,22 @@ GET /api/scrape/media/{name}
 
 **一个刻意的克制**：端点只接**文件名**，不接路径。让调用方把拿到的路径原样贴回来会更"方便"，但那意味着服务端要解析客户端给的路径——而方便不值得用一次路径解析去换。
 
-**未做**：二进制产物的 `--out` 语义（§3.3 想要"必须落到 `--out` 目录"，而当前是服务端临时目录 + 返回路径）。**现在它没有前置了**：取字节的通道已经就位。
+**未做**：无。本阶段的两件事（端点、CLI 取值）都已交付，见下。
+
+### Phase 2d — CLI `--output <dir>`（✅ 已交付，B2）
+
+**要解决的问题**：端点让"拿得到字节"成为可能，但 CLI 用户还要自己去 curl。`scrape` 现在有 `--output <dir>`（`-o`）：CLI 按名字把每个产物取回 `<dir>`，并把打印出来的文档里那些字段**改写成本地路径**——此后文档描述的每个文件，调用方手上都有。
+
+**一处命名偏差，是刻意的**：设计稿 §3.3 写的是 `--out`，实现用了 `--output`。理由是 CLI 里这个选项名已经存在（`crawl --output <file>`、`webminer --output <dir>`），同一个概念在同一个 CLI 里用两种拼法是纯粹的负担。文档同步改了。
+
+**实现上的两个决定**：
+
+1. **分发加守卫**：`"scrape" if tool_params.get("output").is_some()`。没有 `--output` 时 `scrape` 仍然走原来的通用路径，**逐字节不变**——这条保证比"顺手把 `scrape` 也接管了"重要得多。
+2. **两种响应形状都接受**：工具输出既见过裸的文档，也见过 `{success, data}` 包裹的。猜错的那个会**一个产物都找不到却仍然报成功**，所以两种都认，而不是赌一个。
+
+**顺带修掉一个真实缺陷（这次是我引入 `-o` 时暴露的）**：`misplaced_option_message` 对一个短选项只报**第一个**长名。而 `-o` 本来就是多义的（`crawl`/`scrape` 的 `--output` vs `screenshot`/`pdf` 的 `--filename`），只报一个等于告诉用户一个**对别的命令不成立**的事实。现在把每个不同的长名都列出来。这是被单测抓住的：`misplaced_option_resolves_a_short_alias_to_its_long_form` 先失败，才暴露出消息本身在撒谎——**修消息，而不是把 `-o` 撤掉绕开**。
+
+**验证**：`cargo test --bin browser4-cli` **1604** 通过（+4：`--output` 透传与缺省、短别名、`artifact_name_of` 的两种路径风格与非文件值、`scrape_document_mut` 的两种形状）；真机 `test_e2e_scrape_formats` 新增一段：`scrape --formats screenshot,pdf --output <dir>` 之后，取回的 PNG 有 PNG 魔数、PDF 有 `%PDF-` 魔数，且**打印出的文档里出现的是调用方目录**（证明字段被改写，而不是只把文件摆在旁边）。
 
 ### Phase 3 — 服务与 AI 格式（≈1.5 天）
 - `audio` / `video`（`media.*`）、`summary(LLM)` / `question`（`agent_*`）

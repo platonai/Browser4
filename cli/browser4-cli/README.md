@@ -320,8 +320,16 @@ browser4-cli scrape --formats '[{"type":"screenshot","fullPage":true,"base64":tr
 browser4-cli scrape --formats '[{"type":"pdf","base64":true}]'
 ```
 
-The path is on the **backend's** machine. From another host, take the file name out of
-it and fetch the bytes from the backend — only a name is accepted, never a path:
+The path is on the **backend's** machine. Pass `--output <dir>` (`-o`) and the CLI
+fetches each file and prints the document with the local paths:
+
+```bash
+browser4-cli scrape --formats "screenshot,pdf" --output ./out
+# → "screenshot": "./out/screenshot-<ts>-<rand>.png", "pdf": "./out/pdf-<ts>-<rand>.pdf"
+```
+
+From another host, fetch a single artifact by name — only a name is accepted, never a
+path:
 
 ```bash
 curl -o shot.png "http://backend:18182/api/scrape/media/screenshot-<ts>-<rand>.png"

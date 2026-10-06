@@ -4945,6 +4945,59 @@ pub(super) fn test_scrape_formats(ctx: &mut E2ECtx) {
         "a name carrying a path must never be served"
     );
 
+    // ── 4d. `--output` brings the files to this machine ───────────────────
+    // The endpoint serves the bytes; `--output` is the CLI half of the same story. What
+    // must hold afterwards is that the document names files that exist *here* — a path on
+    // the backend's machine is of no use to a caller on another host.
+    let out_dir = ctx.workspace_dir.join("scrape-output");
+    let _ = fs::remove_dir_all(&out_dir);
+    let with_output = run_command(
+        ctx,
+        &[
+            "scrape",
+            "--formats",
+            "screenshot,pdf",
+            "--output",
+            out_dir.to_str().expect("workspace path is not valid UTF-8"),
+        ],
+    );
+    assert!(
+        with_output.stdout.contains("[Artifact]("),
+        "the CLI must report where the files landed:\n{}",
+        with_output.stdout
+    );
+    let fetched = |extension: &str| -> std::path::PathBuf {
+        fs::read_dir(&out_dir)
+            .unwrap_or_else(|e| panic!("--output directory was not created ({out_dir:?}): {e}"))
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .find(|path| path.extension().map(|ext| ext == extension).unwrap_or(false))
+            .unwrap_or_else(|| panic!("no .{extension} under {out_dir:?}"))
+    };
+    let local_png = fetched("png");
+    let local_pdf = fetched("pdf");
+    assert!(
+        fs::read(&local_png)
+            .expect("reading the fetched png")
+            .starts_with(&[0x89, b'P', b'N', b'G']),
+        "the fetched PNG must really be a PNG: {local_png:?}"
+    );
+    assert!(
+        fs::read(&local_pdf)
+            .expect("reading the fetched pdf")
+            .starts_with(b"%PDF-"),
+        "the fetched PDF must really be a PDF: {local_pdf:?}"
+    );
+    // The document must point *into the caller's directory*: the field was rewritten, not
+    // merely copied alongside the backend's path. On Windows the JSON escapes the
+    // separators, so the escaped spelling is what the document carries.
+    let printed_dir = out_dir.to_string_lossy().to_string();
+    assert!(
+        with_output.stdout.contains(&printed_dir)
+            || with_output.stdout.contains(&printed_dir.replace('\\', "\\\\")),
+        "the document must name the local copies under {printed_dir}:\n{}",
+        with_output.stdout
+    );
+
     // ── 5. A live-only request does not capture at all ────────────────────
     // "Capture once" also means "never more than the plan needs": with no
     // snapshot-scoped step there is nothing to serialize into the page store.

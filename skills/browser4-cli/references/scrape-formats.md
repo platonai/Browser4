@@ -130,6 +130,7 @@ browser4-cli scrape --formats "markdown,links" | grep -o '"formatsDelivered":\[[
 |---|---|
 | `--formats <list>` | The outputs to produce, in request order. Accepts a comma-separated string (`"markdown,links"`), a JSON array (`'["markdown","links"]'`) or a single name. An entry may be an object carrying that format's options. Omitted or empty means `["markdown"]` |
 | `--no-main-content` | Derive markdown from the whole cleaned page instead of the readable article. A flag, not a value: the default is already `true`, so only turning it off needs spelling |
+| `-o`, `--output <dir>` | Fetch the files this request produced (`screenshot`, `pdf`) into `<dir>` and print the document with those local paths. Without it, a binary format can only report the backend's own path. The directory is created if it does not exist |
 
 `scrape` takes **no URL argument**, and that is deliberate rather than an omission.
 Every read in this family targets the session's *active* page — `html_snapshot
@@ -166,20 +167,30 @@ page with `--formats '[{"type":"screenshot","fullPage":true}]'`.
 ```
 
 That path is on the machine running the **backend**, under the project's temporary
-tree — usable from a CLI on the same host. From another machine, take the **file name**
-out of that path and fetch it from the backend:
+tree — usable from a CLI on the same host. There are two ways to get the bytes onto
+*your* machine, and they suit different callers:
 
 ```bash
+# 1. The CLI fetches them for you (the usual choice from a CLI)
+browser4-cli scrape --formats "screenshot,pdf" --output ./out
+# → the printed document points at ./out/…, and each file is also listed afterwards as
+#   [Artifact](./out/<name>) so a script can read the destinations off the output
+
+# 2. Fetch by name yourself, e.g. from another language or another host
 curl -o shot.png "http://<backend>:18182/api/scrape/media/screenshot-<ts>-<rand>.png"
 ```
 
-Only the name is accepted, never a path. A string that cannot be an artifact name at all
-(one containing `/` or `\`, or starting with a dot) is refused with **400** rather than
-cleaned up, and a well-formed name that is not there is **404** with the usual
-`{success, error, message}` body. Artifacts are temporary: they live in the process temp
-tree and go away with it.
+`--output` is the only way to get a binary format out of a scrape: `markdown` and the
+other text formats go to stdout, but an image or a PDF cannot, so without `--output`
+the document can only tell you where the *backend* put the file.
 
-Ask for the bytes as well and the document carries both:
+For the raw endpoint, only the file **name** is accepted, never a path. A string that
+cannot be an artifact name at all (one containing `/` or `\`, or starting with a dot)
+is refused with **400** rather than cleaned up, and a well-formed name that is not there
+is **404** with the usual `{success, error, message}` body. Artifacts are temporary:
+they live in the process temp tree and go away with it.
+
+Ask for the bytes inside the document as well and it carries both:
 
 ```bash
 browser4-cli scrape --formats '[{"type":"screenshot","fullPage":true,"base64":true}]'

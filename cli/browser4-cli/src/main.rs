@@ -7590,6 +7590,151 @@ async fn handle_pdf(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// `scrape --output <dir>`: bring the files home
+// ---------------------------------------------------------------------------
+
+/// The document fields whose value is a **path** to a file the backend produced.
+///
+/// A binary format writes the field named after its own id, so this mirrors the server's
+/// artifact kinds one-for-one — and, like any mirror, it cannot detect drift: a new
+/// binary format needs a line here. `scrape formats` stays the server-side authority on
+/// what can be produced; this list only says which fields the CLI knows how to carry a
+/// file in.
+const SCRAPE_ARTIFACT_FIELDS: &[&str] = &["screenshot", "pdf"];
+
+/// The file name inside a backend path, or `None` when the value is not a file path.
+///
+/// Only the last segment is ever used: the CLI addresses the artifact endpoint by name,
+/// and sending the path back would mean the server had to parse a client-supplied path.
+fn artifact_name_of(path: &str) -> Option<String> {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    // A name with no dot is not a file this command can place; keeping the check here
+    // means a non-file value (a URL, a sentence) is skipped rather than turned into a
+    // request for something that cannot exist.
+    if name.is_empty() || !name.contains('.') {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+/// The part of the response the document lives in.
+///
+/// This CLI has seen tool output both as the payload itself and wrapped in
+/// `{success, data}`, so both shapes are accepted rather than one being assumed: the
+/// wrong guess would silently find no artifacts and report success.
+fn scrape_document_mut(root: &mut Value) -> &mut Value {
+    let wrapped = root.get("data").map(|data| data.is_object()).unwrap_or(false);
+    if wrapped {
+        &mut root["data"]
+    } else {
+        root
+    }
+}
+
+/// Fetch the artifact [name] from the backend that produced it.
+async fn download_artifact(client: &Client, base_url: &str, name: &str) -> Result<Vec<u8>, String> {
+    let url = format!("{}/api/scrape/media/{}", base_url.trim_end_matches('/'), name);
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("GET {url} failed: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("GET {url} failed with {status}: {body}"));
+    }
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|e| format!("GET {url}: reading the body failed: {e}"))
+}
+
+/// `scrape --output <dir>` — one capture on the server, the files on this machine.
+///
+/// The document names each artifact by a path on the **backend's** machine, which is the
+/// honest answer from a self-hosted server but useless to a CLI running anywhere else. So
+/// the files are fetched by name and the document is rewritten to point at the local
+/// copies: after this, every field describes a file the caller actually has.
+///
+/// Only reached when `--output` was given; without it the generic path prints the
+/// server's answer untouched.
+async fn handle_scrape(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let output_dir = tool_params
+        .get("output")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let capture_args = {
+        let mut args = tool_params.clone();
+        if let Value::Object(ref mut map) = args {
+            // A destination on this machine means nothing to the server, and forwarding
+            // it would put an undeclared argument on the tool call.
+            map.remove("output");
+        }
+        args
+    };
+
+    let text = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut args = capture_args.clone();
+        args["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, args).await }
+    })
+    .await?;
+
+    // `--output` is the only way to reach this handler, so the destination is present.
+    let Some(dir) = output_dir else {
+        cli_println!("{text}");
+        return Ok(());
+    };
+    let dir = PathBuf::from(dir);
+
+    let mut document: Value = serde_json::from_str(&text).map_err(|e| {
+        format!("scrape did not return JSON, so --output cannot tell which fields are files: {e}")
+    })?;
+
+    let mut written: Vec<PathBuf> = Vec::new();
+    {
+        let doc = scrape_document_mut(&mut document);
+        for field in SCRAPE_ARTIFACT_FIELDS {
+            let Some(raw) = doc.get(*field).and_then(|value| value.as_str()) else {
+                continue;
+            };
+            let Some(name) = artifact_name_of(raw) else {
+                continue;
+            };
+            let bytes = download_artifact(client, base_url, &name).await?;
+            let path = dir.join(&name);
+            save_binary(&path, &bytes).map_err(|e| describe_io_error(&e))?;
+            doc[*field] = json!(path.to_string_lossy());
+            written.push(path);
+        }
+    }
+
+    cli_println!(
+        "{}",
+        serde_json::to_string_pretty(&document)
+            .map_err(|e| format!("Failed to render the document: {e}"))?
+    );
+    // Printed after the document so a caller reading the last lines sees where the files
+    // went even when the document itself is long.
+    for path in written {
+        cli_println!("[Artifact]({})", path.display());
+    }
+    Ok(())
+}
+
 async fn handle_tool_command(
     client: &Client,
     base_url: &str,
@@ -26294,9 +26439,25 @@ fn misplaced_option_message(token: &str) -> Option<String> {
         .join(", ");
     let remainder = owners.len().saturating_sub(MAX_OWNERS);
 
+    // A short flag can mean different long options on different commands (`-o` is
+    // `--output` for `crawl`/`scrape` and `--filename` for `screenshot`/`pdf`). Naming
+    // only the first owner's long form would be a small lie about the others, so every
+    // distinct long form is listed.
+    let mut long_forms: Vec<&str> = Vec::new();
+    for (_, key) in owners.iter() {
+        if !long_forms.contains(key) {
+            long_forms.push(key);
+        }
+    }
+    let long_forms = long_forms
+        .iter()
+        .map(|key| format!("`--{}`", key))
+        .collect::<Vec<_>>()
+        .join(", ");
+
     let mut message = format!(
-        "Unknown option: '{}' — it is an option of {} (as `--{}`), not a global flag or a command.",
-        token, named, long_key
+        "Unknown option: '{}' — it is an option of {} (as {}), not a global flag or a command.",
+        token, named, long_forms
     );
     if remainder > 0 {
         message.push_str(&format!(" (and {} more command(s))", remainder));
@@ -27108,6 +27269,19 @@ async fn run(
         }
         "pdf" => {
             handle_pdf(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        // Guarded so that a plain `scrape` keeps going through the generic path, byte for
+        // byte: `--output` is the only thing this handler adds, and nothing about the
+        // existing behaviour should depend on it being reachable.
+        "scrape" if tool_params.get("output").is_some() => {
+            handle_scrape(
                 &client,
                 &base_url,
                 &tool_name,
@@ -30399,8 +30573,50 @@ mod tests {
     fn misplaced_option_resolves_a_short_alias_to_its_long_form() {
         let message = misplaced_option_message("-o").expect("-o is a short alias");
 
-        assert!(message.contains("--filename"), "expected the long form: {message}");
+        // `-o` is not one long option: it is `--output` where a destination directory or
+        // file is the point, and `--filename` for the screenshot/pdf commands. The
+        // message must name every meaning, because a user who follows only the first
+        // would get a different option than the one they meant.
+        assert!(message.contains("--filename"), "expected `--filename`: {message}");
+        assert!(message.contains("--output"), "expected `--output`: {message}");
         assert!(!message.contains("Unknown command"), "{message}");
+    }
+
+    #[test]
+    fn artifact_name_of_takes_the_last_segment_of_either_path_flavour() {
+        // The CLI addresses the artifact endpoint by name, so a Windows path from a
+        // Windows backend and a POSIX path from a Linux one must both reduce to the name.
+        assert_eq!(
+            artifact_name_of(r"C:\tmp\cache\web\pdf\pdf-20261007-010203-456-abcdef01.pdf").as_deref(),
+            Some("pdf-20261007-010203-456-abcdef01.pdf"),
+        );
+        assert_eq!(
+            artifact_name_of("/tmp/cache/web/screenshot/shot-20261007-010203-456-abcdef01.png").as_deref(),
+            Some("shot-20261007-010203-456-abcdef01.png"),
+        );
+
+        // A value that is not a file is skipped rather than turned into a request for
+        // something that cannot exist: a URL has no dot in its last segment, and a
+        // base64 blob is not a path at all.
+        for not_a_path in ["", "   ", "https://example.com/page", "iVBORw0KGgoAAAANSUhEUg"] {
+            assert_eq!(artifact_name_of(not_a_path), None, "value={not_a_path:?}");
+        }
+    }
+
+    #[test]
+    fn scrape_document_mut_accepts_both_response_shapes() {
+        // Tool output has been seen both bare and wrapped in `{success, data}`. Guessing
+        // wrong would find no artifacts and still report success, so both are accepted.
+        let mut bare = json!({ "pdf": "/tmp/a.pdf" });
+        assert_eq!(scrape_document_mut(&mut bare)["pdf"], "/tmp/a.pdf");
+
+        let mut wrapped = json!({ "success": true, "data": { "pdf": "/tmp/a.pdf" } });
+        assert_eq!(scrape_document_mut(&mut wrapped)["pdf"], "/tmp/a.pdf");
+
+        // A `data` that is not an object (an error message, say) leaves the root as the
+        // document rather than indexing into something that is not one.
+        let mut not_a_document = json!({ "success": false, "data": "boom" });
+        assert_eq!(scrape_document_mut(&mut not_a_document)["success"], false);
     }
 
     #[test]

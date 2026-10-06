@@ -2800,7 +2800,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Page scrape ----
         CommandDef {
             name: "scrape",
-            description: "Scrape the session's current page once and return every requested output in ONE document — markdown, html, rawHtml, links, images, attributes, deterministicJson, readability. Asking for three outputs this way costs one page load instead of three, and because every field comes from that single capture they cannot disagree about what the page said. There is no URL argument: every read in this family targets the active page, so 'open <url>' first is how you choose the page. Run 'scrape formats' to see what this build can deliver.",
+            description: "Scrape the session's current page once and return every requested output in ONE document — markdown, html, rawHtml, links, images, attributes, deterministicJson, readability, screenshot, pdf. Asking for three outputs this way costs one page load instead of three, and because every field comes from that single capture they cannot disagree about what the page said. There is no URL argument: every read in this family targets the active page, so 'open <url>' first is how you choose the page. Run 'scrape formats' to see what this build can deliver. screenshot and pdf are files rather than text, so pass --output <dir> to get them onto this machine.",
             category: Category::Export,
             hidden: false,
             batch_supported: false,
@@ -2818,6 +2818,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: true,
                     short: None,
                 },
+                OptionDef {
+                    name: "output <dir>",
+                    description: "Fetch the files this request produced (screenshot, pdf) into <dir> and name the local copies in the document. Without it a binary format can only report the backend's own path, which is of no use to a caller on another machine",
+                    is_bool: false,
+                    short: Some("o"),
+                },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "page_scrape".to_string(),
@@ -2830,6 +2836,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // Sent only when the flag is present: the backend's default is true,
                 // and sending a value the caller did not ask for would freeze it.
                 if let Some(true) = get_bool(args, "no-main-content") { p["onlyMainContent"] = json!(false); }
+                // Client-side only: a destination on *this* machine is nothing the
+                // server could act on. The handler reads it and strips it before the
+                // call, which is also why the dispatch arm for it is guarded.
+                if let Some(v) = get_opt_str(args, "output") { p["output"] = json!(v); }
                 p
             },
         },
@@ -9628,7 +9638,9 @@ mod tests {
         // document about the wrong page that still looked successful.
         assert!(cmd.args.is_empty(), "scrape takes no positional argument");
         let keys: Vec<&str> = cmd.options.iter().map(|o| o.key()).collect();
-        assert_eq!(keys, vec!["formats", "no-main-content"]);
+        // `output` is a destination on the *caller's* machine, so it is an option rather
+        // than a server argument: the handler strips it before the tool call.
+        assert_eq!(keys, vec!["formats", "no-main-content", "output"]);
 
         // Even if a URL somehow reached the params map it would not be forwarded.
         let mut args = HashMap::new();
@@ -9658,6 +9670,39 @@ mod tests {
         assert!(!cmd.options[0].is_bool, "--formats takes a value");
         assert!(cmd.options[1].is_bool, "--no-main-content is a flag");
         assert!(!cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_scrape_output_option_is_passed_through_and_absent_by_default() {
+        let map = commands_map();
+        let cmd = map.get("scrape").unwrap();
+
+        // Forwarded in the params so the handler can see it, even though it is a
+        // destination on the caller's machine and never reaches the server: the handler
+        // reads it and strips it, and that removal is what the dispatch guard keys on.
+        let mut args = HashMap::new();
+        args.insert("output".to_string(), json!("out/artifacts"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["output"], "out/artifacts");
+
+        // Not sent when the caller did not ask for a destination: the server has no
+        // `output` argument, and inventing one would put an undeclared arg on the call.
+        assert!((cmd.tool_params_fn)(&HashMap::new()).get("output").is_none());
+    }
+
+    #[test]
+    fn test_scrape_output_has_a_short_alias() {
+        let map = commands_map();
+        let cmd = map.get("scrape").unwrap();
+        let output = cmd
+            .options
+            .iter()
+            .find(|o| o.key() == "output")
+            .expect("scrape should declare --output");
+
+        // A destination is typed on every binary-format request, which is exactly what a
+        // short alias is for.
+        assert_eq!(output.short, Some("o"));
     }
 
     // =========================================================================
