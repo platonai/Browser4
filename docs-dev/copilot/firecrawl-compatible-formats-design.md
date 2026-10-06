@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | **Phase 0 + 1a/1b/1d 已实现；Phase 1c 部分实现**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 8 个 provider / SPI 接线与 contributor 消费 / **A1 runner + A2 `page` 域（含 CLI `page scrape`）+ 真机 e2e**，**159 个单测全绿**）；剩余：REST `api/scrape` 控制器、`strict` 三态、`expires`/`maxAge`、Phase 2+ |
+| 状态 | **Phase 0 + 1a/1b/1d 已实现；Phase 1c 主体已实现**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 8 个 provider / SPI 接线与 contributor 消费 / runner + `page` 域 + CLI `page scrape` + REST `api/scrape`，**166 个单测全绿**，MCP 与 REST 两条路径均经真实后端 + 真实 Chrome 验证）；剩余：`strict` 三态、`expires`/`maxAge`、异步面、夹具页、Phase 2+ |
 | 目标仓库 | Browser4 `4.14.0-rc.8` @ `e0a7d20858`（4.13.x 合并后的 4.14.x；设计起草时基线为 `d86b69fc8b`） |
 | 对照基线 | Firecrawl `ce8ed1233`（见 [对照表](firecrawl-vs-browser4-output-formats.md)） |
 | 一句话 | 给 Browser4 加一层「`formats[]` 请求 → 一次抓取扇出多种输出 → 返回 Firecrawl 形状 Document」的兼容面，并把它作为后续 branding/product/menu 等格式的**插件扩展点** |
@@ -544,7 +544,7 @@ class BrandingFormatContributor : PageFormatContributor {
 | 降级可见 | 未实现格式 / 工具不支持 / X-SQL 报错各自产生不同文案；`formatsDelivered` 可区分"没请求"与"请求了没拿到" |
 | 字段裁剪 | 未请求格式的字段在响应中不存在（`retainRequested`） |
 
-### Phase 1c — REST/MCP 集成层（🟡 A1 + A2 + A7 已交付并经真机验证；A5/A6 未实现）
+### Phase 1c — REST/MCP 集成层（✅ A1 + A2 + A3 + A5 + A7 已交付并经真机验证；`strict`/`expires`/异步面/夹具页见"仍待交付"）
 
 已核实的接入点（复用时不必再找）：
 
@@ -624,14 +624,39 @@ $ ./b4w.ps1 page scrape --formats '["markdown","links"]'      # JSON 数组形�
 
 **`images` 空而有记录不是矛盾**：example.com 没有 `<img>`，所以 `images` 是空列表，被共享 mapper 的 NON_EMPTY 语义从线上省略；但 `formatsDelivered` 仍列出它。这正是想要的区分——"请求了、产出为空" ≠ "没请求"，而后者才需要 `warning`。
 
+#### A5 ✅ `PageScrapeController`（`api/scrape` + `api/scrape/formats`）
+
+薄壳：请求体 → 调用 `PageScrapeService` → `{success, data}` 信封。放在这里的任何决策都会被决定两次，所以这里不做决策。
+
+- `POST /api/scrape` — 校验（`FormatOptionSchema.requireValid()`）在调用 service **之前**，所以拼错格式不需要付一次页面加载。
+- `GET /api/scrape/formats` — 能力发现，与 MCP 的 `page.formats` 同一份数据。
+- `IllegalArgumentException` → 400 的 `@ExceptionHandler`，照 `ScrapeController` 的既有形状。
+- 异步面（`/submit` + `/{id}/status|result|stream`）**未实现**：本 build 能交付的每个格式都在一次同步 capture 内答完，异步面是为媒体下载与 LLM 调用准备的（Phase 3）。现在加就是一个没有调用方的未测信封。
+
+**真机验证（同一后端，紧接上面的 e2e）**：
+
+```
+GET  /api/scrape/formats  → 200  {"success":true,"data":[ … 22 条 … ]}
+POST /api/scrape          → 200  {"success":true,"data":{"url":"https://example.com/",
+                                "markdown":"…","links":["https://iana.org/help/example-domains"],
+                                "metadata":{…, "formatsRequested":["markdown","links"],
+                                            "formatsDelivered":["markdown","links"]}}}
+POST 未知格式 "markdwon"   → 400  {"success":false,"error":"Bad Request",
+                                "message":"Unknown format 'markdwon'. Known formats: markdown, …"}
+```
+
+**真机才暴露的坑（第三个）**：`PageScrapeRequestBody` 一开始没写 `@param:JsonProperty`，结果请求体**没有绑定**——服务收到的是全默认值对象，于是返回了一个指向 `sessionId` 的 400，而真正的问题是 DTO 绑定。三条探针（未知格式 / 只给 sessionId / 不给 sessionId）当时返回**完全一样**的错误，这个自相矛盾本身就是线索。补上注解后三条全部正确。
+
+**如实记录一处未查清的地方**：我无法完整复原当时的中间状态。按 `needsSnapshot = steps.any { FROM_SNAPSHOT }`，若 `formats` 真的是空的就不该发生 capture，也就不该出现那个 `sessionId` 报错——两者对不上。事实是：加注解前三条探针稳定返回同一个错，加注解后三条全部正确。机制上我只确认到"DTO 未绑定"，没有把中间过程编圆。本模块每个请求 DTO 都带这组注解（`rest/mcp/controller/dto/McpDtos.kt`），跟约定走即可。
+
 #### 仍待交付
 
-- `PageScrapeController`（`api/scrape`，含 `formats` 能力发现与 `{id}/status|result|stream` 异步面）。REST 面是**薄壳**：MCP 路径已端到端可达，REST 只是把同一份 `PageScrapeService` 暴露成 HTTP。
-- `strict` 三态契约（§6.2 的 503/502/504）。因此 `page.scrape` **刻意不接受** `strict` 参数——接受了却只降级就是撒谎。
+- `strict` 三态契约（§6.2 的 503/502/504）。因此 `page.scrape` 与 `POST /api/scrape` **刻意不接受** `strict` 参数——接受了却只降级就是撒谎。
 - `expires` / `maxAge`：同上，见 A1 的已知偏差。
 - 裸 `scrape` 命令（见上，需要 `commands.rs` + 别名 + e2e 场景）。
-- **`sessionId` 目前是必需的**（`requiresReceiver = true`）。设计稿 §3.2 写的是"不需要 sessionId"，但 §12 的开放问题 **Q1**（无 url 且无会话时自动开临时会话，还是要求先 `open`）至今未拍板，所以在拍板前要求会话是唯一诚实的选择。CLI 会自动注入 sessionId，所以 `page scrape` 用户体验上无感；只有裸 HTTP 调用方需要显式给。
-- **§11 的夹具页** still 未建（`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/formats-fixture.html`）。本次 e2e 用的是 `https://example.com`，它够证明链路，但不含表格、重复卡片、无 alt 图片、`data-*` 属性——渲染质量仍需夹具页覆盖。
+- **`sessionId` 目前是必需的**（`requiresReceiver = true`）。设计稿 §3.2 写的是"不需要 sessionId"，但 §12 的开放问题 **Q1**（无 url 且无会话时自动开临时会话，还是要求先 `open`）至今未拍板，所以在拍板前要求会话是唯一诚实的选择。CLI 会自动注入 sessionId，所以 `page scrape` 用户体验上无感；REST 调用方需要显式给。
+- 异步面（`/api/scrape/submit` + `/{id}/status|result|stream`），理由见 A5。
+- **§11 的夹具页**仍未建（`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/formats-fixture.html`）。本次 e2e 用的是 `https://example.com`，它够证明链路，但不含表格、重复卡片、无 alt 图片、`data-*` 属性——渲染质量仍需夹具页覆盖。
 
 
 
