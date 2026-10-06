@@ -197,9 +197,11 @@ object PageFormats {
             QUESTION -> setOf("answer")
             QUERY -> setOf("answer", "highlights")
             VIDEO -> setOf("video", "videos")
-            // The file is written either way, so the path is always present; the
-            // base64 rides alongside it only when the format asked for it.
+            // A binary format's file is written either way, so the path is always
+            // present; the base64 rides alongside it only when the format asked for it.
+            // Two fields, one format — the same rule for both binary formats.
             SCREENSHOT -> setOf("screenshot", "screenshotBase64")
+            PDF -> setOf("pdf", "pdfBase64")
             else -> setOf(canonical)
         }
     }

@@ -7,6 +7,7 @@ import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import com.fasterxml.jackson.databind.JsonNode
 import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
 import java.util.Base64
 import java.util.UUID
@@ -114,20 +115,19 @@ class SnapshotFormatStepRunner(
     /**
      * Write a step's base64 output to a file and return its path.
      *
-     * The location is [AppPaths.WEB_SCREENSHOT_DIR] — the directory this project
-     * already reserves for screenshots, and one that sits **inside the process temp
-     * tree** (`PROC_TMP_DIR/cache/web/screenshot`). That is what makes the answer a
-     * genuinely temporary file: the path is usable while the process's temp tree
-     * lives, which is the honest contract and also the reason a *remote* caller needs
-     * a download endpoint rather than a path.
+     * The location is chosen by [artifactDir] — a directory this project already
+     * reserves, inside the **process temp tree**, which is what makes the answer a
+     * genuinely temporary file: the path is usable while that tree lives. It is also
+     * why a *remote* caller needs the download endpoint rather than a path.
      *
      * The name carries a timestamp and a short random suffix rather than the request
      * id: two concurrent requests can capture the same page, and `PageFormats` has no
      * request identifier yet (design §3.5's `metadata.scrapeId` is still unset).
      *
      * @throws IllegalArgumentException when the payload is not the base64 the tool
-     *   documented — loudly, so a broken artifact degrades the format with a reason
-     *   instead of writing a corrupt file.
+     *   documented, or when [extension] is unusable as a file suffix — loudly, so a
+     *   broken artifact degrades the format with a reason instead of writing a corrupt
+     *   file or a file in the wrong place.
      */
     override suspend fun persistArtifact(nameHint: String, base64: String, extension: String): String {
         val bytes = try {
@@ -141,13 +141,56 @@ class SnapshotFormatStepRunner(
             throw IllegalArgumentException("artifact '$nameHint' decoded to zero bytes")
         }
 
-        val dir = AppPaths.WEB_SCREENSHOT_DIR
+        val leaf = artifactExtension(extension)
+        val dir = artifactDir(leaf)
         Files.createDirectories(dir)
-        val name = "$nameHint-${AppPaths.fromNow()}-${UUID.randomUUID().toString().take(8)}.$extension"
+        // The name uses the *normalised* extension, so the value that was validated is the
+        // value that is written: passing `.pdf` must not produce `..pdf`.
+        val name = "$nameHint-${AppPaths.fromNow()}-${UUID.randomUUID().toString().take(8)}.$leaf"
         val path = dir.resolve(name)
         Files.write(path, bytes)
         return path.toString()
     }
+
+    /**
+     * [extension] as a safe file suffix and directory leaf.
+     *
+     * Lowercased and stripped of a leading dot, because `ArtifactSpec` documents a
+     * dot-less lowercase extension and a provider that spells it `.PDF` should get a
+     * correct file rather than `..PDF`. Everything else is **refused rather than
+     * sanitised**: the value comes from a provider's `ArtifactSpec`, which is an
+     * extension point open to plugins, and it becomes both a directory name and a file
+     * suffix — so a path is not something a plugin may steer, and a plugin's bug should
+     * surface as an error rather than be quietly rewritten.
+     *
+     * @throws IllegalArgumentException when [extension] is empty or is not purely
+     *   alphanumeric once normalised.
+     */
+    private fun artifactExtension(extension: String): String {
+        val leaf = extension.trim().lowercase().removePrefix(".")
+        require(leaf.isNotEmpty()) { "an artifact needs an extension to be filed under" }
+        require(leaf.all { it.isLetterOrDigit() }) {
+            "invalid artifact extension '$extension': only letters and digits are allowed"
+        }
+        return leaf
+    }
+
+    /**
+     * The directory an artifact of [leaf] is written to.
+     *
+     * Both roots are `AppPaths`, which is the constraint the artifact policy sets and
+     * the only place this process is allowed to scatter files. A capture (`png`) goes
+     * to [AppPaths.WEB_SCREENSHOT_DIR], the directory this project already reserves for
+     * it; anything else gets a sibling under the same `web/` parent, named after its
+     * extension — so a PDF lands in `web/pdf`, not in a folder called `screenshot`.
+     *
+     * One shared directory would be shorter and wrong: an artifact filed under a name
+     * that contradicts it is how someone loses an hour later. `pdf` needs no new
+     * `AppPaths` constant either — that class lives in the dependency, and the leaf is
+     * derived from the parent that already holds `export/` and `screenshot/`.
+     */
+    private fun artifactDir(leaf: String): Path =
+        if (leaf == PNG_EXTENSION) AppPaths.WEB_SCREENSHOT_DIR else AppPaths.WEB_CACHE_DIR.resolve(leaf)
 
     /** The tool returns bare base64; a `data:` URI prefix is accepted rather than fatal. */
     private fun stripDataUriPrefix(raw: String): String {
@@ -230,6 +273,9 @@ class SnapshotFormatStepRunner(
         internal const val EXPIRES_ARG = "expires"
 
         private const val CAPTURE = "capture"
+
+        /** The one extension with a directory of its own in `AppPaths`. */
+        private const val PNG_EXTENSION = "png"
         private const val SECONDS_PER_MINUTE = 60L
         private const val SECONDS_PER_HOUR = 3_600L
         private const val SECONDS_PER_DAY = 86_400L

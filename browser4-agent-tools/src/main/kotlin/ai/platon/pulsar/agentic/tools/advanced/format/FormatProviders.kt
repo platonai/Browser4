@@ -6,6 +6,7 @@ import ai.platon.pulsar.agentic.tools.advanced.format.providers.HtmlFormatProvid
 import ai.platon.pulsar.agentic.tools.advanced.format.providers.ImagesFormatProvider
 import ai.platon.pulsar.agentic.tools.advanced.format.providers.LinksFormatProvider
 import ai.platon.pulsar.agentic.tools.advanced.format.providers.MarkdownFormatProvider
+import ai.platon.pulsar.agentic.tools.advanced.format.providers.PdfFormatProvider
 import ai.platon.pulsar.agentic.tools.advanced.format.providers.RawHtmlFormatProvider
 import ai.platon.pulsar.agentic.tools.advanced.format.providers.ReadabilityFormatProvider
 import ai.platon.pulsar.agentic.tools.advanced.format.providers.ScreenshotFormatProvider
@@ -33,8 +34,9 @@ object FormatProviders {
         ImagesFormatProvider,
         AttributesFormatProvider,
         DeterministicJsonFormatProvider,
-        // The only LIVE_TAB provider so far: everything above answers from the capture.
+        // The LIVE_TAB providers: everything above answers from the capture alone.
         ScreenshotFormatProvider,
+        PdfFormatProvider,
     ).associateBy { it.id }
 
     /**

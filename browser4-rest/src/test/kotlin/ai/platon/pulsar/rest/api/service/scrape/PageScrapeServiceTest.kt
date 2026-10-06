@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service.scrape
 
+import ai.platon.pulsar.agentic.tools.advanced.format.FormatProviders
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatSnapshot
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatStepRunner
 import ai.platon.pulsar.skeleton.workflow.format.FormatOptionSchema
@@ -9,6 +10,7 @@ import ai.platon.pulsar.skeleton.workflow.format.PageFormats
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -163,22 +165,31 @@ class PageScrapeServiceTest {
     @Test
     @DisplayName("a core format this build cannot deliver is unavailable, with the reason")
     fun unimplementedCoreFormatIsUnavailable() {
-        // `pdf`, not `screenshot`: screenshot gained a provider in Phase 2, and the
-        // capability listing is exactly where that must show up.
-        val entry = service().formats().single { it["id"] == "pdf" }
+        // `audio`, not `pdf` or `screenshot`: both of those gained providers in Phase 2,
+        // and the capability listing is exactly where that must show up. The guard makes
+        // a stale example fail readably instead of confusingly.
+        val missing = PageFormats.AUDIO
+        assertFalse(FormatProviders.isImplemented(missing), "$missing has a provider now; pick another example")
+
+        val entry = service().formats().single { it["id"] == missing }
 
         assertEquals(false, entry["available"])
         assertEquals("not available in this build", entry["reason"])
     }
 
     @Test
-    @DisplayName("a format that gained a provider reports itself available")
-    fun screenshotIsAvailable() {
-        val entry = service().formats().single { it["id"] == "screenshot" }
+    @DisplayName("formats that gained a provider report themselves available")
+    fun formatsWithProvidersAreAvailable() {
+        // `screenshot` and `pdf` were both reported as "not available in this build"
+        // until Phase 2; a capability listing that still said so would send callers away
+        // from a format this deployment can deliver.
+        for (id in listOf(PageFormats.SCREENSHOT, PageFormats.PDF)) {
+            val entry = service().formats().single { it["id"] == id }
 
-        assertEquals(true, entry["available"])
-        assertNull(entry["reason"])
-        assertEquals("core", entry["source"])
+            assertEquals(true, entry["available"], id)
+            assertNull(entry["reason"], id)
+            assertEquals("core", entry["source"], id)
+        }
     }
 
     @Test

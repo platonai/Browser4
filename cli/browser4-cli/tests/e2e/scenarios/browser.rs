@@ -4825,8 +4825,8 @@ pub(super) fn test_scrape_formats(ctx: &mut E2ECtx) {
         bad.stderr
     );
 
-    // ── 4. The live stage: capture, read, THEN screenshot ─────────────────
-    // One request mixing a snapshot format with a live one. The interesting part is
+    // ── 4. The live stage: capture, read, THEN the tab work ───────────────
+    // One request mixing a snapshot format with *two* live ones. The interesting part is
     // not that a screenshot came back but that the *tab* work happened after the
     // capture-derived format, which is the ordering the engine promises.
     let mixed = run_command(
@@ -4834,22 +4834,22 @@ pub(super) fn test_scrape_formats(ctx: &mut E2ECtx) {
         &[
             "scrape",
             "--formats",
-            r#"["markdown",{"type":"screenshot","fullPage":true,"base64":true}]"#,
+            r#"["markdown",{"type":"screenshot","fullPage":true,"base64":true},{"type":"pdf"}]"#,
         ],
     );
     let mixed_doc = &mixed.stdout;
     assert!(
         mixed_doc.contains(r#""markdown":"#),
-        "the capture-derived format must survive the live step:\n{mixed_doc}"
+        "the capture-derived format must survive the live steps:\n{mixed_doc}"
     );
     assert_eq!(
         mixed_doc.matches("\"captureId\"").count(),
         1,
-        "one capture must serve both the snapshot read and the live step:\n{mixed_doc}"
+        "one capture must serve both the snapshot read and the live steps:\n{mixed_doc}"
     );
     assert!(
-        mixed_doc.contains(r#""formatsDelivered":["markdown","screenshot"]"#),
-        "both formats should be delivered:\n{mixed_doc}"
+        mixed_doc.contains(r#""formatsDelivered":["markdown","screenshot","pdf"]"#),
+        "every format should be delivered:\n{mixed_doc}"
     );
 
     // The bytes are real image data, not a placeholder: PNG (`iVBOR…`) or JPEG.
@@ -4869,13 +4869,47 @@ pub(super) fn test_scrape_formats(ctx: &mut E2ECtx) {
         "the returned path must exist on the service host: {path}"
     );
 
+    // ── 4b. `pdf`: a second live format, printed and filed ────────────────
+    let pdf_path = json_string_field(mixed_doc, "pdf")
+        .unwrap_or_else(|| panic!("no pdf path in:\n{mixed_doc}"));
+    assert!(pdf_path.ends_with(".pdf"), "expected a pdf path, got {pdf_path}");
+    // Filed under its own directory, not in the screenshot one: the host picks the leaf
+    // from the extension, and a PDF sitting in a folder called `screenshot` is exactly
+    // the small lie this assertion exists to prevent.
+    assert_eq!(
+        std::path::Path::new(&pdf_path)
+            .parent()
+            .and_then(|dir| dir.file_name())
+            .and_then(|name| name.to_str()),
+        Some("pdf"),
+        "a PDF should be filed under a directory that says so: {pdf_path}"
+    );
+    // `pdfBase64` was not asked for, so it must not be there — the bytes are opt-in even
+    // though the file itself is always written.
+    assert!(
+        !mixed_doc.contains("\"pdfBase64\""),
+        "base64 output must be opt-in:\n{}",
+        &mixed_doc[..mixed_doc.len().min(600)]
+    );
+    // The strongest available check: read the file back and look for the PDF magic. A
+    // path that exists but holds an error page or a stub would pass every field-level
+    // assertion while being useless to the caller.
+    let pdf_bytes = fs::read(&pdf_path)
+        .unwrap_or_else(|e| panic!("the returned pdf path must be readable ({pdf_path}): {e}"));
+    assert!(
+        pdf_bytes.starts_with(b"%PDF-"),
+        "expected a real PDF at {pdf_path}, got {} bytes starting with {:?}",
+        pdf_bytes.len(),
+        &pdf_bytes[..pdf_bytes.len().min(8)]
+    );
+
     // ── 5. A live-only request does not capture at all ────────────────────
     // "Capture once" also means "never more than the plan needs": with no
     // snapshot-scoped step there is nothing to serialize into the page store.
-    let live_only = run_command(ctx, &["scrape", "--formats", "screenshot"]);
+    let live_only = run_command(ctx, &["scrape", "--formats", "screenshot,pdf"]);
     assert!(
-        live_only.stdout.contains(".png\""),
-        "a bare screenshot should still land a file:\n{}",
+        live_only.stdout.contains(".png\"") && live_only.stdout.contains(".pdf\""),
+        "both live formats should land a file:\n{}",
         live_only.stdout
     );
     assert!(

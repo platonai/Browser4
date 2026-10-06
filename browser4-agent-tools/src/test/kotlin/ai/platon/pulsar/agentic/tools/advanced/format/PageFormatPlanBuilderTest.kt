@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.tools.advanced.format
 
 import ai.platon.pulsar.skeleton.workflow.format.FormatOptionSchema
 import ai.platon.pulsar.skeleton.workflow.format.PageFormat
+import ai.platon.pulsar.skeleton.workflow.format.PageFormats
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -114,15 +115,19 @@ class PageFormatPlanBuilderTest {
     @Test
     @DisplayName("a format this build cannot deliver warns and plans nothing")
     fun unavailableFormatsWarn() {
-        // `pdf`, not `screenshot`: screenshot gained a provider, and a test that used it
-        // as the "cannot deliver" example would have gone on passing only by accident.
-        assertEquals(listOf("pdf: not available in this build"), plan("pdf").warnings)
+        // `audio` needs a media service, which is Phase 3. Two earlier choices for this
+        // example (screenshot, then pdf) each gained a provider; the guard below is what
+        // turns "the example became available" into a readable failure.
+        val missing = PageFormats.AUDIO
+        assertFalse(FormatProviders.isImplemented(missing), "$missing has a provider now; pick another example")
+
+        assertEquals(listOf("$missing: not available in this build"), plan(missing).warnings)
         assertEquals(
             listOf("query: deprecated and unavailable; use question or highlights"),
             plan(mapOf("type" to "query", "prompt" to "p")).warnings,
         )
-        assertTrue(plan("pdf").steps.isEmpty())
-        assertFalse(plan("pdf").needsSnapshot)
+        assertTrue(plan(missing).steps.isEmpty())
+        assertFalse(plan(missing).needsSnapshot)
     }
 
     @Test

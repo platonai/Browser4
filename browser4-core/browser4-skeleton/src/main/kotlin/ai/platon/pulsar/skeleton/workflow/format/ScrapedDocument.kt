@@ -38,6 +38,9 @@ import com.fasterxml.jackson.annotation.JsonInclude
  * @property video `video` format: local path to the downloaded video.
  * @property videos `video` format: discovered videos (Firecrawl's `VideoItem[]`).
  * @property pdf `pdf` extension: local path to the rendered PDF.
+ * @property pdfBase64 `pdf` with `base64`: the document's bytes. Coexists with [pdf]
+ *   for the same reason [screenshotBase64] coexists with [screenshot] — the file is
+ *   written either way, so asking for the bytes never costs the caller the path.
  * @property json `json` / `deterministicJson`: the extracted object.
  * @property summary `summary` format.
  * @property answer `question` (and deprecated `query`): the answer text.
@@ -68,6 +71,7 @@ data class ScrapedDocument(
     val video: String? = null,
     val videos: List<Any?>? = null,
     val pdf: String? = null,
+    val pdfBase64: String? = null,
     val json: Any? = null,
     val summary: String? = null,
     val answer: String? = null,
@@ -109,6 +113,7 @@ data class ScrapedDocument(
             video = kept("video", video),
             videos = if ("videos" in keep) videos else null,
             pdf = kept("pdf", pdf),
+            pdfBase64 = if ("pdfBase64" in keep) pdfBase64 else null,
             json = kept("json", json),
             summary = kept("summary", summary),
             answer = kept("answer", answer),
@@ -211,6 +216,7 @@ data class ScrapedDocument(
         "video" -> video != null
         "videos" -> videos != null
         "pdf" -> pdf != null
+        "pdfBase64" -> pdfBase64 != null
         "json" -> json != null
         "summary" -> summary != null
         "answer" -> answer != null

@@ -31,8 +31,18 @@ private const val LINKS_JSON = """["$HREF/x","$HREF/y","$HREF/x"]"""
 private const val IMAGES_JSON = """["$HREF/a.png"]"""
 private const val ATTRIBUTES_JSON = """["10","20"]"""
 private const val QUERY_JSON = """{"isDone":true,"resultSet":[{"title":"T","price":10}]}"""
-private const val ARTIFACT_DIR = "/tmp/web/screenshot"
+private const val ARTIFACT_ROOT = "/tmp/web"
 private const val SCREENSHOT_BASE64 = "aGVsbG8="
+private const val PDF_BASE64 = "JVBERi0="
+
+/**
+ * Where the fake host files an artifact.
+ *
+ * Mirrors the production host, where the directory follows the extension. A fake that
+ * dropped everything into one directory would let a test pass while the real host filed
+ * a PDF under `screenshot/`.
+ */
+private fun artifactPath(nameHint: String, extension: String) = "$ARTIFACT_ROOT/$extension/$nameHint.$extension"
 
 private val SNAPSHOT_TOOLS = setOf(
     "html_snapshot.export",
@@ -41,7 +51,7 @@ private val SNAPSHOT_TOOLS = setOf(
     "html_snapshot.query",
 )
 
-private val ALL_TOOLS = SNAPSHOT_TOOLS + "tab.screenshot"
+private val ALL_TOOLS = SNAPSHOT_TOOLS + setOf("tab.screenshot", "tab.pdf")
 
 @DisplayName("PageFormatEngine")
 class PageFormatEngineTest {
@@ -106,7 +116,7 @@ class PageFormatEngineTest {
             if (persistFails) throw UnsupportedOperationException("this host has nowhere to put bytes")
             persisted += "$nameHint.$extension"
             calls += "persist:$nameHint"
-            return "$ARTIFACT_DIR/$nameHint.$extension"
+            return artifactPath(nameHint, extension)
         }
 
         override fun supports(domain: String, method: String): Boolean = "$domain.$method" in supported
@@ -357,19 +367,19 @@ class PageFormatEngineTest {
     // ---- live stage and artifacts -------------------------------------------
 
     @Test
-    @DisplayName("a live step runs after every snapshot read, and its bytes are persisted")
+    @DisplayName("every live step runs after every snapshot read, and each artifact is persisted")
     fun liveStepRunsLastAndItsArtifactIsPersisted() = runBlocking {
         val runner = FakeRunner(
             supported = ALL_TOOLS,
-            responses = responses() + ("tab.screenshot" to SCREENSHOT_BASE64),
+            responses = responses() + ("tab.screenshot" to SCREENSHOT_BASE64) + ("tab.pdf" to PDF_BASE64),
         )
 
-        val document = PageFormatEngine(runner).scrape(request("markdown", "screenshot"))
+        val document = PageFormatEngine(runner).scrape(request("markdown", "screenshot", "pdf"))
 
-        // `screenshot` is the only format that needs the tab, so this is the ordering
-        // guarantee's real shape: one capture, every snapshot read (markdown's
-        // readability probe first, then the export fallback), then the live step, then
-        // the bytes landing on disk.
+        // The ordering guarantee's real shape once there are two live formats: one
+        // capture, every snapshot read (markdown's readability probe first, then the
+        // export fallback), then the tab work, then the bytes landing on disk — the live
+        // steps in request order, and none of them before a read.
         assertEquals(
             listOf(
                 "capture",
@@ -377,14 +387,18 @@ class PageFormatEngineTest {
                 "read:export.clean",
                 "live:tab.screenshot",
                 "persist:screenshot",
+                "live:tab.pdf",
+                "persist:pdf",
             ),
             runner.calls,
         )
-        assertEquals(listOf("screenshot.png"), runner.persisted)
-        assertEquals("$ARTIFACT_DIR/screenshot.png", document.screenshot)
+        assertEquals(listOf("screenshot.png", "pdf.pdf"), runner.persisted)
+        assertEquals(artifactPath("screenshot", "png"), document.screenshot)
+        assertEquals(artifactPath("pdf", "pdf"), document.pdf)
         // Not asked for: the bytes are opt-in because they dwarf the document.
         assertNull(document.screenshotBase64)
-        assertEquals(listOf("markdown", "screenshot"), document.metadata.formatsDelivered)
+        assertNull(document.pdfBase64)
+        assertEquals(listOf("markdown", "screenshot", "pdf"), document.metadata.formatsDelivered)
     }
 
     @Test
@@ -399,7 +413,7 @@ class PageFormatEngineTest {
             request(mapOf("type" to "screenshot", "base64" to true))
         )
 
-        assertEquals("$ARTIFACT_DIR/screenshot.png", document.screenshot)
+        assertEquals(artifactPath("screenshot", "png"), document.screenshot)
         assertEquals(SCREENSHOT_BASE64, document.screenshotBase64)
     }
 
@@ -421,7 +435,7 @@ class PageFormatEngineTest {
             }
 
             override suspend fun persistArtifact(nameHint: String, base64: String, extension: String): String =
-                "$ARTIFACT_DIR/$nameHint.$extension"
+                artifactPath(nameHint, extension)
 
             override fun supports(domain: String, method: String): Boolean = true
         }

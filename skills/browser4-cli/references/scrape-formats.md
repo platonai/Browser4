@@ -150,13 +150,13 @@ shared scrape session); until then the argument is refused rather than ignored.
 to every call it makes.
 
 **Available formats in a stock install** — `markdown`, `html`, `rawHtml`, `links`,
-`images`, `attributes`, `deterministicJson`, `readability`, `screenshot`. Everything
-else the command accepts (`pdf`, `json`, `summary`, `question`, `audio`, `video`,
+`images`, `attributes`, `deterministicJson`, `readability`, `screenshot`, `pdf`.
+Everything else the command accepts (`json`, `summary`, `question`, `audio`, `video`,
 `changeTracking`, `rawBase64`) is either a later phase or needs a plugin;
 `scrape formats` is the authority for the build you are running, not this list.
 
-`screenshot` is the only format that needs the **live tab**, and the only one that
-writes a file. It captures the visible viewport by default, or the whole scrollable
+`screenshot` and `pdf` are the two formats that need the **live tab**, and the only
+two that write a file. It captures the visible viewport by default, or the whole scrollable
 page with `--formats '[{"type":"screenshot","fullPage":true}]'`.
 
 **The file is always written; the path is what comes back:**
@@ -188,6 +188,41 @@ honour them and a silently wrong capture is worse than an error:
 Either one produces `screenshot: … is not supported yet — …` in `warning`, and the
 rest of a mixed request still runs.
 
+### `pdf`
+
+Prints the page through CDP `Page.printToPDF` — A4, portrait, background graphics
+printed — and comes back as a file, exactly like `screenshot`:
+
+```json
+{"pdf": "/…/cache/web/pdf/pdf-<ts>-<rand>.pdf"}
+```
+
+Note the directory: PDFs are filed under `web/pdf`, a sibling of `web/screenshot`, so
+a folder name never contradicts what is inside it.
+
+`pdf` is a **Browser4 extension**: Firecrawl has no page-to-PDF output format (its own
+`pdf` code goes the other way — it *parses* a PDF you scraped into markdown). There is
+therefore no Firecrawl option set to match, and an option that cannot be honoured is
+refused by name rather than ignored:
+
+| Option | Why it is refused |
+|---|---|
+| `viewport: {width, height}` | A PDF is printed for the whole document; `Page.printToPDF` has no region to capture |
+| `quality` | The PDF path has no quality setting |
+
+`fullPage` is accepted and changes nothing, which is deliberate: a PDF already *is* the
+whole page, and `fullPage` is a plain boolean defaulting to `false` — so "the caller
+said nothing" and "the caller said `false`" are the same value, and refusing it would
+refuse every plain `"pdf"` request.
+
+`base64: true` also returns `pdfBase64`, on the same terms as `screenshot`: the file is
+written either way, so the bytes come *in addition to* the path, never instead of it.
+
+```bash
+browser4-cli scrape --formats '[{"type":"pdf","base64":true}]'
+# → "pdf": "<path>", "pdfBase64": "JVBERi0xLjQ…"
+```
+
 A request that asks for **only** live formats does not capture at all: with no
 snapshot-scoped step there is nothing to serialize into the page store, so
 `metadata.captureId` is absent. That is capture-once working in the other direction.
@@ -202,7 +237,7 @@ exist only once a plugin provides them, and `scrape formats` reports
 | Symptom | Meaning | Fix |
 |---|---|---|
 | `Unknown format 'markdwon'. Known formats: …` | A format id this build does not accept. Nothing was captured | Check the spelling against the printed list, or run `scrape formats` |
-| `Missing required parameter: sessionId` | Called over raw HTTP without a session | Use the CLI (it injects one), or pass `sessionId` in the JSON body. There is no "auto-open a session" mode yet |
+| `'sessionId' is required: …` | Called over raw HTTP without a session. `scrape` reads the page a session is already *on*, so it will not pick one for you — guessing would read a different session's page | `open` the page first and pass the `sessionId` it returns; the CLI injects one for you automatically |
 | Only the first format came back, and the exit code was 0 | Your shell split the comma list: in PowerShell an *unquoted* `a,b,c` is three arguments, so `--formats` received only `a` | Quote it: `--formats "markdown,links,images"`. `formatsRequested` in the response shows what the server actually received |
 | `unexpected positional argument` | `scrape` takes no URL: every read targets the active page | `open <url>` first, then scrape |
 | `'url' is not supported yet` (REST/MCP callers) | A request-level URL was rejected by name rather than ignored — the reads would have answered from the active page | `open` the page first; per-request targeting needs Stage 0 |

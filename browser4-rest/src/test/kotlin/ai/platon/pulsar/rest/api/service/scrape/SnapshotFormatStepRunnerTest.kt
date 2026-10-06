@@ -81,6 +81,59 @@ class SnapshotFormatStepRunnerTest {
     }
 
     @Test
+    @DisplayName("a PDF is filed under web/pdf, never under a directory called screenshot")
+    fun nonImageArtifactsGetTheirOwnDirectory() {
+        val encoded = Base64.getEncoder().encodeToString("%PDF-1.4".toByteArray())
+
+        val path = runBlocking { runner(RecordingDispatcher()).persistArtifact("pdf", encoded, "pdf") }
+
+        val file = Path.of(path)
+        assertTrue(Files.exists(file), "expected a real file at $path")
+        // Still AppPaths, still the temp tree — but the leaf follows the extension, so
+        // the directory never contradicts what is inside it. One shared directory would
+        // have been shorter and would have put PDFs in `screenshot/`.
+        assertTrue(file.startsWith(AppPaths.WEB_CACHE_DIR), "expected $path under ${AppPaths.WEB_CACHE_DIR}")
+        assertFalse(file.startsWith(AppPaths.WEB_SCREENSHOT_DIR), "a PDF must not land in $path")
+        assertTrue(path.endsWith(".pdf"), path)
+        Files.deleteIfExists(file)
+    }
+
+    @Test
+    @DisplayName("an extension that could steer the write is refused rather than sanitised")
+    fun hostileArtifactExtensionIsRefused() {
+        val encoded = Base64.getEncoder().encodeToString("hi".toByteArray())
+
+        // The extension becomes a directory name and a file suffix, and it arrives from a
+        // provider's `ArtifactSpec` — an extension point open to plugins. A traversal
+        // attempt must fail loudly; silently rewriting it would hide the plugin's bug.
+        for (extension in listOf("", "   ", "../evil", "p/n", "p\\n", "pdf;rm")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { runner(RecordingDispatcher()).persistArtifact("pdf", encoded, extension) }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("an extension is normalised once, so the value validated is the value written")
+    fun artifactExtensionIsNormalised() {
+        val encoded = Base64.getEncoder().encodeToString("%PDF-1.4".toByteArray())
+
+        // `ArtifactSpec` documents a dot-less lowercase extension. A provider that spells
+        // it `.PDF` should still get a correct file — not `..PDF` — and the directory
+        // decision must follow the same normalised value rather than the raw one.
+        val path = runBlocking { runner(RecordingDispatcher()).persistArtifact("pdf", encoded, ".PDF") }
+
+        val file = Path.of(path)
+        assertTrue(Files.exists(file), "expected a real file at $path")
+        assertTrue(
+            file.startsWith(AppPaths.WEB_CACHE_DIR.resolve("pdf")),
+            "expected $path under ${AppPaths.WEB_CACHE_DIR.resolve("pdf")}",
+        )
+        assertTrue(path.endsWith(".pdf"), "expected a normalised suffix, got $path")
+        Files.deleteIfExists(file)
+    }
+
+    @Test
     @DisplayName("a data-URI prefix is tolerated, and a payload that is not base64 is refused")
     fun artifactPayloadIsValidated() {
         val encoded = Base64.getEncoder().encodeToString("hi".toByteArray())

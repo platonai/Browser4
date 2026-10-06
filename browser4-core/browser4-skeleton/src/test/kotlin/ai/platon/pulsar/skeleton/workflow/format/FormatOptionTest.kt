@@ -364,9 +364,11 @@ class FormatOptionTest {
         assertEquals(setOf("answer"), PageFormats.documentFieldsOf("question"))
         assertEquals(setOf("answer", "highlights"), PageFormats.documentFieldsOf("query"))
         assertEquals(setOf("video", "videos"), PageFormats.documentFieldsOf("video"))
-        // The file is written either way, so the path is always there; the bytes ride
-        // alongside it only when the format asked for them.
+        // A binary format writes its file either way, so the path is always there; the
+        // bytes ride alongside it only when the format asked for them. Same rule for
+        // both binary formats.
         assertEquals(setOf("screenshot", "screenshotBase64"), PageFormats.documentFieldsOf("screenshot"))
+        assertEquals(setOf("pdf", "pdfBase64"), PageFormats.documentFieldsOf("pdf"))
         assertEquals(setOf("branding"), PageFormats.documentFieldsOf("branding"))
         assertTrue(PageFormats.documentFieldsOf("markdwon").isEmpty())
         assertEquals("json", PageFormats.formatOfField("json"))

@@ -793,7 +793,7 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 
    真正的第三方 id 支持（`@JsonAnyGetter` 泛化容器）**已决定不做（决策 A4），留待办**：它会让响应多出插件定义的顶层键，等于让插件参与决定 API 形状——那是 API 形状的**所有权**问题，不该被一次实现顺手决定。
 
-### Phase 2 — 活体产物（🟡 `screenshot` 已交付并经真机验证；`pdf` 与落盘策略未做）
+### Phase 2 — 活体产物（✅ 已交付：`screenshot` 与 `pdf` 都经真机验证）
 
 `screenshot` 是第一个需要**活体 tab** 的格式，也是 `FormatStage.LIVE_TAB` 的第一次真实执行——在此之前该阶段只在 `FakeRunner` 单测里跑过，而这正是它藏了两个真 bug 的原因（见下）。
 
@@ -821,7 +821,43 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 
 **真机断言**（`test_e2e_scrape_formats`，真实 Chrome）：一次请求里 `markdown` + `screenshot` 共存且全文只有**一个** `captureId`（快照读先于活体步骤）；`formatsDelivered` 两者齐全；`screenshotBase64` 是真实图像数据（`iVBOR…` PNG 魔数）；**返回的路径上文件确实存在**（"必写文件"是对文件系统的承诺，只查字段等于没查）；纯活体请求**不产生** `captureId`（"一次抓取"的另一半：不多于所需）。
 
-**未做**：`pdf`（同样的活体路径，落盘策略与 `screenshot` 一致即可复用）；二进制产物的 `--out` 语义（§3.3 想要"必须落到 `--out` 目录"，而当前是服务端临时目录 + 返回路径）；**下载端点（决策 A3 = 要）**——顺序上它先于 `--out`，因为没有取字节的通道时，`--out` 只能靠"调用方与服务端共享文件系统"这个假设。
+### Phase 2b — `pdf`（✅ 已交付）
+
+`pdf` 是第二个活体格式，也是第一个**复用** `screenshot` 打开的产物路径的格式。它同时是唯一一个我们**无法**从 Firecrawl 抄语义的格式，这一点值得记下来。
+
+**先核实了一件事：Firecrawl 没有 `pdf` 输出格式。** 它的 `apps/api/src/scraper/scrapeURL/engines/pdf/`（`firePDF`）做的是**反方向**——把一个*本身就是 PDF* 的页面**解析**成 markdown。所以"Firecrawl 的 `pdf` 有哪些选项"这个问题**没有答案**，不存在要兼容的选项集；能到达这里的选项只有 `PageFormat` 那个扁平超集。这与 `ScrapedDocument` 里"`readability` 与 `pdf` 是 Browser4 扩展"的说明是一致的。
+
+**工具面**：`tab.pdf` 走 CDP `Page.printToPDF`（A4、纵向、打印背景），返回 base64——与 `screenshot` 同形，所以 `ArtifactSpec` + `persistArtifact` 直接复用。但它**一个参数都不收**：执行器是 `validateArgs(args, emptySet(), emptySet(), ...)`，传任何参数都会被判为多余参数。
+
+于是能检测到的选项只有两种诚实处理——接受或按名字拒绝：
+
+| 选项 | 处理 | 理由 |
+|---|---|---|
+| `viewport` | **拒绝** | `Page.printToPDF` 没有区域概念；PDF 就是整篇文档 |
+| `quality` | **拒绝** | PDF 路径上根本没有这个旋钮 |
+| `fullPage` | **接受，且不改变调用** | 见下 |
+| `base64` | 接受 | 本层选项而非工具选项；`pdfBase64` 与 `pdf` 并存 |
+
+**`fullPage` 的刻意不对称**：`PageFormat.fullPage` 是非空 `Boolean`，默认 `false`，所以"调用方没提"与"调用方写了 `false`"是**同一个值**。拒绝 `false` 会拒绝掉每一个朴素的 `"pdf"` 请求；而 `true` 不过是把"PDF 本来就是整篇文档"这句话说出来。因此它被接受且不产生参数。这是本阶段唯一一处"接受但不做任何事"的选项，理由写在 provider 的 KDoc 里。
+
+**产物的目录按扩展名分流**：`persistArtifact` 原来把一切都写进 `AppPaths.WEB_SCREENSHOT_DIR`，这对 PDF 就是**目录名与内容矛盾**。现在 `png` 仍去那个项目自己预留的 `web/screenshot`，其它扩展名去同一个 `web/` 父目录下的同名兄弟目录——PDF 落在 `web/pdf`。两个根都来自 `AppPaths`（用户的约束），只是叶子不同。顺带加了一条校验：扩展名来自 provider 的 `ArtifactSpec`（**插件可达的扩展点**），而它既当目录名又当文件后缀，所以只允许字母数字，路径穿越会被**拒绝**而不是"清洗"掉。
+
+**验证**
+
+```bash
+.\mvnw.cmd -o -pl ":browser4-skeleton,:browser4-agent-tools,:browser4-rest" \
+  "-Dtest=FormatOptionTest,ScrapedDocumentTest,PdfFormatProviderTest,ScreenshotFormatProviderTest,PageFormatPlanBuilderTest,PageFormatEngineTest,SnapshotFormatStepRunnerTest,PageScrapeServiceTest,PageScrapeControllerTest,PageScrapeToolExecutorTest" \
+  -D"surefire.failIfNoSpecifiedTests=false" -D"jacoco.skip=true" test
+# skeleton:     44 tests, 0 failures
+# agent-tools:  60 tests, 0 failures  (PdfFormatProvider 8 / ScreenshotFormatProvider 8)
+# rest:         46 tests, 0 failures  (SnapshotFormatStepRunner 16 / 服务 9 / 控制器 9 / 执行器 12)
+```
+
+**真机断言**（`test_e2e_scrape_formats`，真实 Chrome，扩展后）：一次请求里 `markdown` + `screenshot` + **`pdf`** 三者共存且全文仍只有**一个** `captureId`（两个活体步骤都在快照读之后）；路径存在且以 `.pdf` 结尾；**把文件读回来验 `%PDF-` 魔数**——只查字段或只查文件存在都可能放过一个装着错误页的假产物；`pdfBase64` **不出现**（未请求就是不存在，字节是 opt-in）；纯活体请求 `screenshot,pdf` 仍**不产生** `captureId`。
+
+**顺带修掉两处测试腐化**：`PageFormatPlanBuilderTest` 与 `PageScrapeServiceTest` 都拿 `pdf` 当"本 build 交付不了"的例子——它一交付就会失败。这次换成 `audio`（Phase 3 的媒体服务），并加了一条 `assertFalse(FormatProviders.isImplemented(missing))` 守卫，让"例子本身变成可交付"这条失败读起来是人话。这个例子已经搬过两次（`screenshot` → `pdf` → `audio`），守卫是防止第三次搬得莫名其妙。
+
+**未做**：二进制产物的 `--out` 语义（§3.3 想要"必须落到 `--out` 目录"，而当前是服务端临时目录 + 返回路径）；**下载端点（决策 A3 = 要）**——顺序上它先于 `--out`，因为没有取字节的通道时，`--out` 只能靠"调用方与服务端共享文件系统"这个假设。
 
 ### Phase 3 — 服务与 AI 格式（≈1.5 天）
 - `audio` / `video`（`media.*`）、`summary(LLM)` / `question`（`agent_*`）
@@ -844,7 +880,7 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 - `browser4-branding` 插件（对应 Firecrawl `branding`）
 - `browser4-product` / `browser4-menu`（可选；也可先用 `extract --schema` 方案替代）
 
-**总量估算**：Phase 0 + Phase 1a/1b/1d 已交付；Phase 1c ≈ 1 天、Phase 2-5 ≈ 6 人日（不含插件实现）。Phase 1d 提前消化了原计划里 Phase 6 的 `PluginManager` 接线，并把 Phase 1c 的真正起点从"引擎能否被扩展"推进到"接入层"。Phase 6 现在只剩插件实现本身（以及两个待拍板的 SPI 形状决策）。
+**总量估算**：Phase 0 + Phase 1a/1b/1c/1d + Phase 2 已交付；Phase 3-5 ≈ 4.5 人日（不含插件实现）。Phase 1d 提前消化了原计划里 Phase 6 的 `PluginManager` 接线，Phase 2 消化了活体产物，于是 **Phase 6 现在只剩插件实现本身**——两个 SPI 形状决策（A1、A4）都已拍板，且都判为"不做真支持"，只留下两条已登记的待办。设计稿 §3.3 里 `--out`、异步面、`strict`、请求级 `url` 与 `expires` 仍待在"仍待交付"里逐项推进。
 
 ---
 
@@ -857,7 +893,7 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 | REST | MockMvc：`/api/scrape` 200/400/503；`/api/scrape/formats` 形状；异步面 `submit → status → result` |
 | MCP | `page_scrape` 参数归一化（`schemas` 别名、snake_case）、缺 sessionId 的行为、错误码透传 |
 | 夹具 | ✅ `formats-fixture.html` 已建（`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/`）：文章区 + 导航噪声 + 3 个重复卡片 + 表格 + 图片（含无 alt）+ `data-*` 属性 + 外链/内链 + 分页链接。每个元素的存在理由写在文件顶部的注释里 |
-| e2e | ✅ `cargo test --test e2e -- --scenario=test_e2e_scrape_formats`（`requires_browser4: true`）：真实浏览器验证 markdown 的标题/表格/代码块、links 的绝对化、images 含无 alt 那张、attributes 的三个值、以及全文档恰好一个 `captureId`（capture-once 的线上证据） |
+| e2e | ✅ `cargo test --test e2e -- --scenario=test_e2e_scrape_formats`（`requires_browser4: true`）：真实浏览器验证 markdown 的标题/表格/代码块、links 的绝对化、images 含无 alt 那张、attributes 的三个值、以及全文档恰好一个 `captureId`（capture-once 的线上证据）。活体侧：`screenshot` 的 PNG 魔数与**文件确实存在**、`pdf` 的 `%PDF-` 魔数与**落在 `web/pdf`**、两者与 markdown 同请求仍只一个 `captureId`、纯活体请求**不产生** `captureId` |
 | 对拍（非门禁） | 同一夹具页分别跑 Firecrawl 与 Browser4，人工比对 markdown 体积、links 集合、images 集合，作为"语义漂移"预警，不设阈值断言 |
 
 ---
@@ -902,7 +938,7 @@ Q3 有一个必须先说清的设计前提：设计稿写的 `/api/scrape/{id}/m
 - [x] 新增/变更逻辑有测试：主路径 + 边界（未知格式、静态不可交付、非法组合、`viewport`/`quality` 被拒、无磁盘 host 降级、注册期拒绝陌生 id/字段）
 - [x] 无新增高噪声日志/警告；降级路径用文档的 `warning` 字段而非日志刷屏
 - [x] **I1/I2/I3 有不变量测试**——`PageFormatEngineTest` 的三条：`I1: eight formats cost exactly one capture` / `I2: every snapshot read is bound to the captured snapshot` / `I3: a failing live step degrades without breaking snapshot formats`
-- [x] 夹具页 + 真实浏览器 e2e 覆盖格式层（`requires_browser4: true`，`test_e2e_scrape_formats`）；`screenshot` 的真机覆盖已完成，`pdf` 仍随 Phase 2
+- [x] 夹具页 + 真实浏览器 e2e 覆盖格式层（`requires_browser4: true`，`test_e2e_scrape_formats`）；活体产物（`screenshot` 与 `pdf`）的真机覆盖已完成——包括读回文件验魔数、验 PDF 落在 `web/pdf`、验字节按 `base64` opt-in
 - [x] 无新增直接 CDP 方法：`screenshot` 复用了既有的 `tab.screenshot` 工具，没有新写 CDP 调用，故四条评审门不适用
 - [x] 文档同步：`SKILL.md` / `references/scrape-formats.md` / `help.rs` / `README.md` / `README.zh.md` / `cli/browser4-cli/README.md` / `docs/mcp-tools.md`+`.json`（145 工具）
 - [ ] `tips.rs` 未同步：`scrape` / `scrape formats` 目前落到 `TIPS_GENERAL`，没有专属提示（已在 §12 的待办清单第 3 条留档）
