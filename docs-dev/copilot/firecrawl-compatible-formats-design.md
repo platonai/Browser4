@@ -649,6 +649,23 @@ POST 未知格式 "markdwon"   → 400  {"success":false,"error":"Bad Request",
 
 **如实记录一处未查清的地方**：我无法完整复原当时的中间状态。按 `needsSnapshot = steps.any { FROM_SNAPSHOT }`，若 `formats` 真的是空的就不该发生 capture，也就不该出现那个 `sessionId` 报错——两者对不上。事实是：加注解前三条探针稳定返回同一个错，加注解后三条全部正确。机制上我只确认到"DTO 未绑定"，没有把中间过程编圆。本模块每个请求 DTO 都带这组注解（`rest/mcp/controller/dto/McpDtos.kt`），跟约定走即可。
 
+#### 文档族已同步
+
+- `skills/browser4-cli/references/scrape-formats.md`（新增，`procedure` tier，159 行）：快速上手、何时用、一次抓取如何扇出、模式、参数、错误与恢复。其中"一次 capture 供全部格式共用"由 `captureId`/`captureTime` 每个响应恰好一个来证明；"请求了但产出为空"与"没请求"的区别写进了 `formatsDelivered` 的读法；PowerShell 引号坑单独成条（它长得和"静默丢格式"一模一样）。
+- `skills/browser4-cli/SKILL.md`：命令表加 `page scrape` / `page formats` 两行，Reference Map 加条目。403→406 行（上限 500）。
+- `README.md` / `README.zh.md`：决策树加"一页要多种产出"分支。
+- `cli/browser4-cli/README.md`：新增 `### Page scrape` 小节（含响应示例与 `formatsRequested`/`formatsDelivered` 的读法），决策树同步。
+- **`help.rs` / `tips.rs` 刻意不改**：这两个是**静态**命令表，而 `page scrape` 是运行期从 `/mcp/tools/specs` 发现的声明式命令——`grep "profile import" help.rs` 零命中，证实同类动态命令（`profile import`）也不在其中。往静态表里塞动态命令只会制造第二份真相。
+
+#### 顺带修掉一个我引入的门禁缺口：`ToolRegistryFixture`
+
+`browser4-rest/src/test/.../mcp/contract/ToolRegistryFixture.kt` 是**手工维护**的"产品实际宣传的全部域"清单，`ToolDocGeneratorTest`（漂移门禁）与 `ToolContractMatrixTest`（契约矩阵）共用它。新增 `page` 域时我漏了它，后果是双重的且都静默：
+
+1. `docs/mcp-tools.md` / `.json` 少两个工具（143 而不是 145）；
+2. **我的 spec 没进契约矩阵**——而契约矩阵正是那道会拦住"`defaultValue = null` 被当作必需参数"的检查，也就是我在真机上撞到的那个坑。
+
+补进夹具后门禁立刻报警 `docs/mcp-tools.md is stale`，重新生成（`-DregenerateToolDocs=true`）后 145 工具入档，契约矩阵 10/10 通过。**教训**：新域挂载后必须同时进这个夹具，否则文档与契约检查会一起静默失效。
+
 #### 仍待交付
 
 - `strict` 三态契约（§6.2 的 503/502/504）。因此 `page.scrape` 与 `POST /api/scrape` **刻意不接受** `strict` 参数——接受了却只降级就是撒谎。

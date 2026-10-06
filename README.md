@@ -118,6 +118,8 @@ Need to extract data from a page?
 ├─ Static page, multiple correlated fields (title+price+url per item)?
 │  → htmlsnapshot query --sql @query.sql
 ├─ Live JS / complex DOM logic? → eval --json
+├─ Several outputs from one page (text + links + images + a table)?
+│  → page scrape --formats "markdown,links,images"   # one capture for all of them
 ├─ Natural language ("find the product price")? → extract (needs LLM key)
 └─ High volume, many pages? → crawl or swarm with --sql
 ```

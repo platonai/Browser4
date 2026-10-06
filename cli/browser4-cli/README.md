@@ -262,6 +262,58 @@ the submission can be inspected afterwards with `swarm list --batch <id>` — e.
 `swarm list --batch <id> --status failed --json` prints exactly the URLs that
 failed, with each task's `duration_ms`.
 
+### Page scrape
+
+| Command | Description |
+|---|---|
+| `page scrape --formats <list>` | One page capture → many outputs in a single document |
+| `page formats` | List every accepted format id, whether this build can deliver it, and why not |
+
+Asking for several outputs one command at a time means one page load each, and the
+answers can describe different page states. `page scrape` captures the page **once**
+and derives every requested format from that one capture, so `markdown` and `links`
+cannot disagree about what the page said:
+
+```bash
+browser4-cli page scrape --formats "markdown,links,images"
+browser4-cli page scrape --formats '["markdown",{"type":"deterministicJson","sql":"select dom_first_text(dom, \'h1\') as title"}]'
+browser4-cli page scrape --url "https://example.com/post" --formats "markdown"
+```
+
+The response is one document whose `metadata` carries `captureId` and `captureTime`
+— there is exactly one of each per response, which is how you can tell the capture
+was shared — plus `formatsRequested` and `formatsDelivered`:
+
+```json
+{
+  "url": "https://example.com/",
+  "markdown": "…",
+  "links": ["https://iana.org/help/example-domains"],
+  "metadata": {
+    "captureId": "https://example.com/",
+    "captureTime": "2026-10-06T03:00:23.582Z",
+    "formatsRequested": ["markdown", "links"],
+    "formatsDelivered": ["markdown", "links"]
+  }
+}
+```
+
+Available in a stock install: `markdown`, `html`, `rawHtml`, `links`, `images`,
+`attributes`, `deterministicJson`, `readability`. `branding`, `product`, `menu` and
+`highlights` need a plugin contributor; the rest are later phases. Run
+`browser4-cli page formats` for the authoritative answer for your build.
+
+**A format that produced nothing is not a failure.** A page with no `<img>` yields an
+empty `images`, which is omitted from the JSON while still appearing in
+`formatsDelivered` — that is how "requested, produced nothing" is told apart from
+"not requested". A format this build cannot deliver appears in neither and is named
+in `warning`, and the rest of the response is still returned.
+
+> **Quote a comma-separated list.** In PowerShell an unquoted `markdown,links,images`
+> is three arguments, so `--formats` receives only `markdown` and the request still
+> succeeds — the response's `formatsRequested` is the tell. Write
+> `--formats "markdown,links,images"`.
+
 ### Crawl
 
 | Command | Description |
@@ -382,6 +434,8 @@ Need to extract data from a page?
 ├─ Interactive page (click, fill, scroll first)? → snapshot + refs, then extract
 ├─ Static page, one field? → htmlsnapshot get text "<selector>"
 ├─ Static page, multiple correlated fields? → htmlsnapshot query --sql @query.sql
+├─ Several outputs from one page (text + links + images)?
+│  → page scrape --formats "markdown,links,images"   # one capture for all of them
 ├─ Natural language ("find the price")? → extract (needs LLM key)
 └─ High volume, many pages? → crawl or swarm with --sql
 ```

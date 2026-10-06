@@ -133,6 +133,8 @@ browser4-cli frame main
 ├─ 静态页面，需要相关联的多字段（每个条目的标题+价格+链接）？
 │  → htmlsnapshot query --sql @query.sql
 ├─ 需要处理实时 JS / 复杂 DOM 逻辑？→ eval --json
+├─ 一页要多种产出（正文 + 链接 + 图片 + 表格）？
+│  → page scrape --formats "markdown,links,images"   # 一次抓取，全部产出
 ├─ 自然语言需求（“找到商品价格”）？→ extract（需要 LLM key）
 └─ 大规模、多页面处理？→ crawl 或 swarm 搭配 --sql
 ```
