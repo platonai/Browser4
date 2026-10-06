@@ -223,6 +223,7 @@ struct FixturePages {
     frame_inner_html: String,
     console_probe_html: String,
     experience_html: String,
+    formats_html: String,
     /// Port the cross-origin listener ([`CrossOriginFixtureServer`]) actually
     /// bound on `127.0.0.2`, published by the scenario that starts it.  The
     /// cross-origin page's iframe `src` must carry this port, and it cannot be
@@ -274,6 +275,7 @@ impl FixtureServer {
             frame_inner_html: load_html_fixture(FRAME_INNER_FIXTURE_FILE),
             console_probe_html: load_html_fixture(CONSOLE_PROBE_FIXTURE_FILE),
             experience_html: load_html_fixture(EXPERIENCE_FIXTURE_FILE),
+            formats_html: load_html_fixture(FORMATS_FIXTURE_FILE),
             cross_origin_port,
             download_requests,
         });
@@ -396,6 +398,12 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "text/html; charset=utf-8",
             pages.download_html.clone(),
+        )
+    } else if path == FORMATS_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.formats_html.clone(),
         )
     } else if path == FRAME_PATH {
         (
@@ -2599,6 +2607,13 @@ impl E2ECtx {
     /// unique per run, so a replay that merely guessed cannot pass.
     fn experience_url(&self, nonce: &str) -> String {
         format!("{}{}?nonce={}", self.fixture_base_url, EXPERIENCE_PATH, nonce)
+    }
+
+    /// The formats fixture: article body + nav noise, a table, three repeated
+    /// cards with `data-*` attributes, an image without `alt`, and internal plus
+    /// external links.
+    fn formats_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, FORMATS_PATH)
     }
 
     /// A slow fixture URL (served after a fixed delay) used to hold browser

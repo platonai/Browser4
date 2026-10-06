@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Formats Fixture — Meridian Kettle Spec Sheet</title>
+    <meta name="description" content="A realistic page for exercising the formats layer.">
+    <link rel="icon" href="/b4/assets/favicon.png">
+</head>
+<body>
+<!--
+  Fixture for the `formats` layer (browser4-cli scrape / the `page` tool domain).
+
+  It exists because https://example.com proves the pipeline but exercises almost
+  none of it: no table, no repeated cards, no image without alt, no data-*
+  attributes. Every assertion the format tests need has a home here, and each one
+  is deliberate:
+
+    * <nav> + <footer>       readability must strip them; the whole-page markdown
+                             must keep them, which is what distinguishes the two
+                             markdown paths.
+    * 3 repeated .variant    card shape + `data-*` attributes for the attributes
+                             format (one selector, three values).
+    * <table> with <thead>   header detection, padding and pipe escaping.
+    * <pre><code class=...>  a fenced block that must carry its language.
+    * <img alt> / <img>      one described image and one with no alt at all.
+    * internal + external    absolute-isation: a relative href must come back as
+      links                  a fixture URL, an absolute one unchanged.
+    * pagination links       the common "next page" shape a crawler follows.
+-->
+<header>
+    <nav aria-label="Breadcrumb">
+        <a href="?">Home</a> &gt;
+        <a href="?section=kitchen">Kitchen</a> &gt;
+        <span>Kettles</span>
+    </nav>
+</header>
+
+<main>
+    <article>
+        <h1>Meridian Kettle — Spec Sheet</h1>
+
+        <p>The Meridian is a 1.7 litre variable-temperature kettle. This page is the
+            reference sheet: the two paragraphs below are the article body, and the
+            nav above and the footer below are the noise a readability pass is
+            expected to drop.</p>
+
+        <p>It ships in three variants, listed in the table further down. The
+            temperature can be set in 5&nbsp;°C steps between 40&nbsp;°C and
+            100&nbsp;°C, which is the feature most reviews lead with.</p>
+
+        <h2 id="variants">Variants</h2>
+
+        <table>
+            <thead>
+            <tr>
+                <th>Variant</th>
+                <th>Capacity</th>
+                <th>Material</th>
+                <th>Price</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td>Meridian Core</td>
+                <td>1.7 L</td>
+                <td>Stainless steel</td>
+                <td>79</td>
+            </tr>
+            <tr>
+                <td>Meridian Glass</td>
+                <td>1.7 L</td>
+                <td>Borosilicate glass</td>
+                <td>99</td>
+            </tr>
+            <tr>
+                <td>Meridian Pro</td>
+                <td>1.7 L | 1.0 L</td>
+                <td>Stainless steel</td>
+                <td>129</td>
+            </tr>
+            </tbody>
+        </table>
+
+        <h2 id="order">Ordering</h2>
+
+        <div class="variant" data-sku="MK-CORE-17">
+            <h3>Meridian Core</h3>
+            <img src="/b4/assets/meridian-core.png" alt="Meridian Core, brushed steel">
+            <p class="price" data-amount="79" data-currency="USD">$79</p>
+        </div>
+
+        <div class="variant" data-sku="MK-GLASS-17">
+            <h3>Meridian Glass</h3>
+            <img src="/b4/assets/meridian-glass.png">
+            <p class="price" data-amount="99" data-currency="USD">$99</p>
+        </div>
+
+        <div class="variant" data-sku="MK-PRO-17">
+            <h3>Meridian Pro</h3>
+            <img src="/b4/assets/meridian-pro.png" alt="Meridian Pro with the travel lid">
+            <p class="price" data-amount="129" data-currency="USD">$129</p>
+        </div>
+
+        <h2 id="api">Reading the temperature</h2>
+
+        <p>Set the target and read it back. The call is synchronous; the kettle
+            reports the temperature it actually reached, not the one requested, so
+            callers should compare rather than assume:</p>
+
+        <pre><code class="language-kotlin">val kettle = Meridian.connect()
+kettle.target = 85
+check(kettle.current in 80..90) { "expected the kettle to reach the target" }</code></pre>
+
+        <blockquote>
+            <p>Boiling is not adjustable above 100&nbsp;°C at sea level; the kettle
+                holds at a rolling boil instead.</p>
+        </blockquote>
+
+        <h2 id="notes">Notes</h2>
+
+        <ul>
+            <li>Descale every 4–6 weeks in hard-water areas.
+                <ul>
+                    <li>Citric acid, 1 tablespoon per litre.</li>
+                </ul>
+            </li>
+            <li>The base is not dishwasher safe.</li>
+        </ul>
+
+        <ol>
+            <li>Fill to the minimum mark.</li>
+            <li>Set the target temperature.</li>
+            <li>Press <strong>Start</strong>; the ring turns <em>amber</em>.</li>
+        </ol>
+
+        <p>Full specification on the
+            <a href="https://example.org/meridian/spec">manufacturer's site</a>,
+            and the warranty terms are on the
+            <a href="?section=warranty">warranty page</a>.</p>
+
+        <hr>
+
+        <p><small>Last reviewed 2026-08-14 by the documentation team.</small></p>
+
+        <nav class="pagination" aria-label="Pagination">
+            <a href="?page=1">Previous</a>
+            <a href="?page=3">Next</a>
+        </nav>
+    </article>
+</main>
+
+<footer>
+    <p>&copy; 2026 Meridian Appliances — <a href="?section=legal">Legal</a></p>
+</footer>
+</body>
+</html>

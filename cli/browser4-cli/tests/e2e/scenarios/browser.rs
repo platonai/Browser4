@@ -4718,3 +4718,110 @@ pub(super) fn test_experience_real_web_smoke(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["close"]);
 }
+
+/// The formats layer against a real page built to exercise it.
+///
+/// `https://example.com` proves the pipeline but exercises almost none of it: no
+/// table, no repeated cards, no image without `alt`, no `data-*` attributes. The
+/// `formats` fixture has all of them, so these assertions can be about what
+/// actually came back rather than about a field merely being present.
+///
+/// It is also the only end-to-end exercise of `attributes`, whose selectors can
+/// only be expressed through the JSON-array form of `--formats`.
+pub(super) fn test_scrape_formats(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let url = ctx.formats_url();
+    let open_result = run_command(ctx, &["open", &url, OPEN_PROFILE_MODE_ARG]);
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected the formats fixture session to open:\n{}",
+        open_result.stdout
+    );
+
+    // ── 1. Four formats from ONE request ──────────────────────────────────
+    // `--no-main-content` asks for the whole cleaned page, so the table and the
+    // footer are provably in scope (the readability path is case 2).
+    let formats = r#"[{"type":"attributes","selectors":[{"selector":".price","attribute":"data-amount"}]},"markdown","links","images"]"#;
+    let result = run_command(ctx, &["scrape", "--formats", formats, "--no-main-content"]);
+    let document = &result.stdout;
+
+    // markdown: the heading, a table with a header row, and a fenced block that
+    // kept its language. These three are what a naive converter gets wrong.
+    for expected in ["# Meridian Kettle", "| Variant", "```kotlin"] {
+        assert!(
+            document.contains(expected),
+            "whole-page markdown should contain {expected:?}:\n{document}"
+        );
+    }
+
+    // links: the external href is left alone, and the page's own relative links
+    // come back absolute against the fixture URL.
+    assert!(
+        document.contains("https://example.org/meridian/spec"),
+        "the external link should survive verbatim:\n{document}"
+    );
+    assert!(
+        document.contains(&format!("{url}?section=warranty")),
+        "the internal link should be absolute-ised against {url}:\n{document}"
+    );
+    assert!(
+        document.contains(&format!("{url}?page=3")),
+        "the pagination link should be extracted:\n{document}"
+    );
+
+    // images: three, including `meridian-glass.png` — the one with NO alt. Skipping
+    // an image because it lacks alternate text is the classic way to lose data.
+    for image in ["meridian-core.png", "meridian-glass.png", "meridian-pro.png"] {
+        assert!(
+            document.contains(image),
+            "{image} should be extracted (the alt-less one included):\n{document}"
+        );
+    }
+
+    // attributes: one selector, three values, in document order.
+    assert!(
+        document.contains(r#""values":["79","99","129"]"#),
+        "the .price/data-amount attribute should carry all three values:\n{document}"
+    );
+
+    // All four formats were delivered, and the capture was shared: exactly one
+    // captureId in the whole document is the observable proof of capture-once.
+    assert!(
+        document.contains(r#""formatsDelivered":["markdown","links","images","attributes"]"#),
+        "every requested format should be delivered:\n{document}"
+    );
+    assert_eq!(
+        document.matches("\"captureId\"").count(),
+        1,
+        "one capture must serve every format, got:\n{document}"
+    );
+
+    // ── 2. The readability path drops the furniture ───────────────────────
+    // Default `onlyMainContent` derives markdown from the readable article, so the
+    // article body must survive and the site chrome must not.
+    let readable = run_command(ctx, &["scrape", "--formats", "markdown"]);
+    assert!(
+        readable.stdout.contains("variable-temperature kettle"),
+        "the readable path should keep the article body:\n{}",
+        readable.stdout
+    );
+    assert!(
+        !readable.stdout.contains("Meridian Appliances"),
+        "the readable path should drop the footer:\n{}",
+        readable.stdout
+    );
+
+    // ── 3. A mistyped format is refused by name, before any capture ────────
+    let bad = run_command_expecting_failure(
+        ctx,
+        &["scrape", "--formats", "markdwon"],
+        "Unknown format",
+    );
+    assert!(
+        bad.stdout.contains("Unknown format") || bad.stderr.contains("Unknown format"),
+        "a typo must be named, got stdout:\n{}\nstderr:\n{}",
+        bad.stdout,
+        bad.stderr
+    );
+}

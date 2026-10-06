@@ -2,8 +2,8 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | **Phase 0 + 1a/1b/1d 已实现；Phase 1c 主体已实现**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 8 个 provider / SPI 接线与 contributor 消费 / runner + `page` 域 + CLI `page scrape` + REST `api/scrape`，**166 个单测全绿**，MCP 与 REST 两条路径均经真实后端 + 真实 Chrome 验证）；剩余：`strict` 三态、`expires`/`maxAge`、异步面、夹具页、Phase 2+ |
-| 目标仓库 | Browser4 `4.14.0-rc.8` @ `e0a7d20858`（4.13.x 合并后的 4.14.x；设计起草时基线为 `d86b69fc8b`） |
+| 状态 | **Phase 0 + 1a/1b/1d 已实现；Phase 1c 主体已实现**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 8 个 provider / SPI 接线与 contributor 消费 / runner + `page` 域 + CLI `scrape`+`scrape formats` + REST `api/scrape` / §11 夹具页与真机渲染断言）；MCP、CLI、REST 三条路径均经真实后端 + 真实 Chrome 验证；剩余：`strict` 三态、`expires`/`maxAge`、异步面、Phase 2+ |
+| 目标仓库 | Browser4 `4.14.0-rc.8` @ `bacdf71ea2`（4.13.x 合并后的 4.14.x；设计起草时基线为 `d86b69fc8b`） |
 | 对照基线 | Firecrawl `ce8ed1233`（见 [对照表](firecrawl-vs-browser4-output-formats.md)） |
 | 一句话 | 给 Browser4 加一层「`formats[]` 请求 → 一次抓取扇出多种输出 → 返回 Firecrawl 形状 Document」的兼容面，并把它作为后续 branding/product/menu 等格式的**插件扩展点** |
 
@@ -544,7 +544,7 @@ class BrandingFormatContributor : PageFormatContributor {
 | 降级可见 | 未实现格式 / 工具不支持 / X-SQL 报错各自产生不同文案；`formatsDelivered` 可区分"没请求"与"请求了没拿到" |
 | 字段裁剪 | 未请求格式的字段在响应中不存在（`retainRequested`） |
 
-### Phase 1c — REST/MCP 集成层（✅ A1 + A2 + A3 + A5 + A7 已交付并经真机验证；`strict`/`expires`/异步面/夹具页见"仍待交付"）
+### Phase 1c — REST/MCP 集成层（✅ A1 + A2 + A3 + A5 + A7 已交付并经真机验证；夹具页已建；`strict`/`expires`/异步面见"仍待交付"）
 
 已核实的接入点（复用时不必再找）：
 
@@ -656,6 +656,28 @@ POST 未知格式 "markdwon"   → 400  {"success":false,"error":"Bad Request",
 
 **如实记录一处未查清的地方**：我无法完整复原当时的中间状态。按 `needsSnapshot = steps.any { FROM_SNAPSHOT }`，若 `formats` 真的是空的就不该发生 capture，也就不该出现那个 `sessionId` 报错——两者对不上。事实是：加注解前三条探针稳定返回同一个错，加注解后三条全部正确。机制上我只确认到"DTO 未绑定"，没有把中间过程编圆。本模块每个请求 DTO 都带这组注解（`rest/mcp/controller/dto/McpDtos.kt`），跟约定走即可。
 
+#### §11 夹具页与真机渲染断言
+
+`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/formats-fixture.html` + CLI 场景 `test_e2e_scrape_formats`（`requires_browser4: true`）。
+
+之前用 `https://example.com` 只能证明"链路通"——它没有表格、没有重复卡片、没有无 alt 图片、没有 `data-*` 属性，所以对**渲染质量**一个字都说不了。夹具页把每个待断言的东西都放进去，元素的存在理由写在文件顶部注释里：`<nav>`/`<footer>`（readability 该丢、整页 markdown 该留，这正是两条 markdown 路径的区别）、3 个带 `data-*` 的重复卡片、带 `<thead>` 的表格（含一个单元格里带 `|`，测转义）、`language-kotlin` 的代码块、一张有 alt 与一张无 alt 的图片、内外链与分页链接。
+
+真机断言（22 秒，真实 Chrome，harness 自起的后端）：
+
+| 断言 | 为什么它值得存在 |
+|---|---|
+| markdown 含 `# Meridian Kettle`、`\| Variant`、` ```kotlin ` | 标题层级、表格表头、代码块语言——朴素转换器最容易丢掉的三样 |
+| 外链 `https://example.org/…` 原样保留 | 绝对化不能改写已经是绝对的 URL |
+| 内链与分页链接变成 `<fixture>/formats?section=warranty`、`?page=3` | 相对 href 必须绝对化，且基准是页面 URL 而非别的什么 |
+| 三张图片都在，**含无 alt 那张** | "没有 alt 就跳过"是丢数据的经典方式 |
+| `"values":["79","99","129"]` | 一个 selector 三个值、且保序 |
+| `"formatsDelivered":["markdown","links","images","attributes"]` | 四个格式全部交付 |
+| 全文恰好 **1 个** `captureId` | capture-once 在线上形状里的可观测证据 |
+| readability 路径保留正文、丢掉 `Meridian Appliances`（页脚） | 证明 `onlyMainContent` 真的在抽正文，而不只是换了个字段名 |
+| 拼错格式返回 `Unknown format` | §6.2 的"未知 → 400"，且发生在 capture 之前 |
+
+这套断言是**渲染质量的第一道真实门禁**：在它之前，`HtmlToMarkdown` 的 26 个单测用的是各自构造的小片段，没有任何测试看过一张真实页面的整体输出。
+
 #### 文档族已同步
 
 - `skills/browser4-cli/references/scrape-formats.md`（新增，`procedure` tier，159 行）：快速上手、何时用、一次抓取如何扇出、模式、参数、错误与恢复。其中"一次 capture 供全部格式共用"由 `captureId`/`captureTime` 每个响应恰好一个来证明；"请求了但产出为空"与"没请求"的区别写进了 `formatsDelivered` 的读法；PowerShell 引号坑单独成条（它长得和"静默丢格式"一模一样）。
@@ -680,7 +702,7 @@ POST 未知格式 "markdwon"   → 400  {"success":false,"error":"Bad Request",
 - `expires` / `maxAge`：同上，见 A1 的已知偏差。
 - **`sessionId` 目前是必需的**（`requiresReceiver = true`）。设计稿 §3.2 写的是"不需要 sessionId"，但 §12 的开放问题 **Q1**（无 url 且无会话时自动开临时会话，还是要求先 `open`）至今未拍板，所以在拍板前要求会话是唯一诚实的选择。CLI 会自动注入 sessionId，所以 `scrape` 用户体验上无感；REST 调用方需要显式给。
 - 异步面（`/api/scrape/submit` + `/{id}/status|result|stream`），理由见 A5。
-- **§11 的夹具页**仍未建（`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/formats-fixture.html`）。本次 e2e 用的是 `https://example.com`，它够证明链路，但不含表格、重复卡片、无 alt 图片、`data-*` 属性——渲染质量仍需夹具页覆盖。
+- ~~**§11 的夹具页**仍未建~~ **已建并已用于真机断言**：`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/formats-fixture.html` + CLI 真机场景 `test_e2e_scrape_formats`（`requires_browser4: true`）。§11 的详细说明见下。
 
 
 
@@ -771,8 +793,8 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 | 引擎 | **I1**：一次 `page_scrape` 只触发一次 `html_snapshot.capture`（用 mock executor 计数）；**I2**：Stage 2 步骤无 `LIVE_TAB` 输入；**I3**：截图失败时 markdown/links 仍返回且带 warning；**I6**：非法组合在编译期抛错 |
 | REST | MockMvc：`/api/scrape` 200/400/503；`/api/scrape/formats` 形状；异步面 `submit → status → result` |
 | MCP | `page_scrape` 参数归一化（`schemas` 别名、snake_case）、缺 sessionId 的行为、错误码透传 |
-| 夹具 | 新增 `browser4-tests/pulsar-tests-common/src/main/resources/static/b4/formats-fixture.html`：文章区 + 导航噪声 + 3 个重复卡片 + 表格 + 图片（含无 alt）+ `data-*` 属性 + 外链/内链 + 分页链接 |
-| e2e | `cargo test --test e2e -- --scenario=test_e2e_scrape_formats*`（`requires_browser4: true`）；真实浏览器验证 screenshot 落盘非空、markdown 长度 > 阈值、links 含预期 URL |
+| 夹具 | ✅ `formats-fixture.html` 已建（`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/`）：文章区 + 导航噪声 + 3 个重复卡片 + 表格 + 图片（含无 alt）+ `data-*` 属性 + 外链/内链 + 分页链接。每个元素的存在理由写在文件顶部的注释里 |
+| e2e | ✅ `cargo test --test e2e -- --scenario=test_e2e_scrape_formats`（`requires_browser4: true`）：真实浏览器验证 markdown 的标题/表格/代码块、links 的绝对化、images 含无 alt 那张、attributes 的三个值、以及全文档恰好一个 `captureId`（capture-once 的线上证据） |
 | 对拍（非门禁） | 同一夹具页分别跑 Firecrawl 与 Browser4，人工比对 markdown 体积、links 集合、images 集合，作为"语义漂移"预警，不设阈值断言 |
 
 ---
@@ -805,7 +827,7 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 - [ ] 新增/变更逻辑有测试：主路径 + 边界（未知格式、不可用格式、非法组合、截图引擎不支持）
 - [ ] 无新增高噪声日志/警告；降级路径用 `warning` 字段而非日志刷屏
 - [ ] **I1/I2/I3 有不变量测试**（capture 恰好一次、只读、失败不阻断）
-- [ ] 夹具页 + 真实浏览器 e2e 覆盖截图/导出（`requires_browser4: true`）
+- [x] 夹具页 + 真实浏览器 e2e 覆盖格式层（`requires_browser4: true`，`test_e2e_scrape_formats`）；截图/导出的真机覆盖仍随 Phase 2 
 - [ ] 无新增直接 CDP 方法；若新增，四条评审门逐条留证据
 - [ ] 文档同步：`SKILL.md` / `references/scrape-formats.md` / `help.rs` / `tips.rs` / `README.md` / `README.zh.md` / `cli/browser4-cli/README.md`
 - [ ] 无密钥/私有端点入库；`page_formats` 不泄露服务地址

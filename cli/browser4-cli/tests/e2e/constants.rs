@@ -118,6 +118,15 @@ pub const FRAME_INNER_FIXTURE_FILE: &str = "frame-inner.html";
 
 pub const CONSOLE_PROBE_FIXTURE_FILE: &str = "console-probe-fixture.html";
 
+/// Fixture for the `formats` layer: a page with a real article body, navigation
+/// noise, a table, three repeated cards carrying `data-*` attributes, an image
+/// without `alt`, and internal + external links. It exists because
+/// `https://example.com` proves the pipeline but exercises almost none of it —
+/// see the comment at the top of the file for what each element is for.
+pub const FORMATS_FIXTURE_FILE: &str = "formats-fixture.html";
+
+pub const FORMATS_PATH: &str = "/formats";
+
 /// Experience-replay fixture: a real page whose flow only completes when the
 /// selectors recorded by `experience save --facts` are replayed.  The page
 /// carries a disabled decoy input so positional guesses cannot drive it.
