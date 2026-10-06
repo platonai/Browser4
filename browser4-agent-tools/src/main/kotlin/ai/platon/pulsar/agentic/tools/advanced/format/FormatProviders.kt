@@ -8,6 +8,7 @@ import ai.platon.pulsar.agentic.tools.advanced.format.providers.LinksFormatProvi
 import ai.platon.pulsar.agentic.tools.advanced.format.providers.MarkdownFormatProvider
 import ai.platon.pulsar.agentic.tools.advanced.format.providers.RawHtmlFormatProvider
 import ai.platon.pulsar.agentic.tools.advanced.format.providers.ReadabilityFormatProvider
+import ai.platon.pulsar.agentic.tools.advanced.format.providers.ScreenshotFormatProvider
 
 /**
  * The formats this build can deliver, keyed by canonical format id.
@@ -32,6 +33,8 @@ object FormatProviders {
         ImagesFormatProvider,
         AttributesFormatProvider,
         DeterministicJsonFormatProvider,
+        // The only LIVE_TAB provider so far: everything above answers from the capture.
+        ScreenshotFormatProvider,
     ).associateBy { it.id }
 
     /**

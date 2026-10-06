@@ -31,6 +31,8 @@ private const val LINKS_JSON = """["$HREF/x","$HREF/y","$HREF/x"]"""
 private const val IMAGES_JSON = """["$HREF/a.png"]"""
 private const val ATTRIBUTES_JSON = """["10","20"]"""
 private const val QUERY_JSON = """{"isDone":true,"resultSet":[{"title":"T","price":10}]}"""
+private const val ARTIFACT_DIR = "/tmp/web/screenshot"
+private const val SCREENSHOT_BASE64 = "aGVsbG8="
 
 private val SNAPSHOT_TOOLS = setOf(
     "html_snapshot.export",
@@ -38,6 +40,8 @@ private val SNAPSHOT_TOOLS = setOf(
     "html_snapshot.scrape_all",
     "html_snapshot.query",
 )
+
+private val ALL_TOOLS = SNAPSHOT_TOOLS + "tab.screenshot"
 
 @DisplayName("PageFormatEngine")
 class PageFormatEngineTest {
@@ -53,6 +57,8 @@ class PageFormatEngineTest {
         private val supported: Set<String> = SNAPSHOT_TOOLS,
         private val responses: Map<String, String> = emptyMap(),
         private val failing: Set<String> = emptySet(),
+        /** A host with nowhere to put bytes — the engine must degrade, not fail. */
+        private val persistFails: Boolean = false,
     ) : FormatStepRunner {
 
         var captures = 0
@@ -65,6 +71,9 @@ class PageFormatEngineTest {
         val readSnapshots = mutableListOf<FormatSnapshot>()
 
         val liveCalls = mutableListOf<String>()
+
+        /** Artifacts the engine asked this host to write, as `hint.extension`. */
+        val persisted = mutableListOf<String>()
 
         override suspend fun acquireSnapshot(expires: Duration): FormatSnapshot {
             captures++
@@ -91,6 +100,13 @@ class PageFormatEngineTest {
             liveCalls += key
             if (key in failing) throw IllegalStateException("boom $key")
             return responses[key] ?: ""
+        }
+
+        override suspend fun persistArtifact(nameHint: String, base64: String, extension: String): String {
+            if (persistFails) throw UnsupportedOperationException("this host has nowhere to put bytes")
+            persisted += "$nameHint.$extension"
+            calls += "persist:$nameHint"
+            return "$ARTIFACT_DIR/$nameHint.$extension"
         }
 
         override fun supports(domain: String, method: String): Boolean = "$domain.$method" in supported
@@ -336,6 +352,121 @@ class PageFormatEngineTest {
         // longer has a field to carry it, so this asserts the remaining contract.
         assertEquals(Duration.ZERO, runner.seen)
         assertEquals("hit", document.metadata.cacheState)
+    }
+
+    // ---- live stage and artifacts -------------------------------------------
+
+    @Test
+    @DisplayName("a live step runs after every snapshot read, and its bytes are persisted")
+    fun liveStepRunsLastAndItsArtifactIsPersisted() = runBlocking {
+        val runner = FakeRunner(
+            supported = ALL_TOOLS,
+            responses = responses() + ("tab.screenshot" to SCREENSHOT_BASE64),
+        )
+
+        val document = PageFormatEngine(runner).scrape(request("markdown", "screenshot"))
+
+        // `screenshot` is the only format that needs the tab, so this is the ordering
+        // guarantee's real shape: one capture, every snapshot read (markdown's
+        // readability probe first, then the export fallback), then the live step, then
+        // the bytes landing on disk.
+        assertEquals(
+            listOf(
+                "capture",
+                "read:html_snapshot.readability",
+                "read:export.clean",
+                "live:tab.screenshot",
+                "persist:screenshot",
+            ),
+            runner.calls,
+        )
+        assertEquals(listOf("screenshot.png"), runner.persisted)
+        assertEquals("$ARTIFACT_DIR/screenshot.png", document.screenshot)
+        // Not asked for: the bytes are opt-in because they dwarf the document.
+        assertNull(document.screenshotBase64)
+        assertEquals(listOf("markdown", "screenshot"), document.metadata.formatsDelivered)
+    }
+
+    @Test
+    @DisplayName("base64 rides alongside the path when the format asks for it")
+    fun base64IsOptional() = runBlocking {
+        val runner = FakeRunner(
+            supported = ALL_TOOLS,
+            responses = responses() + ("tab.screenshot" to SCREENSHOT_BASE64),
+        )
+
+        val document = PageFormatEngine(runner).scrape(
+            request(mapOf("type" to "screenshot", "base64" to true))
+        )
+
+        assertEquals("$ARTIFACT_DIR/screenshot.png", document.screenshot)
+        assertEquals(SCREENSHOT_BASE64, document.screenshotBase64)
+    }
+
+    @Test
+    @DisplayName("fullPage reaches the tool, and a bare screenshot asks for no region")
+    fun fullPageReachesTheTool() = runBlocking {
+        val seen = mutableListOf<Map<String, Any?>>()
+        val runner = object : FormatStepRunner {
+            override suspend fun acquireSnapshot(expires: Duration): FormatSnapshot =
+                FormatSnapshot(KEY, HREF, CAPTURED_AT, "miss")
+
+            override suspend fun readOnSnapshot(
+                snapshot: FormatSnapshot, domain: String, method: String, args: Map<String, Any?>,
+            ): String = CLEAN_HTML
+
+            override suspend fun runOnTab(domain: String, method: String, args: Map<String, Any?>): String {
+                seen += args
+                return SCREENSHOT_BASE64
+            }
+
+            override suspend fun persistArtifact(nameHint: String, base64: String, extension: String): String =
+                "$ARTIFACT_DIR/$nameHint.$extension"
+
+            override fun supports(domain: String, method: String): Boolean = true
+        }
+
+        PageFormatEngine(runner).scrape(request("screenshot"))
+        PageFormatEngine(runner).scrape(request(mapOf("type" to "screenshot", "fullPage" to true)))
+
+        assertEquals(emptyMap<String, Any?>(), seen[0])
+        assertEquals(mapOf("fullPage" to true), seen[1])
+    }
+
+    @Test
+    @DisplayName("a host that cannot persist bytes degrades the format instead of failing the request")
+    fun aHostWithoutDiskDegrades() = runBlocking {
+        val runner = FakeRunner(
+            supported = ALL_TOOLS,
+            responses = responses() + ("tab.screenshot" to SCREENSHOT_BASE64),
+            persistFails = true,
+        )
+
+        val document = PageFormatEngine(runner).scrape(request("markdown", "screenshot"))
+
+        // The live step itself succeeded; failing to *store* it is a degradation, and
+        // markdown — which never needed the tab — is untouched.
+        assertNotNull(document.markdown)
+        assertNull(document.screenshot)
+        assertTrue(document.warning!!.contains("nowhere to put bytes"), document.warning)
+        assertEquals(listOf("markdown"), document.metadata.formatsDelivered)
+    }
+
+    @Test
+    @DisplayName("an unsupported option is refused at plan time, with the rest of the request intact")
+    fun anUnsupportedOptionDegradesAtPlanTime() = runBlocking {
+        val runner = FakeRunner(supported = ALL_TOOLS, responses = responses())
+
+        val document = PageFormatEngine(runner).scrape(
+            request("markdown", mapOf("type" to "screenshot", "quality" to 80))
+        )
+
+        assertNotNull(document.markdown)
+        assertNull(document.screenshot)
+        assertTrue(document.warning!!.contains("screenshot: quality is not supported"), document.warning)
+        // Refused before anything ran: no live call at all.
+        assertTrue(runner.liveCalls.isEmpty(), "refused options must not reach the browser")
+        assertEquals(listOf("markdown"), document.metadata.formatsDelivered)
     }
 
     @Test

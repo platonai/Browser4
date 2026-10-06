@@ -186,6 +186,23 @@ class ScrapedDocumentTest {
     }
 
     @Test
+    @DisplayName("a screenshot carries its path, and its bytes only when requested")
+    fun screenshotPathAndBytesAreIndependent() {
+        val justThePath = ScrapedDocument(screenshot = "/tmp/shot.png")
+
+        // The file is always written, so the path is what `screenshot` means; the
+        // bytes are a separate opt-in field and must not appear on their own.
+        assertEquals(listOf("screenshot"), justThePath.deliveredFormats(listOf("screenshot")))
+        assertTrue(justThePath.retainRequested(listOf("screenshot")).screenshotBase64 == null)
+
+        val withBytes = justThePath.copy(screenshotBase64 = "aGk=")
+        assertEquals(listOf("screenshot"), withBytes.deliveredFormats(listOf("screenshot")))
+        assertEquals("aGk=", withBytes.retainRequested(listOf("screenshot")).screenshotBase64)
+        // Not requested → not present, even though the field is populated.
+        assertTrue(withBytes.retainRequested(listOf("markdown")).screenshotBase64 == null)
+    }
+
+    @Test
     @DisplayName("withContributedField writes the fields a contributor may own")
     fun withContributedFieldWritesContributorFields() {
         val profile = mapOf("logo" to "l.svg")

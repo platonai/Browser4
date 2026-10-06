@@ -197,6 +197,9 @@ object PageFormats {
             QUESTION -> setOf("answer")
             QUERY -> setOf("answer", "highlights")
             VIDEO -> setOf("video", "videos")
+            // The file is written either way, so the path is always present; the
+            // base64 rides alongside it only when the format asked for it.
+            SCREENSHOT -> setOf("screenshot", "screenshotBase64")
             else -> setOf(canonical)
         }
     }
@@ -222,6 +225,10 @@ object PageFormats {
  *   be an unknown string so validation can report it with its original spelling.
  * @property fullPage screenshot: capture the full scrollable page.
  * @property quality screenshot: JPEG quality, 1-100.
+ * @property base64 screenshot: also return the capture's bytes, not just its path.
+ *   The file is written either way, so this only decides whether the response also
+ *   carries `screenshotBase64` — opting in is explicit because the bytes dwarf the
+ *   rest of the document.
  * @property viewport screenshot: capture this viewport size.
  * @property schema json/deterministicJson/changeTracking: JSON schema object.
  * @property prompt json/deterministicJson/changeTracking/query: extraction prompt.
@@ -242,6 +249,7 @@ data class PageFormat(
     val type: String,
     val fullPage: Boolean = false,
     val quality: Int? = null,
+    val base64: Boolean = false,
     val viewport: FormatViewport? = null,
     val schema: Map<String, Any?>? = null,
     val prompt: String? = null,
@@ -643,6 +651,7 @@ object FormatOptionSchema {
             type = canonical,
             fullPage = asBoolean(options["fullpage"]) ?: aliasFullPage,
             quality = asInt(options["quality"]),
+            base64 = asBoolean(options["base64"]) ?: false,
             viewport = asViewport(options["viewport"]),
             schema = asMap(options["schema"]),
             prompt = asString(options["prompt"]),

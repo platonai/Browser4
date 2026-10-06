@@ -3,9 +3,13 @@ package ai.platon.pulsar.rest.api.service.scrape
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatSnapshot
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatStepRunner
 import ai.platon.pulsar.agentic.tools.advanced.format.HTML_SNAPSHOT_DOMAIN
+import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import com.fasterxml.jackson.databind.JsonNode
+import java.nio.file.Files
 import java.time.Duration
+import java.util.Base64
+import java.util.UUID
 
 /**
  * The production [FormatStepRunner]: it drives the same `html_snapshot` tools the
@@ -106,6 +110,51 @@ class SnapshotFormatStepRunner(
         outputOf(domain, method, dispatcher.call(domain, method, args))
 
     override fun supports(domain: String, method: String): Boolean = dispatcher.supports(domain, method)
+
+    /**
+     * Write a step's base64 output to a file and return its path.
+     *
+     * The location is [AppPaths.WEB_SCREENSHOT_DIR] — the directory this project
+     * already reserves for screenshots, and one that sits **inside the process temp
+     * tree** (`PROC_TMP_DIR/cache/web/screenshot`). That is what makes the answer a
+     * genuinely temporary file: the path is usable while the process's temp tree
+     * lives, which is the honest contract and also the reason a *remote* caller needs
+     * a download endpoint rather than a path.
+     *
+     * The name carries a timestamp and a short random suffix rather than the request
+     * id: two concurrent requests can capture the same page, and `PageFormats` has no
+     * request identifier yet (design §3.5's `metadata.scrapeId` is still unset).
+     *
+     * @throws IllegalArgumentException when the payload is not the base64 the tool
+     *   documented — loudly, so a broken artifact degrades the format with a reason
+     *   instead of writing a corrupt file.
+     */
+    override suspend fun persistArtifact(nameHint: String, base64: String, extension: String): String {
+        val bytes = try {
+            Base64.getDecoder().decode(stripDataUriPrefix(base64))
+        } catch (e: IllegalArgumentException) {
+            throw IllegalArgumentException(
+                "artifact '$nameHint' is not base64 (${e.message}); refusing to write a corrupt file", e
+            )
+        }
+        if (bytes.isEmpty()) {
+            throw IllegalArgumentException("artifact '$nameHint' decoded to zero bytes")
+        }
+
+        val dir = AppPaths.WEB_SCREENSHOT_DIR
+        Files.createDirectories(dir)
+        val name = "$nameHint-${AppPaths.fromNow()}-${UUID.randomUUID().toString().take(8)}.$extension"
+        val path = dir.resolve(name)
+        Files.write(path, bytes)
+        return path.toString()
+    }
+
+    /** The tool returns bare base64; a `data:` URI prefix is accepted rather than fatal. */
+    private fun stripDataUriPrefix(raw: String): String {
+        val trimmed = raw.trim()
+        val comma = trimmed.indexOf(',')
+        return if (trimmed.startsWith("data:") && comma > 0) trimmed.substring(comma + 1) else trimmed
+    }
 
     /**
      * A tool that ran and produced nothing is a failure, not an empty result.

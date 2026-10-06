@@ -769,10 +769,35 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 1. **`FormatInput.LIVE_TAB` 对 contributor 永远不满足。** `FormatContext` 只携带值，不带 driver，所以 contributor 拿不到 tab 控制权。这直接使 §7.2 里那个 `BrandingFormatContributor` 示例（`requires = setOf(RAW_HTML, LIVE_TAB)`）恒不可用。当前实现把它明确报成 `needs a live tab (contributors are handed values, not a driver)`，而不是假装满足。要修就得改 SPI 形状（给 `FormatContext` 一个受控的 tab 调用能力），那是对已发布契约的破坏性变更，应当先定。
 2. **全新的第三方格式 id 没有落脚字段。** `ScrapedDocument` 的字段集是封闭的，`contributedFields()` 只有 branding/product/menu/highlights。一个 id 为 `myFormat` 的 contributor 即使注册成功，也没有字段可写（引擎会报 `writes 'x', which is not a contributor field`）。`outputField` 因此实际只能在这四个之间重定向。要支持真正的第三方 id，需要给 `ScrapedDocument` 加一个 `@JsonAnyGetter` 的泛化容器 —— 会改动 Phase 0 的线上形状，同样应当先定。
 
-### Phase 2 — 活体产物（≈1 天）
-- `screenshot`（沿用 `tab.screenshot` 的全部参数与 `/STACK` 相关处理）、`pdf`
-- 二进制产物的落盘命名与 `--out` 语义
-- 测试：夹具页 + 真实浏览器 e2e（`requires_browser4: true`）
+### Phase 2 — 活体产物（🟡 `screenshot` 已交付并经真机验证；`pdf` 与落盘策略未做）
+
+`screenshot` 是第一个需要**活体 tab** 的格式，也是 `FormatStage.LIVE_TAB` 的第一次真实执行——在此之前该阶段只在 `FakeRunner` 单测里跑过，而这正是它藏了两个真 bug 的原因（见下）。
+
+**落盘策略（按你的口径）**：必写临时文件 → 默认返回路径 → 可选返回 base64 → 遵循 `AppPaths`。
+
+落地时确认了一件事：`AppPaths.WEB_SCREENSHOT_DIR` = `WEB_CACHE_DIR/screenshot`，而 `WEB_CACHE_DIR = CACHE_DIR/web`、`CACHE_DIR = PROC_TMP_DIR/cache` —— 也就是说这个项目**本来就为截图预留的目录就在进程临时目录树下**，同时满足"临时文件"与"遵循 AppPaths"，不需要新造路径。
+
+| 件 | 做法 |
+|---|---|
+| `FormatStep.artifact: ArtifactSpec?` | 步骤声明输出是**字节**而非文本；引擎先让 host 落盘，再把**路径**交给 provider |
+| `FormatStepRunner.persistArtifact(hint, base64, ext)` | 新方法，**默认实现拒绝**（"本 host 不能落盘"）——于是没有磁盘的 host 让依赖它的格式降级成 warning，而不是让整个请求失败 |
+| `StepResult.raw` | 保留工具原始输出，所以"同时要路径和字节"不需要 provider 自己做 I/O |
+| `PageFormat.base64` | 新选项；`base64: true` 时文档同时带 `screenshotBase64`——文件无论如何都写，所以路径不会因为要了字节而丢 |
+| `ScrapedDocument.screenshotBase64` | 与 `screenshot` 共存（照 `video`/`videos` 的先例），`documentFieldsOf("screenshot")` 返回两个字段 |
+| `UnsupportedFormatOptionException` | provider 拒绝它无法兑现的选项；`PageFormatPlanBuilder` 捕获并转成指名格式的 warning |
+
+**`viewport` 与 `quality` 被拒绝而不是忽略**：Firecrawl 的 `viewport` 是**尺寸** `{width,height}`，而 `tab.screenshot` 的 `viewport` 是**滚动序号**——把一个当另一个用会截错区域还报成功。`quality` 则根本没有对应旋钮。
+
+**真机才暴露的两个 bug（都已落地为回归测试）**
+
+1. **内建域不在 `CustomToolRegistry` 里。** 我的 `SessionFormatToolDispatcher` 只查注册表，而 `tab`/`browser` 这类内建域在会话的 `AgentToolManager` 中。后果：`supports("tab","screenshot")` 恒为 false，`screenshot` 降级成 `tab.screenshot is not supported in this deployment`——**工具明明就在那儿**。修法与 `MCPToolController` 的统一派发一致：先查注册表，否则走会话的 agent 工具管理器。回归测试锁住 `supports`。
+2. **给内建域注入 `sessionId` 会被判为多余参数。** 内建执行器从 receiver/driver 取会话并**严格**校验参数，于是 `tab.screenshot` 回 `Extraneous parameter 'sessionId' … Allowed=[fullPage, format]`；MCP 层正是因此在派发前剥掉传输参数。修法：只对自定义域注入。
+
+两个都只有"真的让活体阶段跑一次"才会暴露——这也是为什么我坚持先做 `screenshot` 而不是先做更好写的 `pdf`。
+
+**真机断言**（`test_e2e_scrape_formats`，真实 Chrome）：一次请求里 `markdown` + `screenshot` 共存且全文只有**一个** `captureId`（快照读先于活体步骤）；`formatsDelivered` 两者齐全；`screenshotBase64` 是真实图像数据（`iVBOR…` PNG 魔数）；**返回的路径上文件确实存在**（"必写文件"是对文件系统的承诺，只查字段等于没查）；纯活体请求**不产生** `captureId`（"一次抓取"的另一半：不多于所需）。
+
+**未做**：`pdf`（同样的活体路径，但落盘策略与 `screenshot` 一致即可复用）；二进制产物的 `--out` 语义（§3.3 想要"必须落到 `--out` 目录"，而当前是服务端临时目录 + 返回路径）；Q3 的下载端点（远程调用方拿不到文件，已写入 KNOWN 限制）。
 
 ### Phase 3 — 服务与 AI 格式（≈1.5 天）
 - `audio` / `video`（`media.*`）、`summary(LLM)` / `question`（`agent_*`）

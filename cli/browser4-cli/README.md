@@ -305,9 +305,18 @@ was shared — plus `formatsRequested` and `formatsDelivered`:
 ```
 
 Available in a stock install: `markdown`, `html`, `rawHtml`, `links`, `images`,
-`attributes`, `deterministicJson`, `readability`. `branding`, `product`, `menu` and
-`highlights` need a plugin contributor; the rest are later phases. Run
+`attributes`, `deterministicJson`, `readability`, `screenshot`. `branding`, `product`,
+`menu` and `highlights` need a plugin contributor; the rest are later phases. Run
 `browser4-cli scrape formats` for the authoritative answer for your build.
+
+`screenshot` is the only format that needs the live tab, and the only one that writes a
+file. The file is always written to the backend's temporary tree and the `screenshot`
+field holds that local path; add `"base64": true` to the format entry to also get the
+bytes in `screenshotBase64`:
+
+```bash
+browser4-cli scrape --formats '[{"type":"screenshot","fullPage":true,"base64":true}]'
+```
 
 **A format that produced nothing is not a failure.** A page with no `<img>` yields an
 empty `images`, which is omitted from the JSON while still appearing in

@@ -92,13 +92,24 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
         }
 
         val results = LinkedHashMap<StepKey, String>()
-        document = runSnapshotSteps(plan, snapshot, results, document)
-        document = runLiveSteps(plan, results, document)
+        val rawOutputs = LinkedHashMap<StepKey, String>()
+        document = runSnapshotSteps(plan, snapshot, results, rawOutputs, document)
+        document = runLiveSteps(plan, results, rawOutputs, document)
 
         request.formats.forEach { format ->
             val provider = FormatProviders.find(format.type) ?: return@forEach
-            val stepResults = provider.steps(format, options).mapNotNull { step ->
-                results[step.key()]?.let { output -> StepResult(step, output) }
+            // Re-planning here is how a provider recovers the steps it declared. An
+            // option it refuses was already turned into a warning while the plan was
+            // built, so it must skip the format, not fail the request.
+            val steps = try {
+                provider.steps(format, options)
+            } catch (e: UnsupportedFormatOptionException) {
+                return@forEach
+            }
+            val stepResults = steps.mapNotNull { step ->
+                results[step.key()]?.let { output ->
+                    StepResult(step, output, raw = rawOutputs[step.key()] ?: output)
+                }
             }
             if (stepResults.isEmpty()) return@forEach
             document = provider.assemble(format, stepResults, AssemblyContext(snapshot, options), document)
@@ -130,6 +141,7 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
         plan: PageFormatPlan,
         snapshot: FormatSnapshot?,
         results: MutableMap<StepKey, String>,
+        rawOutputs: MutableMap<StepKey, String>,
         document: ScrapedDocument,
     ): ScrapedDocument {
         var result = document
@@ -142,7 +154,8 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
             }
             val target = snapshot ?: return@forEach
             try {
-                results[key] = runner.readOnSnapshot(target, step.domain, step.method, step.args)
+                record(step, rawOutputs) { runner.readOnSnapshot(target, step.domain, step.method, step.args) }
+                    ?.let { results[key] = it }
             } catch (e: Exception) {
                 if (step.policy == StepPolicy.REQUIRED) throw e
                 result = result.withWarning(failureWarning(step, e))
@@ -151,9 +164,32 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
         return result
     }
 
+    /**
+     * Turn one step's raw output into what the provider consumes.
+     *
+     * A text step passes through. A step carrying an [ArtifactSpec] has the host write
+     * the bytes and the provider receives the **path**, with the raw base64 kept in
+     * [rawOutputs] for a format that also returns the bytes. Persisting is part of the
+     * step's success: a host that cannot write files fails here, and the step's policy
+     * decides whether that degrades the format or the request.
+     *
+     * @return the value to hand the provider, or null when the tool produced nothing.
+     */
+    private suspend fun record(
+        step: FormatStep,
+        rawOutputs: MutableMap<StepKey, String>,
+        call: suspend () -> String,
+    ): String? {
+        val raw = call()
+        val artifact = step.artifact ?: return raw
+        rawOutputs[step.key()] = raw
+        return runner.persistArtifact(artifact.nameHint, raw, artifact.extension)
+    }
+
     private suspend fun runLiveSteps(
         plan: PageFormatPlan,
         results: MutableMap<StepKey, String>,
+        rawOutputs: MutableMap<StepKey, String>,
         document: ScrapedDocument,
     ): ScrapedDocument {
         var result = document
@@ -165,7 +201,8 @@ class PageFormatEngine(private val runner: FormatStepRunner) {
                 return@forEach
             }
             try {
-                results[key] = runner.runOnTab(step.domain, step.method, step.args)
+                record(step, rawOutputs) { runner.runOnTab(step.domain, step.method, step.args) }
+                    ?.let { results[key] = it }
             } catch (e: Exception) {
                 if (step.policy == StepPolicy.REQUIRED) throw e
                 result = result.withWarning(failureWarning(step, e))

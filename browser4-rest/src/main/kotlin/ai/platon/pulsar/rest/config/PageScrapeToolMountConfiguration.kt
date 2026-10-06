@@ -37,7 +37,7 @@ class PageScrapeToolMountConfiguration(
 
     @Bean
     fun pageScrapeService(): PageScrapeService =
-        PageScrapeService(SessionFormatToolDispatcher.factory(customToolTargets))
+        PageScrapeService(SessionFormatToolDispatcher.factory(sessionManager, customToolTargets))
 
     @Bean
     fun pageScrapeToolExecutor(): PageScrapeToolExecutor = PageScrapeToolExecutor(pageScrapeService())

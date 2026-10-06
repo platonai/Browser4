@@ -44,6 +44,15 @@ data class FormatStep(
     val method: String,
     val args: Map<String, Any?> = emptyMap(),
     val policy: StepPolicy = StepPolicy.DEGRADABLE,
+    /**
+     * Set when the step's output is **bytes** (base64), not text.
+     *
+     * The engine hands such an output to [FormatStepRunner.persistArtifact] and gives
+     * the provider the resulting path, so a provider never performs I/O and stays
+     * testable against a fake host. The raw base64 is still available to the provider
+     * through [StepResult.raw] for a format that asks to return it as well.
+     */
+    val artifact: ArtifactSpec? = null,
 ) {
     /**
      * Identity used to run a step at most once per request.
@@ -54,6 +63,19 @@ data class FormatStep(
      */
     fun key(): StepKey = StepKey(stage, domain, method, args)
 }
+
+/**
+ * How the host should persist a step's binary output.
+ *
+ * @property extension file extension without the dot, e.g. `png`.
+ * @property nameHint a stem for the file name, e.g. `screenshot`; the host decides
+ *   where it lands and may add a request identifier, because "where do bytes go on
+ *   this machine" is a host question, not a provider one.
+ */
+data class ArtifactSpec(
+    val extension: String,
+    val nameHint: String,
+)
 
 /** Identity of a [FormatStep]; equal steps share one execution. */
 data class StepKey(
@@ -106,9 +128,14 @@ data class FormatOptions(
  * The result of one executed step, handed back to the provider that asked for it.
  *
  * @property step the step that produced it.
- * @property output the tool output.
+ * @property output what the provider consumes: the tool output, or — for a step with
+ *   an [ArtifactSpec] — the **path** the host persisted the bytes to.
+ * @property raw the tool's untouched output. Equal to [output] for every step except
+ *   an artifact step, where it is the base64 the host wrote out; a format that also
+ *   returns the bytes (`screenshot` with `base64`) reads it from here rather than
+ *   making the provider do I/O.
  */
-data class StepResult(val step: FormatStep, val output: String)
+data class StepResult(val step: FormatStep, val output: String, val raw: String = output)
 
 /**
  * What a provider may consult while turning step outputs into document fields.

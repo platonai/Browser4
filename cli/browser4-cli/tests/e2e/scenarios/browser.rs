@@ -4824,4 +4824,76 @@ pub(super) fn test_scrape_formats(ctx: &mut E2ECtx) {
         bad.stdout,
         bad.stderr
     );
+
+    // ── 4. The live stage: capture, read, THEN screenshot ─────────────────
+    // One request mixing a snapshot format with a live one. The interesting part is
+    // not that a screenshot came back but that the *tab* work happened after the
+    // capture-derived format, which is the ordering the engine promises.
+    let mixed = run_command(
+        ctx,
+        &[
+            "scrape",
+            "--formats",
+            r#"["markdown",{"type":"screenshot","fullPage":true,"base64":true}]"#,
+        ],
+    );
+    let mixed_doc = &mixed.stdout;
+    assert!(
+        mixed_doc.contains(r#""markdown":"#),
+        "the capture-derived format must survive the live step:\n{mixed_doc}"
+    );
+    assert_eq!(
+        mixed_doc.matches("\"captureId\"").count(),
+        1,
+        "one capture must serve both the snapshot read and the live step:\n{mixed_doc}"
+    );
+    assert!(
+        mixed_doc.contains(r#""formatsDelivered":["markdown","screenshot"]"#),
+        "both formats should be delivered:\n{mixed_doc}"
+    );
+
+    // The bytes are real image data, not a placeholder: PNG (`iVBOR…`) or JPEG.
+    assert!(
+        mixed_doc.contains("iVBORw0KGgo") || mixed_doc.contains("/9j/"),
+        "screenshotBase64 should be real image data:\n{}",
+        &mixed_doc[..mixed_doc.len().min(600)]
+    );
+
+    // And `screenshot` holds a path that really exists — "always write the file" is a
+    // promise about the filesystem, so checking the field alone would prove nothing.
+    let path = json_string_field(mixed_doc, "screenshot")
+        .unwrap_or_else(|| panic!("no screenshot path in:\n{mixed_doc}"));
+    assert!(path.ends_with(".png"), "expected a png path, got {path}");
+    assert!(
+        std::path::Path::new(&path).exists(),
+        "the returned path must exist on the service host: {path}"
+    );
+
+    // ── 5. A live-only request does not capture at all ────────────────────
+    // "Capture once" also means "never more than the plan needs": with no
+    // snapshot-scoped step there is nothing to serialize into the page store.
+    let live_only = run_command(ctx, &["scrape", "--formats", "screenshot"]);
+    assert!(
+        live_only.stdout.contains(".png\""),
+        "a bare screenshot should still land a file:\n{}",
+        live_only.stdout
+    );
+    assert!(
+        !live_only.stdout.contains("\"captureId\""),
+        "a live-only request must not capture:\n{}",
+        live_only.stdout
+    );
+}
+
+/// Read a top-level string field out of a JSON document the CLI printed.
+///
+/// Deliberately minimal — the scenarios assert on substrings everywhere else, and the
+/// one thing that cannot be a substring check is a filesystem path (Windows escapes
+/// its separators as `\\`, so the raw text is not the path).
+fn json_string_field(document: &str, key: &str) -> Option<String> {
+    let marker = format!("\"{key}\":\"");
+    let start = document.find(&marker)? + marker.len();
+    let rest = &document[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].replace("\\\\", "\\"))
 }

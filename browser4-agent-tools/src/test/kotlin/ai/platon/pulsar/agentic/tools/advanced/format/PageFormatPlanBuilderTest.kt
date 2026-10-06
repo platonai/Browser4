@@ -114,13 +114,34 @@ class PageFormatPlanBuilderTest {
     @Test
     @DisplayName("a format this build cannot deliver warns and plans nothing")
     fun unavailableFormatsWarn() {
-        assertEquals(listOf("screenshot: not available in this build"), plan("screenshot").warnings)
+        // `pdf`, not `screenshot`: screenshot gained a provider, and a test that used it
+        // as the "cannot deliver" example would have gone on passing only by accident.
+        assertEquals(listOf("pdf: not available in this build"), plan("pdf").warnings)
         assertEquals(
             listOf("query: deprecated and unavailable; use question or highlights"),
             plan(mapOf("type" to "query", "prompt" to "p")).warnings,
         )
-        assertTrue(plan("screenshot").steps.isEmpty())
-        assertFalse(plan("screenshot").needsSnapshot)
+        assertTrue(plan("pdf").steps.isEmpty())
+        assertFalse(plan("pdf").needsSnapshot)
+    }
+
+    @Test
+    @DisplayName("an option a provider refuses becomes a warning, and the rest still plans")
+    fun unsupportedOptionsWarn() {
+        // A provider that cannot honour an option throws rather than dropping it, so a
+        // caller who asked for an 80-quality screenshot is told instead of silently
+        // getting a default-quality one.
+        val plan = plan(mapOf("type" to "screenshot", "quality" to 80), "markdown")
+
+        assertEquals(1, plan.warnings.size, plan.warnings.toString())
+        assertTrue(
+            plan.warnings.single().startsWith("screenshot: quality is not supported yet"),
+            plan.warnings.single(),
+        )
+        // The refused format contributes no steps; its neighbours are unaffected.
+        assertTrue(plan.steps.isNotEmpty(), "markdown must still be planned")
+        assertTrue(plan.steps.all { it.format == "markdown" }, plan.steps.toString())
+        assertFalse(plan.needsLiveTab, "a refused live format must not imply a live step")
     }
 
     @Test

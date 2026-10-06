@@ -150,10 +150,48 @@ shared scrape session); until then the argument is refused rather than ignored.
 to every call it makes.
 
 **Available formats in a stock install** — `markdown`, `html`, `rawHtml`, `links`,
-`images`, `attributes`, `deterministicJson`, `readability`. Everything else the
-command accepts (`screenshot`, `pdf`, `json`, `summary`, `question`, `audio`,
-`video`, `changeTracking`, `rawBase64`) is either a later phase or needs a plugin;
+`images`, `attributes`, `deterministicJson`, `readability`, `screenshot`. Everything
+else the command accepts (`pdf`, `json`, `summary`, `question`, `audio`, `video`,
+`changeTracking`, `rawBase64`) is either a later phase or needs a plugin;
 `scrape formats` is the authority for the build you are running, not this list.
+
+`screenshot` is the only format that needs the **live tab**, and the only one that
+writes a file. It captures the visible viewport by default, or the whole scrollable
+page with `--formats '[{"type":"screenshot","fullPage":true}]'`.
+
+**The file is always written; the path is what comes back:**
+
+```json
+{"screenshot": "/…/cache/web/screenshot/screenshot-<ts>-<rand>.png"}
+```
+
+That path is on the machine running the **backend**, under the project's temporary
+tree — usable from a CLI on the same host, and not dereferenceable by a remote
+caller (a download endpoint is not implemented). Ask for the bytes as well and the
+document carries both:
+
+```bash
+browser4-cli scrape --formats '[{"type":"screenshot","fullPage":true,"base64":true}]'
+# → "screenshot": "<path>", "screenshotBase64": "iVBORw0KGgo…"
+```
+
+The bytes are opt-in on purpose: base64 dwarfs everything else in the document.
+
+Two screenshot options are **refused rather than ignored**, because no tool can
+honour them and a silently wrong capture is worse than an error:
+
+| Option | Why it is refused |
+|---|---|
+| `viewport: {width, height}` | `tab.screenshot`'s `viewport` is a *scroll index*, not a size — passing a size as an index would capture the wrong region and report success |
+| `quality` | `tab.screenshot` has no quality setting |
+
+Either one produces `screenshot: … is not supported yet — …` in `warning`, and the
+rest of a mixed request still runs.
+
+A request that asks for **only** live formats does not capture at all: with no
+snapshot-scoped step there is nothing to serialize into the page store, so
+`metadata.captureId` is absent. That is capture-once working in the other direction.
+
 
 `branding`, `product`, `menu` and `highlights` are **contributor** formats: they
 exist only once a plugin provides them, and `scrape formats` reports

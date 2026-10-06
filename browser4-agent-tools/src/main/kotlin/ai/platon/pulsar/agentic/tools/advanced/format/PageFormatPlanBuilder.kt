@@ -43,7 +43,15 @@ object PageFormatPlanBuilder {
                 return@forEach
             }
 
-            val steps = provider.steps(format, options)
+            val steps = try {
+                provider.steps(format, options)
+            } catch (e: UnsupportedFormatOptionException) {
+                // An option this build cannot honour is refused by name rather than
+                // silently dropped — a 1280x800 request must not quietly become a
+                // 1920x1080 answer. The rest of the request still runs.
+                warnings += "${format.type}: ${e.message}"
+                return@forEach
+            }
             if (steps.isEmpty()) {
                 warnings += "${format.type}: no steps to run (a required option is missing)"
                 return@forEach

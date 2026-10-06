@@ -1,14 +1,19 @@
 package ai.platon.pulsar.rest.api.service.scrape
 
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatSnapshot
+import ai.platon.pulsar.common.AppPaths
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
+import java.util.Base64
 
 private const val CAPTURE_JSON =
     """{"url":"https://example.com/p","href":"https://example.com/p?a=1",""" +
@@ -50,6 +55,66 @@ class SnapshotFormatStepRunnerTest {
         dispatcher: FormatToolDispatcher,
         readExpires: Duration = SnapshotFormatStepRunner.DEFAULT_READ_EXPIRES,
     ) = SnapshotFormatStepRunner(dispatcher, readExpires)
+
+    // ---- artifact landing ---------------------------------------------------
+
+    @Test
+    @DisplayName("base64 is decoded to a real file under AppPaths' screenshot directory")
+    fun artifactsLandUnderAppPaths() {
+        val payload = "hello".toByteArray()
+        val encoded = Base64.getEncoder().encodeToString(payload)
+
+        val path = runBlocking { runner(RecordingDispatcher()).persistArtifact("screenshot", encoded, "png") }
+
+        val file = Path.of(path)
+        assertTrue(Files.exists(file), "expected a real file at $path")
+        // AppPaths owns the location, and WEB_SCREENSHOT_DIR sits inside the process
+        // temp tree — which is what makes the returned path a *temporary* file rather
+        // than something the caller may keep.
+        assertTrue(
+            file.startsWith(AppPaths.WEB_SCREENSHOT_DIR),
+            "expected $path under ${AppPaths.WEB_SCREENSHOT_DIR}",
+        )
+        assertTrue(path.endsWith(".png"), path)
+        assertArrayEquals(payload, Files.readAllBytes(file))
+        Files.deleteIfExists(file)
+    }
+
+    @Test
+    @DisplayName("a data-URI prefix is tolerated, and a payload that is not base64 is refused")
+    fun artifactPayloadIsValidated() {
+        val encoded = Base64.getEncoder().encodeToString("hi".toByteArray())
+
+        val withPrefix = runBlocking {
+            runner(RecordingDispatcher()).persistArtifact("screenshot", "data:image/png;base64,$encoded", "png")
+        }
+        assertArrayEquals("hi".toByteArray(), Files.readAllBytes(Path.of(withPrefix)))
+        Files.deleteIfExists(Path.of(withPrefix))
+
+        // Loudly, so the format degrades with a reason instead of a corrupt file
+        // landing on disk and being reported as a successful capture.
+        val bad = assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { runner(RecordingDispatcher()).persistArtifact("screenshot", "not base64 !!", "png") }
+        }
+        assertTrue(bad.message!!.contains("not base64"), bad.message)
+    }
+
+    @Test
+    @DisplayName("two captures of the same page get different files")
+    fun artifactNamesDoNotCollide() {
+        val encoded = Base64.getEncoder().encodeToString("hi".toByteArray())
+        val one = runner(RecordingDispatcher())
+
+        val first = runBlocking { one.persistArtifact("screenshot", encoded, "png") }
+        val second = runBlocking { one.persistArtifact("screenshot", encoded, "png") }
+
+        // A request id would be nicer, but none exists yet; a timestamp plus a random
+        // suffix is what keeps two concurrent captures of one page from overwriting
+        // each other.
+        assertTrue(first != second, "expected distinct paths, both were $first")
+        Files.deleteIfExists(Path.of(first))
+        Files.deleteIfExists(Path.of(second))
+    }
 
     // ---- the capture-once invariant -----------------------------------------
 

@@ -151,10 +151,22 @@ class PageScrapeServiceTest {
     @Test
     @DisplayName("a core format this build cannot deliver is unavailable, with the reason")
     fun unimplementedCoreFormatIsUnavailable() {
-        val entry = service().formats().single { it["id"] == "screenshot" }
+        // `pdf`, not `screenshot`: screenshot gained a provider in Phase 2, and the
+        // capability listing is exactly where that must show up.
+        val entry = service().formats().single { it["id"] == "pdf" }
 
         assertEquals(false, entry["available"])
         assertEquals("not available in this build", entry["reason"])
+    }
+
+    @Test
+    @DisplayName("a format that gained a provider reports itself available")
+    fun screenshotIsAvailable() {
+        val entry = service().formats().single { it["id"] == "screenshot" }
+
+        assertEquals(true, entry["available"])
+        assertNull(entry["reason"])
+        assertEquals("core", entry["source"])
     }
 
     @Test

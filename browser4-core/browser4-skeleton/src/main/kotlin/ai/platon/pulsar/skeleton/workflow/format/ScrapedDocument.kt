@@ -31,6 +31,9 @@ import com.fasterxml.jackson.annotation.JsonInclude
  * @property links `links` format: absolute links discovered on the page.
  * @property images `images` format: image URLs discovered on the page.
  * @property screenshot `screenshot` format: local path to the capture.
+ * @property screenshotBase64 `screenshot` format with `base64`: the capture's bytes.
+ *   Coexists with [screenshot] rather than replacing it — the file is written either
+ *   way, so the path is always known and the base64 is the part a caller opts into.
  * @property audio `audio` format: local path to the downloaded audio.
  * @property video `video` format: local path to the downloaded video.
  * @property videos `video` format: discovered videos (Firecrawl's `VideoItem[]`).
@@ -60,6 +63,7 @@ data class ScrapedDocument(
     val links: List<String>? = null,
     val images: List<String>? = null,
     val screenshot: String? = null,
+    val screenshotBase64: String? = null,
     val audio: String? = null,
     val video: String? = null,
     val videos: List<Any?>? = null,
@@ -100,6 +104,7 @@ data class ScrapedDocument(
             links = kept("links", links),
             images = kept("images", images),
             screenshot = kept("screenshot", screenshot),
+            screenshotBase64 = if ("screenshotBase64" in keep) screenshotBase64 else null,
             audio = kept("audio", audio),
             video = kept("video", video),
             videos = if ("videos" in keep) videos else null,
@@ -200,6 +205,7 @@ data class ScrapedDocument(
         "links" -> links != null
         "images" -> images != null
         "screenshot" -> screenshot != null
+        "screenshotBase64" -> screenshotBase64 != null
         "audio" -> audio != null
         "video" -> video != null
         "videos" -> videos != null

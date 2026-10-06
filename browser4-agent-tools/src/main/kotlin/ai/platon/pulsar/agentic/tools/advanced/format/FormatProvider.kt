@@ -14,6 +14,20 @@ import com.fasterxml.jackson.databind.JsonNode
  */
 const val HTML_SNAPSHOT_DOMAIN = "html_snapshot"
 
+/** The tool domain the live-tab family lives in (`tab.screenshot`, `tab.pdf`, …). */
+const val LIVE_TAB_DOMAIN = "tab"
+
+/**
+ * Thrown by a provider that cannot honour the options it was given.
+ *
+ * [PageFormatPlanBuilder] catches it and turns it into a **warning naming the
+ * format**, so a request that mixes an unsupported option with supported formats
+ * still succeeds for the rest. Throwing is what keeps an option from being accepted
+ * and silently ignored: a caller who asked for a 1280×800 screenshot must not get a
+ * 1920×1080 one that looks successful.
+ */
+class UnsupportedFormatOptionException(message: String) : IllegalArgumentException(message)
+
 /**
  * Turns one requested format into tool steps and back into document fields.
  *

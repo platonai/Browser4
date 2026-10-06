@@ -94,4 +94,28 @@ interface FormatStepRunner {
      * failing the request; the engine never calls an unsupported method.
      */
     fun supports(domain: String, method: String): Boolean
+
+    /**
+     * Write a step's binary output to a file and return the path.
+     *
+     * Called by the engine for a [FormatStep] carrying an [ArtifactSpec], **before**
+     * the provider sees the result — so a provider never does I/O and can be tested
+     * against a fake host. The host owns the location: it is a local path on the
+     * machine running the backend, which is what makes it usable for a CLI on the
+     * same host and unusable for a remote caller without a download endpoint.
+     *
+     * The default refuses, which degrades the dependent format with a warning rather
+     * than failing the request — the same treatment as an unsupported tool, and the
+     * honest answer for a host that has nowhere to put bytes.
+     *
+     * @param nameHint a stem for the file name, e.g. `screenshot`.
+     * @param base64 the tool's base64 output.
+     * @param extension the wanted extension without the dot.
+     * @return the path the bytes were written to.
+     * @throws UnsupportedOperationException when this host cannot persist files.
+     */
+    suspend fun persistArtifact(nameHint: String, base64: String, extension: String): String =
+        throw UnsupportedOperationException(
+            "This host cannot persist binary artifacts, so a format that produces a file is unavailable"
+        )
 }
