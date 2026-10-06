@@ -16,10 +16,26 @@ import kotlin.reflect.KClass
  *
  * ## Methods
  *
- * - `scrape(sessionId?, url?, formats, onlyMainContent?)` — one request, one
+ * - `scrape(sessionId, formats, onlyMainContent?)` — one request, one
  *   capture, many outputs, returned as one Firecrawl-v2-shaped document.
  * - `formats()` — capability discovery: every accepted format id, whether this
  *   deployment can deliver it right now, and why not when it cannot.
+ *
+ * ## `sessionId` is required (decision A2: "open first")
+ *
+ * The design draft had it optional ("no url means the session's current page"). That
+ * branch is gone: with no `url` to target, only a session can say *which* page to read,
+ * and choosing one here would read a different caller's page. So the argument is
+ * declared **required** — the same shape `html_snapshot` and `webdb` already use
+ * (`ToolSpec.Arg("sessionId", "String", null)`) — and `PageScrapeService` is what
+ * actually refuses a blank one.
+ *
+ * Note the spec is *not* what enforces it: `ToolSpecValidator` lists `sessionId` in
+ * `DEFAULT_CONTEXT_ARGS` and skips it (`ToolSpecValidator.kt:65`) before the
+ * required-argument check, and the MCP layer strips it from the forwarded arguments
+ * anyway. Declaring it required is for the documentation and discovery surfaces; a
+ * null default on any *payload* argument would instead be actively wrong, because
+ * there the validator really does treat it as required.
  *
  * ## The CLI surface is a static command pair, not a declared name
  *
@@ -68,7 +84,15 @@ class PageScrapeToolExecutor(
                 // whatever the declared type says (`String?` included), so every
                 // optional argument spells its default as the literal "null" — the
                 // convention the rest of the tool layer already uses.
-                ToolSpec.Arg("sessionId", "String?", "null", "The session whose page to scrape; omit to use the session the call is bound to."),
+                //
+                // `sessionId` is the one deliberate exception (see the class KDoc): it
+                // is a transport argument the validator skips, and every other domain
+                // declares it required. `PageScrapeService` is what refuses a blank one.
+                ToolSpec.Arg(
+                    "sessionId", "String", null,
+                    "The session whose page to scrape. Required: open the page first (`open <url>`), " +
+                        "because this layer reads the page a session is already on.",
+                ),
                 ToolSpec.Arg(
                     "formats", "List<Any>", "null",
                     "The outputs to produce, in request order. A string names a format (`markdown`); " +

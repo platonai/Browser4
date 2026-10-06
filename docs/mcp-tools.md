@@ -1033,14 +1033,14 @@ Examples:
 ### `page_scrape`
 
 ```
-page.scrape(sessionId: String? = null, formats: List<Any> = null, onlyMainContent: Boolean = true)
+page.scrape(sessionId: String, formats: List<Any> = null, onlyMainContent: Boolean = true)
 ```
 
 Scrape a page once and return every requested format in one Firecrawl-compatible document. All formats are derived from a single capture, so `markdown` and `links` describe the same page state and eight formats cost one page load. Formats this deployment cannot deliver are omitted from the document and named in its `warning`; `metadata.formatsDelivered` tells 'not requested' from 'requested but unavailable'.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `sessionId` | String? | no | null | The session whose page to scrape; omit to use the session the call is bound to. |
+| `sessionId` | String | yes |  | The session whose page to scrape. Required: open the page first (`open <url>`), because this layer reads the page a session is already on. |
 | `formats` | List<Any> | no | null | The outputs to produce, in request order. A string names a format (`markdown`); an object adds its options (`{"type":"screenshot","fullPage":true}`). Accepts the list, a comma-separated string, or a JSON array. Omitted or empty means `["markdown"]`. |
 | `onlyMainContent` | Boolean | no | true | Derive markdown from the readable article instead of the whole cleaned page. |
 

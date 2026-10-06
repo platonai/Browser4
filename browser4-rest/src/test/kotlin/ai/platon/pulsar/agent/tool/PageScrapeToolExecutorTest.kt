@@ -17,6 +17,9 @@ import java.time.Duration
 private const val KEY = "https://example.com/p"
 private const val CLEAN_HTML = "<h1>Title</h1><p>Body</p>"
 
+/** A session must be addressed on every scrape (decision A2: "open first"). */
+private const val SESSION = "s1"
+
 /** A host bridge with no browser behind it; see [PageScrapeServiceTest] for the same shape. */
 private class StubRunner : FormatStepRunner {
     var captures = 0
@@ -51,7 +54,7 @@ class PageScrapeToolExecutorTest {
     @Test
     @DisplayName("scrape returns the document as a map, not a description envelope")
     fun scrapeReturnsAMap() = runBlocking {
-        val result = scrape("formats" to listOf("markdown"))
+        val result = scrape("sessionId" to SESSION, "formats" to listOf("markdown"))
 
         // AbstractToolExecutor wraps anything that is not a Map/Collection/String in a
         // `{type, description}` envelope, which would hand the caller a toString() of
@@ -66,7 +69,7 @@ class PageScrapeToolExecutorTest {
     @DisplayName("formats accepts a JSON string, a list, and a comma-separated string")
     fun formatsArgumentFormsAreAccepted() = runBlocking {
         for (raw in listOf("""["markdown"]""", listOf("markdown"), "markdown")) {
-            val document = scrape("formats" to raw) as Map<*, *>
+            val document = scrape("sessionId" to SESSION, "formats" to raw) as Map<*, *>
             assertTrue(document["markdown"].toString().contains("Title"), "formats=$raw")
         }
     }
@@ -74,7 +77,7 @@ class PageScrapeToolExecutorTest {
     @Test
     @DisplayName("an omitted formats argument still defaults to markdown")
     fun formatsDefaultsToMarkdown() = runBlocking {
-        val document = scrape() as Map<*, *>
+        val document = scrape("sessionId" to SESSION) as Map<*, *>
 
         assertTrue(document["markdown"].toString().contains("Title"), document.toString())
         // Nothing else was produced: "not requested" must not look like "missing".
@@ -82,11 +85,30 @@ class PageScrapeToolExecutorTest {
     }
 
     @Test
-    @DisplayName("an unknown format id is refused before anything is captured")
+    @DisplayName("an unknown format id is refused before anything is captured, session or not")
     fun unknownFormatIsRefusedBeforeCapture() {
-        // The caller must learn about a typo without paying for a page load.
-        assertThrows(IllegalArgumentException::class.java) {
+        // The caller must learn about a typo without paying for a page load. This also
+        // pins the *order* of the two refusals: format validation runs before the
+        // session requirement, so a caller who got both wrong hears about the typo
+        // first — the cheaper mistake to fix.
+        val error = assertThrows(IllegalArgumentException::class.java) {
             runBlocking { scrape("formats" to listOf("markdwon")) }
+        }
+        assertTrue(error.message!!.contains("markdwon"), error.message)
+        assertEquals(0, runner.captures)
+    }
+
+    @Test
+    @DisplayName("a call that names no session is refused before a runner is built")
+    fun missingSessionIsRefused() {
+        // Decision A2 ("open first"). The message must name both the argument and the
+        // fix: "sessionId is required" alone leaves the caller guessing what to do.
+        for (blank in listOf<String?>(null, "   ")) {
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { scrape("sessionId" to blank, "formats" to listOf("markdown")) }
+            }
+            assertTrue(error.message!!.contains("'sessionId' is required"), "sessionId='$blank'")
+            assertTrue(error.message!!.contains("open"), "sessionId='$blank'")
         }
         assertEquals(0, runner.captures)
     }
@@ -95,7 +117,9 @@ class PageScrapeToolExecutorTest {
     @DisplayName("an illegal combination is refused before anything is captured")
     fun illegalCombinationIsRefusedBeforeCapture() {
         assertThrows(IllegalArgumentException::class.java) {
-            runBlocking { scrape("formats" to listOf("json", "deterministicJson", "markdown")) }
+            runBlocking {
+                scrape("sessionId" to SESSION, "formats" to listOf("json", "deterministicJson", "markdown"))
+            }
         }
         assertEquals(0, runner.captures)
     }
@@ -104,7 +128,9 @@ class PageScrapeToolExecutorTest {
     @DisplayName("onlyMainContent is parsed from either a boolean or a string")
     fun onlyMainContentAcceptsBothSpellings() = runBlocking {
         for (raw in listOf<Any>(false, "false")) {
-            val document = scrape("formats" to "markdown", "onlyMainContent" to raw) as Map<*, *>
+            val document = scrape(
+                "sessionId" to SESSION, "formats" to "markdown", "onlyMainContent" to raw,
+            ) as Map<*, *>
             // With onlyMainContent off, markdown comes from the cleaned export.
             assertTrue(document["markdown"].toString().contains("Title"), "onlyMainContent=$raw")
         }
@@ -158,15 +184,24 @@ class PageScrapeToolExecutorTest {
     }
 
     @Test
-    @DisplayName("no scrape argument is required: a null default would make it required")
-    fun scrapeTakesNoRequiredArguments() {
-        // ToolSpecValidator reports MISSING_REQUIRED_ARG whenever `defaultValue` is
+    @DisplayName("sessionId is the only argument allowed a null default, and the validator skips it")
+    fun sessionIdIsTheOnlyRequiredArgument() {
+        // `ToolSpecValidator` reports MISSING_REQUIRED_ARG whenever `defaultValue` is
         // null — the `?` in `String?` does not make an argument optional. A live call
-        // with only `formats` therefore failed on the required `url`; this locks the
-        // convention so it cannot come back.
+        // carrying only `formats` once failed on exactly that, for the required `url`.
+        // So no *payload* argument may spell its default as null.
+        //
+        // `sessionId` is the deliberate exception, and it is not a loophole: it is a
+        // transport argument listed in `ToolSpecValidator.DEFAULT_CONTEXT_ARGS`, and the
+        // validator `continue`s past it *before* the required-argument check — so a null
+        // default cannot make it required by accident. Every other domain already
+        // declares it this way (`HTMLSnapshotToolExecutor`, `WebDbToolExecutor`), and
+        // decision A2 made it the truth here too: `PageScrapeService` refuses a blank
+        // session regardless of what any spec says.
         val spec = executor().getToolSpecs().getValue("scrape")
 
         val required = spec.arguments.filter { it.defaultValue == null }.map { it.name }
-        assertTrue(required.isEmpty(), "ToolSpecValidator would require these: $required")
+        assertEquals(listOf("sessionId"), required)
+        assertEquals("String", spec.arguments.single { it.name == "sessionId" }.type)
     }
 }

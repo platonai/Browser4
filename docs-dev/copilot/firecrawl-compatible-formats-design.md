@@ -85,11 +85,18 @@ GET  /api/scrape/formats            # 能力发现：本部署支持哪些格式
 
 | 工具名 | 参数 | 返回 |
 |---|---|---|
-| `page_scrape` | `url?`、`sessionId?`、`formats`、`options?`、`strict?` | Document JSON |
-| `page_formats` | — | `[{id, available, reason, requires, plugin}]`（对齐 `htmlsnapshot algorithms` 的发现式设计） |
+| `page_scrape` | `sessionId`、`formats`、`onlyMainContent?` | Document JSON |
+| `page_formats` | — | `[{id, available, reason, source, requires}]`（对齐 `htmlsnapshot algorithms` 的发现式设计） |
 
-- `page_scrape` **不需要** `sessionId`：无 url 时用会话当前页，有 url 时在共享 scrape 会话上只读加载（与 `htmlsnapshot readability <url>` 的语义一致）。
+- ~~`page_scrape` **不需要** `sessionId`~~ → **改为必需（决策 A2：要求先 `open`）**，理由与实现见下方"实现偏差"。
 - 需在 `MCPToolController.FRONTEND_TOOL_NAME_ALIASES` 注册前端别名。
+
+> **实现偏差（Phase 1c）**
+>
+> - **`url` 与 `strict` 已从参数面移除**——不是"暂不支持"，是**不接受**。`url` 曾被转发、写进 `metadata.sourceURL`、然后被忽略：步骤读的是会话的**当前页**，所以它返回了一份关于**另一个页面**的貌似合理的文档；`strict` 的三态契约未实现，接受它只会把"降级"说成"严格"。两者在入口**按名字拒绝**（`'url' is not supported yet: …`），不静默吞掉。
+> - **`sessionId` 必需（决策 A2）**：设计稿写的是"无 url 时用会话当前页，有 url 时在共享 scrape 会话上只读加载"。**该分支已被否决**——`url` 不存在了，所以"读哪一页"只能由会话回答；而"自动挑一个会话"正是会读到**别人页面**的那类静默错误，也正是本轮要消灭的失败模式。因此调用方**先 `open`**，会话由 `sessionId` 显式给出；`PageScrapeService` 在管道入口拒绝空白 `sessionId`，消息指名要 `open`。
+>   - 这与仓库既有约定一致：`html_snapshot`、`webdb` 等域一律把 `sessionId` 声明为**必需**（`ToolSpec.Arg("sessionId", "String", null)`，`WebDbToolExecutor.kt:35` 的说明甚至直接写 "Required."）。本域原先的 `"String?"` + `"null"` 默认值（"省略即用绑定的会话"）是全仓库唯一的例外，现已改齐。
+>   - **一个必须知道的陷阱**：`ToolSpecValidator` 会把 `sessionId` 整个**跳过**（`DEFAULT_CONTEXT_ARGS`，`ToolSpecValidator.kt:65` 在必需性检查**之前** `continue`），而且 MCP 派发前 `normalizeToolArguments` 已经把它剥掉（`MCPToolController.kt:1844`），所以把 spec 声明成必需**不会**产生任何运行时校验——它只影响 `docs/mcp-tools.json` 与能力发现。**真正的拒绝发生在服务层**，别指望 spec 兜住。
 
 ### 3.3 CLI
 
@@ -117,8 +124,8 @@ browser4-cli scrape formats    # 能力发现
 
 ```jsonc
 {
-  "url": "https://example.com/post",     // 可省略 → 用会话当前页
-  "sessionId": "s1",                     // 可省略 → 共享 scrape 会话
+  "url": "https://example.com/post",     // 不接受（按名字拒绝）；先 open
+  "sessionId": "s1",                     // 必需（决策 A2）
   "formats": [
     "markdown",
     { "type": "screenshot", "fullPage": true, "quality": 80 },
@@ -381,8 +388,8 @@ data class FormatContext(
 > **实现偏差（Phase 1d）**
 >
 > - 代码里 `metadata` 的类型是 `ScrapeMetadata` 而非 `Map<String, Any?>`——它是现成的强类型对象，摊平成 map 只会丢信息。
-> - `FormatInput.LIVE_TAB` 目前**恒不满足**：`FormatContext` 只携带值，不带 tab 控制权，所以声明了它的 contributor 一律被判不可用（warning 点名 `needs a live tab (contributors are handed values, not a driver)`）。这使本节下方的 `BrandingFormatContributor` 示例恒不生效，需要一次 SPI 形状决策，见 Phase 1d 的"设计缺口"。
-> - `outputField` 实际只能在 `branding` / `product` / `menu` / `highlights` 之间重定向：`ScrapedDocument` 的字段集是封闭的，全新的第三方 id 没有落脚字段（引擎会明确报错，不会静默丢弃）。同样见 Phase 1d 的"设计缺口"。
+> - **`FormatInput.LIVE_TAB` 是要删掉的（决策 A1），但按"注明留待办"暂不实施。** 它现在仍是一个**恒不满足**的值：`FormatContext` 只携带值，不带 tab 控制权，所以声明了它的 contributor 一律被判不可用（warning 点名 `needs a live tab (contributors are handed values, not a driver)`）。既然 `branding` 不需要活体 DOM（A1），这个枚举值就不该留在**面向插件作者的公开枚举**里——一个恒为假的值对插件作者是陷阱。删除动作见"待办清单"。
+> - `outputField` 实际只能在 `branding` / `product` / `menu` / `highlights` 之间重定向：`ScrapedDocument` 的字段集是封闭的，全新的第三方 id 没有落脚字段（引擎会明确报错，不会静默丢弃）。**已决定不真支持第三方 id（决策 A4），同样留待办**——见"待办清单"。
 
 注册表（照搬 `PageSummaryAlgorithmRegistry`）：
 
@@ -419,7 +426,9 @@ class BrandingFormatContributor : PageFormatContributor {
     override val id = "branding"
     override val displayName = "Branding profile"
     override val description = "Logo / colours / typography extracted from the page"
-    override val requires = setOf(FormatInput.RAW_HTML, FormatInput.LIVE_TAB)
+    // 决策 A1：branding 不需要活体 DOM —— logo URL 与声明的颜色在原始 HTML 里就有，
+    // 只有"计算后"的颜色/排版才需要渲染后的 DOM，而 branding 不要求那部分。
+    override val requires = setOf(FormatInput.RAW_HTML)
     override fun isAvailable() = brandingService.isConfigured()
     override suspend fun contribute(ctx: FormatContext) = brandingService.extract(ctx)
 }
@@ -714,7 +723,8 @@ POST 未知格式 "markdwon"   → 400  {"success":false,"error":"Bad Request",
 - **`strict` 三态契约**（§6.2 的 503/502/504）。因此 `page.scrape` 与 `POST /api/scrape` **刻意不接受** `strict` 参数——接受了却只降级就是撒谎。
 - **请求级 `url`（Stage 0 ENSURE）**：见上面的"`url` 与 `expires` 已从请求面移除"。这是三个缺口里最影响可用性的一个——`open` 先行的替代方案在多页场景下会不断切换 tab。
 - **`expires` / `maxAge`**：字段已删（见上）。实现需要一条"只读地报出已存快照身份"的通道；倾向新增一个方法（如 `stored`）而不是给 `capture` 加条件语义——保留 `capture` 的纯粹性。
-- **`sessionId` 目前是必需的**（`requiresReceiver = true`）。设计稿 §3.2 写的是"不需要 sessionId"，但 §12 的开放问题 **Q1**（无 url 且无会话时自动开临时会话，还是要求先 `open`）至今未拍板，所以在拍板前要求会话是唯一诚实的选择。CLI 会自动注入 sessionId，所以 `scrape` 用户体验上无感；REST 调用方需要显式给。
+- ~~**`sessionId` 目前是必需的**（`requiresReceiver = true`）~~ **已由决策 A2 定案为"要求先 `open`"**——它不再是一条"等拍板"的临时状态，而是设计意图。`sessionId` 在 spec 里同时改为**必需**（与 `html_snapshot` / `webdb` 的既有约定对齐），服务层在管道入口拒绝空白值并指名要 `open`。CLI 会自动注入 sessionId，所以 `scrape` 用户体验上无感；REST 调用方必须显式给。
+- **二进制产物的下载端点**（决策 A3 = 要）：远程调用方现在拿不到 `screenshot`/`pdf` 的字节——路径是**后端本地**的。**这已不是理论缺口**：`screenshot` 一交付它就真实存在。形状不能照抄设计稿的 `{id}` 版（同步无状态请求没有任务 id，见 §12 Q3）。
 - 异步面（`/api/scrape/submit` + `/{id}/status|result|stream`），理由见 A5。
 - ~~**§11 的夹具页**仍未建~~ **已建并已用于真机断言**：`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/formats-fixture.html` + CLI 真机场景 `test_e2e_scrape_formats`（`requires_browser4: true`）。§11 的详细说明见下。
 
@@ -766,7 +776,11 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 
 **本阶段暴露的两个 SPI 缺口，一个已处置、一个仍待拍板**
 
-1. **`FormatInput.LIVE_TAB` 对 contributor 永远不满足（仍待拍板）。** `FormatContext` 只携带值，不带 driver，所以 contributor 拿不到 tab 控制权。这直接使 §7.2 里那个 `BrandingFormatContributor` 示例（`requires = setOf(RAW_HTML, LIVE_TAB)`）恒不可用。当前实现把它明确报成 `needs a live tab (contributors are handed values, not a driver)`，而不是假装满足。**待你回答的问题是产品性的：`branding` 到底需不需要活体 DOM？** 原始 HTML 能拿到 logo URL 与**声明**的颜色，**计算后**的颜色/排版需要渲染后的 DOM。需要 → 必须把受控的工具调度能力放进 `FormatContext`（破坏性变更，且要先定能力边界，否则等于把 `tab.eval` 交给插件）；不需要 → 从 `FormatInput` 删掉 `LIVE_TAB`，让枚举不再有一个恒为假的值。
+1. **`FormatInput.LIVE_TAB` 对 contributor 永远不满足 —— 已拍板（决策 A1：`branding` 不需要活体 DOM），删除动作留待办。** `FormatContext` 只携带值，不带 driver，所以 contributor 拿不到 tab 控制权。这直接使 §7.2 里那个 `BrandingFormatContributor` 示例（原 `requires = setOf(RAW_HTML, LIVE_TAB)`）恒不可用；当前实现把它明确报成 `needs a live tab (contributors are handed values, not a driver)`，而不是假装满足。
+
+   **A1 的裁决是"不需要"**，理由是边界清楚：原始 HTML 能拿到 logo URL 与**声明**的颜色（`<meta>` / 内联样式），只有**计算后**的颜色、排版、字体栈才需要渲染后的 DOM —— 而 branding 的输出被定义为前者。因此另一条分支（把受控工具调度能力放进 `FormatContext`）**不做**：那是一次破坏性 SPI 变更，且必须先定能力边界，否则等于把 `tab.eval` 交给插件。
+
+   于是剩下的动作很小但**按你的要求留作待办**：从 `FormatInput` 删掉 `LIVE_TAB`（枚举不该留一个恒为假的值，它只对插件作者构成陷阱），相应删掉引擎里那条 warning 分支与它的单测。
 
 2. **全新的第三方格式 id 没有落脚字段（已处置，按"注册时拒绝"）。** 原先：id 为 `myFormat` 的 contributor 注册会**成功**，却永远不会被调用（引擎的 contributor pass 只遍历 `PageFormats.isContributed`），或写字段时被拒——两种情况都要等到调用时才以 warning 的形式暴露，而那时调用方已经付过代价。
 
@@ -777,7 +791,7 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 
    检查落在 `outputField` 而非 id 上是有意的：`outputField` 存在的意义就是允许 id 与字段不同名（测试里有 `id = "product"`、`outputField = "branding"` 被接受）。引擎侧那条调用时兜底保留，但**已经不可能经注册表触达**，相应测试改为断言"根本注册不上"。
 
-   真正的第三方 id 支持（`@JsonAnyGetter` 泛化容器）仍是未决项：它会让响应多出插件定义的顶层键，并让插件参与决定 API 形状，需要单独拍板。
+   真正的第三方 id 支持（`@JsonAnyGetter` 泛化容器）**已决定不做（决策 A4），留待办**：它会让响应多出插件定义的顶层键，等于让插件参与决定 API 形状——那是 API 形状的**所有权**问题，不该被一次实现顺手决定。
 
 ### Phase 2 — 活体产物（🟡 `screenshot` 已交付并经真机验证；`pdf` 与落盘策略未做）
 
@@ -807,7 +821,7 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 
 **真机断言**（`test_e2e_scrape_formats`，真实 Chrome）：一次请求里 `markdown` + `screenshot` 共存且全文只有**一个** `captureId`（快照读先于活体步骤）；`formatsDelivered` 两者齐全；`screenshotBase64` 是真实图像数据（`iVBOR…` PNG 魔数）；**返回的路径上文件确实存在**（"必写文件"是对文件系统的承诺，只查字段等于没查）；纯活体请求**不产生** `captureId`（"一次抓取"的另一半：不多于所需）。
 
-**未做**：`pdf`（同样的活体路径，但落盘策略与 `screenshot` 一致即可复用）；二进制产物的 `--out` 语义（§3.3 想要"必须落到 `--out` 目录"，而当前是服务端临时目录 + 返回路径）；Q3 的下载端点（远程调用方拿不到文件，已写入 KNOWN 限制）。
+**未做**：`pdf`（同样的活体路径，落盘策略与 `screenshot` 一致即可复用）；二进制产物的 `--out` 语义（§3.3 想要"必须落到 `--out` 目录"，而当前是服务端临时目录 + 返回路径）；**下载端点（决策 A3 = 要）**——顺序上它先于 `--out`，因为没有取字节的通道时，`--out` 只能靠"调用方与服务端共享文件系统"这个假设。
 
 ### Phase 3 — 服务与 AI 格式（≈1.5 天）
 - `audio` / `video`（`media.*`）、`summary(LLM)` / `question`（`agent_*`）
@@ -861,24 +875,37 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 | R7 | **格式命名空间冲突**：插件贡献的 id 与未来核心格式撞名 | 注册被跳过、行为静默变化 | 注册冲突 warn + `page_formats` 标出来源（core/plugin）；核心格式名保留清单写入 `FormatOption.kt` |
 | R8 | **能力发现滞后**：`page_formats` 报告可用、实际调用失败（服务刚掉线） | 调用方误判 | `page_formats` 标 `available` 为"配置层面可用"，运行时失败仍走 §6.2 契约 |
 
-**开放问题（需评审拍板）**
+**开放问题 —— 已全部拍板**
 
-1. **Q1**：`page_scrape` 无 url 且无会话时——是自动开临时会话，还是要求调用方先 `open`？（倾向：自动用共享 scrape 会话，与 `readability <url>` 一致）
-2. **Q2**：`ScrapedDocument` 是否要保留 Firecrawl 的 `extract` 字段名（v1 遗留）？倾向不保留。
-3. **Q3**：二进制产物是否需要 `/api/scrape/{id}/media/{name}` 的下载端点，让远程调用方不必共享文件系统？倾向 Phase 3 再加。
-4. **Q4**：`changeTracking` 的存储保留策略是否复用 `webdb` 的清理周期，还是独立 TTL？（影响 R7/D7）
+| # | 问题 | 裁决 | 落点 |
+|---|---|---|---|
+| Q1 | 无 url 且无会话时，自动开临时会话还是要求先 `open`？ | **要求先 `open`** | ✅ 已实现（决策 A2）：服务层在管道入口拒绝空白 `sessionId` 并指名要 `open`；spec 同时改为必需 |
+| Q2 | `ScrapedDocument` 是否保留 Firecrawl v1 的 `extract` 字段名？ | **不保留** | 本来就没实现，记录为已决（决策 A5） |
+| Q3 | 二进制产物是否要下载端点，让远程调用方不必共享文件系统？ | **要** | ⏳ 待实现（决策 A3）。**注意形状**：设计稿的 `/api/scrape/{id}/media/{name}` 假定的是异步面，见下 |
+| Q4 | `changeTracking` 的保留策略是否复用 `webdb` 的清理周期？ | **复用** | Phase 4 按此实现（决策 A6） |
+
+Q3 有一个必须先说清的设计前提：设计稿写的 `/api/scrape/{id}/media/{name}` 假定的是**异步**面（`submit` → `{id}`），而当前 `POST /api/scrape` 是**同步、无状态**的——服务端不保留任务 id。所以实现 A3 时不能照抄那个形状。诚实的候选是以**返回给调用方的产物标识**寻址，严格限定在 `AppPaths` 的产物目录内并拒绝路径穿越；等异步面落地再引入 `{id}` 版本。
+
+**顺序上有个依赖**：A3 是 B2 的**前置**。CLI 要把二进制产物落到调用方的 `--out` 目录，就必须有一条取字节的通道；没有它，CLI 只能共享服务端文件系统——而那正是 A3 要消灭的假设。
+
+**待办清单（你要求显式留档的两项）**
+
+1. **删掉 `FormatInput.LIVE_TAB`**（决策 A1）——`branding` 不需要活体 DOM，所以这个值只会误导插件作者；连带删掉引擎里那条 warning 分支与它的单测。
+2. **真正的第三方格式 id 支持**（决策 A4，`@JsonAnyGetter` 泛化容器）——不做，理由是 API 形状的所有权不该被一次实现顺手决定。
+3. **`tips.rs` 里 `scrape` / `scrape formats` 没有专属提示**（落到 `TIPS_GENERAL`）——设计文档 §13 的文档门列了这一项，属于已知小缺口。
 
 ---
 
 ## 13. 验收清单（DoD，对齐 `AGENTS.md`）
 
-- [ ] 构建与相关测试通过（`mvn -DskipTests` + 最小相关测试域）
-- [ ] 新增/变更逻辑有测试：主路径 + 边界（未知格式、不可用格式、非法组合、截图引擎不支持）
-- [ ] 无新增高噪声日志/警告；降级路径用 `warning` 字段而非日志刷屏
-- [ ] **I1/I2/I3 有不变量测试**（capture 恰好一次、只读、失败不阻断）
-- [x] 夹具页 + 真实浏览器 e2e 覆盖格式层（`requires_browser4: true`，`test_e2e_scrape_formats`）；截图/导出的真机覆盖仍随 Phase 2 
-- [ ] 无新增直接 CDP 方法；若新增，四条评审门逐条留证据
-- [ ] 文档同步：`SKILL.md` / `references/scrape-formats.md` / `help.rs` / `tips.rs` / `README.md` / `README.zh.md` / `cli/browser4-cli/README.md`
-- [ ] 无密钥/私有端点入库；`page_formats` 不泄露服务地址
-- [ ] 无版本号随意变更（走父 BOM）
-- [ ] 性能影响评估：多格式请求的额外开销（除外部服务外应为零抓取、零额外 CDP 往返）
+- [x] 构建与相关测试通过：Kotlin **205**（skeleton 83 / agent-tools 52 / boot 12 / rest 58）0 失败；Rust **1600** 单测；`-Pquality-gate` BUILD SUCCESS
+- [x] 新增/变更逻辑有测试：主路径 + 边界（未知格式、静态不可交付、非法组合、`viewport`/`quality` 被拒、无磁盘 host 降级、注册期拒绝陌生 id/字段）
+- [x] 无新增高噪声日志/警告；降级路径用文档的 `warning` 字段而非日志刷屏
+- [x] **I1/I2/I3 有不变量测试**——`PageFormatEngineTest` 的三条：`I1: eight formats cost exactly one capture` / `I2: every snapshot read is bound to the captured snapshot` / `I3: a failing live step degrades without breaking snapshot formats`
+- [x] 夹具页 + 真实浏览器 e2e 覆盖格式层（`requires_browser4: true`，`test_e2e_scrape_formats`）；`screenshot` 的真机覆盖已完成，`pdf` 仍随 Phase 2
+- [x] 无新增直接 CDP 方法：`screenshot` 复用了既有的 `tab.screenshot` 工具，没有新写 CDP 调用，故四条评审门不适用
+- [x] 文档同步：`SKILL.md` / `references/scrape-formats.md` / `help.rs` / `README.md` / `README.zh.md` / `cli/browser4-cli/README.md` / `docs/mcp-tools.md`+`.json`（145 工具）
+- [ ] `tips.rs` 未同步：`scrape` / `scrape formats` 目前落到 `TIPS_GENERAL`，没有专属提示（已在 §12 的待办清单第 3 条留档）
+- [x] 无密钥/私有端点入库；`page_formats` 不泄露服务地址
+- [x] 无版本号随意变更（走父 BOM）
+- [x] 性能影响评估：多格式请求零额外抓取、零额外 CDP 往返——真机断言了"全文恰好一个 `captureId`"与"纯活体请求不产生 `captureId`"

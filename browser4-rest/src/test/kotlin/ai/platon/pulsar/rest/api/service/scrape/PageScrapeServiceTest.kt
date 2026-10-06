@@ -94,11 +94,23 @@ class PageScrapeServiceTest {
     }
 
     @Test
-    @DisplayName("a request with no session named still reaches the runner factory")
-    fun sessionIdIsOptionalAndForwarded() = runBlocking {
-        service().scrape(formats = formats("markdown"))
+    @DisplayName("a request that names no session is refused before a runner is built")
+    fun blankSessionIdIsRefused() {
+        // Decision A2 ("open first"): every step reads the page a session is already
+        // on, so a request without one has no honest answer — and picking a session
+        // here would read another caller's page. The factory must not even be called:
+        // no runner means nothing can reach a browser.
+        for (blank in listOf<String?>(null, "", "   ")) {
+            requestedSessionIds.clear()
 
-        assertEquals(listOf<String?>(null), requestedSessionIds)
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { service().scrape(formats = formats("markdown"), sessionId = blank) }
+            }
+
+            assertTrue(error.message!!.contains("'sessionId' is required"), "sessionId='$blank'")
+            assertTrue(error.message!!.contains("open"), "sessionId='$blank'")
+            assertEquals(emptyList<String?>(), requestedSessionIds, "sessionId='$blank'")
+        }
     }
 
     @Test
@@ -121,7 +133,7 @@ class PageScrapeServiceTest {
         }
 
         val error = assertThrows(IllegalStateException::class.java) {
-            runBlocking { service(failing).scrape(formats = formats("rawHtml")) }
+            runBlocking { service(failing).scrape(formats = formats("rawHtml"), sessionId = "s1") }
         }
         assertTrue(error.message!!.contains("boom html_snapshot.export"), error.message)
     }

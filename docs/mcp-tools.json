@@ -1069,15 +1069,14 @@
     "domain" : "page",
     "method" : "scrape",
     "mcpNames" : [ "page_scrape" ],
-    "signature" : "page.scrape(sessionId: String? = null, formats: List<Any> = null, onlyMainContent: Boolean = true)",
+    "signature" : "page.scrape(sessionId: String, formats: List<Any> = null, onlyMainContent: Boolean = true)",
     "description" : "Scrape a page once and return every requested format in one Firecrawl-compatible document. All formats are derived from a single capture, so `markdown` and `links` describe the same page state and eight formats cost one page load. Formats this deployment cannot deliver are omitted from the document and named in its `warning`; `metadata.formatsDelivered` tells 'not requested' from 'requested but unavailable'.",
     "returnType" : "Map<String, Any?>",
     "arguments" : [ {
       "name" : "sessionId",
-      "type" : "String?",
-      "required" : false,
-      "default" : "null",
-      "description" : "The session whose page to scrape; omit to use the session the call is bound to."
+      "type" : "String",
+      "required" : true,
+      "description" : "The session whose page to scrape. Required: open the page first (`open <url>`), because this layer reads the page a session is already on."
     }, {
       "name" : "formats",
       "type" : "List<Any>",

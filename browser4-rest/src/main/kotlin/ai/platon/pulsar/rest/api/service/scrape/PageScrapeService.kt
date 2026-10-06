@@ -34,23 +34,39 @@ class PageScrapeService(private val runnerFactory: FormatStepRunnerFactory) {
      * read-only on the shared scrape session, then read that), and the parameter
      * comes back with it; until then `open <url>` first is the only honest way.
      *
+     * A session is **required** (decision A2: "open first"). Every step reads the page a
+     * session is already on, so a request that names none has no honest answer: the
+     * alternatives are to fail or to pick a session on the caller's behalf, and picking
+     * one reads *another caller's page* — the same class of silent wrong answer that
+     * removing `url` was meant to end. The refusal names `open` because that is the fix.
+     *
      * @param formats the requested formats, already normalized and validated.
-     * @param sessionId the addressed session, or null when the caller named none.
+     * @param sessionId the addressed session; null or blank is refused.
      * @param onlyMainContent whether markdown should come from the readable article
      *   rather than the whole cleaned page.
      * @return one document carrying every format that was delivered.
+     * @throws IllegalArgumentException when no session is addressed — before a runner
+     *   is built, so a refused request never touches a browser.
      * @throws Exception the original failure of a REQUIRED step.
      */
     suspend fun scrape(
         formats: List<PageFormat>,
         sessionId: String? = null,
         onlyMainContent: Boolean = true,
-    ): ScrapedDocument = PageFormatEngine(runnerFactory.create(sessionId)).scrape(
-        PageScrapeRequest(
-            formats = formats,
-            onlyMainContent = onlyMainContent,
+    ): ScrapedDocument {
+        // Resolved explicitly rather than via `require`, so the non-blank session is a
+        // `String` by construction and the check cannot be read as re-validating a
+        // value that is already known good.
+        val session = sessionId?.takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException(NO_SESSION_MESSAGE)
+
+        return PageFormatEngine(runnerFactory.create(session)).scrape(
+            PageScrapeRequest(
+                formats = formats,
+                onlyMainContent = onlyMainContent,
+            )
         )
-    )
+    }
 
     /**
      * What this deployment can deliver, for the capability listing.
@@ -107,4 +123,18 @@ class PageScrapeService(private val runnerFactory: FormatStepRunnerFactory) {
 
     private fun deprecationReplacement(id: String): String =
         if (id == PageFormats.QUERY) "question or highlights" else "its replacement"
+
+    companion object {
+        /**
+         * Why a session is required, in the caller's terms.
+         *
+         * A constant rather than an inline literal because the wording is part of the
+         * contract: both faces (REST and the `page` tool domain) surface this same
+         * sentence, and the tests assert it names both the argument and the fix.
+         */
+        const val NO_SESSION_MESSAGE: String =
+            "'sessionId' is required: every step reads the page a session is already on, so this " +
+                "request cannot choose one for you — guessing would read a different session's page. " +
+                "Open the page first (`open <url>`), then scrape it with that session's id."
+    }
 }

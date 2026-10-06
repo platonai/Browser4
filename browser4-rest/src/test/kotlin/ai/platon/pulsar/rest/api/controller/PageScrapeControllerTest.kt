@@ -16,6 +16,9 @@ import java.time.Duration
 private const val KEY = "https://example.com/p"
 private const val CLEAN_HTML = "<h1>Title</h1><p>Body</p>"
 
+/** A session must be addressed on every scrape (decision A2: "open first"). */
+private const val SESSION = "s1"
+
 private class StubRunner : FormatStepRunner {
     var captures = 0
         private set
@@ -51,7 +54,9 @@ class PageScrapeControllerTest {
     @Test
     @DisplayName("a scrape answers in the {success, data} envelope")
     fun scrapeReturnsTheEnvelope() = runBlocking {
-        val response = controller().scrape(PageScrapeRequestBody(formats = listOf("markdown")))
+        val response = controller().scrape(
+            PageScrapeRequestBody(sessionId = SESSION, formats = listOf("markdown")),
+        )
 
         assertEquals(true, response["success"])
         val data = response["data"] as Map<*, *>
@@ -64,7 +69,7 @@ class PageScrapeControllerTest {
     @Test
     @DisplayName("an omitted formats list means markdown, and it is carried through")
     fun formatsDefaultToMarkdown() = runBlocking {
-        val response = controller().scrape(PageScrapeRequestBody())
+        val response = controller().scrape(PageScrapeRequestBody(sessionId = SESSION))
 
         val data = response["data"] as Map<*, *>
         assertTrue(data["markdown"].toString().contains("Title"), data.toString())
@@ -77,7 +82,11 @@ class PageScrapeControllerTest {
         // 400 territory: a typo must be visible without the caller paying for a page
         // load, and the exception must be the one the @ExceptionHandler maps to 400.
         assertThrows(IllegalArgumentException::class.java) {
-            runBlocking { controller().scrape(PageScrapeRequestBody(formats = listOf("markdwon"))) }
+            runBlocking {
+                controller().scrape(
+                    PageScrapeRequestBody(sessionId = SESSION, formats = listOf("markdwon")),
+                )
+            }
         }
         assertEquals(0, runner.captures)
     }
@@ -88,7 +97,10 @@ class PageScrapeControllerTest {
         assertThrows(IllegalArgumentException::class.java) {
             runBlocking {
                 controller().scrape(
-                    PageScrapeRequestBody(formats = listOf("json", "deterministicJson", "markdown")),
+                    PageScrapeRequestBody(
+                        sessionId = SESSION,
+                        formats = listOf("json", "deterministicJson", "markdown"),
+                    ),
                 )
             }
         }
@@ -108,6 +120,7 @@ class PageScrapeControllerTest {
                 controller().scrape(
                     PageScrapeRequestBody(
                         url = "https://other.example/page",
+                        sessionId = SESSION,
                         formats = listOf("markdown"),
                     ),
                 )
@@ -118,10 +131,32 @@ class PageScrapeControllerTest {
     }
 
     @Test
+    @DisplayName("a request naming no session is refused by name, before anything is captured")
+    fun sessionIdIsRefusedByName() {
+        // Decision A2 ("open first"): the reads target the page a session is already on,
+        // so there is no honest answer without one — and picking a session here would
+        // read a different caller's page. The *type* matters as much as the message:
+        // IllegalArgumentException is exactly what the handler above maps to 400, so a
+        // missing session is a caller mistake, not a 500 worth retrying.
+        for (blank in listOf<String?>(null, "   ")) {
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                runBlocking {
+                    controller().scrape(
+                        PageScrapeRequestBody(sessionId = blank, formats = listOf("markdown")),
+                    )
+                }
+            }
+            assertTrue(error.message!!.contains("'sessionId' is required"), "sessionId='$blank'")
+            assertTrue(error.message!!.contains("open"), "sessionId='$blank'")
+        }
+        assertEquals(0, runner.captures, "a refused request must not capture anything")
+    }
+
+    @Test
     @DisplayName("a per-format options object is accepted alongside plain names")
     fun formatObjectsAreAccepted() = runBlocking {
         val response = controller().scrape(
-            PageScrapeRequestBody(formats = listOf(mapOf("type" to "markdown"))),
+            PageScrapeRequestBody(sessionId = SESSION, formats = listOf(mapOf("type" to "markdown"))),
         )
 
         val data = response["data"] as Map<*, *>
