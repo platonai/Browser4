@@ -1,8 +1,13 @@
 package ai.platon.pulsar.boot.plugin
 
 import ai.platon.pulsar.skeleton.plugin.Browser4Plugin
+import ai.platon.pulsar.skeleton.plugin.PageFormatContributorMount
 import ai.platon.pulsar.skeleton.plugin.PageSummaryAlgorithmMount
 import ai.platon.pulsar.skeleton.plugin.PluginMount
+import ai.platon.pulsar.skeleton.workflow.format.FormatContext
+import ai.platon.pulsar.skeleton.workflow.format.FormatInput
+import ai.platon.pulsar.skeleton.workflow.format.PageFormatContributor
+import ai.platon.pulsar.skeleton.workflow.format.PageFormatContributorRegistry
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryAlgorithm
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryAlgorithmRegistry
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryInput
@@ -40,17 +45,20 @@ class PluginManagerTest {
     lateinit var tempDir: Path
 
     private val algorithmRegistry = PageSummaryAlgorithmRegistry.instance
+    private val formatRegistry = PageFormatContributorRegistry.instance
 
     @BeforeEach
     fun resetAlgorithmRegistry() {
         algorithmRegistry.clear()
         algorithmRegistry.register(WpsiPageSummaryAlgorithm)
+        formatRegistry.clear()
     }
 
     @AfterEach
     fun restoreAlgorithmRegistry() {
         algorithmRegistry.clear()
         algorithmRegistry.register(WpsiPageSummaryAlgorithm)
+        formatRegistry.clear()
     }
 
     @Test
@@ -210,6 +218,67 @@ class PluginManagerTest {
         }
         JarOutputStream(Files.newOutputStream(jarPath), jdkManifest).use { _ -> }
         assertNull(manifestOfLocation(jarPath.toUri().toURL()))
+    }
+
+    @Test
+    @DisplayName("PageFormatContributorMount contributes formats into the registry on startup")
+    fun wiresPageFormatContributorMount() {
+        val branding = contributor("branding")
+        val mount = object : PageFormatContributorMount {
+            override fun getPageFormatContributors(): List<PageFormatContributor> = listOf(branding)
+        }
+
+        PluginManager(pluginContext(mount)).run(Mockito.mock(ApplicationArguments::class.java))
+
+        assertEquals(1, formatRegistry.size())
+        assertSame(branding, formatRegistry.get("branding"))
+    }
+
+    @Test
+    @DisplayName("a refused contributor neither aborts startup nor loses its siblings")
+    fun refusedContributorKeepsStartupAlive() {
+        // `markdown` is a core format: register() refuses the id by throwing, so
+        // the wiring has to catch per contributor rather than per mount.
+        val mount = object : PageFormatContributorMount {
+            override fun getPageFormatContributors(): List<PageFormatContributor> =
+                listOf(contributor("markdown"), contributor("menu"))
+        }
+
+        PluginManager(pluginContext(mount)).run(Mockito.mock(ApplicationArguments::class.java))
+
+        assertNull(formatRegistry.get("markdown"))
+        assertEquals(1, formatRegistry.size())
+        assertNotNull(formatRegistry.get("menu"))
+    }
+
+    // ---- Helpers ----
+
+    /** A minimal contributor, distinguishable by identity in assertions. */
+    private fun contributor(formatId: String): PageFormatContributor = object : PageFormatContributor {
+        override val id = formatId
+        override val displayName = formatId
+        override val description = "contributed by PluginManagerTest"
+        override val requires = emptySet<FormatInput>()
+
+        override suspend fun contribute(ctx: FormatContext): Any? = formatId
+    }
+
+    /**
+     * An application context exposing exactly [mounts] as plugin mounts and no
+     * plugins — the same shape the wiring tests above build inline.
+     */
+    private fun pluginContext(vararg mounts: PluginMount): ApplicationContext {
+        val environment = Mockito.mock(Environment::class.java)
+        Mockito.`when`(environment.getProperty("browser4.plugins.enable-all", Boolean::class.java, false))
+            .thenReturn(false)
+
+        val context = Mockito.mock(ApplicationContext::class.java)
+        Mockito.`when`(context.environment).thenReturn(environment)
+        Mockito.`when`(context.getBeansOfType(PluginMount::class.java))
+            .thenReturn(mounts.mapIndexed { i, mount -> "mount$i" to mount }.toMap())
+        Mockito.`when`(context.getBeansOfType(Browser4Plugin::class.java))
+            .thenReturn(emptyMap())
+        return context
     }
 
     // ---- Helper ----
