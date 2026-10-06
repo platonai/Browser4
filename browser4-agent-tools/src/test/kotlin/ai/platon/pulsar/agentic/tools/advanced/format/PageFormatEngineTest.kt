@@ -646,19 +646,20 @@ class PageFormatEngineTest {
     }
 
     @Test
-    @DisplayName("a contributor writing a field the document does not have warns")
-    fun foreignOutputFieldWarns() = runBlocking {
-        PageFormatContributorRegistry.instance.register(
-            FakeContributor("branding", outputField = "summary")
-        )
+    @DisplayName("a contributor whose output field is not writable cannot even register")
+    fun aForeignOutputFieldNeverReachesTheEngine() = runBlocking {
+        // The engine still carries a call-time guard for this, but it is now unreachable
+        // through the registry: registration refuses the contributor, which is where a
+        // plugin author can still act on the message. `PageFormatContributorRegistryTest`
+        // covers the refusal itself.
+        val refused = runCatching {
+            PageFormatContributorRegistry.instance.register(
+                FakeContributor("branding", outputField = "summary")
+            )
+        }.isSuccess
 
-        val document = PageFormatEngine(FakeRunner(responses = responses())).scrape(request("branding"))
-
-        assertNull(document.summary)
-        assertTrue(
-            document.warning!!.contains("writes 'summary', which is not a contributor field"),
-            document.warning,
-        )
+        assertFalse(refused, "a contributor writing outside the contributed fields must be refused")
+        assertNull(PageFormatContributorRegistry.instance.get("branding"))
     }
 
     @Test

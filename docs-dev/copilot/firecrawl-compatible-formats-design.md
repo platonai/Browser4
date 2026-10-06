@@ -764,10 +764,20 @@ REST/MCP 层马上要把 `formatsDelivered` 交给调用方，这个误报必须
 
 新增的 13 个引擎用例覆盖：写入字段并计入 `formatsDelivered`、contributor 与核心格式共享同一次 capture（`captures == 1`）、拿到格式自身的请求选项、未注册 / 自报不可用（带原因）/ 缺输入 / 缺 live tab / 返回 null / 抛异常 / 写错字段各自的文案、`markdown` 这类核心 id 不可被认领。
 
-**本阶段暴露的两个设计缺口（需要拍板，未擅自改 SPI）**
+**本阶段暴露的两个 SPI 缺口，一个已处置、一个仍待拍板**
 
-1. **`FormatInput.LIVE_TAB` 对 contributor 永远不满足。** `FormatContext` 只携带值，不带 driver，所以 contributor 拿不到 tab 控制权。这直接使 §7.2 里那个 `BrandingFormatContributor` 示例（`requires = setOf(RAW_HTML, LIVE_TAB)`）恒不可用。当前实现把它明确报成 `needs a live tab (contributors are handed values, not a driver)`，而不是假装满足。要修就得改 SPI 形状（给 `FormatContext` 一个受控的 tab 调用能力），那是对已发布契约的破坏性变更，应当先定。
-2. **全新的第三方格式 id 没有落脚字段。** `ScrapedDocument` 的字段集是封闭的，`contributedFields()` 只有 branding/product/menu/highlights。一个 id 为 `myFormat` 的 contributor 即使注册成功，也没有字段可写（引擎会报 `writes 'x', which is not a contributor field`）。`outputField` 因此实际只能在这四个之间重定向。要支持真正的第三方 id，需要给 `ScrapedDocument` 加一个 `@JsonAnyGetter` 的泛化容器 —— 会改动 Phase 0 的线上形状，同样应当先定。
+1. **`FormatInput.LIVE_TAB` 对 contributor 永远不满足（仍待拍板）。** `FormatContext` 只携带值，不带 driver，所以 contributor 拿不到 tab 控制权。这直接使 §7.2 里那个 `BrandingFormatContributor` 示例（`requires = setOf(RAW_HTML, LIVE_TAB)`）恒不可用。当前实现把它明确报成 `needs a live tab (contributors are handed values, not a driver)`，而不是假装满足。**待你回答的问题是产品性的：`branding` 到底需不需要活体 DOM？** 原始 HTML 能拿到 logo URL 与**声明**的颜色，**计算后**的颜色/排版需要渲染后的 DOM。需要 → 必须把受控的工具调度能力放进 `FormatContext`（破坏性变更，且要先定能力边界，否则等于把 `tab.eval` 交给插件）；不需要 → 从 `FormatInput` 删掉 `LIVE_TAB`，让枚举不再有一个恒为假的值。
+
+2. **全新的第三方格式 id 没有落脚字段（已处置，按"注册时拒绝"）。** 原先：id 为 `myFormat` 的 contributor 注册会**成功**，却永远不会被调用（引擎的 contributor pass 只遍历 `PageFormats.isContributed`），或写字段时被拒——两种情况都要等到调用时才以 warning 的形式暴露，而那时调用方已经付过代价。
+
+   现在 `PageFormatContributorRegistry.register` 在注册时就拒绝两件事，且消息指名可接受的取值：
+
+   - **id 不属于本 build 的 contributed 集合** → `the engine only offers a contributor an id it knows, so this registration would never run`；
+   - **`outputField` 不在可写字段内** → 列出 `contributedFields()`。
+
+   检查落在 `outputField` 而非 id 上是有意的：`outputField` 存在的意义就是允许 id 与字段不同名（测试里有 `id = "product"`、`outputField = "branding"` 被接受）。引擎侧那条调用时兜底保留，但**已经不可能经注册表触达**，相应测试改为断言"根本注册不上"。
+
+   真正的第三方 id 支持（`@JsonAnyGetter` 泛化容器）仍是未决项：它会让响应多出插件定义的顶层键，并让插件参与决定 API 形状，需要单独拍板。
 
 ### Phase 2 — 活体产物（🟡 `screenshot` 已交付并经真机验证；`pdf` 与落盘策略未做）
 

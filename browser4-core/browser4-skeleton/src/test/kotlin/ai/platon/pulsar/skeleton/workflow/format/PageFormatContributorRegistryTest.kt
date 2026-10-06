@@ -77,6 +77,57 @@ class PageFormatContributorRegistryTest {
     }
 
     @Test
+    @DisplayName("an id this build does not offer a contributor is refused at registration")
+    fun unknownContributedIdIsRefused() {
+        // The engine offers a contributor only the ids it knows (`PageFormats.CONTRIBUTED`),
+        // so a novel id would register successfully and then never be called — a plugin
+        // author would have no way to tell why. Refusing here names the accepted ids.
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            registry.register(FakeContributor("myFormat"))
+        }
+        assertTrue(error.message!!.contains("myFormat"), error.message)
+        assertTrue(error.message!!.contains("branding"), error.message)
+        assertEquals(0, registry.size())
+    }
+
+    @Test
+    @DisplayName("a contributor writing a field it does not own is refused at registration")
+    fun unwritableOutputFieldIsRefused() {
+        // `outputField` cannot be changed by the engine, and an id may legally differ
+        // from its field — so the check belongs on the field, not on the id.
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            registry.register(object : PageFormatContributor {
+                override val id = "branding"
+                override val displayName = "Branding"
+                override val description = "writes somewhere it should not"
+                override val outputField = "summary"
+                override val requires: Set<FormatInput> = emptySet()
+                override suspend fun contribute(ctx: FormatContext): Any? = "x"
+            })
+        }
+        assertTrue(error.message!!.contains("summary"), error.message)
+        assertEquals(0, registry.size())
+    }
+
+    @Test
+    @DisplayName("a contributor may write a sibling contributed field")
+    fun aContributedFieldOtherThanTheIdIsAllowed() {
+        // The rule is "one of the four contributed fields", not "the field named after
+        // the id" — that is what `outputField` exists for.
+        val accepted = registry.register(object : PageFormatContributor {
+            override val id = "product"
+            override val displayName = "Product"
+            override val description = "reports through branding"
+            override val outputField = "branding"
+            override val requires: Set<FormatInput> = emptySet()
+            override suspend fun contribute(ctx: FormatContext): Any? = "x"
+        })
+
+        assertTrue(accepted)
+        assertEquals("branding", registry.get("product")?.outputField)
+    }
+
+    @Test
     @DisplayName("an id that does not match the pattern is refused")
     fun invalidId() {
         assertThrows(IllegalArgumentException::class.java) { registry.register(FakeContributor("")) }

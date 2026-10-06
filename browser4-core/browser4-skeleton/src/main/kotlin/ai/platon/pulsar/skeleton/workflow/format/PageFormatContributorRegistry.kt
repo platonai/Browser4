@@ -43,6 +43,18 @@ class PageFormatContributorRegistry private constructor() {
         require(!isReserved(id)) {
             "Page format id '$id' is reserved by the built-in engine and cannot be contributed"
         }
+        // Two failures that used to surface only at call time — as a warning on a
+        // response the caller had already paid for. Both are knowable here, so they are
+        // refused here, where the message can still reach a plugin author.
+        require(PageFormats.isContributed(id)) {
+            "Page format id '$id' is not one of this build's contributed formats " +
+                "(${PageFormats.CONTRIBUTED.sorted()}); the engine only offers a contributor an id it " +
+                "knows, so this registration would never run"
+        }
+        require(contributor.outputField in PageFormats.contributedFields()) {
+            "Page format '$id' writes '${contributor.outputField}', which is not a document field a " +
+                "contributor may own; writable: ${PageFormats.contributedFields().sorted()}"
+        }
 
         val previous = contributors.putIfAbsent(id, contributor)
         if (previous != null) {

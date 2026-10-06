@@ -138,9 +138,10 @@ data class ScrapedDocument(
      *
      * Only [PageFormats.contributedFields] can be written: a core field belongs
      * to the provider that produced it, and a format id with no field of its own
-     * has nowhere to land. The engine checks the field before calling this and
-     * reports a mismatch instead of dropping the value, so `this` coming back
-     * unchanged means the caller skipped that check.
+     * has nowhere to land. `PageFormatContributorRegistry.register` refuses a
+     * contributor whose `outputField` is outside that set, so reaching the fall-through
+     * means a registration bypassed the registry — the engine still reports the
+     * mismatch rather than dropping the value.
      *
      * [highlights] is typed `String?` on the wire (Firecrawl's shape), so a
      * contributor returning another type has it rendered rather than rejected —
