@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | **Phase 0 + Phase 1a/1b/1d 已实现**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 8 个 provider / **SPI 接线与 contributor 消费**，**129 个单测全绿**）；Phase 1c（REST/MCP 集成层）与 Phase 2+ 未实现 |
+| 状态 | **Phase 0 + 1a/1b/1d 已实现；Phase 1c 部分实现**（格式模型 / 校验 / Document / SPI / 核心 HTML→Markdown / 计划构建器 / 格式引擎 + 8 个 provider / SPI 接线与 contributor 消费 / **A1 runner + A2 `page` 域（含 CLI `page scrape`）+ 真机 e2e**，**159 个单测全绿**）；剩余：REST `api/scrape` 控制器、`strict` 三态、`expires`/`maxAge`、Phase 2+ |
 | 目标仓库 | Browser4 `4.14.0-rc.8` @ `e0a7d20858`（4.13.x 合并后的 4.14.x；设计起草时基线为 `d86b69fc8b`） |
 | 对照基线 | Firecrawl `ce8ed1233`（见 [对照表](firecrawl-vs-browser4-output-formats.md)） |
 | 一句话 | 给 Browser4 加一层「`formats[]` 请求 → 一次抓取扇出多种输出 → 返回 Firecrawl 形状 Document」的兼容面，并把它作为后续 branding/product/menu 等格式的**插件扩展点** |
@@ -544,7 +544,7 @@ class BrandingFormatContributor : PageFormatContributor {
 | 降级可见 | 未实现格式 / 工具不支持 / X-SQL 报错各自产生不同文案；`formatsDelivered` 可区分"没请求"与"请求了没拿到" |
 | 字段裁剪 | 未请求格式的字段在响应中不存在（`retainRequested`） |
 
-### Phase 1c — REST/MCP 集成层（❌ 未实现，下一步）
+### Phase 1c — REST/MCP 集成层（🟡 A1 + A2 + A7 已交付并经真机验证；A5/A6 未实现）
 
 已核实的接入点（复用时不必再找）：
 
@@ -562,13 +562,78 @@ class BrandingFormatContributor : PageFormatContributor {
 - **运行时 bundle 版本必须与检出一致**，否则 dev 模式拒绝启动（本次是 bundle `4.14.0-rc.6` vs 检出 `4.14.0-rc.8`）。用 `$env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = "1"` 重建后：`Server ready in 9.7s`，真实浏览器成功加载 `https://example.com`（title `Example Domain`），MCP 链路端到端可用。**真机 e2e 因此是可行的，1c 必须走到这一步。**
 - **`--expires` 就是 capture-once 的物理载体，且已确认**：`export` / `query` / `readability` / `scrape_all` 都接受 `-expires/--expires <dur>`，help 原文写着 "a positive value reads the stored snapshot while it is younger than the window, **without touching the tab**"。这正是 A1 需要的行为，不需要靠 KDoc 推断——`htmlsnapshot capture` 落盘后用带正数 `expires` 的读即可复用同一份快照。
 
-待交付：
+#### A1 ✅ `SnapshotFormatStepRunner`
 
-- `SnapshotFormatStepRunner` —— `FormatStepRunner` 的真实实现。**关键点**：它必须在每个 `readOnSnapshot` 调用里注入正数 `expires`（例如 `1d`），否则快照族读方法会各自重新 capture 活体页面，I1/I2 立刻失效；这一段必须有单测锁住（可用 fake `ToolExecutor` 断言 args）。
-- `PageScrapeToolExecutor`（domain `page`，方法 `scrape` / `formats`）+ `PageScrapeToolMountConfiguration` + `MCPToolController` 前端别名。
-- `PageScrapeController`（`api/scrape`，含 `formats` 能力发现与 `{id}/status|result|stream` 异步面）+ `PageScrapeService`。
-- CLI `scrape` 命令（Phase 5 内容提前到此阶段一并做，否则功能不可达）。
-- **需要真机验证**：`AGENTS.md` 要求真实浏览器 + e2e 夹具，不能只用 mock 收尾。
+`browser4-rest/.../rest/api/service/scrape/SnapshotFormatStepRunner.kt`
+
+把 `FormatStepRunner` 实现为对 `html_snapshot` 工具族的驱动，经一个 **窄缝** `FormatToolDispatcher`（`call(domain, method, args)` + `supports`）而不是直接抓 driver——这样 runner 能用录制式 fake 测，也就才有可能**断言它注入的参数**。
+
+三处刻意设计：
+
+1. **每个读都注入正数 `expires`，且是覆盖而不是默认。** 引擎在调用 `readOnSnapshot` 之前已经 capture 过一次；而快照族读方法的 `0s` 默认语义是"capture 活体页面"。若只是"提供默认值"，某个步骤自带 `expires: 0s` 就能悄悄让 8 个格式各重载一次页面。所以注入写在步骤自身参数**之后**，不可被覆盖。
+2. **窗口在构造期校验，且下限是 1 秒而不是"正数"。** 这条是被自己的测试逼出来的：`Duration.ofMillis(500)` 既不是零也不是负数，但在快照族的时长文法里会渲染成 `"0s"` —— 恰好是"读活体页面"。于是"正数"这个下限不够，真正的下限是"不会塌成 0s"。`formatExpires` 里也再挡一次，避免这个危险值从别的路径产生。
+3. **工具返回空即失败。** 返回 `""` 会被上游当成"这页没有链接"，并被记成一次成功的空格式 —— 静默失败。抛出去让引擎按步骤策略处理：尽力而为的转 warning，必需的抛原始异常。
+
+**已知偏差（如实记录，未擅自改既有工具）**：`acquireSnapshot` **总是 capture**，`cacheState` 恒为 `"miss"`。引擎的 `expires` 语义是 Firecrawl 的 `maxAge`（"命中存储则不重抓"），但没有任何 `html_snapshot` 工具能**只读**地给出一个已存快照的身份——`capture` 总是序列化活体 tab，且它是唯一返回 store key / href / capture time 的方法。要兑现 `maxAge` 就得给既有工具加一条"只读元数据"路径，那会改动一个契约写得很细的既有工具，应当单独评审。**对正确性要紧的不变量——每个请求恰好一次 capture——两种做法都成立。**
+
+#### A2 ✅ `PageScrapeService` + `PageScrapeToolExecutor`（domain `page`）+ mount
+
+- `FormatStepRunnerFactory`（`fun interface`）——每次请求一个 runner。这是让 service 可测的缝：测试注入一个返回 fake runner 的工厂，于是参数处理与响应塑形不必有浏览器就能验。工厂而非单例是必须的：runner 绑定到请求寻址的会话，共享实例会让一个调用方的格式读到另一个调用方的页面。
+- `PageScrapeService` —— 只负责请求级决策（解析 → 计划 → 执行 → 装配），capture-once / 阶段划分 / 逐格式降级仍归引擎，工具落在哪归工厂。`formats()` 产出能力清单，`available` 明确是**配置层面**的答案而非承诺（已注册但服务刚掉线的 contributor 仍会在调用时失败，那由每请求的 `warning` 报告；在这里也报就成了同一件事的两个真相源）。
+- `PageScrapeToolExecutor` —— MCP 适配层。**返回 `Map` 而不是 `ScrapedDocument`**：`AbstractToolExecutor` 会把任何非 String/Number/Boolean/Map/Collection/Array 的结果包成 `{type, description}` 信封，直接返回文档对象会让调用方拿到 `"ScrapedDocument(...)"` 而不是载荷。
+- `PageScrapeToolMountConfiguration` —— `ToolMount` → `CustomToolRegistry`，照 `HTMLSnapshotToolMountConfiguration` 的形状。`CustomToolTargets` 目前不是 bean（MCP controller 与内嵌 server 各自 new 一个），这里以同样的 `beanResolver` 构造第三个实例，保证格式步骤与客户端发起的工具调用解析出同一个 receiver。
+
+**参数归一化**：`formats` 接受三种拼法——真正的列表、逗号分隔文本（`--formats markdown,links` 到达时就是一个字符串）、客户端 JSON 编码的数组。三种是同一个请求，所以在入口归一，而不是让调用方猜这个工具要哪一种。
+
+**A4（`FRONTEND_TOOL_NAME_ALIASES`）经核实不需要。** 该别名表是给 `browser_*` 前端名映射到内建方法用的；自定义域的 MCP 名 `page_scrape` 由 `dispatchToCustomExecutor` 通过 `toMcpToolName(domain, specMethod)` 反查得到，无需注册。而且别名表的键集与 `McpToolNames.frontendAliases` 由 `McpToolAliasParityTest` 断言一致，凭空加一条反而会让两边都红。设计原文的 A4 据此作废。
+
+#### A7 的实现方式改了：用 `ToolSpec.cliName`，但必须是**空格形式**
+
+两个 spec 声明了 `cliName = "page scrape"` / `"page formats"`。按 `AGENTS.md` 的既有机制，CLI 从 `GET /mcp/tools/specs` 发现它们并渲染成一级命令，参数由 spec 的 `arguments` 定义——**不需要 `CommandDef`、不需要 `rewrite_prefixed_command()`、不需要 `preferred_spaced_command_form()`**。
+
+**为什么不是单词 `scrape`**：CLI 的声明式命令解析（`main.rs:26076-26106`）要求 `global.args.len() >= 2` 且第二 token 不以 `-` 开头——它只探测**两 token** 的空格形式。所以 `cliName = "scrape"` 永远不会被匹配（`scrape --formats x` 在 flag 之前只有一个 token），而 `scrape formats` 会。单词命令属于 `commands.rs` 里静态注册的那一类（`goto`/`close`/`eval`），声明式机制做不到。两条路只能选一条：
+
+- 现在这样：`page scrape` / `page formats`，零 CLI 代码改动，立即可用；
+- 或者走 `commands.rs` 加 `CommandDef` + `MCPToolController` 别名 + e2e 场景（`test_e2e_command_coverage` 不变量要求每个 `Tested` 命令都有场景），才能得到设计稿 §3.3 写的裸 `scrape`。
+
+选了前者并把后者记为后续项。`AGENTS.md` 的"新命令用空格形式"偏好与此一致。
+
+#### 真机 e2e 已留证（2026-10-06，真实后端 + 真实 Chrome）
+
+```
+$ ./b4w.ps1 page formats
+[{"id":"markdown","available":true,"source":"core"}, … ,{"id":"branding","available":false,
+  "reason":"no plugin contributor installed","source":"plugin"}, …]
+
+$ ./b4w.ps1 page scrape --formats "markdown,links,images"
+{"url":"https://example.com/","markdown":"该域名仅用于文档示例…Learn more",
+ "links":["https://iana.org/help/example-domains"],
+ "metadata":{"url":"https://example.com/","captureId":"https://example.com/",
+   "captureTime":"2026-10-06T02:29:20.094Z","formatsRequested":["markdown","links","images"],
+   "formatsDelivered":["markdown","links","images"]}}
+
+$ ./b4w.ps1 page scrape --formats '["markdown","links"]'      # JSON 数组形式同样可用
+```
+
+一次 capture 供三个格式共用（`captureTime` 只有一个，`links` 与 `markdown` 描述同一页面状态）。
+
+**真机才暴露的两个坑，都已落地为回归测试：**
+
+1. **`ToolSpecValidator` 把"没有 `defaultValue`"当作必需参数**，与类型里的 `?` 无关（`ToolSpecValidator.kt:67`）。所以 `url: String?` 这种可选参数在真机上被要求提供，第一次带 `formats` 的调用直接 400。修正：所有可选参数按既有约定写 `defaultValue = "null"`。`PageScrapeToolExecutorTest.scrapeTakesNoRequiredArguments` 锁住这条。
+2. **PowerShell 里未加引号的 `--formats markdown,links` 会变成三个 argv**，CLI 只收到第一个，其余成为被丢弃的位置参数——**看起来像"静默丢格式并报成功"**。加引号即可；这不是 CLI 缺陷，但值得写进文档，因为它长得和真 bug 一模一样。已在此处记录。
+
+**`images` 空而有记录不是矛盾**：example.com 没有 `<img>`，所以 `images` 是空列表，被共享 mapper 的 NON_EMPTY 语义从线上省略；但 `formatsDelivered` 仍列出它。这正是想要的区分——"请求了、产出为空" ≠ "没请求"，而后者才需要 `warning`。
+
+#### 仍待交付
+
+- `PageScrapeController`（`api/scrape`，含 `formats` 能力发现与 `{id}/status|result|stream` 异步面）。REST 面是**薄壳**：MCP 路径已端到端可达，REST 只是把同一份 `PageScrapeService` 暴露成 HTTP。
+- `strict` 三态契约（§6.2 的 503/502/504）。因此 `page.scrape` **刻意不接受** `strict` 参数——接受了却只降级就是撒谎。
+- `expires` / `maxAge`：同上，见 A1 的已知偏差。
+- 裸 `scrape` 命令（见上，需要 `commands.rs` + 别名 + e2e 场景）。
+- **`sessionId` 目前是必需的**（`requiresReceiver = true`）。设计稿 §3.2 写的是"不需要 sessionId"，但 §12 的开放问题 **Q1**（无 url 且无会话时自动开临时会话，还是要求先 `open`）至今未拍板，所以在拍板前要求会话是唯一诚实的选择。CLI 会自动注入 sessionId，所以 `page scrape` 用户体验上无感；只有裸 HTTP 调用方需要显式给。
+- **§11 的夹具页** still 未建（`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/formats-fixture.html`）。本次 e2e 用的是 `https://example.com`，它够证明链路，但不含表格、重复卡片、无 alt 图片、`data-*` 属性——渲染质量仍需夹具页覆盖。
+
+
 
 ### Phase 1d — SPI 接线与 contributor 消费（✅ 已实现，从 Phase 6 提前）
 

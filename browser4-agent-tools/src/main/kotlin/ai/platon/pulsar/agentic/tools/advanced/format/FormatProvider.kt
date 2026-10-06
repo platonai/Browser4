@@ -5,8 +5,14 @@ import ai.platon.pulsar.skeleton.workflow.format.PageFormat
 import ai.platon.pulsar.skeleton.workflow.format.ScrapedDocument
 import com.fasterxml.jackson.databind.JsonNode
 
-/** The tool domain the snapshot family lives in. */
-internal const val HTML_SNAPSHOT_DOMAIN = "html_snapshot"
+/**
+ * The tool domain the snapshot family lives in.
+ *
+ * Public because it is a wire name a host has to spell: the REST-side
+ * [ai.platon.pulsar.agentic.tools.advanced.format.FormatStepRunner] implementation
+ * dispatches to it, and a second literal there could drift from this one.
+ */
+const val HTML_SNAPSHOT_DOMAIN = "html_snapshot"
 
 /**
  * Turns one requested format into tool steps and back into document fields.

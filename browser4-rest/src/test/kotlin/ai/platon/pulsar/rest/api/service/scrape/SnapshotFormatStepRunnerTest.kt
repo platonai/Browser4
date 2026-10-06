@@ -1,0 +1,221 @@
+package ai.platon.pulsar.rest.api.service.scrape
+
+import ai.platon.pulsar.agentic.tools.advanced.format.FormatSnapshot
+import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Test
+import java.time.Duration
+
+private const val CAPTURE_JSON =
+    """{"url":"https://example.com/p","href":"https://example.com/p?a=1",""" +
+        """"capturedAt":"2026-10-06T00:00:00Z","contentType":"text/html","title":"T"}"""
+
+private val SNAPSHOT = FormatSnapshot("https://example.com/p", "https://example.com/p", "2026-10-06T00:00:00Z", "miss")
+
+@DisplayName("SnapshotFormatStepRunner")
+class SnapshotFormatStepRunnerTest {
+
+    /**
+     * A dispatcher that records every call, so the arguments the runner injects
+     * can be asserted — which is the whole reason the runner takes a dispatcher
+     * instead of reaching for a browser.
+     */
+    private class RecordingDispatcher(
+        private val supported: Set<String> = setOf("html_snapshot.capture", "html_snapshot.export"),
+        private val responses: Map<String, Any?> = emptyMap(),
+    ) : FormatToolDispatcher {
+
+        val calls = mutableListOf<Triple<String, String, Map<String, Any?>>>()
+
+        override suspend fun call(domain: String, method: String, args: Map<String, Any?>): Any? {
+            calls += Triple(domain, method, args)
+            require("$domain.$method" in supported) { "Unsupported $domain method: $method" }
+            return responses["$domain.$method"]
+        }
+
+        override fun supports(domain: String, method: String): Boolean = "$domain.$method" in supported
+
+        fun argsOf(domain: String, method: String): Map<String, Any?> =
+            calls.single { it.first == domain && it.second == method }.third
+
+        fun callCount(domain: String, method: String): Int =
+            calls.count { it.first == domain && it.second == method }
+    }
+
+    private fun runner(
+        dispatcher: FormatToolDispatcher,
+        readExpires: Duration = SnapshotFormatStepRunner.DEFAULT_READ_EXPIRES,
+    ) = SnapshotFormatStepRunner(dispatcher, readExpires)
+
+    // ---- the capture-once invariant -----------------------------------------
+
+    @Test
+    @DisplayName("every snapshot read asks the store for a positive window")
+    fun snapshotReadInjectsAPositiveExpires() = runBlocking {
+        val dispatcher = RecordingDispatcher(responses = mapOf("html_snapshot.export" to "<html/>"))
+
+        runner(dispatcher).readOnSnapshot(SNAPSHOT, "html_snapshot", "export", mapOf("clean" to true))
+
+        val args = dispatcher.argsOf("html_snapshot", "export")
+        assertEquals("1d", args[SnapshotFormatStepRunner.EXPIRES_ARG])
+        // The step's own arguments survive: only the window is added.
+        assertEquals(true, args["clean"])
+    }
+
+    @Test
+    @DisplayName("a step-supplied expires is overridden, not merely defaulted")
+    fun snapshotReadOverridesAStepSuppliedExpires() = runBlocking {
+        // `0s` is the tool default and means "capture the live page": letting a step
+        // carry it through would reload the page once per format and quietly make
+        // capture-once a fiction.
+        val dispatcher = RecordingDispatcher(responses = mapOf("html_snapshot.export" to "<html/>"))
+
+        runner(dispatcher).readOnSnapshot(
+            SNAPSHOT, "html_snapshot", "export", mapOf(SnapshotFormatStepRunner.EXPIRES_ARG to "0s"),
+        )
+
+        assertEquals("1d", dispatcher.argsOf("html_snapshot", "export")[SnapshotFormatStepRunner.EXPIRES_ARG])
+    }
+
+    @Test
+    @DisplayName("a zero or negative read window is refused when the runner is built")
+    fun zeroReadWindowIsRefusedAtConstruction() {
+        val dispatcher = RecordingDispatcher()
+
+        // The failure has to land here, not on a request that loads the page eight
+        // times and still reports success.
+        assertThrows(IllegalArgumentException::class.java) { runner(dispatcher, Duration.ZERO) }
+        assertThrows(IllegalArgumentException::class.java) { runner(dispatcher, Duration.ofSeconds(-1)) }
+    }
+
+    @Test
+    @DisplayName("a read window below one second is refused: it would round to the live page")
+    fun subSecondReadWindowIsRefused() {
+        val dispatcher = RecordingDispatcher()
+
+        // `Duration.ofMillis(500)` is neither zero nor negative, yet it renders as
+        // `0s` in the duration grammar — the tool's "capture the live page". This is
+        // the one way a "positive" window can still undo capture-once, so the floor
+        // is a second.
+        assertThrows(IllegalArgumentException::class.java) { runner(dispatcher, Duration.ofMillis(500)) }
+        assertThrows(IllegalArgumentException::class.java) {
+            SnapshotFormatStepRunner.formatExpires(Duration.ofMillis(500))
+        }
+        // One second is the smallest window that survives the grammar.
+        assertEquals("1s", SnapshotFormatStepRunner.formatExpires(Duration.ofSeconds(1)))
+        // Sub-second precision is truncated, not rounded up: a shorter window only
+        // ever makes a read fall back to the live page sooner, which is the safe
+        // direction, and it can never reach `0s`.
+        assertEquals("1s", SnapshotFormatStepRunner.formatExpires(Duration.ofMillis(1_500)))
+    }
+
+    @Test
+    @DisplayName("the read window is spelled in the largest exact unit")
+    fun readWindowUsesTheLargestExactUnit() = runBlocking {
+        val cases = mapOf(
+            Duration.ofDays(2) to "2d",
+            Duration.ofHours(2) to "2h",
+            Duration.ofMinutes(10) to "10m",
+            Duration.ofSeconds(45) to "45s",
+            // 90 minutes is an exact number of minutes but not of hours, so minutes
+            // is the largest unit that divides it exactly.
+            Duration.ofMinutes(90) to "90m",
+        )
+        for ((window, expected) in cases) {
+            val dispatcher = RecordingDispatcher(responses = mapOf("html_snapshot.export" to "<html/>"))
+            runner(dispatcher, window).readOnSnapshot(SNAPSHOT, "html_snapshot", "export", emptyMap())
+
+            assertEquals(expected, dispatcher.argsOf("html_snapshot", "export")[SnapshotFormatStepRunner.EXPIRES_ARG])
+        }
+    }
+
+    // ---- capture ------------------------------------------------------------
+
+    @Test
+    @DisplayName("acquireSnapshot captures once and returns the store identity")
+    fun acquireSnapshotCapturesOnce() = runBlocking {
+        val dispatcher = RecordingDispatcher(responses = mapOf("html_snapshot.capture" to CAPTURE_JSON))
+
+        val snapshot = runner(dispatcher).acquireSnapshot(Duration.ZERO)
+
+        assertEquals(1, dispatcher.callCount("html_snapshot", "capture"))
+        // `url` is the normalized page-store key, `href` the browser-facing address.
+        assertEquals("https://example.com/p", snapshot.key)
+        assertEquals("https://example.com/p?a=1", snapshot.href)
+        assertEquals("2026-10-06T00:00:00Z", snapshot.capturedAt)
+        assertEquals("miss", snapshot.cacheState)
+    }
+
+    @Test
+    @DisplayName("acquireSnapshot accepts already-parsed metadata as well as JSON text")
+    fun acquireSnapshotAcceptsAMap() = runBlocking {
+        val dispatcher = RecordingDispatcher(
+            responses = mapOf(
+                "html_snapshot.capture" to mapOf("url" to "https://example.com/p", "capturedAt" to "T"),
+            ),
+        )
+
+        val snapshot = runner(dispatcher).acquireSnapshot(Duration.ZERO)
+
+        assertEquals("https://example.com/p", snapshot.key)
+        // No `href` in the metadata: the key is the honest fallback.
+        assertEquals("https://example.com/p", snapshot.href)
+    }
+
+    @Test
+    @DisplayName("a capture with no usable metadata fails loudly")
+    fun captureWithoutMetadataFails() {
+        for (response in listOf<Any?>("", "   ", "not json", """{"title":"no url"}""")) {
+            val dispatcher = RecordingDispatcher(responses = mapOf("html_snapshot.capture" to response))
+            assertThrows(IllegalStateException::class.java) {
+                runBlocking { runner(dispatcher).acquireSnapshot(Duration.ZERO) }
+            }
+        }
+    }
+
+    // ---- live steps ---------------------------------------------------------
+
+    @Test
+    @DisplayName("a live step is run as given, with no window injected")
+    fun liveStepGetsNoExpiresWindow() = runBlocking {
+        val dispatcher = RecordingDispatcher(
+            supported = setOf("tab.screenshot"),
+            responses = mapOf("tab.screenshot" to "/tmp/s.png"),
+        )
+
+        val output = runner(dispatcher).runOnTab("tab", "screenshot", mapOf("fullPage" to true))
+
+        assertEquals("/tmp/s.png", output)
+        val args = dispatcher.argsOf("tab", "screenshot")
+        assertFalse(args.containsKey(SnapshotFormatStepRunner.EXPIRES_ARG))
+        assertEquals(true, args["fullPage"])
+    }
+
+    // ---- failure and capability semantics -----------------------------------
+
+    @Test
+    @DisplayName("a tool that produced nothing is a failure, not an empty result")
+    fun emptyOutputFailsLoudly() {
+        val dispatcher = RecordingDispatcher(responses = mapOf("html_snapshot.export" to null))
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            runBlocking { runner(dispatcher).readOnSnapshot(SNAPSHOT, "html_snapshot", "export", emptyMap()) }
+        }
+        assertTrue(error.message!!.contains("html_snapshot.export returned no output"), error.message)
+    }
+
+    @Test
+    @DisplayName("supports is the dispatcher's answer, so the engine can degrade before calling")
+    fun supportsDelegates() {
+        val dispatcher = RecordingDispatcher(supported = setOf("html_snapshot.export"))
+
+        val runner = runner(dispatcher)
+        assertTrue(runner.supports("html_snapshot", "export"))
+        assertFalse(runner.supports("html_snapshot", "capture"))
+        assertTrue(dispatcher.calls.isEmpty(), "supports must not dispatch")
+    }
+}

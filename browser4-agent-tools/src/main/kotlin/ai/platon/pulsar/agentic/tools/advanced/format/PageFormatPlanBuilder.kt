@@ -92,8 +92,12 @@ object PageFormatPlanBuilder {
      * for a later phase — so they must read differently. A contributed id is not
      * decided here: whether a plugin supplies it is a runtime fact, and
      * [PageFormatEngine] reports it.
+     *
+     * Public because the capability listing a caller reads
+     * (`page.formats` / `GET /api/scrape/formats`) has to say the same words as the
+     * per-request `warning`, and two copies of a user-facing sentence drift.
      */
-    internal fun unavailableWarning(id: String): String = when {
+    fun unavailableWarning(id: String): String = when {
         PageFormats.isDeprecated(id) -> "$id: deprecated and unavailable; use question or highlights"
         else -> "$id: not available in this build"
     }
@@ -101,10 +105,10 @@ object PageFormatPlanBuilder {
     /**
      * Why a requested format that needs a plugin contributor has none.
      *
-     * Lives here next to [unavailableWarning] so the two "unavailable" texts a
-     * caller can see stay in one place, even though only the engine can decide
-     * when this one applies.
+     * Lives next to [unavailableWarning] so the two "unavailable" texts a caller
+     * can see stay in one place, even though only the engine and the capability
+     * listing can decide when this one applies.
      */
-    internal fun missingContributorWarning(id: String): String =
+    fun missingContributorWarning(id: String): String =
         "$id: unavailable (no plugin contributor installed)"
 }
