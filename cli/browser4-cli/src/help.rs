@@ -27,6 +27,7 @@ pub fn public_command_name(name: &str) -> &str {
         "crawl-clear" => "crawl clear",
         "crawl-list" => "crawl list",
         "crawl-resume" => "crawl resume",
+        "scrape-formats" => "scrape formats",
         "htmlsnapshot-capture" => "htmlsnapshot capture",
         "htmlsnapshot-get" => "htmlsnapshot get",
         "htmlsnapshot-get-all" => "htmlsnapshot get all",

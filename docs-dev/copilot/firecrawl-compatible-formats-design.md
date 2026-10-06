@@ -587,32 +587,39 @@ class BrandingFormatContributor : PageFormatContributor {
 
 **A4（`FRONTEND_TOOL_NAME_ALIASES`）经核实不需要。** 该别名表是给 `browser_*` 前端名映射到内建方法用的；自定义域的 MCP 名 `page_scrape` 由 `dispatchToCustomExecutor` 通过 `toMcpToolName(domain, specMethod)` 反查得到，无需注册。而且别名表的键集与 `McpToolNames.frontendAliases` 由 `McpToolAliasParityTest` 断言一致，凭空加一条反而会让两边都红。设计原文的 A4 据此作废。
 
-#### A7 的实现方式改了：用 `ToolSpec.cliName`，但必须是**空格形式**
+#### A7：最终走静态 `CommandDef`，得到设计稿 §3.3 的裸 `scrape`
 
-两个 spec 声明了 `cliName = "page scrape"` / `"page formats"`。按 `AGENTS.md` 的既有机制，CLI 从 `GET /mcp/tools/specs` 发现它们并渲染成一级命令，参数由 spec 的 `arguments` 定义——**不需要 `CommandDef`、不需要 `rewrite_prefixed_command()`、不需要 `preferred_spaced_command_form()`**。
+先试过 `ToolSpec.cliName`（声明式命令），**结论是它表达不了裸单词命令**：CLI 的声明式解析（`main.rs:26076-26106`）要求 `global.args.len() >= 2` 且第二 token 不以 `-` 开头——只探测**两 token** 的空格形式。所以 `cliName = "scrape"` 永远不会被匹配（`scrape --formats x` 在 flag 之前只有一个 token），而 `scrape formats` 会。当时以 `page scrape` / `page formats` 交付并把这个分歧摆出来，选择是"改成裸 `scrape`"，于是改成静态注册：
 
-**为什么不是单词 `scrape`**：CLI 的声明式命令解析（`main.rs:26076-26106`）要求 `global.args.len() >= 2` 且第二 token 不以 `-` 开头——它只探测**两 token** 的空格形式。所以 `cliName = "scrape"` 永远不会被匹配（`scrape --formats x` 在 flag 之前只有一个 token），而 `scrape formats` 会。单词命令属于 `commands.rs` 里静态注册的那一类（`goto`/`close`/`eval`），声明式机制做不到。两条路只能选一条：
+| 位置 | 改动 |
+|---|---|
+| `commands.rs` | 新增 `scrape`（位置参数 `url?` + `--formats` / `--url` / `--no-main-content`，映射 `page_scrape`）与 `scrape-formats`（映射 `page_formats`） |
+| `main.rs` `rewrite_prefixed_command()` | `scrape` 分支 + `known_subs = ["formats"]`：`scrape formats` → `scrape-formats`，其余第二 token（URL、flag）原样通过 |
+| `main.rs` `preferred_spaced_command_form()` | `scrape-formats` → `scrape formats` |
+| `help.rs` `public_command_name()` | 同一映射（它与 `preferred_spaced_command_form` 是**两份**表，`rejected_flat_forms_have_spaced_public_names` 会抓出漏配——实测确实抓到了） |
+| `main.rs` `no_snapshot_commands()` | 两个都加：它们不改页面状态，命令后自动快照只是噪声（与 `extract` / `summarize` 同理） |
+| `tests/e2e/mod.rs` `tested_commands()` | 两个都加（`test_e2e_command_coverage` 不变量双向要求） |
+| `tests/e2e/scenarios/` | 新增 `test_e2e_mock_scrape_commands` 场景：裸命令带位置 URL、`scrape formats` 经改写、未知名第二 token 被当作 URL |
 
-- 现在这样：`page scrape` / `page formats`，零 CLI 代码改动，立即可用；
-- 或者走 `commands.rs` 加 `CommandDef` + `MCPToolController` 别名 + e2e 场景（`test_e2e_command_coverage` 不变量要求每个 `Tested` 命令都有场景），才能得到设计稿 §3.3 写的裸 `scrape`。
+`page.scrape` / `page.formats` 两个 spec **不再声明 `cliName`**：一个动作两个入口、两处需要同步，是纯粹的漂移面。CLI 命令面现在只有一套名字。
 
-选了前者并把后者记为后续项。`AGENTS.md` 的"新命令用空格形式"偏好与此一致。
+**顺带记一条契约**：`scrape <第二 token>` 里无法识别的第二 token 会被当作 **URL** 交给裸命令，而不是报"未知子命令"——这是"前缀可裸用"的必然结果，`crawl` / `chat` / `webdb` 都一样。代价是拼错的子命令（`scrape formts`）会被当成 URL 发到后端。e2e 场景把这条行为固定下来，免得以后有人误以为是 bug 而"修"成报错。
 
 #### 真机 e2e 已留证（2026-10-06，真实后端 + 真实 Chrome）
 
 ```
-$ ./b4w.ps1 page formats
+$ ./b4w.ps1 scrape formats
 [{"id":"markdown","available":true,"source":"core"}, … ,{"id":"branding","available":false,
   "reason":"no plugin contributor installed","source":"plugin"}, …]
 
-$ ./b4w.ps1 page scrape --formats "markdown,links,images"
+$ ./b4w.ps1 scrape --formats "markdown,links,images"
 {"url":"https://example.com/","markdown":"该域名仅用于文档示例…Learn more",
  "links":["https://iana.org/help/example-domains"],
  "metadata":{"url":"https://example.com/","captureId":"https://example.com/",
    "captureTime":"2026-10-06T02:29:20.094Z","formatsRequested":["markdown","links","images"],
    "formatsDelivered":["markdown","links","images"]}}
 
-$ ./b4w.ps1 page scrape --formats '["markdown","links"]'      # JSON 数组形式同样可用
+$ ./b4w.ps1 scrape --formats '["markdown","links"]'      # JSON 数组形式同样可用
 ```
 
 一次 capture 供三个格式共用（`captureTime` 只有一个，`links` 与 `markdown` 描述同一页面状态）。
@@ -652,10 +659,11 @@ POST 未知格式 "markdwon"   → 400  {"success":false,"error":"Bad Request",
 #### 文档族已同步
 
 - `skills/browser4-cli/references/scrape-formats.md`（新增，`procedure` tier，159 行）：快速上手、何时用、一次抓取如何扇出、模式、参数、错误与恢复。其中"一次 capture 供全部格式共用"由 `captureId`/`captureTime` 每个响应恰好一个来证明；"请求了但产出为空"与"没请求"的区别写进了 `formatsDelivered` 的读法；PowerShell 引号坑单独成条（它长得和"静默丢格式"一模一样）。
-- `skills/browser4-cli/SKILL.md`：命令表加 `page scrape` / `page formats` 两行，Reference Map 加条目。403→406 行（上限 500）。
+- `skills/browser4-cli/SKILL.md`：命令表加 `scrape` / `scrape formats` 两行，Reference Map 加条目。403→406 行（上限 500）。
 - `README.md` / `README.zh.md`：决策树加"一页要多种产出"分支。
-- `cli/browser4-cli/README.md`：新增 `### Page scrape` 小节（含响应示例与 `formatsRequested`/`formatsDelivered` 的读法），决策树同步。
-- **`help.rs` / `tips.rs` 刻意不改**：这两个是**静态**命令表，而 `page scrape` 是运行期从 `/mcp/tools/specs` 发现的声明式命令——`grep "profile import" help.rs` 零命中，证实同类动态命令（`profile import`）也不在其中。往静态表里塞动态命令只会制造第二份真相。
+- `cli/browser4-cli/README.md`：新增 `### Scrape` 小节（含响应示例与 `formatsRequested`/`formatsDelivered` 的读法），决策树同步。
+- **`help.rs` 需要改，而且实测漏配会被门禁抓出来**：它按 `all_commands()` 渲染，所以描述与选项自动进帮助；但它另有一份 `public_command_name()` 映射表（与 `preferred_spaced_command_form()` 是两份），漏配时 `rejected_flat_forms_have_spaced_public_names` 立刻失败——我确实先漏了，是这条测试逼出来的。
+- **`tips.rs` 不改**：提示按静态命令名索引，且并非每个命令都有；新命令没有提示不是缺陷。（注意这与 A7 改走静态注册**无关**——动态声明命令同样不在这个表里，`grep "profile import" tips.rs` 零命中。）
 
 #### 顺带修掉一个我引入的门禁缺口：`ToolRegistryFixture`
 
@@ -670,8 +678,7 @@ POST 未知格式 "markdwon"   → 400  {"success":false,"error":"Bad Request",
 
 - `strict` 三态契约（§6.2 的 503/502/504）。因此 `page.scrape` 与 `POST /api/scrape` **刻意不接受** `strict` 参数——接受了却只降级就是撒谎。
 - `expires` / `maxAge`：同上，见 A1 的已知偏差。
-- 裸 `scrape` 命令（见上，需要 `commands.rs` + 别名 + e2e 场景）。
-- **`sessionId` 目前是必需的**（`requiresReceiver = true`）。设计稿 §3.2 写的是"不需要 sessionId"，但 §12 的开放问题 **Q1**（无 url 且无会话时自动开临时会话，还是要求先 `open`）至今未拍板，所以在拍板前要求会话是唯一诚实的选择。CLI 会自动注入 sessionId，所以 `page scrape` 用户体验上无感；REST 调用方需要显式给。
+- **`sessionId` 目前是必需的**（`requiresReceiver = true`）。设计稿 §3.2 写的是"不需要 sessionId"，但 §12 的开放问题 **Q1**（无 url 且无会话时自动开临时会话，还是要求先 `open`）至今未拍板，所以在拍板前要求会话是唯一诚实的选择。CLI 会自动注入 sessionId，所以 `scrape` 用户体验上无感；REST 调用方需要显式给。
 - 异步面（`/api/scrape/submit` + `/{id}/status|result|stream`），理由见 A5。
 - **§11 的夹具页**仍未建（`browser4-tests/pulsar-tests-common/src/main/resources/static/b4/formats-fixture.html`）。本次 e2e 用的是 `https://example.com`，它够证明链路，但不含表格、重复卡片、无 alt 图片、`data-*` 属性——渲染质量仍需夹具页覆盖。
 

@@ -452,6 +452,8 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "frames",
         "extract",
         "summarize",
+        "scrape",
+        "scrape-formats",
         "snapshot",
         "snapshot-grep",
         "screenshot",
@@ -24638,6 +24640,17 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         }
         return None;
     }
+    // "scrape" works standalone (scrape <url>) AND as a prefix (scrape formats).
+    // Only rewrite the known subcommand so a positional URL passes through.
+    if prefix == "scrape" {
+        let known_subs = ["formats"];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("scrape-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
     // "doctor" works standalone (doctor) AND as a prefix (doctor log).
     if prefix == "doctor" {
         let known_subs = ["log", "metrics", "status"];
@@ -24821,6 +24834,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "crawl-clear" => Some("crawl clear"),
         "crawl-list" => Some("crawl list"),
         "crawl-resume" => Some("crawl resume"),
+        "scrape-formats" => Some("scrape formats"),
         "co-create" => Some("swarm create"),
         "co-submit" => Some("swarm submit"),
         "co-query" => Some("swarm query"),
@@ -34941,6 +34955,57 @@ mod tests {
 
         assert_eq!(rewritten[0], "webdb-normalize");
         assert_eq!(rewritten[1], "http://example.com");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_scrape_formats() {
+        let rewritten = rewrite_prefixed_command(&[
+            "scrape".to_string(),
+            "formats".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "scrape-formats");
+        assert_eq!(rewritten.len(), 1);
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_scrape_with_url_passes_through() {
+        // `scrape <url>` is the bare command: a positional URL that is not a known
+        // subcommand must reach it untouched, or the URL would be swallowed as a
+        // subcommand name.
+        let result = rewrite_prefixed_command(&[
+            "scrape".to_string(),
+            "https://example.com/p".to_string(),
+        ]);
+        assert!(result.is_none(), "scrape <url> should not be rewritten");
+
+        // A flag in second position is not a subcommand either.
+        let flagged = rewrite_prefixed_command(&[
+            "scrape".to_string(),
+            "--formats".to_string(),
+            "markdown".to_string(),
+        ]);
+        assert!(flagged.is_none(), "scrape --formats ... should not be rewritten");
+    }
+
+    #[test]
+    fn preferred_spaced_command_form_includes_scrape_formats() {
+        assert_eq!(
+            preferred_spaced_command_form("scrape-formats"),
+            Some("scrape formats")
+        );
+        // `scrape` itself is a valid standalone command, not a spaced form.
+        assert_eq!(preferred_spaced_command_form("scrape"), None);
+    }
+
+    #[test]
+    fn no_snapshot_commands_includes_scrape() {
+        // Neither command changes page state, so the post-command snapshot would be
+        // noise — the same reason `extract` and `summarize` are in the set.
+        let cmds = no_snapshot_commands();
+        assert!(cmds.contains("scrape"));
+        assert!(cmds.contains("scrape-formats"));
     }
 
     #[test]

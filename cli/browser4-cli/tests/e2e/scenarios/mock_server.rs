@@ -2229,6 +2229,71 @@ pub(super) fn test_cdp_command(ctx: &mut E2ECtx) {
 }
 
 /// `tool call <mcp-name> [--json '{...}']` — generic MCP tool passthrough.
+/// `scrape` (one capture → many formats) and its `scrape formats` subcommand.
+///
+/// Both spellings matter: `scrape <url>` must survive the prefix rewriter as the
+/// bare command, while `scrape formats` must be rewritten to the internal
+/// `scrape-formats` — and both must reach the backend under the documented MCP
+/// tool names, which is what the recorded tool calls assert.
+pub(super) fn test_scrape_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result.stdout.contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    // The bare command with a positional URL and the formats list.
+    let scrape = run_command(
+        ctx,
+        &["scrape", "https://example.com/p", "--formats", "markdown,links"],
+    );
+    assert!(
+        scrape.stdout.contains("mock response for page_scrape"),
+        "scrape should dispatch to page_scrape, got:\n{}",
+        scrape.stdout
+    );
+
+    // The spaced subcommand is rewritten to the internal kebab name.
+    let formats = run_command(ctx, &["scrape", "formats"]);
+    assert!(
+        formats.stdout.contains("mock response for page_formats"),
+        "scrape formats should dispatch to page_formats, got:\n{}",
+        formats.stdout
+    );
+
+    // An unknown second token is a URL, not a subcommand: `scrape` is a bare command
+    // too, so `scrape <anything>` must reach it as the positional url — the same
+    // contract `crawl <url>` has. (The consequence worth knowing: a mistyped
+    // subcommand is sent as a url, which fails at the backend rather than here.)
+    let as_url = run_command(ctx, &["scrape", "not-a-subcommand"]);
+    assert!(
+        as_url.stdout.contains("mock response for page_scrape"),
+        "an unknown second token should be treated as a url, got:\n{}",
+        as_url.stdout
+    );
+
+    let called: Vec<String> = mock_server
+        .snapshot()
+        .tool_calls
+        .iter()
+        .map(|call| call.tool.clone())
+        .collect();
+    assert!(
+        called.iter().any(|tool| tool == "page_scrape"),
+        "page_scrape was never called; recorded: {called:?}"
+    );
+    assert!(
+        called.iter().any(|tool| tool == "page_formats"),
+        "page_formats was never called; recorded: {called:?}"
+    );
+}
+
 pub(super) fn test_tool_call_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

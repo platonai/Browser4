@@ -262,22 +262,22 @@ the submission can be inspected afterwards with `swarm list --batch <id>` — e.
 `swarm list --batch <id> --status failed --json` prints exactly the URLs that
 failed, with each task's `duration_ms`.
 
-### Page scrape
+### Scrape
 
 | Command | Description |
 |---|---|
-| `page scrape --formats <list>` | One page capture → many outputs in a single document |
-| `page formats` | List every accepted format id, whether this build can deliver it, and why not |
+| `scrape [url] --formats <list>` | One page capture → many outputs in a single document |
+| `scrape formats` | List every accepted format id, whether this build can deliver it, and why not |
 
 Asking for several outputs one command at a time means one page load each, and the
-answers can describe different page states. `page scrape` captures the page **once**
-and derives every requested format from that one capture, so `markdown` and `links`
+answers can describe different page states. `scrape` captures the page **once** and
+derives every requested format from that one capture, so `markdown` and `links`
 cannot disagree about what the page said:
 
 ```bash
-browser4-cli page scrape --formats "markdown,links,images"
-browser4-cli page scrape --formats '["markdown",{"type":"deterministicJson","sql":"select dom_first_text(dom, \'h1\') as title"}]'
-browser4-cli page scrape --url "https://example.com/post" --formats "markdown"
+browser4-cli scrape --formats "markdown,links,images"
+browser4-cli scrape --formats '["markdown",{"type":"deterministicJson","sql":"select dom_first_text(dom, \'h1\') as title"}]'
+browser4-cli scrape "https://example.com/post" --formats "markdown"    # or: scrape --url ...
 ```
 
 The response is one document whose `metadata` carries `captureId` and `captureTime`
@@ -301,7 +301,7 @@ was shared — plus `formatsRequested` and `formatsDelivered`:
 Available in a stock install: `markdown`, `html`, `rawHtml`, `links`, `images`,
 `attributes`, `deterministicJson`, `readability`. `branding`, `product`, `menu` and
 `highlights` need a plugin contributor; the rest are later phases. Run
-`browser4-cli page formats` for the authoritative answer for your build.
+`browser4-cli scrape formats` for the authoritative answer for your build.
 
 **A format that produced nothing is not a failure.** A page with no `<img>` yields an
 empty `images`, which is omitted from the JSON while still appearing in

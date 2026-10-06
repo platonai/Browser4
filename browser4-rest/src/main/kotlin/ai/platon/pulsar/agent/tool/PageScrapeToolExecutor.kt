@@ -21,6 +21,14 @@ import kotlin.reflect.KClass
  * - `formats()` — capability discovery: every accepted format id, whether this
  *   deployment can deliver it right now, and why not when it cannot.
  *
+ * ## The CLI surface is a static command pair, not a declared name
+ *
+ * `browser4-cli scrape` and `browser4-cli scrape formats` are `CommandDef`s in
+ * `commands.rs` that map onto `page_scrape` / `page_formats`; these specs declare no
+ * `cliName`. The declared-command mechanism only resolves a **spaced** invocation
+ * (the CLI probes when it has two tokens), so a bare `scrape` cannot be reached that
+ * way — and declaring a name here as well would give one action two entry points.
+ *
  * ## What it deliberately does not expose yet
  *
  * - **`expires` / Firecrawl `maxAge`.** The capture step always captures (see
@@ -80,7 +88,6 @@ class PageScrapeToolExecutor(
                 "the same page state and eight formats cost one page load. Formats this deployment cannot " +
                 "deliver are omitted from the document and named in its `warning`; " +
                 "`metadata.formatsDelivered` tells 'not requested' from 'requested but unavailable'.",
-            cliName = "page scrape",
             examples = listOf(
                 ToolExample(
                     title = "Markdown and links from the current page",
@@ -107,7 +114,6 @@ class PageScrapeToolExecutor(
                 "and why not when it cannot. `available` is a configuration answer, not a promise: a registered " +
                 "contributor whose service is running can still fail at call time, and that failure is reported " +
                 "per request in the document's `warning`.",
-            cliName = "page formats",
             examples = listOf(ToolExample(title = "List the available formats", runnable = true)),
         )
     }

@@ -7,6 +7,7 @@ import ai.platon.pulsar.rest.api.service.scrape.PageScrapeService
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
@@ -144,16 +145,16 @@ class PageScrapeToolExecutorTest {
     // ---- tool spec ----------------------------------------------------------
 
     @Test
-    @DisplayName("both methods declare a spaced CLI name, so the CLI needs no command table entry")
-    fun toolSpecsDeclareCliNames() {
+    @DisplayName("the specs declare no CLI name: the CLI surface is a static command pair")
+    fun toolSpecsDeclareNoCliName() {
         val specs = executor().getToolSpecs()
 
-        // Spaced on purpose: the CLI resolves a declared command only when the
-        // invocation has at least two tokens, so a single-word `cliName` such as
-        // "scrape" would never be discovered (`scrape --formats x` has one token
-        // before the flags). `page scrape` is the first token pair the resolver sees.
-        assertEquals("page scrape", specs.getValue("scrape").cliName)
-        assertEquals("page formats", specs.getValue("formats").cliName)
+        // `scrape` / `scrape formats` live in commands.rs, not in these specs. The
+        // declared-command mechanism can only resolve a *spaced* invocation (the CLI
+        // probes when it has two tokens), so a bare `scrape` is unreachable that way;
+        // declaring one here as well would give one action two entry points.
+        assertNull(specs.getValue("scrape").cliName)
+        assertNull(specs.getValue("formats").cliName)
     }
 
     @Test

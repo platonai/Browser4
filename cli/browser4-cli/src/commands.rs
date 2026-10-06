@@ -2797,6 +2797,68 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |_| json!({}),
         },
+        // ---- Page scrape ----
+        CommandDef {
+            name: "scrape",
+            description: "Scrape a page once and return every requested output in ONE document — markdown, html, rawHtml, links, images, attributes, deterministicJson, readability. Asking for three outputs this way costs one page load instead of three, and because every field comes from that single capture they cannot disagree about what the page said. The URL can be passed as a positional argument or via --url. Run 'scrape formats' to see what this build can deliver.",
+            category: Category::Export,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "url",
+                description: "Scrape this URL instead of the session's current page",
+                optional: true,
+            }],
+            options: &[
+                OptionDef {
+                    name: "formats <list>",
+                    description: "The outputs to produce, in request order: a comma-separated list (\"markdown,links\"), a JSON array ('[\"markdown\",{\"type\":\"screenshot\",\"fullPage\":true}]'), or a single name. Omit for markdown. Quote a comma list — in PowerShell an unquoted a,b,c is three arguments and only the first reaches --formats",
+                    is_bool: false,
+                    short: Some("f"),
+                },
+                // The positional `url` and this option share one key, exactly like
+                // `htmlsnapshot export`'s `[file]` / `--file`: whichever the caller
+                // uses fills the same slot, so neither form needs its own plumbing.
+                OptionDef {
+                    name: "url <url>",
+                    description: "Scrape this URL instead of the session's current page (same as the positional form)",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
+                    name: "no-main-content",
+                    description: "Derive markdown from the whole cleaned page instead of the readable article",
+                    is_bool: true,
+                    short: None,
+                },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "page_scrape".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
+                // Passed through as text on purpose: the backend accepts a list, a
+                // comma-separated string and a JSON array, and re-spelling the value
+                // here would only add a second place for the three forms to drift.
+                if let Some(v) = get_opt_str(args, "formats") { p["formats"] = json!(v); }
+                // Sent only when the flag is present: the backend's default is true,
+                // and sending a value the caller did not ask for would freeze it.
+                if let Some(true) = get_bool(args, "no-main-content") { p["onlyMainContent"] = json!(false); }
+                p
+            },
+        },
+        CommandDef {
+            name: "scrape-formats",
+            description: "List every output format 'scrape' accepts, whether this build can deliver it right now, and why not when it cannot. 'available' is a configuration answer, not a promise: a registered contributor whose service is running can still fail at call time, and that failure is reported per request in the document's 'warning'.",
+            category: Category::Export,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "page_formats".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
         // ---- Export ----
         CommandDef {
             name: "webdb-export",
@@ -9532,6 +9594,89 @@ mod tests {
             cmd.options.iter().any(|opt| opt.name == "focus"),
             "type command should support --focus option"
         );
+    }
+
+    // =========================================================================
+    // scrape / scrape-formats commands — tool name and params
+    // =========================================================================
+
+    #[test]
+    fn test_scrape_tool_name_is_page_scrape() {
+        let map = commands_map();
+        let cmd = map.get("scrape").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "page_scrape");
+    }
+
+    #[test]
+    fn test_scrape_formats_tool_name_is_page_formats() {
+        let map = commands_map();
+        let cmd = map.get("scrape-formats").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "page_formats");
+    }
+
+    #[test]
+    fn test_scrape_params_forward_url_and_formats_verbatim() {
+        let map = commands_map();
+        let cmd = map.get("scrape").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com/p"));
+        // The value is passed through as text: the backend accepts a list, a
+        // comma-separated string and a JSON array, and re-spelling it here would add
+        // a second place for those three forms to drift.
+        args.insert("formats".to_string(), json!("markdown,links"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com/p");
+        assert_eq!(params["formats"], "markdown,links");
+        // `onlyMainContent` is only sent when the caller turns it off: the backend
+        // default is true, and sending a value nobody asked for would freeze it.
+        assert!(params.get("onlyMainContent").is_none());
+    }
+
+    #[test]
+    fn test_scrape_no_main_content_flag_sends_false() {
+        let map = commands_map();
+        let cmd = map.get("scrape").unwrap();
+        let mut args = HashMap::new();
+        args.insert("no-main-content".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["onlyMainContent"], false);
+    }
+
+    #[test]
+    fn test_scrape_takes_one_optional_positional_and_three_options() {
+        let map = commands_map();
+        let cmd = map.get("scrape").unwrap();
+        assert_eq!(cmd.args.len(), 1);
+        assert!(cmd.args[0].optional, "the url must be optional");
+        assert_eq!(cmd.args[0].name, "url");
+
+        let keys: Vec<&str> = cmd.options.iter().map(|o| o.key()).collect();
+        // `url` is both a positional and an option on purpose: they share one key, so
+        // whichever the caller uses fills the same slot (the `htmlsnapshot export`
+        // `[file]` / `--file` precedent).
+        assert_eq!(keys, vec!["formats", "url", "no-main-content"]);
+        assert!(!cmd.options[0].is_bool, "--formats takes a value");
+        assert!(!cmd.options[1].is_bool, "--url takes a value");
+        assert!(cmd.options[2].is_bool, "--no-main-content is a flag");
+        assert!(!cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_scrape_url_option_and_positional_land_in_the_same_slot() {
+        let map = commands_map();
+        let cmd = map.get("scrape").unwrap();
+
+        // The parser stores a positional under its ArgDef name, which is the same key
+        // the option uses — so a single read covers both spellings.
+        let mut positional = HashMap::new();
+        positional.insert("url".to_string(), json!("https://a.example"));
+        assert_eq!((cmd.tool_params_fn)(&positional)["url"], "https://a.example");
+
+        let mut flagged = HashMap::new();
+        flagged.insert("url".to_string(), json!("https://b.example"));
+        assert_eq!((cmd.tool_params_fn)(&flagged)["url"], "https://b.example");
     }
 
     // =========================================================================
