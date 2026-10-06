@@ -82,8 +82,9 @@ class BrowserToolExecutorTest {
         every { front.guid } returns "FRONT-GUID"
         every { browser.frontDriver } returns front
         every { browser.drivers } returns mapOf("FRONT-GUID" to front)
-        // A successful destroyDriver drops the driver from the registry, which is
-        // the evidence closeTab looks for (see BrowserToolExecutor.isTabListed).
+        // A successful destroyDriver drops the driver from the registry and the
+        // relaxed listDrivers() reports no survivor, which is what closeTab's
+        // verification reads (see BrowserToolExecutor.destroyAndVerifyClosed).
         every { browser.destroyDriver(front) } answers {
             every { browser.drivers } returns emptyMap()
         }
@@ -110,6 +111,12 @@ class BrowserToolExecutorTest {
         val liveDriver = mockk<AbstractWebDriver>(relaxed = true)
         every { liveDriver.guid } returns "LIVE-GUID"
         coEvery { browser.listDrivers() } returns listOf(liveDriver)
+        // Closing the live tab must drop it from the tab list: that list is both
+        // how the target driver is resolved and what closeTab's verification
+        // polls, so a driver that is never dropped reads as an uncommitted close.
+        every { browser.destroyDriver(liveDriver) } answers {
+            coEvery { browser.listDrivers() } returns emptyList()
+        }
 
         val result = executor.callFunctionOn(
             ToolCall("browser", "closeTab", mutableMapOf()),
@@ -122,81 +129,77 @@ class BrowserToolExecutorTest {
     }
 
     @Test
-    @DisplayName("closeTab verification accepts a tab that disappears inside the grace window")
-    fun closeTabVerificationAcceptsATabThatDisappearsInsideTheGraceWindow() = runBlocking {
-        // The CDP teardown races the verification: Target.closeTarget resolves
-        // while the browser still lists the target for a moment.
-        var probes = 0
-        val closed = executor.awaitTabGone(graceMillis = 500, pollMillis = 20) {
-            probes++
-            probes <= 2
-        }
-
-        assertTrue(closed, "A tab the browser drops inside the window is a successful close")
-        assertEquals(3, probes, "The tab must be probed until it is gone")
-    }
-
-    @Test
-    @DisplayName("closeTab verification fails a tab that stays listed for the whole window")
-    fun closeTabVerificationFailsATabThatStaysListedForTheWholeWindow() = runBlocking {
-        var probes = 0
-        val closed = executor.awaitTabGone(graceMillis = 150, pollMillis = 20) {
-            probes++
-            true
-        }
-
-        assertFalse(closed, "A tab still listed after the grace window was never closed")
-        assertTrue(probes > 1, "The tab must be watched inside the window, got $probes probe(s)")
-    }
-
-    @Test
-    @DisplayName("closeTab verification keeps watching an unreadable tab list instead of failing the close")
-    fun closeTabVerificationKeepsWatchingAnUnreadableTabList() = runBlocking {
-        // No readable tab list is no evidence of an open tab: a close that
-        // cannot be verified must not be reported as a failure.
-        var probes = 0
-        val closed = executor.awaitTabGone(graceMillis = 150, pollMillis = 20) {
-            probes++
-            null
-        }
-
-        assertTrue(closed, "An unreadable tab list must not fail the close that just happened")
-        assertTrue(probes > 1, "An unreadable tab list must not end the verification early, got $probes probe(s)")
-    }
-
-    @Test
-    @DisplayName("closeTab verification returns immediately when the close already landed")
-    fun closeTabVerificationReturnsImmediatelyWhenTheCloseAlreadyLanded() = runBlocking {
-        var probes = 0
-        val closed = executor.awaitTabGone(graceMillis = 5_000, pollMillis = 20) {
-            probes++
-            false
-        }
-
-        assertTrue(closed)
-        assertEquals(1, probes, "A tab that is already gone needs no second probe")
-    }
-
-    @Test
-    @DisplayName("closeTab verification flags a close that left the driver registered")
-    fun closeTabVerificationFlagsACloseThatLeftTheDriverRegistered() = runBlocking {
-        // destroyDriver is a no-op for a driver the browser does not recognize,
-        // so the registry still holds the guid: the close never happened.
-        val stubborn = mockk<AbstractWebDriver>(relaxed = true)
-        every { stubborn.guid } returns "STUBBORN-GUID"
-        every { browser.findDriverByGUID("STUBBORN-GUID") } returns stubborn
-        every { browser.drivers } returns mapOf("STUBBORN-GUID" to stubborn)
+    @DisplayName("closeTab by GUID succeeds when the tab is gone on the first check")
+    fun closeTabByGuidVerifiedGoneImmediately() = runBlocking {
+        val executor = BrowserToolExecutor(
+            closeVerifyPollMs = 10L,
+            closeVerifyPollsPerAttempt = 2,
+            closeMaxAttempts = 2,
+        )
+        val target = mockk<AbstractWebDriver>(relaxed = true)
+        every { target.guid } returns "TAB-GUID"
+        every { browser.findDriverByGUID("TAB-GUID") } returns target
+        // Relaxed listDrivers() returns an empty list: the close took effect.
 
         val result = executor.callFunctionOn(
-            ToolCall("browser", "closeTab", mutableMapOf("tabId" to "STUBBORN-GUID")),
+            ToolCall("browser", "closeTab", mutableMapOf("tabId" to "TAB-GUID")),
+            browser
+        )
+
+        assertNull(result.exception)
+        verify(exactly = 1) { browser.destroyDriver(target) }
+    }
+
+    @Test
+    @DisplayName("closeTab retries when page recovery resurrects the tab, then succeeds")
+    fun closeTabRetriesAfterResurrection() = runBlocking {
+        val executor = BrowserToolExecutor(
+            closeVerifyPollMs = 10L,
+            closeVerifyPollsPerAttempt = 2,
+            closeMaxAttempts = 3,
+        )
+        val target = mockk<AbstractWebDriver>(relaxed = true)
+        every { target.guid } returns "TAB-GUID"
+        every { browser.findDriverByGUID("TAB-GUID") } returns target
+        // Attempt 0's two polls still see the tab (close not committed yet);
+        // the first poll of attempt 1 (after the retry destroy) sees it gone.
+        coEvery { browser.listDrivers() } returnsMany listOf(
+            listOf(target), listOf(target), emptyList()
+        )
+
+        val result = executor.callFunctionOn(
+            ToolCall("browser", "closeTab", mutableMapOf("tabId" to "TAB-GUID")),
+            browser
+        )
+
+        assertNull(result.exception)
+        // Initial destroy plus one retry against the resurrected driver.
+        verify(exactly = 2) { browser.destroyDriver(target) }
+    }
+
+    @Test
+    @DisplayName("closeTab fails loudly when the tab survives every attempt")
+    fun closeTabFailsLoudlyWhenTabSurvives() = runBlocking {
+        val executor = BrowserToolExecutor(
+            closeVerifyPollMs = 10L,
+            closeVerifyPollsPerAttempt = 2,
+            closeMaxAttempts = 2,
+        )
+        val target = mockk<AbstractWebDriver>(relaxed = true)
+        every { target.guid } returns "TAB-GUID"
+        every { browser.findDriverByGUID("TAB-GUID") } returns target
+        coEvery { browser.listDrivers() } returns listOf(target)
+
+        val result = executor.callFunctionOn(
+            ToolCall("browser", "closeTab", mutableMapOf("tabId" to "TAB-GUID")),
             browser
         )
 
         assertNotNull(result.exception)
-        assertTrue(
-            result.exception?.cause?.message?.contains("still open after destroyDriver") == true,
-            "Expected the failed close to be surfaced, got: ${result.exception?.cause?.message}"
-        )
+        val message = result.exception?.cause?.message.orEmpty() + result.exception?.message.orEmpty()
+        assertTrue(message.contains("TAB-GUID"), "failure must name the tab: $message")
+        // One destroy per attempt — never reported as a phantom success.
+        verify(exactly = 2) { browser.destroyDriver(target) }
     }
 
     @Test
@@ -247,3 +250,4 @@ class BrowserToolExecutorTest {
         assertEquals(true, tabs[1]["active"])
     }
 }
+

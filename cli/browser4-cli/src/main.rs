@@ -13052,6 +13052,31 @@ async fn handle_agent_result(
     Ok(())
 }
 
+/// A tracked task's status is terminal once it completed or failed.
+///
+/// Used by `agent list --clear` to tell history apart from work that is still
+/// live server-side.
+fn agent_task_status_is_terminal(status: &str) -> bool {
+    status == "completed" || status.starts_with("failed")
+}
+
+/// Whether `agent list --clear` should drop one tracked async task.
+///
+/// The default clear removes terminal (completed/failed) tasks only:
+/// queued/processing and never-polled (empty status) tasks keep running
+/// server-side, so untracking them would hide a live task the user can still
+/// monitor. `--all` removes every agent task regardless of state.
+fn agent_clear_drops_task(task: &state::AsyncTaskEntry, remove_all: bool) -> bool {
+    if task.command != "agent" {
+        return false;
+    }
+    if remove_all {
+        return true;
+    }
+    // Drop history; keep work that is still live.
+    agent_task_status_is_terminal(&task.last_status)
+}
+
 async fn handle_agent_list(
     client: &Client,
     base_url: &str,
@@ -13073,27 +13098,22 @@ async fn handle_agent_list(
             .unwrap_or(false);
         let mut list = read_async_tasks(None);
         let before = list.tasks.len();
-        let is_terminal = |s: &str| s == "completed" || s.starts_with("failed");
         let detached: Vec<String> = if remove_all {
             list.tasks
                 .iter()
-                .filter(|t| t.command == "agent" && !is_terminal(&t.last_status))
+                .filter(|t| {
+                    t.command == "agent" && !agent_task_status_is_terminal(&t.last_status)
+                })
                 .map(|t| t.task_id.clone())
                 .collect()
         } else {
             Vec::new()
         };
-        list.tasks.retain(|t| {
-            if t.command != "agent" {
-                return true;
-            }
-            if remove_all {
-                return false;
-            }
-            // Default: drop only terminal tasks; keep queued/processing and
-            // never-polled (empty last_status) entries.
-            is_terminal(&t.last_status)
-        });
+        // `retain` keeps what its predicate accepts, so the predicate is the
+        // inverse of "drop": non-agent tasks always stay, and the default
+        // (non-`--all`) clear keeps queued/processing and never-polled
+        // (empty last_status) entries.
+        list.tasks.retain(|t| !agent_clear_drops_task(t, remove_all));
         let removed = before - list.tasks.len();
         let kept = list.tasks.iter().filter(|t| t.command == "agent").count();
         write_async_tasks(&list, None).map_err(|e| e.to_string())?;
@@ -37050,6 +37070,49 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].task_id, "a1");
         assert_eq!(filtered[1].task_id, "a2");
+    }
+
+    #[test]
+    fn agent_task_status_is_terminal_labels() {
+        assert!(agent_task_status_is_terminal("completed"));
+        assert!(agent_task_status_is_terminal("failed (417)"));
+        assert!(agent_task_status_is_terminal("failed (closed)"));
+        assert!(!agent_task_status_is_terminal("queued"));
+        assert!(!agent_task_status_is_terminal("processing"));
+        assert!(!agent_task_status_is_terminal("pending"));
+        // Never polled: still live server-side, so not terminal.
+        assert!(!agent_task_status_is_terminal(""));
+    }
+
+    /// `agent list --clear` drops terminal history and keeps work that is
+    /// still running; `--all` drops every tracked agent task, but never a
+    /// non-agent one.
+    #[test]
+    fn agent_clear_drops_terminal_tasks_only_by_default() {
+        let task = |command: &str, status: &str| state::AsyncTaskEntry {
+            task_id: format!("{command}-{status}"),
+            command: command.to_string(),
+            description: "d".to_string(),
+            submitted_at: "t".to_string(),
+            last_status: status.to_string(),
+            ..Default::default()
+        };
+
+        // Default clear: history goes, live work stays.
+        assert!(agent_clear_drops_task(&task("agent", "completed"), false));
+        assert!(agent_clear_drops_task(&task("agent", "failed (417)"), false));
+        assert!(!agent_clear_drops_task(&task("agent", "queued"), false));
+        assert!(!agent_clear_drops_task(&task("agent", "processing"), false));
+        assert!(!agent_clear_drops_task(&task("agent", ""), false));
+
+        // --all: every agent task goes, running or not.
+        assert!(agent_clear_drops_task(&task("agent", "completed"), true));
+        assert!(agent_clear_drops_task(&task("agent", "queued"), true));
+        assert!(agent_clear_drops_task(&task("agent", ""), true));
+
+        // A non-agent task is never dropped by `agent list --clear`.
+        assert!(!agent_clear_drops_task(&task("crawl", "completed"), false));
+        assert!(!agent_clear_drops_task(&task("crawl", "completed"), true));
     }
 
     // -----------------------------------------------------------------------

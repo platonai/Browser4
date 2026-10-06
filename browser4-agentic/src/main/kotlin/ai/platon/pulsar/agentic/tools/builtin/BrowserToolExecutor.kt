@@ -5,15 +5,19 @@ import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.api.AbstractBrowser
 import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.api.Browser
-import ai.platon.pulsar.api.model.WebDriverException
-import ai.platon.pulsar.chrome.PulsarBrowser
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.chrome.network.NetworkObserver
 import ai.platon.pulsar.chrome.network.RouteManager
 import ai.platon.pulsar.common.getLogger
 import kotlin.reflect.KClass
 
-class BrowserToolExecutor : AbstractToolExecutor() {
+class BrowserToolExecutor(
+    // Timing for the close-verify loop. Production uses the defaults; tests
+    // shrink the budget so the "tab never closes" path stays fast.
+    private val closeVerifyPollMs: Long = 150L,
+    private val closeVerifyPollsPerAttempt: Int = 4,
+    private val closeMaxAttempts: Int = 3,
+) : AbstractToolExecutor() {
     private val logger = getLogger(this)
 
     override val domain = "browser"
@@ -129,24 +133,11 @@ class BrowserToolExecutor : AbstractToolExecutor() {
 
             "closeTab" -> {
                 val driver = resolveTabDriver(browser, args, functionName, allowCurrentTab = true)
-                val guid = driver.guid
-                browser.destroyDriver(driver)
-                // destroyDriver swallows CDP close failures (runCatching around
-                // closeMe), so a failed close would otherwise report success
-                // while every tab stays open.  Verify the tab is actually gone
-                // and surface the failure (AGENTS.md: no silent failures).
-                //
-                // The verification waits out the CDP teardown: Target.closeTarget
-                // resolves before the browser has dropped the target, so a single
-                // immediate check intermittently finds the closing tab still in
-                // the browser's tab list (observed as a flaky closeTab failure in
-                // CI).  A tab that is genuinely still open never disappears, so
-                // the throw below still fires for real failures.
-                if (!awaitTabClosed(browser, guid)) {
-                    throw IllegalStateException(
-                        "Failed to close tab '$guid': the tab is still open after destroyDriver"
-                    )
-                }
+                // The GUID is captured before the close: the index shifts once
+                // the tab is gone and the driver object is replaced if page
+                // recovery resurrects the tab (see destroyAndVerifyClosed).
+                val targetGuid = (driver as? AbstractWebDriver)?.guid
+                destroyAndVerifyClosed(browser, driver, targetGuid, functionName)
                 true
             }
 
@@ -166,6 +157,75 @@ class BrowserToolExecutor : AbstractToolExecutor() {
             }
 
             else -> throw IllegalArgumentException("Unsupported browser method: $functionName(${args.keys})")
+        }
+    }
+
+    /**
+     * Destroy [driver] and verify that its tab actually disappears.
+     *
+     * The base browser library removes the driver from its map first and only
+     * then sends `Target.closeTarget` over the browser-level web socket — that
+     * send is fire-and-forget (transport failures are swallowed and logged at
+     * debug level). The very next tab listing triggers unmanaged-page recovery,
+     * which re-creates a driver for every tab Chrome still lists: when the
+     * close CDP call has not been processed yet (CI under load, a busy browser
+     * web socket), the just-closed tab is resurrected permanently and the
+     * caller is told the close succeeded while the tab survives.
+     *
+     * To close that race the removal is verified by GUID; when the tab
+     * resurfaces, recovery built a new driver object for the same GUID, so it
+     * is re-resolved and destroyed again. A tab that survives every attempt
+     * fails loudly instead of reporting a phantom success.
+     */
+    private suspend fun destroyAndVerifyClosed(
+        browser: AbstractBrowser,
+        initial: AbstractWebDriver,
+        targetGuid: String?,
+        functionName: String,
+    ) {
+        browser.destroyDriver(initial)
+
+        // Without a GUID the close cannot be verified by identity — trust the
+        // call rather than guessing from the shifted index.
+        if (targetGuid.isNullOrEmpty()) {
+            return
+        }
+
+        var current: AbstractWebDriver = initial
+        repeat(closeMaxAttempts) { attempt ->
+            // Poll within this attempt's window — Chrome usually commits the
+            // close within the first one or two checks.
+            repeat(closeVerifyPollsPerAttempt) { poll ->
+                val survivors = browser.listDrivers().filterIsInstance<AbstractWebDriver>()
+                if (survivors.none { it.guid == targetGuid }) {
+                    return
+                }
+                if (poll < closeVerifyPollsPerAttempt - 1) {
+                    kotlinx.coroutines.delay(closeVerifyPollMs)
+                }
+            }
+
+            // The tab is still listed. Recovery may have re-created its driver
+            // object; re-resolve by GUID (the lookup itself runs recovery) and
+            // drive the close again.
+            val resurrected = browser.findDriverByGUID(targetGuid)
+            if (resurrected == null) {
+                // Gone between the last listing and the lookup — closed.
+                return
+            }
+            if (attempt < closeMaxAttempts - 1) {
+                logger.warn(
+                    "! Tab {} survived close attempt {}/{} — retrying",
+                    targetGuid, attempt + 1, closeMaxAttempts
+                )
+                current = resurrected
+                browser.destroyDriver(current)
+            } else {
+                throw IllegalStateException(
+                    "$functionName: tab '$targetGuid' still exists after $closeMaxAttempts " +
+                        "close attempts; the browser did not commit the close"
+                )
+            }
         }
     }
 
@@ -215,72 +275,5 @@ class BrowserToolExecutor : AbstractToolExecutor() {
         }
     }
 
-    /**
-     * Wait for [guid] to disappear from the browser's live tab list.
-     *
-     * `Target.closeTarget` resolves before the browser has finished tearing the
-     * target down, so an immediate single check can still see the closing tab.
-     * Polls for a short bounded window ([TAB_CLOSE_GRACE_MILLIS]) and reports a
-     * failure only when the browser still lists the tab at the end of it.
-     */
-    private suspend fun awaitTabClosed(browser: AbstractBrowser, guid: String): Boolean =
-        awaitTabGone(TAB_CLOSE_GRACE_MILLIS, TAB_CLOSE_POLL_MILLIS) { isTabListed(browser, guid) }
-
-    /**
-     * Poll [isListed] until it stops reporting the tab, up to [graceMillis].
-     *
-     * Returns `true` as soon as the tab is gone, `false` only when the last
-     * observation inside the window still lists it — a tab that stayed listed
-     * for the whole grace window was never closed.
-     */
-    internal suspend fun awaitTabGone(
-        graceMillis: Long,
-        pollMillis: Long,
-        isListed: () -> Boolean?,
-    ): Boolean {
-        val deadline = System.currentTimeMillis() + graceMillis
-        while (true) {
-            val listed = isListed()
-            if (listed == false) return true
-            // `null` means the tab list could not be read (the browser itself is
-            // going away), which is no evidence of an open tab: keep watching
-            // and only report a failure from a positive sighting.
-            if (System.currentTimeMillis() >= deadline) return listed != true
-            kotlinx.coroutines.delay(pollMillis)
-        }
-    }
-
-    /**
-     * Whether the browser still has a tab with [guid], or `null` when that
-     * cannot be determined.
-     *
-     * Evidence comes from two reads that both leave the browser untouched: the
-     * driver registry (which `destroyDriver` clears synchronously) and the
-     * browser's own tab list (`GET /json/list` on the CDP endpoint).
-     * `listDrivers()` must NOT be used here: it runs `recoverUnmanagedPages()`,
-     * which re-registers a tab the browser has not dropped yet as a brand new
-     * driver.  Nothing removes such a recovered driver before `pageLoadTimeout`
-     * (minutes), so the phantom entry would keep reporting the tab as open and
-     * turn every close that races the teardown into a failure — the very
-     * failure this verification exists to outlive.
-     */
-    private fun isTabListed(browser: AbstractBrowser, guid: String): Boolean? {
-        // The close must at least have dropped the driver it was given.
-        if (browser.drivers.containsKey(guid)) return true
-        val pulsarBrowser = browser as? PulsarBrowser ?: return false
-        return try {
-            pulsarBrowser.listTabs().any { it.id == guid }
-        } catch (e: WebDriverException) {
-            logger.warn("Failed to read the browser tab list while verifying tab {} | {}", guid, e.message)
-            null
-        }
-    }
-
-    private companion object {
-        /** How long `closeTab` waits for the CDP target teardown to land. */
-        const val TAB_CLOSE_GRACE_MILLIS = 2_000L
-
-        /** Interval between live-tab checks inside the grace window. */
-        const val TAB_CLOSE_POLL_MILLIS = 100L
-    }
 }
+
