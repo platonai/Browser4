@@ -9,11 +9,9 @@ import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.CommandSubmitResponse
+import ai.platon.pulsar.rest.api.support.SessionResolution
+import ai.platon.pulsar.rest.api.support.toServerSentEvents
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onCompletion
-import kotlinx.coroutines.flow.onEach
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.http.codec.ServerSentEvent
@@ -26,6 +24,10 @@ import java.time.Instant
  *
  * A page visit is a browser operation, so a malformed request must be rejected
  * *before* a session (and with it a browser) is allocated — see [submitJsonCommand].
+ *
+ * The session is named by the body, else by the query parameter, else by [DEFAULT_SESSION_ID].
+ * A blank value counts as "not named" rather than as a session whose id is the empty string —
+ * see [SessionResolution], which every endpoint here resolves through.
  * */
 @RestController
 @CrossOrigin
@@ -127,16 +129,23 @@ class CommandController(
      * The body wins over the query parameter (the body is the per-request, explicit
      * choice); a client that sends both and disagrees is warned rather than silently
      * overridden, following the [submitPlainCommand] precedent for conflicting parameters.
+     *
+     * "Both and disagrees" means both actually named a session: a blank value is not a
+     * choice, so `?sessionId=s1` with a blank `body.sessionId` is not a conflict to warn
+     * about — it is the one session that was named.
      * */
     private fun resolveSessionId(requestSessionId: String?, querySessionId: String?): String {
-        if (requestSessionId != null && querySessionId != null && requestSessionId != querySessionId) {
+        val bodyNames = !requestSessionId.isNullOrBlank()
+        val queryNames = !querySessionId.isNullOrBlank()
+
+        if (bodyNames && queryNames && requestSessionId != querySessionId) {
             logger.warn(
                 "Conflicting session ids: body sessionId='{}' but ?sessionId='{}'. Using the body value.",
                 requestSessionId, querySessionId
             )
         }
 
-        return requestSessionId ?: querySessionId ?: DEFAULT_SESSION_ID
+        return SessionResolution.firstNamedOrDefault(requestSessionId, querySessionId)
     }
 
     /**
@@ -206,7 +215,7 @@ class CommandController(
             return async ?: modeIsAsync
         }
 
-        val effectiveSessionId = sessionId ?: DEFAULT_SESSION_ID
+        val effectiveSessionId = SessionResolution.firstNamedOrDefault(sessionId)
 
         return if (isAsync()) {
             ResponseEntity.accepted()
@@ -222,7 +231,7 @@ class CommandController(
         @PathVariable id: String,
         @RequestParam(name = "sessionId") sessionId: String? = null,
     ): ResponseEntity<CommandStatus> {
-        val effectiveSessionId = sessionId ?: DEFAULT_SESSION_ID
+        val effectiveSessionId = SessionResolution.firstNamedOrDefault(sessionId)
 
         val status = commandExecutor.getStatus(effectiveSessionId, id)
             ?: return ResponseEntity.notFound().build()
@@ -235,7 +244,7 @@ class CommandController(
         @PathVariable id: String,
         @RequestParam(name = "sessionId") sessionId: String? = null,
     ): ResponseEntity<CommandResult> {
-        val effectiveSessionId = sessionId ?: DEFAULT_SESSION_ID
+        val effectiveSessionId = SessionResolution.firstNamedOrDefault(sessionId)
 
         val result = commandExecutor.getResult(effectiveSessionId, id)
             ?: return ResponseEntity.notFound().build()
@@ -277,22 +286,11 @@ class CommandController(
         @PathVariable id: String,
         @RequestParam(name = "sessionId") sessionId: String? = null,
     ): Flux<ServerSentEvent<CommandStatus>> {
-        val effectiveSessionId = sessionId ?: DEFAULT_SESSION_ID
+        val effectiveSessionId = SessionResolution.firstNamedOrDefault(sessionId)
 
-        return Flux.create { sink ->
-            val job = commandExecutor.commandStatusFlow(effectiveSessionId, id)
-                .onEach { sink.next(it) }
-                .onCompletion { sink.complete() }
-                .catch {
-                    logger.error("Error in command status flow", it)
-                    sink.error(it)
-                }
-                .launchIn(commandExecutor.launchScope())
-
-            sink.onDispose { job.cancel() }
-        }.map {
-            // NOTE: [2025/5/20] JavaScript client-side code expects only JSON data, not the event ID nor event name.
-            ServerSentEvent.builder(it).build()
-        }
+        // The default event shape is this endpoint's contract: JavaScript client-side code
+        // expects only JSON data, not the event ID nor the event name.
+        return commandExecutor.commandStatusFlow(effectiveSessionId, id)
+            .toServerSentEvents(commandExecutor.launchScope(), logger)
     }
 }

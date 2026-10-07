@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.tools.advanced.format.FormatFailureException
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.service.scrape.ArtifactStore
 import ai.platon.pulsar.rest.api.service.scrape.PageScrapeService
+import ai.platon.pulsar.rest.api.support.ScrapeEnvelopes
 import ai.platon.pulsar.skeleton.workflow.format.FormatOptionSchema
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -76,9 +77,9 @@ class PageScrapeController(
      */
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(IllegalArgumentException::class)
-    fun handleBadRequest(e: IllegalArgumentException): Map<String, Any> {
+    fun handleBadRequest(e: IllegalArgumentException): Map<String, Any?> {
         logger.warn("Bad page scrape request: {}", e.message)
-        return mapOf("success" to false, "error" to "Bad Request", "message" to (e.message ?: ""))
+        return ScrapeEnvelopes.failure(ScrapeEnvelopes.BAD_REQUEST, e.message)
     }
 
     /**
@@ -97,12 +98,11 @@ class PageScrapeController(
     fun handleFormatFailure(e: FormatFailureException): ResponseEntity<Map<String, Any?>> {
         logger.warn("Strict page scrape could not be satisfied: {}", e.message)
         return ResponseEntity.status(e.code.httpStatus).body(
-            linkedMapOf(
-                "success" to false,
-                "error" to e.code.wire,
+            ScrapeEnvelopes.failure(
+                e.code.wire,
+                e.message,
                 "retryable" to e.code.retryable,
                 "hint" to e.code.hint,
-                "message" to (e.message ?: ""),
             )
         )
     }
@@ -138,9 +138,8 @@ class PageScrapeController(
             strict = request.strict ?: false,
         )
 
-        return mapOf(
-            "success" to true,
-            "data" to pulsarObjectMapper().convertValue<Map<String, Any?>>(document, DOCUMENT_TYPE),
+        return ScrapeEnvelopes.success(
+            pulsarObjectMapper().convertValue<Map<String, Any?>>(document, DOCUMENT_TYPE)
         )
     }
 
@@ -152,10 +151,7 @@ class PageScrapeController(
      * reported per request in the document's `warning`.
      */
     @GetMapping("formats")
-    fun formats(): Map<String, Any?> = mapOf(
-        "success" to true,
-        "data" to pageScrapeService.formats(),
-    )
+    fun formats(): Map<String, Any?> = ScrapeEnvelopes.success(pageScrapeService.formats())
 
     /**
      * Serve back the bytes of an artifact a scrape returned.
@@ -206,10 +202,9 @@ class PageScrapeController(
      */
     private fun artifactNotFound(name: String): ResponseEntity<ByteArray> {
         val body = pulsarObjectMapper().writeValueAsBytes(
-            linkedMapOf(
-                "success" to false,
-                "error" to "Not Found",
-                "message" to "no artifact named '$name' on this host; artifact files are temporary " +
+            ScrapeEnvelopes.failure(
+                ScrapeEnvelopes.NOT_FOUND,
+                "no artifact named '$name' on this host; artifact files are temporary " +
                     "and are removed with the process temp tree",
             )
         )
