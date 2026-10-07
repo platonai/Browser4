@@ -818,7 +818,16 @@ Browser4 自带一个轻量级 **MockSite** 服务器，用于提供静态 HTML 
 
 欢迎贡献代码和文档！详情见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-<img width="400" height="400" alt="群聊：dsh-Browser4社区交流3群" src="https://github.com/user-attachments/assets/c15fe635-0e9f-4ac2-b038-abec6bd6bbe4" />
+### 联系我们
+
+- 💬 WeChat: galaxyeye
+- 🌐 Weibo: [galaxyeye](https://weibo.com/galaxyeye)
+- 📧 Email: galaxyeye@live.cn, ivincent.zhang@gmail.com
+- 🐦 Twitter: galaxyeye8
+
+<div style="display: flex;">
+  <img src="docs/images/wechat-author.png" width="300" height="365" alt="WeChat QR Code" />
+</div>
 
 ---
 
