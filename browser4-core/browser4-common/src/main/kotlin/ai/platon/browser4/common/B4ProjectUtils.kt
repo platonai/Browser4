@@ -1,4 +1,4 @@
-package ai.platon.pulsar.common
+package ai.platon.browser4.common
 
 import org.slf4j.LoggerFactory
 import java.io.*

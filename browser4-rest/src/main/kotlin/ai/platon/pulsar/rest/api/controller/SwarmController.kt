@@ -7,7 +7,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacade
 import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacadeRegistry
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
-import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.api.entities.SessionResponse
 import ai.platon.pulsar.rest.api.entities.toSessionResponse

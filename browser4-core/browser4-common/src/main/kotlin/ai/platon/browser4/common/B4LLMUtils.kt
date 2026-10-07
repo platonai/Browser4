@@ -1,7 +1,6 @@
-package ai.platon.pulsar.common
+package ai.platon.browser4.common
 
 import org.slf4j.LoggerFactory
-import java.io.FileNotFoundException
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL

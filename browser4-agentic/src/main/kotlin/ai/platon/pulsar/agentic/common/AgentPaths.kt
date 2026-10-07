@@ -2,7 +2,7 @@ package ai.platon.pulsar.agentic.common
 
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.AppPaths
-import ai.platon.pulsar.common.B4ProjectUtils
+import ai.platon.browser4.common.B4ProjectUtils
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.RequiredDirectory
 import ai.platon.pulsar.common.createRequiredResources

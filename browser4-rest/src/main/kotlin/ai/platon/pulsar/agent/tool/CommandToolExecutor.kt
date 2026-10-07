@@ -1,7 +1,7 @@
 package ai.platon.pulsar.agent.tool
 
 import ai.platon.pulsar.agentic.agents.RunEngine
-import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agentic.model.TaskPolicy
 import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec

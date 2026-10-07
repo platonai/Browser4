@@ -1,7 +1,7 @@
 package ai.platon.pulsar.rest.mcp.service
 
-import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
-import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContexts

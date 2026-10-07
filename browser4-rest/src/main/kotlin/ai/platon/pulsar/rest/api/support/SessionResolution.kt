@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.api.support
 
-import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 
 /**
  * How a REST request answers "which session does this address?".

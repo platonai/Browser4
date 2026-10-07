@@ -4,7 +4,7 @@ import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.NavigateEntry
-import ai.platon.pulsar.common.B4Constants
+import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.common.config.MutableConfig
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.DisplayName

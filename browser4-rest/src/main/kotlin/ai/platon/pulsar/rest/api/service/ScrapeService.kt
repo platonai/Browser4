@@ -1,6 +1,5 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agent.tool.UserCommandExecutor.Companion.FLOW_POLLING_INTERVAL
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession

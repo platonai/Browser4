@@ -1,8 +1,8 @@
 package ai.platon.pulsar.agentic.inference.action
 
 import ai.platon.pulsar.api.WebDriver
-import ai.platon.pulsar.common.B4LLMUtils
-import ai.platon.pulsar.common.B4ResourceLoader
+import ai.platon.browser4.common.B4LLMUtils
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals

@@ -1,4 +1,4 @@
-package ai.platon.pulsar.common
+package ai.platon.browser4.common
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -9,6 +9,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import kotlin.collections.iterator
 
 /**
  * Unit tests for [B4LLMUtils] source-reading helpers. The jar extraction logic is tested
