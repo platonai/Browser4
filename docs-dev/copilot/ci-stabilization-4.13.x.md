@@ -2138,11 +2138,10 @@ harness `--list` 实测 e2e 选中 204 例）时，发现 nightly 的**选择面
 
 ### 30.4 还没做（需要决策）
 
-* **`E2E`/`E2ETest` 标记的 10 个类 / 82 个方法仍然无人执行**（含 `HtmlSnapshotScenariosE2ETest` 32、
-  `MCPToolControllerE2ETest` 18、`Browser4MCPServerE2ETest` 14），整个
-  `browser4-tests/browser4-e2e-tests` 模块（5 个方法）同样是死代码。要不要让 nightly 接管
-  （去掉 `E2E,E2ETest` 两个排除项，或新增 `-DrunE2ETests=true` 的独立 job）需要先评估这些用例
-  在 Docker 后端上的稳定性 —— 直接放开很可能让 nightly 长期变红。
+* ~~**`E2E`/`E2ETest` 标记的 10 个类 / 82 个方法仍然无人执行**… 要不要让 nightly 接管需要先评估稳定性。~~
+  **已处置（§31.4，本轮）**：nightly 去掉了 `E2E,E2ETest` 两个排除项，5 个类 / 60 个方法进入夜间执行；
+  另外 5 个由它们自己的 `ManualOnly`(3 类) / `RequiresAI`(2 类) 继续排除 —— 那是 tag 语义决定的，
+  不是"放开 E2E"能解决的。
 * **tag 标注稀疏**：356 个含 `@Test` 的类只有 52 个带 tag，`Heavy`/`HeavyTest`/`Integration`/
   `RequiresDocker`/`SDK` 五个 tag 零标注，排除清单里它们目前不产生任何效果。补齐标注是
   "tag 门禁"名实相符的前提。
@@ -2201,6 +2200,38 @@ Docker 构建 / 启动应用 / 健康检查 / CLI e2e 都是默认 `success()` �
 其中 3 个是 Spring + 真 Chrome 的重测试），处置建议见
 [E2E tag 稳定性评估](e2e-tag-stability-assessment.md)；其中 `Browser4MCPServerE2ETest`
 （mockk、无浏览器、2.8 s）建议改标 `Unit`+`Fast` 回到 PR 门禁 —— 该改名属于行为变更，等决策后执行。
+
+### 31.4 `E2E`/`E2ETest` 交给 nightly（本轮决定，**覆盖 §31.3 的建议**）
+
+§31.3 的结论是"不要在 nightly 里直接放开"。本轮改成放开，这是一次明确的取舍，把两边都记下来：
+
+* **反对意见（§31.3）**：放开只会多跑几个类，其中几个是 Spring + 真 Chrome 的重测试（单类 6.5–8 分钟），
+  flake 风险由 nightly 长期承担。
+* **采纳放开的理由**：这两个 tag 在此之前**在任何 workflow 都不执行**，那部分用例只有维护成本没有回报，
+  而"评估后不放开"的代价在 §31.3 里被低估了；nightly 是 cron 报告不是合并门禁，偶发红不挡任何人的合并，
+  而"永远不红"的价值低于"真的跑过"——把重测试放夜间，与 `docs/TESTING.md` 把 `Heavy` 送来这里是同一逻辑。
+* **边界**：`pr.yml` / `ci.yml` **不改**，所以重测试不会进入合并/发布门禁的预算；
+  `ManualOnly`(3 类) 与 `RequiresAI`(2 类) 也继续排除——后者尤其必要，nightly 没有 LLM key，
+  放开只会得到必然失败的类。
+
+改动落在 `.github/workflows/nightly.yml`（`excluded_groups: 'ManualOnly,RequiresAI'`，并在文件头写明
+"E2E/E2ETest 只在这里跑，且不要顺着这条改动把 ManualOnly/RequiresAI 一起放开"），口径同步到
+`docs/TESTING.md` 的门禁矩阵与覆盖缺口两节。
+
+**实测（本地按 nightly 的新 `excludedGroups` 跑这 5 个类，`BUILD SUCCESS` / 0 失败）**：
+
+| 类 | 模块 | 例数 | 耗时 |
+| --- | --- | --- | --- |
+| `HtmlSnapshotScenariosE2ETest` | `browser4-rest-tests` | 39 | 436.0 s |
+| `CaptureIgnoreDomFeaturesE2ETest` | `browser4-rest-tests` | 2 | 59.2 s |
+| `StorageStateCookiePathE2ETest` | `browser4-rest-tests` | 4 | 37.9 s |
+| `SwarmControllerE2ETest` | `browser4-rest-tests` | 5 | 2.7 s |
+| `Browser4MCPServerE2ETest` | `browser4-agentic` | 14 | 4.2 s |
+| **合计** | | **64** | **~540 s（约 9 分钟）** |
+
+nightly 的 `Run Comprehensive Tests` 步骤预算是 150 min，加这 9 分钟不需要动预算。
+注意这 64 例里有 39 例集中在 `HtmlSnapshotScenariosE2ETest`（436 s，Spring + 真 Chrome），
+它是这次改动的主要成本，也是 §31.3 当初警告的那一类。
 
 ## 32. `release.yml` `v4.13.21`：导航探针与 `fill` 的拒绝让 7 个 CLI e2e 场景变红（4.13.x，2026-09-23）
 

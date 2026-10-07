@@ -228,7 +228,7 @@ pwsh bin/skill-doc-lint.ps1   # 只跑合规检查（与 CI 那一步等价的�
 | --- | --- | --- | --- | --- |
 | `pr.yml`（PR） | 除 `Unit/Fast` 外全排除 + `-Pquality-gate`（**强制** INSTRUCTION ≥ 0.20） | 快档基线 | 无 | 25 min |
 | `ci.yml`（release tag） | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck` | +Integration/Heavy | `--level=BASIC`（150） | 50 min |
-| `nightly.yml`（00:00 UTC） | `ManualOnly,RequiresAI,E2E,E2ETest` | +Slow/HeavyTest/TestInfraCheck（约 32 个方法）、JaCoCo **仅观测**（`-Djacoco.check.skip=true`） | `--level=EXTENDED --enable-all --max-failures=0`（208） | 75 / 30 min |
+| `nightly.yml`（00:00 UTC） | `ManualOnly,RequiresAI` | +Slow/HeavyTest/TestInfraCheck、**+E2E/E2ETest（5 个类 / 64 个方法，实测 ~9 min）**、JaCoCo **仅观测**（`-Djacoco.check.skip=true`） | `--level=EXTENDED --enable-all --max-failures=0`（208） | 75 / 30 min |
 | `nightly-cli.yml`（03:00 UTC） | — | — | `--level=ALL --enable-all`（208） | 30 min |
 | `nightly-cli.yml` 的 `windows-smoke` job（03:00 UTC） | — | — | `--level=SMOKE --max-failures=0`（7，含 coverage 伪条目）**+** `--scenario=test_e2e_mock_click_is_stack_safe` | 25 min |
 | `release.yml` / `release-cli.yml` | 仅构建 | — | `--level=EXTENDED --enable-all` | — |
@@ -293,15 +293,23 @@ runner 上证明稳定，把该 job 提到 `--level=BASIC` 只是一个词的改
 
 ### 已知覆盖缺口（尚未修，需要决策）
 
-* **`E2E`/`E2ETest` 标记的 11 个类 / 86 个方法在任何 workflow 都不执行**
-  （含 `HtmlSnapshotScenariosE2ETest` 32、`MCPToolControllerE2ETest` 18、`Browser4MCPServerE2ETest` 14 …），
-  整个 `browser4-tests/browser4-e2e-tests` 模块（5 个方法）同样为死代码。
-  原因是 nightly/ci/pr 都排除这两个 tag，而没有 workflow 传 `-DrunE2ETests=true`。
-  **已做过稳定性评估并给出按类处置方案**（两轮本地采样 56 例 0 失败）：
-  见 [E2E tag 稳定性评估](../docs-dev/copilot/e2e-tag-stability-assessment.md)。
-  结论摘要：不要在 nightly 里直接放开这两个 tag（放开只多跑 4 个类，其中 3 个是 Spring + 真实 Chrome 的
-  重测试，单类 6.5–8 分钟）；`Browser4MCPServerE2ETest` 是 mockk 驱动、2.8 s 跑完 14 例，
-  建议改标 `Unit`+`Fast` 让它回到 PR 门禁。
+* **`E2E`/`E2ETest`：nightly 现在跑其中的 5 个类（本轮起）。** 静态清点到 10 个类带这两个 tag，
+  实测进入 nightly 的是这 5 个 / **64 个方法 / 约 9 分钟 / 0 失败**
+  （`HtmlSnapshotScenariosE2ETest` 39 例 · 436 s、`CaptureIgnoreDomFeaturesE2ETest` 2 例 · 59 s、
+  `Browser4MCPServerE2ETest` 14 例 · 4.2 s、`StorageStateCookiePathE2ETest` 4 例 · 37.9 s、
+  `SwarmControllerE2ETest` 5 例 · 2.7 s）。`pr.yml` 与 `ci.yml` 仍排除这两个 tag —— 它们是合并/发布门禁，
+  而这几个类单个就是分钟级。
+  剩下 5 个类**依然不执行**，但原因是它们自己的 tag 而非 E2E：`AgentE2ETest` / `SkillInstallE2ETest` /
+  `CommandControllerE2ETest` 是 `ManualOnly`（taxonomy 的语义就是"必须人工触发"），
+  `MCPToolControllerE2ETest` / `SkillRegistrationAndInvocationE2ETest` 是 `RequiresAI`（需要 LLM key）。
+  整个 `browser4-tests/browser4-e2e-tests` 模块（3 个类 / 5 个方法）因此**仍是死代码** ——
+  要让它跑，要动的是 `ManualOnly`/`RequiresAI` 的语义，那是另一个决策，不是"放开 E2E"。
+  历史评估（含这类重测试的实测耗时与 flake 风险）见
+  [E2E tag 稳定性评估](../docs-dev/copilot/e2e-tag-stability-assessment.md) 与
+  [ci-stabilization §31.3/§31.4](../docs-dev/copilot/ci-stabilization-4.13.x.md)；nightly 不是合并门禁，
+  因此愿意承担这份耗时与偶发失败，换取这两个 tag 不再无人执行。
+* **口径更正**：本节曾写"11 个类 / 86 个方法"，本次静态清点是 **10 个类**；方法数也随用例增长而变化
+  （`HtmlSnapshotScenariosE2ETest` 由文档记的 32 增至实测 39）。上表 nightly 行的 counts 以本次实测为准。
 * **Tag 标注仍在补齐中（本轮已按实测数据补了一批）**：357 个含 `@Test` 的类里 62 个带 tag（295 个无 tag）。
   补齐规则（用 surefire 的 `<testcase time>` 实测 + 被测进程是否真的拉起 Chrome 作为证据）：
   单方法实测 **≥30 s → `Heavy`**、**5–30 s → `Slow`**、真的启动 Chrome **→ `RequiresBrowser`**；

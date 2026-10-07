@@ -273,7 +273,7 @@ Both gates pass `-Dsurefire.excludes=**integration**` (class-file pattern, not t
 
 Neither `ci.yml` nor `nightly.yml` fails early any more: `Check Test Status` only records `MAVEN_TESTS_FAILED` in `$GITHUB_ENV`, the Docker build / app startup / CLI e2e stages still run, and a final `Enforce CI Gate` / `Enforce Nightly Gate` step (after `Pipeline Summary`) decides the job outcome from the JVM stage flag plus the CLI e2e outcome. So one round reports both sides instead of hiding the CLI suite behind a single broken JVM test.
 
-The nightly gate (`.github/workflows/nightly.yml`, 00:00 UTC) is a superset: it adds `Slow`/`HeavyTest`/`TestInfraCheck`, measures JaCoCo in observe-only mode
+The nightly gate (`.github/workflows/nightly.yml`, 00:00 UTC) is a superset: it adds `Slow`/`HeavyTest`/`TestInfraCheck` **and `E2E`/`E2ETest`** (the only place those two tags execute at all; `pr.yml` and `ci.yml` still exclude them), measures JaCoCo in observe-only mode
 (`-P...,quality-gate -Djacoco.check.skip=true`, no floor), runs `cargo test --bin browser4-cli --lib` (the only place the Rust unit tests run), runs the CLI e2e suite with `--level=EXTENDED --enable-all --max-failures=0`, and defers the job outcome to a final `Enforce Nightly Gate` step so a failing JVM test never skips the CLI e2e stage. See [TESTING.md § CI 门禁实际覆盖](docs/TESTING.md) for the current coverage inventory.
 See [CI stabilization notes](docs-dev/copilot/ci-stabilization-4.13.x.md) before changing either list.
 
