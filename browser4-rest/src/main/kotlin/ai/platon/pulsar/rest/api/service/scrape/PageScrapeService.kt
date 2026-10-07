@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.tools.advanced.format.FormatProviders
 import ai.platon.pulsar.agentic.tools.advanced.format.PageFormatEngine
 import ai.platon.pulsar.agentic.tools.advanced.format.PageFormatPlanBuilder
 import ai.platon.pulsar.agentic.tools.advanced.format.PageScrapeRequest
+import ai.platon.pulsar.rest.api.support.SessionResolution
 import ai.platon.pulsar.skeleton.workflow.format.PageFormat
 import ai.platon.pulsar.skeleton.workflow.format.PageFormatContributor
 import ai.platon.pulsar.skeleton.workflow.format.PageFormatContributorRegistry
@@ -64,8 +65,10 @@ class PageScrapeService(private val runnerFactory: FormatStepRunnerFactory) {
     ): ScrapedDocument {
         // Resolved explicitly rather than via `require`, so the non-blank session is a
         // `String` by construction and the check cannot be read as re-validating a
-        // value that is already known good.
-        val session = sessionId?.takeIf { it.isNotBlank() }
+        // value that is already known good. What counts as "named" is shared with the
+        // command endpoints ([SessionResolution]) — only the answer differs: this face
+        // refuses instead of falling back to a default session.
+        val session = SessionResolution.firstNamed(sessionId)
             ?: throw IllegalArgumentException(NO_SESSION_MESSAGE)
 
         return PageFormatEngine(runnerFactory.create(session)).scrape(

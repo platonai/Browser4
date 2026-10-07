@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
+import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.CommandStatus
@@ -13,6 +14,10 @@ import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.eq
+import org.mockito.kotlin.times
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
@@ -157,5 +162,62 @@ class CommandControllerTest {
         val gone = controller.cancelCommand("gone").body
         assertEquals(false, gone?.get("cancelled"))
         assertEquals("task not running or unknown", gone?.get("message"))
+    }
+
+    // ---- session resolution -------------------------------------------------
+
+    @Test
+    @DisplayName("the body's session wins, but a blank body session does not shadow a named query")
+    fun theBodySessionWinsAndABlankOneIsNotASession() {
+        runBlocking {
+            whenever(executor.executePageVisitCommand(any(), any(), any())).thenReturn(aVisitStatus())
+
+            controller.submitJsonCommand(
+                PageVisitRequest(url = URL, sessionId = "body-session"),
+                sessionId = "query-session",
+            )
+            verify(executor).executePageVisitCommand(eq("body-session"), any(), any())
+
+            // A blank body value is not an explicit choice, so the named query parameter is
+            // the one session this request named — not a conflict to warn about.
+            controller.submitJsonCommand(
+                PageVisitRequest(url = URL, sessionId = "   "),
+                sessionId = "query-session",
+            )
+            verify(executor).executePageVisitCommand(eq("query-session"), any(), any())
+        }
+    }
+
+    @Test
+    @DisplayName("a blank or absent sessionId falls back to the default session, never to \"\"")
+    fun aBlankSessionIdFallsBackToTheDefault() {
+        runBlocking {
+            whenever(executor.executePageVisitCommand(any(), any(), any())).thenReturn(aVisitStatus())
+
+            // The regression: read literally, `?sessionId=` reached the executor as a session
+            // whose id is the empty string — a session the caller never opened, addressed by
+            // a parameter that looks like it was left out.
+            val sessions = argumentCaptor<String>()
+            listOf(null, "", "   ").forEach { blank ->
+                controller.submitJsonCommand(PageVisitRequest(url = URL), sessionId = blank)
+            }
+
+            verify(executor, times(3)).executePageVisitCommand(sessions.capture(), any(), any())
+            // Every blank spelling resolves to the same session, and none of them arrives as "".
+            assertEquals(
+                listOf(DEFAULT_SESSION_ID, DEFAULT_SESSION_ID, DEFAULT_SESSION_ID),
+                sessions.allValues,
+            )
+        }
+    }
+
+    private fun aVisitStatus() = CommandStatus(
+        id = "task-session",
+        statusCode = ResourceStatus.SC_OK,
+        processState = "completed",
+    )
+
+    private companion object {
+        const val URL = "https://example.com/product/1"
     }
 }

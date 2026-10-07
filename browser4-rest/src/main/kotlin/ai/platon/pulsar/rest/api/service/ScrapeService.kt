@@ -11,6 +11,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlinkFactory
 import ai.platon.pulsar.agentic.tools.advanced.crawl.refreshed
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.rest.api.support.toServerSentEvents
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import jakarta.annotation.PreDestroy
@@ -203,21 +204,11 @@ class ScrapeService(
     }
 
     fun streamEvents(id: String): Flux<ServerSentEvent<ScrapeResponse>> {
-        return Flux.create<ScrapeResponse> { sink ->
-            val job = commandStatusFlow(id).onEach {
-                sink.next(it)
-                if (it.isDone) {
-                    sink.complete()
-                }
-            }.catch {
-                logger.error("Error in command status flow", it)
-                sink.error(it)
-            }.launchIn(scrapingScope)
-
-            sink.onDispose {
-                job.cancel()
-            }
-        }.map {
+        // The event shape is this endpoint's own: unlike the command stream, it publishes
+        // the response's `id` and `event` name, and its client keys on both. The polling
+        // flow ends by emitting the done response, so the bridge completes the stream with
+        // it — no early `complete` needed here.
+        return commandStatusFlow(id).toServerSentEvents(scrapingScope, logger) {
             ServerSentEvent.builder(it).id(it.id!!).event(it.event).build()
         }
     }
