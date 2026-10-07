@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service.scrape
 
+import ai.platon.browser4.common.Beta
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatStepRunner
 
 /**
@@ -13,6 +14,7 @@ import ai.platon.pulsar.agentic.tools.advanced.format.FormatStepRunner
  * factory returning a runner over a recording dispatcher, so the service's argument
  * handling and response shaping can be exercised without a browser.
  */
+@Beta
 fun interface FormatStepRunnerFactory {
 
     /**

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service.scrape
 
+import ai.platon.browser4.common.Beta
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatProviders
 import ai.platon.pulsar.agentic.tools.advanced.format.PageFormatEngine
 import ai.platon.pulsar.agentic.tools.advanced.format.PageFormatPlanBuilder
@@ -22,6 +23,7 @@ import ai.platon.pulsar.skeleton.workflow.format.ScrapedDocument
  * @property runnerFactory builds the host bridge for each request, bound to the
  *   session the caller addressed.
  */
+@Beta
 class PageScrapeService(private val runnerFactory: FormatStepRunnerFactory) {
 
     /**

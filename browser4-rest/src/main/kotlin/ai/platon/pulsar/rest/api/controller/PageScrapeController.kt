@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.browser4.common.Beta
 import ai.platon.pulsar.agentic.tools.advanced.format.FormatFailureException
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.service.scrape.ArtifactStore
@@ -54,6 +55,7 @@ import java.nio.file.Files
     consumes = [MediaType.ALL_VALUE],
     produces = [MediaType.APPLICATION_JSON_VALUE]
 )
+@Beta
 class PageScrapeController(
     private val pageScrapeService: PageScrapeService,
 ) {
