@@ -1840,6 +1840,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - Every seed must be an absolute URL (https://example.com/page). A value the crawl"
+                .to_string(),
+        );
+        lines.push(
+            "    could never fetch ('formats', 'example.com', 'htps://exmple.com') is refused before"
+                .to_string(),
+        );
+        lines.push(
+            "    the crawl is submitted — naming the seed, and the seed file line it came from."
+                .to_string(),
+        );
+        lines.push(
             "  - --depth (-d) controls how many levels of links to follow (default: 1). Use 0 to skip link discovery."
                 .to_string(),
         );

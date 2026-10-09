@@ -523,11 +523,11 @@ poll, read and cancel with. An unknown id reports `status=failed`.
 crawl.submit(url: String, depth: Int = 1, args: String = "", parallelTabs: Int? = null, taskTimeoutMillis: Long? = null)
 ```
 
-Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default.
+Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default. Every seed must be an absolute http(s) URL: a seed the crawl could never fetch is refused with `Malformed url: <...>` and no task is created.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `url` | String | yes |  | Seed URL to start from. Required unless the seed list is supplied through `args`. |
+| `url` | String | yes |  | Seed URL to start from. Required unless the seed list is supplied through `args`. Must be an absolute http(s) URL. |
 | `depth` | Int | no | 1 | How many link levels to follow from the seed. `0` processes the seed page only. |
 | `args` | String | no |  | Extra crawl arguments as a CLI-style string, e.g. `-outLinkSelector=a[href]` or an X-SQL query. |
 | `parallelTabs` | Int? | no | null | Cap on concurrent fetch tabs for this task. Clamped server-side; a missing or non-positive value uses the server default. |

@@ -9,6 +9,7 @@ import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlService
+import ai.platon.pulsar.rest.api.service.crawl.requireStandardSeeds
 import kotlin.reflect.KClass
 
 /**
@@ -36,7 +37,8 @@ class CrawlToolExecutor(
             arguments = listOf(
                 ToolSpec.Arg(
                     "url", "String", null,
-                    "Seed URL to start from. Required unless the seed list is supplied through `args`.",
+                    "Seed URL to start from. Required unless the seed list is supplied through `args`. " +
+                        "Must be an absolute http(s) URL.",
                 ),
                 ToolSpec.Arg(
                     "depth", "Int", "1",
@@ -61,7 +63,9 @@ class CrawlToolExecutor(
             returnType = "String",
             description = "Submit a crawl task. Returns a task ID for status polling. " +
                 "parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task " +
-                "budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default.",
+                "budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default. " +
+                "Every seed must be an absolute http(s) URL: a seed the crawl could never fetch is " +
+                "refused with `Malformed url: <...>` and no task is created.",
             help = """
                 Starts a recursive crawl in the background and returns the task id
                 immediately. Poll it with `crawl.status`, read the payload with
@@ -184,6 +188,11 @@ class CrawlToolExecutor(
                 val taskTimeoutMillis = paramLong(
                     args, "taskTimeoutMillis", functionName, required = false, default = null
                 )?.takeIf { it > 0 }
+                // The REST controller refuses a malformed seed, but this is the *other* entry
+                // point into CrawlService — and the one the CLI calls (`crawl_submit`).  Without
+                // the check here, `<bin> crawl formats` created a task, reported 0 pages found and
+                // exited 0 instead of saying the seed was never a URL.
+                requireStandardSeeds(url, urls)
                 crawlService.submit(
                     CrawlRequest(
                         url = url,

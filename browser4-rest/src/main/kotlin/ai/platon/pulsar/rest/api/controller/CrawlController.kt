@@ -1,10 +1,10 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResumeResult
 import ai.platon.pulsar.rest.api.service.crawl.CrawlService
+import ai.platon.pulsar.rest.api.service.crawl.requireStandardSeeds
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
@@ -40,16 +40,9 @@ class CrawlController(
         // fetch the fetcher's *default search-engine url* for the page that was asked for
         // (`AbstractPulsarContext.normalize` substitutes `SEARCH_ENGINE_URL` when the input is
         // neither a url nor base64).  A row is then reported under a URL nobody requested.  Refused
-        // here, while the caller can still fix it — the handler below turns this into a 400.
-        (listOf(request.url) + request.urls.orEmpty())
-            .filter { it.isNotBlank() }
-            .forEach { seed ->
-                // A seed may carry trailing LoadOptions, exactly like the scrape payloads do.
-                val url = URLUtils.splitUrlArgs(seed).first
-                if (!URLUtils.isStandard(url)) {
-                    throw IllegalArgumentException("Malformed url: <$url>")
-                }
-            }
+        // here, while the caller can still fix it — the handler below turns this into a 400.  The
+        // rule itself is shared with the MCP tool, the other entry point into `CrawlService`.
+        requireStandardSeeds(request.url, request.urls)
         if (request.depth < 0) {
             throw IllegalArgumentException("depth must be >= 0, got ${request.depth}")
         }

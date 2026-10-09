@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
@@ -1233,6 +1234,46 @@ class CrawlSupportTest {
         }
         val emptyMessage = buildZeroByteDiagnostic(emptyPage)
         assertTrue(emptyMessage.contains("no content"), emptyMessage)
+    }
+
+    // ------------------------------------------------------------------
+    // requireStandardSeeds
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a standard seed, a seed list and trailing LoadOptions are all accepted")
+    fun testRequireStandardSeedsAcceptsFetchableSeeds() {
+        requireStandardSeeds("https://example.com", null)
+        requireStandardSeeds("https://example.com -expires 1d", null)
+        requireStandardSeeds("file:///tmp/local.html", null)
+        requireStandardSeeds("", listOf("https://example.com/a", "http://localhost:18080/b"))
+    }
+
+    @Test
+    @DisplayName("a blank seed carries no url, so it is not the one refused")
+    fun testRequireStandardSeedsIgnoresBlanks() {
+        requireStandardSeeds("", listOf("", "   ", "https://example.com"))
+    }
+
+    @Test
+    @DisplayName("the first seed that is not a URL is refused by name, before anything is submitted")
+    fun testRequireStandardSeedsRefusesAMalformedSeed() {
+        val fromUrl = assertThrows<IllegalArgumentException> {
+            requireStandardSeeds("formats", null)
+        }
+        assertEquals("Malformed url: <formats>", fromUrl.message)
+
+        // The list is checked as well: the CLI's seed file arrives as `urls`.
+        val fromList = assertThrows<IllegalArgumentException> {
+            requireStandardSeeds("", listOf("https://example.com/a", "not-a-url", "htps://exmple.com"))
+        }
+        assertEquals("Malformed url: <not-a-url>", fromList.message)
+
+        // A misspelled scheme parses, so it has to be refused by the scheme check.
+        val misspelledScheme = assertThrows<IllegalArgumentException> {
+            requireStandardSeeds("htps://exmple.com -expires 1d", null)
+        }
+        assertEquals("Malformed url: <htps://exmple.com>", misspelledScheme.message)
     }
 
     private companion object {

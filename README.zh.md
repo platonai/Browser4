@@ -596,7 +596,7 @@ browser4-cli network route "**/api/users" --body '{"users":[]}' --content-type a
 | `swarm result <id>` | 获取已完成的 swarm 任务结果。 |
 | `swarm list` | 列出已跟踪的 swarm 任务。 |
 | `swarm close` | 关闭 swarm 会话并释放浏览器资源。 |
-| `crawl [url]` | 从 URL 或 seed file 开始抓取。支持 `--seed-file`、`--sql`、`--sql-stdin`、`--sql-base64`、`--format`、`--output`、`-d/--depth`、`-ol/--out-link-selector`、`-olp/--out-link-pattern`、`-tl/--top-links`、`-a/--args`、`--refresh`、`--parse`、`--expires`、`-p/--priority`、`--page-load-timeout`、`--ignore-url-query`、`--no-norm`、`--readonly`、`-bg/--background`。 |
+| `crawl [url]` | 从 URL 或 seed file 开始抓取（每个种子必须是绝对 http(s) URL，非法值会在提交前被拒绝）。支持 `--seed-file`、`--sql`、`--sql-stdin`、`--sql-base64`、`--format`、`--output`、`-d/--depth`、`-ol/--out-link-selector`、`-olp/--out-link-pattern`、`-tl/--top-links`、`-a/--args`、`--refresh`、`--parse`、`--expires`、`-p/--priority`、`--page-load-timeout`、`--ignore-url-query`、`--no-norm`、`--readonly`、`-bg/--background`。 |
 | `crawl status <id>` | 查询 crawl 任务状态。 |
 | `crawl result <id>` | 获取 crawl 结果。 |
 | `crawl cancel <id>` | 取消运行中的 crawl 任务（检查点会保留，因此之后仍可续传）。 |

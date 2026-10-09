@@ -357,6 +357,14 @@ failed, 400 not honourable).
 | `crawl list` | List all tracked crawl tasks and their status |
 | `crawl resume <id>` | Continue an interrupted crawl from its checkpoint (no repeat requests for URLs that already succeeded) |
 
+Every seed — the positional `url` and each `--seed-file` line — must be an absolute http(s)
+URL. A value the crawl could never fetch (`formats`, `example.com`, `htps://…`) is refused
+before the task is submitted, naming the seed and, for a seed file, the line it came from:
+
+```text
+Error: Invalid crawl URL 'formats' (urls.txt line 4): expected an absolute http(s) URL such as https://example.com/page.
+```
+
 `crawl` collects its units (one per seed URL) concurrently by default — each unit
 runs on its own browser tab leased from the driver pool. Use `--parallel <n>` to
 bound how many run at once (`--parallel 1` restores the strictly sequential

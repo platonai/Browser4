@@ -104,8 +104,8 @@ case-insensitive (`DOM_FIRST_TEXT` = `dom_first_text`).
 
 | Flag | Short | Type | Default | Description |
 |---|---|---|---|---|
-| `url` (positional) | | string | — | Starting URL. Omit when using `--seed-file` |
-| `--seed-file` | | string | — | File with URLs to crawl, one per line. Lines starting with `#` are comments |
+| `url` (positional) | | string | — | Starting URL. Must be absolute (`https://…`); omit when using `--seed-file` |
+| `--seed-file` | | string | — | File with URLs to crawl, one per line, each an absolute URL. Lines starting with `#` are comments |
 | `--depth` | `-d` | int | `1` | 0 = fetch only (no links); 1+ = follow links to that depth |
 | `--parallel` | | int | `4` | How many units (pages/tabs) to collect at the same time. `1` = strictly sequential |
 | `--timeout` | | duration | `10m` | How long the crawl may run before the server cancels it: seconds (`900`) or `30s`, `10m`, `1h`. Max `1h` |
@@ -346,12 +346,30 @@ both a positional `url` and `--seed-file` are given, the URL is prepended to the
 https://www.amazon.com/dp/B0C17W3Q9B
 ```
 
+Every seed — the positional URL and each seed-file line — must be an **absolute URL**.  A value the
+crawl could never fetch is refused **before** the task is submitted; the message names the seed and,
+for a seed file, the line it came from:
+
+```text
+Invalid crawl URL 'formats' (command argument): expected an absolute http(s) URL such as https://example.com/page.
+Invalid crawl URL 'formats' (urls.txt line 4): expected an absolute http(s) URL such as https://example.com/page.
+```
+
+A host without its scheme gets the fix suggested (`did you mean 'https://example.com'?`), and a
+value with a misspelled or unfetchable scheme (`htps://…`, `ftp://…`) names that scheme.  Several
+refused seeds are reported together (the first five, then a count).  Without this check the seed was
+submitted anyway: the fetcher substituted its default search-engine URL for the page nobody asked
+for, the task reported `0 pages found`, and the run exited `0` — a typo that looked exactly like an
+empty site (issue #616).  A seed may still carry trailing LoadOptions
+(`https://example.com -expires 1d`), which are split off before the URL is checked.
+
 ## Error handling
 
 | Situation | Behavior |
 |---|---|
 | No URLs provided | Exits with "No URLs provided. Specify a URL argument or --seed-file." |
 | Empty seed file | Exits with "No URLs provided." after parsing |
+| Malformed seed | Exits with "Invalid crawl URL '<value>' (<origin>): expected an absolute http(s) URL such as https://example.com/page." before the server is started — `<origin>` is `command argument` or `<seed file> line <n>`. A bare host is answered with `did you mean 'https://<host>'?` |
 | Timeout | Exits with message + task ID; increase `BROWSER4_CLI_CRAWL_TIMEOUT_SECS` |
 | Server error | Exits with "Crawl failed: ..." and server error details |
 | No links found (depth >= 1) | Exit 0 with a `⚠ Link discovery found no out-links` warning plus the backend diagnostic (it distinguishes "selector matched nothing" from "pattern filtered them all") and the effective `--out-link-pattern`. The seed page is always counted in depth ≥ 2 crawls, so an all-filtered crawl reports `Crawl completed. 1 pages found.` (depth-1 crawls list only discovered pages and report `0 pages found`). Inspect the warning text and verify `--out-link-selector` / `--out-link-pattern` — a shell-mangled pattern (Git Bash `/`-prefix conversion) is the usual cause |

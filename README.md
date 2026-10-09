@@ -590,7 +590,7 @@ The `co` prefix is accepted as an alias for `swarm`.
 | `swarm result <id>` | Fetch a completed swarm result. |
 | `swarm list` | List tracked swarm tasks. |
 | `swarm close` | Close the swarm session and release browser resources. |
-| `crawl [url]` | Crawl from a URL or seed file. Supports `--seed-file`, `--sql`, `--sql-stdin`, `--sql-base64`, `--format`, `--output`, `-d/--depth`, `-ol/--out-link-selector`, `-olp/--out-link-pattern`, `-tl/--top-links`, `-a/--args`, `--refresh`, `--parse`, `--expires`, `-p/--priority`, `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly`, `-bg/--background`. |
+| `crawl [url]` | Crawl from a URL or seed file (every seed must be an absolute http(s) URL — a malformed one is refused before the crawl is submitted). Supports `--seed-file`, `--sql`, `--sql-stdin`, `--sql-base64`, `--format`, `--output`, `-d/--depth`, `-ol/--out-link-selector`, `-olp/--out-link-pattern`, `-tl/--top-links`, `-a/--args`, `--refresh`, `--parse`, `--expires`, `-p/--priority`, `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly`, `-bg/--background`. |
 | `crawl status <id>` | Check crawl task status. |
 | `crawl result <id>` | Fetch crawl results. |
 | `crawl cancel <id>` | Cancel a running crawl (the checkpoint is kept, so it can be resumed). |

@@ -4578,6 +4578,73 @@ pub(super) fn test_crawl_command_help_and_validation(ctx: &mut E2ECtx) {
     );
 }
 
+/// A crawl seed that is not a URL must be refused before a task exists (issue #616).
+///
+/// `crawl formats` used to be submitted like any other seed: the task was created, the run
+/// reported "0 pages found" and the CLI exited 0 — a typo indistinguishable from an empty site.
+pub(super) fn test_crawl_refuses_malformed_seeds(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // 1. A bare word as the positional URL — the shortest form of the bug.
+    let bare_word = run_command_expecting_failure(ctx, &["crawl", "formats"], "Invalid crawl URL");
+    let bare_word_output = format!("{}\n{}", bare_word.stdout, bare_word.stderr);
+    assert!(
+        bare_word_output.contains("Invalid crawl URL 'formats' (command argument)"),
+        "Expected the refused seed to be named in:\n{}",
+        bare_word_output
+    );
+    assert!(
+        bare_word_output.contains("expected an absolute http(s) URL"),
+        "Expected the accepted form to be spelled out in:\n{}",
+        bare_word_output
+    );
+    assert_eq!(2, bare_word.exit_code, "a bad URL is a usage error (USAGE = 2)");
+
+    // 2. A host without its scheme — the hint is what makes this actionable.
+    let schemeless =
+        run_command_expecting_failure(ctx, &["crawl", "example.com"], "did you mean 'https://example.com'?");
+    assert_eq!(2, schemeless.exit_code, "a schemeless seed is a usage error (USAGE = 2)");
+
+    // 3. A malformed line inside a seed file — reported with its file and line number, and it
+    //    exits like the argument form does.
+    let seed_file = ctx.workspace_dir.join("crawl-seed-malformed.txt");
+    fs::write(&seed_file, b"# seeds\nhttps://example.com/ok\nformats\n")
+        .expect("write malformed seed file failed");
+    let seed_file_arg = format!("--seed-file={}", seed_file.to_string_lossy());
+    let seed_file_failure =
+        run_command_expecting_failure(ctx, &["crawl", &seed_file_arg], "crawl-seed-malformed.txt line 3");
+    let seed_file_output = format!("{}\n{}", seed_file_failure.stdout, seed_file_failure.stderr);
+    assert!(
+        seed_file_output.contains("'formats' (")
+            && seed_file_output.contains("crawl-seed-malformed.txt line 3"),
+        "Expected the refused seed file line to be named in:\n{}",
+        seed_file_output
+    );
+    assert_eq!(
+        2, seed_file_failure.exit_code,
+        "a bad seed-file line exits like a bad argument, not as an internal error (1)"
+    );
+
+    // Nothing was submitted, and no tool was called: the refusals happen before a task is created
+    // (the seed file is refused before the server is even asked to start).
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot.crawl_submissions.is_empty(),
+        "A refused seed must not reach the backend, got {:?}",
+        snapshot.crawl_submissions
+    );
+    assert!(
+        snapshot.crawl_cancel_calls.is_empty() && snapshot.crawl_resume_calls.is_empty(),
+        "A refused seed must not touch any other crawl endpoint"
+    );
+    assert!(
+        snapshot.tool_calls.is_empty() && snapshot.plain_commands.is_empty(),
+        "A refused seed must not reach the backend at all, got tool calls {:?}",
+        snapshot.tool_calls
+    );
+}
+
 pub(super) fn test_crawl_with_seed_file(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let mock_server = start_mock_crawl_session(ctx);

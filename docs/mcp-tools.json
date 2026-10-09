@@ -340,13 +340,13 @@
     "method" : "submit",
     "mcpNames" : [ "crawl_submit" ],
     "signature" : "crawl.submit(url: String, depth: Int = 1, args: String = \"\", parallelTabs: Int? = null, taskTimeoutMillis: Long? = null)",
-    "description" : "Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default.",
+    "description" : "Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default. Every seed must be an absolute http(s) URL: a seed the crawl could never fetch is refused with `Malformed url: <...>` and no task is created.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "url",
       "type" : "String",
       "required" : true,
-      "description" : "Seed URL to start from. Required unless the seed list is supplied through `args`."
+      "description" : "Seed URL to start from. Required unless the seed list is supplied through `args`. Must be an absolute http(s) URL."
     }, {
       "name" : "depth",
       "type" : "Int",

@@ -3832,12 +3832,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef {
                 name: "url",
-                description: "The starting URL for the crawl (omit if using --seed-file)",
+                description: "The starting URL for the crawl — an absolute http(s) URL (omit if using --seed-file)",
                 optional: true,
             }],
             options: &[
                 OptionDef { name: "depth <n>", description: "Maximum crawl depth (default: 1). Use 0 to fetch pages without link discovery.", is_bool: false, short: Some("d") },
-                OptionDef { name: "seed-file <file>", description: "File containing URLs to crawl, one per line (lines starting with # are ignored)", is_bool: false, short: None },
+                OptionDef { name: "seed-file <file>", description: "File containing URLs to crawl, one per line — each line must be an absolute http(s) URL (lines starting with # are ignored)", is_bool: false, short: None },
                 OptionDef { name: "sql <query>", description: "X-SQL query to extract structured data from each crawled page. Use @url as the page URL placeholder. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "sql-base64 <base64>", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },

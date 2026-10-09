@@ -16742,27 +16742,160 @@ fn validate_crawl_option_tokens(args: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Resolve the URL list for a crawl: combines the direct URL argument with
-/// URLs from the seed file (if any). Returns an error when no URLs are
-/// provided. Lines starting with `#` and blank lines are ignored in seed
-/// file content.
-fn resolve_crawl_urls(url: &str, seed_file_content: Option<&str>) -> Result<Vec<String>, String> {
-    let mut urls: Vec<String> = Vec::new();
-    if !url.is_empty() {
-        urls.push(url.to_string());
+/// The schemes a crawl seed may use.
+///
+/// Mirrors `URLUtils.isStandard` on the server, which accepts http(s) and `file:`.  Anything else
+/// (`ftp:`, `mailto:`, `data:`) parses as a URL but is not a document this pipeline fetches, and
+/// the submission boundary refuses it — the CLI must not be more permissive than the boundary it
+/// feeds.
+const CRAWL_SEED_SCHEMES: [&str; 3] = ["http", "https", "file"];
+
+/// What a crawl seed has to be, spelled the same way in every refusal.
+const CRAWL_SEED_EXPECTATION: &str =
+    "expected an absolute http(s) URL such as https://example.com/page";
+
+/// How many refused seeds one message spells out; the rest are counted.
+const MAX_REPORTED_CRAWL_SEED_PROBLEMS: usize = 5;
+
+/// The url part of a seed.
+///
+/// A seed may carry trailing LoadOptions (`https://example.com -expires 1d`), exactly like the
+/// scrape payloads do — the server splits them with `URLUtils.splitUrlArgs` — so only the first
+/// whitespace-separated token is the address.
+fn crawl_seed_url_part(seed: &str) -> &str {
+    seed.trim().split_whitespace().next().unwrap_or("")
+}
+
+/// Why [seed] cannot start a crawl, or `None` when it can.
+///
+/// `crawl formats` used to be submitted like any other seed: the fetcher substituted its default
+/// search-engine url for the page nobody asked for, the task reported `0 pages found` and the CLI
+/// exited 0 — a typo that looked exactly like an empty site (issue #616).  The backend refuses such
+/// a seed at the submission boundary (`Malformed url: <...>`), so the CLI refuses it here, before
+/// the server is launched and before a task exists.
+fn crawl_seed_problem(seed: &str) -> Option<String> {
+    let raw = crawl_seed_url_part(seed);
+    // An absent seed is reported as "No URLs provided", not as a malformed one.
+    if raw.is_empty() {
+        return None;
     }
-    if let Some(content) = seed_file_content {
-        for line in content.lines() {
+
+    // Checked before the parser: a schemeless address with a port (`localhost:18080/ec`) does
+    // *parse* — as a URL whose scheme is `localhost` — so trusting the parse first would report an
+    // unsupported scheme where the user only forgot `https://`.
+    if let Some(url) = crawl_seed_https_hint(raw) {
+        return Some(format!("did you mean '{url}'?"));
+    }
+
+    match reqwest::Url::parse(raw) {
+        Ok(parsed) => {
+            let scheme = parsed.scheme();
+            if !CRAWL_SEED_SCHEMES.contains(&scheme) {
+                return Some(format!("unsupported scheme '{scheme}' — {CRAWL_SEED_EXPECTATION}"));
+            }
+            // `file:///tmp/a.html` legitimately has an empty host; http(s) never does.
+            if scheme != "file" && parsed.host_str().unwrap_or("").is_empty() {
+                return Some(CRAWL_SEED_EXPECTATION.to_string());
+            }
+            None
+        }
+        Err(_) => Some(CRAWL_SEED_EXPECTATION.to_string()),
+    }
+}
+
+/// The `https://` spelling of a seed that is a plausible address without its scheme
+/// (`amazon.com`, `www.example.com/product/7`, `localhost:18080/ec`) — the one typo a crawl seed
+/// is most likely to be, and the one a bare "expected an absolute URL" cannot act on.
+fn crawl_seed_https_hint(raw: &str) -> Option<String> {
+    if raw.is_empty() || raw.contains("://") {
+        return None;
+    }
+    let authority = raw.split(|c| c == '/' || c == '?' || c == '#').next().unwrap_or("");
+    // A colon is a port (`localhost:18080`) or the value is not an address at all
+    // (`mailto:a@b.com`, `data:text/html`, `C:\tmp\a.html`).
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
+        Some(_) => return None,
+        None => authority,
+    };
+    let is_host = host == "localhost"
+        || (host.contains('.')
+            && !host.starts_with('.')
+            && !host.ends_with('.')
+            && host
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')));
+    if is_host {
+        Some(format!("https://{raw}"))
+    } else {
+        None
+    }
+}
+
+/// The refusal for one seed, or `None` when the seed is fine.
+///
+/// [origin] names where the value came from (`command argument`, `urls.txt line 3`), so a refused
+/// seed in a large seed file can be found instead of only recognized.
+fn crawl_seed_refusal(seed: &str, origin: &str) -> Option<String> {
+    crawl_seed_problem(seed)
+        .map(|problem| format!("Invalid crawl URL '{seed}' ({origin}): {problem}."))
+}
+
+/// Resolve the URL list for a crawl: combines the direct URL argument with URLs from the seed file
+/// (if any).
+///
+/// Fails with [ExitCode::Usage] — "bad URL" in the exit code's own terms — when a seed is not a URL
+/// a crawl can fetch, and with the historical [ExitCode::General] when there is nothing to crawl: a
+/// seed the backend will refuse must not be submitted, and a typo must exit like the usage error it
+/// is whether it was typed as the argument or written into a seed file. Lines starting with `#` and
+/// blank lines are ignored in seed file content.
+///
+/// [seed_file] is the file's `(path, content)`, so a refused seed can name the file and the line it
+/// came from.  Values are trimmed, including the direct argument.
+fn resolve_crawl_urls(url: &str, seed_file: Option<(&str, &str)>) -> Result<Vec<String>, CliError> {
+    // (value, where it came from) — the provenance is only used for a refusal.
+    let mut seeds: Vec<(String, String)> = Vec::new();
+    if !url.trim().is_empty() {
+        seeds.push((url.trim().to_string(), "command argument".to_string()));
+    }
+    if let Some((path, content)) = seed_file {
+        for (index, line) in content.lines().enumerate() {
             let line = line.trim();
             if !line.is_empty() && !line.starts_with('#') {
-                urls.push(line.to_string());
+                seeds.push((line.to_string(), format!("{path} line {}", index + 1)));
             }
         }
     }
-    if urls.is_empty() {
-        return Err("No URLs provided. Specify a URL argument or --seed-file.".to_string());
+    if seeds.is_empty() {
+        return Err(CliError(
+            ExitCode::General,
+            "No URLs provided. Specify a URL argument or --seed-file.".to_string(),
+        ));
     }
-    Ok(urls)
+
+    let refusals: Vec<String> = seeds
+        .iter()
+        .filter_map(|(value, origin)| crawl_seed_refusal(value, origin))
+        .collect();
+    if refusals.len() == 1 {
+        let refusal = refusals.into_iter().next().unwrap_or_default();
+        return Err(CliError(ExitCode::Usage, refusal));
+    }
+    if !refusals.is_empty() {
+        let shown = refusals.len().min(MAX_REPORTED_CRAWL_SEED_PROBLEMS);
+        let mut message = format!(
+            "{} of {} crawl seeds are not URLs a crawl can fetch:\n  {}",
+            refusals.len(),
+            seeds.len(),
+            refusals[..shown].join("\n  ")
+        );
+        if refusals.len() > shown {
+            message.push_str(&format!("\n  … and {} more", refusals.len() - shown));
+        }
+        return Err(CliError(ExitCode::Usage, message));
+    }
+
+    Ok(seeds.into_iter().map(|(value, _)| value).collect())
 }
 
 /// Parse the crawl poll response and classify its status.
@@ -16893,7 +17026,7 @@ async fn handle_crawl(
         None => None,
     };
 
-    let urls = resolve_crawl_urls(url, seed_content.as_deref())?;
+    let urls = resolve_crawl_urls(url, seed_file.zip(seed_content.as_deref()))?;
 
     // ---- Resolve X-SQL query ----
     let use_sql_stdin = tool_params
@@ -26903,6 +27036,32 @@ async fn run(
         }
     }
 
+    // Early validation for crawl seeds — a value the crawl can never fetch must
+    // fail before the server is launched (and before a task is created that
+    // reports "0 pages found" for a page nobody asked for).
+    if command == "crawl" {
+        let url = tool_params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if let Some(refusal) = crawl_seed_refusal(url, "command argument") {
+            return Err(CliError(ExitCode::Usage, refusal));
+        }
+        // The seed file is resolved here *and* in `handle_crawl`: only this read can refuse a bad
+        // line before the server is launched (a cold dev start rebuilds the runtime bundle first),
+        // and only that one feeds the submission.  Both call `resolve_crawl_urls`, so a line
+        // cannot be accepted here and refused there.
+        if let Some(file_path) = tool_params.get("seedFile").and_then(|v| v.as_str()) {
+            let content = std::fs::read_to_string(file_path).map_err(|e| {
+                CliError(
+                    ExitCode::General,
+                    format!("Failed to read seed file '{}': {}", file_path, describe_io_error(&e)),
+                )
+            })?;
+            resolve_crawl_urls(url, Some((file_path, content.as_str())))?;
+        }
+    }
+
     // Ensure the Browser4 server is running (for relevant commands).
     // Page-dependent commands targeting localhost do NOT auto-start the server
     // — the user should run `open <url>` or `goto <url>` first so a page is
@@ -36421,14 +36580,14 @@ mod tests {
     #[test]
     fn resolve_crawl_urls_seed_file_only() {
         let seed = "https://seed1.com\nhttps://seed2.com\n";
-        let urls = resolve_crawl_urls("", Some(seed)).unwrap();
+        let urls = resolve_crawl_urls("", Some(("urls.txt", seed))).unwrap();
         assert_eq!(urls, vec!["https://seed1.com", "https://seed2.com"]);
     }
 
     #[test]
     fn resolve_crawl_urls_direct_plus_seed_file() {
         let seed = "https://seed1.com\n";
-        let urls = resolve_crawl_urls("https://direct.com", Some(seed)).unwrap();
+        let urls = resolve_crawl_urls("https://direct.com", Some(("urls.txt", seed))).unwrap();
         assert_eq!(urls, vec!["https://direct.com", "https://seed1.com"]);
     }
 
@@ -36436,24 +36595,21 @@ mod tests {
     fn resolve_crawl_urls_ignores_comments_and_blanks() {
         let seed =
             "# this is a comment\n\nhttps://valid.com\n\n# another comment\nhttps://valid2.com\n\n";
-        let urls = resolve_crawl_urls("", Some(seed)).unwrap();
+        let urls = resolve_crawl_urls("", Some(("urls.txt", seed))).unwrap();
         assert_eq!(urls, vec!["https://valid.com", "https://valid2.com"]);
     }
 
     #[test]
     fn resolve_crawl_urls_trims_whitespace_in_lines() {
         let seed = "  https://a.com  \n  https://b.com  ";
-        let urls = resolve_crawl_urls("", Some(seed)).unwrap();
+        let urls = resolve_crawl_urls("", Some(("urls.txt", seed))).unwrap();
         assert_eq!(urls, vec!["https://a.com", "https://b.com"]);
     }
 
     #[test]
-    fn resolve_crawl_urls_direct_url_trims_self() {
-        // Direct URLs are used as-is (no trimming by this function —
-        // trimming happens at the caller level from tool_params).
-        // Just verify the function doesn't add extra trimming.
-        let urls = resolve_crawl_urls("https://with-spaces.com/page%20one", None).unwrap();
-        assert_eq!(urls, vec!["https://with-spaces.com/page%20one"]);
+    fn resolve_crawl_urls_trims_whitespace_around_the_direct_url() {
+        let urls = resolve_crawl_urls("  https://example.com/page%20one  ", None).unwrap();
+        assert_eq!(urls, vec!["https://example.com/page%20one"]);
     }
 
     #[test]
@@ -36461,21 +36617,183 @@ mod tests {
         let result = resolve_crawl_urls("", None);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.contains("No URLs provided"), "got: {err}");
+        assert!(err.message().contains("No URLs provided"), "got: {err}");
+        assert_eq!(ExitCode::General, err.code(), "an empty seed list keeps its historical code");
     }
 
     #[test]
     fn resolve_crawl_urls_empty_seed_file_still_errors_when_no_direct_url() {
-        let result = resolve_crawl_urls("", Some(""));
+        let result = resolve_crawl_urls("", Some(("urls.txt", "")));
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.contains("No URLs provided"), "got: {err}");
+        assert!(err.message().contains("No URLs provided"), "got: {err}");
     }
 
     #[test]
     fn resolve_crawl_urls_seed_with_only_comments_errors() {
-        let result = resolve_crawl_urls("", Some("# just a comment\n# another"));
+        let result = resolve_crawl_urls("", Some(("urls.txt", "# just a comment\n# another")));
         assert!(result.is_err());
+    }
+
+    // -------------------------------------------------------------------
+    // crawl seed validation tests (issue #616)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn crawl_seed_accepts_absolute_http_and_https_urls() {
+        for seed in [
+            "https://example.com",
+            "http://localhost:18080/ec/dp/B0E000001",
+            "https://example.com/product/7?page=2#reviews",
+            "HTTPS://EXAMPLE.COM/Path",
+            "https://user:pw@example.com:8443/a",
+        ] {
+            assert_eq!(None, crawl_seed_problem(seed), "expected {seed} to be accepted");
+        }
+    }
+
+    #[test]
+    fn crawl_seed_accepts_a_file_url() {
+        // `URLUtils.isStandard` accepts `file:`, so refusing it here would be stricter
+        // than the boundary the CLI feeds.
+        assert_eq!(None, crawl_seed_problem("file:///tmp/local.html"));
+    }
+
+    #[test]
+    fn crawl_seed_accepts_trailing_load_options() {
+        // A seed may carry LoadOptions, exactly as the REST API allows.
+        assert_eq!(None, crawl_seed_problem("https://example.com -expires 1d"));
+        assert_eq!(None, crawl_seed_problem("https://example.com -outLink \"a[href]\""));
+    }
+
+    #[test]
+    fn crawl_seed_accepts_an_absent_value() {
+        // A missing seed is reported as "No URLs provided", not as a malformed one.
+        assert_eq!(None, crawl_seed_problem(""));
+        assert_eq!(None, crawl_seed_problem("   "));
+    }
+
+    #[test]
+    fn crawl_seed_rejects_a_bare_word() {
+        // `crawl formats` created a task that reported 0 pages and exited 0.
+        let problem = crawl_seed_problem("formats").expect("a bare word is not a seed");
+        assert!(problem.contains("absolute http(s) URL"), "got: {problem}");
+        assert!(!problem.contains("did you mean"), "got: {problem}");
+    }
+
+    #[test]
+    fn crawl_seed_rejects_a_misspelled_scheme() {
+        let problem = crawl_seed_problem("htps://exmple.com").expect("htps:// is not http(s)");
+        assert!(problem.contains("unsupported scheme 'htps'"), "got: {problem}");
+        assert!(problem.contains("absolute http(s) URL"), "got: {problem}");
+    }
+
+    #[test]
+    fn crawl_seed_rejects_a_scheme_a_crawl_cannot_fetch() {
+        let problem = crawl_seed_problem("ftp://example.com/pub").expect("ftp is not crawlable");
+        assert!(problem.contains("unsupported scheme 'ftp'"), "got: {problem}");
+    }
+
+    #[test]
+    fn crawl_seed_rejects_a_scheme_with_no_host() {
+        assert!(crawl_seed_problem("http://").is_some());
+        assert!(crawl_seed_problem("https://:8080/p").is_some());
+    }
+
+    #[test]
+    fn crawl_seed_hints_the_https_spelling_of_a_bare_host() {
+        for (seed, hint) in [
+            ("amazon.com", "https://amazon.com"),
+            ("www.example.com/product/7", "https://www.example.com/product/7"),
+            ("localhost:18080/ec", "https://localhost:18080/ec"),
+        ] {
+            let problem = crawl_seed_problem(seed).expect("a schemeless host is not a seed");
+            assert_eq!(format!("did you mean '{hint}'?"), problem, "wrong hint for {seed}");
+        }
+    }
+
+    #[test]
+    fn crawl_seed_does_not_hint_a_url_for_a_non_host() {
+        // A single word, a Windows path and a space-containing value are not hosts;
+        // suggesting an https:// spelling of them would be noise.
+        for seed in ["formats", "C:\\tmp\\a.html", "not a url"] {
+            let problem = crawl_seed_problem(seed).expect("not a seed");
+            assert!(!problem.contains("did you mean"), "{seed} got: {problem}");
+        }
+    }
+
+    #[test]
+    fn crawl_seed_refusal_names_the_seed_and_its_origin() {
+        let refusal = crawl_seed_refusal("formats", "command argument").expect("a refusal");
+        assert_eq!(
+            "Invalid crawl URL 'formats' (command argument): expected an absolute http(s) URL \
+             such as https://example.com/page.",
+            refusal
+        );
+        assert_eq!(None, crawl_seed_refusal("https://example.com", "command argument"));
+    }
+
+    #[test]
+    fn resolve_crawl_urls_rejects_a_malformed_direct_url() {
+        let err = resolve_crawl_urls("formats", None).unwrap_err();
+
+        assert!(
+            err.message().contains("Invalid crawl URL 'formats' (command argument)"),
+            "got: {err}"
+        );
+        assert!(err.message().contains("absolute http(s) URL"), "got: {err}");
+        assert_eq!(
+            ExitCode::Usage,
+            err.code(),
+            "a bad URL is a usage error, and exits like the pre-server check does"
+        );
+    }
+
+    #[test]
+    fn resolve_crawl_urls_rejects_a_malformed_seed_file_line_with_its_line_number() {
+        let seed = "https://ok.com\n\n# comment\nformats\nhttps://ok2.com\n";
+        let err = resolve_crawl_urls("", Some(("urls.txt", seed))).unwrap_err();
+
+        assert!(err.message().contains("'formats' (urls.txt line 4)"), "got: {err}");
+        assert_eq!(ExitCode::Usage, err.code(), "a bad seed-file URL exits like a bad argument");
+    }
+
+    #[test]
+    fn resolve_crawl_urls_reports_every_refused_seed_once() {
+        let seed = "https://ok.com\nformats\nhtps://exmple.com\n";
+        let err = resolve_crawl_urls("amazon.com", Some(("urls.txt", seed)))
+            .unwrap_err()
+            .message()
+            .to_string();
+
+        assert!(err.starts_with("3 of 4 crawl seeds are not URLs a crawl can fetch:"), "got: {err}");
+        assert!(err.contains("'amazon.com' (command argument)"), "got: {err}");
+        assert!(err.contains("'formats' (urls.txt line 2)"), "got: {err}");
+        assert!(err.contains("'htps://exmple.com' (urls.txt line 3)"), "got: {err}");
+        assert!(err.contains("did you mean 'https://amazon.com'?"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_crawl_urls_caps_the_refused_seeds_it_spells_out() {
+        let seed = (1..=8)
+            .map(|i| format!("bad-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let err = resolve_crawl_urls("", Some(("urls.txt", seed.as_str())))
+            .unwrap_err()
+            .message()
+            .to_string();
+
+        assert!(err.starts_with("8 of 8 crawl seeds"), "got: {err}");
+        assert!(err.contains("'bad-5' (urls.txt line 5)"), "got: {err}");
+        assert!(!err.contains("'bad-6'"), "the sixth refusal must be counted, not listed: {err}");
+        assert!(err.contains("… and 3 more"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_crawl_urls_keeps_a_seed_with_load_options_intact() {
+        let urls = resolve_crawl_urls("https://example.com -expires 1d", None).unwrap();
+        assert_eq!(urls, vec!["https://example.com -expires 1d"]);
     }
 
     // -------------------------------------------------------------------
