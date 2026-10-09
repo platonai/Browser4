@@ -58,6 +58,11 @@ data class PptxConfig(
 
     /** Skip data URI images */
     val skipDataUris: Boolean = true,
+
+    /** HTTP proxy for image downloads, e.g. "127.0.0.1:10808" or "http://127.0.0.1:10808".
+     * Null means no explicit proxy (the download client also falls back to the
+     * HTTPS_PROXY / HTTP_PROXY environment variables). */
+    val proxy: String? = null,
 ) {
     companion object {
         private const val PREFIX = "pptx."
@@ -79,6 +84,7 @@ data class PptxConfig(
                 maxContentBlocksPerSlide = conf.getInt("${PREFIX}slide.max-content-blocks", 6),
                 skipSvg = conf.getBoolean("${PREFIX}detect.skip-svg", true),
                 skipDataUris = conf.getBoolean("${PREFIX}detect.skip-data-uris", true),
+                proxy = conf.get("${PREFIX}download.proxy", "")?.takeIf { it.isNotBlank() },
             )
         }
     }

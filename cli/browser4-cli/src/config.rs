@@ -11,7 +11,15 @@ use std::path::PathBuf;
 use crate::state::resolve_default_state_dir;
 
 /// Allowed keys for `config set` / `config get` / `config delete`.
-pub const VALID_CONFIG_KEYS: &[&str] = &["server", "timeout", "proxy", "session"];
+pub const VALID_CONFIG_KEYS: &[&str] = &["server", "timeout", "proxy", "session", "extension_id"];
+
+/// Whether `id` is a well-formed Chrome extension ID: 32 lowercase
+/// alphanumeric characters (Web Store IDs use `[a-p]`, path-derived IDs of a
+/// locally loaded extension satisfy the same shape).
+pub fn is_valid_extension_id(id: &str) -> bool {
+    let id = id.trim();
+    id.len() == 32 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
 
 /// Server-side config keys recognized by `config get` / `set` / `delete`.
 ///
@@ -48,6 +56,12 @@ pub struct ConfigStore {
     /// Overridden by `-s` / `--session` / `BROWSER4_CLI_SESSION`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// Browser4 extension ID used by `attach --extension`. Needed when the
+    /// extension was loaded unpacked (*Load unpacked*), which gives it a
+    /// path-derived ID instead of the Web Store listing's ID. Overridden by the
+    /// `BROWSER4_EXTENSION_ID` environment variable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_id: Option<String>,
 }
 
 /// Resolve the path to the config file.
@@ -97,6 +111,7 @@ pub fn config_value(config: &ConfigStore, key: &str) -> Option<String> {
         "timeout" => config.timeout.map(|t| t.to_string()),
         "proxy" => config.proxy.clone(),
         "session" => config.session.clone(),
+        "extension_id" => config.extension_id.clone(),
         _ => None,
     }
 }
@@ -122,6 +137,16 @@ pub fn config_set_value(config: &mut ConfigStore, key: &str, value: &str) -> Res
         }
         "proxy" => config.proxy = Some(value.to_string()),
         "session" => config.session = Some(value.to_string()),
+        "extension_id" => {
+            if !is_valid_extension_id(value) {
+                return Err(format!(
+                    "Invalid extension id '{}': expected 32 lowercase alphanumeric characters \
+                     (see chrome://extensions for the id of a locally loaded extension)",
+                    value.trim()
+                ));
+            }
+            config.extension_id = Some(value.trim().to_string());
+        }
         other => return Err(config_unknown_key_error(other)),
     }
     Ok(())
@@ -135,6 +160,7 @@ pub fn config_delete_value(config: &mut ConfigStore, key: &str) -> Result<(), St
         "timeout" => config.timeout = None,
         "proxy" => config.proxy = None,
         "session" => config.session = None,
+        "extension_id" => config.extension_id = None,
         other => return Err(config_unknown_key_error(other)),
     }
     Ok(())
@@ -225,13 +251,14 @@ mod tests {
         // by config_value, config_set_value, and config_delete_value.
         let mut c = ConfigStore::default();
         for key in VALID_CONFIG_KEYS {
+            // Each key must be set with a value its own validator accepts.
+            let value = match *key {
+                "timeout" => "10",
+                "extension_id" => "jdcmdidbgjeebbhkoepjgifeibipfimi",
+                _ => "testval",
+            };
             // Set
-            config_set_value(
-                &mut c,
-                key,
-                if *key == "timeout" { "10" } else { "testval" },
-            )
-            .unwrap();
+            config_set_value(&mut c, key, value).unwrap();
             // Get
             let val = config_value(&c, key);
             assert!(val.is_some(), "Key '{}' should have a value after set", key);
@@ -243,6 +270,47 @@ mod tests {
                 key
             );
         }
+    }
+
+    #[test]
+    fn test_config_set_extension_id_validates_the_id() {
+        let mut c = ConfigStore::default();
+        config_set_value(&mut c, "extension_id", "jdcmdidbgjeebbhkoepjgifeibipfimi").unwrap();
+        assert_eq!(
+            Some("jdcmdidbgjeebbhkoepjgifeibipfimi".to_string()),
+            c.extension_id
+        );
+
+        let err = config_set_value(&mut c, "extension_id", "NOT-AN-ID").unwrap_err();
+        assert!(err.contains("Invalid extension id"), "Expected 'Invalid extension id' in: {err}");
+        // A rejected update leaves the previous value in place.
+        assert_eq!(
+            Some("jdcmdidbgjeebbhkoepjgifeibipfimi".to_string()),
+            c.extension_id
+        );
+    }
+
+    #[test]
+    fn test_is_valid_extension_id_accepts_only_32_lowercase_alphanumerics() {
+        assert!(is_valid_extension_id("jdcmdidbgjeebbhkoepjgifeibipfimi"));
+        assert!(is_valid_extension_id("  abcdefghijklmnopabcdefghijklmnop  "));
+        assert!(!is_valid_extension_id(""));
+        assert!(!is_valid_extension_id("tooshort"));
+        assert!(!is_valid_extension_id("ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP"));
+        assert!(!is_valid_extension_id("abcdefghijklmnopabcdefghijklmno-"));
+    }
+
+    #[test]
+    fn test_config_extension_id_round_trips_through_json() {
+        let mut c = ConfigStore::default();
+        config_set_value(&mut c, "extension_id", "abcdefghijklmnopabcdefghijklmnop").unwrap();
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("\"extension_id\""), "{json}");
+        let parsed: ConfigStore = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            Some("abcdefghijklmnopabcdefghijklmnop".to_string()),
+            parsed.extension_id
+        );
     }
 
     #[test]

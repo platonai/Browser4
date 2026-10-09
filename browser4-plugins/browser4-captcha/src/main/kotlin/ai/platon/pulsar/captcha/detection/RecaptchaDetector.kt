@@ -39,7 +39,10 @@ open class RecaptchaDetector(val conf: ImmutableConfig) : CaptchaDetector {
     override suspend fun detect(driver: WebDriver): CaptchaDetectionResult {
         return try {
             val jsResult = driver.evaluateValue(CaptchaSolveScripts.DETECT_RECAPTCHA) as? String
-                ?: return CaptchaDetectionResult.NOT_PRESENT
+                ?: run {
+                    logger.warn("reCAPTCHA detection script returned null — possible JS evaluation failure (e.g. IIFE wrapping issue). Returning NOT_PRESENT but this may be a false negative.")
+                    return CaptchaDetectionResult.NOT_PRESENT
+                }
 
             val parsed: Map<String, Any?> = json.readValue(jsResult)
             val present = parsed["present"] as? Boolean ?: false

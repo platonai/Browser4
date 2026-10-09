@@ -1,7 +1,7 @@
 package ai.platon.pulsar.agentic.tools.specs
 
-import ai.platon.pulsar.common.B4LLMUtils
-import ai.platon.pulsar.common.B4ProjectUtils
+import ai.platon.browser4.common.B4LLMUtils
+import ai.platon.browser4.common.B4ProjectUtils
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.DisplayName

@@ -14,7 +14,9 @@ import ai.platon.pulsar.common.urls.URLUtils
  *   "same request, no redirect" case.  Query *parameter order* is not part of
  *   that identity: the engine's own normalizer sorts the parameters, so the
  *   identity a fetch is filed under and the address the browser was navigated
- *   to (and reports back as `document.URL`) differ in spelling alone.
+ *   to (and reports back as `document.URL`) differ in spelling alone.  A
+ *   same-host, same-path, default-port `http→https` 301 upgrade is also treated
+ *   as the same document (a downgrade or an explicit port is not).
  * - [referToSamePageIgnoringQuery] — the same, ignoring the query string.
  *   Sites routinely answer a URL with a 302 that changes only variant or
  *   tracking parameters (Amazon: `…/dp/B0X?psc=1` → `…/dp/B0X?th=1`, and
@@ -37,8 +39,7 @@ internal object UrlDocumentMatcher {
             val hb = ub.host?.lowercase() ?: return@runCatching false
             val pa = (ua.path ?: "").removeSuffix("/")
             val pb = (ub.path ?: "").removeSuffix("/")
-            ha == hb && ua.scheme == ub.scheme &&
-                effectivePort(ua) == effectivePort(ub) &&
+            ha == hb && sameOriginAddress(ua, ub) &&
                 pa == pb && referToSameQuery(ua.query, ub.query)
         }.getOrDefault(false)
     }
@@ -82,9 +83,7 @@ internal object UrlDocumentMatcher {
             val hb = ub.host?.lowercase() ?: return@runCatching false
             val pa = (ua.path ?: "").removeSuffix("/")
             val pb = (ub.path ?: "").removeSuffix("/")
-            ha == hb && ua.scheme == ub.scheme &&
-                effectivePort(ua) == effectivePort(ub) &&
-                pa == pb
+            ha == hb && sameOriginAddress(ua, ub) && pa == pb
         }.getOrDefault(false)
     }
 
@@ -109,6 +108,36 @@ internal object UrlDocumentMatcher {
         val committed = runCatching { java.nio.file.Path.of(java.net.URI(committedUrl)) }.getOrNull()
             ?: return false
         return requested.normalize() == committed.normalize()
+    }
+
+    /**
+     * Whether the committed and requested URLs sit on the same origin,
+     * tolerating a default-port http→https upgrade.
+     *
+     * Parameter order mirrors every call site: [committed] is the document the
+     * browser actually committed (`document.URL`), [requested] is the URL the
+     * fetch asked for.
+     *
+     * Many sites answer their bare `http://host/` URL with a 301 to the
+     * `https://host/` page on the same host and path (books.toscrape.com does).
+     * Requiring identical schemes made the guard refuse the very page that was
+     * requested, retiring the driver and losing the content. We accept that
+     * upgrade ONLY when:
+     *  - the schemes are identical and the effective ports match, OR
+     *  - the REQUESTED url is plain `http` on its default port (80) and the
+     *    COMMITTED url is `https` on its default port (443).
+     *
+     * The reverse (an https request committing as http — a downgrade), any
+     * explicit/non-default port, and any other scheme pair are still refused;
+     * host and path are checked by the callers.
+     */
+    private fun sameOriginAddress(committed: java.net.URI, requested: java.net.URI): Boolean {
+        val sa = committed.scheme?.lowercase()
+        val sb = requested.scheme?.lowercase()
+        if (sa == sb) return effectivePort(committed) == effectivePort(requested)
+        // One-directional upgrade only: requested http:80 -> committed https:443.
+        return sb == "http" && sa == "https" &&
+            requested.port <= 0 && committed.port <= 0
     }
 
     private fun effectivePort(uri: java.net.URI): Int {

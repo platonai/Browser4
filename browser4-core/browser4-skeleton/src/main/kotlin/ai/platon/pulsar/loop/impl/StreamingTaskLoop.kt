@@ -1,7 +1,7 @@
 package ai.platon.pulsar.loop.impl
 
 import ai.platon.pulsar.common.AppContext
-import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_LABEL
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_LABEL
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.collect.UrlFeeder
 import ai.platon.pulsar.common.config.CapabilityTypes.CRAWL_ENABLE_DEFAULT_DATA_COLLECTORS

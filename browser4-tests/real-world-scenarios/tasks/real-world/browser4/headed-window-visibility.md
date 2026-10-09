@@ -15,9 +15,23 @@ when the session config carries an explicit `browser.display.mode`).
 
 ## Setup
 
-- A browser4-cli with the headed-window visibility check (`browser_window_visibility`)
-  is required. Without it, this scenario documents the missing detection as a
-  usability finding instead of asserting behavior.
+- A browser4-cli with the headed-window visibility check is required. The real
+  implementation is `browser4_window_state()` in
+  `cli/browser4-cli/src/daemon.rs`, invoked by the `open` handler in
+  `main.rs` after a successful navigation of a freshly created session (it is
+  skipped when `open` only reconnects to an existing session, because the
+  display mode is fixed at creation time). Without it, this scenario documents
+  the missing detection as a usability finding instead of asserting behavior.
+- **Platform boundary:** the detection exists on Windows only. On Unix builds
+  the `browser4_window_state()` stub returns `found_browser=false` /
+  `headed_window_visible=true`, so neither warning can ever fire on
+  Linux/macOS/CI — window visibility must be verified visually there.
+- **Scope boundary:** the Windows check enumerates every `chrome.exe` carrying
+  `--remote-debugging-port` and a `PULSAR_CHROME` profile marker on the
+  machine; it cannot attribute a process to the CLI session that launched it.
+  A visible result is reliable; a negative result can be skewed by other
+  concurrent Browser4 sessions, which is why the warning text states the
+  detection is machine-wide.
 - The scenario does not require a specific site; `https://example.com` is used
   as a stable, lightweight target.
 
@@ -37,10 +51,13 @@ when the session config carries an explicit `browser.display.mode`).
      `https://example.com/` is required.
    - If the only page target is `about:blank`, record it as a regression: the
      session navigated a different (headless) browser instance.
-4. If no visible window exists at all, check for the CLI warning (`⚠ Browser4
-   started a headed browser process, but no visible window was detected.`) and
-   record the exact warning text — the warning is the fallback detection, not
-   the expected outcome.
+4. If no visible window exists at all, check for the CLI warning (`⚠  A headed
+   Browser4 browser process is running, but no visible window was detected.`,
+   followed by a machine-wide-detection note) and record the exact warning
+   text — the warning is the fallback detection, not the expected outcome.
+   Reopening with `open --headed` against an EXISTING (already created)
+   session must not trigger it: the check only runs for freshly created
+   sessions.
 5. Repeat step 1-4 once more (`close` then `open --headed` again) to check
    whether headed visibility is stable across consecutive launches.
 6. Open a HEADLESS session (`browser4-cli open --headless https://example.com`)

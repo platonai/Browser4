@@ -11,8 +11,8 @@ import ai.platon.pulsar.chrome.PulsarBrowser
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
-import ai.platon.pulsar.common.B4Constants.BROWSER_CONTEXT_DIR
-import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_PATH
+import ai.platon.browser4.common.B4Constants.BROWSER_CONTEXT_DIR
+import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env pwsh
+#!/usr/bin/env pwsh
 #requires -Version 7
 
 # ═══════════════════════════════════════════════════════════════════
@@ -197,8 +197,22 @@ $script:AppData = if ($env:APPDATA) {
 # ─────────────────────────────────────────────────────
 $InstallPs1Url = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1'
 $InstallShUrl  = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh'
+
+# Documented default server endpoint.  This is a LAST-RESORT fallback only:
+# the CLI's built-in default is not stable across releases (`CliState::default()`
+# ships `http://localhost:8182`), and a user may point `config.json` at any port.
+# Every health check below therefore resolves the endpoint the CLI actually
+# recorded — see Get-ServerBaseUrlCandidates — instead of hardcoding this one.
 $ServerBaseUrl = 'http://localhost:18182'
 $ServerHealthUrl = "$ServerBaseUrl/actuator/health"
+
+# The CLI's historical built-in default, kept as a fallback candidate so a
+# server launched without a `config.json` in the test sandbox is still found.
+$LegacyServerBaseUrl = 'http://localhost:8182'
+
+# Set once a health probe has observed a live server, so the later
+# "is the server down?" checks target the same endpoint instead of re-guessing.
+$script:ActiveServerBaseUrl = ''
 
 # The user's real ~/.browser4 (read-only — never modified by this test).
 # Used only as a source for copying config into the test sandbox.
@@ -454,22 +468,91 @@ function Wait-ProcessAndCollect {
     }
 }
 
+function Get-CliCommandAsyncOutput {
+    param([System.Diagnostics.Process]$Process)
+    # Read what an async CLI invocation has produced so far WITHOUT waiting for
+    # it and WITHOUT deleting its redirect files.  A failed `open` otherwise has
+    # no diagnostics at all, because `Invoke-CliCommandAsync` attaches the
+    # output files to the process and nothing ever reads them.
+    $stdout = Get-Content -Path $Process._StdoutFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    $stderr = Get-Content -Path $Process._StderrFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+
+    $exited = $true
+    $exitCode = $null
+    try {
+        $exited = $Process.HasExited
+        if ($exited) { $exitCode = [int]$Process.ExitCode }
+    } catch {
+        # Stale process object — treat whatever we read as final.
+    }
+
+    return [PSCustomObject]@{
+        Exited   = $exited
+        ExitCode = $exitCode
+        Stdout   = if ($stdout) { $stdout.Trim() } else { '' }
+        Stderr   = if ($stderr) { $stderr.Trim() } else { '' }
+    }
+}
+
+function Remove-CliCommandAsyncOutput {
+    param([System.Diagnostics.Process]$Process)
+    # Best effort: while `open` is still running the files stay locked on
+    # Windows, the delete fails, and the next step can still read them.
+    Remove-Item $Process._StdoutFile, $Process._StderrFile -Force -ErrorAction SilentlyContinue
+}
+
 function Get-RuntimeBundleDir {
-    # The runtime bundle lives under the test sandbox (BROWSER4_RUNTIME_DIR
-    # or BROWSER4_CLI_STATE_DIR).  Search both roots so we find the bundle
-    # regardless of which env var the current CLI version honours.
+    # Locate the installed runtime bundle so callers can report where it lives,
+    # tail `logs/pulsar.log` from it, or delete it to force the cold-start
+    # download path.
+    #
+    # Layouts, newest first:
+    #   current : {runtime data dir}/runtime/{tag}/  holding
+    #             lib/Browser4Bundle.jar — plus runtime/bin/java[.exe]
+    #   legacy  : a `browser4-bundle` directory holding Browser4Bundle.jar
+    #
+    # The previous implementation probed only the legacy shape, so it never
+    # matched an installed runtime: `open (warm start)` was always reported as
+    # "skipped (bundle not cached)", a failed cold start lost its server-log
+    # tail, and the cold-start download path was never actually exercised.
     $searchRoots = @($RuntimeDataDir, $Browser4Home)
     if ($OSWin) {
         $searchRoots += Join-Path $AppData 'browser4'
         $searchRoots += Join-Path $LocalAppData 'browser4'
     }
+
     foreach ($root in $searchRoots) {
         if (-not (Test-Path $root)) { continue }
-        $candidate = Get-ChildItem -Path $root -Recurse -Directory -Filter 'browser4-bundle' -ErrorAction SilentlyContinue `
-            | Where-Object { Test-Path (Join-Path $_.FullName 'Browser4Bundle.jar') } `
-            | Select-Object -First 1
-        if ($candidate) { return $candidate.FullName }
+
+        $versionsRoot = Join-Path $root 'runtime'
+        if (Test-Path $versionsRoot) {
+            # Prefer the version the CLI recorded as current, then any other
+            # versioned install, newest first.
+            $candidates = @()
+            $currentTagFile = Join-Path $versionsRoot 'current.tag'
+            if (Test-Path $currentTagFile) {
+                $tag = Get-Content -Path $currentTagFile -Raw -ErrorAction SilentlyContinue
+                if ($tag) { $candidates += (Join-Path $versionsRoot $tag.Trim()) }
+            }
+            $candidates += @(Get-ChildItem -Path $versionsRoot -Directory -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending |
+                    ForEach-Object { $_.FullName })
+
+            foreach ($candidate in $candidates) {
+                if (-not $candidate) { continue }
+                if (Test-Path (Join-Path (Join-Path $candidate 'lib') 'Browser4Bundle.jar')) {
+                    return $candidate
+                }
+            }
+        }
+
+        # Legacy layout (pre-versioned installs and local dev bundles).
+        $legacy = Get-ChildItem -Path $root -Recurse -Directory -Filter 'browser4-bundle' -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path (Join-Path $_.FullName 'Browser4Bundle.jar') } |
+            Select-Object -First 1
+        if ($legacy) { return $legacy.FullName }
     }
+
     return $null
 }
 
@@ -478,52 +561,147 @@ function Get-RuntimeBundleDir {
 # ═══════════════════════════════════════════════════════════════
 <#
 .SYNOPSIS
+    Return the ordered, de-duplicated list of server base URLs worth probing.
+
+.DESCRIPTION
+    The CLI's default server port is NOT fixed: the documented default is
+    18182, `CliState::default()` ships 8182, and a user's `config.json` can
+    point anywhere.  Hardcoding one port made every `open` health check fail
+    on a clean sandbox even though the server was up and serving, so the
+    endpoint is resolved from what the CLI itself recorded — falling back to
+    the known defaults only when nothing is found.
+
+    Sources, in priority order:
+      1. The endpoint already observed healthy during this run.
+      2. `cli-state.json` / `cli-managed-processes.json` in the test sandbox
+         (written by the CLI when it launches or adopts a server).
+      3. The user's real `~/.browser4/config.json` `server` value (read-only).
+      4. The documented default (18182), then the CLI's built-in 8182.
+#>
+function Get-ServerBaseUrlCandidates {
+    $candidates = [System.Collections.Generic.List[string]]::new()
+
+    if ($script:ActiveServerBaseUrl) { $candidates.Add($script:ActiveServerBaseUrl) }
+
+    foreach ($file in @(
+            (Join-Path $Browser4Home 'cli-state.json'),
+            (Join-Path $Browser4Home 'cli-managed-processes.json')
+        )) {
+        if (-not (Test-Path $file)) { continue }
+        try {
+            $data = Get-Content -Path $file -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+            if ($data.baseUrl) { $candidates.Add([string]$data.baseUrl) }
+            foreach ($proc in @($data.processes)) {
+                if ($proc -and $proc.baseUrl) { $candidates.Add([string]$proc.baseUrl) }
+            }
+        } catch {
+            # Partially written or mid-update state file — retry on the next poll.
+        }
+    }
+
+    $userConfigJson = Join-Path $UserBrowser4Home 'config.json'
+    if (Test-Path $userConfigJson) {
+        try {
+            $cfg = Get-Content -Path $userConfigJson -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+            if ($cfg.server) { $candidates.Add([string]$cfg.server) }
+        } catch {
+            # Unreadable user config is not fatal — fall through to the defaults.
+        }
+    }
+
+    $candidates.Add($ServerBaseUrl)
+    $candidates.Add($LegacyServerBaseUrl)
+
+    return @($candidates |
+        Where-Object { $_ } |
+        ForEach-Object { ([string]$_).Trim().TrimEnd('/') } |
+        Where-Object { $_ -match '^https?://' } |
+        Select-Object -Unique)
+}
+
+<#
+.SYNOPSIS
+    Return the first server base URL that currently answers /actuator/health,
+    or $null when nothing responds.
+
+.DESCRIPTION
+    Used for the shutdown checks ("prove the server is gone").  Deliberately
+    does not cache a negative result, so a server that is still shutting down
+    is re-probed on the next caller invocation.
+#>
+function Test-ServerReachable {
+    param([int]$TimeoutSeconds = 3)
+    foreach ($base in (Get-ServerBaseUrlCandidates)) {
+        try {
+            $response = Invoke-WebRequest -Uri "$base/actuator/health" -TimeoutSec $TimeoutSeconds -UseBasicParsing -ErrorAction Stop
+            if ($response.StatusCode -eq 200) { return $base }
+        } catch {
+            # Not listening / not healthy — try the next candidate.
+        }
+    }
+    return $null
+}
+
+<#
+.SYNOPSIS
     Poll the Browser4 server health endpoint until it responds or times out.
 
 .DESCRIPTION
-    Sends GET requests to $ServerHealthUrl (/actuator/health) with exponential
-    backoff.  Returns an object with .Healthy (bool) and .Elapsed (TimeSpan).
+    Probes every candidate endpoint from Get-ServerBaseUrlCandidates
+    (/actuator/health) with exponential backoff, re-resolving the candidates
+    on every attempt so the real endpoint is picked up as soon as the CLI
+    records it.  Returns an object with .Healthy (bool), .BaseUrl (the
+    endpoint that answered, or the last one tried), .Elapsed and .Content.
 
     This replaces brittle Start-Sleep-based polling with a real readiness
     check — exactly what the CLI itself and Docker healthcheck use.
 #>
 function Wait-ServerHealthy {
     param(
-        [string]$BaseUrl = $ServerBaseUrl,
+        [string]$BaseUrl = '',
         [int]$TimeoutSeconds = 120
     )
-    $healthUrl = "$BaseUrl/actuator/health"
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $sleep = 1
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $lastStatus = ''
+    $lastBaseUrl = ''
 
     while (([DateTime]::UtcNow) -lt $deadline) {
-        try {
-            # Invoke-RestMethod parses the JSON response directly into a
-            # PSCustomObject — avoids the byte[]-vs-string inconsistency
-            # that Invoke-WebRequest + ConvertFrom-Json can hit when the
-            # server returns a compressed or chunked response on Windows.
-            $healthData = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5 -ErrorAction Stop
+        # Re-resolve on every attempt: `open` writes its state file only after
+        # the server is up, so the first polls may have to fall back.
+        $targets = if ($BaseUrl) { @($BaseUrl.TrimEnd('/')) } else { @(Get-ServerBaseUrlCandidates) }
 
-            if ($healthData.status -eq 'UP') {
-                $sw.Stop()
-                return [PSCustomObject]@{
-                    Healthy  = $true
-                    Elapsed  = $sw.Elapsed
-                    Content  = ($healthData | ConvertTo-Json -Compress)
+        foreach ($target in $targets) {
+            $lastBaseUrl = $target
+            try {
+                # Invoke-RestMethod parses the JSON response directly into a
+                # PSCustomObject — avoids the byte[]-vs-string inconsistency
+                # that Invoke-WebRequest + ConvertFrom-Json can hit when the
+                # server returns a compressed or chunked response on Windows.
+                $healthData = Invoke-RestMethod -Uri "$target/actuator/health" -TimeoutSec 5 -ErrorAction Stop
+
+                if ($healthData.status -eq 'UP') {
+                    $script:ActiveServerBaseUrl = $target
+                    $sw.Stop()
+                    return [PSCustomObject]@{
+                        Healthy  = $true
+                        BaseUrl  = $target
+                        Elapsed  = $sw.Elapsed
+                        Content  = ($healthData | ConvertTo-Json -Compress)
+                    }
                 }
-            }
 
-            # Status field present but not UP (e.g. DOWN, OUT_OF_SERVICE)
-            $lastStatus = $healthData.status
-            Write-Info "Health status=$lastStatus (waiting for UP)"
-        } catch {
-            # Server not reachable, non-2xx, or invalid JSON —
-            # all expected during startup.  Log the first few times
-            # so the operator can see progress, then go quiet.
-            if ($sleep -le 4) {
-                Write-Info "Health endpoint not ready: $_"
+                # Status field present but not UP (e.g. DOWN, OUT_OF_SERVICE)
+                $lastStatus = $healthData.status
+                Write-Info "Health status=$lastStatus at $target (waiting for UP)"
+            } catch {
+                # Server not reachable, non-2xx, or invalid JSON —
+                # all expected during startup.  Log the first few times
+                # so the operator can see progress, then go quiet.
+                if ($sleep -le 4) {
+                    Write-Info "Health endpoint not ready at $target : $_"
+                }
             }
         }
 
@@ -539,6 +717,7 @@ function Wait-ServerHealthy {
     }
     return [PSCustomObject]@{
         Healthy  = $false
+        BaseUrl  = $lastBaseUrl
         Elapsed  = $sw.Elapsed
         Content  = ''
     }
@@ -677,7 +856,7 @@ Write-Info "Test state dir  : $Browser4Home  (BROWSER4_CLI_STATE_DIR)"
 Write-Info "Test runtime dir: $RuntimeDataDir  (BROWSER4_RUNTIME_DIR)"
 Write-Info "Target version  : $(if ($Version) { $Version } else { 'latest (stable)' })"
 Write-Info "User home (RO)  : $UserBrowser4Home"
-Write-Info "ServerHealth    : $ServerHealthUrl"
+Write-Info "ServerHealth    : resolved from CLI state (fallback $ServerHealthUrl, legacy $LegacyServerBaseUrl)"
 Write-Info "Server opts     : $env:BROWSER4_SERVER_OPTS"
 
 if (-not (Test-Path $WorkingDir)) {
@@ -1202,13 +1381,16 @@ function Invoke-InstallationCycle {
     $openProc = Invoke-CliCommandAsync -Arguments @('open')
 
     # Poll the server health endpoint until it responds or we time out.
-    Write-Info "Polling $ServerHealthUrl for readiness …"
+    # The endpoint is resolved from the CLI's own state because its default
+    # port has drifted from the documented 18182 (see Get-ServerBaseUrlCandidates).
+    Write-Info "Polling for readiness (candidates: $((Get-ServerBaseUrlCandidates) -join ', ')) …"
     $coldHealth = Wait-ServerHealthy -TimeoutSeconds 120
     $coldStartSw.Stop()
     $coldStartTime = $coldStartSw.Elapsed
 
     $coldStartOk = $coldHealth.Healthy
     if ($coldStartOk) {
+        Write-Info "Server endpoint : $($coldHealth.BaseUrl)"
         Write-Info "Server healthy after $($coldHealth.Elapsed.TotalSeconds.ToString('F1'))s"
         Write-Info "Total cold-start time (wall clock): $($coldStartTime.TotalSeconds.ToString('F1'))s"
 
@@ -1227,12 +1409,29 @@ function Invoke-InstallationCycle {
         }
     } else {
         Write-WarningMsg "Server did NOT become healthy within $($coldHealth.Elapsed.TotalSeconds.ToString('F1'))s"
+        Write-WarningMsg "Last endpoint probed: $($coldHealth.BaseUrl)"
+
+        # Surface what `open` itself reported.  Without this a failed cold start
+        # is undiagnosable: the CLI's own error (download failure, JVM crash,
+        # port conflict) goes to the async process's redirect files, which
+        # nothing else in this script ever reads.
+        $openOutput = Get-CliCommandAsyncOutput -Process $openProc
+        Write-WarningMsg "browser4-cli open exited=$($openOutput.Exited) exitCode=$($openOutput.ExitCode)"
+        foreach ($entry in @(
+                @{ Name = 'stdout'; Text = $openOutput.Stdout },
+                @{ Name = 'stderr'; Text = $openOutput.Stderr })) {
+            if (-not $entry.Text) { continue }
+            Write-WarningMsg "--- open $($entry.Name) (last 20 lines) ---"
+            ($entry.Text -split "`r?`n" | Select-Object -Last 20) |
+                ForEach-Object { Write-Host "      $_" -ForegroundColor DarkYellow }
+        }
+
         # Check if a bundle at least appeared (download/extract may have worked)
         $bundleAfter = Get-RuntimeBundleDir
         if ($bundleAfter) {
             Write-Info "Runtime bundle exists at $bundleAfter but server is not responding"
-            # Check for server log
-            $logPath = Join-Path $bundleAfter 'logs\pulsar.log'
+            # Check for server log (nested Join-Path keeps this portable)
+            $logPath = Join-Path (Join-Path $bundleAfter 'logs') 'pulsar.log'
             if (Test-Path $logPath) {
                 $logTail = Get-Content -Path $logPath -Tail 20 -ErrorAction SilentlyContinue | Out-String
                 Write-WarningMsg "pulsar.log tail:`n$logTail"
@@ -1241,6 +1440,9 @@ function Invoke-InstallationCycle {
             Write-WarningMsg 'Runtime bundle also not found — download/extract may have failed'
         }
     }
+
+    # The async `open` output has served its diagnostic purpose.
+    Remove-CliCommandAsyncOutput -Process $openProc
 
     Write-StepResult -Step 'open (cold start)' -Passed $coldStartOk `
         -Detail "healthy=$coldStartOk time=$($coldStartTime.TotalSeconds.ToString('F1'))s"
@@ -1267,13 +1469,11 @@ function Invoke-InstallationCycle {
             Start-Sleep -Seconds 3
 
             # Verify server is down before measuring warm start
-            try {
-                $checkResp = Invoke-WebRequest -Uri $ServerHealthUrl -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
-                if ($checkResp.StatusCode -eq 200) {
-                    Write-WarningMsg 'Server still reachable after kill-all — waiting longer'
-                    Start-Sleep -Seconds 10
-                }
-            } catch {
+            $stillReachable = Test-ServerReachable -TimeoutSeconds 2
+            if ($stillReachable) {
+                Write-WarningMsg "Server still reachable at $stillReachable after kill-all — waiting longer"
+                Start-Sleep -Seconds 10
+            } else {
                 Write-Info 'Server confirmed stopped'
             }
 
@@ -1325,15 +1525,11 @@ function Invoke-InstallationCycle {
     # Verify the server is no longer reachable.
     # This confirms kill-all actually stopped the server process —
     # a real user expects "kill-all" to mean the server is gone.
-    Write-Info "Verifying server is no longer reachable at $ServerHealthUrl ..."
-    $serverStillUp = $false
-    try {
-        $shutdownCheck = Invoke-WebRequest -Uri $ServerHealthUrl -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
-        if ($shutdownCheck.StatusCode -eq 200) {
-            $serverStillUp = $true
-        }
-    } catch {
-        # Expected — server should be unreachable
+    Write-Info "Verifying the server is no longer reachable (candidates: $((Get-ServerBaseUrlCandidates) -join ', ')) ..."
+    $reachableAt = Test-ServerReachable -TimeoutSeconds 3
+    $serverStillUp = [bool]$reachableAt
+    if ($serverStillUp) {
+        Write-WarningMsg "Server still responding at $reachableAt"
     }
 
     if ($serverStillUp) {
@@ -1446,6 +1642,29 @@ if (-not $Stress) {
         # Ensure config is available before running multi-scenarios
         Copy-ConfigFromUserHome
 
+        # ── Re-pin the runtime bundle before the stress suite ──────────────
+        # Both cycles above end with `uninstall`, which deletes the runtime
+        # data directory — including the bundle the CLI was installed with.
+        # Without re-installing it, the suite's first `open` resolves "latest
+        # stable" and silently exercises a DIFFERENT backend than the CLI under
+        # test.  An older backend then rejects parameters the newer CLI sends
+        # (e.g. `engine` on `command.run`) and the agent scenarios fail for a
+        # reason that has nothing to do with the release under test.
+        #
+        # This mirrors what the install script already does for the CLI
+        # itself: pass -Version through as --tag so both halves match.
+        if ($Version) {
+            Write-Info "Ensuring the Browser4 runtime matches $Version before the stress suite …"
+            $runtimeInstall = Invoke-CliCommand -Arguments @('install', '--tag', $Version) -TimeoutSeconds 1800 -IgnoreExitCode
+            if ($runtimeInstall.ExitCode -eq 0) {
+                Write-Info "Runtime pinned to $Version"
+            } else {
+                Write-WarningMsg "browser4-cli install --tag $Version exited with $($runtimeInstall.ExitCode)"
+                Write-WarningMsg 'The stress suite may run against a different runtime version than the CLI under test.'
+                Write-Info "install output: $($runtimeInstall.Output)"
+            }
+        }
+
         $multiScenariosScript = Join-Path $ScriptDir '..\browser4-tests\tests-production\multi-scenarios.ps1'
         if (-not (Test-Path $multiScenariosScript) -and $RepoRoot) {
             # Fall back to repo-relative path for bw-compat
@@ -1485,13 +1704,25 @@ if (-not $Stress) {
                     -RedirectStandardOutput $multiStdout `
                     -RedirectStandardError $multiStderr
 
-                $multiScenarioCount = 4
-                $perScenarioTimeout = 600
+                # Per-scenario budgets, mirrored from multi-scenarios.ps1
+                # ($ScenarioTimeoutOverrides keyed on stress-session.ps1, and
+                # $ScenarioTimeoutDefault = 600 for everything else).  The outer
+                # budget has to exceed their SUM: sizing it from a flat 600s per
+                # scenario made it smaller than the inner budget it wraps, so a
+                # suite still legitimately inside its own limits got killed.
+                $scenarioBudgetsSeconds = @(
+                    3600, # stress-session.ps1   (3 iterations of real page loads)
+                    600,  # agent-run-page-visit.ps1
+                    600,  # agent-run-page-visit-interact.ps1
+                    600   # swarm-agents.ps1
+                )
+                $multiScenarioCount = $scenarioBudgetsSeconds.Count
+                $perIterationBudget = ($scenarioBudgetsSeconds | Measure-Object -Sum).Sum
                 $multiTimeout = [Math]::Max(
-                    $MultiScenariosIterations * $multiScenarioCount * $perScenarioTimeout + 300,
+                    $MultiScenariosIterations * $perIterationBudget + 300,
                     3600
                 )
-                Write-Info "Multi-scenarios timeout: ${multiTimeout}s (${MultiScenariosIterations} iter × ${multiScenarioCount} scenarios × ${perScenarioTimeout}s + margin)"
+                Write-Info "Multi-scenarios timeout: ${multiTimeout}s (${MultiScenariosIterations} iter × ${perIterationBudget}s inner budget over ${multiScenarioCount} scenarios + margin)"
 
                 $multiDeadline = [DateTime]::UtcNow.AddSeconds($multiTimeout)
                 $multiStartTime = [DateTime]::UtcNow

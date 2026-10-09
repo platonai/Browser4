@@ -4,8 +4,8 @@ on:
   schedule:
     # Runs at 00:00 UTC every day
     # This is a comprehensive nightly build including:
-    # - All JVM tests (Fast + Slow + HeavyTest + TestInfraCheck + Integration*)
-    #   minus ManualOnly / RequiresAI / E2E / E2ETest
+    # - All JVM tests (Fast + Slow + HeavyTest + TestInfraCheck + Integration*
+    #   + E2E/E2ETest) minus ManualOnly / RequiresAI
     # - JaCoCo coverage measured in observe-only mode (no floor: the floor
     #   belongs to pr.yml, which controls its own subset)
     # - Docker image building + the full browser4-cli e2e suite (204 scenarios,
@@ -15,8 +15,13 @@ on:
     # Note: the same CLI e2e suite also runs in nightly-cli.yml (03:00 UTC, 30 min
     # budget). This workflow keeps its own copy because it builds and starts the
     # Docker image from the same commit; keep both step budgets at 30 min.
-    # Note: E2E/E2ETest-tagged JVM tests are still excluded everywhere (see
-    # docs/TESTING.md §"CI 门禁实际覆盖" for the current inventory).
+    # Note: E2E/E2ETest-tagged JVM tests run HERE and nowhere else — pr.yml and
+    # ci.yml still exclude both tags.  Nightly is their right home: it is a cron
+    # report rather than a merge gate, so the heavy classes among them (a Spring +
+    # real-Chrome suite) cost minutes here instead of a release gate's budget.
+    # Five of the ten classes stay out on their *own* tags — three are ManualOnly
+    # and two RequiresAI — so this file must keep excluding those two no matter
+    # what happens to E2E/E2ETest.  See docs/TESTING.md §"CI 门禁实际覆盖".
     - cron: '0 0 * * *'
   # Allow manual workflow runs
   workflow_dispatch:
@@ -79,7 +84,14 @@ jobs:
           # 0.20 INSTRUCTION floor stays enforced by pr.yml.
           maven_profiles: 'all-main-modules,all-test-modules,quality-gate'
           maven_args: '-Djacoco.check.skip=true'
-          excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest' # E2E tests might be flaky in CI, so we run them separately in a different workflow
+          # E2E/E2ETest are deliberately NOT excluded here — this is the only place
+          # they run (pr.yml and ci.yml still drop both tags, because those gates are
+          # merge/release gates and the heavy classes among them are minutes each).
+          # `ManualOnly` and `RequiresAI` stay: their meanings are "a human triggers
+          # this" and "needs an LLM key", neither of which a nightly cron can supply.
+          # Editing this list? Read docs-dev/copilot/ci-stabilization-4.13.x.md §30.4
+          # and §31.3 first — they record why it looked the other way until now.
+          excluded_groups: 'ManualOnly,RequiresAI'
           run_pulsar_tests: 'true'
           # 150 minutes, not 60.  This run is where the `Heavy` suites live:
           # docs/TESTING.md sends >30 s / resource-hungry classes here, and §33

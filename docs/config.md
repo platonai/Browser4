@@ -485,6 +485,30 @@ starts normally with no captcha functionality.
 2. **Development** (`spring-boot:run`): add as a Maven dependency.
 3. **Fat JAR**: add `browser4-captcha` as a dependency before building.
 
+From the source tree you can also install via the CLI:
+
+```bash
+browser4-cli plugin install browser4-plugins/browser4-captcha/target/browser4-captcha-*.jar
+browser4-cli stop    # the next browser4-cli command auto-restarts the dev backend
+```
+
+### Calling the CAPTCHA tools
+
+The plugin registers MCP tools named `captcha_detect`, `captcha_solve`,
+`captcha_solve_image`, and `captcha_get_balance` (domain.method `captcha.detect`
+maps to snake_case `captcha_detect`). Invoke them from the CLI with the generic
+passthrough:
+
+```bash
+browser4-cli tool call captcha_detect
+browser4-cli tool call captcha_get_balance
+browser4-cli tool call captcha_solve --json '{"type": "RECAPTCHA_V2", "siteKey": "<site-key>"}'
+```
+
+With no API key configured, `captcha_get_balance` returns
+`{configured: false, balance: null, ...}` and `captcha_solve` fails with
+"No CAPTCHA solving provider configured".
+
 ### Configuration Properties
 
 | Property | Default | Description |

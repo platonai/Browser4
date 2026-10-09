@@ -62,6 +62,21 @@ open class PptxGenerator(
     }
 
     /**
+     * Result of a PPTX generation pass.
+     *
+     * @property path               absolute path to the generated PPTX
+     * @property embeddedImageCount images actually placed on slides (not block count)
+     * @property skippedImageCount  image blocks dropped by the per-slide cap or slide overflow
+     * @property failedImageCount   images that could not be downloaded
+     */
+    data class PptxGenerationOutput(
+        val path: Path,
+        val embeddedImageCount: Int,
+        val skippedImageCount: Int,
+        val failedImageCount: Int,
+    )
+
+    /**
      * Generate a PPTX file from extracted content blocks.
      */
     open suspend fun generate(
@@ -69,15 +84,19 @@ open class PptxGenerator(
         pageUrl: String,
         pageTitle: String,
         outputDir: Path,
-    ): Path {
+    ): PptxGenerationOutput {
         Files.createDirectories(outputDir)
 
         val slideShow = XMLSlideShow()
         slideShow.pageSize = Dimension(config.slideWidth, config.slideHeight)
 
+        var embeddedImageCount = 0
+        var skippedImageCount = 0
+
         try {
             // 1. Download all referenced images
-            val imageBytes = imageDownloader.downloadImages(blocks)
+            val download = imageDownloader.downloadImages(blocks)
+            val imageBytes = download.bytes
 
             // 2. Create title slide
             createTitleSlide(slideShow, pageTitle, pageUrl)
@@ -87,7 +106,9 @@ open class PptxGenerator(
 
             // 4. Create content slides for each section
             for (section in sections) {
-                createSectionSlides(slideShow, section, imageBytes)
+                val counts = createSectionSlides(slideShow, section, imageBytes)
+                embeddedImageCount += counts.embedded
+                skippedImageCount += counts.skipped
             }
 
             // 5. Write to file
@@ -98,12 +119,23 @@ open class PptxGenerator(
                 slideShow.write(fos)
             }
 
+            if (skippedImageCount > 0) {
+                logger.warn(
+                    "PPTX generation: {} images embedded, {} skipped (per-slide cap / slide overflow)",
+                    embeddedImageCount, skippedImageCount
+                )
+            }
             logger.info(
                 "Generated PPTX with {} slides for '{}': {}",
                 slideShow.slides.size, pageTitle.take(80), outputPath
             )
 
-            return outputPath
+            return PptxGenerationOutput(
+                path = outputPath,
+                embeddedImageCount = embeddedImageCount,
+                skippedImageCount = skippedImageCount,
+                failedImageCount = download.failed,
+            )
         } finally {
             slideShow.close()
         }
@@ -151,16 +183,20 @@ open class PptxGenerator(
         subRun.setFontColor(Color(0x66, 0x66, 0x66))
     }
 
+    private data class SlideImageCounts(val embedded: Int, val skipped: Int)
+
     private fun createSectionSlides(
         slideShow: XMLSlideShow,
         section: Section,
         imageBytes: Map<String, ByteArray>,
-    ) {
+    ): SlideImageCounts {
         val blocks = section.blocks
-        if (blocks.isEmpty()) return
+        if (blocks.isEmpty()) return SlideImageCounts(0, 0)
 
         var blockIndex = 0
         var continuationIndex = 0
+        var embedded = 0
+        var skipped = 0
 
         while (blockIndex < blocks.size) {
             val remainingBlocks = blocks.size - blockIndex
@@ -177,11 +213,14 @@ open class PptxGenerator(
                 "${section.title} (continued $continuationIndex)"
             }
 
-            createContentSlide(slideShow, slideTitle, chunk, imageBytes)
+            val counts = createContentSlide(slideShow, slideTitle, chunk, imageBytes)
+            embedded += counts.embedded
+            skipped += counts.skipped
 
             blockIndex += chunkSize
             continuationIndex++
         }
+        return SlideImageCounts(embedded, skipped)
     }
 
     private fun createContentSlide(
@@ -189,7 +228,7 @@ open class PptxGenerator(
         slideTitle: String,
         blocks: List<ContentBlock>,
         imageBytes: Map<String, ByteArray>,
-    ) {
+    ): SlideImageCounts {
         val slide = slideShow.createSlide()
         val slideWidth = config.slideWidth.toDouble()
         val slideHeight = config.slideHeight.toDouble()
@@ -216,6 +255,8 @@ open class PptxGenerator(
         var yOffset = contentTop
         val contentWidth = slideWidth - MARGIN * 2
         var imageCountOnSlide = 0
+        var embedded = 0
+        var skipped = 0
 
         for (block in blocks) {
             when (block.type) {
@@ -228,8 +269,18 @@ open class PptxGenerator(
                 "image" -> {
                     if (imageCountOnSlide < config.maxImagesPerSlide) {
                         val newOffset = addImageBlock(slideShow, slide, block, imageBytes, yOffset, contentWidth)
-                        if (newOffset != yOffset) imageCountOnSlide++
+                        if (newOffset != yOffset) {
+                            imageCountOnSlide++
+                            embedded++
+                        } else {
+                            // addImageBlock returned without placing the image
+                            // (download bytes missing / embed failure) — count as
+                            // failed-to-embed, not as a silent drop.
+                        }
                         yOffset = newOffset
+                    } else {
+                        // Per-slide image cap reached — the image is dropped.
+                        skipped++
                     }
                 }
                 "table" -> {
@@ -246,8 +297,16 @@ open class PptxGenerator(
                 }
             }
 
-            if (yOffset > slideHeight - MARGIN) break
+            if (yOffset > slideHeight - MARGIN) {
+                // Slide overflow: remaining blocks in this chunk are dropped.
+                // Count any remaining image blocks as skipped.
+                skipped += blocks
+                    .subList(blocks.indexOf(block) + 1, blocks.size)
+                    .count { it.type == "image" }
+                break
+            }
         }
+        return SlideImageCounts(embedded, skipped)
     }
 
     // ---- Individual block renderers ----

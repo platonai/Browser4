@@ -16,10 +16,16 @@ session (whose state container) × display (how it renders) × source (whose bro
 (concurrency and state isolation) → display (must a human participate?) → secondary knobs (§4).
 
 > **Two hard constraints** limit the combinations:
-> 1. **SWARM always launches its own browsers.** A swarm session cannot attach to an existing browser —
->    `swarm create` only accepts `--profile-mode`/`--max-open-tabs`/`--max-browser-contexts`/`--display-mode`.
-> 2. **The display mode is fixed when the session is created.** Reconnecting with `open --headed` on an
->    existing session warns and ignores the flag; use `close` + `open`, or `open --fresh`.
+> 1. **SWARM always launches its own browsers.** A swarm session cannot attach to
+>    an existing browser — `swarm create` only accepts
+>    `--profile-mode`/`--max-open-tabs`/`--max-browser-contexts`/`--display-mode`.
+> 2. **The display mode is fixed when the session is created.** Reconnecting with
+>    `open --headed` on an existing session ignores the flag; the CLI warns only
+>    when the requested mode differs from the active session's (re-running
+>    `open --headed` on a headed session stays silent). Use `close` + `open`, or
+>    `open --fresh` to change mode.
+
+---
 
 ## Quick Comparison
 
@@ -32,7 +38,7 @@ session (whose state container) × display (how it renders) × source (whose bro
 | | `GUI` (`--headed`) | a human must act (login, CAPTCHA, QR code); demos; visual debugging | uses the desktop; impossible in CI / no-display environments |
 | | `SUPERVISED` | wrapping Chrome in an external supervisor process (in practice an Xvfb-based wrapper on Linux) | inert unless a supervisor is configured; **not** implicitly headless |
 | **Source** | backend-launched (`open`) | production batches, clean environments, CI | `close` terminates the browser process |
-| | `attach --cdp` | debugging live issues, cloud browsers, Electron, SSH-tunnelled remote Chrome | needs a debugging endpoint (explicit one on Linux/macOS) |
+| | `attach --cdp` | debugging live issues, cloud browsers, Electron, SSH-tunnelled remote Chrome | needs a debugging endpoint (explicit one on Linux/macOS); a channel name resolves the common cases, otherwise pass `--cdp <url\|port\|host:port>` |
 | | `attach --extension` | "just use my own browser" with zero flags/ports | not for CI; one relay connection per browser; extension required |
 
 ## 1. Axis 1 — Session
@@ -106,9 +112,9 @@ visible **for exactly one retry**:
    browser4-cli -s <name> open --headed "<url>"        # retry the same step
    ```
 
-   `--headed` cannot be applied to a live session (the flag is ignored with a
-   warning) and `goto` never changes the mode — `close` or `open --fresh` is
-   mandatory.
+   `--headed` cannot be applied to a live session (the flag is ignored, with a
+   warning only when the requested mode differs from the active session's) and
+   `goto` never changes the mode — `close` or `open --fresh` is mandatory.
 3. **Notify the user** that the mode changed and why — a visible window must never
    appear silently: *"The site blocked the headless browser (bot detection), so I
    switched to headed mode and retried."*
@@ -130,9 +136,22 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
 
 **Headed-mode reliability and anti-bot notes**
 
-- After `open --headed`, the CLI verifies that a visible window actually exists and warns when the session was
-  launched headless anyway, or when the process is headed but no window is detected. If you see that warning,
-  `close` and retry `open --headed` once.
+- After `open --headed`, the CLI verifies that a visible window actually exists
+  and warns when the session was launched headless anyway, or when the process is
+  headed but no window is detected. If you see that warning, `close` and retry
+  `open --headed` once. The check runs only for a **freshly created** session —
+  reconnecting to an existing session never runs it (the mode is already fixed),
+  which also prevents false "display-mode bug" alerts when a headless session is
+  reopened with `--headed`.
+- **The visibility check is Windows-only and machine-wide.** It enumerates every
+  `chrome.exe` launched with a remote-debugging port and a `PULSAR_CHROME`
+  profile marker; it cannot attribute a process to the CLI session that launched
+  it (the session→browser PID mapping lives inside the backend). A *visible*
+  result is trustworthy; a *negative* result can be skewed by other concurrent
+  Browser4 sessions — e.g. a headless session running alongside the headed one
+  just launched — which is why the warning states its detection is machine-wide.
+  On Unix the check is a stub that can never warn; verify window visibility
+  visually on Linux/macOS/CI.
 - Browser4 passes plain `--headless` (never `--headless=new`), forces
   `--disable-blink-features=AutomationControlled`, and leaves user-agent rotation off by default because
   rotation itself is detectable.
@@ -227,22 +246,33 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
 | | Backend-launched (`open`) | `attach --cdp` | `attach --extension` |
 |---|---|---|---|
 | Browser | Chrome launched by Browser4 | any already-running CDP endpoint: Chrome/Edge/Electron/cloud | already-running Chrome/Edge **with the Browser4 extension installed** |
-| Setup | none | remote debugging enabled in the target (`chrome://inspect/#remote-debugging`), or start it with `--remote-debugging-port=N` | install the extension; optionally set `BROWSER4_EXTENSION_TOKEN` to skip the approval dialog |
+| Setup | none | remote debugging enabled in either form — start the browser with `--remote-debugging-port=N` (plus a non-default `--user-data-dir`), or flip `chrome://inspect/#remote-debugging` → *"Allow remote debugging for this browser instance"* | install the extension; optionally set `BROWSER4_EXTENSION_TOKEN` to skip the approval dialog |
 | Login state | whatever the Browser4 profile holds (or `state-save`/`state-load`) | the real profile you are using | the real profile you are using |
-| Connection check | — | endpoint probed (`/json/version` + at least one page target) before binding; loud errors otherwise | session stays pending until the extension connects; pending connections expire after ~2 min |
+| Connection check | — | candidates from `DevToolsActivePort` + process listeners are probed, and the first endpoint that can host a page wins: an HTTP endpoint with `/json` page targets, or a browser-level WebSocket that answers `Target.getTargets`; loud errors otherwise | session stays pending until the extension connects; pending connections expire after ~2 min |
 | `close` behaviour | **terminates the browser process** | disconnects; **the browser keeps running**, but the tab Browser4 was driving is closed | disconnects the relay; the browser keeps running, but the tabs Browser4 drove are removed (`chrome.tabs.remove`) |
 | If the connection drops | a new session can be created | **never silently replaced** — the command errors and asks you to re-attach | same, and a stale extension session is auto-reconnected once |
 | Concurrency | one browser per session | several sessions may attach to the same browser | **one relay connection per browser** — a new attach tears down the previous one |
 | Works in CI | yes | only with an explicitly started browser/endpoint | no (needs an interactive Chrome with the extension) |
 | Best for | production batches, clean environments, CI | debugging live issues, cloud browsers, Electron, SSH-tunnelled remote Chrome | "just use my own browser" with zero flags/ports |
 
-**`attach --cdp` endpoint resolution.** `--cdp` accepts a channel name (`chrome`, `chrome-canary`, `msedge`,
-`msedge-dev`, …), an HTTP endpoint (`http://localhost:9222`), a WebSocket URL, a bare port, or `host:port`.
-Channel-name resolution has three tiers: scan running processes for `--remote-debugging-port=N`, then the
-channel's default port, then a scan of 9222–9333. **When the browser was started with
-`--remote-debugging-port=0` (which is what Browser4-launched browsers use), the real port is discovered by
-listing the process's listening ports — this tier is Windows-only.** On Linux/macOS, pass an explicit endpoint
-(or start the target browser with a fixed `--remote-debugging-port`) instead of relying on the channel name.
+**`attach --cdp` endpoint resolution**
+
+`--cdp` accepts a channel name (`chrome`, `chrome-canary`, `msedge`, `msedge-dev`, …), an HTTP endpoint
+(`http://localhost:9222`), a WebSocket URL, a bare port, or `host:port`. A **browser-level** WebSocket
+(`ws://…/devtools/browser/<uuid>`) is attached to over that socket; a **page-level** one is only a
+host:port hint, with pages resolved over `GET /json`.
+
+Channel-name resolution takes the first candidate that can host a page: the browser's
+`<user-data-dir>/DevToolsActivePort` (second line = its socket) and `--remote-debugging-port=N`, then the
+process's other listening ports, the channel default, and a 9222–9333 scan. Browsers started with
+`--remote-debugging-port=0` (Browser4-launched) resolve through `DevToolsActivePort` on every platform —
+the CLI reads the `--user-data-dir` from the running process; only the listening-port sweep is
+Windows-only, and only when that file cannot be located.
+
+Chrome's built-in `chrome://inspect/#remote-debugging` toggle is a supported `--cdp` endpoint: it publishes
+a browser-level WebSocket and 404s every `/json*` path, so `attach --cdp chrome` resolves it from
+`DevToolsActivePort`, an explicit `ws://127.0.0.1:<port>/devtools/browser/<uuid>` works too, and pages
+come from `Target.getTargets`. `attach --extension` stays available as an alternative.
 
 Attaching binds the session to a page tab of the target browser — an existing page when one is available,
 otherwise a newly created `about:blank` tab. Subsequent commands act on that bound tab, and `close` closes it
@@ -276,7 +306,7 @@ a managed session, use `state-save` / `state-load`.
 | Browser channel | managed = Chrome; attach = chrome*/msedge* | Need Edge/Canary/Electron/cloud → attach only. |
 | Platform | GUI-less envs force headless; sandboxed shells need writable `BROWSER4_RUNTIME_DIR` / `BROWSER4_CLI_STATE_DIR` | Determines whether headed is even possible and whether the backend can start. |
 | Lifecycle | `close` (one session) · `close-all` · `swarm close` | `swarm close` also aborts pending tasks; forgetting it holds contexts and the worker pool. |
-| Observability | `list` (Connection column shows the **actual** browser, flagging channel mismatches) · `status` · `screenshot` | Always confirm the real browser after an attach — driving the wrong profile looks like "lost login state". |
+| Observability | `list` (Connection column shows the **actual** browser, flagging channel mismatches; Display column shows the creation-time mode — Headed/Headless/Supervised/Attached) · `status` · `screenshot` | Always confirm the real browser after an attach — driving the wrong profile looks like "lost login state". |
 | Cold start | first `open` starts the runtime; first swarm jobs wait 30–60 s | Do not diagnose a cold start as a hang. |
 | Per-session concurrency | commands on one session are serialized | Parallelism comes from multiple sessions/contexts, not from issuing commands concurrently to one session. |
 
@@ -289,7 +319,8 @@ Need to drive a browser
 │  ├─ No debugging-port setup wanted → attach --extension [channel]
 │  │    (avoid chrome:// pages; one session per browser; not for CI)
 │  └─ Want a controlled/remote endpoint → attach --cdp <url|host:port|channel>
-│       (on Linux/macOS pass an explicit endpoint; `close` leaves the browser running)
+│       (a channel finds DevToolsActivePort on every platform; otherwise pass an
+│        explicit endpoint; `close` leaves the browser running)
 ├─ Bulk, non-interactive, throughput?
 │  └─ swarm create [--profile-mode TEMPORARY] [--max-browser-contexts N]
 │     → swarm query --sql @q.sql --seed-file urls.txt --refresh

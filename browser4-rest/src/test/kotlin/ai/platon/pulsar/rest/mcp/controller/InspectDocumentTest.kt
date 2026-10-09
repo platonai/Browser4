@@ -739,4 +739,77 @@ class InspectDocumentTest {
             assertEquals(3, result["matchCount"].asInt())
         }
     }
+
+    // =========================================================================
+    // Truncation hints
+    // =========================================================================
+
+    @Nested
+    @DisplayName("Truncation hints")
+    inner class TruncationHints {
+
+        /** books.toscrape-style listing: clipped label baked into the markup, full value in title. */
+        private val clippedTitlesHtml = """
+            <html><body>
+            <article class="product_pod" vi="0 0 300 400">
+              <h3><a href="/catalogue/a-light-in-the-attic" title="A Light in the Attic">A Light in the ...</a></h3>
+              <div class="product_price"><p class="price_color">£51.77</p></div>
+            </article>
+            <article class="product_pod" vi="0 320 300 400">
+              <h3><a href="/catalogue/tipping-the-velvet" title="Tipping the Velvet">Tipping the Vel...</a></h3>
+              <div class="product_price"><p class="price_color">£53.74</p></div>
+            </article>
+            </body></html>
+        """.trimIndent()
+
+        @Test
+        @DisplayName("nested clipped anchor gets a title-attribute hint")
+        fun nestedClippedAnchorPointsAtTitleAttr() {
+            val result = inspect(clippedTitlesHtml, ".product_pod")
+            val hints = result["samples"][0]["truncationHints"]
+            assertNotNull(hints, "nested clipped text should produce truncation hints")
+            val titleHint = hints.firstOrNull { it["attribute"].asText() == "title" }
+            assertNotNull(titleHint, "a title-attribute hint should exist: $hints")
+            assertTrue(
+                titleHint!!["childSelector"].asText().contains("a"),
+                "hint should point at the anchor ref: ${titleHint["childSelector"]}"
+            )
+            assertEquals("A Light in the Attic", titleHint["sampleValue"].asText())
+        }
+
+        @Test
+        @DisplayName("no hint when clipped text has no fuller attribute")
+        fun noHintWithoutFullerAttribute() {
+            val html = """
+                <html><body>
+                <div class="card" vi="0 0 100 100"><h3><a href="/x">Some clipped title...</a></h3></div>
+                <div class="card" vi="0 120 100 100"><h3><a href="/y">Another clipped one...</a></h3></div>
+                </body></html>
+            """.trimIndent()
+            val result = inspect(html, ".card")
+            assertFalse(
+                result["samples"][0].has("truncationHints"),
+                "clipped text without a fuller title/aria-label/alt must not produce hints"
+            )
+        }
+
+        @Test
+        @DisplayName("unicode ellipsis also triggers hint detection")
+        fun unicodeEllipsisTriggersHint() {
+            val html = """
+                <html><body>
+                <div class="card" vi="0 0 100 100">
+                  <a href="/x" title="The full expanded tooltip text">Short label…</a>
+                </div>
+                <div class="card" vi="0 120 100 100">
+                  <a href="/y" title="Second full expanded tooltip text">Other label…</a>
+                </div>
+                </body></html>
+            """.trimIndent()
+            val result = inspect(html, ".card")
+            val hints = result["samples"][0]["truncationHints"]
+            assertNotNull(hints, "a unicode ellipsis should trigger detection")
+            assertTrue(hints.any { it["attribute"].asText() == "title" })
+        }
+    }
 }

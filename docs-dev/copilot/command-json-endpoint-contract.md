@@ -3,6 +3,8 @@
 > 日期：2026-09-28 · 来源：`CommandController#submitJsonCommand()` 代码审查（含后续 P2 项）。
 > 范围：P1×2 + P2×2 + `/plain` 对齐，全部配门禁内单测（`CommandControllerTest` 6、`UserCommandExecutorTest` 2、
 > `CommandToolExecutorTest` 8）；其余按文末"未修"清单拆独立提交。
+>
+> 追加：2026-10-07 第五轮（C 批抽取）——见文末「第五轮」。本轮**不动路由、不动响应体**。
 
 ## 第一轮：P1-1 async 响应契约三方矛盾 → 202 + JSON 对象
 
@@ -116,6 +118,59 @@ cd cli/browser4-cli && cargo test --test e2e --no-run
 `/api/commands*` 此前只有 `E2ETest`/`Slow` 标签的用例，两个门禁都不跑；现在 async 形状、非法 url 不分配资源、
 取消三态、同步访问的线程与并发上限都进了门禁。
 
+## 第五轮（2026-10-07）：C 批抽取 —— sessionId / 信封 / SSE 桥
+
+起因：评估"把 `api/x`（`ScrapeController`）、`api/scrape`（`PageScrapeController`）、`api/commands`（本文件的主角）
+三个采集 controller 合并成一个"时，结论是**类不该合、契约该统一**——三者不共享任务模型、会话语义与响应形状，
+物理合并会在启动期撞 `Ambiguous mapping`（`{id}/status|result|stream` 与根 `POST` 在两个前缀上同形）。
+于是先做**只在共享规则上收敛**的这一批：路由与响应体一律不动。
+
+### 5-1 `sessionId`：空白 = 未指定（新增 `rest/api/support/SessionResolution.kt`）
+
+改前两边各写一份，且**规则不一致**：`CommandController` 用 `sessionId ?: DEFAULT_SESSION_ID`，于是 `?sessionId=`
+（空串）会被当成**真的会话 id** —— `ensurePageVisitor("")` 去建一个调用方从未打开过的会话；而 `PageScrapeService`
+用 `takeIf { it.isNotBlank() }`，空白即拒。第一轮把 `?sessionId=` 从"被静默忽略"改成"被采纳"，本轮补上它该有的判据。
+
+- `SessionResolution.firstNamed(...)` / `firstNamedOrDefault(...)`：会话 id 的判据是**非空白**，`null`/`""`/`"   "` 一律视为"未指定"。
+- `CommandController` 五处（`resolveSessionId`、`submitPlainCommand`、`getStatus`、`getResult`、`streamEvents`）统一走它。
+- 冲突 WARN 收紧为"**两侧都真的指定了**才算冲突"：否则空白 body + `?sessionId=s1` 会先 WARN 说"用 body 的值"、
+  实际却用 `s1` —— 一条会骗人的日志。
+- `PageScrapeService` 行为不变（缺省仍拒），只是判据改为共享；两条面的**答案**差异（默认 vs 拒绝）保持并写进 KDoc。
+
+### 5-2 `/api/scrape` 信封（新增 `rest/api/support/ScrapeEnvelopes.kt`）
+
+该面 5 个站点（成功 ×2、400、`strict` 失败、404）本来各拼一遍 map，共享两条规则——键顺序、以及"message 缺失即空串，
+永不 null"——但没有任何地方钉住。收敛为 `success(data)` 与 `failure(error, message, vararg details)`，键顺序由测试锁死。
+`/api/x` 的 400 体**不并进来**：它压根没有 `success` 键，合并只能靠 flag 掩盖差异（而它本就在下线候选名单上）。
+
+### 5-3 `Flow → SSE` 桥（新增 `rest/api/support/ServerSentEvents.kt`）
+
+`ScrapeService.streamEvents` 与 `CommandController.streamEvents` 各写一遍 create → collect → dispose。
+
+- 抽为 `Flow<T>.toServerSentEvents(scope, logger, map)`；**事件形状留在调用点**：`/api/x` 发响应自身的 `id`/`event`，
+  `/api/commands` 只发 `data`（其 JS 客户端只解 data），差异因此仍在调用点可见。
+- **顺带修一个被抽取暴露的真 bug**：原来的 `onCompletion { sink.complete() }` 排在 `.catch` **之前**，状态流失败时
+  先 `complete`、再 `sink.error`，后者被已终止的 sink 丢弃 —— `/api/commands/{id}/stream` 会把"任务状态流炸了"
+  作为**正常结束**发给客户端，错误只留在日志里。现改为 `onCompletion { cause -> if (cause == null) sink.complete() }`，
+  失败交给 `catch` 上报（且仍由 `catch` 吞掉，避免在 scope 里变成未捕获异常）。`/api/x` 原本是对的（它在 `onEach`
+  里见 `isDone` 就 `complete`），本轮之后两条流行为一致。
+
+### 新测试（均 `Unit` + `Fast`，PR 门禁内）
+
+`SessionResolutionTest` 3、`ScrapeEnvelopesTest` 4、`ServerSentEventsTest` 4（顺序与完成、两种事件形状、
+失败上报、dispose 取消轮询），`CommandControllerTest` 6 → 8（空白 sessionId 不再落到 `""`；body 覆盖 query）。
+
+```bash
+./mvnw.cmd -B --no-transfer-progress -pl browser4-rest -Dtest="SessionResolutionTest,ScrapeEnvelopesTest,ServerSentEventsTest,CommandControllerTest,PageScrapeControllerTest,ScrapeControllerTest,SystemStatusControllerTest,PageScrapeServiceTest" -DfailIfNoTests=false test
+# → Tests run: 70, Failures: 0, Errors: 0 — BUILD SUCCESS
+
+./mvnw.cmd -B --no-transfer-progress -pl browser4-rest -Dtest="PageScrapeToolExecutorTest,CommandToolExecutorTest,UserCommandExecutorTest,MCPToolControllerTest,ArtifactStoreTest,ArgumentNormalizersTest" -DfailIfNoTests=false test
+# → Tests run: 138, Failures: 0, Errors: 0 — BUILD SUCCESS
+```
+
+未跑：`E2E`/`Slow`/`Integration` 标签的用例（`CommandControllerSSETest` 等，两个门禁都不跑；SSE 的行为变更因此只有
+单测覆盖）与 Rust e2e（本轮无路由改动）。
+
 ## 未修（建议独立提交）
 
 | # | 问题 | 要点 |
@@ -125,3 +180,5 @@ cd cli/browser4-cli && cargo test --test e2e --no-run
 | — | 任意 body `sessionId` 即建会话、REST 路径无限流、全仓无 Spring Security | 仅 4h 空闲回收兜底 |
 | — | 异步提交的 `ensurePageVisitor` 仍在请求线程 | `submitPageVisitCommand` 需同步返回 id，只有新建会话时才会真阻塞 |
 | — | `/plain` 的空命令仍走 202+id，轮询才知道 400 | 与 `/json` 的"先校验再分配"不同；未改是怕破坏既有轮询语义 |
+| — | SSE 桥是手写的 `Flux.create`，而仓库已依赖 `kotlinx-coroutines-reactor` | 换 `Flow.asFlux()` 还能再删一层，但会改变缓冲与取消机制，需一次真机 SSE 验证 |
+| — | SSE 的失败路径没有 E2E 覆盖 | 第五轮的错误上报只有 `ServerSentEventsTest` 单测钉住；`CommandControllerSSETest` 是 `Slow`/`E2E` 标签，两个门禁都不跑 |

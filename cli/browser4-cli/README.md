@@ -262,6 +262,93 @@ the submission can be inspected afterwards with `swarm list --batch <id>` — e.
 `swarm list --batch <id> --status failed --json` prints exactly the URLs that
 failed, with each task's `duration_ms`.
 
+### Scrape
+
+| Command | Description |
+|---|---|
+| `scrape [url] --formats <list>` | One page capture → many outputs in a single document |
+| `scrape formats` | List every accepted format id, whether this build can deliver it, and why not |
+
+Asking for several outputs one command at a time means one page load each, and the
+answers can describe different page states. `scrape` captures the page **once** and
+derives every requested format from that one capture, so `markdown` and `links`
+cannot disagree about what the page said:
+
+```bash
+browser4-cli scrape --formats "markdown,links,images"
+browser4-cli scrape --formats '["markdown",{"type":"deterministicJson","sql":"select dom_first_text(dom, \'h1\') as title"}]'
+browser4-cli open "https://example.com/post" && browser4-cli scrape --formats "markdown"
+```
+
+`scrape` takes **no URL argument**: every read in this family targets the session's
+active page (`html_snapshot export` does not even accept one), so a request-level URL
+could only have been recorded in `metadata.sourceURL` while the content came from
+whatever the tab was showing — a document about the wrong page. `open` the page you
+mean, then scrape it.
+
+The response is one document whose `metadata` carries `captureId` and `captureTime`
+— there is exactly one of each per response, which is how you can tell the capture
+was shared — plus `formatsRequested` and `formatsDelivered`:
+
+```json
+{
+  "url": "https://example.com/",
+  "markdown": "…",
+  "links": ["https://iana.org/help/example-domains"],
+  "metadata": {
+    "captureId": "https://example.com/",
+    "captureTime": "2026-10-06T03:00:23.582Z",
+    "formatsRequested": ["markdown", "links"],
+    "formatsDelivered": ["markdown", "links"]
+  }
+}
+```
+
+Available in a stock install: `markdown`, `html`, `rawHtml`, `links`, `images`,
+`attributes`, `deterministicJson`, `readability`, `screenshot`, `pdf`. `branding`,
+`product`, `menu` and `highlights` need a plugin contributor; the rest are later
+phases. Run `browser4-cli scrape formats` for the authoritative answer for your build.
+
+`screenshot` and `pdf` are the two formats that need the live tab, and the only ones
+that write a file. The file is always written to the backend's temporary tree — PNGs
+under `web/screenshot`, PDFs under `web/pdf` — and the `screenshot` / `pdf` field holds
+that local path; add `"base64": true` to the format entry to also get the bytes in
+`screenshotBase64` / `pdfBase64`:
+
+```bash
+browser4-cli scrape --formats '[{"type":"screenshot","fullPage":true,"base64":true}]'
+browser4-cli scrape --formats '[{"type":"pdf","base64":true}]'
+```
+
+The path is on the **backend's** machine. Pass `--output <dir>` (`-o`) and the CLI
+fetches each file and prints the document with the local paths:
+
+```bash
+browser4-cli scrape --formats "screenshot,pdf" --output ./out
+# → "screenshot": "./out/screenshot-<ts>-<rand>.png", "pdf": "./out/pdf-<ts>-<rand>.pdf"
+```
+
+From another host, fetch a single artifact by name — only a name is accepted, never a
+path:
+
+```bash
+curl -o shot.png "http://backend:18182/api/scrape/media/screenshot-<ts>-<rand>.png"
+```
+
+**A format that produced nothing is not a failure.** A page with no `<img>` yields an
+empty `images`, which is omitted from the JSON while still appearing in
+`formatsDelivered` — that is how "requested, produced nothing" is told apart from
+"not requested". A format this build cannot deliver appears in neither and is named
+in `warning`, and the rest of the response is still returned. Pass `--strict` when a
+missing format should stop the job instead: the exit code becomes non-zero and the
+message names the reason and the code to act on (503 unavailable here, 502/504 ran and
+failed, 400 not honourable).
+
+> **Quote a comma-separated list.** In PowerShell an unquoted `markdown,links,images`
+> is three arguments, so `--formats` receives only `markdown` and the request still
+> succeeds — the response's `formatsRequested` is the tell. Write
+> `--formats "markdown,links,images"`.
+
 ### Crawl
 
 | Command | Description |
@@ -352,12 +439,12 @@ Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer enc
 
 | Command | Description |
 |---|---|
-| `config` | List all CLI configuration values (server, timeout, proxy, session) |
+| `config` | List all CLI configuration values (server, timeout, proxy, session, extension_id) |
 | `config get <key>` | Get a single configuration value |
 | `config set <key> <value>` | Set a configuration value (persisted to `~/.browser4/config.json`) |
 | `config delete <key>` | Remove a configuration value, resetting it to default |
 
-Keys: `server` (default Browser4 URL), `timeout` (seconds, positive integer), `proxy` (download proxy URL), `session` (default session name). Configuration values are global fallbacks — explicit flags (`--server`, `--timeout`, `--proxy`, `-s`) override them per invocation.
+Keys: `server` (default Browser4 URL), `timeout` (seconds, positive integer), `proxy` (download proxy URL), `session` (default session name), `extension_id` (id of a locally loaded Browser4 extension, used by `attach --extension`). Configuration values are global fallbacks — explicit flags (`--server`, `--timeout`, `--proxy`, `-s`) override them per invocation, and `BROWSER4_EXTENSION_ID` overrides the persisted `extension_id`.
 
 ### Global options
 
@@ -382,6 +469,8 @@ Need to extract data from a page?
 ├─ Interactive page (click, fill, scroll first)? → snapshot + refs, then extract
 ├─ Static page, one field? → htmlsnapshot get text "<selector>"
 ├─ Static page, multiple correlated fields? → htmlsnapshot query --sql @query.sql
+├─ Several outputs from one page (text + links + images)?
+│  → page scrape --formats "markdown,links,images"   # one capture for all of them
 ├─ Natural language ("find the price")? → extract (needs LLM key)
 └─ High volume, many pages? → crawl or swarm with --sql
 ```

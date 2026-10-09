@@ -122,7 +122,7 @@ browser4-cli select e18 "CA"
 
 **Problem:** An auditor or researcher needs a quick, AI-readable overview of a page's structure — headings, forms, tables, key content blocks, and statistics — without reading the full HTML or writing selectors.
 
-**Why HTML Snapshot:** `summary` generates a Web Page Summary Index (WPSI) — a deterministic compressed page summary (typically <1% of original HTML) in YAML format. It's designed for LLM consumption and quick human review.
+**Why HTML Snapshot:** `summary` generates a Web Page Summary Index (WPSI) — a deterministic compressed page summary (usually far smaller than the original HTML; the ratio varies with page structure, and dense listing pages compress much less) in YAML format. It's designed for LLM consumption and quick human review.
 
 ### 11a. Generate a page summary
 

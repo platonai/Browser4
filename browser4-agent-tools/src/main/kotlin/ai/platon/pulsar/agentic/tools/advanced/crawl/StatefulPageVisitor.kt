@@ -12,6 +12,7 @@ import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.common.alwaysFalse
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.FlatJSONExtractor
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.dom.FeaturedDocument
@@ -279,7 +280,7 @@ class StatefulPageVisitor(
                 val instruct =
                     PromptTemplate(dataExtractionRules, mapOf(PLACEHOLDER_PAGE_CONTENT to textContent)).render()
                 performInstruct("fields", instruct, status, "map") { content ->
-                    FlatJSONExtractor.extract(content)
+                    extractFieldsTolerant(content)
                 }
                 logger.info("fields: {}", status.pageVisitResult?.fields)
             }
@@ -366,6 +367,23 @@ class StatefulPageVisitor(
         status.addInstructResult(result)
     }
 
+    /**
+     * Extract a flat `field -> value` map from an LLM response, tolerating
+     * non-scalar (array/object) values.
+     *
+     * [FlatJSONExtractor] deserializes the JSON object into `Map<String, String>`,
+     * so a single array-valued field (e.g. `"notable awards": [...]`) makes
+     * Jackson reject the WHOLE object and the entire extraction is lost as `{}`.
+     * Strategy:
+     *  1. try the standard extractor first — when it succeeds its output is
+     *     unchanged (and it owns the JSON-block detection heuristics);
+     *  2. when it yields nothing, parse the first JSON object loosely and
+     *     stringify non-scalar values as compact JSON, preserving every field
+     *     instead of dropping the whole result.
+     */
+    internal fun extractFieldsTolerant(content: String): Map<String, String> =
+        TolerantFieldExtractor.extract(content)
+
     private suspend fun chatWithLLM(instruct: String): String {
         try {
             return session.chat(instruct).content
@@ -396,5 +414,75 @@ class StatefulPageVisitor(
     override fun close() {
         statusCache.invalidateAll()
         logger.info("StatefulPageVisitor closed (session={})", session.uuid)
+    }
+}
+
+/**
+ * Tolerant extraction of a flat `field -> value` map from LLM output that may
+ * contain array- or object-valued fields. See [StatefulPageVisitor.extractFieldsTolerant].
+ */
+internal object TolerantFieldExtractor {
+    private val logger = getLogger(TolerantFieldExtractor::class)
+
+    fun extract(content: String): Map<String, String> {
+        val standard = runCatching { FlatJSONExtractor.extract(content) }.getOrDefault(emptyMap())
+        if (standard.isNotEmpty()) return standard
+
+        val block = extractFirstJsonObject(content) ?: return emptyMap()
+        val node = try {
+            pulsarObjectMapper().readTree(block)
+        } catch (e: Exception) {
+            logger.warn("Failed to parse tolerant fields block length={}: {}", block.length, e.message)
+            return emptyMap()
+        }
+        if (!node.isObject) return emptyMap()
+
+        val result = LinkedHashMap<String, String>()
+        node.fields().forEach { (key, value) ->
+            result[key] = when {
+                value.isNull -> ""
+                value.isTextual -> value.asText()
+                value.isValueNode -> value.asText()
+                // Arrays and nested objects survive as compact JSON text.
+                else -> value.toString()
+            }
+        }
+        if (result.isNotEmpty()) {
+            logger.info("Recovered {} field(s) containing non-scalar values", result.size)
+        }
+        return result
+    }
+
+    /**
+     * Return the first balanced top-level JSON object substring in [content],
+     * ignoring braces inside JSON strings. Handles ```` ```json ```` fenced
+     * blocks and prose around the object. Returns null when no object exists.
+     */
+    fun extractFirstJsonObject(content: String): String? {
+        val start = content.indexOf('{')
+        if (start < 0) return null
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in start until content.length) {
+            val ch = content[i]
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    ch == '\\' -> escaped = true
+                    ch == '"' -> inString = false
+                }
+            } else {
+                when (ch) {
+                    '"' -> inString = true
+                    '{' -> depth++
+                    '}' -> {
+                        depth--
+                        if (depth == 0) return content.substring(start, i + 1)
+                    }
+                }
+            }
+        }
+        return null
     }
 }

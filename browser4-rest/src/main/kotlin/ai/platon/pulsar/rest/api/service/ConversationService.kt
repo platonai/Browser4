@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.*
 import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.rest.session.PulsarSessionManager
@@ -23,6 +23,7 @@ class ConversationService(
     val loadService: LoadService,
 ) {
     private val logger = getLogger(ConversationService::class)
+
     val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
 
     suspend fun chat(prompt: String): String {

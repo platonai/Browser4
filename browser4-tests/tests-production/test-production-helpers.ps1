@@ -137,12 +137,20 @@ $script:AppData = if ($env:APPDATA) {
     $env:HOME
 }
 
-# Constants (mirrors lines 151-169)
+# Constants (mirrors test-production.ps1's constant block)
 $InstallPs1Url   = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1'
 $InstallShUrl    = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh'
+# The harness runs against a sandbox state dir, but the extracted helpers only
+# need *a* value here — the directory-discovery tests override it per case.
 $Browser4Home    = if ($script:OSWin) { Join-Path $env:USERPROFILE '.browser4' } else { Join-Path $env:HOME '.browser4' }
+$UserBrowser4Home = $Browser4Home
+# Documented default — only a last-resort fallback for the endpoint resolver.
 $ServerBaseUrl   = 'http://localhost:18182'
 $ServerHealthUrl = "$ServerBaseUrl/actuator/health"
+# The CLI's built-in default, kept as the second fallback candidate.
+$LegacyServerBaseUrl = 'http://localhost:8182'
+# Set by Wait-ServerHealthy once a live endpoint is observed.
+$script:ActiveServerBaseUrl = ''
 
 # Runtime data directory (mirrors lines 158-169)
 $RuntimeDataDir = if ($script:OSWin) {
@@ -166,7 +174,35 @@ $script:FailedSteps = 0
 # Resolve the path to test-production.ps1 and extract function defs
 # -------------------------------------------------------------------
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$TestProductionPath = Join-Path $ScriptDir '..\test-production.ps1'
+
+# This helper unit-tests the acceptance harness, so — unlike every other script
+# in this directory — it does need a repository checkout.  Resolve the harness
+# from the repo root and fail with an actionable message when there is none.
+# Split-Path twice instead of joining '..\..' so the lookup also works on
+# Linux/macOS, where a backslash is a literal character, not a separator.
+$RepoRootCandidate = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+$RepoRoot = if ($RepoRootCandidate -and (Test-Path (Join-Path $RepoRootCandidate 'pom.xml'))) {
+    $RepoRootCandidate
+} elseif ($env:BROWSER4_REPO_ROOT -and (Test-Path (Join-Path $env:BROWSER4_REPO_ROOT 'pom.xml'))) {
+    (Resolve-Path $env:BROWSER4_REPO_ROOT).Path
+} else {
+    $null
+}
+
+$TestProductionPath = if ($RepoRoot) {
+    Join-Path (Join-Path $RepoRoot 'bin') 'test-production.ps1'
+} else {
+    ''
+}
+
+if (-not $TestProductionPath -or -not (Test-Path $TestProductionPath)) {
+    Write-Host ''
+    Write-Host 'ERROR: bin/test-production.ps1 was not found.' -ForegroundColor Red
+    Write-Host '       This script unit-tests the acceptance harness, so it must run from' -ForegroundColor Red
+    Write-Host '       inside a Browser4 checkout.  Set BROWSER4_REPO_ROOT to the checkout' -ForegroundColor Red
+    Write-Host '       root when running it from anywhere else.' -ForegroundColor Red
+    exit 1
+}
 
 Write-Host "Source : $TestProductionPath" -ForegroundColor DarkGray
 Write-Host "OS     : Win=$($script:OSWin) Linux=$($script:OSLinux) Mac=$($script:OSMac)" -ForegroundColor DarkGray
@@ -401,6 +437,16 @@ function New-TestHome {
     }
 }
 
+# Build a path from segments without embedding backslashes: this script claims
+# to run on Linux/macOS too, where `'a\b'` is a single literal file name rather
+# than a nested path, which would silently break every case below.
+function Join-Segments {
+    param([string]$Root, [string[]]$Segments)
+    $path = $Root
+    foreach ($segment in $Segments) { $path = Join-Path $path $segment }
+    return $path
+}
+
 # Case 1: No home directory at all
 $r = New-TestHome -Setup { param($root) }
 Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
@@ -414,7 +460,7 @@ Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
 # Case 3: browser4-bundle dir exists but no Browser4Bundle.jar inside
 $r = New-TestHome -Setup {
     param($root)
-    $null = New-Item -Path (Join-Path $root 'runtime\browser4-bundle') -ItemType Directory -Force
+    $null = New-Item -Path (Join-Segments $root @('runtime', 'browser4-bundle')) -ItemType Directory -Force
 }
 Assert-Returns -Label 'GRBD: bundle dir without jar → null' -Actual $r.Result -Expected $null
 Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
@@ -422,7 +468,7 @@ Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
 # Case 4: browser4-bundle dir with Browser4Bundle.jar — found
 $r = New-TestHome -Setup {
     param($root)
-    $bundleDir = Join-Path $root 'runtime\browser4-bundle'
+    $bundleDir = Join-Segments $root @('runtime', 'browser4-bundle')
     $null = New-Item -Path $bundleDir -ItemType Directory -Force
     $null = New-Item -Path (Join-Path $bundleDir 'Browser4Bundle.jar') -ItemType File -Force
 }
@@ -433,8 +479,8 @@ Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
 # Case 5: Two nested browser4-bundle dirs, only one has the jar
 $r = New-TestHome -Setup {
     param($root)
-    $emptyDir = Join-Path $root 'a\browser4-bundle'
-    $fullDir  = Join-Path $root 'b\browser4-bundle'
+    $emptyDir = Join-Segments $root @('a', 'browser4-bundle')
+    $fullDir  = Join-Segments $root @('b', 'browser4-bundle')
     $null = New-Item -Path $emptyDir -ItemType Directory -Force
     $null = New-Item -Path $fullDir  -ItemType Directory -Force
     $null = New-Item -Path (Join-Path $fullDir 'Browser4Bundle.jar') -ItemType File -Force
@@ -446,7 +492,7 @@ Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
 # Case 6: Bundle is deep (nested several levels)
 $r = New-TestHome -Setup {
     param($root)
-    $bundleDir = Join-Path $root 'x\y\z\browser4-bundle'
+    $bundleDir = Join-Segments $root @('x', 'y', 'z', 'browser4-bundle')
     $null = New-Item -Path $bundleDir -ItemType Directory -Force
     $null = New-Item -Path (Join-Path $bundleDir 'Browser4Bundle.jar') -ItemType File -Force
 }
@@ -458,7 +504,7 @@ Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
 # Test-Path returns $true for directories too, so this is a doc-edge-case.
 $r = New-TestHome -Setup {
     param($root)
-    $bundleDir = Join-Path $root 'runtime\browser4-bundle'
+    $bundleDir = Join-Segments $root @('runtime', 'browser4-bundle')
     $null = New-Item -Path $bundleDir -ItemType Directory -Force
     # Create Browser4Bundle.jar as a directory (not a file)
     $null = New-Item -Path (Join-Path $bundleDir 'Browser4Bundle.jar') -ItemType Directory -Force
@@ -466,6 +512,134 @@ $r = New-TestHome -Setup {
 $found = ($null -ne $r.Result) -and $r.Result.EndsWith('browser4-bundle')
 Assert-Returns -Label 'GRBD: jar-is-directory (finds it — Test-Path is true for dirs)' -Actual $found -Expected $true
 Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
+
+# ── Current (versioned) layout: {root}/runtime/{tag}/lib/Browser4Bundle.jar ──
+# The legacy cases above kept passing while the real layout went undetected,
+# which is exactly how `open (warm start)` came to be reported as
+# "skipped (bundle not cached)" on every run.
+
+# Case 8: current.tag names the installed version
+$r = New-TestHome -Setup {
+    param($root)
+    $libDir = Join-Path (Join-Path (Join-Path $root 'runtime') 'v4.14.0-rc.7') 'lib'
+    $null = New-Item -Path $libDir -ItemType Directory -Force
+    $null = New-Item -Path (Join-Path $libDir 'Browser4Bundle.jar') -ItemType File -Force
+    Set-Content -Path (Join-Path (Join-Path $root 'runtime') 'current.tag') -Value 'v4.14.0-rc.7'
+}
+$found = ($null -ne $r.Result) -and $r.Result.EndsWith('v4.14.0-rc.7')
+Assert-Returns -Label 'GRBD: versioned layout via current.tag → install dir' -Actual $found -Expected $true
+Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
+
+# Case 9: versioned layout without current.tag is still discovered by scanning
+$r = New-TestHome -Setup {
+    param($root)
+    $libDir = Join-Path (Join-Path (Join-Path $root 'runtime') 'v4.13.25') 'lib'
+    $null = New-Item -Path $libDir -ItemType Directory -Force
+    $null = New-Item -Path (Join-Path $libDir 'Browser4Bundle.jar') -ItemType File -Force
+}
+$found = ($null -ne $r.Result) -and $r.Result.EndsWith('v4.13.25')
+Assert-Returns -Label 'GRBD: versioned layout without current.tag → install dir' -Actual $found -Expected $true
+Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
+
+# Case 10: versioned directory present but no lib/Browser4Bundle.jar → not a bundle
+$r = New-TestHome -Setup {
+    param($root)
+    $null = New-Item -Path (Join-Path (Join-Path (Join-Path $root 'runtime') 'v4.14.0-rc.7') 'lib') -ItemType Directory -Force
+    Set-Content -Path (Join-Path (Join-Path $root 'runtime') 'current.tag') -Value 'v4.14.0-rc.7'
+}
+Assert-Returns -Label 'GRBD: versioned dir without jar → null' -Actual $r.Result -Expected $null
+Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
+
+# Case 11: a stale current.tag pointing at a deleted version falls back to scanning
+$r = New-TestHome -Setup {
+    param($root)
+    $libDir = Join-Path (Join-Path (Join-Path $root 'runtime') 'v4.13.25') 'lib'
+    $null = New-Item -Path $libDir -ItemType Directory -Force
+    $null = New-Item -Path (Join-Path $libDir 'Browser4Bundle.jar') -ItemType File -Force
+    Set-Content -Path (Join-Path (Join-Path $root 'runtime') 'current.tag') -Value 'v4.99.0-gone'
+}
+$found = ($null -ne $r.Result) -and $r.Result.EndsWith('v4.13.25')
+Assert-Returns -Label 'GRBD: stale current.tag → falls back to an existing install' -Actual $found -Expected $true
+Remove-Item $r.Root -Recurse -Force -ErrorAction SilentlyContinue
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Get-ServerBaseUrlCandidates
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Get-ServerBaseUrlCandidates: endpoint discovery ━━━" -ForegroundColor Cyan
+
+# The harness must never hardcode the server endpoint: the CLI's built-in
+# default (8182) and the documented one (18182) disagree, and a user's
+# config.json can point anywhere.  These cases pin the resolution order.
+function New-EndpointTestHome {
+    param([scriptblock]$Setup)
+    $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) "b4-test-endpoint-$([System.IO.Path]::GetRandomFileName())"
+    $null = New-Item -Path $testRoot -ItemType Directory -Force
+    $originalHome     = $Browser4Home
+    $originalUserHome = $UserBrowser4Home
+    $originalActive   = $script:ActiveServerBaseUrl
+    $stateDir = Join-Path $testRoot 'state'
+    $userHome = Join-Path $testRoot 'userhome'
+    $null = New-Item -Path $stateDir -ItemType Directory -Force
+    $null = New-Item -Path $userHome -ItemType Directory -Force
+    Set-Variable -Scope script -Name Browser4Home     -Value $stateDir
+    Set-Variable -Scope script -Name UserBrowser4Home -Value $userHome
+    $script:ActiveServerBaseUrl = ''
+    try {
+        & $Setup @{ State = $stateDir; UserHome = $userHome; Root = $testRoot }
+        Set-Variable -Scope script -Name Browser4Home     -Value $stateDir
+        Set-Variable -Scope script -Name UserBrowser4Home -Value $userHome
+        return @{ Candidates = @(Get-ServerBaseUrlCandidates) }
+    } finally {
+        Set-Variable -Scope script -Name Browser4Home     -Value $originalHome
+        Set-Variable -Scope script -Name UserBrowser4Home -Value $originalUserHome
+        $script:ActiveServerBaseUrl = $originalActive
+        Remove-Item $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Case 1: no state at all → documented default first, then the CLI's built-in one
+$r = New-EndpointTestHome -Setup { param($dirs) }
+Assert-Returns -Label 'ESBUC: empty sandbox → 18182 then 8182' -Actual ($r.Candidates -join ',') `
+    -Expected 'http://localhost:18182,http://localhost:8182'
+
+# Case 2: cli-state.json wins — this is what `browser4-cli open` writes
+$r = New-EndpointTestHome -Setup {
+    param($dirs)
+    Set-Content -Path (Join-Path $dirs.State 'cli-state.json') -Value '{"baseUrl":"http://localhost:8182"}' -Encoding UTF8
+}
+Assert-Returns -Label 'ESBUC: cli-state.json endpoint comes first' -Actual $r.Candidates[0] -Expected 'http://localhost:8182'
+Assert-Returns -Label 'ESBUC: documented default still appended' -Actual ($r.Candidates -contains 'http://localhost:18182') -Expected $true
+
+# Case 3: cli-managed-processes.json is used when cli-state.json is absent
+$r = New-EndpointTestHome -Setup {
+    param($dirs)
+    $json = '{"processes":[{"pid":1,"baseUrl":"http://localhost:18282","port":18282}]}'
+    Set-Content -Path (Join-Path $dirs.State 'cli-managed-processes.json') -Value $json -Encoding UTF8
+}
+Assert-Returns -Label 'ESBUC: managed-process endpoint is honoured' -Actual $r.Candidates[0] -Expected 'http://localhost:18282'
+
+# Case 4: the user's own config.json is honoured (read-only)
+$r = New-EndpointTestHome -Setup {
+    param($dirs)
+    Set-Content -Path (Join-Path $dirs.UserHome 'config.json') -Value '{"server":"http://localhost:19090"}' -Encoding UTF8
+}
+Assert-Returns -Label 'ESBUC: user config.json server is honoured' -Actual ($r.Candidates -contains 'http://localhost:19090') -Expected $true
+
+# Case 5: malformed state must not throw — fall back to the defaults
+$r = New-EndpointTestHome -Setup {
+    param($dirs)
+    Set-Content -Path (Join-Path $dirs.State 'cli-state.json') -Value '{not json' -Encoding UTF8
+}
+Assert-Returns -Label 'ESBUC: corrupt state file → defaults, no throw' -Actual ($r.Candidates -join ',') `
+    -Expected 'http://localhost:18182,http://localhost:8182'
+
+# Case 6: endpoints are de-duplicated and normalised (trailing slash trimmed)
+$r = New-EndpointTestHome -Setup {
+    param($dirs)
+    Set-Content -Path (Join-Path $dirs.State 'cli-state.json') -Value '{"baseUrl":"http://localhost:18182/"}' -Encoding UTF8
+}
+Assert-Returns -Label 'ESBUC: duplicates collapsed, trailing slash trimmed' -Actual ($r.Candidates -join ',') `
+    -Expected 'http://localhost:18182,http://localhost:8182'
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: Update-SessionPath

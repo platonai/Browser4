@@ -9,8 +9,8 @@ import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.CapabilityTypes.*
 import ai.platon.pulsar.common.config.MutableConfig
-import ai.platon.pulsar.common.B4Constants.BROWSER_CONTEXT_DIR
-import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_PATH
+import ai.platon.browser4.common.B4Constants.BROWSER_CONTEXT_DIR
+import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.core.api.PulsarSettings
 
 /**

@@ -3,6 +3,7 @@ package ai.platon.pulsar.skeleton.plugin
 import ai.platon.pulsar.skeleton.event.BrowseEventHandlers
 import ai.platon.pulsar.skeleton.event.CrawlEventHandlers
 import ai.platon.pulsar.skeleton.event.LoadEventHandlers
+import ai.platon.pulsar.skeleton.workflow.format.PageFormatContributor
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryAlgorithm
 
 /**
@@ -23,6 +24,7 @@ import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryAlgorithm
  * - `ToolMount` (in browser4-agentic) — register custom tool executors
  * - `PageSnifferMount` (in browser4-protocol) — register page category sniffers
  * - [PageSummaryAlgorithmMount] — register `htmlsnapshot summary` algorithms
+ * - [PageFormatContributorMount] — register page-output formats for `page_scrape`
  */
 interface PluginMount
 
@@ -173,4 +175,39 @@ interface PageSummaryAlgorithmMount : PluginMount {
      * Page summary algorithms contributed by this plugin.
      */
     fun getPageSummaryAlgorithms(): List<PageSummaryAlgorithm>
+}
+
+/**
+ * Mount point for **page-output formats** used by the Firecrawl-compatible
+ * `page_scrape` request (`formats: [...]`; CLI: `browser4-cli scrape --formats`).
+ *
+ * The `PluginManager` registers every returned contributor in the global
+ * `PageFormatContributorRegistry`. Formats implemented by the built-in engine
+ * (`markdown`, `html`, `links`, …) do not go through this mount point and their
+ * ids are reserved; a contributor claiming one is refused at registration.
+ *
+ * Contributor ids must match `[a-z][a-zA-Z0-9]*` and must be unique. An id that
+ * is already registered is skipped with a warning (first wins), so a plugin
+ * cannot silently replace another plugin's format.
+ *
+ * A contributor may be registered and still report itself unavailable (its
+ * external service is not configured); the format engine then omits the field
+ * and records the reason in the response `warning` instead of failing the
+ * request.
+ *
+ * ## Example
+ *
+ * ```kotlin
+ * @AutoConfiguration
+ * class BrandingAutoConfiguration : PageFormatContributorMount {
+ *     override fun getPageFormatContributors(): List<PageFormatContributor> =
+ *         listOf(BrandingFormatContributor())
+ * }
+ * ```
+ */
+interface PageFormatContributorMount : PluginMount {
+    /**
+     * Page-output formats contributed by this plugin.
+     */
+    fun getPageFormatContributors(): List<PageFormatContributor>
 }

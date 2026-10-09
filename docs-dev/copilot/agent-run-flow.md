@@ -42,7 +42,7 @@ browser4-cli (Rust)                       browser4-rest (Kotlin)                
   - `tool_params_fn` → 生成参数 `{task, wait?, waitTimeout?, noopLimit?, engine}`，`engine` 默认 `"cli"`；
   - `batch_supported: false`。
 - `should_ensure_server_running("agent-run")` 为真（`src/main.rs:20655`）→ `ensure_server_running()`
-  自动拉起/复用后端（Spring Boot，默认 `http://localhost:8182`），无需用户先 `open`。
+  自动拉起/复用后端（Spring Boot，生产默认 `http://localhost:18182`；开发检出从 8282 起另分配端口），无需用户先 `open`。
 - 分发到 `"agent-run" => handle_agent_run(...)`（`src/main.rs:22335`）。
 
 ### 1.2 `handle_agent_run`（`src/main.rs:10792`）

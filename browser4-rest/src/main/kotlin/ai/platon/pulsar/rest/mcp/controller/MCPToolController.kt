@@ -28,6 +28,7 @@ import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.dom.FeaturedDocument
+import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import ai.platon.pulsar.skeleton.workflow.parse.html.ViBox
 import com.fasterxml.jackson.annotation.JsonInclude
@@ -639,6 +640,11 @@ class MCPToolController(
                 "ownsBrowser" to s.ownsBrowser,
                 "createdAt" to s.createdAt,
                 "lastAccessedAt" to s.lastAccessedAt,
+                // Display mode (GUI/HEADLESS/SUPERVISED) fixed at session
+                // creation, derived from the same capabilities the launcher
+                // used. Empty when the session capabilities never pinned a
+                // mode (attached sessions, sessions on the server default).
+                "displayMode" to (PulsarSettings.parse(s.capabilities).displayMode?.name ?: ""),
                 // Attach identity: the REQUESTED channel vs the browser that
                 // REALLY connected.  Clients (CLI list/status) use these to
                 // surface wrong-browser attachments instead of showing only
@@ -721,8 +727,12 @@ class MCPToolController(
         val session = sessionManager.createAttachedSession(
             cdpEndpoint = cdpEndpoint,
             cdpPort = cdpPort,
+            // Keep `sessionId`: a named attach (browser4-cli -s name) must resolve
+            // to its OWN session, exactly like open_session. Filtering it forced
+            // every attach onto the single DEFAULT slot, so a second named attach
+            // silently rebound the first name's browser.
             capabilities = args.filterKeys {
-                it != "cdpEndpoint" && it != "cdpPort" && it != "sessionId"
+                it != "cdpEndpoint" && it != "cdpPort"
             }.mapValues { it.value?.toString() }
         )
 
@@ -1410,7 +1420,7 @@ class MCPToolController(
             val evaluate = result
             val exception = evaluate.exception
             if (exception != null) {
-                ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception)))
+                ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception), exception.cause))
             } else {
                 val text = ToolResultTextRenderer.render(evaluate)
 
@@ -1420,7 +1430,10 @@ class MCPToolController(
             }
         } catch (e: Exception) {
             logger.warn("Custom executor failed | tool={} | domain={} | {}", toolName, domain, e.message)
-            ResponseEntity.ok(errorResponse("$toolName failed: ${e.message}"))
+            // Classify from the exception: the wrapping text below is what the caller reads,
+            // but the code has to come from the failure, or a layer that knew it was, say,
+            // TARGET_UNAVAILABLE reports as INTERNAL.
+            ResponseEntity.ok(errorResponse("$toolName failed: ${e.message}", e))
         }
     }
 
@@ -1584,6 +1597,14 @@ class MCPToolController(
         val sessionId = requireSessionId(normalizedRequest.arguments)
         val managed = sessionManager.getOrRecoverSession(sessionId)
             ?: return ResponseEntity.ok(errorResponse("Session not found: $sessionId"))
+
+        // Fail loud when an externally CDP-attached browser has died: getSession
+        // does not run health resolution, so without this gate the stale driver
+        // would return cached data (last URL from currentUrl, null from evaluate)
+        // with exit status 0. The message tells the user to re-attach.
+        sessionManager.cdpAttachedSessionUnavailable(managed)?.let {
+            return ResponseEntity.ok(errorResponse(it))
+        }
 
         val agent = managed.agenticSession.companionAgent as? BasicBrowserAgent
             ?: return ResponseEntity.ok(errorResponse("Session agent does not support tools"))
@@ -1861,6 +1882,27 @@ class MCPToolController(
         isError = true,
         errorCode = code.wire,
     )
+
+    /**
+     * The same response, classified from the failure instead of from its rendered text.
+     *
+     * A throwable is the better input: [ToolErrorMapper.classify] checks types first (a
+     * `TimeoutException` is a timeout whatever its wording) and falls back to the very same
+     * message patterns. Classifying the text alone loses everything the type knew — which
+     * is how a failure that reported itself as `TARGET_UNAVAILABLE` came back to the client
+     * as `INTERNAL`: the wrapper's prose carried no pattern the mapper could match, while
+     * the exception it wrapped was explicit about its code.
+     *
+     * The message stays authoritative when the failure is unclassifiable, because the code
+     * and the text are read by the same caller and must not disagree.
+     */
+    internal fun errorResponse(message: String, error: Throwable?): MCPToolCallResponse =
+        errorResponse(
+            message,
+            error?.let { ToolErrorMapper.classify(it) }
+                ?.takeIf { it != ToolErrorCode.INTERNAL }
+                ?: ToolErrorMapper.classifyMessage(message),
+        )
 
     /**
      * Build an error message for a tool call failure, enriching it with
@@ -2340,24 +2382,42 @@ internal fun inspectDocument(
         sample.set<ArrayNode>("children", children)
 
         // ── Truncation detection ──────────────────────────────────────────
-        // When visible text ends with "..." (CSS text-overflow: ellipsis or
-        // HTML-source truncation), check child elements for title/aria-label/alt
-        // attributes that contain fuller text. Surface these as alternative
-        // selectors for DOM_FIRST_ATTR-based extraction.
-        if (rawFullText.endsWith("...") && rawFullText.length > 4) {
+        // Text ending with "…"/"..." means CSS text-overflow clipping OR (more
+        // often on real sites) truncation baked into the HTML source — the
+        // full value then lives in a title/aria-label/alt attribute. The
+        // clipped node is frequently NESTED inside the match
+        // (e.g. article.product_pod > h3 > a), so scan every element's OWN
+        // text instead of only the match's direct children, and accept the
+        // fuller attribute on the clipped element itself or its parent.
+        run {
             val truncationHints = pulsarObjectMapper().createArrayNode()
-            for (child in m.children()) {
-                val childEl = child as? org.jsoup.nodes.Element ?: continue
-                for (attr in listOf("title", "aria-label", "alt")) {
-                    val attrVal = childEl.attr(attr).trim()
-                    if (attrVal.isNotBlank() && attrVal.length > rawFullText.length) {
-                        val hint = pulsarObjectMapper().createObjectNode()
-                        hint.put("childSelector", buildElementRef(childEl))
-                        hint.put("attribute", attr)
-                        hint.put("sampleValue", truncateText(attrVal, maxWords = 8))
-                        hint.put("fullTextLength", attrVal.length)
-                        truncationHints.add(hint)
-                        break  // one hint per child — prefer first matching attr
+            val seen = mutableSetOf<String>()
+            for (el in m.allElements) {
+                if (truncationHints.size() >= 3) break
+                val own = el.ownText().trim()
+                val clipped = (own.endsWith("...") || own.endsWith("\u2026")) && own.length > 4
+                if (!clipped) continue
+                val attrTargets = if (el === m) {
+                    listOf(m)
+                } else {
+                    listOfNotNull(el as org.jsoup.nodes.Element, el.parent())
+                }
+                outer@ for (target in attrTargets) {
+                    for (attr in listOf("title", "aria-label", "alt")) {
+                        val attrVal = target.attr(attr).trim()
+                        if (attrVal.isNotBlank() && attrVal.length > own.length) {
+                            val ref = buildElementRef(target)
+                            // one hint per selector+attribute — prefer first match
+                            if (seen.add("$ref|$attr")) {
+                                val hint = pulsarObjectMapper().createObjectNode()
+                                hint.put("childSelector", ref)
+                                hint.put("attribute", attr)
+                                hint.put("sampleValue", truncateText(attrVal, maxWords = 8))
+                                hint.put("fullTextLength", attrVal.length)
+                                truncationHints.add(hint)
+                            }
+                            break@outer
+                        }
                     }
                 }
             }

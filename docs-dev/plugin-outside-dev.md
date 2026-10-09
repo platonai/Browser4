@@ -119,8 +119,8 @@ mvn archetype:generate \
 # 1. 校验 JAR 结构（thin JAR、清单、AutoConfiguration.imports）
 bin/verify-plugin.ps1 target/browser4-<feature>-<版本>.jar
 
-# 2. 装入真实 Browser4（默认端口 8182；以实际配置为准）
-curl.exe -X POST http://localhost:8182/api/plugins/install `
+# 2. 装入真实 Browser4（生产默认端口 18182；开发检出会从 8282 起另分配端口）
+curl.exe -X POST http://localhost:18182/api/plugins/install `
   -F "file=@target/browser4-<feature>-<版本>.jar" -F "replace=true"
 
 # 3. 重启后日志应出现：
@@ -130,7 +130,7 @@ curl.exe -X POST http://localhost:8182/api/plugins/install `
 #      - browser4-<feature> v<版本>
 
 # 4. 确认注册
-curl.exe http://localhost:8182/api/plugins
+curl.exe http://localhost:18182/api/plugins
 ```
 
 - 用 `browser4-cli` 跑真实页面冒烟，验证钩子行为与工具可用性。
@@ -198,7 +198,7 @@ curl.exe http://localhost:8182/api/plugins
 | 宿主升级导致插件被拒载 | 版本策略（第 5 节）：跟随宿主重建 + 兼容矩阵文档 |
 | thin JAR 纪律被破坏（fat JAR / 作用域错） | CI 强制 `verify-plugin.ps1` + 代码评审清单 |
 | Windows 下插件 JAR 被锁无法重装 | 宿主已有 classloader close 机制；冲突返回 409，用 `replace=true` 重试 |
-| 端口混淆（8182 vs 部分文档的 8080） | 宿主验证命令显式用 8182，或以实际配置为准 |
+| 端口混淆（CLI 生产默认 18182 vs 开发检出从 8282 起分配） | 以 `browser4-cli status` 打印的 Server URL 为准，不要在命令里写死端口 |
 
 ---
 

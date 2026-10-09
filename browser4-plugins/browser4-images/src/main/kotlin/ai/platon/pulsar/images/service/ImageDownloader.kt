@@ -143,6 +143,14 @@ open class ImageDownloader(
             val response = client.newCall(requestBuilder.build()).execute()
 
             if (!response.isSuccessful) {
+                val reason = response.message.ifBlank { ImageUtils.defaultHttpReason(response.code) }
+                // HTTP/2 responses carry no reason phrase; add guidance for the
+                // codes that usually indicate a fixable cause.
+                val hint = when (response.code) {
+                    401, 403 -> " (access denied — the server may require auth or block non-browser clients)"
+                    429 -> " (rate limited — slow down or retry later)"
+                    else -> ""
+                }
                 response.close()
                 return@withContext ImageDownloadResult(
                     url = validatedUrl,
@@ -150,7 +158,7 @@ open class ImageDownloader(
                     bytesDownloaded = 0,
                     durationMs = System.currentTimeMillis() - startTime,
                     success = false,
-                    error = "HTTP ${response.code}: ${response.message}",
+                    error = "HTTP ${response.code} $reason$hint: $validatedUrl",
                 )
             }
 
@@ -180,8 +188,37 @@ open class ImageDownloader(
 
             // Determine filename
             val contentType = body.contentType()?.toString()
+
+            // Reject clearly non-image responses before saving anything. The
+            // detector's <a>-extension heuristic can yield HTML pages (e.g.
+            // MediaWiki /wiki/File: description pages) that would otherwise be
+            // written to disk as "images" with success=true. Unknown/absent
+            // Content-Type and generic binary (octet-stream) are allowed.
+            if (contentType != null && !ImageUtils.isImageMimeType(contentType)
+                && contentType.substringBefore(';').trim() != "application/octet-stream"
+            ) {
+                body.close()
+                return@withContext ImageDownloadResult(
+                    url = validatedUrl,
+                    filePath = "",
+                    bytesDownloaded = 0,
+                    contentType = contentType,
+                    durationMs = System.currentTimeMillis() - startTime,
+                    success = false,
+                    error = "Not an image: Content-Type is '$contentType'. " +
+                        "The URL likely serves an HTML page (e.g. a file description page) rather than a direct image file.",
+                )
+            }
+
             val finalName = filename ?: ImageUtils.suggestFilename(validatedUrl, contentType)
-            val safeName = ImageUtils.sanitizeFilename(finalName)
+            val sanitized = ImageUtils.sanitizeFilename(finalName)
+            // Servers may negotiate a different format than the URL suggests
+            // (e.g. Wikimedia content negotiation returning WebP for a .png URL);
+            // correct the extension so the saved filename reflects the bytes.
+            val safeName = ImageUtils.alignFilenameExtension(sanitized, contentType)
+            if (safeName != sanitized) {
+                logger.info("Renamed download to '{}' to match actual Content-Type {}", safeName, contentType)
+            }
             val outputPath = outputDir.resolve(safeName)
 
             // Prevent path traversal
@@ -249,13 +286,24 @@ open class ImageDownloader(
             }
         } catch (e: IOException) {
             logger.warn("Download failed for {}: {}", validatedUrl, e.message)
+            // A connection reset/timeout often means direct egress is blocked
+            // while the browser succeeds through the OS system proxy — the JVM
+            // does not inherit it. Point at the proxy configuration.
+            val message = e.message ?: ""
+            val networkish = message.contains("reset", ignoreCase = true) ||
+                message.contains("timed out", ignoreCase = true) ||
+                message.contains("unreachable", ignoreCase = true)
+            val proxyHint = if (networkish) {
+                " — if this host needs a proxy, set image.download.proxy or JVM -Dhttps.proxyHost " +
+                    "(the browser's system proxy is not inherited by the JVM)"
+            } else ""
             ImageDownloadResult(
                 url = validatedUrl,
                 filePath = "",
                 bytesDownloaded = 0,
                 durationMs = System.currentTimeMillis() - startTime,
                 success = false,
-                error = "IO error: ${e.message}",
+                error = "IO error: ${message}$proxyHint",
             )
         } catch (e: Exception) {
             logger.warn("Download failed for {}: {}", validatedUrl, e.message)

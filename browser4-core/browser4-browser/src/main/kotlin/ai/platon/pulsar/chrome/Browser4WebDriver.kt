@@ -20,7 +20,7 @@ import ai.platon.pulsar.chrome.network.TrackedNetworkRequest
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
-import ai.platon.pulsar.common.B4Constants
+import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -35,7 +35,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 import java.util.concurrent.atomic.AtomicBoolean

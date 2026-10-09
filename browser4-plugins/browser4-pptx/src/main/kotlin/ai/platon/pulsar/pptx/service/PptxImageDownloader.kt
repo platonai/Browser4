@@ -121,20 +121,34 @@ open class PptxImageDownloader(
     }
 
     /**
+     * Outcome of a bulk image download pass.
+     *
+     * @property bytes      successfully downloaded images, keyed by URL
+     * @property total      distinct image URLs attempted
+     * @property failed     number of URLs that could not be downloaded
+     */
+    data class DownloadResult(
+        val bytes: Map<String, ByteArray>,
+        val total: Int,
+        val failed: Int,
+    )
+
+    /**
      * Download all images referenced in a list of content blocks.
      *
      * Downloads are performed concurrently with a semaphore to limit parallel connections.
      *
      * @param blocks the content blocks containing image URLs
-     * @return map of image URL to byte array (only successful downloads)
+     * @return [DownloadResult] with the downloaded bytes and a failed count so
+     *         callers can surface silent download failures to the user.
      */
-    open suspend fun downloadImages(blocks: List<ContentBlock>): Map<String, ByteArray> {
+    open suspend fun downloadImages(blocks: List<ContentBlock>): DownloadResult {
         val imageUrls = blocks
             .filter { it.type == "image" && !it.src.isNullOrBlank() }
             .mapNotNull { it.src }
             .distinct()
 
-        if (imageUrls.isEmpty()) return emptyMap()
+        if (imageUrls.isEmpty()) return DownloadResult(emptyMap(), 0, 0)
 
         val semaphore = Semaphore(config.concurrentDownloads.coerceIn(1, 10))
         val results = mutableMapOf<String, ByteArray>()
@@ -154,8 +168,16 @@ open class PptxImageDownloader(
             }.forEach { it.await() }
         }
 
-        logger.info("Downloaded {}/{} images for PPTX embedding", results.size, imageUrls.size)
-        return results
+        val failed = imageUrls.size - results.size
+        if (failed > 0) {
+            logger.warn(
+                "PPTX image downloads: {}/{} succeeded, {} failed",
+                results.size, imageUrls.size, failed
+            )
+        } else {
+            logger.info("Downloaded {}/{} images for PPTX embedding", results.size, imageUrls.size)
+        }
+        return DownloadResult(results, imageUrls.size, failed)
     }
 
     private fun isDataUri(url: String): Boolean {

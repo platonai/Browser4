@@ -97,7 +97,7 @@ object CaptchaSolveScripts {
                     const actionEl = document.querySelector('[data-action]');
                     if (actionEl) result.action = actionEl.getAttribute('data-action');
                     else {
-                        const match2 = document.documentElement.innerHTML.match(/recaptcha\.execute\([^,]+,\s*['"](\w+)['"]/);
+                        const match2 = document.documentElement.innerHTML.match(/recaptcha\.execute\x28[^,]+,\s*['"](\w+)['"]/);
                         if (match2) result.action = match2[1];
                     }
                 }

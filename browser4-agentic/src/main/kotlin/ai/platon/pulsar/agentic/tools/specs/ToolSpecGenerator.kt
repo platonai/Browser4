@@ -1,9 +1,9 @@
 package ai.platon.pulsar.agentic.tools.specs
 
 import ai.platon.pulsar.api.WebDriver
-import ai.platon.pulsar.common.B4LLMUtils
-import ai.platon.pulsar.common.B4ProjectUtils
-import ai.platon.pulsar.common.B4ResourceLoader
+import ai.platon.browser4.common.B4LLMUtils
+import ai.platon.browser4.common.B4ProjectUtils
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.common.ExperimentalApi

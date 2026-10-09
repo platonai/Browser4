@@ -10,6 +10,9 @@ import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolRateLimiter
 import ai.platon.pulsar.agentic.tools.ToolResultCache
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.advanced.format.FormatDegradation
+import ai.platon.pulsar.agentic.tools.advanced.format.FormatFailureException
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
@@ -28,6 +31,7 @@ import kotlinx.coroutines.sync.Mutex
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
 import org.mockito.Mock
@@ -142,6 +146,11 @@ class MCPToolControllerTest {
         `when`(managedSession.createdAt).thenReturn(1720000000000L)
         `when`(managedSession.lastAccessedAt).thenReturn(1720086400000L)
         `when`(sessionManager.checkHealthy(managedSession)).thenReturn(CheckState(0))
+        // Capabilities that never pinned a display mode: `PulsarSettings.parse` resolves
+        // displayMode to null, the payload reports the empty string, and
+        // pulsarObjectMapper omits empty-string map entries — so the key must be absent
+        // rather than serialized as null.
+        `when`(managedSession.capabilities).thenReturn(null)
 
         val result = controller.callTool(request, response)
 
@@ -151,6 +160,41 @@ class MCPToolControllerTest {
         assertTrue(result.body!!.content[0].text.contains(""""healthy":true"""))
         assertTrue(result.body!!.content[0].text.contains(""""createdAt":1720000000000"""))
         assertTrue(result.body!!.content[0].text.contains(""""lastAccessedAt":1720086400000"""))
+        assertFalse(result.body!!.content[0].text.contains("displayMode"))
+    }
+
+    @Test
+    @DisplayName("list_sessions derives displayMode from the headed capability flag")
+    fun testListSessionsDerivesDisplayModeFromHeadedFlag() = runBlocking {
+        val request = MCPToolCallRequest(tool = "list_sessions")
+        `when`(sessionManager.getAllSessions()).thenReturn(listOf(managedSession))
+        `when`(managedSession.sessionId).thenReturn(sessionId)
+        `when`(managedSession.status).thenReturn(SessionStatus.ACTIVE)
+        `when`(managedSession.kind).thenReturn(SessionKind.BROWSER4_LAUNCHED)
+        `when`(managedSession.capabilities).thenReturn(mapOf("headed" to "false"))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.content[0].text.contains(""""displayMode":"HEADLESS""""))
+        Unit
+    }
+
+    @Test
+    @DisplayName("list_sessions honours an explicit displayMode capability string")
+    fun testListSessionsHonoursExplicitDisplayModeString() = runBlocking {
+        val request = MCPToolCallRequest(tool = "list_sessions")
+        `when`(sessionManager.getAllSessions()).thenReturn(listOf(managedSession))
+        `when`(managedSession.sessionId).thenReturn(sessionId)
+        `when`(managedSession.status).thenReturn(SessionStatus.ACTIVE)
+        `when`(managedSession.kind).thenReturn(SessionKind.BROWSER4_LAUNCHED)
+        `when`(managedSession.capabilities).thenReturn(mapOf("displayMode" to "SUPERVISED"))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.content[0].text.contains(""""displayMode":"SUPERVISED""""))
+        Unit
     }
 
     @Test
@@ -2214,5 +2258,35 @@ class MCPToolControllerTest {
 
         assertEquals("tab", toolCall.domain)
         assertEquals("frameMain", toolCall.method)
+    }
+
+    @Test
+    @DisplayName("a failure that knows its own code is not reported as INTERNAL")
+    fun codedFailureKeepsItsCode() {
+        // Regression, found by a real-browser run of `scrape --strict`: the code was derived
+        // from the rendered message, so a failure whose type said TARGET_UNAVAILABLE reached
+        // the client as INTERNAL — the wrapper's prose matched no pattern, while the
+        // exception it wrapped was explicit about its code. The wording of an error must not
+        // decide its status.
+        val failure = FormatFailureException(
+            listOf(FormatDegradation("audio", "not available in this build", ToolErrorCode.TARGET_UNAVAILABLE)),
+        )
+
+        val response = controller.errorResponse("page_scrape failed: ${failure.message}", failure)
+
+        assertEquals("TARGET_UNAVAILABLE", response.errorCode)
+        assertTrue(response.content.first().text.contains("[TARGET_UNAVAILABLE]"), response.content.first().text)
+
+        // An unclassifiable failure still falls back to the message patterns, so the fix did
+        // not trade one blind spot for another.
+        val fromMessage = controller.errorResponse("page_scrape failed: Session not found: s1", null)
+        assertEquals("SESSION_NOT_FOUND", fromMessage.errorCode)
+
+        // And a timeout keeps its type even when the text says nothing about time.
+        val timeout = controller.errorResponse(
+            "page_scrape failed: boom",
+            java.util.concurrent.TimeoutException("nope"),
+        )
+        assertEquals("TIMEOUT", timeout.errorCode)
     }
 }

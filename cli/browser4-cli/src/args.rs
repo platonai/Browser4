@@ -111,18 +111,25 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
             flags.pretty = true;
         } else if !seen_command && arg == "--help-json" {
             flags.help_json = true;
-        } else if arg.starts_with("--timeout=") {
+        } else if !seen_command && arg.starts_with("--timeout=") {
             flags.timeout_secs = arg["--timeout=".len()..].parse().ok();
-            if let Some(secs) = flags.timeout_secs {
-                crate::http::set_global_timeout_override(secs);
-            }
-        } else if arg == "--timeout" {
+        } else if !seen_command && arg == "--timeout" {
             if i + 1 < argv.len() {
                 i += 1;
                 flags.timeout_secs = argv[i].parse().ok();
-                if let Some(secs) = flags.timeout_secs {
-                    crate::http::set_global_timeout_override(secs);
-                }
+            }
+        } else if arg.starts_with("--timeout=") {
+            // After the command name, forward `--timeout=<v>` to the subcommand
+            // (e.g. `loop --timeout 30` must reach the loop parser, not the HTTP
+            // client timeout). The global HTTP timeout must be placed BEFORE the
+            // command name.
+            flags.args.push(arg.clone());
+        } else if arg == "--timeout" {
+            // Forward `--timeout <v>` to the subcommand as well.
+            flags.args.push(arg.clone());
+            if i + 1 < argv.len() && !argv[i + 1].starts_with('-') {
+                i += 1;
+                flags.args.push(argv[i].clone());
             }
         } else if arg.starts_with("--server=") {
             flags.server_url = Some(arg["--server=".len()..].to_string());
@@ -679,6 +686,47 @@ mod tests {
         let flags = parse_global_flags(&argv);
         assert_eq!(flags.session_name.as_deref(), Some("mysession"));
         assert_eq!(flags.args, vec!["goto", "https://example.com"]);
+    }
+
+    #[test]
+    fn test_parse_global_flags_timeout_before_command_is_global() {
+        let argv = vec![
+            "--timeout".to_string(),
+            "60".to_string(),
+            "goto".to_string(),
+            "https://example.com".to_string(),
+        ];
+        let flags = parse_global_flags(&argv);
+        assert_eq!(flags.timeout_secs, Some(60));
+        assert_eq!(flags.args, vec!["goto", "https://example.com"]);
+    }
+
+    #[test]
+    fn test_parse_global_flags_timeout_after_command_is_forwarded() {
+        // `loop --timeout 30 ...` — the loop's own duration limit must reach the
+        // loop parser instead of being swallowed as the global HTTP timeout.
+        let argv = vec![
+            "loop".to_string(),
+            "--timeout".to_string(),
+            "30".to_string(),
+            "--interval".to_string(),
+            "10".to_string(),
+            "status".to_string(),
+        ];
+        let flags = parse_global_flags(&argv);
+        assert_eq!(flags.timeout_secs, None);
+        assert_eq!(
+            flags.args,
+            vec!["loop", "--timeout", "30", "--interval", "10", "status"]
+        );
+    }
+
+    #[test]
+    fn test_parse_global_flags_timeout_equals_after_command_is_forwarded() {
+        let argv = vec!["loop".to_string(), "--timeout=30".to_string(), "status".to_string()];
+        let flags = parse_global_flags(&argv);
+        assert_eq!(flags.timeout_secs, None);
+        assert_eq!(flags.args, vec!["loop", "--timeout=30", "status"]);
     }
 
     #[test]

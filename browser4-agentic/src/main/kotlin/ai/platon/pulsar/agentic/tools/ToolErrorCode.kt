@@ -72,6 +72,19 @@ enum class ToolErrorCode(
 }
 
 /**
+ * A failure that already knows which [ToolErrorCode] it is.
+ *
+ * [ToolErrorMapper.classify] checks this before it starts inferring: a layer that holds
+ * the fact should not have to phrase its message so that the inference guesses right.
+ * The wording of an error must not decide its status code — this was written for the
+ * `formats` layer, where "this build cannot deliver the format" and "the tool ran and
+ * failed" are the same shape of exception with two very different answers.
+ */
+interface CodedFailure {
+    val code: ToolErrorCode
+}
+
+/**
  * Maps a failure to a [ToolErrorCode].
  *
  * Both MCP channels share this mapping — an error reported as
@@ -85,6 +98,9 @@ object ToolErrorMapper {
         if (error == null) return ToolErrorCode.INTERNAL
         val chain = generateSequence(error) { it.cause }.take(5).toList()
         val messages = chain.mapNotNull { it.message }.joinToString(" | ")
+
+        // A layer that classified the failure itself wins over every inference below.
+        chain.forEach { cause -> if (cause is CodedFailure) return cause.code }
 
         chain.forEach { cause ->
             when (cause::class.simpleName) {

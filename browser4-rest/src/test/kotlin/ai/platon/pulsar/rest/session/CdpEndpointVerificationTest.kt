@@ -79,6 +79,106 @@ class CdpEndpointVerificationTest {
         val result = PulsarSessionManager.verifyCdpEndpoint("http://127.0.0.1:$deadPort")
         assertFalse(result.reachable)
         assertEquals(0, result.pageTargetCount)
+        assertEquals(null, result.versionStatus)
+    }
+
+    @Test
+    @DisplayName("verifyCdpEndpoint records the /json/version status when the endpoint answers 404")
+    fun verifyCdpEndpointRecordsHttpStatus() {
+        server.createContext("/json/version") { exchange ->
+            exchange.sendResponseHeaders(404, -1)
+            exchange.close()
+        }
+        val result = PulsarSessionManager.verifyCdpEndpoint("http://127.0.0.1:$port")
+        assertFalse(result.reachable)
+        assertEquals(404, result.versionStatus)
+    }
+
+    @Test
+    @DisplayName("describeAttachFailure treats HTTP 404 as a non-CDP endpoint, built-in mode only a possibility")
+    fun describeAttachFailureExplainsBuiltInRemoteDebugging() {
+        server.createContext("/json/version") { exchange ->
+            exchange.sendResponseHeaders(404, -1)
+            exchange.close()
+        }
+        val endpoint = "http://127.0.0.1:$port"
+        val result = PulsarSessionManager.verifyCdpEndpoint(endpoint)
+        val failure = PulsarSessionManager.describeAttachFailure(endpoint, result)
+            ?: error("an endpoint without CDP discovery must produce a failure message")
+
+        // The certain fact: something answered HTTP but it is not a CDP endpoint.
+        assertTrue(failure.contains("reachable but is not a Chrome DevTools"), failure)
+        assertTrue(failure.contains("HTTP 404"), failure)
+        // A plain web server returns the same 404 — it must not be claimed to BE Chrome.
+        assertTrue(failure.contains("Any non-CDP web server answers the same way"), failure)
+        // Built-in remote debugging is offered only as ONE possibility.
+        assertTrue(failure.contains("One possibility"), failure)
+        assertTrue(failure.contains("chrome://inspect/#remote-debugging"), failure)
+        assertTrue(failure.contains("attach --extension"), failure)
+    }
+
+    @Test
+    @DisplayName("describeAttachFailure translates a raw ConnectException into plain language")
+    fun describeAttachFailureHumanizesConnectionRefused() {
+        // Simulate the transport failure verifyCdpEndpoint records when nothing
+        // is listening — its detail is the raw exception class name.
+        val endpoint = "http://127.0.0.1:19999"
+        val result = PulsarSessionManager.CdpEndpointVerification(
+            reachable = false,
+            browser = null,
+            pageTargetCount = 0,
+            detail = "ConnectException",
+            versionStatus = null,
+        )
+        val failure = PulsarSessionManager.describeAttachFailure(endpoint, result)
+            ?: error("an unreachable endpoint must produce a failure message")
+
+        assertTrue(failure.contains("is not reachable"), failure)
+        assertTrue(failure.contains("nothing is listening"), failure)
+        // The raw Java class name must not leak to the user.
+        assertFalse(failure.contains("ConnectException"), failure)
+        assertTrue(failure.contains("--remote-debugging-port"), failure)
+    }
+
+    @Test
+    @DisplayName("humanizeConnectionFailure keeps unknown causes verbatim")
+    fun humanizeConnectionFailureKeepsUnknownCause() {
+        assertEquals(
+            "SSL handshake failed: certificate expired",
+            PulsarSessionManager.humanizeConnectionFailure("SSL handshake failed: certificate expired"),
+        )
+        assertTrue(
+            PulsarSessionManager.humanizeConnectionFailure("Connection refused: /127.0.0.1:1")
+                .contains("nothing is listening"),
+        )
+    }
+
+    @Test
+    @DisplayName("describeAttachFailure keeps page-target guidance and adds the extension fallback")
+    fun describeAttachFailureGuidesOnPageLessEndpoint() {
+        stubCdpEndpoints("Chrome/151.0.0.0", emptyList())
+        val endpoint = "http://127.0.0.1:$port"
+        val result = PulsarSessionManager.verifyCdpEndpoint(endpoint)
+        assertEquals(0, result.pageTargetCount)
+
+        val failure = PulsarSessionManager.describeAttachFailure(endpoint, result)
+            ?: error("a page-less endpoint must produce a failure message")
+        assertTrue(failure.contains("has no page targets"), failure)
+        assertTrue(failure.contains("Open a tab in the target browser"), failure)
+        assertTrue(failure.contains("attach --extension"), failure)
+    }
+
+    @Test
+    @DisplayName("describeAttachFailure accepts an endpoint that lists a page target")
+    fun describeAttachFailureAcceptsAttachableEndpoint() {
+        stubCdpEndpoints(
+            "Chrome/151.0.0.0",
+            listOf(mapOf("type" to "page", "title" to "t", "url" to "about:blank"))
+        )
+        val endpoint = "http://127.0.0.1:$port"
+        val result = PulsarSessionManager.verifyCdpEndpoint(endpoint)
+        assertEquals(200, result.versionStatus)
+        assertEquals(null, PulsarSessionManager.describeAttachFailure(endpoint, result))
     }
 
     @Test
@@ -92,6 +192,24 @@ class CdpEndpointVerificationTest {
         val result = PulsarSessionManager.verifyCdpEndpoint("http://127.0.0.1:$port")
         assertTrue(result.reachable)
         assertEquals(0, result.pageTargetCount)
+    }
+
+    @Test
+    @DisplayName("browserLevelWebSocketUrl accepts browser sockets and leaves page sockets alone")
+    fun browserLevelWebSocketUrlClassifiesEndpoints() {
+        val browserSocket = "ws://127.0.0.1:9222/devtools/browser/8b91cacf-d8aa-4fa3-8b45-687c7de7af8a"
+        assertEquals(browserSocket, PulsarSessionManager.browserLevelWebSocketUrl(browserSocket))
+        assertEquals(
+            "wss://cloud.example.com/devtools/browser/x",
+            PulsarSessionManager.browserLevelWebSocketUrl("  wss://cloud.example.com/devtools/browser/x ")
+        )
+
+        // A page socket carries one tab and cannot answer Target.getTargets, so
+        // it keeps going through the HTTP-discovery path.
+        assertEquals(null, PulsarSessionManager.browserLevelWebSocketUrl("ws://127.0.0.1:9222/devtools/page/ABC"))
+        assertEquals(null, PulsarSessionManager.browserLevelWebSocketUrl("http://127.0.0.1:9222"))
+        assertEquals(null, PulsarSessionManager.browserLevelWebSocketUrl("127.0.0.1:9222"))
+        assertEquals(null, PulsarSessionManager.browserLevelWebSocketUrl(""))
     }
 
     @Test

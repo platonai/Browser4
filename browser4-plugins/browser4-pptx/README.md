@@ -24,14 +24,14 @@ The module is a Browser4 plugin. Place `browser4-pptx-<version>.jar` on the appl
 {
   "name": "browser4-pptx",
   "version": "4.12.1-SNAPSHOT",
-  "sdkVersion": "4.14.0-rc.1",
+  "sdkVersion": "${project.version}",
   "description": "Convert web pages to PowerPoint (PPTX) files",
   "dependsOn": ["browser4-protocol", "browser4-agentic"],
   "autoConfigurationClasses": ["ai.platon.pulsar.pptx.config.PptxAutoConfiguration"]
 }
 ```
 
-`version` is the plugin's own release version; `sdkVersion` (required since 4.14) declares the Browser4 SDK the plugin was built against. A plugin whose `sdkVersion` has a newer major than the host is refused; an older same-major one loads with a warning.
+`version` is the plugin's own release version (an independent literal, bumped with the plugin). `sdkVersion` (required since 4.14) declares the Browser4 SDK the plugin was built against and is substituted by Maven resource filtering (`${project.version}`, inherited from the `browser4-pdk` parent) so it always matches the SDK it was compiled against; a plugin whose `sdkVersion` has a newer major than the host is refused, while an older same-major one loads with a warning.
 
 No additional setup is required — Spring Boot auto-configuration registers the handler and tool executor automatically.
 
@@ -41,14 +41,22 @@ No additional setup is required — Spring Boot auto-configuration registers the
 
 ```
 pptx.generate()
-pptx.generate(outputPath: "/path/to/output")
+pptx.generate(outputDir: "/path/to/output/dir")
 ```
+
+`outputDir` is the **directory** where the file is written (not a file path). The
+generator always names the file `<sanitized-page-title>_<timestamp>.pptx`. If a
+`.pptx`-suffixed path is passed, its parent directory is used. The legacy
+`outputPath` argument is still accepted as an alias.
 
 Returns a `PptxGenerationResult` with:
 - `filePath` — absolute path to the generated `.pptx` file
 - `slideCount` — number of slides created
 - `blockCount` — number of content blocks extracted
-- `imageCount` — number of images embedded
+- `imageCount` — number of images **actually embedded** on slides (not the image block count)
+- `downloadedImages` — images downloaded successfully
+- `failedImages` — images that failed to download
+- `skippedImages` — images dropped by the per-slide cap or slide overflow
 - `durationMs` — generation time in milliseconds
 
 ### Via Auto-Generation
@@ -124,8 +132,9 @@ All properties use the `pptx.` prefix.
 |----------|---------|-------------|
 | `pptx.output.dir` | `downloads/pptx` | Output directory for generated PPTX files |
 | `pptx.download.max-size` | `10485760` | Max image download size in bytes (10 MB) |
-| `pptx.download.timeout.seconds` | `30` | Per-image download timeout |
+| `pptx.download.timeout.seconds` | `30` | Per-image download timeout (connect + read) |
 | `pptx.download.concurrent` | `3` | Max concurrent image downloads |
+| `pptx.download.proxy` | _(unset)_ | HTTP/HTTPS proxy for image downloads (`host:port` or full URL). Falls back to `HTTPS_PROXY`/`HTTP_PROXY` env vars when unset |
 | `pptx.auto-generate.enabled` | `false` | Auto-generate PPTX on `onDocumentSteady` |
 | `pptx.title.max-length` | `120` | Max title length before truncation |
 | `pptx.slide.width` | `720` | Slide width in POI points (10 in, widescreen) |

@@ -105,12 +105,16 @@ open class CaptchaToolExecutor(
             domain = domain,
             method = "getBalance",
             arguments = emptyList(),
-            returnType = "Double",
-            description = "Get the current account balance of the CAPTCHA solving service.",
+            returnType = "Map<String, Any?>",
+            description = "Get the account balance of the configured CAPTCHA solving service(s), or a 'configured: false' marker when no provider is set up.",
             help = """
                 captcha.getBalance()
 
-                Returns the USD balance of the primary configured CAPTCHA solving service.
+                Returns a map with:
+                - configured: whether at least one solving provider is registered
+                - balance: the USD balance averaged across all configured providers (null when unconfigured)
+                - providers: the configured provider names
+                - message: configuration hint when no provider is registered
             """.trimIndent()
         )
     }
@@ -150,7 +154,7 @@ open class CaptchaToolExecutor(
                     pageUrl = pageUrl,
                     proxy = config.solveProxy
                 )
-                captchaSolver.solve(request)
+                solveOrThrow(request)
             }
 
             "solveImage" -> {
@@ -168,14 +172,50 @@ open class CaptchaToolExecutor(
                     metadata = mapOf("caseSensitive" to caseSensitive.toString()),
                     proxy = config.solveProxy
                 )
-                captchaSolver.solve(request)
+                solveOrThrow(request)
             }
 
             "getBalance" -> {
-                captchaSolver.balance()
+                if (captchaSolver.size == 0) {
+                    mapOf(
+                        "configured" to false,
+                        "balance" to null,
+                        "providers" to emptyList<String>(),
+                        "message" to NO_PROVIDER_MESSAGE
+                    )
+                } else {
+                    mapOf(
+                        "configured" to true,
+                        "balance" to captchaSolver.balance(),
+                        "providers" to captchaSolver.providers.map { it.name }
+                    )
+                }
             }
 
             else -> throw IllegalArgumentException("Unsupported captcha method: $functionName. Use detect, solve, solveImage, or getBalance.")
         }
+    }
+
+    /**
+     * Solve [request], failing loudly when no provider is configured or the
+     * solving attempt did not succeed. Throwing here lets the MCP layer mark
+     * the tool result as `isError=true` instead of returning a FAILED payload
+     * that looks like a normal (non-error) response.
+     */
+    private suspend fun solveOrThrow(request: CaptchaSolveRequest): CaptchaSolution {
+        check(captchaSolver.size > 0) { NO_PROVIDER_MESSAGE }
+
+        val solution = captchaSolver.solve(request)
+        if (!solution.isSolved) {
+            throw IllegalStateException(
+                "CAPTCHA solving failed (status=${solution.status}, provider=${solution.provider}): ${solution.error ?: "no error details"}"
+            )
+        }
+        return solution
+    }
+
+    companion object {
+        const val NO_PROVIDER_MESSAGE =
+            "No CAPTCHA solving provider configured — set captcha.capsolver.api.key (or captcha.twocaptcha.api.key / captcha.anticaptcha.api.key)"
     }
 }

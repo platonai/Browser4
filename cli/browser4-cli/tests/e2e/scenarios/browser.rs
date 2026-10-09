@@ -1563,27 +1563,47 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
         "[tab_commands] tab-close stdout: >>>\n{}\n<<<  stderr: >>>\n{}\n<<<",
         close_result.stdout, close_result.stderr
     );
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5_000);
+    // The backend applies the close asynchronously, and a close can be
+    // reported as success while the tab survives (the v4.13.27 tag run saw
+    // the closed tab still listed 5s later): on the success path the CLI
+    // prints its prediction from the pre-close list and does not re-check.
+    // Poll, and if the tab is still listed after the first window, re-issue
+    // the same close once — closing an already-closed tab is harmless (the
+    // CLI treats "already gone" as success, not an error). The assertion
+    // below is unchanged, so a close that never takes effect still fails the
+    // scenario.
     let mut after_close_output = String::new();
     let mut after_close_raw = String::new();
-    while std::time::Instant::now() < deadline {
-        let check = run_command(ctx, &["tab-list", "--json"]);
-        after_close_raw = check.stdout.clone();
-        after_close_output = strip_snapshot_output(&check.stdout);
-        eprintln!(
-            "[tab_commands] poll tab-list: raw_stdout(len={}) >>>\n{}\n<<<  stripped(len={}) >>>\n{}\n<<<  contains_other={}  contains_interactive={}  contains_form={}",
-            after_close_raw.len(),
-            after_close_raw,
-            after_close_output.len(),
-            after_close_output,
-            after_close_output.contains(&other_url),
-            after_close_output.contains(&interactive_url),
-            after_close_output.contains(&form_url),
-        );
+    for attempt in 0..2 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5_000);
+        while std::time::Instant::now() < deadline {
+            let check = run_command(ctx, &["tab-list", "--json"]);
+            after_close_raw = check.stdout.clone();
+            after_close_output = strip_snapshot_output(&check.stdout);
+            eprintln!(
+                "[tab_commands] poll tab-list: raw_stdout(len={}) >>>\n{}\n<<<  stripped(len={}) >>>\n{}\n<<<  contains_other={}  contains_interactive={}  contains_form={}",
+                after_close_raw.len(),
+                after_close_raw,
+                after_close_output.len(),
+                after_close_output,
+                after_close_output.contains(&other_url),
+                after_close_output.contains(&interactive_url),
+                after_close_output.contains(&form_url),
+            );
+            if !after_close_output.contains(&other_url) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
         if !after_close_output.contains(&other_url) {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        if attempt == 0 {
+            eprintln!(
+                "[tab_commands] tab-close --guid {other_guid} had not taken effect after 5s — retrying once"
+            );
+            run_command(ctx, &["tab-close", "--guid", &other_guid]);
+        }
     }
     assert!(
         !after_close_output.contains(&other_url),
@@ -4697,4 +4717,369 @@ pub(super) fn test_experience_real_web_smoke(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["close"]);
+}
+
+/// The formats layer against a real page built to exercise it.
+///
+/// `https://example.com` proves the pipeline but exercises almost none of it: no
+/// table, no repeated cards, no image without `alt`, no `data-*` attributes. The
+/// `formats` fixture has all of them, so these assertions can be about what
+/// actually came back rather than about a field merely being present.
+///
+/// It is also the only end-to-end exercise of `attributes`, whose selectors can
+/// only be expressed through the JSON-array form of `--formats`.
+pub(super) fn test_scrape_formats(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let url = ctx.formats_url();
+    let open_result = run_command(ctx, &["open", &url, OPEN_PROFILE_MODE_ARG]);
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected the formats fixture session to open:\n{}",
+        open_result.stdout
+    );
+
+    // ── 1. Four formats from ONE request ──────────────────────────────────
+    // `--no-main-content` asks for the whole cleaned page, so the table and the
+    // footer are provably in scope (the readability path is case 2).
+    let formats = r#"[{"type":"attributes","selectors":[{"selector":".price","attribute":"data-amount"}]},"markdown","links","images"]"#;
+    let result = run_command(ctx, &["scrape", "--formats", formats, "--no-main-content"]);
+    let document = &result.stdout;
+
+    // markdown: the heading, a table with a header row, and a fenced block that
+    // kept its language. These three are what a naive converter gets wrong.
+    for expected in ["# Meridian Kettle", "| Variant", "```kotlin"] {
+        assert!(
+            document.contains(expected),
+            "whole-page markdown should contain {expected:?}:\n{document}"
+        );
+    }
+
+    // links: the external href is left alone, and the page's own relative links
+    // come back absolute against the fixture URL.
+    assert!(
+        document.contains("https://example.org/meridian/spec"),
+        "the external link should survive verbatim:\n{document}"
+    );
+    assert!(
+        document.contains(&format!("{url}?section=warranty")),
+        "the internal link should be absolute-ised against {url}:\n{document}"
+    );
+    assert!(
+        document.contains(&format!("{url}?page=3")),
+        "the pagination link should be extracted:\n{document}"
+    );
+
+    // images: three, including `meridian-glass.png` — the one with NO alt. Skipping
+    // an image because it lacks alternate text is the classic way to lose data.
+    for image in ["meridian-core.png", "meridian-glass.png", "meridian-pro.png"] {
+        assert!(
+            document.contains(image),
+            "{image} should be extracted (the alt-less one included):\n{document}"
+        );
+    }
+
+    // attributes: one selector, three values, in document order.
+    assert!(
+        document.contains(r#""values":["79","99","129"]"#),
+        "the .price/data-amount attribute should carry all three values:\n{document}"
+    );
+
+    // All four formats were delivered, and the capture was shared: exactly one
+    // captureId in the whole document is the observable proof of capture-once.
+    assert!(
+        document.contains(r#""formatsDelivered":["markdown","links","images","attributes"]"#),
+        "every requested format should be delivered:\n{document}"
+    );
+    assert_eq!(
+        document.matches("\"captureId\"").count(),
+        1,
+        "one capture must serve every format, got:\n{document}"
+    );
+
+    // ── 2. The readability path drops the furniture ───────────────────────
+    // Default `onlyMainContent` derives markdown from the readable article, so the
+    // article body must survive and the site chrome must not.
+    let readable = run_command(ctx, &["scrape", "--formats", "markdown"]);
+    assert!(
+        readable.stdout.contains("variable-temperature kettle"),
+        "the readable path should keep the article body:\n{}",
+        readable.stdout
+    );
+    assert!(
+        !readable.stdout.contains("Meridian Appliances"),
+        "the readable path should drop the footer:\n{}",
+        readable.stdout
+    );
+
+    // ── 3. A mistyped format is refused by name, before any capture ────────
+    let bad = run_command_expecting_failure(
+        ctx,
+        &["scrape", "--formats", "markdwon"],
+        "Unknown format",
+    );
+    assert!(
+        bad.stdout.contains("Unknown format") || bad.stderr.contains("Unknown format"),
+        "a typo must be named, got stdout:\n{}\nstderr:\n{}",
+        bad.stdout,
+        bad.stderr
+    );
+
+    // ── 4. The live stage: capture, read, THEN the tab work ───────────────
+    // One request mixing a snapshot format with *two* live ones. The interesting part is
+    // not that a screenshot came back but that the *tab* work happened after the
+    // capture-derived format, which is the ordering the engine promises.
+    let mixed = run_command(
+        ctx,
+        &[
+            "scrape",
+            "--formats",
+            r#"["markdown",{"type":"screenshot","fullPage":true,"base64":true},{"type":"pdf"}]"#,
+        ],
+    );
+    let mixed_doc = &mixed.stdout;
+    assert!(
+        mixed_doc.contains(r#""markdown":"#),
+        "the capture-derived format must survive the live steps:\n{mixed_doc}"
+    );
+    assert_eq!(
+        mixed_doc.matches("\"captureId\"").count(),
+        1,
+        "one capture must serve both the snapshot read and the live steps:\n{mixed_doc}"
+    );
+    assert!(
+        mixed_doc.contains(r#""formatsDelivered":["markdown","screenshot","pdf"]"#),
+        "every format should be delivered:\n{mixed_doc}"
+    );
+
+    // The bytes are real image data, not a placeholder: PNG (`iVBOR…`) or JPEG.
+    assert!(
+        mixed_doc.contains("iVBORw0KGgo") || mixed_doc.contains("/9j/"),
+        "screenshotBase64 should be real image data:\n{}",
+        &mixed_doc[..mixed_doc.len().min(600)]
+    );
+
+    // And `screenshot` holds a path that really exists — "always write the file" is a
+    // promise about the filesystem, so checking the field alone would prove nothing.
+    let path = json_string_field(mixed_doc, "screenshot")
+        .unwrap_or_else(|| panic!("no screenshot path in:\n{mixed_doc}"));
+    assert!(path.ends_with(".png"), "expected a png path, got {path}");
+    assert!(
+        std::path::Path::new(&path).exists(),
+        "the returned path must exist on the service host: {path}"
+    );
+
+    // ── 4b. `pdf`: a second live format, printed and filed ────────────────
+    let pdf_path = json_string_field(mixed_doc, "pdf")
+        .unwrap_or_else(|| panic!("no pdf path in:\n{mixed_doc}"));
+    assert!(pdf_path.ends_with(".pdf"), "expected a pdf path, got {pdf_path}");
+    // Filed under its own directory, not in the screenshot one: the host picks the leaf
+    // from the extension, and a PDF sitting in a folder called `screenshot` is exactly
+    // the small lie this assertion exists to prevent.
+    assert_eq!(
+        std::path::Path::new(&pdf_path)
+            .parent()
+            .and_then(|dir| dir.file_name())
+            .and_then(|name| name.to_str()),
+        Some("pdf"),
+        "a PDF should be filed under a directory that says so: {pdf_path}"
+    );
+    // `pdfBase64` was not asked for, so it must not be there — the bytes are opt-in even
+    // though the file itself is always written.
+    assert!(
+        !mixed_doc.contains("\"pdfBase64\""),
+        "base64 output must be opt-in:\n{}",
+        &mixed_doc[..mixed_doc.len().min(600)]
+    );
+    // The strongest available check: read the file back and look for the PDF magic. A
+    // path that exists but holds an error page or a stub would pass every field-level
+    // assertion while being useless to the caller.
+    let pdf_bytes = fs::read(&pdf_path)
+        .unwrap_or_else(|e| panic!("the returned pdf path must be readable ({pdf_path}): {e}"));
+    assert!(
+        pdf_bytes.starts_with(b"%PDF-"),
+        "expected a real PDF at {pdf_path}, got {} bytes starting with {:?}",
+        pdf_bytes.len(),
+        &pdf_bytes[..pdf_bytes.len().min(8)]
+    );
+
+    // ── 4c. The artifact is fetchable by name over HTTP ───────────────────
+    // The endpoint exists because the path above is on the *backend's* machine: a caller
+    // anywhere else cannot dereference it. Only a name is accepted, never a path.
+    let name = std::path::Path::new(&pdf_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_else(|| panic!("no file name in {pdf_path}"));
+    let http = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("reqwest client build failed");
+
+    let url = format!("{}/api/scrape/media/{}", ctx.browser4_base_url, name);
+    let response = http.get(&url).send().unwrap_or_else(|e| panic!("GET {url} failed: {e}"));
+    assert_eq!(response.status().as_u16(), 200, "GET {url}");
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/pdf"),
+        "the media type must follow the artifact kind",
+    );
+    let fetched = response.bytes().expect("media response body").to_vec();
+    assert_eq!(
+        fetched, pdf_bytes,
+        "the bytes fetched over HTTP must be the file the path pointed at"
+    );
+
+    // A name that is really a path is never resolved. The exact status is the servlet
+    // container's business (it may refuse the URL before the handler sees it), so the
+    // assertion is the property that matters: nothing is served.
+    let traversal = http
+        .get(format!("{}/api/scrape/media/..%5C..%5Csecret.pdf", ctx.browser4_base_url))
+        .send()
+        .expect("traversal request failed");
+    assert_ne!(
+        traversal.status().as_u16(),
+        200,
+        "a name carrying a path must never be served"
+    );
+
+    // ── 4d. `--output` brings the files to this machine ───────────────────
+    // The endpoint serves the bytes; `--output` is the CLI half of the same story. What
+    // must hold afterwards is that the document names files that exist *here* — a path on
+    // the backend's machine is of no use to a caller on another host.
+    let out_dir = ctx.workspace_dir.join("scrape-output");
+    let _ = fs::remove_dir_all(&out_dir);
+    let with_output = run_command(
+        ctx,
+        &[
+            "scrape",
+            "--formats",
+            "screenshot,pdf",
+            "--output",
+            out_dir.to_str().expect("workspace path is not valid UTF-8"),
+        ],
+    );
+    assert!(
+        with_output.stdout.contains("[Artifact]("),
+        "the CLI must report where the files landed:\n{}",
+        with_output.stdout
+    );
+    let fetched = |extension: &str| -> std::path::PathBuf {
+        fs::read_dir(&out_dir)
+            .unwrap_or_else(|e| panic!("--output directory was not created ({out_dir:?}): {e}"))
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .find(|path| path.extension().map(|ext| ext == extension).unwrap_or(false))
+            .unwrap_or_else(|| panic!("no .{extension} under {out_dir:?}"))
+    };
+    let local_png = fetched("png");
+    let local_pdf = fetched("pdf");
+    assert!(
+        fs::read(&local_png)
+            .expect("reading the fetched png")
+            .starts_with(&[0x89, b'P', b'N', b'G']),
+        "the fetched PNG must really be a PNG: {local_png:?}"
+    );
+    assert!(
+        fs::read(&local_pdf)
+            .expect("reading the fetched pdf")
+            .starts_with(b"%PDF-"),
+        "the fetched PDF must really be a PDF: {local_pdf:?}"
+    );
+    // The document must point *into the caller's directory*: the field was rewritten, not
+    // merely copied alongside the backend's path. On Windows the JSON escapes the
+    // separators, so the escaped spelling is what the document carries.
+    let printed_dir = out_dir.to_string_lossy().to_string();
+    assert!(
+        with_output.stdout.contains(&printed_dir)
+            || with_output.stdout.contains(&printed_dir.replace('\\', "\\\\")),
+        "the document must name the local copies under {printed_dir}:\n{}",
+        with_output.stdout
+    );
+
+    // ── 5. A live-only request does not capture at all ────────────────────
+    // "Capture once" also means "never more than the plan needs": with no
+    // snapshot-scoped step there is nothing to serialize into the page store.
+    let live_only = run_command(ctx, &["scrape", "--formats", "screenshot,pdf"]);
+    assert!(
+        live_only.stdout.contains(".png\"") && live_only.stdout.contains(".pdf\""),
+        "both live formats should land a file:\n{}",
+        live_only.stdout
+    );
+    assert!(
+        !live_only.stdout.contains("\"captureId\""),
+        "a live-only request must not capture:\n{}",
+        live_only.stdout
+    );
+
+    // ── 6. `--strict` turns a degradation into a failure ──────────────────
+    // `audio` needs a media service this build does not ship, which makes it the one format
+    // that is *known* and *undeliverable* without any external setup — exactly the case the
+    // three-state contract exists for. The pair matters: the same request must degrade by
+    // default and fail under `--strict`, or one of the two behaviours is untested.
+    let lenient = run_command(ctx, &["scrape", "--formats", "audio,markdown"]);
+    assert!(
+        lenient.stdout.contains("audio: not available in this build"),
+        "the default degrades and says why:\n{}",
+        lenient.stdout
+    );
+    assert!(
+        lenient.stdout.contains("\"markdown\""),
+        "and the rest of the request still comes back:\n{}",
+        lenient.stdout
+    );
+
+    let strict = run_command_expecting_failure(
+        ctx,
+        &["scrape", "--formats", "audio", "--strict"],
+        "TARGET_UNAVAILABLE",
+    );
+    assert_ne!(strict.exit_code, 0, "strict must fail the call");
+    // The code alone is not enough: the caller has to learn *which* format, or the failure
+    // is a riddle. It travels in the message the engine built from the degradation.
+    let strict_output = format!("{}{}", strict.stdout, strict.stderr);
+    assert!(
+        strict_output.contains("audio"),
+        "the failure must name the format:\n{strict_output}"
+    );
+
+    // ── 7. The REST face refuses a request that names no session ──────────
+    // Decision A2 ("open first"): every step reads the page a session is already on, so a
+    // call that names none cannot be answered honestly — and picking one would read a
+    // different caller's page. The refusal must name the field *and* the fix, and it must
+    // arrive as 400 (a caller mistake) rather than as a 500 worth retrying.
+    let no_session = http
+        .post(format!("{}/api/scrape", ctx.browser4_base_url))
+        .header("Content-Type", "application/json")
+        .body(r#"{"formats":["markdown"]}"#)
+        .send()
+        .expect("REST scrape request failed");
+    assert_eq!(
+        no_session.status().as_u16(),
+        400,
+        "a request with no session is the caller's mistake"
+    );
+    let refusal = no_session.text().unwrap_or_default();
+    assert!(
+        refusal.contains("'sessionId' is required"),
+        "the refusal must name the argument:\n{refusal}"
+    );
+    assert!(
+        refusal.contains("open"),
+        "and the fix (`open` first):\n{refusal}"
+    );
+}
+
+/// Read a top-level string field out of a JSON document the CLI printed.
+///
+/// Deliberately minimal — the scenarios assert on substrings everywhere else, and the
+/// one thing that cannot be a substring check is a filesystem path (Windows escapes
+/// its separators as `\\`, so the raw text is not the path).
+fn json_string_field(document: &str, key: &str) -> Option<String> {
+    let marker = format!("\"{key}\":\"");
+    let start = document.find(&marker)? + marker.len();
+    let rest = &document[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].replace("\\\\", "\\"))
 }

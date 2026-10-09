@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agentic.context
 
-import ai.platon.pulsar.common.B4Constants
+import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.agentic.*
 import ai.platon.pulsar.agentic.context.sql.AbstractBrowser4H2SQLContext
 import ai.platon.pulsar.api.BrowserManager

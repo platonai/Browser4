@@ -80,6 +80,12 @@ open class ImageDetector(
         /** Whether this is an SVG image */
         @JsonProperty("isSvg")
         val isSvg: Boolean = false,
+
+        /** Whether the image has actually loaded (naturalWidth/naturalHeight are real values).
+         * Lazy-loaded images that have not been fetched yet report false, and
+         * [width]/[height] are then rendered (layout) sizes, not source dimensions. */
+        @JsonProperty("loaded")
+        val loaded: Boolean? = null,
     )
 
     /**
@@ -139,10 +145,12 @@ open class ImageDetector(
          * JavaScript probe that scans the DOM for image sources.
          *
          * Queries:
-         * - `<img>` elements — src, srcset, currentSrc, naturalWidth/Height, dimensions
+         * - `<img>` elements — src, srcset, data-src, currentSrc, naturalWidth/Height, dimensions
          * - `<picture>` elements — `<source>` children with srcset
          * - `<a>` links to image files — href ending in known image extensions
-         * - Elements with inline `background-image` CSS
+         *   (MediaWiki /wiki/File: description pages excluded — they are HTML)
+         * - Elements with `background-image` CSS — via a bounded getComputedStyle
+         *   scan (covers stylesheet-derived backgrounds, not just inline styles)
          * - `<link rel="icon">`, `<link rel="apple-touch-icon">`
          * - `<meta property="og:image">`, `<meta name="twitter:image">`
          * - `<image>` elements in inline SVG
@@ -170,8 +178,10 @@ function __b4_image_add(item) {
 var imgs = document.querySelectorAll('img');
 for (var i = 0; i < imgs.length; i++) {
     var el = imgs[i];
-    var src = el.currentSrc || el.src || '';
-    var srcAttr = el.getAttribute('src') || '';
+    // Lazy-loaded images may carry the real source in data-src until fetched
+    var lazySrc = el.getAttribute('data-src') || '';
+    var src = el.currentSrc || el.src || lazySrc || '';
+    var srcAttr = el.getAttribute('src') || lazySrc || '';
     var srcset = el.getAttribute('srcset') || '';
     __b4_image_add({
         tagName: 'img',
@@ -184,7 +194,8 @@ for (var i = 0; i < imgs.length; i++) {
         naturalHeight: el.naturalHeight || null,
         alt: el.alt || el.getAttribute('alt') || null,
         isDataUri: DATA_URI_RE.test(src || srcAttr),
-        isSvg: SVG_EXTENSION.test(src || srcAttr)
+        isSvg: SVG_EXTENSION.test(src || srcAttr),
+        loaded: (el.naturalWidth || 0) > 0
     });
 
     // Handle srcset candidates (pick the largest)
@@ -215,7 +226,8 @@ for (var i = 0; i < imgs.length; i++) {
                 naturalHeight: el.naturalHeight || null,
                 alt: el.alt || null,
                 isDataUri: DATA_URI_RE.test(bestUrl),
-                isSvg: SVG_EXTENSION.test(bestUrl)
+                isSvg: SVG_EXTENSION.test(bestUrl),
+                loaded: (el.naturalWidth || 0) > 0
             });
         }
     }
@@ -259,61 +271,74 @@ for (var p = 0; p < pictures.length; p++) {
 }
 
 // ---- 3. <a> links pointing to image files ----
+// MediaWiki-style file description pages (/wiki/File:Name.svg) are HTML pages,
+// not direct image files — exclude them so bulk downloads don't save HTML.
 var anchors = document.querySelectorAll('a[href]');
 for (var k = 0; k < anchors.length; k++) {
     var a = anchors[k];
     var href = a.href || '';
-    if (IMAGE_EXTENSIONS.test(href)) {
-        __b4_image_add({
-            tagName: 'a',
-            srcUrl: a.getAttribute('href') || href || null,
-            resolvedUrl: href || null,
-            type: null,
-            width: null,
-            height: null,
-            naturalWidth: null,
-            naturalHeight: null,
-            alt: a.textContent ? a.textContent.trim().substring(0, 200) : null,
-            isDataUri: false,
-            isSvg: SVG_EXTENSION.test(href)
-        });
-    }
+    if (!IMAGE_EXTENSIONS.test(href)) continue;
+    var aPath = '';
+    try { aPath = new URL(href).pathname; } catch (ex) {}
+    if (/\/(wiki|w)\/(File|Image):/i.test(aPath)) continue;
+    __b4_image_add({
+        tagName: 'a',
+        srcUrl: a.getAttribute('href') || href || null,
+        resolvedUrl: href || null,
+        type: null,
+        width: null,
+        height: null,
+        naturalWidth: null,
+        naturalHeight: null,
+        alt: a.textContent ? a.textContent.trim().substring(0, 200) : null,
+        isDataUri: false,
+        isSvg: SVG_EXTENSION.test(href)
+    });
 }
 
-// ---- 4. Elements with inline background-image CSS ----
+// ---- 4. Elements with background-image CSS (inline or stylesheet-derived) ----
+// getComputedStyle sees stylesheet-defined background-image too (inline
+// style alone is dead code on production pages), but it is too expensive to
+// run on every element of a large DOM — bound the scan to visible elements
+// (non-zero layout size) with a hard budget.
 var allElements = document.querySelectorAll('*');
+var computedStyleBudget = 4000;
 for (var e = 0; e < allElements.length; e++) {
     var elem = allElements[e];
-    var style = elem.style;
-    if (!style || !style.backgroundImage) continue;
-    var bg = style.backgroundImage;
+    if (!elem.offsetWidth && !elem.offsetHeight) continue;
+    if (computedStyleBudget <= 0) break;
+    computedStyleBudget--;
+    var bg = '';
+    try { bg = getComputedStyle(elem).backgroundImage || ''; } catch (ex) { continue; }
     if (bg === 'none' || bg === 'initial' || bg === 'inherit') continue;
 
-    var urlMatch = bg.match(/url\(["']?([^)"'\s]+)["']?\)/);
-    if (!urlMatch) continue;
-    var bgUrl = urlMatch[1];
-    if (!bgUrl) continue;
+    var urlRe = /url\(["']?([^)"']+?)["']?\)/g;
+    var urlMatch;
+    while ((urlMatch = urlRe.exec(bg)) !== null) {
+        var bgUrl = urlMatch[1];
+        if (!bgUrl) continue;
 
-    // Skip data URIs for background images by default (they're often icons/sprites)
-    if (DATA_URI_RE.test(bgUrl)) continue;
+        // Skip data URIs for background images by default (they're often icons/sprites)
+        if (DATA_URI_RE.test(bgUrl)) continue;
 
-    try {
-        var resolvedBgUrl = (new URL(bgUrl, document.baseURI)).href;
-        __b4_image_add({
-            tagName: 'background',
-            srcUrl: bgUrl,
-            resolvedUrl: resolvedBgUrl,
-            type: null,
-            width: elem.offsetWidth || null,
-            height: elem.offsetHeight || null,
-            naturalWidth: null,
-            naturalHeight: null,
-            alt: null,
-            isDataUri: false,
-            isSvg: SVG_EXTENSION.test(bgUrl)
-        });
-    } catch(ex) {
-        // Ignore invalid URLs in background-image
+        try {
+            var resolvedBgUrl = (new URL(bgUrl, document.baseURI)).href;
+            __b4_image_add({
+                tagName: 'background',
+                srcUrl: bgUrl,
+                resolvedUrl: resolvedBgUrl,
+                type: null,
+                width: elem.offsetWidth || null,
+                height: elem.offsetHeight || null,
+                naturalWidth: null,
+                naturalHeight: null,
+                alt: null,
+                isDataUri: false,
+                isSvg: SVG_EXTENSION.test(bgUrl)
+            });
+        } catch(ex) {
+            // Ignore invalid URLs in background-image
+        }
     }
 }
 

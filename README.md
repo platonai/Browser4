@@ -118,6 +118,10 @@ Need to extract data from a page?
 ├─ Static page, multiple correlated fields (title+price+url per item)?
 │  → htmlsnapshot query --sql @query.sql
 ├─ Live JS / complex DOM logic? → eval --json
+├─ Several outputs from one page (text + links + images + a table)?
+│  → scrape --formats "markdown,links,images"   # one capture for all of them
+├─ A screenshot or a PDF as a *file* on this machine?
+│  → scrape --formats "screenshot,pdf" --output ./out
 ├─ Natural language ("find the product price")? → extract (needs LLM key)
 └─ High volume, many pages? → crawl or swarm with --sql
 ```
@@ -288,14 +292,14 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | Command | Description |
 |---|---|
 | `open [url]` | Open a browser session or reconnect to an existing one. **Headless by default.** Supports `--headed` (visible window), `--headless`, `--profile <path>`, `--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`, `--interact-level <FASTEST\|FAST\|DEFAULT>`. **Note:** `SYSTEM_DEFAULT` is deprecated and unsupported on Chrome ≥ 143 — use `attach` + `state-save`/`state-load` to reuse system browser state (see [browser-state-import.md](skills/browser4-cli/references/browser-state-import.md)). |
-| `attach` | Attach to an existing browser via CDP or the Browser4 extension. Supports `--cdp <url\|port\|channel>` and remote endpoint options. After a successful attach the CLI prints the browser that actually connected (`Connected browser: …` / `Attached to … at …`) and shows a ⚠ warning when it conflicts with the requested channel (e.g. requested msedge but Chrome connected) — verify it before driving the session. |
+| `attach` | Attach to an existing browser via CDP or the Browser4 extension. Supports `--cdp <url\|port\|channel>` and remote endpoint options. A channel name resolves candidates from the browser's `DevToolsActivePort`, `--remote-debugging-port` and listening ports, and binds the first endpoint that can host a page — over `/json`, or over the browser-level WebSocket that Chrome's built-in `chrome://inspect/#remote-debugging` toggle publishes (`attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>` also works). After a successful attach the CLI prints the browser that actually connected (`Connected browser: …` / `Attached to … at …`) and shows a ⚠ warning when it conflicts with the requested channel (e.g. requested msedge but Chrome connected) — verify it before driving the session. |
 | `close` | Close the active browser session. |
 | `list` | List browser sessions with their status and next-open behavior. The Connection column prefers the backend-reported actual browser and annotates channel conflicts (e.g. `requested msedge · actual Google Chrome`). Supports `--all`. |
 | `session-default <name>` | Make a named session become the default unnamed session. |
 | `close-all` | Close all sessions without stopping the backend. |
 | `kill-all` | Force-stop the backend and Browser4-managed browser processes. |
 | `stop` | Gracefully stop the Browser4 server. |
-| `status` | Show server version, port, health, and the web status panel URL (`http://<server>:18182/status`). When a session is active it also prints a current-session block: Name / Session ID / Status / Connection / Next open. |
+| `status` | Show server version, port, health, and the web status panel URL (`http://<server>:18182/status`). When a session is active it also prints a current-session block: Name / Session ID / Status / Display / Connection / Next open. |
 | `doctor` | Run diagnostics: build info, LLM status (including the configuration file it reads, the winning provider key and the active model), stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`; `--fix` also writes a commented LLM config template. |
 | `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
 | `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
@@ -818,7 +822,16 @@ Join our community for support, feedback, and collaboration!
 
 We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
-<img width="400" height="400" alt="群聊：dsh-Browser4社区交流3群" src="https://github.com/user-attachments/assets/c15fe635-0e9f-4ac2-b038-abec6bd6bbe4" />
+### Contact Us
+
+- 💬 WeChat: galaxyeye
+- 🌐 Weibo: [galaxyeye](https://weibo.com/galaxyeye)
+- 📧 Email: galaxyeye@live.cn, ivincent.zhang@gmail.com
+- 🐦 Twitter: galaxyeye8
+
+<div style="display: flex;">
+  <img src="docs/images/wechat-author.png" width="300" height="365" alt="WeChat QR Code" />
+</div>
 
 ---
 

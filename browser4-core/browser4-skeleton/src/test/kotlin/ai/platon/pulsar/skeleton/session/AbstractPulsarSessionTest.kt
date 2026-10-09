@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.session
 
-import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_PATH
+import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_DISPLAY_MODE

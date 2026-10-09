@@ -12,9 +12,11 @@ import ai.platon.pulsar.skeleton.plugin.BrowseEventMount
 import ai.platon.pulsar.skeleton.plugin.Browser4Plugin
 import ai.platon.pulsar.skeleton.plugin.CrawlEventMount
 import ai.platon.pulsar.skeleton.plugin.LoadEventMount
+import ai.platon.pulsar.skeleton.plugin.PageFormatContributorMount
 import ai.platon.pulsar.skeleton.plugin.PageSummaryAlgorithmMount
 import ai.platon.pulsar.skeleton.plugin.PluginManifest
 import ai.platon.pulsar.skeleton.plugin.PluginMount
+import ai.platon.pulsar.skeleton.workflow.format.PageFormatContributorRegistry
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryAlgorithmRegistry
 import jakarta.annotation.PreDestroy
 import org.springframework.boot.ApplicationArguments
@@ -39,6 +41,7 @@ import java.util.jar.JarFile
  * - [SwarmFacadeMount] → [SwarmFacadeRegistry]
  * - [PageSnifferMount] → `BrowserResponseHandler.pageCategorySniffer`
  * - [PageSummaryAlgorithmMount] → [PageSummaryAlgorithmRegistry]
+ * - [PageFormatContributorMount] → [PageFormatContributorRegistry]
  */
 class PluginManager(
     private val applicationContext: ApplicationContext,
@@ -217,6 +220,11 @@ class PluginManager(
             if (mount is PageSummaryAlgorithmMount) {
                 wirePageSummaryAlgorithmMount(mount)
             }
+
+            // --- Page format contributor mount ---
+            if (mount is PageFormatContributorMount) {
+                wirePageFormatContributorMount(mount)
+            }
         }
     }
 
@@ -259,6 +267,31 @@ class PluginManager(
                 logger.warn(
                     "  ! Failed to register page summary algorithm '{}': {}",
                     runCatching { algorithm.id }.getOrDefault("<invalid>"), e.message
+                )
+            }
+        }
+    }
+
+    /**
+     * Registers the page-output formats a plugin contributes.
+     *
+     * One bad contributor must not abort startup, and it must not take the
+     * plugin's other formats down with it, so each registration is guarded
+     * separately — [PageFormatContributorRegistry.register] rejects an invalid
+     * or reserved id by throwing. A duplicate id is not an error: the registry
+     * keeps the first registration and logs the skip.
+     */
+    private fun wirePageFormatContributorMount(mount: PageFormatContributorMount) {
+        mount.getPageFormatContributors().forEach { contributor ->
+            try {
+                val registered = PageFormatContributorRegistry.instance.register(contributor)
+                if (registered) {
+                    logger.info("  + Registered page format contributor: '{}'", contributor.id)
+                }
+            } catch (e: Exception) {
+                logger.warn(
+                    "  ! Failed to register page format contributor '{}': {}",
+                    runCatching { contributor.id }.getOrDefault("<invalid>"), e.message
                 )
             }
         }

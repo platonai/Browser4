@@ -42,8 +42,8 @@ class PptxGeneratorTest {
         config: PptxConfig = PptxConfig()
     ): PptxGenerator {
         val downloader = object : PptxImageDownloader(config, OkHttpClient()) {
-            override suspend fun downloadImages(blocks: List<ContentBlock>): Map<String, ByteArray> {
-                return imageBytes
+            override suspend fun downloadImages(blocks: List<ContentBlock>): DownloadResult {
+                return DownloadResult(imageBytes, imageBytes.size, 0)
             }
         }
         return PptxGenerator(config, downloader)
@@ -62,7 +62,7 @@ class PptxGeneratorTest {
             pageUrl = "https://example.com",
             pageTitle = "Test Page",
             outputDir = tempDir,
-        )
+        ).path
 
         assertTrue(path.toFile().exists())
         assertTrue(path.toFile().length() > 0)
@@ -84,7 +84,7 @@ class PptxGeneratorTest {
             pageUrl = "https://example.com/page",
             pageTitle = "My Page Title",
             outputDir = tempDir,
-        )
+        ).path
 
         assertTrue(path.toFile().exists())
         readSlideShow(path).use { ppt ->
@@ -109,7 +109,7 @@ class PptxGeneratorTest {
             ContentBlock(type = "paragraph", text = "More content."),
         )
 
-        val path = generator.generate(blocks, "https://example.com", "Page", tempDir)
+        val path = generator.generate(blocks, "https://example.com", "Page", tempDir).path
 
         assertTrue(path.toFile().exists())
         readSlideShow(path).use { ppt ->
@@ -128,7 +128,7 @@ class PptxGeneratorTest {
             ContentBlock(type = "paragraph", text = "Another paragraph."),
         )
 
-        val path = generator.generate(blocks, "https://example.com", "No Headings Page", tempDir)
+        val path = generator.generate(blocks, "https://example.com", "No Headings Page", tempDir).path
 
         assertTrue(path.toFile().exists())
         readSlideShow(path).use { ppt ->
@@ -149,7 +149,7 @@ class PptxGeneratorTest {
             blocks.add(ContentBlock(type = "paragraph", text = "Paragraph number $i."))
         }
 
-        val path = generator.generate(blocks, "https://example.com", "Long Page", tempDir)
+        val path = generator.generate(blocks, "https://example.com", "Long Page", tempDir).path
 
         assertTrue(path.toFile().exists())
         readSlideShow(path).use { ppt ->
@@ -168,7 +168,7 @@ class PptxGeneratorTest {
             ContentBlock(type = "list", items = listOf("Item 1", "Item 2", "Item 3"), ordered = false),
         )
 
-        val path = generator.generate(blocks, "https://example.com", "List Page", tempDir)
+        val path = generator.generate(blocks, "https://example.com", "List Page", tempDir).path
 
         assertTrue(path.toFile().exists())
         readSlideShow(path).use { ppt ->
@@ -193,7 +193,7 @@ class PptxGeneratorTest {
             ),
         )
 
-        val path = generator.generate(blocks, "https://example.com", "Table Page", tempDir)
+        val path = generator.generate(blocks, "https://example.com", "Table Page", tempDir).path
 
         assertTrue(path.toFile().exists())
         readSlideShow(path).use { ppt ->
@@ -210,7 +210,7 @@ class PptxGeneratorTest {
             pageUrl = "https://example.com",
             pageTitle = "Test",
             outputDir = tempDir,
-        )
+        ).path
 
         assertTrue(path.fileName.toString().endsWith(".pptx"))
     }
@@ -228,7 +228,7 @@ class PptxGeneratorTest {
             pageUrl = "https://example.com",
             pageTitle = "Valid PPTX",
             outputDir = tempDir,
-        )
+        ).path
 
         // PPTX is a ZIP file — should be readable by POI
         readSlideShow(path).use { ppt ->
