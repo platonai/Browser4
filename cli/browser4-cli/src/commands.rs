@@ -1338,10 +1338,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false },
-                ArgDef { name: "button", description: "Button to click, defaults to left", optional: true },
+                ArgDef { name: "button", description: "Button to click: left (default), right, or middle", optional: true },
             ],
             options: &[
-                OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
+                OptionDef { name: "modifiers", description: "Modifier key held during the click: Control, Shift, Alt, or Meta (one key; use `keydown`/`keyup` to hold a key across commands)", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
                 OptionDef { name: "auto-dismiss-dialogs", description: "Auto-accept any native JavaScript dialog (alert/confirm/prompt) triggered by the click", is_bool: true, short: None },
@@ -1364,10 +1364,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false },
-                ArgDef { name: "button", description: "Button to click, defaults to left", optional: true },
+                ArgDef { name: "button", description: "Button to click: left (default), right, or middle", optional: true },
             ],
             options: &[
-                OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
+                OptionDef { name: "modifiers", description: "Modifier key held during the double click: Control, Shift, Alt, or Meta (one key)", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
                 OptionDef { name: "auto-dismiss-dialogs", description: "Auto-accept any native JavaScript dialog (alert/confirm/prompt) triggered by the double-click", is_bool: true, short: None },
@@ -1553,7 +1553,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "text", description: "Wait until this text appears on the page", is_bool: false, short: None },
-                OptionDef { name: "url", description: "Wait until the URL matches this glob pattern", is_bool: false, short: None },
+                OptionDef { name: "url", description: "Wait until the URL matches this glob pattern (e.g. **/checkout*, */login)", is_bool: false, short: None },
                 OptionDef { name: "load", description: "Wait for page load state: networkidle, domcontentloaded, or load (networkidle only settles the network — poll `wait <result-selector>` for late-rendered results)", is_bool: false, short: None },
                 OptionDef { name: "fn", description: "Wait until this JavaScript expression returns true", is_bool: false, short: None },
                 OptionDef { name: "download", description: "Wait until a download in the given directory completes (polls for .crdownload files)", is_bool: true, short: None },
@@ -1662,14 +1662,14 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[
-                OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false, short: None },
+                OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response — a bare name is written to the snapshot directory with a .yml extension", is_bool: false, short: None },
                 OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height] (enabled by default)", is_bool: true, short: None },
                 OptionDef { name: "no-boxes", description: "Disable bounding boxes in snapshot output", is_bool: true, short: None },
                 OptionDef { name: "interactive", description: "Interactive-oriented rendering: merge inner text into element names so ref lines read as self-contained targets (not a strict interactive-only filter). Combine with --stdout to see refs inline.", is_bool: true, short: Some("i") },
                 OptionDef { name: "urls", description: "Include href URLs for link elements", is_bool: true, short: Some("u") },
                 OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
                 OptionDef { name: "no-compact", description: "Disable compact mode; include all structural nodes", is_bool: true, short: None },
-                OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
+                OptionDef { name: "depth", description: "Limit tree depth to n levels (default: unlimited)", is_bool: false, short: Some("d") },
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector (use --selector; -s is reserved for --session globally). Note: root-to-leaf ancestor elements outside the matched scope are included for tree-path context.", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file. Large trees are paginated (default 2000 lines/page) — when truncated, a hint is appended to stdout (and the full footer goes to stderr). Use --all or --page-size 0 to print the complete tree.", is_bool: true, short: None },
@@ -2334,13 +2334,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "state", description: "For offline: on or off (default: on)", optional: true },
             ],
             options: &[
-                OptionDef { name: "lat", description: "Latitude (geo)", is_bool: false, short: None },
-                OptionDef { name: "lon", description: "Longitude (geo)", is_bool: false, short: None },
+                OptionDef { name: "lat", description: "Latitude in degrees, -90 to 90 (geo; give --lat together with --lon)", is_bool: false, short: None },
+                OptionDef { name: "lon", description: "Longitude in degrees, -180 to 180 (geo; give --lon together with --lat)", is_bool: false, short: None },
                 OptionDef { name: "accuracy", description: "Position accuracy in meters (geo, default: 1)", is_bool: false, short: None },
                 OptionDef { name: "json", description: "Headers as a JSON object string, e.g. '{\"X-Api-Key\": \"abc\"}' (headers)", is_bool: false, short: None },
                 OptionDef { name: "color-scheme", description: "Emulated prefers-color-scheme: light, dark, or no-preference (media)", is_bool: false, short: None },
-                OptionDef { name: "width", description: "Viewport width in px (device)", is_bool: false, short: None },
-                OptionDef { name: "height", description: "Viewport height in px (device)", is_bool: false, short: None },
+                OptionDef { name: "width", description: "Viewport width in px (device; give --width together with --height)", is_bool: false, short: None },
+                OptionDef { name: "height", description: "Viewport height in px (device; give --height together with --width)", is_bool: false, short: None },
                 OptionDef { name: "dpr", description: "Device scale factor (device, default: 1)", is_bool: false, short: None },
                 OptionDef { name: "mobile", description: "Enable mobile (touch) emulation (device)", is_bool: true, short: None },
             ],
@@ -2483,8 +2483,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "domain", description: "Only include cookies with the exact domain", is_bool: false, short: None },
-                OptionDef { name: "path", description: "Only include cookies with the exact path", is_bool: false, short: None },
+                OptionDef { name: "domain", description: "Only include cookies with the exact domain (e.g. example.com — a subdomain is a different cookie)", is_bool: false, short: None },
+                OptionDef { name: "path", description: "Only include cookies with the exact path (must start with '/', e.g. /checkout)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_save_storage_state".to_string(),
@@ -2547,7 +2547,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "domain", description: "Cookie domain (defaults to current page domain if omitted)", is_bool: false, short: None },
-                OptionDef { name: "path", description: "Cookie path", is_bool: false, short: None },
+                OptionDef { name: "path", description: "Cookie path — must start with '/' (default: '/', i.e. the whole site)", is_bool: false, short: None },
                 OptionDef { name: "expires", description: "Cookie expiry: Unix timestamp, relative duration (e.g. 7d, 1w, 30m — s/m/h/d/w), or RFC 3339 datetime", is_bool: false, short: None },
                 OptionDef { name: "httpOnly", description: "Mark the cookie as HttpOnly", is_bool: true, short: None },
                 OptionDef { name: "secure", description: "Mark the cookie as Secure", is_bool: true, short: None },
@@ -2597,7 +2597,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             }],
             options: &[
                 OptionDef { name: "domain", description: "Cookie domain (defaults to current page domain if omitted)", is_bool: false, short: None },
-                OptionDef { name: "path", description: "Cookie path override", is_bool: false, short: None },
+                OptionDef { name: "path", description: "Delete only the cookie stored at this exact path — must start with '/' (omit to match the cookie by name regardless of path)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "delete_cookies".to_string(),
@@ -4110,7 +4110,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-capture",
-            description: "Capture: serialize the page the active tab is showing, store it in Browser4's page store, and return page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Every htmlsnapshot command works on a fresh snapshot of the active page: this one returns the snapshot's metadata, while the reads (`get`, `get all`, `inspect`, `summary`, `grep`, `export`, `query`, `readability`) capture the active page first and then operate on that snapshot — so a read already sees the tab as it is now (form results, SPA updates, `eval` mutations). The capture is always keyed by the active tab's own normalized URL, so a read aimed at another URL never captures it.",
+            description: "Capture: serialize the page the active tab is showing and return its metadata — the long form of `htmlsnapshot`, which runs the very same capture. Run `browser4-cli --help htmlsnapshot` for the full description.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -4260,12 +4260,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "file", description: "Path to save the HTML file (or use --file)", optional: true },
+                ArgDef { name: "file", description: "Path to save the HTML file (or use --file); without either, a timestamped .html file is written to the snapshot directory", optional: true },
             ],
             options: &[
                 OptionDef {
                     name: "file <file>",
-                    description: "Path to save the HTML file",
+                    description: "Path to save the HTML file (default: a timestamped .html file in the snapshot directory)",
                     is_bool: false,
                     short: None,
                 },

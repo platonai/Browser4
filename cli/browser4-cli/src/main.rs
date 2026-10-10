@@ -20766,12 +20766,20 @@ fn find_declared_cli_spec<'a>(specs: &'a [CliToolSpec], spaced: &str) -> Option<
 /// than failing. The timeout is deliberately short: this is a discovery probe
 /// (`plugin commands`, `--help --examples`), not a tool call, so an absent
 /// backend must not stall the command.
-async fn fetch_tool_spec_values(base_url: &str) -> Vec<Value> {
+/// Budget for the optional plugin-declared-command section appended to help.
+///
+/// The static reference is printed *before* this runs, so the wait never delays
+/// the page the user asked for — but a dead backend must not add its full 2 s
+/// specs timeout to every help invocation either.
+const HELP_SPECS_BUDGET: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Fetch the tool specs from `GET /mcp/tools/specs` with an explicit budget.
+///
+/// Discovery is best-effort everywhere it is used: an unreachable backend, a
+/// timeout or a malformed body all yield an empty list, never an error.
+async fn fetch_tool_spec_values_within(base_url: &str, budget: std::time::Duration) -> Vec<Value> {
     let url = format!("{}/mcp/tools/specs", base_url.trim_end_matches('/'));
-    let Ok(client) = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-    else {
+    let Ok(client) = reqwest::Client::builder().timeout(budget).build() else {
         return Vec::new();
     };
     let Ok(response) = client.get(&url).send().await else {
@@ -20784,6 +20792,10 @@ async fn fetch_tool_spec_values(base_url: &str) -> Vec<Value> {
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default()
+}
+
+async fn fetch_tool_spec_values(base_url: &str) -> Vec<Value> {
+    fetch_tool_spec_values_within(base_url, std::time::Duration::from_secs(2)).await
 }
 
 /// Fetch all plugin-declared CLI tool specs from `GET /mcp/tools/specs`.
@@ -21036,51 +21048,83 @@ fn resolve_command_tool(command: &str, args: &[String]) -> Option<String> {
 
 /// Build the `--help --examples` report for a CLI command.
 ///
-/// Sourcing: the command is mapped to its MCP tool ([resolve_command_tool]) and
-/// that tool's `examples` are read from `GET /mcp/tools/specs` — the same
-/// endpoint (and the same base URL / session-independent path) the CLI already
-/// uses to discover plugin-declared commands.
+/// Sourcing, in order: the CLI's own `Examples:` block (shipped in the binary,
+/// so this works with no backend at all), then the richer tool-level examples
+/// read from `GET /mcp/tools/specs` — the same endpoint (and the same base URL /
+/// session-independent path) the CLI already uses to discover plugin-declared
+/// commands.
 ///
 /// Never fails: an unreachable backend, an unknown command, a tool the backend
-/// does not advertise and a tool without examples each produce one explanatory
+/// does not advertise and a tool without examples each end in an explanatory
 /// line, and the command still exits 0.
 async fn build_command_examples(base_url: &str, command: &str, args: &[String]) -> String {
+    // A quoted spaced name (`--help "htmlsnapshot get" --examples`) arrives as
+    // one argument; resolve it to the internal key its help page lives under
+    // before looking anything up.
+    let resolved = match classify_help_target(command) {
+        HelpTarget::Command(resolved) => resolved,
+        _ => command.to_string(),
+    };
+    let command = resolved.as_str();
+
     let public = help::public_command_name(command);
-    let no_examples = |reason: &str| format!("No examples available for '{public}' — {reason}");
+    let local = help::command_examples(command);
 
     let Some(tool) = resolve_command_tool(command, args) else {
         return if commands_map().contains_key(command) || command.starts_with("plugin") {
-            no_examples("the command maps to no single tool.")
+            examples_or_reason(public, &local, "the command maps to no single tool.")
         } else {
-            no_examples("unknown command.")
+            examples_or_reason(public, &local, "unknown command.")
         };
     };
 
-    build_tool_examples(base_url, &tool, public).await
+    match build_tool_examples(base_url, &tool).await {
+        Ok(report) => report,
+        Err(reason) => examples_or_reason(public, &local, &reason),
+    }
+}
+
+/// Render a command's built-in examples, or explain why there are none.
+fn examples_or_reason(public: &str, local: &[String], reason: &str) -> String {
+    if local.is_empty() {
+        return format!("No examples available for '{public}' — {reason}");
+    }
+    let mut lines = vec![format!(
+        "Examples for browser4-cli {public} (built into the CLI):"
+    )];
+    lines.extend(local.iter().cloned());
+    lines.push(String::new());
+    lines.push(format!("Tool-level examples are unavailable: {reason}"));
+    lines.push(format!(
+        "Run `browser4-cli --help {public}` for arguments, options, and notes."
+    ));
+    lines.join("\n")
 }
 
 /// Like [build_command_examples] but for an already-resolved tool — used by
 /// plugin-declared commands (`ToolSpec.cliName`), whose tool name comes from the
 /// spec rather than from `CommandDef.tool_name_fn`.
-async fn build_tool_examples(base_url: &str, tool: &str, public: &str) -> String {
-    let no_examples = |reason: &str| format!("No examples available for '{public}' — {reason}");
-
+///
+/// `Err` carries the reason as a phrase the caller drops into its own message
+/// (`"is the backend running?"`), so both the one-line report and the built-in
+/// fallback can explain themselves.
+async fn build_tool_examples(base_url: &str, tool: &str) -> Result<String, String> {
     let specs: Vec<ToolSpecDoc> = fetch_tool_spec_values(base_url)
         .await
         .iter()
         .filter_map(|value| serde_json::from_value(value.clone()).ok())
         .collect();
     if specs.is_empty() {
-        return no_examples("is the backend running?");
+        return Err("is the backend running?".to_string());
     }
 
     let Some(spec) = find_tool_spec(&specs, tool) else {
-        return no_examples(&format!("the backend does not advertise '{tool}'."));
+        return Err(format!("the backend does not advertise '{tool}'."));
     };
 
     let label = format!("{}.{} ({})", spec.domain, spec.method, tool);
     render_tool_examples(&label, &spec.examples)
-        .unwrap_or_else(|| no_examples(&format!("the tool '{tool}' declares no examples.")))
+        .ok_or_else(|| format!("the tool '{tool}' declares no examples."))
 }
 
 /// `plugin commands` — list CLI commands declared by installed plugins via
@@ -24850,10 +24894,11 @@ fn validate_required_args(
                     })
                     .collect();
                 return Err(format!(
-                    "Missing required argument: <{}>.\nUsage: browser4-cli {} {}",
+                    "Missing required argument: <{}>.\nUsage: browser4-cli {} {}\n{}",
                     arg.name,
-                    cmd_def.name,
-                    usage_args.join(" ")
+                    public_command_name(cmd_def.name),
+                    usage_args.join(" "),
+                    help::help_hint(cmd_def.name)
                 ));
             }
         }
@@ -26363,38 +26408,39 @@ fn main() {
 
         // Plugin-declared CLI commands (ToolSpec.cliName, spaced form like
         // `profile import`): resolved BEFORE normalize so the spaced name
-        // survives rewriting. Only probed when the first token is not a known
-        // built-in command (avoids an extra HTTP round-trip for open/goto/...).
-        let declared_result = {
-            let declared_cmd_map = commands_map();
-            if global.args.len() >= 2
-                && !global.args[1].starts_with('-')
-                && declared_cmd_map.get(global.args[0].as_str()).is_none()
-            {
-                let base_url = resolve_base_url(
-                    global.server_url.as_deref(),
-                    global.session_name.as_deref(),
-                );
-                let spaced = format!("{} {}", global.args[0], global.args[1]);
-                if let Some(spec) = fetch_declared_cli_spec(&base_url, &spaced).await {
-                    // `--help --examples` on a plugin-declared command prints the
-                    // spec's examples instead of calling the tool (the declared
-                    // path forwards every option, so `--examples` would reach the
-                    // backend as an unknown argument).
-                    if global.args.iter().any(|a| a == "--examples") {
-                        let tool = format!("{}_{}", spec.domain, spec.method);
-                        let report = build_tool_examples(&base_url, &tool, &spaced).await;
-                        cli_println!("{report}");
-                        Some(Ok(()))
-                    } else {
-                        Some(handle_declared_cli_command(&base_url, &spec, &global).await)
-                    }
+        // survives rewriting. Only probed when the first token could name one
+        // (see `could_be_declared_cli_command`) — the probe costs a specs
+        // round-trip, and probing flags or pseudo-commands delayed static help
+        // by ~2 s. `help profile` still shows the plugin section: run() fetches
+        // it for non-exact targets after printing the reference.
+        let declared_result = if could_be_declared_cli_command(&global.args) {
+            let base_url = resolve_base_url(
+                global.server_url.as_deref(),
+                global.session_name.as_deref(),
+            );
+            let spaced = format!("{} {}", global.args[0], global.args[1]);
+            if let Some(spec) = fetch_declared_cli_spec(&base_url, &spaced).await {
+                // `--help --examples` on a plugin-declared command prints the
+                // spec's examples instead of calling the tool (the declared
+                // path forwards every option, so `--examples` would reach the
+                // backend as an unknown argument).
+                if global.args.iter().any(|a| a == "--examples") {
+                    let tool = format!("{}_{}", spec.domain, spec.method);
+                    let report = build_tool_examples(&base_url, &tool)
+                        .await
+                        .unwrap_or_else(|reason| {
+                            format!("No examples available for '{spaced}' — {reason}")
+                        });
+                    cli_println!("{report}");
+                    Some(Ok(()))
                 } else {
-                    None
+                    Some(handle_declared_cli_command(&base_url, &spec, &global).await)
                 }
             } else {
                 None
             }
+        } else {
+            None
         };
 
         let (command, effective_global, from_spaced_prefix) =
@@ -26669,7 +26715,7 @@ async fn run(
     // ── Help dispatch ────────────────────────────────────────────────
     //
     // Progressive disclosure:
-    //   no args        → quick reference (~35 lines, most-used commands)
+    //   no args        → quick reference (the minimal usable manual, ≤60 lines)
     //   --help         → full command reference by category
     //   --help <topic> → category or per-command details
     //   --help-json    → machine-readable JSON (for AI agents / scripts)
@@ -26700,18 +26746,54 @@ async fn run(
     if command == "help" || command == "--help" || command == "-h" {
         let help_args: Vec<String> = global.args.iter().skip(1).cloned().collect();
         let sub = resolve_help_target(&help_args);
-        // Plugin-declared commands are rendered with a [plugin] badge, so
-        // `help` and `help profile` both show the plugin surface.
-        let specs = fetch_all_declared_cli_specs(&base_url).await;
+        // `--help <command> --examples` asks for the same thing as
+        // `<command> --help --examples`; without this the flag was silently
+        // ignored whenever `--help` came first.
+        if global.args.iter().any(|a| a == "--examples") {
+            match sub.as_deref().filter(|target| !target.starts_with('-')) {
+                Some(target) => {
+                    cli_println!(
+                        "{}",
+                        build_command_examples(&base_url, target, &global.args).await
+                    );
+                }
+                // `--help --examples` names no command — same usage line the
+                // command-first form prints.
+                None => cli_println!("Usage: browser4-cli <command> --help --examples"),
+            }
+            return Ok(());
+        }
+        // The reference itself is static and is printed first: it must never
+        // wait on the server. An exact command is fully answered by the binary,
+        // so no request is made at all; every other target may have
+        // plugin-declared commands, whose section is fetched afterwards on a
+        // short budget (the page is already on screen by then).
+        let exact_command = sub
+            .as_deref()
+            .is_some_and(|target| matches!(classify_help_target(target), HelpTarget::Command(_)));
         let handled = print_help(sub.as_deref());
-        if handled {
-            let declared = render_declared_help_section(sub.as_deref(), &specs);
+        if !handled {
+            // Unknown locally — it may still be a plugin-declared command, and
+            // that genuinely needs the backend's specs.
+            let specs = fetch_all_declared_cli_specs(&base_url).await;
+            if !print_declared_help(sub.as_deref(), &specs) {
+                eprintln!("Unknown command: {}", sub.as_deref().unwrap_or(""));
+                print_help(None);
+            }
+            return Ok(());
+        }
+        if !exact_command {
+            // Plugin-declared commands are rendered with a [plugin] badge, so
+            // `help` and `help profile` both show the plugin surface.
+            let specs = fetch_tool_spec_values_within(&base_url, HELP_SPECS_BUDGET).await;
+            let declared: Vec<CliToolSpec> = specs
+                .iter()
+                .filter_map(|t| serde_json::from_value(t.clone()).ok())
+                .collect();
+            let declared = render_declared_help_section(sub.as_deref(), &declared);
             if !declared.is_empty() {
                 cli_println!("{}", declared);
             }
-        } else if !print_declared_help(sub.as_deref(), &specs) {
-            eprintln!("Unknown command: {}", sub.as_deref().unwrap_or(""));
-            print_help(None);
         }
         return Ok(());
     }
@@ -26725,16 +26807,20 @@ async fn run(
     // `--examples` (accepted together with `--help`): print the runnable usage
     // examples of the tool the command maps to. Handled before dispatch — and
     // before `batch`, which maps to no single tool — so asking for examples
-    // never executes the command, and a missing backend only costs a one-line
-    // message. Never fails, never starts the server.
+    // never executes the command, and a missing backend still yields the CLI's
+    // own built-in examples. Never fails, never starts the server.
     if global.args.iter().any(|a| a == "--examples") {
         if command.starts_with('-') {
             cli_println!("Usage: browser4-cli <command> --help --examples");
             return Ok(());
         }
+        // `browser4-cli htmlsnapshot get --help --examples` arrives as the
+        // parent command plus a positional subcommand; resolve it the same way
+        // `help` does, or the examples would come from the parent's tool.
+        let target = resolve_help_target(&global.args).unwrap_or_else(|| command.to_string());
         cli_println!(
             "{}",
-            build_command_examples(&base_url, command, &global.args).await
+            build_command_examples(&base_url, &target, &global.args).await
         );
         return Ok(());
     }
@@ -26746,11 +26832,15 @@ async fn run(
     // When the user passes --help/-h after a command (e.g. `htmlsnapshot --help`),
     // print the help for that command instead of complaining about the form.
     if global.args.iter().any(|a| a == "--help" || a == "-h") {
-        let specs = fetch_all_declared_cli_specs(&base_url).await;
-        let handled = print_help(Some(command));
-        if !handled && !print_declared_help(Some(command), &specs) {
-            eprintln!("Unknown command: {}", command);
-            print_help(None);
+        // Static help is answered by the binary; the backend is only consulted
+        // when the target is not a command/category/prefix the CLI knows, which
+        // is when it could still be a plugin-declared command.
+        if !print_help(Some(command)) {
+            let specs = fetch_all_declared_cli_specs(&base_url).await;
+            if !print_declared_help(Some(command), &specs) {
+                eprintln!("Unknown command: {}", command);
+                print_help(None);
+            }
         }
         return Ok(());
     }
@@ -26946,14 +27036,19 @@ async fn run(
         if paths.is_empty() {
             return Err(CliError(
                 ExitCode::Usage,
-                "upload requires at least one file path (usage: upload <ref> <file> [file...])"
-                    .to_string(),
+                format!(
+                    "Missing required argument: <file>.\nUsage: browser4-cli upload <ref> <file> [file...]\n{}",
+                    help::help_hint("upload")
+                ),
             ));
         }
         if paths.iter().any(|p| p.is_empty()) {
             return Err(CliError(
                 ExitCode::Usage,
-                "upload: file path must not be empty.".to_string(),
+                format!(
+                    "upload: file path must not be empty.\n{}",
+                    help::help_hint("upload")
+                ),
             ));
         }
         if is_local {
@@ -28322,6 +28417,32 @@ async fn run(
     Ok(())
 }
 
+/// Whether the first arguments could name a plugin-declared CLI command
+/// (`ToolSpec.cliName`, spaced form such as `profile import`).
+///
+/// Only such invocations are worth a `GET /mcp/tools/specs` round-trip before
+/// dispatch. Flags (`--help fill`), CLI-level pseudo-commands (`help`,
+/// `version`) and known built-in commands are answered locally, and probing
+/// them used to delay static help by the full specs timeout.
+///
+/// Must tolerate an empty argument list: `browser4-cli` and
+/// `browser4-cli --help-json` carry no positional arguments at all.
+fn could_be_declared_cli_command(args: &[String]) -> bool {
+    let Some(first) = args.first().map(String::as_str) else {
+        return false;
+    };
+    if first.starts_with('-') || matches!(first, "help" | "version") {
+        return false;
+    }
+    let Some(second) = args.get(1) else {
+        return false;
+    };
+    if second.starts_with('-') || commands_map().contains_key(first) {
+        return false;
+    }
+    true
+}
+
 /// Resolve a help target from command-line arguments.
 ///
 /// Handles spaced prefixed forms (`swarm create`, `agent run`) by rewriting
@@ -28343,6 +28464,53 @@ fn resolve_help_target(args: &[String]) -> Option<String> {
     Some(target.clone())
 }
 
+/// How a `--help <target>` argument resolves.
+#[derive(Debug, PartialEq, Eq)]
+enum HelpTarget {
+    /// An exact command name — print that command's own help page. Carries the
+    /// internal (kebab-case) name the alias resolved to.
+    Command(String),
+    /// A category name or alias — list every command in that category.
+    Category(&'static str),
+    /// A prefix of one or more public command names (`experience` → `experience …`).
+    Prefix,
+    /// Nothing matched.
+    Unknown,
+}
+
+/// Classify a `--help <target>` argument.
+///
+/// Order matters: an exact command wins, then a category name or alias, and
+/// only then a prefix. Prefix matching used to run first, so the documented
+/// category `--help session` printed an arbitrary slice of the
+/// `sessionstorage-*` family, while `--help storage`, `--help tabs`,
+/// `--help network`, and `--help core` reported an unknown command even though
+/// the reference lists those very sections.
+fn classify_help_target(name: &str) -> HelpTarget {
+    let cmd_map = commands_map();
+    if cmd_map.contains_key(name) {
+        return HelpTarget::Command(name.to_string());
+    }
+    // A quoted spaced name (`--help "swarm submit"`) arrives as one argument;
+    // its internal key is the kebab-case form.
+    let kebab = name.replace(' ', "-");
+    if kebab != name && cmd_map.contains_key(kebab.as_str()) {
+        return HelpTarget::Command(kebab);
+    }
+    if let Some(canonical) = resolve_category_alias(name) {
+        if !commands_in_category(canonical).is_empty() {
+            return HelpTarget::Category(canonical);
+        }
+    }
+    if cmd_map
+        .values()
+        .any(|c| public_command_name(c.name).starts_with(name))
+    {
+        return HelpTarget::Prefix;
+    }
+    HelpTarget::Unknown
+}
+
 /// Print help for a command name, prefix, category, or the general overview.
 /// Returns `true` when a specific target was handled (or the overview was
 /// printed); `false` when the target matched nothing — the caller then tries
@@ -28350,31 +28518,17 @@ fn resolve_help_target(args: &[String]) -> Option<String> {
 fn print_help(command_name: Option<&str>) -> bool {
     if let Some(name) = command_name {
         if name != "--help" {
-            let cmd_map = commands_map();
-            if let Some(cmd) = cmd_map.get(name) {
-                cli_println!("{}", generate_command_help(cmd));
-                return true;
-            }
-            // Not an exact command — collect every command whose public
-            // name starts with this prefix (e.g. "swarm" matches
-            // "swarm create", "swarm submit", ...). Include hidden commands
-            // since the user explicitly asked for help on this prefix.
-            let matching: Vec<&crate::commands::CommandDef> = cmd_map
-                .values()
-                .filter(|c| public_command_name(c.name).starts_with(name))
-                .collect();
-            if !matching.is_empty() {
-                let mut lines: Vec<String> = vec![format!("{} subcommands:\n", name)];
-                for cmd in matching {
-                    lines.push(generate_help_entry(cmd));
+            match classify_help_target(name) {
+                HelpTarget::Command(resolved) => {
+                    let cmd_map = commands_map();
+                    let cmd = cmd_map
+                        .get(resolved.as_str())
+                        .expect("classify_help_target reported an exact command");
+                    cli_println!("{}", generate_command_help(cmd));
+                    return true;
                 }
-                cli_println!("{}", lines.join("\n"));
-                return true;
-            }
-            // Try category alias — shows all commands in that category
-            if let Some(canonical) = resolve_category_alias(name) {
-                let cat_cmds = commands_in_category(canonical);
-                if !cat_cmds.is_empty() {
+                HelpTarget::Category(canonical) => {
+                    let cat_cmds = commands_in_category(canonical);
                     // Find the display title for this category
                     let title = CATEGORY_TITLES
                         .iter()
@@ -28385,27 +28539,54 @@ fn print_help(command_name: Option<&str>) -> bool {
                     for cmd in &cat_cmds {
                         lines.push(generate_help_entry(cmd));
                     }
+                    lines.push(String::new());
+                    lines.push(
+                        "Run `browser4-cli --help <command>` for the full description, options, and examples."
+                            .to_string(),
+                    );
                     cli_println!("{}", lines.join("\n"));
                     return true;
                 }
+                HelpTarget::Prefix => {
+                    // Collect every command whose public name starts with this
+                    // prefix (e.g. "swarm" matches "swarm create", "swarm
+                    // submit", ...), including hidden commands since the user
+                    // explicitly asked for help on this prefix. Sort by public
+                    // name: HashMap iteration order is arbitrary, so the list
+                    // used to come out shuffled.
+                    let cmd_map = commands_map();
+                    let mut matching: Vec<&crate::commands::CommandDef> = cmd_map
+                        .values()
+                        .filter(|c| public_command_name(c.name).starts_with(name))
+                        .collect();
+                    matching.sort_by_key(|c| public_command_name(c.name));
+                    let mut lines: Vec<String> = vec![format!("{} subcommands:\n", name)];
+                    for cmd in matching {
+                        lines.push(generate_help_entry(cmd));
+                    }
+                    cli_println!("{}", lines.join("\n"));
+                    return true;
+                }
+                HelpTarget::Unknown => {
+                    // Plugin tool commands (e.g. `plugin-pptx`, `plugin-images`) are
+                    // not statically registered — they are discovered at runtime from
+                    // the installed plugin manifests. Don't print a bare "Unknown
+                    // command"; point the user at the discovery entry points.
+                    if name.starts_with("plugin-") {
+                        let domain = &name["plugin-".len()..];
+                        eprintln!(
+                            "Plugin tool domain '{}' is not a static CLI command.\n\
+                             Plugin tools are discovered dynamically from installed plugins.\n\
+                             Run `browser4-cli plugin` to list available plugin domains and tools,\n\
+                             or call a tool directly with `browser4-cli tool call <mcp-tool-name>`.",
+                            domain
+                        );
+                    }
+                    // Report "not handled": the caller still tries the plugin-declared
+                    // commands and prints "Unknown command" when nothing matches.
+                    return false;
+                }
             }
-            // Plugin tool commands (e.g. `plugin-pptx`, `plugin-images`) are
-            // not statically registered — they are discovered at runtime from
-            // the installed plugin manifests. Don't print a bare "Unknown
-            // command"; point the user at the discovery entry points.
-            if name.starts_with("plugin-") {
-                let domain = &name["plugin-".len()..];
-                eprintln!(
-                    "Plugin tool domain '{}' is not a static CLI command.\n\
-                     Plugin tools are discovered dynamically from installed plugins.\n\
-                     Run `browser4-cli plugin` to list available plugin domains and tools,\n\
-                     or call a tool directly with `browser4-cli tool call <mcp-tool-name>`.",
-                    domain
-                );
-            }
-            // Report "not handled": the caller still tries the plugin-declared
-            // commands and prints "Unknown command" when nothing matches.
-            return false;
         }
     }
     cli_println!("{}", generate_help());
@@ -30999,6 +31180,16 @@ mod tests {
         let err = validate_required_args(&cmd_def, &parsed).unwrap_err();
         assert!(err.contains("Missing required argument"));
         assert!(err.contains("url"));
+        // The usage line alone leaves the user guessing about the options — the
+        // error must also point at the command's own help page.
+        assert!(
+            err.contains("Usage: browser4-cli test-cmd <url>"),
+            "error should carry a usage line: {err}"
+        );
+        assert!(
+            err.contains("`browser4-cli --help test-cmd`"),
+            "error should point at the help page: {err}"
+        );
     }
 
     #[test]
@@ -31824,6 +32015,61 @@ mod tests {
         assert!(report.contains("    - Feed the task id to crawl.status"), "report: {report}");
     }
 
+    /// The pre-dispatch plugin probe must never run for flags, pseudo-commands
+    /// or built-in commands — and must not touch `args[0]` when there are no
+    /// arguments at all (`browser4-cli`, `browser4-cli --help-json`).
+    #[test]
+    fn declared_command_probe_only_fires_for_plausible_declared_names() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+
+        assert!(!could_be_declared_cli_command(&args(&[])));
+        assert!(!could_be_declared_cli_command(&args(&["--help-json"])));
+        assert!(!could_be_declared_cli_command(&args(&["--version"])));
+        assert!(!could_be_declared_cli_command(&args(&["--help"])));
+        assert!(!could_be_declared_cli_command(&args(&["--help", "fill"])));
+        assert!(!could_be_declared_cli_command(&args(&["help", "profile"])));
+        assert!(!could_be_declared_cli_command(&args(&["version"])));
+        // Known commands are dispatched locally, whatever follows them.
+        assert!(!could_be_declared_cli_command(&args(&["goto", "https://example.com"])));
+        assert!(!could_be_declared_cli_command(&args(&["fill", "e5"])));
+        // A flag in second position is an option, not a subcommand.
+        assert!(!could_be_declared_cli_command(&args(&["profile", "--json"])));
+        // The declared spaced form (`profile import`) is exactly this shape.
+        assert!(could_be_declared_cli_command(&args(&["profile", "import"])));
+    }
+
+    /// `--examples` must resolve a spaced subcommand the same way `help` does,
+    /// or `browser4-cli htmlsnapshot get --help --examples` reports the
+    /// parent's tool (or "unknown command" when the name is quoted).
+    #[test]
+    fn examples_resolve_spaced_subcommands() {
+        assert_eq!(
+            resolve_help_target(&["htmlsnapshot".to_string(), "get".to_string(), "--examples".to_string()]),
+            Some("htmlsnapshot-get".to_string())
+        );
+        assert_eq!(
+            resolve_help_target(&[
+                "htmlsnapshot".to_string(),
+                "get".to_string(),
+                "all".to_string(),
+                "--examples".to_string()
+            ]),
+            Some("htmlsnapshot-get-all".to_string())
+        );
+        // Single-word commands are untouched.
+        assert_eq!(
+            resolve_help_target(&["fill".to_string(), "--examples".to_string()]),
+            Some("fill".to_string())
+        );
+        // `crawl submit` is positional to the standalone `crawl` command rather
+        // than a rewritten subcommand, so the target stays `crawl` — its tool
+        // (crawl_submit) is still resolved from the positional argument.
+        assert_eq!(
+            resolve_help_target(&["crawl".to_string(), "submit".to_string(), "--examples".to_string()]),
+            Some("crawl".to_string())
+        );
+    }
+
     #[test]
     fn examples_unknown_command_prints_one_line_message() {
         // Unknown commands map to no tool, so no backend round-trip is made.
@@ -31841,38 +32087,77 @@ mod tests {
     }
 
     #[test]
-    fn examples_command_without_a_single_tool_prints_one_line_message() {
+    fn examples_command_without_a_single_tool_falls_back_to_builtin_examples() {
+        // `batch` maps to no single tool, but it does ship examples in the
+        // binary, so the report stays runnable instead of being a dead end.
         let report = block_on(build_command_examples(
             &unreachable_base_url(),
             "batch",
             &["batch".to_string(), "--examples".to_string()],
         ));
 
-        assert_eq!(
-            report,
-            "No examples available for 'batch' — the command maps to no single tool."
+        assert!(
+            report.starts_with("Examples for browser4-cli batch (built into the CLI):"),
+            "report: {report}"
+        );
+        assert!(
+            report.contains("  browser4-cli batch \"goto https://browser4.io\" \"snapshot\""),
+            "report: {report}"
+        );
+        assert!(
+            report.contains(
+                "Tool-level examples are unavailable: the command maps to no single tool."
+            ),
+            "report: {report}"
         );
     }
 
+    /// A command that ships no examples of its own still gets the one-line
+    /// explanation — the built-in fallback must not invent content.
     #[test]
-    fn examples_unreachable_backend_degrades_to_a_hint() {
-        // `click` maps to browser_click; with no backend listening the probe
-        // fails and the caller still gets one clear line (and exit code 0).
+    fn examples_without_builtin_examples_prints_one_line_message() {
+        let report = block_on(build_command_examples(
+            &unreachable_base_url(),
+            "mousemove",
+            &example_args(&["100", "200", "--help", "--examples"]),
+        ));
+
+        assert_eq!(
+            report,
+            "No examples available for 'mousemove' — is the backend running?"
+        );
+        assert_eq!(report.lines().count(), 1, "must be one line: {report}");
+    }
+
+    #[test]
+    fn examples_unreachable_backend_falls_back_to_builtin_examples() {
+        // `click` ships examples in the binary; with no backend listening the
+        // caller still gets something runnable (and exit code 0).
         let report = block_on(build_command_examples(
             &unreachable_base_url(),
             "click",
             &example_args(&["e5", "--help", "--examples"]),
         ));
 
-        assert_eq!(
-            report,
-            "No examples available for 'click' — is the backend running?"
+        assert!(
+            report.starts_with("Examples for browser4-cli click (built into the CLI):"),
+            "report: {report}"
+        );
+        assert!(report.contains("  browser4-cli click e5"), "report: {report}");
+        assert!(
+            report.contains("Tool-level examples are unavailable: is the backend running?"),
+            "report: {report}"
+        );
+        assert!(
+            report.contains("`browser4-cli --help click`"),
+            "the fallback must still point at the command help: {report}"
         );
     }
 
     #[test]
     fn examples_report_missing_tool_and_missing_examples() {
-        // Reachable backend that does not advertise the tool at all.
+        // Reachable backend that does not advertise the tool at all: `click`
+        // falls back to its built-in examples, and the reason is still stated.
         let without_click = spawn_status_mock_server(
             "200 OK",
             r#"{"tools":[{"domain":"crawl","method":"submit","mcpNames":["crawl_submit"],
@@ -31883,9 +32168,15 @@ mod tests {
             "click",
             &example_args(&["e5", "--examples"]),
         ));
-        assert_eq!(
-            report,
-            "No examples available for 'click' — the backend does not advertise 'browser_click'."
+        assert!(
+            report.starts_with("Examples for browser4-cli click (built into the CLI):"),
+            "report: {report}"
+        );
+        assert!(
+            report.contains(
+                "Tool-level examples are unavailable: the backend does not advertise 'browser_click'."
+            ),
+            "report: {report}"
         );
 
         // Reachable backend that advertises the tool without examples.
@@ -31898,9 +32189,11 @@ mod tests {
             "click",
             &example_args(&["e5", "--examples"]),
         ));
-        assert_eq!(
-            report,
-            "No examples available for 'click' — the tool 'browser_click' declares no examples."
+        assert!(
+            report.contains(
+                "Tool-level examples are unavailable: the tool 'browser_click' declares no examples."
+            ),
+            "report: {report}"
         );
     }
 
@@ -31910,11 +32203,8 @@ mod tests {
         // declared spec (`profile_import` + `import`), which is why the declared
         // path resolves the tool itself and calls build_tool_examples.
         let base_url = spawn_status_mock_server("200 OK", TOOL_SPECS_FIXTURE);
-        let report = block_on(build_tool_examples(
-            &base_url,
-            "profile_import_import",
-            "profile import",
-        ));
+        let report = block_on(build_tool_examples(&base_url, "profile_import_import"))
+            .expect("the fixture declares profile_import_import");
 
         assert!(
             report.contains("Examples for profile_import.import (profile_import_import):"),
@@ -38699,6 +38989,139 @@ mod tests {
             .output()
             .expect("run self");
         assert!(!output.status.success());
+    }
+
+    /// `--help <target>` must resolve categories before falling back to prefix
+    /// matching: the printed reference advertises category names, and
+    /// prefix-first made `--help session` print a slice of `sessionstorage-*`
+    /// while `--help storage` / `--help tabs` / `--help network` reported an
+    /// unknown command.
+    #[test]
+    fn test_help_target_resolution_prefers_categories_over_prefixes() {
+        // Categories that a prefix match used to shadow or miss entirely.
+        assert_eq!(
+            classify_help_target("session"),
+            HelpTarget::Category("browsers")
+        );
+        assert_eq!(
+            classify_help_target("sessions"),
+            HelpTarget::Category("browsers")
+        );
+        assert_eq!(classify_help_target("storage"), HelpTarget::Category("storage"));
+        assert_eq!(classify_help_target("state"), HelpTarget::Category("storage"));
+        assert_eq!(classify_help_target("tabs"), HelpTarget::Category("tabs"));
+        assert_eq!(classify_help_target("network"), HelpTarget::Category("network"));
+        assert_eq!(classify_help_target("core"), HelpTarget::Category("core"));
+        assert_eq!(classify_help_target("nav"), HelpTarget::Category("navigation"));
+        assert_eq!(classify_help_target("swarm"), HelpTarget::Category("swarm"));
+        // `skill` now means the [Skill management] family, not the single
+        // bundled-skill `skills` command.
+        assert_eq!(classify_help_target("skill"), HelpTarget::Category("skill"));
+
+        // Exact commands still win over the category of the same name.
+        assert_eq!(classify_help_target("goto"), HelpTarget::Command("goto".into()));
+        assert_eq!(
+            classify_help_target("config"),
+            HelpTarget::Command("config".into())
+        );
+        assert_eq!(
+            classify_help_target("crawl"),
+            HelpTarget::Command("crawl".into())
+        );
+        assert_eq!(
+            classify_help_target("skills"),
+            HelpTarget::Command("skills".into())
+        );
+        // A quoted spaced name resolves to the same command as the two-argument
+        // form (`--help swarm submit`).
+        assert_eq!(
+            classify_help_target("swarm submit"),
+            HelpTarget::Command("swarm-submit".into())
+        );
+        assert_eq!(
+            classify_help_target("htmlsnapshot get"),
+            HelpTarget::Command("htmlsnapshot-get".into())
+        );
+
+        // Genuine prefixes and misses behave as before.
+        assert_eq!(classify_help_target("experience"), HelpTarget::Prefix);
+        assert_eq!(classify_help_target("webdb"), HelpTarget::Prefix);
+        assert_eq!(classify_help_target("no-such-thing"), HelpTarget::Unknown);
+    }
+
+    /// Every category name and alias the help advertises must list commands —
+    /// a category that resolves to nothing prints an empty page.
+    #[test]
+    fn test_every_documented_category_lists_commands() {
+        // The whole printed reference, so the category index is checked as the
+        // user actually sees it (scoped to the Categories block itself).
+        let help = generate_help();
+        let start = help.find("── Categories").expect("category index in help");
+        let end = help[start..]
+            .find("── Commands")
+            .map(|i| start + i)
+            .unwrap_or(help.len());
+        let index = &help[start..end];
+        for (name, title) in CATEGORY_TITLES {
+            if commands_in_category(name).is_empty() {
+                continue;
+            }
+            // Every category with commands is advertised in the index.
+            assert!(
+                index.contains(name),
+                "category '{name}' ({title}) has commands but is missing from the index"
+            );
+            match classify_help_target(name) {
+                HelpTarget::Category(canonical) => {
+                    assert_eq!(canonical, *name);
+                    assert!(
+                        !commands_in_category(canonical).is_empty(),
+                        "category '{name}' ({title}) resolves but lists no commands"
+                    );
+                }
+                // A category whose name is also a command can only be reached
+                // through an alias — the index marks those with `*`. For
+                // `config`, `install`, and `skills` the same-named command is
+                // the family's own entry point, so the alias route only has to
+                // exist where the section is genuinely a different thing: the
+                // [HTML Snapshot] section is twelve `htmlsnapshot …` commands,
+                // not the accessibility `snapshot` command.
+                HelpTarget::Command(resolved) => {
+                    assert!(
+                        commands_map().contains_key(resolved.as_str()),
+                        "'{name}' resolved to a command that does not exist"
+                    );
+                    assert!(
+                        index.contains(&format!("{name}*")),
+                        "shadowed category '{name}' must be marked in the index"
+                    );
+                    if *name == "snapshot" {
+                        assert!(
+                            crate::help::CATEGORY_ALIASES
+                                .iter()
+                                .any(|(_alias, canonical)| canonical == name),
+                            "the [HTML Snapshot] section must stay reachable through an alias"
+                        );
+                    }
+                }
+                other => panic!("category '{name}' ({title}) resolved to {other:?}"),
+            }
+        }
+        for (alias, canonical) in [
+            ("nav", "navigation"),
+            ("kb", "keyboard"),
+            ("extraction", "snapshot"),
+            ("session", "browsers"),
+            ("cap", "export"),
+            ("state", "storage"),
+            ("cfg", "config"),
+        ] {
+            assert_eq!(
+                classify_help_target(alias),
+                HelpTarget::Category(canonical),
+                "alias '{alias}' should list the '{canonical}' category"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

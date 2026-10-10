@@ -402,10 +402,16 @@ pub fn build_upload_args(raw: &HashMap<String, Value>) -> Result<HashMap<String,
     };
 
     if positional.is_empty() {
-        return Err("error: upload requires a target ref and at least one file path (usage: upload <ref> <file> [file...])".to_string());
+        return Err(format!(
+            "Missing required argument: <ref> and at least one <file>.\nUsage: browser4-cli upload <ref> <file> [file...]\n{}",
+            crate::help::help_hint("upload")
+        ));
     }
     if positional.len() < 2 {
-        return Err("error: upload requires a file path after the target ref (usage: upload <ref> <file> [file...])".to_string());
+        return Err(format!(
+            "Missing required argument: <file>.\nUsage: browser4-cli upload <ref> <file> [file...]\n{}",
+            crate::help::help_hint("upload")
+        ));
     }
 
     result.insert("ref".to_string(), json!(positional[0]));

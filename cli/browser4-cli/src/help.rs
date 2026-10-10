@@ -8,6 +8,49 @@ const VERSION: &str = env!("BROWSER4_CLI_VERSION");
 /// Maximum characters per line in help output.
 const MAX_LINE_WIDTH: usize = 120;
 
+/// Inner width of the Quick Start box, i.e. the columns between its borders.
+const QUICK_START_BOX_WIDTH: usize = 74;
+
+/// Longest command description listed in a category (the full text stays
+/// available through `--help <command>` and `--help-json`).
+const LISTING_DESC_WIDTH: usize = 110;
+
+/// Display width of `s` in terminal columns.
+///
+/// `str::len()` counts UTF-8 bytes, so every column computed from it drifts on
+/// non-ASCII text: the `★` high-frequency marker is one column wide but three
+/// bytes, which pushed every starred row two columns left of its neighbours.
+/// Count characters instead, and charge East-Asian wide characters and emoji
+/// the two columns they actually occupy.
+fn display_width(s: &str) -> usize {
+    s.chars().map(char_width).sum()
+}
+
+/// Terminal columns occupied by one character: 0 for zero-width marks, 2 for
+/// East-Asian wide characters and emoji, 1 otherwise.
+fn char_width(c: char) -> usize {
+    match c as u32 {
+        // Combining marks, ZWSP/ZWNJ/ZWJ/LRM/RLM, variation selectors, BOM.
+        0x0300..=0x036F | 0x200B..=0x200F | 0xFE00..=0xFE0F | 0xFEFF => 0,
+        // Wide / fullwidth: CJK, Hangul, fullwidth forms, emoji.
+        0x1100..=0x115F
+        | 0x2E80..=0x303E
+        | 0x3041..=0x33FF
+        | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF
+        | 0xA000..=0xA4CF
+        | 0xAC00..=0xD7A3
+        | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE6F
+        | 0xFF00..=0xFF60
+        | 0xFFE0..=0xFFE6
+        | 0x1F300..=0x1F64F
+        | 0x1F900..=0x1F9FF
+        | 0x20000..=0x3FFFD => 2,
+        _ => 1,
+    }
+}
+
 pub fn public_command_name(name: &str) -> &str {
     match name {
         "agent-run" => "agent run",
@@ -140,11 +183,19 @@ pub const CATEGORY_TITLES: &[(&str, &str)] = &[
 
 /// Short aliases for category-based help filtering.
 /// e.g. `browser4-cli --help nav` shows Navigation commands.
-const CATEGORY_ALIASES: &[(&str, &str)] = &[
+///
+/// Canonical category names already resolve on their own, so this table holds
+/// only genuine aliases — no `alias = itself` entries (the `skill` alias used
+/// to point at the one-command [Skills] section instead of the [Skill
+/// management] family callers obviously meant).
+pub const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("nav", "navigation"),
     ("kb", "keyboard"),
     ("input", "keyboard"),
-    ("extract", "snapshot"),
+    // NB: `extract` is deliberately absent — it is the name of the AI
+    // extraction command, and an exact command always wins over a category, so
+    // the alias could never fire. The [HTML Snapshot] section is reached
+    // through `extraction`, `data`, or `ss`.
     ("extraction", "snapshot"),
     ("data", "snapshot"),
     ("session", "browsers"),
@@ -153,12 +204,104 @@ const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("capture", "export"),
     ("ss", "snapshot"),
     ("state", "storage"),
-    ("skill", "skills"),
     ("plugin", "plugins"),
-    ("swarm", "swarm"),
     ("crawl", "swarm"),
     ("cfg", "config"),
     ("settings", "config"),
+];
+
+/// A global CLI option — parsed before the command name (see `args.rs`),
+/// except where noted.
+///
+/// The human-readable help and `--help-json` both render from this one table.
+/// They used to be maintained separately and had already drifted: `--pretty`
+/// and `--proxy` were missing from the printed help, while `--help`,
+/// `--version`, and `-h` were missing from the JSON schema.
+pub struct GlobalOption {
+    /// Flags exactly as the user types them, e.g. `-s, --session <name>`.
+    pub flags: &'static str,
+    /// Key used in the `--help-json` `global_options` map.
+    pub json_key: &'static str,
+    /// JSON type of the value: `bool`, `string`, or `int`.
+    pub json_type: &'static str,
+    /// One-line description, wrapped by the help renderer.
+    pub description: &'static str,
+}
+
+/// Every global option the CLI accepts, in help display order.
+pub const GLOBAL_OPTIONS: &[GlobalOption] = &[
+    GlobalOption {
+        flags: "-s, --session <name>",
+        json_key: "-s, --session",
+        json_type: "string",
+        description: "Named session label — a GLOBAL flag: place it BEFORE the command (`browser4-cli -s job-42 snapshot`); after the command it is rejected as a positional argument",
+    },
+    GlobalOption {
+        flags: "--json",
+        json_key: "--json",
+        json_type: "bool",
+        description: "Emit JSON to stdout only (suppresses tips, hints, and human-readable text); after a command it belongs to that command (`batch --json` reads stdin)",
+    },
+    GlobalOption {
+        flags: "-q, --quiet",
+        json_key: "-q, --quiet",
+        json_type: "bool",
+        description: "Suppress normal output, only show errors; also accepted after the command (`htmlsnapshot -q`)",
+    },
+    GlobalOption {
+        flags: "--pretty",
+        json_key: "--pretty",
+        json_type: "bool",
+        description: "Pretty-print JSON results that parse as an object or array",
+    },
+    GlobalOption {
+        flags: "-tip, --show-tip",
+        json_key: "-tip, --show-tip",
+        json_type: "bool",
+        description: "Show a relevant tip on stderr after each command",
+    },
+    GlobalOption {
+        flags: "--server <url>",
+        json_key: "--server",
+        json_type: "string",
+        description: "Override the Browser4 server URL (default http://localhost:18182)",
+    },
+    GlobalOption {
+        flags: "--timeout <seconds>",
+        json_key: "--timeout",
+        json_type: "int",
+        description: "Override the default HTTP timeout for tool calls (e.g. --timeout 300 for long-running plugin tools); also accepted after the command unless the command defines its own --timeout",
+    },
+    GlobalOption {
+        flags: "--proxy <url>",
+        json_key: "--proxy",
+        json_type: "string",
+        description: "HTTP proxy for downloads (runtime bundle, webminer), overriding https_proxy and the system proxy",
+    },
+    GlobalOption {
+        flags: "-h, --help [cmd|category]",
+        json_key: "-h, --help",
+        json_type: "string",
+        description: "Print help: no argument for the command reference, a command name for its full page, a category for one section (see Categories above)",
+    },
+    GlobalOption {
+        flags: "--help-json [command]",
+        json_key: "--help-json",
+        json_type: "string",
+        description: "Emit the command reference (or one command) as machine-readable JSON for AI agents and scripts",
+    },
+    GlobalOption {
+        flags: "--help --examples",
+        json_key: "--help --examples",
+        json_type: "bool",
+        description: "Print runnable usage examples of the tool the command maps to (needs the backend)",
+    },
+    GlobalOption {
+        flags: "-v, --version",
+        json_key: "-v, --version",
+        json_type: "bool",
+        description: "Print the browser4-cli version",
+    },
 ];
 
 /// Resolve a category alias to its canonical category name, or return the
@@ -188,29 +331,150 @@ pub fn commands_in_category(category_name: &str) -> Vec<CommandDef> {
         .collect()
 }
 
+/// One row of the Quick Start box: `║` + content padded to the box width + `║`.
+fn box_row(content: &str) -> String {
+    let pad = QUICK_START_BOX_WIDTH.saturating_sub(display_width(content));
+    debug_assert!(
+        display_width(content) <= QUICK_START_BOX_WIDTH,
+        "Quick Start row is wider than the box: {content}"
+    );
+    format!("║{}{}║", content, " ".repeat(pad))
+}
+
+/// Render the Quick Start box.
+///
+/// Every row is padded to [`QUICK_START_BOX_WIDTH`] display columns, so the
+/// right border stays flush whatever glyphs a row contains. The command column
+/// is computed from the widest entry, so editing an entry cannot misalign the
+/// table (the previous hand-spaced version had a one-column drift on `fill`,
+/// a missing right border, and three different line widths).
+fn quick_start_box() -> Vec<String> {
+    const ENTRIES: &[(&str, &str)] = &[
+        ("goto <url>", "Navigate to a page (auto-starts server & session)"),
+        ("snapshot [-v <N>]", "Capture the accessibility tree with element refs"),
+        ("snapshot -i", "Interactive-oriented tree (text merged into refs)"),
+        ("click <ref>", "Click an element by ref (e5) or CSS selector"),
+        ("fill <ref> \"<txt>\"", "Fill a form field (--submit presses Enter)"),
+        ("htmlsnapshot", "Capture the live page into the store (reads too)"),
+        ("dialog-accept", "Accept a native JS dialog (alert/confirm/prompt)"),
+    ];
+    let cmd_col = ENTRIES
+        .iter()
+        .map(|(cmd, _)| display_width(cmd))
+        .max()
+        .unwrap_or(0);
+
+    let title = "╔══ Quick Start ";
+    let mut rows = vec![
+        format!(
+            "{}{}╗",
+            title,
+            "═".repeat(QUICK_START_BOX_WIDTH + 1 - display_width(title))
+        ),
+        box_row("  The commands you'll use most often:"),
+        box_row(""),
+    ];
+    for (cmd, desc) in ENTRIES {
+        let pad = " ".repeat(cmd_col - display_width(cmd) + 2);
+        rows.push(box_row(&format!("    {cmd}{pad}{desc}")));
+    }
+    rows.push(box_row(""));
+    rows.push(box_row(
+        "  Learn more: browser4-cli --help <command>  ·  --help-json (AI/scripts)",
+    ));
+    rows.push(format!(
+        "╚{}╝",
+        "═".repeat(QUICK_START_BOX_WIDTH)
+    ));
+    rows
+}
+
+/// Split `text` into word-wrapped lines, the first prefixed with
+/// `first_line_prefix` and continuations indented to `indent` columns.
+fn wrapped_lines(text: &str, first_line_prefix: &str, indent: usize) -> Vec<String> {
+    wrap_text(text, first_line_prefix, indent)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Render the category index: every name `--help <category>` accepts, plus the
+/// short aliases grouped by the category they resolve to.
+///
+/// Generated from [`CATEGORY_TITLES`] / [`CATEGORY_ALIASES`] so the advertised
+/// set cannot drift from the one that actually resolves — the previous
+/// hand-written list ("nav, extract, session, kb, agent, swarm") named `session`
+/// and `extract`, which resolved to something else entirely.
+///
+/// A category whose name is also a command (`snapshot`, `config`, `install`,
+/// `skills`) is marked with `*`: an exact command wins, so that name shows the
+/// command and the section is reached through one of its aliases instead.
+fn category_index_lines() -> Vec<String> {
+    let cmd_map = crate::commands::commands_map();
+    let mut names: Vec<String> = Vec::new();
+    let mut shadowed: Vec<&str> = Vec::new();
+    for (name, _title) in CATEGORY_TITLES {
+        if commands_in_category(name).is_empty() {
+            continue;
+        }
+        if cmd_map.contains_key(*name) {
+            shadowed.push(*name);
+            names.push(format!("{name}*"));
+        } else {
+            names.push((*name).to_string());
+        }
+    }
+
+    let mut out = vec![
+        "\n── Categories (--help <category>) ───────────────────────────────────".to_string(),
+        "  Each [Section] below is a category; `--help <name>` lists just that one.".to_string(),
+    ];
+    if !shadowed.is_empty() {
+        out.extend(wrapped_lines(
+            &format!(
+                "(*) {} {} also command names, so `--help <name>` prints that command — use an alias where one exists (e.g. `--help extraction` for HTML Snapshot).",
+                shadowed.join(", "),
+                if shadowed.len() == 1 { "is" } else { "are" }
+            ),
+            "  ",
+            6,
+        ));
+    }
+    out.extend(wrapped_lines(&names.join(", "), "    ", 4));
+
+    // Aliases grouped by target: `nav=navigation  kb,input=keyboard  …`
+    let mut targets: Vec<&str> = Vec::new();
+    for (_alias, canonical) in CATEGORY_ALIASES {
+        if !targets.contains(canonical) {
+            targets.push(canonical);
+        }
+    }
+    let groups: Vec<String> = targets
+        .iter()
+        .map(|target| {
+            let aliases: Vec<&str> = CATEGORY_ALIASES
+                .iter()
+                .filter(|(_alias, canonical)| canonical == target)
+                .map(|(alias, _)| *alias)
+                .collect();
+            format!("{}={}", aliases.join(","), target)
+        })
+        .collect();
+    out.push("  Short aliases:".to_string());
+    out.extend(wrapped_lines(&groups.join("  "), "    ", 4));
+    out
+}
+
 /// Generate global help text listing all available commands by category.
 pub fn generate_help() -> String {
     let cmds = all_commands();
     let mut lines: Vec<String> = vec![
         format!("browser4-cli {} — Control a Browser4 server from the command line", VERSION),
-        format!("Usage: browser4-cli [-s <session>] <command> [args] [options]"),
+        "Usage: browser4-cli [-s <session>] <command> [args] [options]".to_string(),
     ];
 
-    // Quick Start — the 5 most common commands for new users
-    lines.push("\n╔══ Quick Start ═══════════════════════════════════════════════════════".to_string());
-    lines.push("║  These are the commands you'll use most often:".to_string());
-    lines.push("║".to_string());
-    lines.push("║    goto <url>         Navigate to a page (auto-starts server & session)".to_string());
-    lines.push("║    snapshot [-v <N>]  Capture accessibility tree with element refs".to_string());
-    lines.push("║    snapshot -i        Interactive-oriented tree (merges text into ref names —".to_string());
-    lines.push("║                        an interactive-oriented layout, not an interactive-only filter)".to_string());
-    lines.push("║    click <ref>        Click an element by its ref (e5) or CSS selector".to_string());
-    lines.push("║    fill <ref> \"<txt>\"  Fill a form field (--submit to press Enter)".to_string());
-    lines.push("║    htmlsnapshot       Capture the live page into the store; so do reads".to_string());
-    lines.push("║    dialog-accept      Accept a native JavaScript dialog (alert/confirm/prompt)".to_string());
-    lines.push("║".to_string());
-    lines.push("║  Learn more: browser4-cli --help <command>  or  --help-json for AI/scripts".to_string());
-    lines.push("╚══════════════════════════════════════════════════════════════════════════".to_string());
+    // Quick Start — the commands new users reach for first
+    lines.extend(quick_start_box());
 
     // Common workflows — compact pipe-style
     lines.push("\n── Common workflows ─────────────────────────────────────────────────".to_string());
@@ -233,6 +497,9 @@ pub fn generate_help() -> String {
     lines.push("  Parallel extraction:".to_string());
     lines.push("    swarm create  →  swarm query --sql @q.sql --seed-file urls.txt  →  swarm result <id>".to_string());
 
+    // Category index — which `--help <category>` targets exist
+    lines.extend(category_index_lines());
+
     // Category listing — each category with its commands
     let mut first_category = true;
     for (cat_name, cat_title) in CATEGORY_TITLES {
@@ -247,11 +514,44 @@ pub fn generate_help() -> String {
             lines.push("\n── Commands ─────────────────────────────────────────────────────────".to_string());
             // Legend for the ★ marker used on high-frequency command rows below.
             lines.push("  ★ = high-frequency command — good starting points for new users".to_string());
+            lines.push(
+                "  Rows show a one-line summary; `--help <command>` has the full description, options, and examples."
+                    .to_string(),
+            );
         }
         first_category = false;
         lines.push(format!("\n  [{}]", cat_title));
         for cmd in cat_cmds {
             lines.push(generate_help_entry(cmd));
+        }
+    }
+
+    // Hidden commands — supported, but deliberately absent from the category
+    // list above. Naming the families here is what makes them discoverable at
+    // all; the per-family listing is one `--help <family>` away.
+    let hidden_groups = hidden_command_groups();
+    if !hidden_groups.is_empty() {
+        lines.push(
+            "\n── Hidden commands ──────────────────────────────────────────────────".to_string(),
+        );
+        lines.push(
+            "  Supported, but kept out of the category list above — `--help <family>` lists one:"
+                .to_string(),
+        );
+        let width = hidden_groups
+            .iter()
+            .map(|group| display_width(&group.prefix))
+            .max()
+            .unwrap_or(0);
+        for group in &hidden_groups {
+            let noun = if group.count == 1 { "command " } else { "commands" };
+            lines.push(format!(
+                "    {}{}  {}  →  browser4-cli --help {}",
+                group.prefix,
+                " ".repeat(width - display_width(&group.prefix)),
+                format_args!("{:>2} {}", group.count, noun),
+                group.prefix
+            ));
         }
     }
 
@@ -273,59 +573,12 @@ pub fn generate_help() -> String {
     lines.push("  After restart, plugin tools are callable via: browser4-cli tool call <mcp-name>".to_string());
     lines.push("  Tool names are snake_case (captcha.detect -> captcha_detect); see docs/config.md §CAPTCHA.".to_string());
 
-    // Global options
+    // Global options — rendered from GLOBAL_OPTIONS so the printed list and
+    // the --help-json schema cannot drift apart.
     lines.push("\n── Global options ───────────────────────────────────────────────────".to_string());
-    lines.push(format_with_gap(
-        "  --help [cmd|category]",
-        "print help; try categories: nav, extract, session, kb, agent, swarm",
-        30,
-    ));
-    lines.push(format_with_gap(
-        "  --help-json",
-        "emit full command reference as machine-readable JSON (for AI / scripts)",
-        30,
-    ));
-    lines.push(format_with_gap(
-        "  --help --examples",
-        "print runnable usage examples of the tool the command maps to",
-        30,
-    ));
-    lines.push(format_with_gap("  --version", "print version", 30));
-    lines.push(format_with_gap(
-        "  --json",
-        "emit JSON to stdout only (suppresses tips, hints, and human-readable text)",
-        30,
-    ));
-    lines.push(format_with_gap(
-        "  -q, --quiet",
-        "suppress normal output, only show errors",
-        30,
-    ));
-    lines.push(format_with_gap(
-        "  -tip, --show-tip",
-        "show a relevant tip on stderr after each command",
-        30,
-    ));
-    lines.push(format_with_gap(
-        "  -s <name>",
-        "named session label — a GLOBAL flag: place it BEFORE the command (`browser4-cli -s job-42 snapshot`); after the command it is rejected as a positional argument",
-        30,
-    ));
-    lines.push(format_with_gap(
-        "  --timeout <seconds>",
-        "override the default HTTP timeout for tool calls (e.g. --timeout 300 for long-running plugin tools)",
-        30,
-    ));
-    lines.push(format_with_gap(
-        "  --server <url>",
-        "override Browser4 server URL",
-        30,
-    ));
-    lines.push(format_with_gap(
-        "  (anywhere)",
-        "-q/--quiet and --timeout are also accepted after the command (e.g. 'htmlsnapshot -q'); --json after the command belongs to the command",
-        30,
-    ));
+    for opt in GLOBAL_OPTIONS {
+        lines.push(format_with_gap(&format!("  {}", opt.flags), opt.description, 30));
+    }
 
     // Environment variables
     lines.push(
@@ -334,12 +587,12 @@ pub fn generate_help() -> String {
     );
     lines.push(format_with_gap(
         "  BROWSER4_CLI_STATE_DIR=<dir>",
-        "override CLI session state directory (default: ~/.browser4); falls back to ./.browser4-cli-state when unwritable",
+        "Override CLI session state directory (default: ~/.browser4); falls back to ./.browser4-cli-state when unwritable",
         30,
     ));
     lines.push(format_with_gap(
         "  BROWSER4_RUNTIME_DIR=<dir>",
-        "override Browser4 runtime data directory (JRE, JARs, launchers)",
+        "Override Browser4 runtime data directory (JRE, JARs, launchers)",
         30,
     ));
 
@@ -356,47 +609,117 @@ pub fn generate_help() -> String {
     lines.join("\n")
 }
 
-/// Generate compact quick-reference help for when no arguments are given.
+/// Generate the no-argument help screen: the CLI's **minimal usable manual**.
 ///
-/// Shows the most commonly used commands grouped by task, global flags, and
-/// pointers to discover more. Designed to fit in ~35 lines so an AI or human
-/// can scan it in a single glance.
+/// It has to take a newcomer (or an AI agent) from zero to a working loop —
+/// navigate, act, extract, switch tabs, recover — without becoming the full
+/// reference, which stays behind `--help` (350+ lines) and
+/// `browser4-cli skills get browser4-cli --full` (the long-form documents).
+///
+/// Budget, and why each number is what it is (enforced by
+/// `test_generate_quick_reference_stays_within_its_budget`):
+///
+/// * **≤ 60 lines** — about two and a half 24-line terminal screens. A
+///   one-screen cheat sheet stopped being possible once the surface grew past
+///   150 commands *and* dialog handling, the ref lifecycle, tabs and the
+///   recovery entry points all had to be on the first screen; 60 keeps it
+///   scrollable-but-complete instead of pretending it still fits one screen.
+/// * **≤ 7 sections, ≤ 12 rows each** — scannability: a section that grows past
+///   a dozen rows is a wall, and the fix is a `--help <category>` pointer, not
+///   more rows.
+/// * **≤ 6 KB** — every no-argument call pays this cost, so it caps the
+///   first-screen context an AI agent spends before doing any work (~1 KB of
+///   ASCII ≈ 250 tokens).
 pub fn generate_quick_reference() -> String {
     let mut lines: Vec<String> = Vec::new();
 
     // Header
     lines.push(format!("browser4-cli {} — Control a Browser4 server from the command line", VERSION));
-    lines.push(format!("Usage: browser4-cli [-s <session>] <command> [args] [options]"));
+    lines.push("Usage: browser4-cli [-s <session>] <command> [args] [options]".to_string());
 
-    // ── Navigate & Inspect ──
+    // ── Core loop ──
+    // The first screen teaches the loop *and* its two traps: refs expire, and a
+    // native dialog blocks every later command until it is answered.
     lines.push(String::new());
-    lines.push("── Navigate & Inspect ─────────────────────────────────────────────".to_string());
-    lines.push(fmt_cmd("goto <url>", "Navigate to a URL (auto-opens session)"));
-    lines.push(fmt_cmd("snapshot [-v <N>]", "Capture page accessibility tree"));
-    lines.push(fmt_cmd("snapshot -i", "Interactive-oriented tree: merges text into ref names (not an interactive-only filter); pair with -v 0 / --selector to bound output"));
-    lines.push(fmt_cmd("click <ref>", "Click an element"));
-    lines.push(fmt_cmd("fill <ref> \"<text>\"", "Fill a form field (--submit to press Enter)"));
-    lines.push(fmt_cmd("scroll <dx> <dy>", "Scroll the page by pixels"));
-    lines.push(fmt_cmd("screenshot [file]", "Capture a screenshot"));
-    lines.push(fmt_cmd("wait <target>", "Wait for element, text, URL, time, or page load"));
+    lines.push("── Core loop ───────────────────────────────────────────────────────".to_string());
+    lines.push(fmt_cmd(
+        "goto <url>",
+        "Navigate — the first command also starts the backend (~10 s)",
+    ));
+    lines.push(fmt_cmd(
+        "snapshot [-v <N>]",
+        "Accessibility tree with element refs; bound big pages with -v 0 / --selector / --depth",
+    ));
+    lines.push(fmt_cmd(
+        "click <ref>",
+        "Click a snapshot ref (e5) or a CSS selector",
+    ));
+    lines.push(fmt_cmd(
+        "fill <ref> \"<text>\"",
+        "Fill a field (--submit presses Enter) · select <ref> <val> picks a dropdown option",
+    ));
+    lines.push(fmt_cmd(
+        "press <key> [ref]",
+        "Press Enter/Escape/ArrowDown… · check/uncheck <ref> · hover/drag <ref>",
+    ));
+    lines.push(fmt_cmd(
+        "type <text> [ref]",
+        "Type into the focused element or a ref (--method chars|exec)",
+    ));
+    lines.push(fmt_cmd(
+        "wait <target>",
+        "Wait for element, text, URL, time, or page load",
+    ));
+    lines.push(fmt_cmd(
+        "scroll <direction> <pixels>",
+        "Scroll the page · screenshot [ref] [-o <file>] captures page or element",
+    ));
+    lines.push("  Refs are single-use: re-snapshot after any interaction, navigation, or tab switch.".to_string());
+    lines.push("  A native dialog blocks every later command — click --auto-dismiss-dialogs, or dialog-accept.".to_string());
 
     // ── Extract & Query ──
     lines.push(String::new());
     lines.push("── Extract & Query ─────────────────────────────────────────────────".to_string());
-    lines.push(fmt_cmd("htmlsnapshot", "Capture the live page into the store, with metadata (the capture every read runs)"));
-    lines.push(fmt_cmd("htmlsnapshot query", "Run X-SQL over a fresh snapshot of the active page, or a stored url"));
-    lines.push(fmt_cmd("extract \"<instr>\"", "AI-powered structured data extraction"));
-    lines.push(fmt_cmd("get <mode> <sel>", "Extract text, html, attr, box, or styles"));
-    lines.push(fmt_cmd("eval \"<js>\"", "Run JavaScript on the page"));
+    lines.push(fmt_cmd("htmlsnapshot", "Capture the live page into the store (the capture every read runs)"));
+    lines.push(fmt_cmd(
+        "htmlsnapshot get text \"<css>\"",
+        "One field · htmlsnapshot query --sql @q.sql extracts structured rows",
+    ));
+    lines.push(fmt_cmd(
+        "snapshot grep \"<pattern>\"",
+        "Find text inside a big tree without dumping it",
+    ));
+    lines.push(fmt_cmd(
+        "extract \"<instr>\"",
+        "AI extraction — saves to a file (add --stdout to print it)",
+    ));
+    lines.push(fmt_cmd("get <mode> <sel>", "Read text, html, attr, box, or styles from the page"));
+    lines.push(fmt_cmd(
+        "eval \"<js>\" [--file]",
+        "Run JavaScript (--file/--stdin avoid Windows quoting traps)",
+    ));
     lines.push(fmt_cmd("crawl <url>", "Crawl websites with link discovery & X-SQL"));
 
-    // ── Sessions ──
+    // ── Sessions & Tabs ──
     lines.push(String::new());
-    lines.push("── Sessions ────────────────────────────────────────────────────────".to_string());
+    lines.push("── Sessions & Tabs ─────────────────────────────────────────────────".to_string());
     lines.push(fmt_cmd("open [url]", "Open or reconnect a browser session"));
-    lines.push(fmt_cmd("close", "Close the current session"));
-    lines.push(fmt_cmd("list", "List all browser sessions"));
-    lines.push(fmt_cmd("attach", "Attach to an external browser via CDP or extension"));
+    lines.push(fmt_cmd(
+        "open --headed [url]",
+        "Visible browser for login/CAPTCHA (ignored when reconnecting — add --fresh)",
+    ));
+    lines.push(fmt_cmd(
+        "close · list · attach",
+        "Close the session · list sessions · attach to an external browser",
+    ));
+    lines.push(fmt_cmd(
+        "tab-list · tab-select <n> · tab-new",
+        "Tabs — list, switch, open; needed after --follow or a target=_blank click",
+    ));
+    lines.push(fmt_cmd(
+        "status · doctor",
+        "Is the server up? · diagnostics and repair",
+    ));
 
     // ── Automation ──
     lines.push(String::new());
@@ -410,22 +733,25 @@ pub fn generate_quick_reference() -> String {
     lines.push(String::new());
     lines.push("── Global flags ────────────────────────────────────────────────────".to_string());
     lines.push(fmt_cmd(
-        "-s <name>",
+        "-s, --session <name>",
         "Named session label — a global flag: place it before the command",
     ));
     lines.push(fmt_cmd("--json", "Machine-parseable JSON output"));
+    lines.push(fmt_cmd("--pretty", "Pretty-print JSON results"));
     lines.push(fmt_cmd("-q, --quiet", "Suppress normal output"));
-    lines.push(fmt_cmd("--server <url>", "Override Browser4 server URL"));
-    lines.push(fmt_cmd("--timeout <s>", "Override HTTP timeout for tool calls"));
-    lines.push(fmt_cmd("--pretty", "Pretty-print JSON output"));
+    lines.push(fmt_cmd(
+        "--server <url> · --timeout <seconds>",
+        "Override the Browser4 server URL or the HTTP timeout for tool calls",
+    ));
 
     // ── Learn more ──
     lines.push(String::new());
     lines.push("── Learn more ──────────────────────────────────────────────────────".to_string());
     lines.push("  browser4-cli --help              Full command reference by category".to_string());
-    lines.push("  browser4-cli --help <category>   Commands in a category (nav, extract, kb, agent, …)".to_string());
+    lines.push("  browser4-cli --help <category>   One section (nav, kb, capture, storage, …)".to_string());
     lines.push("  browser4-cli --help <command>    Detailed help: args, options, examples".to_string());
     lines.push("  browser4-cli --help-json         Machine-readable reference (for AI / scripts)".to_string());
+    lines.push("  browser4-cli skills get browser4-cli --full   Every bundled reference document".to_string());
 
     lines.join("\n")
 }
@@ -496,18 +822,29 @@ pub fn generate_help_json(sub_command: Option<&str>) -> String {
         }));
     }
 
-    // Global options
-    let global_options = serde_json::json!({
-        "-s, --session": {"type": "string", "description": "Named session label — a global option: place it before the command, e.g. `browser4-cli -s job-42 snapshot`. After the command a bare `-s` is rejected as a positional argument."},
-        "--json": {"type": "bool", "description": "Emit machine-parseable JSON to stdout"},
-        "-q, --quiet": {"type": "bool", "description": "Suppress normal output, only show errors"},
-        "--server": {"type": "string", "description": "Override Browser4 server URL"},
-        "--timeout": {"type": "int", "description": "Override HTTP timeout for tool calls (seconds)"},
-        "--proxy": {"type": "string", "description": "Manual HTTP proxy for downloads"},
-        "--pretty": {"type": "bool", "description": "Pretty-print JSON output"},
-        "-tip, --show-tip": {"type": "bool", "description": "Show relevant tips on stderr after commands"},
-        "--help-json": {"type": "bool", "description": "Emit this JSON help and exit"},
-    });
+    // Global options — the same table the printed help renders, so the JSON
+    // schema and the human-readable list stay in step (see GLOBAL_OPTIONS).
+    let mut global_options = serde_json::Map::new();
+    for opt in GLOBAL_OPTIONS {
+        global_options.insert(
+            opt.json_key.to_string(),
+            serde_json::json!({"type": opt.json_type, "description": opt.description}),
+        );
+    }
+
+    // Category aliases — the same table `resolve_category_alias` consults.
+    let mut category_aliases = serde_json::Map::new();
+    for (alias, canonical) in CATEGORY_ALIASES {
+        category_aliases.insert((*alias).to_string(), serde_json::json!(canonical));
+    }
+
+    // Hidden commands: absent from the category list, but a machine consumer
+    // needs them too — `--help-json` used to be unable to reveal `code …`.
+    let hidden_commands: Vec<serde_json::Value> = all_commands()
+        .into_iter()
+        .filter(|c| c.hidden)
+        .map(|c| command_to_json(&c))
+        .collect();
 
     // Environment variables
     let environment_variables = serde_json::json!({
@@ -525,27 +862,11 @@ pub fn generate_help_json(sub_command: Option<&str>) -> String {
         "cli": "browser4-cli",
         "version": VERSION,
         "usage": "browser4-cli [-s <session>] <command> [args] [options]",
-        "global_options": global_options,
+        "global_options": serde_json::Value::Object(global_options),
         "environment_variables": environment_variables,
         "categories": categories_json,
-        "category_aliases": {
-            "nav": "navigation",
-            "kb": "keyboard",
-            "input": "keyboard",
-            "extract": "snapshot",
-            "extraction": "snapshot",
-            "data": "snapshot",
-            "session": "browsers",
-            "sessions": "browsers",
-            "cap": "export",
-            "capture": "export",
-            "ss": "snapshot",
-            "state": "storage",
-            "skill": "skills",
-            "plugin": "plugins",
-            "swarm": "swarm",
-            "crawl": "swarm",
-        },
+        "category_aliases": serde_json::Value::Object(category_aliases),
+        "hidden_commands": hidden_commands,
     });
 
     serde_json::to_string_pretty(&output).unwrap_or_else(|_| "{}".to_string())
@@ -1048,6 +1369,148 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
     }
 
+    // Interaction core: click / fill / type / press / scroll / screenshot had a
+    // usage line, an argument list and nothing else — no example, no note about
+    // refs, dialogs or where the screenshot lands. These are the commands a
+    // first-time user reaches for, so they carry the operational detail.
+    if cmd.name == "click" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(wrap_text(
+            "The target may be a snapshot ref (e5) or a CSS selector (#submit, button.primary). Refs are single-use: a click that changes the DOM invalidates them, so take a fresh snapshot before the next interaction — the automatic post-command snapshot does that for you.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "A native dialog raised by the click leaves the page blocked for the following command: pass --auto-dismiss-dialogs to accept it in the same step, or answer it afterwards with `dialog-accept` / `dialog-dismiss` / `dialog-status`.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "--modifiers holds one modifier key during the click (Control, Shift, Alt, Meta). To hold a key across several commands, use `keydown` and `keyup` instead.",
+            "  - ",
+            4,
+        ));
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli click e5".to_string());
+        lines.push("  browser4-cli click \"#submit\"".to_string());
+        lines.push("  browser4-cli click e12 --auto-dismiss-dialogs".to_string());
+        lines.push("  browser4-cli click e7 --follow".to_string());
+        lines.push("  browser4-cli click e3 --modifiers Control".to_string());
+    }
+
+    if cmd.name == "fill" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(wrap_text(
+            "Accepts a snapshot ref (e5) or a CSS selector. The element must be editable (input, textarea, or a contenteditable node); dropdowns go through `select` instead.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "--submit presses Enter once the text is in place — that is how a search box is normally driven. --verify reads the value back afterwards and reports a mismatch on stderr.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "For long or multi-line text, `type --method exec` inserts the whole value in one step; `fill` writes the value as one field update.",
+            "  - ",
+            4,
+        ));
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli fill e3 \"ada@example.com\"".to_string());
+        lines.push("  browser4-cli fill \"#search\" \"browser4\" --submit".to_string());
+        lines.push("  browser4-cli fill e9 \"hello\" --verify".to_string());
+    }
+
+    if cmd.name == "type" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(wrap_text(
+            "--method picks the insertion strategy: auto (default), chars (always per-character, closest to human typing), exec (always one bulk insert).",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "auto switches to a bulk insert for text longer than 150 characters or containing newlines. If a site ignores bulk-inserted text, force --method chars.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "--focus clicks the target first so the element is in an interactive state before the first keystroke.",
+            "  - ",
+            4,
+        ));
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli type \"lorem ipsum\" e5".to_string());
+        lines.push("  browser4-cli type \"lorem ipsum\" --focus \"#search\" --submit".to_string());
+        lines.push("  browser4-cli type \"hello\" e9 --method chars".to_string());
+    }
+
+    if cmd.name == "press" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(wrap_text(
+            "<key> is a key name (Enter, Tab, Escape, ArrowLeft, …) or a single character. Without a ref the press goes to whatever holds focus, so click or `focus` the target first.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "To hold a key across several commands (Shift+drag, Control+click), use `keydown` before and `keyup` after.",
+            "  - ",
+            4,
+        ));
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli press Enter e5".to_string());
+        lines.push("  browser4-cli press ArrowDown".to_string());
+        lines.push("  browser4-cli press Escape --verify".to_string());
+    }
+
+    if cmd.name == "scroll" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(wrap_text(
+            "<pixels> is relative to the current position, and the command prints the direction, the amount, and the resulting scroll position.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "down/up scroll the page; left/right scroll horizontally. To bring a specific element into view, use `scrollintoview <selector>` instead.",
+            "  - ",
+            4,
+        ));
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli scroll down 800".to_string());
+        lines.push("  browser4-cli scroll up 400".to_string());
+        lines.push("  browser4-cli scroll right 1200".to_string());
+    }
+
+    if cmd.name == "screenshot" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(wrap_text(
+            "Without -o the capture is written to the snapshot directory under a timestamped name, and the printed line reports the path. A bare file name also lands there; a name containing a path separator is resolved against the current directory.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "The extension selects the format: .png (default) or .jpg/.jpeg. --full-page captures the whole scrollable page; -v <n> captures one screen-height chunk around the current position.",
+            "  - ",
+            4,
+        ));
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli screenshot".to_string());
+        lines.push("  browser4-cli screenshot e12 -o card.png".to_string());
+        lines.push("  browser4-cli screenshot --full-page -o page.jpg".to_string());
+        lines.push("  browser4-cli screenshot -v 1".to_string());
+    }
+
     if cmd.name == "select" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -1295,14 +1758,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - If the saved session is missing or stale, `open` creates a new browser session."
                 .to_string(),
         );
-        lines.push(
-            "  - When reconnecting, `--headless`/`--headed` are ignored (the display mode is set when the session is created); a warning is printed on stderr."
-                .to_string(),
-        );
-        lines.push(
-            "  - Use `--fresh` to close the current session and start a new one instead of reconnecting, so tabs, cookies, and location state from a prior run are not inherited."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "When reconnecting, `--headless`/`--headed` are ignored (the display mode is set when the session is created); a warning is printed on stderr.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Use `--fresh` to close the current session and start a new one instead of reconnecting, so tabs, cookies, and location state from a prior run are not inherited.",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - `open` without a URL reconnects or creates a session at about:blank without navigating."
                 .to_string(),
@@ -1993,10 +2458,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - ",
             4,
         ));
-        lines.push(
-            "  - The `get` subcommand supports four fields: `text` (the element's whitespace-normalized inner text), `textcontent` (the raw textContent — original whitespace and newlines kept; neither of the two is a rendered-text read, so CSS overflow does not clip them), `html` (inner HTML), and `attr` (attribute value). Neither text field can recover text that the page itself truncated in its HTML source (e.g. a clipped link label) — use `attr` (often the `title` attribute) or open the detail page for that."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "The `get` subcommand supports four fields: `text` (the element's whitespace-normalized inner text), `textcontent` (the raw textContent — original whitespace and newlines kept; neither of the two is a rendered-text read, so CSS overflow does not clip them), `html` (inner HTML), and `attr` (attribute value). Neither text field can recover text that the page itself truncated in its HTML source (e.g. a clipped link label) — use `attr` (often the `title` attribute) or open the detail page for that.",
+            "  - ",
+            4,
+        ));
         lines.push(wrap_text(
             "Argument order: `get <field:text|textcontent|html|attr> <css-selector> [attribute-name]`.  When using `attr`, the third argument is the attribute name (e.g. `href`, `src`, `class`).",
             "  - ",
@@ -2016,14 +2482,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Element references (`e5`, `backend:15`) are NOT supported by `htmlsnapshot get` — use CSS selectors only."
                 .to_string(),
         );
-        lines.push(
-            "  - Unlike top-level `get` (accessibility tree), `htmlsnapshot get` uses CSS selectors on a fresh snapshot of the active page."
-                .to_string(),
-        );
-        lines.push(
-            "    For live page queries (AXTree-based), use `get text <ref>`. For CSS extraction, no capture step is needed."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "Unlike top-level `get` (accessibility tree), `htmlsnapshot get` uses CSS selectors on a fresh snapshot of the active page. For live page queries (AXTree-based), use `get text <ref>`. For CSS extraction, no capture step is needed.",
+            "  - ",
+            4,
+        ));
         lines.push(wrap_text(
             "X-SQL queries via `htmlsnapshot query --sql` use `@url` as a placeholder for the target page URL (unquoted — SQLTemplate handles escaping). The query captures the active page first and then serves that fresh snapshot, so it sees the page as the tab shows it now (login state, SPA updates, eval mutations).",
             "  - ",
@@ -2046,10 +2509,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - ",
             4,
         ));
-        lines.push(
-            "  - Export a fresh snapshot of the active page's HTML to a local file with `htmlsnapshot export --file <path>`. Add `--clean` to strip scripts, styles, and non-standard attributes. The export captures the tab first, so it is already the page as it is right now."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "Export a fresh snapshot of the active page's HTML to a local file with `htmlsnapshot export --file <path>`. Add `--clean` to strip scripts, styles, and non-standard attributes. The export captures the tab first, so it is already the page as it is right now.",
+            "  - ",
+            4,
+        ));
         lines.push(wrap_text(
             "Generate a compressed page summary (WPSI) from a fresh snapshot of the active page with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — far smaller than the HTML for large, boilerplate-heavy pages, though on dense listing pages (many repeated items, each with a link and bounding box) it can approach the HTML size. The summarization algorithm is pluggable: the built-in default is `wpsi`, and installed plugins can contribute additional algorithm ids. Run `htmlsnapshot algorithms` to list them and pass `--algorithm <id>` to choose one; output from non-wpsi algorithms is printed verbatim.",
             "  - ",
@@ -2192,11 +2656,66 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli htmlsnapshot inspect --selector-base64 W2RhdGEtY29tcG9uZW50LXR5cGU9InMtc2VhcmNoLXJlc3VsdCJd".to_string());
     }
 
+    if cmd.name == "htmlsnapshot-get" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(wrap_text(
+            "The active tab is captured first, so the read sees the page as it is now (form results, SPA updates, `eval` mutations). --expires 30s serves the snapshot already in the store instead, while it is younger than the window, and leaves the tab untouched.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "field=text collapses whitespace, textcontent keeps it raw, html returns inner markup, and attr needs the attribute name as the third argument. Add --absolute to resolve href/src against the page URL — attribute values are otherwise returned exactly as the page holds them (often relative).",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "One call returns the first match. Use `htmlsnapshot get all` for every match, and `htmlsnapshot query` when several fields must stay aligned row by row.",
+            "  - ",
+            4,
+        ));
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli htmlsnapshot get text \"h1\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot get attr \"a.buy\" href --absolute".to_string());
+        lines.push("  browser4-cli htmlsnapshot get text \"body\" --expires 30s".to_string());
+    }
+
+    if cmd.name == "htmlsnapshot-get-all" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(wrap_text(
+            "querySelectorAll semantics: every match is returned, paginated with --offset (0-based) and --limit. Each call is an independent capture unless --expires is given.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Fields behave exactly as in `htmlsnapshot get`. Rows are not correlated with each other — for title + price + link per product, use `htmlsnapshot query` with X-SQL's DOM_LOAD_AND_SELECT so the columns stay aligned.",
+            "  - ",
+            4,
+        ));
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli htmlsnapshot get all text \".price\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot get all attr \"img\" src --absolute --limit 50".to_string());
+        lines.push("  browser4-cli htmlsnapshot get all text \"li.item\" --offset 20 --limit 20".to_string());
+    }
+
     if cmd.name == "snapshot" {
         lines.push("Subcommands:".to_string());
         lines.push(format_with_gap(
             "  snapshot grep [OPTIONS] <pattern>",
             "Search snapshot YAML content with regex patterns and grep-style output. Use | for alternation (e.g. 'price|rating|stars') or -e for multiple patterns. For large pages, capture a specific viewport first with -v <N> before grepping. Supports --page N, --page-size N, and --all for output pagination (2000 lines per page default).",
+            50,
+        ));
+        lines.push(format_with_gap(
+            "  snapshot list [-n <count>] [--all]",
+            "List saved snapshot files with timestamps and sizes (20 most recent by default; --all includes the archive)",
+            50,
+        ));
+        lines.push(format_with_gap(
+            "  snapshot clean [-k <count>] [--all] [--dry-run]",
+            "Remove old snapshot files from the snapshot directory (keeps the 100 most recent by default; --dry-run previews)",
             50,
         ));
         lines.push(String::new());
@@ -2299,6 +2818,33 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Search with pagination (page 2, custom page size)".to_string());
         lines.push("  browser4-cli snapshot grep error --page 2 --page-size 200".to_string());
+    }
+
+    if cmd.name == "snapshot-grep" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(wrap_text(
+            "The search runs against a fresh snapshot of the active page, not against a saved file. --selector scopes the snapshot itself, so matches stay inside that subtree.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Patterns use the Rust regex dialect: ^ and $ anchor line starts/ends, so a literal dollar is [$] (\\$ also compiles but survives fewer shells). Shell quoting still applies — quote a pattern containing |, and add more alternatives with -e PATTERN.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Line numbers are printed by default, so GNU grep -n is a no-op; --no-line-number suppresses them. Long trees are paginated (2000 lines per page): --page/--page-size/--all control that.",
+            "  - ",
+            4,
+        ));
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli snapshot grep \"price|rating\"".to_string());
+        lines.push("  browser4-cli snapshot grep -i \"sign in\"".to_string());
+        lines.push("  browser4-cli snapshot grep -C 3 \"Add to cart\" --selector \".product-list\"".to_string());
+        lines.push("  browser4-cli snapshot grep -F \"a.b.c\"".to_string());
+        lines.push("  browser4-cli snapshot grep \"item\" -c".to_string());
     }
 
     if cmd.name == "skills" {
@@ -3081,6 +3627,48 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli sessionstorage-clear".to_string());
     }
 
+    // Subcommands — `config` never mentioned `config get|set|delete`, `crawl`
+    // never mentioned `crawl resume`, `doctor` never mentioned `doctor log`, and
+    // so on: the family was only visible in the top-level reference, which is
+    // not where a user who already typed the parent command looks.
+    //
+    // Generated last, then spliced in above the first prose section, so the
+    // hand-written blocks (htmlsnapshot, snapshot, skills) keep their
+    // better-worded, annotated lists instead of being duplicated by this one.
+    let subs = subcommands_of(cmd);
+    if !subs.is_empty() && !lines.iter().any(|line| line == "Subcommands:") {
+        let mut block: Vec<String> = vec![String::new(), "Subcommands:".to_string()];
+        for sub in &subs {
+            block.push(generate_help_entry(sub));
+        }
+        block.push(String::new());
+        block.push(format!(
+            "Run `browser4-cli --help {} <subcommand>` for one subcommand's own page.",
+            public_command_name(cmd.name)
+        ));
+        let at = lines
+            .iter()
+            .position(|line| PROSE_SECTIONS.contains(&line.as_str()))
+            .unwrap_or(lines.len());
+        lines.splice(at..at, block);
+    }
+
+    // Long-form material lives in the bundled reference documents; point at
+    // them so the help page does not have to carry (or omit) it.
+    let references = references_for(cmd.name);
+    if !references.is_empty() {
+        let docs: Vec<String> = references
+            .iter()
+            .map(|doc| format!("references/{doc}"))
+            .collect();
+        lines.push(String::new());
+        lines.push(format!("See also: {}", docs.join(", ")));
+        lines.push(
+            "  `browser4-cli skills get browser4-cli --full` prints every bundled document."
+                .to_string(),
+        );
+    }
+
     // Point every per-command help page at the runnable examples of the tool
     // the command maps to (requirement 2.3). The examples live in the backend
     // tool spec, so this is the only place the CLI can advertise them.
@@ -3091,6 +3679,226 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     ));
 
     lines.join("\n")
+}
+
+/// Section headers used by the hand-written per-command prose blocks. The
+/// generated Subcommands section is spliced in above the first one that a page
+/// has, so it sits with Arguments/Options instead of after the examples.
+const PROSE_SECTIONS: &[&str] = &["Notes:", "Examples:", "Subcommands:", "Workflow:"];
+
+/// Bundled reference documents worth pointing at from a command's help page.
+///
+/// Keys are command-name prefixes (longest match wins); values are file names
+/// under `skills/browser4-cli/references/` — exactly the names
+/// `browser4-cli skills get browser4-cli --full` prints in its
+/// `--- browser4-cli/references/<name> ---` markers, so a reader can find the
+/// document the page just recommended.
+///
+/// The reference documents carry the long-form material (X-SQL functions,
+/// extraction scenarios, checkpoint/resume, quoting rules) that would drown a
+/// help page; the page's job is to say where it lives.
+const COMMAND_REFERENCES: &[(&str, &[&str])] = &[
+    ("htmlsnapshot-query", &["htmlsnapshot.md", "x-sql.md", "x-sql-dom-load-select.md"]),
+    ("htmlsnapshot-inspect", &["htmlsnapshot.md", "htmlsnapshot-scenarios-extraction.md"]),
+    ("htmlsnapshot-grep", &["htmlsnapshot.md", "x-sql.md"]),
+    ("htmlsnapshot", &["htmlsnapshot.md"]),
+    ("scrape", &["scrape-formats.md"]),
+    ("snapshot", &["snapshot.md", "quick-patterns.md"]),
+    ("crawl", &["crawl.md", "load-options-guide.md"]),
+    ("swarm", &["swarm.md"]),
+    ("attach", &["attach.md", "browser-modes.md", "browser-state-import.md"]),
+    ("open", &["browser-modes.md", "browser-state-import.md"]),
+    ("loop", &["loop.md"]),
+    ("frame", &["frames.md"]),
+    ("tab-", &["tabs.md", "tab-management.md"]),
+    ("window-", &["tabs.md", "tab-management.md"]),
+    ("cookie", &["storage-state.md"]),
+    ("localstorage", &["storage-state.md"]),
+    ("sessionstorage", &["storage-state.md"]),
+    ("state-", &["storage-state.md"]),
+    ("webdb", &["webdb.md"]),
+    ("upload", &["upload.md"]),
+    ("network", &["network.md"]),
+    ("skills", &["skills.md"]),
+    ("config", &["config.md"]),
+    ("agent", &["agent.md"]),
+    ("extract", &["agent.md"]),
+    ("summarize", &["agent.md"]),
+    ("chat", &["agent.md"]),
+    ("experience", &["agent.md"]),
+    ("eval", &["eval.md", "power-dom.md", "shell-quoting.md"]),
+    ("type", &["shell-quoting.md", "quick-patterns.md"]),
+    ("batch", &["shell-quoting.md"]),
+    ("goto", &["quick-patterns.md"]),
+    ("fill", &["quick-patterns.md"]),
+    ("click", &["quick-patterns.md", "css-selector-bridge.md"]),
+    ("press", &["quick-patterns.md"]),
+    ("select", &["quick-patterns.md", "css-selector-bridge.md"]),
+    ("hover", &["quick-patterns.md"]),
+    ("drag", &["quick-patterns.md"]),
+    ("doctor", &["development-mode.md"]),
+];
+
+/// Reference documents for a command, or an empty slice when none apply.
+///
+/// Matching is by longest key prefix, so `htmlsnapshot-query` wins over the
+/// broader `htmlsnapshot` entry for `browser4-cli --help htmlsnapshot query`.
+fn references_for(command: &str) -> &'static [&'static str] {
+    let mut best: Option<(usize, &'static [&'static str])> = None;
+    for (prefix, docs) in COMMAND_REFERENCES {
+        if command.starts_with(prefix) {
+            let len = prefix.len();
+            if best.is_none_or(|(best_len, _)| len > best_len) {
+                best = Some((len, docs));
+            }
+        }
+    }
+    best.map(|(_, docs)| docs).unwrap_or(&[])
+}
+
+/// One family of hidden commands, e.g. the 24 `code …` helpers.
+struct HiddenGroup {
+    /// Public-name prefix that lists the family (`--help code`).
+    prefix: String,
+    count: usize,
+}
+
+/// Hidden commands grouped by the first word of their public name.
+///
+/// Hidden commands work like any other but are left out of the category list,
+/// which used to make them undiscoverable: nothing in `--help` named `code`,
+/// `act`, or the `skills get/path/unpack` set.
+fn hidden_command_groups() -> Vec<HiddenGroup> {
+    let mut groups: Vec<(String, usize)> = Vec::new();
+    for cmd in all_commands().into_iter().filter(|c| c.hidden) {
+        let public = public_command_name(cmd.name);
+        let first = public.split(' ').next().unwrap_or(public).to_string();
+        match groups.iter_mut().find(|(prefix, _)| *prefix == first) {
+            Some((_, count)) => *count += 1,
+            None => groups.push((first, 1)),
+        }
+    }
+    groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    groups
+        .into_iter()
+        .map(|(prefix, count)| HiddenGroup { prefix, count })
+        .collect()
+}
+
+/// The CLI's own examples for a command — exactly the lines its `--help` page
+/// prints under `Examples:`.
+///
+/// They ship inside the binary, so `--help <command> --examples` can answer
+/// without a backend. The backend's tool-level examples (titles, notes,
+/// snippets) are richer and take precedence when the server is reachable; see
+/// `build_command_examples` in `main.rs`.
+pub fn command_examples(name: &str) -> Vec<String> {
+    let Some(cmd) = all_commands().into_iter().find(|c| c.name == name) else {
+        return Vec::new();
+    };
+    let help = generate_command_help(&cmd);
+    let mut collected: Vec<String> = Vec::new();
+    let mut in_examples = false;
+    for line in help.lines() {
+        if line == "Examples:" {
+            in_examples = true;
+            continue;
+        }
+        if !in_examples {
+            continue;
+        }
+        if line.trim().is_empty() {
+            // A blank line closes the section once something was collected.
+            if !collected.is_empty() {
+                break;
+            }
+            continue;
+        }
+        // Anything that is not an indented example line starts the next section.
+        if !line.starts_with("  ") {
+            break;
+        }
+        collected.push(line.to_string());
+    }
+    collected
+}
+
+/// Pointer appended to usage errors so the failing command's own help page is
+/// one copy-paste away.
+///
+/// `Missing required argument: <ref>.` followed only by a usage line tells the
+/// user what is missing but not where the rest of the command is documented.
+pub fn help_hint(command: &str) -> String {
+    format!(
+        "Run `browser4-cli --help {}` for the options and examples.",
+        public_command_name(command)
+    )
+}
+
+/// Commands that are subcommands of `cmd`, in definition order.
+///
+/// A subcommand is any visible command whose public name starts with this
+/// command's public name followed by a space (`crawl` → `crawl status`,
+/// `crawl result`, …), matching how `--help <prefix>` groups them. The command
+/// itself is excluded, so a command whose name is merely a prefix of its own
+/// spaced form does not list itself.
+fn subcommands_of(cmd: &CommandDef) -> Vec<CommandDef> {
+    let parent = public_command_name(cmd.name);
+    let prefix = format!("{parent} ");
+    all_commands()
+        .into_iter()
+        .filter(|c| {
+            !c.hidden && c.name != cmd.name && public_command_name(c.name).starts_with(&prefix)
+        })
+        .collect()
+}
+
+/// Shorten a command description for a category listing.
+///
+/// Listings are meant to be scanned and compared, but the command descriptions
+/// double as the MCP tool documentation: left whole, a single entry such as
+/// `htmlsnapshot` (twice — it and its `capture` alias) or `scrape` swallowed
+/// ten to twenty wrapped lines each and buried the commands around it.
+/// Listings therefore show the first sentence, trimmed at a word boundary to
+/// [`LISTING_DESC_WIDTH`]; `--help <command>` and `--help-json` keep the full
+/// text.
+fn listing_description(description: &str) -> String {
+    let first_line = description.split('\n').next().unwrap_or("").trim();
+    // First sentence: a period followed by a space or the end of the text.
+    let sentence = match first_line.find(". ") {
+        Some(idx) => &first_line[..=idx],
+        None => first_line,
+    };
+    if display_width(sentence) <= LISTING_DESC_WIDTH {
+        return sentence.to_string();
+    }
+
+    // Too long even as one sentence — cut at the last word boundary that fits.
+    let mut out = String::new();
+    let mut width = 0;
+    for word in sentence.split(' ') {
+        let word_width = display_width(word);
+        let next = if out.is_empty() { word_width } else { width + 1 + word_width };
+        if next > LISTING_DESC_WIDTH {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+            width += 1;
+        }
+        out.push_str(word);
+        width += word_width;
+    }
+    if out.is_empty() {
+        // A single word wider than the budget (e.g. a long URL) — keep it.
+        return sentence.to_string();
+    }
+    // Replace a trailing comma/dash left dangling by the cut, and drop the
+    // space that preceded it.
+    while out.ends_with(',') || out.ends_with(';') || out.ends_with('—') {
+        out.pop();
+    }
+    format!("{} …", out.trim_end())
 }
 
 pub fn generate_help_entry(cmd: &CommandDef) -> String {
@@ -3134,7 +3942,7 @@ pub fn generate_help_entry(cmd: &CommandDef) -> String {
     let marker = if is_high_frequency_command(cmd.name) { "★ " } else { "  " };
     let prefix = format!("{}{} {}", marker, public_name, args_text);
     let prefix = prefix.trim_end();
-    format_with_gap(prefix, cmd.description, 32)
+    format_with_gap(prefix, &listing_description(cmd.description), 32)
 }
 
 /// Commands that appear in the Quick Start section or are among the most
@@ -3175,7 +3983,7 @@ fn wrap_text(text: &str, first_line_prefix: &str, indent: usize) -> String {
     if text.is_empty() {
         return first_line_prefix.to_string();
     }
-    let prefix_len = first_line_prefix.len();
+    let prefix_len = display_width(first_line_prefix);
     let first_avail = MAX_LINE_WIDTH.saturating_sub(prefix_len);
     let cont_avail = MAX_LINE_WIDTH.saturating_sub(indent);
     let cont_pad = " ".repeat(indent);
@@ -3199,7 +4007,7 @@ fn wrap_text(text: &str, first_line_prefix: &str, indent: usize) -> String {
 
             if current_line.is_empty() {
                 current_line = word.to_string();
-            } else if current_line.len() + 1 + word.len() <= limit {
+            } else if display_width(&current_line) + 1 + display_width(word) <= limit {
                 current_line.push(' ');
                 current_line.push_str(word);
             } else {
@@ -3218,7 +4026,9 @@ fn wrap_text(text: &str, first_line_prefix: &str, indent: usize) -> String {
             } else {
                 output.push_str(&cont_pad);
             }
-            output.push_str(line);
+            // Trailing spaces can reach a line end when the caller passes
+            // double-space separators (the alias groups do) — drop them.
+            output.push_str(line.trim_end());
             output.push('\n');
         }
     }
@@ -3232,21 +4042,25 @@ fn wrap_text(text: &str, first_line_prefix: &str, indent: usize) -> String {
 }
 
 fn format_with_gap(prefix: &str, text: &str, threshold: usize) -> String {
-    let gap = if prefix.len() < threshold {
-        threshold - prefix.len()
+    // Measure the prefix in display columns, not bytes: a multi-byte prefix
+    // (the `★` marker) would otherwise eat into the gap and shift the whole
+    // description column left.
+    let prefix_width = display_width(prefix);
+    let gap = if prefix_width < threshold {
+        threshold - prefix_width
     } else {
         2
     };
 
     // Fast path: everything fits on one line
     let full_line = format!("{}{}{}", prefix, " ".repeat(gap), text);
-    if full_line.len() <= MAX_LINE_WIDTH {
+    if display_width(&full_line) <= MAX_LINE_WIDTH {
         return full_line;
     }
 
 
     // Word-wrap the description text with continuation indented to `threshold`
-    let prefix_total = prefix.len() + gap;
+    let prefix_total = prefix_width + gap;
     let first_avail = MAX_LINE_WIDTH.saturating_sub(prefix_total);
     let cont_avail = MAX_LINE_WIDTH.saturating_sub(threshold);
     let cont_indent = " ".repeat(threshold);
@@ -3261,7 +4075,7 @@ fn format_with_gap(prefix: &str, text: &str, threshold: usize) -> String {
 
         if current_line.is_empty() {
             current_line = word.to_string();
-        } else if current_line.len() + 1 + word.len() <= limit {
+        } else if display_width(&current_line) + 1 + display_width(word) <= limit {
             current_line.push(' ');
             current_line.push_str(word);
         } else {
@@ -3308,16 +4122,498 @@ mod tests {
         assert!(help.contains("agent status"));
         assert!(help.contains("agent result"));
         assert!(help.contains("pdf"));
-        assert!(!help.contains("  act "));
+        // `act` is hidden: it must stay out of the category listing, but it is
+        // named in the hidden-commands section (see
+        // test_hidden_command_families_are_listed_and_reachable).
+        let categories_end = help.find("── Hidden commands").unwrap_or(help.len());
+        assert!(!help[..categories_end].contains("  act "));
         assert!(help.contains("swarm create"));
         assert!(help.contains("--json"));
         assert!(help.contains("suppresses tips, hints, and human-readable text"));
         assert!(help.contains("-q, --quiet"));
-        assert!(help.contains("suppress normal output"));
+        assert!(help.contains("Suppress normal output"));
         assert!(help.contains("--help-json"));
         assert!(help.contains("Environment variables"));
         assert!(help.contains("BROWSER4_CLI_STATE_DIR"));
         assert!(help.contains("BROWSER4_RUNTIME_DIR"));
+    }
+
+    /// Column (0-based, in display columns) where a listing row's description
+    /// starts, i.e. the first run of two or more spaces after the command text.
+    fn description_column(line: &str) -> Option<usize> {
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 2;
+        while i + 1 < chars.len() {
+            if chars[i] == ' ' && chars[i + 1] == ' ' {
+                // Skip the whole gap; the description starts right after it.
+                let mut end = i;
+                while end < chars.len() && chars[end] == ' ' {
+                    end += 1;
+                }
+                let prefix: String = chars[..end].iter().collect();
+                return Some(display_width(&prefix));
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// The `★` marker is one column wide but three bytes. Measuring it with
+    /// `str::len()` pushed every starred row two columns left of the plain rows.
+    #[test]
+    fn test_starred_rows_align_with_plain_rows() {
+        let help = generate_help();
+        let starred: Vec<&str> = help.lines().filter(|l| l.starts_with('★')).collect();
+        assert!(
+            starred.len() > 5,
+            "expected several starred rows, found {}",
+            starred.len()
+        );
+        for line in &starred {
+            let col = description_column(line)
+                .unwrap_or_else(|| panic!("no description column in starred row: {line}"));
+            assert!(
+                col >= 32,
+                "starred row starts its description at column {col}, before the 32-column gutter: {line}"
+            );
+        }
+
+        // Rows with a short command must land exactly on the gutter.
+        let snapshot_row = help
+            .lines()
+            .find(|l| l.starts_with("★ snapshot "))
+            .expect("starred snapshot row");
+        assert_eq!(description_column(snapshot_row), Some(32));
+
+        let plain_row = help
+            .lines()
+            .find(|l| l.starts_with("  batch "))
+            .expect("plain batch row");
+        assert_eq!(description_column(plain_row), Some(32));
+    }
+
+    /// The Quick Start box used to be drawn without a right border, with rows
+    /// 71/73/75 columns wide and a one-column drift on the `fill` entry.
+    #[test]
+    fn test_quick_start_box_is_closed_and_padded() {
+        let help = generate_help();
+        let mut frame: Vec<&str> = Vec::new();
+        for line in help.lines() {
+            if line.starts_with('╔') {
+                frame.push(line);
+                continue;
+            }
+            if frame.is_empty() {
+                continue;
+            }
+            frame.push(line);
+            if line.starts_with('╚') {
+                break;
+            }
+        }
+        assert!(frame.len() >= 8, "Quick Start box not found:\n{help}");
+        assert!(
+            frame[0].starts_with("╔══ Quick Start "),
+            "bad box header: {}",
+            frame[0]
+        );
+        assert!(
+            frame[0].ends_with('╗'),
+            "box top border is not closed: {}",
+            frame[0]
+        );
+        assert!(
+            frame.last().unwrap().ends_with('╝'),
+            "box bottom border is not closed: {}",
+            frame.last().unwrap()
+        );
+
+        let width = display_width(frame[0]);
+        for line in &frame {
+            assert_eq!(
+                display_width(line),
+                width,
+                "box rows must all be {width} columns wide: {line}"
+            );
+            assert!(
+                line.starts_with('║') || line.starts_with('╔') || line.starts_with('╚'),
+                "box row must open with a border: {line}"
+            );
+            assert!(
+                line.ends_with('║') || line.ends_with('╗') || line.ends_with('╝'),
+                "box row must close with a border: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_help_output_respects_the_line_width_budget() {
+        for (label, output) in [
+            ("generate_help", generate_help()),
+            ("generate_quick_reference", generate_quick_reference()),
+        ] {
+            for line in output.lines() {
+                assert!(
+                    display_width(line) <= MAX_LINE_WIDTH,
+                    "{label} line is {} columns wide (budget {MAX_LINE_WIDTH}): {line}",
+                    display_width(line)
+                );
+            }
+        }
+    }
+
+    /// Every per-command page, not just the overview: hand-written note blocks
+    /// were pushed as single un-wrapped strings, so `--help htmlsnapshot` had a
+    /// 502-column line and `--help open` two over-wide ones.
+    ///
+    /// Example commands are exempt: an inline X-SQL payload cannot be wrapped
+    /// into the budget without breaking the copy-paste one-liner the example
+    /// exists to provide.
+    #[test]
+    fn test_every_command_help_respects_the_line_width_budget() {
+        let mut offenders: Vec<String> = Vec::new();
+        for cmd in all_commands() {
+            let help = generate_command_help(&cmd);
+            let mut in_examples = false;
+            for line in help.lines() {
+                if line == "Examples:" {
+                    in_examples = true;
+                    continue;
+                }
+                if in_examples {
+                    // Examples run to the end of the section: indented lines
+                    // and blank lines belong to it, anything else starts a
+                    // new section.
+                    if line.is_empty() || line.starts_with("  ") {
+                        continue;
+                    }
+                    in_examples = false;
+                }
+                if display_width(line) > MAX_LINE_WIDTH {
+                    offenders.push(format!(
+                        "'{}' ({} columns): {line}",
+                        public_command_name(cmd.name),
+                        display_width(line)
+                    ));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "help lines over the {MAX_LINE_WIDTH}-column budget:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// The category index and the alias table must agree with the sections that
+    /// actually render: the printed help used to advertise `nav, extract,
+    /// session, kb, agent, swarm`, of which `session` resolved to an arbitrary
+    /// slice of the `sessionstorage-*` family (prefix match won over the alias).
+    #[test]
+    fn test_every_advertised_category_and_alias_resolves() {
+        let index = category_index_lines().join("\n");
+        for (name, _title) in CATEGORY_TITLES {
+            if commands_in_category(name).is_empty() {
+                continue;
+            }
+            assert!(
+                index.contains(name),
+                "category '{name}' has commands but is missing from the category index"
+            );
+        }
+
+        for (alias, canonical) in CATEGORY_ALIASES {
+            let resolved = resolve_category_alias(alias).expect("alias must resolve");
+            assert_eq!(&resolved, canonical, "alias {alias} resolved to {resolved}");
+            assert!(
+                !commands_in_category(canonical).is_empty(),
+                "alias '{alias}' points at category '{canonical}', which has no visible commands"
+            );
+        }
+    }
+
+    #[test]
+    fn test_global_options_are_documented_in_help_and_json() {
+        let help = generate_help();
+        let json = generate_help_json(None);
+        for opt in GLOBAL_OPTIONS {
+            assert!(
+                help.contains(opt.flags),
+                "global option '{}' is missing from the printed help",
+                opt.flags
+            );
+            assert!(
+                json.contains(&format!("\"{}\"", opt.json_key)),
+                "global option '{}' is missing from --help-json",
+                opt.json_key
+            );
+        }
+        // Options that had gone undocumented in one surface or the other.
+        for flag in ["--pretty", "--proxy <url>", "-s, --session <name>", "-h, --help"] {
+            assert!(help.contains(flag), "{flag} missing from the printed help");
+        }
+        for flag in ["--pretty", "--proxy", "-h, --help", "-v, --version"] {
+            assert!(json.contains(flag), "{flag} missing from --help-json");
+        }
+    }
+
+    #[test]
+    fn test_listing_description_keeps_the_first_sentence_and_truncates() {
+        assert_eq!(
+            listing_description("Do a thing. Then do another thing."),
+            "Do a thing."
+        );
+        assert_eq!(listing_description("No period here"), "No period here");
+        // Trailing newlines / paragraphs are dropped
+        assert_eq!(
+            listing_description("First line. \nSecond paragraph."),
+            "First line."
+        );
+
+        let long = format!("{} and then a tail.", "lorem ipsum dolor sit amet ".repeat(5));
+        let short = listing_description(&long);
+        assert!(short.ends_with('…'), "long text should be truncated: {short}");
+        assert!(
+            display_width(&short) <= LISTING_DESC_WIDTH + 2,
+            "truncated description is {} columns wide: {short}",
+            display_width(&short)
+        );
+        assert!(
+            !short.contains("  …"),
+            "truncation left a dangling space: {short}"
+        );
+    }
+
+    /// The quick reference must use the real signatures: `scroll` takes a
+    /// direction and a pixel count (not raw deltas), and `screenshot` takes an
+    /// element ref while the output file goes to `-o`.
+    #[test]
+    fn test_quick_reference_matches_real_command_signatures() {
+        let qr = generate_quick_reference();
+        assert!(qr.contains("scroll <direction> <pixels>"), "{qr}");
+        assert!(!qr.contains("<dx> <dy>"), "scroll is not a delta-x/delta-y command");
+        assert!(qr.contains("screenshot [ref]"), "{qr}");
+        assert!(!qr.contains("screenshot [file]"), "screenshot takes an element ref, not a file");
+    }
+
+    /// A parent command's page must list its family. `config` never mentioned
+    /// `config get|set|delete`, `crawl` never mentioned `crawl resume` — the
+    /// subcommands were only visible in the top-level reference, which is not
+    /// where someone who already typed the parent command looks.
+    #[test]
+    fn test_parent_command_pages_list_their_subcommands() {
+        let mut missing: Vec<String> = Vec::new();
+        for cmd in all_commands() {
+            if cmd.hidden {
+                continue;
+            }
+            let subs = subcommands_of(&cmd);
+            if subs.is_empty() {
+                continue;
+            }
+            let help = generate_command_help(&cmd);
+            let parent = public_command_name(cmd.name);
+            if !help.contains("Subcommands:") {
+                missing.push(format!("{parent} ({} subcommands)", subs.len()));
+                continue;
+            }
+            for sub in subs {
+                let name = public_command_name(sub.name);
+                assert!(
+                    help.contains(name),
+                    "help for '{parent}' lists a Subcommands section but omits '{name}'"
+                );
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "parent commands whose help omits the subcommand family:\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
+    /// The ★ commands are the ones a new user reaches for first, so each must
+    /// carry at least one copy-pasteable example — nine of them used to have a
+    /// usage line and nothing else.
+    #[test]
+    fn test_high_frequency_commands_show_examples() {
+        let mut missing: Vec<String> = Vec::new();
+        for cmd in all_commands() {
+            if !is_high_frequency_command(cmd.name) {
+                continue;
+            }
+            if !generate_command_help(&cmd).contains("Examples:") {
+                missing.push(public_command_name(cmd.name).to_string());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "high-frequency commands without an Examples section: {}",
+            missing.join(", ")
+        );
+    }
+
+    #[test]
+    fn test_help_hint_names_the_public_command() {
+        assert_eq!(
+            help_hint("crawl-status"),
+            "Run `browser4-cli --help crawl status` for the options and examples."
+        );
+        assert!(help_hint("fill").contains("--help fill"));
+        assert!(help_hint("htmlsnapshot-get").contains("--help htmlsnapshot get"));
+    }
+
+    /// `--examples` answers from the binary when the backend is unavailable, so
+    /// the extractor must return exactly what the help page prints.
+    #[test]
+    fn test_command_examples_extracts_the_help_page_examples() {
+        let fill = command_examples("fill");
+        assert_eq!(
+            fill,
+            vec![
+                "  browser4-cli fill e3 \"ada@example.com\"",
+                "  browser4-cli fill \"#search\" \"browser4\" --submit",
+                "  browser4-cli fill e9 \"hello\" --verify",
+            ]
+        );
+        assert!(
+            command_examples("goto").iter().any(|l| l.contains("browser4-cli goto")),
+            "goto ships built-in examples"
+        );
+        assert!(command_examples("no-such-command").is_empty());
+        assert!(
+            command_examples("mousemove").is_empty(),
+            "a command without an Examples section must yield nothing"
+        );
+    }
+
+    /// Extraction and rendering must not drift: every page with an `Examples:`
+    /// section must hand the --examples path at least one line, and none of
+    /// those lines may be the section header or a wrapped continuation.
+    #[test]
+    fn test_command_examples_agree_with_the_rendered_pages() {
+        let mut offenders: Vec<String> = Vec::new();
+        for cmd in all_commands() {
+            let has_section = generate_command_help(&cmd).contains("Examples:");
+            let extracted = command_examples(cmd.name);
+            if has_section && extracted.is_empty() {
+                offenders.push(format!(
+                    "{}: page has an Examples section but none was extracted",
+                    public_command_name(cmd.name)
+                ));
+                continue;
+            }
+            for line in &extracted {
+                if !line.starts_with("  ") || line.trim() == "Examples:" {
+                    offenders.push(format!("{}: bad example line {line:?}", cmd.name));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "examples extraction drifted from the rendered help:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// Every `See also:` document must actually ship inside the binary — a
+    /// renamed or deleted reference would otherwise leave help pages pointing
+    /// at a file `skills get --full` never prints.
+    #[test]
+    fn test_command_references_exist_in_the_bundled_skill() {
+        let bundled: Vec<&str> = crate::skills::all_skill_files()
+            .iter()
+            .map(|f| f.rel_path)
+            .collect();
+        assert!(
+            !bundled.is_empty(),
+            "no skill files are bundled — build.rs did not embed skills/"
+        );
+
+        let mut missing: Vec<String> = Vec::new();
+        for (command, docs) in COMMAND_REFERENCES {
+            for doc in *docs {
+                let wanted = format!("browser4-cli/references/{doc}");
+                if !bundled.contains(&wanted.as_str()) {
+                    missing.push(format!("{command} → {wanted}"));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "help points at reference documents that are not bundled:\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
+    /// The long form wins for nested commands: `htmlsnapshot query` must get
+    /// the X-SQL documents, not just the generic htmlsnapshot one.
+    #[test]
+    fn test_references_render_on_the_command_page() {
+        assert_eq!(
+            references_for("htmlsnapshot-query"),
+            &["htmlsnapshot.md", "x-sql.md", "x-sql-dom-load-select.md"]
+        );
+        assert_eq!(references_for("htmlsnapshot"), &["htmlsnapshot.md"]);
+        assert!(references_for("goto").contains(&"quick-patterns.md"));
+        assert!(references_for("no-such-command").is_empty());
+
+        let cmds = all_commands();
+        let snapshot = cmds.iter().find(|c| c.name == "snapshot").unwrap();
+        let page = generate_command_help(snapshot);
+        assert!(page.contains("See also: references/snapshot.md"), "{page}");
+        assert!(
+            page.contains("`browser4-cli skills get browser4-cli --full`"),
+            "the pointer must say how to read them: {page}"
+        );
+
+        // A command without references must not grow an empty section.
+        let reload = cmds.iter().find(|c| c.name == "reload").unwrap();
+        assert!(!generate_command_help(reload).contains("See also:"));
+    }
+
+    /// Hidden commands have working help pages but are absent from the category
+    /// list, so the reference has to name their families — otherwise nothing in
+    /// `--help` ever mentions `code`, `act`, or `skills get`.
+    #[test]
+    fn test_hidden_command_families_are_listed_and_reachable() {
+        let help = generate_help();
+        let start = help
+            .find("── Hidden commands")
+            .unwrap_or_else(|| panic!("no hidden-commands section:\n{help}"));
+        let section = &help[start..];
+
+        let groups = hidden_command_groups();
+        assert!(!groups.is_empty(), "the CLI has hidden commands to advertise");
+        for group in &groups {
+            assert!(
+                section.contains(&format!("browser4-cli --help {}", group.prefix)),
+                "hidden family '{}' is not advertised:\n{section}",
+                group.prefix
+            );
+            // The advertised prefix must actually resolve to a listing: either
+            // an exact command or at least one public name starting with it.
+            let reachable = crate::commands::commands_map().contains_key(group.prefix.as_str())
+                || all_commands()
+                    .iter()
+                    .any(|c| public_command_name(c.name).starts_with(&format!("{} ", group.prefix)));
+            assert!(
+                reachable,
+                "'--help {}' would not list anything",
+                group.prefix
+            );
+        }
+
+        // Hidden commands stay out of the category listing itself.
+        let categories_end = help.find("── Hidden commands").unwrap();
+        let categories = &help[..categories_end];
+        for cmd in all_commands().into_iter().filter(|c| c.hidden) {
+            let public = public_command_name(cmd.name);
+            assert!(
+                !categories.contains(&format!("\n  {public} ")),
+                "'{public}' is hidden but appears in the category listing"
+            );
+        }
     }
 
     #[test]
@@ -4070,18 +5366,64 @@ mod tests {
         assert!(qr.contains("swarm create|submit"));
         // Global flags
         assert!(qr.contains("--json"));
-        assert!(qr.contains("-s <name>"));
+        assert!(qr.contains("-s, --session <name>"));
         // Learn more pointers
         assert!(qr.contains("--help-json"));
         assert!(qr.contains("browser4-cli --help"));
     }
 
+    /// The no-argument screen is the CLI's minimal usable manual, and this is
+    /// its budget. Every limit has a reason (see the doc comment on
+    /// `generate_quick_reference`) — the previous `<= 55` was a slack ceiling
+    /// around whatever the screen happened to be when the test was written.
     #[test]
-    fn test_generate_quick_reference_is_compact() {
+    fn test_generate_quick_reference_stays_within_its_budget() {
         let qr = generate_quick_reference();
         let lines: Vec<&str> = qr.lines().collect();
-        // Should be under 55 lines (well within reason for a quick reference)
-        assert!(lines.len() <= 55, "quick reference is {} lines, expected <= 55", lines.len());
+
+        // ~two and a half 24-line terminal screens.
+        assert!(
+            lines.len() <= 60,
+            "quick reference is {} lines, budget is 60",
+            lines.len()
+        );
+        // Every no-argument call pays this, so it caps the context an AI agent
+        // spends before doing any work.
+        assert!(
+            qr.len() <= 6 * 1024,
+            "quick reference is {} bytes, budget is 6 KB",
+            qr.len()
+        );
+
+        // Scannability: few sections, none of them a wall of rows.
+        let sections: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|line| line.starts_with("── "))
+            .collect();
+        assert!(!sections.is_empty(), "the quick reference has no sections");
+        assert!(
+            sections.len() <= 7,
+            "quick reference has {} sections (budget 7): {sections:?}",
+            sections.len()
+        );
+
+        let mut per_section: Vec<(&str, usize)> = Vec::new();
+        for line in &lines {
+            if line.starts_with("── ") {
+                per_section.push((line, 0));
+            } else if !line.trim().is_empty() {
+                if let Some(last) = per_section.last_mut() {
+                    last.1 += 1;
+                }
+            }
+        }
+        for (title, rows) in per_section {
+            assert!(
+                rows <= 12,
+                "section '{title}' has {rows} rows (budget 12) — point at `--help <category>` instead"
+            );
+        }
     }
 
     // ── JSON help tests ────────────────────────────────────────────
@@ -4098,6 +5440,10 @@ mod tests {
         assert!(json.contains("\"BROWSER4_RUNTIME_DIR\""));
         assert!(json.contains("\"categories\""));
         assert!(json.contains("\"category_aliases\""));
+        // Hidden commands are absent from the categories but must still be
+        // discoverable by a machine consumer.
+        assert!(json.contains("\"hidden_commands\""));
+        assert!(json.contains("\"name\": \"code-read\""));
         // Should contain some well-known commands
         assert!(json.contains("\"name\": \"goto\""));
         assert!(json.contains("\"name\": \"snapshot\""));

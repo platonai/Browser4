@@ -459,7 +459,7 @@ Keys: `server` (default Browser4 URL), `timeout` (seconds, positive integer), `p
 | Option | Description |
 |---|---|
 | `--help [command]` | Print help (all commands, or detailed help for a specific command) |
-| `--help --examples` | Print the runnable tool examples for a command, fetched from the backend's tool specs (falls back to a one-line notice when the backend is unreachable) |
+| `--help --examples` | Print runnable examples for a command. The CLI's own `Examples:` block answers offline; when the backend is reachable its richer tool-level examples (titles, notes, snippets) are shown instead |
 | `--version` | Print version |
 | `--json` | Emit machine-parseable JSON to stdout |
 | `-q, --quiet` | Suppress normal output, only show errors |
