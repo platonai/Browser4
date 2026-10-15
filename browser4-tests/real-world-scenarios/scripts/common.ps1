@@ -2917,14 +2917,18 @@ function Get-ClaudeUserPaths {
         }
     }
 
-    $home = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { '' }
-    if (-not $home) {
+    # NOTE: never name this `$home` — PowerShell variable names are
+    # case-insensitive, so `$home` IS the read-only automatic variable $HOME and
+    # the assignment below throws "Cannot overwrite variable HOME because it is
+    # read-only or constant" (same trap as $PSHOME/$PID/$Host).
+    $userHome = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { '' }
+    if (-not $userHome) {
         return @{ ConfigFile = ''; SettingsFile = '' }
     }
 
     return @{
-        ConfigFile   = Join-Path $home '.claude.json'
-        SettingsFile = Join-Path (Join-Path $home '.claude') 'settings.json'
+        ConfigFile   = Join-Path $userHome '.claude.json'
+        SettingsFile = Join-Path (Join-Path $userHome '.claude') 'settings.json'
     }
 }
 

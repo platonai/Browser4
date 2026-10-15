@@ -2555,6 +2555,81 @@ Write-Host '━━━ Agent Client Environment & Diagnostics ━━━' -Foregro
     Assert-Equal 'And is not reported as applied' 0 $preserved.ContextTokens
     $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = ''
 
+    # ── User-level path resolution ──────────────────────────────────────────
+    # Regression: Get-ClaudeUserPaths resolves the home directory itself in its
+    # default branch, and its local variable must never be named `$home` —
+    # names are case-insensitive, so `$home = …` IS the read-only automatic
+    # $HOME, and the assignment throws "Cannot overwrite variable HOME because
+    # it is read-only or constant".  Under $ErrorActionPreference='Stop' that is
+    # terminating: every claude scenario run died in under a second, while
+    # kimi/dsh runs stayed green because Initialize-AgentEnvironment returns
+    # early for them.  Every test in the group above passes -ConfigPath, which
+    # short-circuits the branch — hence the coverage gap this group closes.
+    Write-TestGroup 'Get-ClaudeUserPaths — explicit dir, env var, default home'
+    $explicitPaths = Get-ClaudeUserPaths -ConfigDir $tempDir
+    Assert-Equal 'Explicit -ConfigDir wins' `
+        (Join-Path $tempDir '.claude.json') $explicitPaths.ConfigFile
+    Assert-Equal 'Explicit -ConfigDir settings path' `
+        (Join-Path $tempDir 'settings.json') $explicitPaths.SettingsFile
+
+    $savedConfigDir = $env:CLAUDE_CONFIG_DIR
+    $savedAnthropicModel = $env:ANTHROPIC_MODEL
+    $savedContextTokens = $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS
+    try {
+        $env:CLAUDE_CONFIG_DIR = $tempDir
+        $fromEnvPaths = Get-ClaudeUserPaths
+        Assert-Equal '$env:CLAUDE_CONFIG_DIR is honoured' `
+            (Join-Path $tempDir '.claude.json') $fromEnvPaths.ConfigFile
+
+        # The default branch — the one that used to throw.
+        $env:CLAUDE_CONFIG_DIR = ''
+        $resolvedHome = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { '' }
+        $defaultPaths = Get-ClaudeUserPaths
+        if ($resolvedHome) {
+            Assert-Equal 'Default home resolves .claude.json' `
+                (Join-Path $resolvedHome '.claude.json') $defaultPaths.ConfigFile
+            Assert-Equal 'Default home resolves .claude/settings.json' `
+                (Join-Path (Join-Path $resolvedHome '.claude') 'settings.json') $defaultPaths.SettingsFile
+        } else {
+            Assert-Equal 'No home resolvable → empty paths' '' $defaultPaths.ConfigFile
+        }
+
+        # The exact production call (Invoke-Agent → Initialize-AgentEnvironment
+        # with no explicit paths) must survive that branch too.
+        Assert-True 'Precondition: wsPlainDir declares no project permissions' `
+            (-not (Test-Path -LiteralPath (Join-Path $wsPlainDir '.claude')))
+        [System.IO.File]::WriteAllText($settingsPath, '{"model":"no-window-declared"}')
+        $env:ANTHROPIC_MODEL = ''
+        $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = ''
+        $probe = Initialize-AgentEnvironment -Agent claude -WorkspaceRoot $wsPlainDir `
+            -SettingsPath $settingsPath -Force -Silent
+        Assert-True 'Default-path Initialize-AgentEnvironment does not throw' ($null -ne $probe)
+        Assert-True 'Workspace without project permissions is not trusted' (-not $probe.Trusted)
+        Assert-Equal 'No context window invented' 0 $probe.ContextTokens
+    } finally {
+        $env:CLAUDE_CONFIG_DIR = $savedConfigDir
+        $env:ANTHROPIC_MODEL = $savedAnthropicModel
+        $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = $savedContextTokens
+    }
+
+    # ── Read-only automatic variables ───────────────────────────────────────
+    # A branch-only mistake like the one above is invisible to tests that always
+    # pass an override, so scan the production scripts themselves: $HOME/$PSHOME/
+    # $PID/$Host/$Error/… are read-only (or constant) PowerShell automatic
+    # variables, and assigning a case-variant of one throws at runtime.
+    Write-TestGroup 'Production scripts — no assignments to read-only automatic variables'
+    $readOnlyNames = 'home|pshome|pid|host|error|psedition|psversiontable|shellid|psculture|' +
+        'psuiculture|iscoreclr|iswindows|islinux|ismacos|executioncontext|enabledexperimentalfeatures|true|false'
+    $scannedScripts = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File |
+        Where-Object { $_.Name -notlike '*.tests.ps1' })
+    Assert-True 'Production scripts were found to scan' ($scannedScripts.Count -gt 0)
+    foreach ($scannedScript in $scannedScripts) {
+        $scannedSource = [System.IO.File]::ReadAllText($scannedScript.FullName)
+        $readOnlyHit = [regex]::Match($scannedSource, "(?im)^[ \t]*\`$($readOnlyNames)[ \t]*=[^=]")
+        Assert-True "$($scannedScript.Name): no read-only automatic variable assignment" `
+            (-not $readOnlyHit.Success)
+    }
+
     # ── Client diagnostics ──────────────────────────────────────────────────
     Write-TestGroup 'Get-AgentClientDiagnostics — host noise vs agent output'
     $captured = @'
