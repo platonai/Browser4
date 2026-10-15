@@ -99,7 +99,7 @@ OpenRouter gives access to many models through one API. `model.name` defaults to
 
 ```properties
 deepseek.api.key=sk-...
-deepseek.model.name=deepseek-v4-flash[1m]
+deepseek.model.name=deepseek-v4-flash
 ```
 
 | Env var               | Property              | Default |
