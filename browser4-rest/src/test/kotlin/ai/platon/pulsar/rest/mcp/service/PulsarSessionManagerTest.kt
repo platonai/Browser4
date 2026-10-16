@@ -6,6 +6,14 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.agentic.context.GenericAgenticContext
+import ai.platon.pulsar.agentic.tools.AttachFailureException
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.api.BrowserManager
+import ai.platon.pulsar.api.BrowserProtocol
+import ai.platon.pulsar.api.model.BrowserSettings
+import ai.platon.pulsar.api.model.BrowserTab
+import ai.platon.pulsar.chrome.PulsarBrowser
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.session.SessionKind
@@ -22,6 +30,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.Mockito
@@ -630,14 +639,17 @@ class PulsarSessionManagerTest {
     fun attachOverADeadBrowserWebSocketFailsLoudly() {
         // The browser-level WebSocket path (Chrome's built-in remote debugging)
         // must fail at attach time when nothing answers on the socket — never
-        // bind a browser that drives nothing.
+        // bind a browser that drives nothing. The failure carries its own code
+        // (deliberately not an IllegalArgumentException, so it never triggers the
+        // signature/help dump).
         val deadPort = java.net.ServerSocket(0).use { it.localPort }
         val endpoint = "ws://127.0.0.1:$deadPort/devtools/browser/8b91cacf-d8aa-4fa3-8b45-687c7de7af8a"
 
-        val failure = assertThrows(IllegalArgumentException::class.java) {
+        val failure = assertThrows(AttachFailureException::class.java) {
             sessionManager.createAttachedSession(cdpEndpoint = endpoint)
         }
 
+        assertEquals(ToolErrorCode.ENDPOINT_UNREACHABLE, failure.code)
         val message = failure.message ?: ""
         assertTrue(message.contains("could not be attached over its browser-level WebSocket"), message)
         assertTrue(message.contains(endpoint), message)
@@ -748,13 +760,64 @@ class PulsarSessionManagerTest {
             browserIdentity = BrowserIdentity("chrome", "Google Chrome", "138.0.0.0"),
         )
 
-        val error = sessionManager.cdpAttachedSessionUnavailable(session)
-        assertNotNull(error)
-        val message = error!!
+        val failure = sessionManager.cdpAttachedSessionUnavailable(session)
+        assertNotNull(failure)
+        val message = failure!!.message
         assertTrue(message.contains("dead-attached"), "message should name the session: $message")
         assertTrue(message.contains("Google Chrome 138.0.0.0"), "message should identify the browser: $message")
         assertTrue(message.contains("Re-attach", ignoreCase = true), "message should advise re-attach: $message")
+        assertEquals(
+            ToolErrorCode.ENDPOINT_UNREACHABLE, failure.code,
+            "a browser that cannot answer its own health check is unreachable"
+        )
         assertEquals(SessionStatus.STOPPED, session.status, "dead attached session must be marked inactive")
+    }
+
+    @Test
+    @DisplayName("the liveness gate blames the dead tab, not the browser, when the browser is alive")
+    fun cdpAttachedGateDistinguishesDeadTabFromLiveBrowser() {
+        // The reported defect: a session whose driven tab was closed externally
+        // was told its browser had been "closed or crashed" while `curl` on the
+        // CDP port answered 200 — so the user hunted for a crash that never
+        // happened (attach-remote-debug#4). A live browser with a dead driver
+        // link is a different fact and needs a different message AND code.
+        val browser = Mockito.mock(Browser::class.java)
+        runBlocking { Mockito.`when`(browser.healthy()).thenReturn(CheckState(0, "Browser is healthy")) }
+
+        val deadDriver = Mockito.mock(WebDriver::class.java)
+        Mockito.`when`(deadDriver.browser).thenReturn(browser)
+        runBlocking {
+            Mockito.`when`(deadDriver.healthy()).thenReturn(
+                CheckState(503, "WebDriver is not open - the connection to the backend tab is lost")
+            )
+        }
+
+        val session = ManagedSession(
+            sessionId = "dead-tab",
+            agenticSession = mockAgenticSession(isActive = true, browser = browser, driver = deadDriver),
+            capabilities = mapOf(),
+            kind = SessionKind.CDP_ATTACHED,
+            browserIdentity = BrowserIdentity("chrome", "Google Chrome", "155.0.0.0"),
+        )
+
+        val failure = sessionManager.cdpAttachedSessionUnavailable(session)
+        assertNotNull(failure)
+        val message = failure!!.message
+        assertEquals(
+            ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS, failure.code,
+            "a live browser with no drivable page is not an unreachable endpoint"
+        )
+        assertTrue(
+            message.contains("still running"),
+            "the browser is alive and the message must say so: $message"
+        )
+        assertFalse(
+            message.contains("no longer reachable"),
+            "the browser was never unreachable, so the message must not claim it was: $message"
+        )
+        assertTrue(message.contains("Google Chrome 155.0.0.0"), message)
+        assertTrue(message.contains("dead-tab"), message)
+        assertEquals(SessionStatus.STOPPED, session.status)
     }
 
     @Test
@@ -783,6 +846,238 @@ class PulsarSessionManagerTest {
 
         // Nothing bound yet — let the normal tool path report its own error.
         assertNull(sessionManager.cdpAttachedSessionUnavailable(session))
+    }
+
+    @Test
+    @DisplayName("re-attach rebuilds the bound driver on the browser it just bound")
+    fun reAttachRebuildsTheBoundDriverOnTheNewlyBoundBrowser() {
+        // The reported defect: re-attach reported success, rebound the browser
+        // wrapper, and left the OLD driver bound — so the session kept failing on
+        // a driver stuck in INIT and the documented recovery could not recover
+        // (attach-remote-debug#1). The session's bound driver must be one built on
+        // the browser this attach bound.
+        val server = cdpStubServer()
+        try {
+            val port = server.address.port
+            val bindings = SessionBindings()
+            val session = mockBindingSession(bindings)
+            Mockito.doReturn(session)
+                .`when`(agenticContext)
+                .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
+
+            val capabilities = mapOf("sessionId" to "reattach-guard")
+            var browserIndex = 0
+            val construction = Mockito.mockConstruction(PulsarBrowser::class.java) { browser, _ ->
+                stubAttachedBrowser(browser, port, browserIndex++)
+            }
+            try {
+                sessionManager.createAttachedSession(
+                    cdpEndpoint = "http://127.0.0.1:$port", capabilities = capabilities
+                )
+                val firstBrowser = construction.constructed()[0]
+
+                // A first attach binds no driver eagerly; the session's first
+                // command builds one on that wrapper. Simulate that driver, its tab
+                // having been closed externally: unhealthy, but still the session's
+                // bound driver.
+                val staleDriver = Mockito.mock(PulsarWebDriver::class.java)
+                Mockito.`when`(staleDriver.browser).thenReturn(firstBrowser)
+                runBlocking {
+                    Mockito.`when`(staleDriver.healthy()).thenReturn(
+                        CheckState(503, "WebDriver is not open - the connection to the backend tab is lost")
+                    )
+                }
+                bindings.driver = staleDriver
+                bindings.browser = firstBrowser
+
+                // The documented recovery: attach again to the same endpoint.
+                sessionManager.createAttachedSession(
+                    cdpEndpoint = "http://127.0.0.1:$port", capabilities = capabilities
+                )
+
+                val reboundBrowser = construction.constructed()[1]
+                val rebound = requireNotNull(bindings.driver) {
+                    "re-attach must leave the session with a usable driver"
+                }
+                assertNotSame(staleDriver, rebound, "the stale driver must not survive the re-attach")
+                assertTrue(rebound is PulsarWebDriver, "the bound driver must be a pulsar driver")
+                val pulsarDriver = rebound as PulsarWebDriver
+                assertSame(
+                    reboundBrowser, pulsarDriver.browser,
+                    "the bound driver must be built on the browser this attach bound"
+                )
+                // The replacement came from a page tab of the NEW wrapper, not from
+                // the wrapper the stale driver was driving.
+                Mockito.verify(reboundBrowser).newDriverForTab(pulsarDriver.chromeTab)
+                // The stale driver's tab is deliberately left open: it may be the
+                // user's visible page, and a re-attach must not cost them a tab.
+                Mockito.verify(staleDriver, Mockito.never()).close()
+            } finally {
+                construction.close()
+            }
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    @DisplayName("closing one attached session of a shared browser detaches instead of tearing it down")
+    fun closingOneSharedAttachedSessionDetachesOnlyThatSession() {
+        // The reported defect: two sessions attached to one browser shared its
+        // browser object, so closing one retired the sibling's driver and the tab
+        // it drove — contradicting the documented session independence
+        // (attach-remote-debug#3). Closing the last one owns the teardown again.
+        val server = cdpStubServer()
+        try {
+            val port = server.address.port
+            val browserManager = Mockito.mock(BrowserManager::class.java)
+            Mockito.`when`(agenticContext.browserManager).thenReturn(browserManager)
+
+            val bindingsA = SessionBindings()
+            val bindingsB = SessionBindings()
+            val sessionA = mockBindingSession(bindingsA)
+            val sessionB = mockBindingSession(bindingsB)
+            Mockito.`when`(sessionA.context).thenReturn(agenticContext)
+            Mockito.`when`(sessionB.context).thenReturn(agenticContext)
+            val created = ArrayDeque(listOf(sessionA, sessionB))
+            Mockito.doAnswer { created.removeFirst() }
+                .`when`(agenticContext).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
+
+            var browserIndex = 0
+            val construction = Mockito.mockConstruction(PulsarBrowser::class.java) { browser, _ ->
+                stubAttachedBrowser(browser, port, browserIndex++)
+            }
+            try {
+                val a = sessionManager.createAttachedSession(
+                    cdpEndpoint = "http://127.0.0.1:$port",
+                    capabilities = mapOf("sessionId" to "shared-a")
+                )
+                val b = sessionManager.createAttachedSession(
+                    cdpEndpoint = "http://127.0.0.1:$port",
+                    capabilities = mapOf("sessionId" to "shared-b")
+                )
+                val browserA = construction.constructed()[0]
+                val browserB = construction.constructed()[1]
+
+                // Each session drives its own tab through its own driver.
+                val driverA = Mockito.mock(PulsarWebDriver::class.java)
+                val driverB = Mockito.mock(PulsarWebDriver::class.java)
+                bindingsA.driver = driverA
+                bindingsA.browser = browserA
+                bindingsB.driver = driverB
+                bindingsB.browser = browserB
+
+                val report = sessionManager.closeSession(a.sessionId)
+                assertNotNull(report)
+                assertTrue(report!!.detachedOnly, "the close must report that it only detached")
+                assertEquals(listOf(b.sessionId), report.sharedWith)
+                // The shared browser object must not be closed...
+                Mockito.verify(browserA, Mockito.never()).close()
+                Mockito.verify(browserManager, Mockito.never())
+                    .closeBrowser(Mockito.any(Browser::class.java) ?: browserA)
+                // ...only the closing session's own driver goes, and that session
+                // releases its bindings so the close that follows cannot reach the
+                // shared browser either.
+                Mockito.verify(driverA).close()
+                Mockito.verify(driverB, Mockito.never()).close()
+                assertNull(bindingsA.driver)
+                assertNull(bindingsA.browser)
+                assertSame(browserB, bindingsB.browser, "the sibling keeps its browser")
+                assertSame(driverB, bindingsB.driver, "the sibling keeps its driver")
+
+                // Last one out: nothing else drives the browser, so the close owns
+                // the teardown again.
+                val lastReport = sessionManager.closeSession(b.sessionId)
+                assertNotNull(lastReport)
+                assertFalse(lastReport!!.detachedOnly)
+                assertTrue(lastReport.sharedWith.isEmpty(), lastReport.sharedWith.toString())
+                Mockito.verify(browserManager).closeBrowser(browserB)
+            } finally {
+                construction.close()
+            }
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    /**
+     * A CDP discovery stub: `/json/version` names a browser and `/json` lists one
+     * page target, which is what the attach verification probe reads.
+     */
+    private fun cdpStubServer(): HttpServer {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/json/version") { ex ->
+            val body = """{"Browser":"Chrome/155.0.0.0","webSocketDebuggerUrl":"ws://127.0.0.1:0/devtools/browser/x"}"""
+            ex.responseHeaders.add("Content-Type", "application/json")
+            ex.sendResponseHeaders(200, body.toByteArray().size.toLong())
+            ex.responseBody.use { it.write(body.toByteArray()) }
+        }
+        server.createContext("/json") { ex ->
+            val body = """[{"id":"t1","type":"page","url":"https://example.com"}]"""
+            ex.responseHeaders.add("Content-Type", "application/json")
+            ex.sendResponseHeaders(200, body.toByteArray().size.toLong())
+            ex.responseBody.use { it.write(body.toByteArray()) }
+        }
+        server.start()
+        return server
+    }
+
+    /**
+     * Stubs one mock attached-browser wrapper: it reports [port] (so two sessions
+     * can be seen to drive the same endpoint) and offers one page tab to bind a
+     * driver to.
+     */
+    private fun stubAttachedBrowser(browser: PulsarBrowser, port: Int, index: Int) {
+        Mockito.`when`(browser.port).thenReturn(port)
+        Mockito.`when`(browser.settings).thenReturn(BrowserSettings())
+        val tab = BrowserTab().apply {
+            id = "tab-$index"; type = "page"; url = "https://example.com/$index"
+        }
+        Mockito.`when`(browser.listTabs()).thenReturn(arrayOf(tab))
+        val raw = Mockito.mock(PulsarWebDriver::class.java)
+        Mockito.`when`(raw.guid).thenReturn("guid-$index")
+        Mockito.`when`(raw.chromeTab).thenReturn(tab)
+        Mockito.`when`(raw.browserProtocol).thenReturn(Mockito.mock(BrowserProtocol::class.java))
+        Mockito.`when`(raw.browser).thenReturn(browser)
+        Mockito.`when`(browser.newDriverForTab(tab)).thenReturn(raw)
+    }
+
+    /**
+     * What one session has bound — the contract the manager actually uses:
+     * `boundDriver` / `boundBrowser` answer with what `bind*` stored, and stop
+     * answering once `unbind*` removed it. Which bean the library's real config
+     * resolves behind those accessors is the library's business; these tests pin
+     * what the manager asks of it.
+     */
+    private class SessionBindings {
+        var driver: WebDriver? = null
+        var browser: Browser? = null
+    }
+
+    /**
+     * A session whose binding contract is deterministic, so a test can hand it a
+     * stale driver and observe exactly which driver it is left holding.
+     */
+    private fun mockBindingSession(bindings: SessionBindings): AgenticSession {
+        val anyDriver = Mockito.mock(WebDriver::class.java)
+        val anyBrowser = Mockito.mock(PulsarBrowser::class.java)
+        val session = Mockito.mock(GenericAgenticSession::class.java)
+        Mockito.`when`(session.isActive).thenReturn(true)
+        Mockito.`when`(session.boundDriver).thenAnswer { bindings.driver }
+        Mockito.`when`(session.boundBrowser).thenAnswer { bindings.browser }
+        Mockito.doAnswer { bindings.driver = null }
+            .`when`(session).unbindDriver(Mockito.any(WebDriver::class.java) ?: anyDriver)
+        Mockito.doAnswer { bindings.browser = null }
+            .`when`(session).unbindBrowser(Mockito.any(Browser::class.java) ?: anyBrowser)
+        Mockito.doAnswer { invocation ->
+            val driver = invocation.getArgument<WebDriver>(0)
+            bindings.driver = driver
+            bindings.browser = driver.browser
+        }.`when`(session).bindDriver(Mockito.any(WebDriver::class.java) ?: anyDriver)
+        Mockito.doAnswer { invocation ->
+            bindings.browser = invocation.getArgument<Browser>(0)
+        }.`when`(session).bindBrowser(Mockito.any(Browser::class.java) ?: anyBrowser)
+        return session
     }
 
     private fun mockAgenticSession(

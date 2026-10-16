@@ -487,7 +487,10 @@ class AgentToolManager constructor(
                 ?.takeIf { it.isNotEmpty() }?.toIntOrNull()
         val resolved = when {
             tabId != null -> browser.drivers[tabId]
-            index != null -> browser.listDrivers().filterIsInstance<WebDriver>().getOrNull(index)
+            // The same stable creation order BrowserToolExecutor.listTabs numbers
+            // and resolveTabDriver resolves, so the index the caller read from a
+            // listing addresses the tab it was switched to.
+            index != null -> TabActivity.orderedTabDrivers(browser).getOrNull(index)
             else -> null
         }
         if (resolved != null) {

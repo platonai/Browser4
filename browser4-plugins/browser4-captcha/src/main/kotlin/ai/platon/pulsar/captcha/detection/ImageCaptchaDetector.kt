@@ -47,11 +47,15 @@ open class ImageCaptchaDetector(val conf: ImmutableConfig) : CaptchaDetector {
             val imageSelector = parsed["imageSelector"] as? String
             val inputSelector = parsed["inputSelector"] as? String
 
+            // The image probe reports one best candidate image, so the widget count
+            // is always 1 — the key is still carried for shape parity with the
+            // widget detectors (see issue 123037#8).
             CaptchaDetectionResult.found(
                 captchaType = CaptchaType.IMAGE,
                 siteKey = null,
                 selector = imageSelector,
                 confidence = 0.7f,
+                widgetCount = 1,
                 metadata = mapOf(
                     "imageSelector" to (imageSelector ?: ""),
                     "inputSelector" to (inputSelector ?: "")

@@ -33,6 +33,7 @@ import java.util.Queue
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.mockito.Mockito
@@ -391,6 +392,87 @@ class SystemStatusControllerTest {
         @Suppress("UNCHECKED_CAST")
         val items = result["items"] as List<*>
         assertTrue(items.isEmpty())
+    }
+
+    @Test
+    @DisplayName("tabs endpoint marks the first tab active when no front driver was set")
+    fun tabsEndpointFallsBackToFirstDriverForActiveFlag() = runBlocking {
+        // A freshly opened managed session never called bringToFront(), so
+        // frontDriver is null. Every tab used to report active=false, which broke
+        // `.pages[] | select(.active)` on the CLI side.
+        val browser = Mockito.mock(AbstractBrowser::class.java)
+        val first = Mockito.mock(AbstractWebDriver::class.java)
+        val second = Mockito.mock(AbstractWebDriver::class.java)
+        Mockito.`when`(first.guid).thenReturn("tab-1")
+        Mockito.`when`(second.guid).thenReturn("tab-2")
+        runBlocking { Mockito.`when`(first.title()).thenReturn("Example") }
+        runBlocking { Mockito.`when`(first.currentUrl()).thenReturn("https://example.com/after-redirect") }
+        runBlocking { Mockito.`when`(second.title()).thenReturn("Other") }
+        runBlocking { Mockito.`when`(second.currentUrl()).thenReturn("https://example.com/other") }
+        runBlocking { Mockito.`when`(browser.listDrivers()).thenReturn(listOf(first, second)) }
+        Mockito.`when`(browser.frontDriver).thenReturn(null)
+        val session = managedSession("session-1", browser = browser)
+
+        val result = controller(sessions = listOf(session)).tabs(sessionId = null)
+
+        @Suppress("UNCHECKED_CAST")
+        val items = result["items"] as List<Map<String, Any?>>
+        @Suppress("UNCHECKED_CAST")
+        val tabs = items[0]["tabs"] as List<Map<String, Any?>>
+        assertEquals(2, tabs.size)
+        assertEquals(true, tabs[0]["active"], "the only/first tab of a managed session must be active")
+        assertEquals(false, tabs[1]["active"])
+        // The reported address is the live one the tab is really on.
+        assertEquals("https://example.com/after-redirect", tabs[0]["url"])
+    }
+
+    @Test
+    @DisplayName("tabs endpoint keeps the front driver as the active tab when it is set")
+    fun tabsEndpointPrefersFrontDriverWhenSet() = runBlocking {
+        val browser = Mockito.mock(AbstractBrowser::class.java)
+        val first = Mockito.mock(AbstractWebDriver::class.java)
+        val second = Mockito.mock(AbstractWebDriver::class.java)
+        Mockito.`when`(first.guid).thenReturn("tab-1")
+        Mockito.`when`(second.guid).thenReturn("tab-2")
+        runBlocking { Mockito.`when`(first.title()).thenReturn("First") }
+        runBlocking { Mockito.`when`(first.currentUrl()).thenReturn("https://example.com/1") }
+        runBlocking { Mockito.`when`(second.title()).thenReturn("Second") }
+        runBlocking { Mockito.`when`(second.currentUrl()).thenReturn("https://example.com/2") }
+        runBlocking { Mockito.`when`(browser.listDrivers()).thenReturn(listOf(first, second)) }
+        Mockito.`when`(browser.frontDriver).thenReturn(second)
+        val session = managedSession("session-1", browser = browser)
+
+        val result = controller(sessions = listOf(session)).tabs(sessionId = null)
+
+        @Suppress("UNCHECKED_CAST")
+        val items = result["items"] as List<Map<String, Any?>>
+        @Suppress("UNCHECKED_CAST")
+        val tabs = items[0]["tabs"] as List<Map<String, Any?>>
+        assertEquals(false, tabs[0]["active"])
+        assertEquals(true, tabs[1]["active"])
+    }
+
+    @Test
+    @DisplayName("tabs endpoint falls back to the first tab when the front driver is not in the registry")
+    fun tabsEndpointFallsBackWhenFrontDriverIsForeign() = runBlocking {
+        val browser = Mockito.mock(AbstractBrowser::class.java)
+        val tab = Mockito.mock(AbstractWebDriver::class.java)
+        val foreign = Mockito.mock(AbstractWebDriver::class.java)
+        Mockito.`when`(tab.guid).thenReturn("tab-1")
+        Mockito.`when`(foreign.guid).thenReturn("tab-from-another-browser")
+        runBlocking { Mockito.`when`(tab.title()).thenReturn("Example") }
+        runBlocking { Mockito.`when`(tab.currentUrl()).thenReturn("https://example.com") }
+        runBlocking { Mockito.`when`(browser.listDrivers()).thenReturn(listOf(tab)) }
+        Mockito.`when`(browser.frontDriver).thenReturn(foreign)
+        val session = managedSession("session-1", browser = browser)
+
+        val result = controller(sessions = listOf(session)).tabs(sessionId = null)
+
+        @Suppress("UNCHECKED_CAST")
+        val items = result["items"] as List<Map<String, Any?>>
+        @Suppress("UNCHECKED_CAST")
+        val tabs = items[0]["tabs"] as List<Map<String, Any?>>
+        assertEquals(true, tabs[0]["active"], "a stale/foreign front driver must not clear every active flag")
     }
 
     @Test

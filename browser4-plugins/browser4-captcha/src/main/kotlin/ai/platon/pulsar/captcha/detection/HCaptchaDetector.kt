@@ -47,12 +47,14 @@ open class HCaptchaDetector(val conf: ImmutableConfig) : CaptchaDetector {
             if (!present) return CaptchaDetectionResult.NOT_PRESENT
 
             val siteKey = parsed["siteKey"] as? String
+            val widgetCount = (parsed["widgetCount"] as? Number)?.toInt() ?: 1
 
             CaptchaDetectionResult.found(
                 captchaType = CaptchaType.HCAPTCHA,
                 siteKey = siteKey,
                 selector = ".h-captcha",
-                confidence = 0.95f
+                confidence = 0.95f,
+                widgetCount = widgetCount
             )
         } catch (e: Exception) {
             logger.trace("hCaptcha detection error: {}", e.message)

@@ -69,11 +69,24 @@ Convert the current browser page to a Markdown file.
 |---|---|---|---|---|
 | `outputPath` | `String` | No | `downloads/markdown` | Output directory |
 
-Returns: `{filePath, title, url, charCount, linkCount, imageCount, durationMs}`
+Returns: `{filePath, title, url, charCount, linkCount, internalLinkCount, imageCount, durationMs}`
+
+| Field | Description |
+|---|---|
+| `filePath` | Absolute path of the saved `.md` file |
+| `title` | Page title (`document.title`) |
+| `url` | Page URL |
+| `charCount` | Characters written to the file |
+| `linkCount` | Markdown links `[text](url)` in the generated file (images excluded) |
+| `internalLinkCount` | Internal (same-domain) links discovered on the page — the same count `markdown.discoverLinks` reports as `internalLinks` |
+| `imageCount` | Images referenced in the generated file |
+| `durationMs` | Conversion duration |
 
 ### `markdown.crawl`
 
 Crawl the current site starting from the current page. Follows internal same-domain links using BFS order. Each page is saved as a `.md` file.
+
+The crawl drives the session's active tab page by page and navigates that tab back to the page it started from when the crawl finishes (`entryUrl` / `tabRestored`); the reported counters partition, so `pagesCrawled + pagesFailed == pagesAttempted == pageResults.length`.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -81,7 +94,9 @@ Crawl the current site starting from the current page. Follows internal same-dom
 | `maxPages` | `Int` | No | config value (50) | Maximum pages to crawl |
 | `outputPath` | `String` | No | config value | Output directory |
 
-Returns: `CrawlSummary` — `{pagesCrawled, pagesFailed, totalLinksDiscovered, totalImages, durationMs, pageResults[]}`
+Returns: `CrawlSummary` — `{pagesAttempted, pagesCrawled, pagesFailed, totalLinksDiscovered, totalImages, durationMs, entryUrl, tabRestored, pageResults[]}`
+
+Each `pageResults[]` entry: `{url, title, filePath, charCount, linkCount, internalLinkCount, success, error}`
 
 ### `markdown.crawlFrom`
 
@@ -98,12 +113,14 @@ Same as `markdown.crawl` but explicitly navigates to a start URL first.
 
 Fetch a single URL via direct HTTP and convert its HTML to Markdown. Does NOT use the browser — suitable for static pages. For JavaScript-rendered pages, use `markdown.convert` instead.
 
+Uses the same output conventions as `markdown.convert`: YAML front matter, the page title as H1, and a filename derived from the title (URL as fallback). The title comes from `<title>`, then the first `<h1>`, then `og:title`.
+
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `url` | `String` | Yes | — | URL to fetch and convert |
 | `outputPath` | `String` | No | config value | Output directory |
 
-Returns: `{filePath, title, url, linkCount, success, error}`
+Returns: `{filePath, title, url, charCount, linkCount, success, error}` — `linkCount` is the number of markdown links in the saved file.
 
 ### `markdown.discoverLinks`
 
@@ -114,6 +131,8 @@ No parameters.
 Returns: `{totalLinks, internalLinks, externalLinks, internalUrls[], externalUrls[], links[]}`
 
 Each link: `{href, text, resolvedUrl, isInternal}`
+
+Fragment-only anchors (`#section`, `#/route`) stay inside the current document and the page's own URL is not a discovery, so neither is reported — the counts are links to *other* pages, not the raw `<a href>` element count.
 
 ## Architecture
 
@@ -150,15 +169,15 @@ browser4-markdown/
 #### Browser-based conversion (`markdown.convert`, `markdown.crawl`)
 
 1. **Markdown extraction** runs entirely in the browser's DOM via CDP `Runtime.evaluate`. A JavaScript probe walks the DOM in document order, converting headings, paragraphs, images, tables, lists, code blocks, and blockquotes directly to Markdown syntax in a single round-trip.
-2. **Link discovery** also runs via CDP evaluation — finds all `<a href>` elements, resolves relative URLs against the page URL, and flags same-domain (internal) links for crawling.
-3. **Crawling** uses BFS with a visited-set to avoid duplicates. The browser navigates to each page sequentially, extracts markdown, saves to disk, discovers links, and enqueues unvisited internal links up to the configured depth/page limits.
+2. **Link discovery** also runs via CDP evaluation — finds all `<a href>` elements, resolves relative URLs against the page URL, and flags same-domain (internal) links for crawling. Fragment-only anchors (`#section`) and the page's own URL are skipped: they are in-document navigation, not links to another page.
+3. **Crawling** uses BFS with a visited-set to avoid duplicates. The browser navigates to each page sequentially, extracts markdown, saves to disk, discovers links, and enqueues unvisited internal links up to the configured depth/page limits. When the crawl ends, the session's active tab is navigated back to the page it started from.
 4. **Output files** are named from the page title (sanitized for filesystem compatibility) with optional YAML front matter containing metadata.
 
 #### HTTP-based fetching (`markdown.fetch`)
 
 1. Fetches raw HTML via OkHttp (independent of the browser).
 2. Parses with Jsoup to extract the same structural elements.
-3. Converts to Markdown using a Kotlin-based renderer — no JavaScript execution.
+3. Converts to Markdown using a Kotlin-based renderer — no JavaScript execution — deriving the title from `<title>`, the first `<h1>`, or `og:title`.
 4. Best for static sites where JavaScript rendering is not needed.
 
 ## Dependencies

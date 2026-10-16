@@ -19,6 +19,7 @@ import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.images.config.ImageConfig
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.module.kotlin.readValue
 
@@ -49,7 +50,11 @@ open class ImageDetector(
         @JsonProperty("resolvedUrl")
         val resolvedUrl: String? = null,
 
-        /** MIME type if available from type attribute or Content-Type */
+        /** Declared MIME type (a `type` attribute on `<source>`/`<link>`, or a
+         * `data:` URI header), else one inferred from the URL extension. Only the
+         * response `Content-Type` at download time is authoritative. Always
+         * present in the serialized form — a consumer sees a stable schema. */
+        @get:JsonInclude(JsonInclude.Include.ALWAYS)
         @JsonProperty("type")
         val type: String? = null,
 
@@ -91,6 +96,11 @@ open class ImageDetector(
     /**
      * Scan the current page for all image sources.
      *
+     * Each entry's `type` is resolved ([ImageUtils.guessMimeType]) before the
+     * result is returned, and config dimension filters use the rendered
+     * (layout) size, keeping sources whose size is unknown — see
+     * [ImageDimensionFilter].
+     *
      * @param driver the WebDriver connected to the page
      * @return list of detected image sources, filtered by config, or empty list on error
      */
@@ -106,6 +116,9 @@ open class ImageDetector(
 
     /**
      * Apply config-based filters to an image source.
+     *
+     * Dimension filters compare the rendered size and never drop a source whose
+     * size is unknown on the filtered axis ([ImageDimensionFilter]).
      */
     private fun passesFilter(source: ImageSource): Boolean {
         // Skip data URIs if configured
@@ -115,16 +128,7 @@ open class ImageDetector(
         if (config.skipSvg && source.isSvg) return false
 
         // Dimension filtering
-        if (config.minWidth > 0) {
-            val w = source.naturalWidth ?: source.width ?: 0
-            if (w < config.minWidth) return false
-        }
-        if (config.minHeight > 0) {
-            val h = source.naturalHeight ?: source.height ?: 0
-            if (h < config.minHeight) return false
-        }
-
-        return true
+        return ImageDimensionFilter.passes(source, config.minWidth, config.minHeight, DimensionBasis.RENDERED)
     }
 
     internal fun parseResult(result: Any?): List<ImageSource> {
@@ -133,7 +137,9 @@ open class ImageDetector(
             val json = result.toString()
             if (json.isBlank() || json == "[]") return emptyList()
             @Suppress("UNCHECKED_CAST")
-            pulsarObjectMapper().readValue<List<ImageSource>>(json).distinctBy { it.resolvedUrl ?: it.srcUrl ?: "" }
+            pulsarObjectMapper().readValue<List<ImageSource>>(json)
+                .distinctBy { it.resolvedUrl ?: it.srcUrl ?: "" }
+                .map { it.copy(type = it.type ?: ImageUtils.guessMimeType(it.resolvedUrl ?: it.srcUrl)) }
         } catch (e: Exception) {
             logger.debug("Failed to parse image detection result: {}", e.message)
             emptyList()
@@ -154,6 +160,11 @@ open class ImageDetector(
          * - `<link rel="icon">`, `<link rel="apple-touch-icon">`
          * - `<meta property="og:image">`, `<meta name="twitter:image">`
          * - `<image>` elements in inline SVG
+         *
+         * The probe reports a `type` only where the DOM declares one
+         * (`<source>`/`<link>` type attributes, `data:` URIs); [parseResult]
+         * infers the rest from the URL extension so the documented field is
+         * populated for `<img>`, background and meta entries too.
          */
         // Uses a named function declaration + invocation pattern (not IIFE)
         // to avoid breakage by the JS confuser pipeline (JsUtils.toCDPCompatibleExpression

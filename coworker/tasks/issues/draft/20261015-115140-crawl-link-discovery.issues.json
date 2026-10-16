@@ -1,0 +1,241 @@
+{
+  "meta": {
+    "date": "20261015-115140",
+    "source": "20261015-115140-crawl-link-discovery.issues.json",
+    "mode": "dev",
+    "scenario": "crawl-link-discovery"
+  },
+  "background": {
+    "executionContext": "**Environment:** Repo root `D:/workspace/Browser4/Browser4-4.14`, Git Bash on Windows 11. Backend was already running in dev mode (health UP, port 8282, local bundle matches checkout 4.14.1-SNAPSHOT) — no installation or setup friction. All commands used the required `./b4w.ps1` invocation; no source files were modified.\n\n**Preparation:** `./b4w.ps1 help`, read `skills/browser4-cli/SKILL.md` and `references/crawl.md` in full, `./b4w.ps1 crawl --help`, `./b4w.ps1 status`, `AGENTS.md`.\n\n**Main sequence (17 browser4-cli invocations, 9 of them full crawls + 5 pre-flight probes):**\n\n1. `goto \"http://books.toscrape.com/\"` — auto-opened session `9bfa54f3-…` (headless), redirected to https; then two `eval` calls to enumerate `a[href*='catalogue']` hrefs and confirm document order (sidebar categories first).\n2. Crawls (each ~5–46 s; the CLI reported progress every ~10 s):\n   - `crawl \"<url>\" -d 1 -ol \"a[href*='catalogue']\" -olp \".*catalogue.*\" -tl 10` → table/listing, exit 0 (tasks `38d6aced`).\n   - `… --format csv -o crawl2.csv` → **refused, exit 1, no file** (\"Add --sql, or drop --format…\"); same refusal with a `.txt` filename; with `-o` omitted → warning on stderr + plain listing, exit 0.\n   - `… --sql @crawl-query.sql --format csv -o crawl2.csv` → first attempt used `DOM_FIRST_TEXT(dom,'title')` (empty: `title` is not inside the `body` row scope) → exit 6 `ok: 0, failed: 10`; `crawl result <id> --verbose` gave the exact per-page reason. Fixed to `DOM_DOC_TITLE(dom)` → exit 0, 10 filled rows.\n   - Same crawl with `--format table` and `--format json` → aligned table / JSON array, both exit 0.\n   - `--json crawl \"<url>\" -d 1 …` → single-line JSON envelope (3 077 bytes), exit 0.\n   - `crawl --seed-file seed-urls.txt -d 0` (3 book URLs + a `#` comment line) → 3 pages, exit 0.\n3. `crawl list` (showed 7 tasks, \"Pruned 29 completed tasks from local tracking\"), `crawl status <partial-failure id>` (raw record; stderr summary says \"OK\"), `crawl list --status failed` (no match — see Issue 3).\n4. Output-matrix probes with a 1-URL seed file: `--format csv` / `--format json` (± `-o`), and `--json -o probe-json-o.json` (envelope → stdout, plain listing → the `.json` file — Issue 2).\n\n**Decisions / workarounds:** dropped leading-slash values from `-olp` to avoid MSYS path rewriting (per SKILL.md warning); wrote the X-SQL query to a file and used `@file` to avoid quoting issues; used `crawl result --verbose` to diagnose the empty-extraction run; used the global `--json` for JSON output without `--sql`.\n\n---",
+    "workarounds": "",
+    "task": "All nine requested steps were executed against `http://books.toscrape.com/` (which 301-redirects to `https://`). Every crawl completed; the intended artifacts were produced.\n\n| # | Step | Outcome |\n|---|------|---------|\n| 1 | Depth-1 crawl | ✔ Task `38d6aced-…-ac442e7f0887`, 10 pages found, 10 links discovered, ~37 s, exit 0 |\n| 2 | `--out-link-selector` (catalogue links) | ✔ `-ol \"a[href*='catalogue']\"` — matched the site's relative `catalogue/...` hrefs |\n| 3 | `--out-link-pattern \".*catalogue.*\"` | ✔ Applied without shell mangling (no leading `/`) |\n| 4 | `--top-links 10` | ✔ Exactly `10 link(s) discovered`; default would have been 20 |\n| 5 | Table-format output | ✔ Default output = `depth=1 \\| url \\| title` listing; an aligned table was also produced via `--format table --sql` |\n| 6 | CSV to file via `--output` | ✔ **required adding `--sql`** — plain `--format csv -o file` is refused pre-flight (exit 1) |\n| 7 | JSON output | ✔ `--format json` (with `--sql`) → pretty JSON array; the global `--json` flag also yields a JSON envelope without `--sql` |\n| 8 | Seed file + `crawl --seed-file` | ✔ 3 known book detail URLs (`a-light-in-the-attic_1000`, `tipping-the-velvet_999`, `soumission_998`), depth 0, 3 pages, exit 0, ~5 s |\n| 9 | `crawl list` | ✔ 7 tracked tasks at that point, all \"completed\"; the extraction-failure run (exit 6) is mislabeled as completed (Issue 3) |\n\nThe CSV artifact (`crawl2.csv`) contains 10 rows with `url,title`; the JSON artifact (`crawl3.json.out`) contains the same 10 rows as objects. All scratch artifacts are under `.test-sessions/20261015T0901431699046Z/`.\n\n**Fidelity note:** steps 6–7 as literally written (\"same crawl, CSV/JSON via `--format`, save with `--output`\") do not work without `--sql` — this build's `--format csv|json` renders only X-SQL result sets. I satisfied the task's intent by adding a minimal X-SQL query (`crawl-query.sql`: `SELECT DOM_BASE_URI(dom) AS url, DOM_DOC_TITLE(dom) AS title FROM DOM_LOAD_AND_SELECT(@url, ':root')`). Also worth noting: with `-ol \"a[href*='catalogue']\"` + `--top-links 10`, the budget is filled by the sidebar's *category* links (first in document order), so no book *detail* page is ever crawled — expected for the literal selector, but surprising if you read \"top links\" as \"most relevant links\".",
+    "commands": "**Preparation:** `./b4w.ps1 help`, read `skills/browser4-cli/SKILL.md` and `references/crawl.md` in full, `./b4w.ps1 crawl --help`, `./b4w.ps1 status`, `AGENTS.md`.\n\n**Main sequence (17 browser4-cli invocations, 9 of them full crawls + 5 pre-flight probes):**\n\n1. `goto \"http://books.toscrape.com/\"` — auto-opened session `9bfa54f3-…` (headless), redirected to https; then two `eval` calls to enumerate `a[href*='catalogue']` hrefs and confirm document order (sidebar categories first).\n2. Crawls (each ~5–46 s; the CLI reported progress every ~10 s):\n   - `crawl \"<url>\" -d 1 -ol \"a[href*='catalogue']\" -olp \".*catalogue.*\" -tl 10` → table/listing, exit 0 (tasks `38d6aced`).\n   - `… --format csv -o crawl2.csv` → **refused, exit 1, no file** (\"Add --sql, or drop --format…\"); same refusal with a `.txt` filename; with `-o` omitted → warning on stderr + plain listing, exit 0.\n   - `… --sql @crawl-query.sql --format csv -o crawl2.csv` → first attempt used `DOM_FIRST_TEXT(dom,'title')` (empty: `title` is not inside the `body` row scope) → exit 6 `ok: 0, failed: 10`; `crawl result <id> --verbose` gave the exact per-page reason. Fixed to `DOM_DOC_TITLE(dom)` → exit 0, 10 filled rows.\n   - Same crawl with `--format table` and `--format json` → aligned table / JSON array, both exit 0.\n   - `--json crawl \"<url>\" -d 1 …` → single-line JSON envelope (3 077 bytes), exit 0.\n   - `crawl --seed-file seed-urls.txt -d 0` (3 book URLs + a `#` comment line) → 3 pages, exit 0.\n3. `crawl list` (showed 7 tasks, \"Pruned 29 completed tasks from local tracking\"), `crawl status <partial-failure id>` (raw record; stderr summary says \"OK\"), `crawl list --status failed` (no match — see Issue 3).\n4. Output-matrix probes with a 1-URL seed file: `--format csv` / `--format json` (± `-o`), and `--json -o probe-json-o.json` (envelope → stdout, plain listing → the `.json` file — Issue 2).\n\n**Decisions / workarounds:** dropped leading-slash values from `-olp` to avoid MSYS path rewriting (per SKILL.md warning); wrote the X-SQL query to a file and used `@file` to avoid quoting issues; used `crawl result --verbose` to diagnose the empty-extraction run; used the global `--json` for JSON output without `--sql`.\n\n---"
+  },
+  "assessment": {
+    "completionStatus": "Successful — all 9 task steps completed and produced their artifacts (table listing, crawl2.csv with 10 url/title rows, JSON array, 3-URL seed-file crawl, crawl list). Steps 6 and 7 required the documented --sql addition because plain --format csv/json with --output is refused; step 7 also has a no-SQL alternative (--json). The single non-zero exit (6) came from an intentionally bad test query and was correctly reported.",
+    "successRate": "90% — 9/9 steps delivered, but step 6 failed on its literal first attempt (refusal) and needed re-running with --sql, and step 5's 'table' was the plain listing until --format table --sql was added.",
+    "issuesFound": 6,
+    "majorBlockers": "None. The only hard stop — the pre-flight refusal of --format csv/json with --output and no --sql — was non-destructive, exited 1 without writing a file, and named its own fix ('Add --sql'), which worked on the first retry.",
+    "mostConfusingAspects": "1) A plain crawl cannot emit CSV/JSON through --format unless --sql is added, yet the global --json flag does produce JSON — and neither the help nor the refusal message connects these paths; --json combined with -o silently writes a non-JSON listing into the .json file. 2) --top-links truncates in document order, so the 'catalogue' selector spends the whole budget on sidebar category links and no book detail page is ever crawled — the pattern matches everything, which hides why. 3) 'peak 1 unit(s) in flight' for a depth-1 crawl with the default --parallel reads like the flag is broken. 4) A crawl that exited 6 appears as 'completed' in crawl list and never matches --status failed. 5) An all-empty X-SQL extraction produces '10 rows extracted' and 'failed: 10' on adjacent stdout lines, with the reason only in a follow-up command.",
+    "mostValuableImprovements": "1) Reconcile the crawl help/reference with the real --format contract (warn on stdout, refuse with --output, non-zero exit) and mention the --json alternative in both the help and the refusal message. 2) Make the --json/-o combination either write the envelope or refuse — never silently write a plain-text file under a .json name. 3) Preserve or recompute the partial-failure label in crawl list and let --status failed match it. 4) Surface per-page extraction failure reasons in the crawl's own output instead of requiring crawl result --verbose. 5) Explain parallel units (seed rounds) in the --parallel help and completion report.",
+    "usabilityRating": 8
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Global --json combined with --output writes a non-JSON plain-text listing into the output file (guardrail bypassed)",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 --json crawl --seed-file probe-seed.txt -d 0 -o probe-json-o.json\n(the seed file holds one URL: http://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html)"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The output file named .json should contain JSON (the envelope that --json produces on stdout), or the command should refuse/warn like the --format json -o path does. The help states --format csv|json with --output but without --sql is refused precisely because such a file 'lies about its content'."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Exit 0 and no warning: the JSON envelope is printed to stdout, while the -o file receives the human-readable listing ('Crawl completed. 1 page found.' / 'depth=0 | <url> | <title>' / 'Parallelism: …') — a .json file that is not JSON. The identical content is refused (exit 1, no file) when requested via --format json -o x.json."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The guardrail in handle_crawl only inspects the --format option (main.rs:18438: `if !has_sql && (format == \"csv\" || format == \"json\")`) and never consults the global --json flag or the output filename. The -o writer for the non-SQL path unconditionally writes the plain listing (write_crawl_output), so the two JSON output channels behave inconsistently."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:18433 (format guardrail in handle_crawl) and cli/browser4-cli/src/main.rs:18230 (write_crawl_output)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Apply the same guardrail to the global --json flag: refuse `--json … -o <file>` without --sql, or better, write the JSON envelope into the file instead of the listing.\n- Alternatively emit a warning naming the mismatch (like the stdout path of --format csv/json already does).\n- Add an output-matrix unit test covering {--json, --format json} × {-o, stdout} × {--sql, no --sql} to lock the contract down.\n- Update the --json help wording ('Emit JSON to stdout only') to state what -o does in that combination."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "crawl --help says --format csv/json 'has no effect without --sql', but with --output it is a hard refusal; refusal omits the working --json alternative",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 crawl \"http://books.toscrape.com/\" -d 1 -ol \"a[href*='catalogue']\" -olp \".*catalogue.*\" -tl 10 --format csv -o out.csv\n./b4w.ps1 crawl \"…\" --format json -o out.json\n./b4w.ps1 crawl \"…\" --format csv          # no -o\n./b4w.ps1 crawl --help                     # documents '--format … Has no effect without --sql'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Help should describe the real contract, and the recovery advice should name every supported path. For a JSON listing of a plain crawl, `--json` (global flag) is a supported alternative: `./b4w.ps1 --json crawl \"<url>\" -d 1 -ol \"a[href*='catalogue']\" -olp \".*catalogue.*\" -tl 10` returns a clean JSON envelope with the pages array."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Without -o: warning on stderr ('Warning: --format CSV has no effect without --sql…'), crawl proceeds as plain text, exit 0. With -o: pre-flight refusal, exit 1, no file written — regardless of the filename extension (a .txt name is refused too). The refusal message says only 'Add --sql, or drop --format (and use a non-CSV filename)' and never mentions the --json flag, which solves the JSON case without X-SQL."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The runtime guardrail (added at main.rs:18433-18453: warn on stdout because there is no misleading file; refuse when -o would create one) is stricter than the help text, which was not updated and still claims 'no effect'. The refusal message also predates/ignores the global --json envelope path (verified working for both depth 0 and depth 1 crawls), and crawl.md's output-format section repeats only 'Output format: json, csv, or table'."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/commands.rs:4223 (crawl --format help text) and cli/browser4-cli/src/main.rs:18438 (refusal message)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Rewrite the --format help to the actual contract: on stdout it warns and prints the plain listing; combined with --output and without --sql it exits non-zero and writes nothing.\n- In the refusal message, add the JSON alternative for the JSON case: 'use the global --json flag (before the command) for a JSON page listing, or add --sql for X-SQL result sets'.\n- Mention the global --json path in the crawl --help 'Notes' and in skills/browser4-cli/references/crawl.md (Output formats / Page listing sections), which currently documents --json only in the Modes paragraph.\n- Consider allowing --format json on the -o path by writing the same envelope --json produces, eliminating the gap."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "crawl list reports a partially failed crawl (exit 6) as 'completed'; --status failed never matches it",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 crawl \"http://books.toscrape.com/\" -d 1 -ol \"a[href*='catalogue']\" -olp \".*catalogue.*\" -tl 10 --sql \"SELECT DOM_BASE_URI(dom) AS url, DOM_FIRST_TEXT(dom,'title') AS title FROM DOM_LOAD_AND_SELECT(@url,'body')\" --format csv -o out.csv   # exits 6, stderr: 'crawl completed with errors: ok: 0, failed: 10'\n./b4w.ps1 crawl list                    # the task's STATUS column shows 'completed'\n./b4w.ps1 crawl list --status failed    # 'No crawl tasks matching status filter 'failed'.'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The task exit code (6, PartialFailure) is numeric truth; the history view should preserve it. crawl.md promises the local task is stored as 'partial failure (<ok> of <pages> pages ok)', and `crawl list --status failed` should find such tasks."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The STATUS column shows 'completed' and the failed filter matches nothing, so a user auditing crawl history cannot tell which runs were clean. The documented 'partial failure (0 of 10 pages ok)' label never surfaces anywhere: `crawl status <id>` prints the raw backend record (status OK) plus the stderr summary 'OK — 10 page(s) found'; only `crawl result <id> --verbose` reveals the per-page extractionError rows."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Two interacting gaps: (1) handle_crawl writes the richer label locally (main.rs:19212-19216, update_async_task_status sets last_status = 'partial failure (0 of 10 pages ok)'), but handle_crawl_list unconditionally overwrites last_status with the backend-derived friendly status on every refresh (main.rs:16889-16900: friendly_crawl_status('OK') → 'completed'); (2) even if preserved, crawl_status_filter_matches('failed', 'partial failure …') returns false since the label neither starts with 'failed' nor contains 'error'/'timeout' (main.rs:15597-15608)."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:16886 (handle_crawl_list status refresh), cli/browser4-cli/src/main.rs:19210 (partial-failure label write), cli/browser4-cli/src/main.rs:15597 (crawl_status_filter_matches)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- When refreshing a tracked crawl in handle_crawl_list, do not downgrade a locally recorded partial-failure label: either keep it, or recompute it from the result record (count pages with extractionError / 0-byte content / failedPages) and store e.g. 'failed (partial: 0 of 10 pages ok)'.\n- Make crawl_status_filter_matches recognise the partial-failure label ('partial' → matches 'failed').\n- Optionally add PAGES OK/FAILED columns to `crawl list` from pages_found/pages_failed so the distinction is visible without a filter.\n- Add a regression test: crawl that exits 6 → next `crawl list` shows the failed accounting and matches `--status failed` (alongside the existing tests at main.rs:40181+)."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "stdout prints '10 pages crawled, 10 rows extracted.' on a run whose every page failed extraction, right before 'Summary: ok: 0, failed: 10'",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Same run as Issue 3's reproduction (X-SQL query returning empty fields on every page). stdout tail: '10 pages crawled, 10 rows extracted.' then 'Summary: ok: 0, failed: 10'; stderr: 'crawl completed with errors: ok: 0, failed: 10. Use crawl result <id> or --verbose for per-page diagnostics.'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The stdout summary should not read as plain success when no page produced usable content; the cause should be visible without a second command."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Two adjacent stdout lines look contradictory ('10 rows extracted' vs 'failed: 10'). The actual reason — 'The X-SQL extracted no data: every field is empty for <url>' — exists per page but is only reachable via `crawl result <id> --verbose` (or the crawl's own --verbose flag)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "In handle_crawl the success-path summary is printed before the failure accounting (main.rs:19177-19198), and crawl_failure_counts folds extractionErrors into failed_total without reflecting them in the 'N rows extracted' wording; the per-page extractionError strings are only emitted by the result-record printer."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:19177 (page summary print) and cli/browser4-cli/src/main.rs:19197 (crawl_failure_counts accounting)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- When failed_total > 0, adjust the rows line, e.g. '10 rows extracted (10 pages with empty/failed extraction)' before the Summary line.\n- Echo the first per-page extractionError reason (truncated) in the stderr error message next to the 'use crawl result …' hint.\n- Ensure the hint mentions that --verbose on the crawl itself prints the reasons inline (it does, but the wording currently only points at `crawl result`)."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "crawl --parallel help and the completion report use different vocabulary; 'peak 1 unit(s) in flight' is unexplained",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 crawl \"http://books.toscrape.com/\" -d 1 -ol \"a[href*='catalogue']\" -olp \".*catalogue.*\" -tl 10\n# header: 'Parallel tabs: server default'; footer: 'Parallelism: budget 4 tab(s), peak 1 unit(s) in flight'\n./b4w.ps1 crawl --help   # '--parallel <n>  Collect up to <n> pages/tabs at the same time (default: 4, 1 = sequential). Each parallel unit needs its own browser tab'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A first-time user should be able to tell from --help why a single-seed crawl of 11 pages reports peak 1, and what a 'unit' is."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "'unit' appears only in the completion report and is undefined in --help; the help phrase 'pages/tabs' suggests per-page concurrency, so 'peak 1 unit(s) in flight' (correct: a unit is a seed URL / seed round, and a single-seed crawl can never exceed 1) reads like the flag was ignored."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The help text (commands.rs:4238) describes parallelism granularity as pages/tabs, while the backend report and crawl.md count 'units = seed URLs' ('A crawl is a set of independent units — one per seed URL'); the two vocabularies were never reconciled, and the reference's explanation was not folded into the embedded help."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/commands.rs:4238 (crawl --parallel help text)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Extend the --parallel help: 'units are seed URLs, one tab each; links discovered inside a seed round are collected from the shared tab pool — a single-seed crawl therefore reports peak 1 by design'.\n- Make the footer self-describing: 'peak 1 seed unit(s) in flight (1 seed URL submitted)'.\n- Copy the first sentence of crawl.md's Parallelism section into the embedded --help."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "crawl list silently prunes local task records (stale cleanup + 24h retention); documented as a pure listing",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 crawl list\n# observed: 'Pruned 29 completed tasks from local tracking (routine cleanup).' and rows absent afterwards"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "crawl.md's subcommands section documents `crawl clear` / `crawl clear --all` as the only ways history is removed; a list command should be a read, or its retention behavior should be documented."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "`crawl list` mutates the local tracking store: entries the backend no longer knows are removed (notice only printed when more than 20 are pruned at once), and crawl entries older than 24h are dropped silently on every list. crawl.md's `crawl list` section mentions neither retention nor pruning."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "handle_crawl_list performs housekeeping before printing: it deletes stale ids (main.rs:16919-16929, message gated on stale_ids.len() > 20) and retains only crawl tasks submitted within the last 24h (main.rs:16930-16937), then rewrites the store — behavior added without updating the reference doc."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:16919 (stale pruning) and cli/browser4-cli/src/main.rs:16930 (24h age retention in handle_crawl_list)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Document in crawl.md (`crawl list` row/section) that the local list is housekeeping state, not an audit log: entries disappear when the backend forgets the task and after 24h, without affecting backend records or checkpoints.\n- Print the prune notice whenever anything is removed (not only when >20 stale entries), so the disappearance is observable.\n- Consider a `--no-prune` mode for users who want a pure read."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

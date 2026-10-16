@@ -291,11 +291,37 @@ fn format_mcp_transport_error(
                  BROWSER4_CLI_AGENT_TIMEOUT_SECS environment variable.",
             );
         }
+        if is_plugin_tool(tool) {
+            msg.push_str(PLUGIN_TOOL_TIMEOUT_NOTE);
+        }
         msg
     } else {
         format!("HTTP request failed {context}: {error}")
     }
 }
+
+/// True when [tool] is a plugin-provided tool (`<domain>_<method>`) rather than
+/// a built-in alias.
+///
+/// Uses the dispatcher's own built-in table and the same domain/method split the
+/// plugin listing uses, so the two cannot disagree about what counts as a plugin
+/// tool.
+fn is_plugin_tool(tool: &str) -> bool {
+    !crate::is_builtin_tool_name(tool) && crate::split_plugin_tool_name(tool).is_some()
+}
+
+/// Timeout note for plugin tools.
+///
+/// The 30 s client budget is deliberate: the images/pptx/media plugins fail fast
+/// with their own actionable message inside a shorter internal budget, and this
+/// client timeout must not preempt that.  A plugin tool that legitimately needs
+/// longer (bulk downloads, deck/video generation) needs an explicit `--timeout`,
+/// which is what the note says instead of leaving a bare "timed out".
+const PLUGIN_TOOL_TIMEOUT_NOTE: &str = "\nNote: plugin tools run server-side and some (bulk image/media \
+     downloads, deck or video generation) need far longer than the default client budget. \
+     Retry with a larger --timeout (e.g. --timeout 600): the plugin's own internal budget is \
+     deliberately shorter, so raising the client timeout lets its actionable error reach you \
+     instead of being preempted here.";
 
 /// Call an MCP tool on the Browser4 server.
 ///
@@ -1539,6 +1565,72 @@ mod tests {
             !error.contains("may partially execute despite timeout"),
             "Should NOT contain text input partial execution note for click tool, got: {error}"
         );
+    }
+
+    #[test]
+    fn test_plugin_tool_timeout_error_names_the_tool_budget() {
+        // A plugin tool that needs longer than the 30 s client budget used to
+        // report a bare "HTTP request timed out", which reads like a bug rather
+        // than "raise --timeout"; the plugin's own (shorter) budget must survive
+        // to the user instead of being preempted silently.
+        let server_url = spawn_hanging_server();
+        let error = format_mcp_transport_error(
+            "image_download_all",
+            "http://localhost:8182/mcp/call-tool",
+            &json!({ "minWidth": 200 }),
+            Some(std::time::Duration::from_secs(30)),
+            &reqwest::blocking::Client::new()
+                .post(server_url)
+                .timeout(std::time::Duration::from_millis(1))
+                .send()
+                .expect_err("should time out"),
+        );
+        assert!(
+            error.contains("HTTP request timed out"),
+            "Expected timeout prefix, got: {error}"
+        );
+        assert!(
+            error.contains("--timeout 600") && error.contains("plugin's own internal budget"),
+            "Expected the plugin budget note, got: {error}"
+        );
+
+        // Built-in aliases must not attract the plugin note.
+        let server_url = spawn_hanging_server();
+        let builtin = format_mcp_transport_error(
+            "page_title",
+            "http://localhost:8182/mcp/call-tool",
+            &json!({}),
+            Some(std::time::Duration::from_secs(30)),
+            &reqwest::blocking::Client::new()
+                .post(server_url)
+                .timeout(std::time::Duration::from_millis(1))
+                .send()
+                .expect_err("should time out"),
+        );
+        assert!(
+            !builtin.contains("plugin's own internal budget"),
+            "Built-in tools must not get the plugin note, got: {builtin}"
+        );
+    }
+
+    #[test]
+    fn test_plugin_tool_detection_covers_domains_and_excludes_builtins() {
+        for tool in ["image_download_all", "markdown_fetch", "media_detect_videos", "captcha_detect"] {
+            assert!(is_plugin_tool(tool), "{tool} is a plugin tool");
+        }
+        for tool in [
+            "browser_click",
+            "browser_navigate",
+            "page_title",
+            "html_snapshot_query",
+            "command_result",
+            "agent_extract",
+            "list_sessions",
+            "base_u_r_l",
+            "click",
+        ] {
+            assert!(!is_plugin_tool(tool), "{tool} is built in, not a plugin tool");
+        }
     }
 
     #[test]

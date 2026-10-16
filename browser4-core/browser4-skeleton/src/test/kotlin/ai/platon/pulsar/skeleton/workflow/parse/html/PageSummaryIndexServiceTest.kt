@@ -723,6 +723,128 @@ Line Two</p>
     }
 
     // =========================================================================
+    // Selector hints and listing classification
+    // =========================================================================
+
+    /**
+     * A books.toscrape.com-shaped catalogue: [itemCount] `<article class="product_pod">` cards laid
+     * out in [columns] columns, each with a clipped title link and (optionally) a price.
+     */
+    private fun productGridHtml(itemCount: Int = 8, columns: Int = 4, price: Boolean = true): String {
+        val cards = (0 until itemCount).joinToString("\n") { i ->
+            val x = 10 + (i % columns) * 260
+            val y = 110 + (i / columns) * 400
+            val priceSpan = if (price) {
+                """<span vi="${x + 10},${y + 250},80,20" class="price_color">£${10 + i}.99</span>"""
+            } else ""
+            """
+              <article vi="$x,$y,250,380" class="product_pod">
+                <h3 vi="${x + 10},${y + 10},230,20"><a vi="${x + 20},${y + 10},200,20" href="catalogue/p$i/index.html" title="Book $i">Book $i ...</a></h3>
+                <img vi="${x + 10},${y + 40},230,200" src="media/p$i.jpg" alt="Book $i">
+                $priceSpan
+              </article>
+            """.trimIndent()
+        }
+        return """
+            <html vi="0,0,1920,1080"><body vi="0,0,1920,1080">
+              <div vi="0,0,1920,1080" class="container-fluid page">
+                <h1 vi="10,20,400,30">All products</h1>
+                <ol vi="0,100,1800,900" class="row">
+            $cards
+                </ol>
+              </div>
+            </body></html>
+        """.trimIndent()
+    }
+
+    @Test
+    @DisplayName("a repeated product card grid is a product listing, not an article")
+    fun productCardGridIsAProductListing() {
+        val result = PageSummaryIndexService.generate(
+            parse(productGridHtml()), "https://books.toscrape.com/", "All products"
+        )
+
+        assertTrue(result.contains("linkGroups:"), "the grid must be detected as a link group: $result")
+        assertTrue(
+            result.contains("type: \"Product Listing\""),
+            "a 4-column grid of 8 priced cards is a listing: $result"
+        )
+        assertFalse(
+            result.contains("Article / Content"),
+            "repeated <article class=\"product_pod\"> cards are a listing, not article prose: $result"
+        )
+    }
+
+    @Test
+    @DisplayName("a repeated card grid without prices is a listing as well")
+    fun priceLessCardGridIsAListing() {
+        val result = PageSummaryIndexService.generate(
+            parse(productGridHtml(price = false)), "https://example.com/directory", "Directory"
+        )
+
+        assertTrue(
+            result.contains("type: \"Listing / Grid\""),
+            "a grid with no price signal is still a listing: $result"
+        )
+        assertFalse(result.contains("Article / Content"), result)
+    }
+
+    @Test
+    @DisplayName("a single article page keeps its article type")
+    fun singleArticlePageStaysAnArticle() {
+        val html = """
+            <html vi="0,0,1920,1080"><body vi="0,0,1920,1080">
+              <main vi="0,0,900,900">
+                <article vi="0,0,900,800">
+                  <h1 vi="10,10,800,30">How Rust Conquered the Kernel</h1>
+                  <p vi="10,50,800,80">Rust brings memory safety to the Linux kernel without sacrificing performance.</p>
+                  <p vi="10,140,800,80">The first Rust code landed in Linux 6.1, guarded by a configuration flag.</p>
+                </article>
+              </main>
+            </body></html>
+        """.trimIndent()
+
+        val result = PageSummaryIndexService.generate(parse(html), "https://example.com/rust", "Rust")
+
+        assertTrue(
+            result.contains("type: \"Article / Content\""),
+            "one <article> with a long headline is article prose: $result"
+        )
+    }
+
+    @Test
+    @DisplayName("multi-class elements get compound selectors, never descendant ones")
+    fun multiClassElementsGetCompoundSelectors() {
+        val html = """
+            <html vi="0,0,1920,1080"><body vi="0,0,1920,1080">
+              <section vi="0,0,900,800" class="col-sm-8 col-md-9">
+                <ul vi="0,100,400,300" class="row grid-4">
+                  <li vi="0,100,120,80">one</li>
+                  <li vi="0,190,120,80">two</li>
+                  <li vi="0,280,120,80">three</li>
+                </ul>
+              </section>
+            </body></html>
+        """.trimIndent()
+
+        val result = PageSummaryIndexService.generate(parse(html), "https://example.com/p", "P")
+
+        assertTrue(
+            result.contains("selector: \".col-sm-8.col-md-9\""),
+            "a two-class landmark needs a compound selector: $result"
+        )
+        assertTrue(
+            result.contains("parentTag: ul.row.grid-4"),
+            "a two-class list parent needs a compound selector: $result"
+        )
+        assertFalse(
+            result.contains(".col-sm-8 col-md-9"),
+            "a space-joined class list is a DESCENDANT selector and matches something else: $result"
+        )
+        assertFalse(result.contains(".row grid-4"), "no space-joined class list may be emitted: $result")
+    }
+
+    // =========================================================================
     // Helper
     // =========================================================================
 

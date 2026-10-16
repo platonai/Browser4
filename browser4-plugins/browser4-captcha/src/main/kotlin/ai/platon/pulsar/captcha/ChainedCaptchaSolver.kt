@@ -31,14 +31,26 @@ open class ChainedCaptchaSolver(val conf: ImmutableConfig) : CaptchaSolver {
 
     private val solvers = CopyOnWriteArrayList<CaptchaSolver>()
 
+    /**
+     * API keys a provider might echo back in its error text, so they can be redacted
+     * from the message a caller sees.
+     */
+    private val secretKeys: List<String> = API_KEY_PROPERTIES
+        .mapNotNull { conf.get(it)?.trim()?.takeIf { key -> key.isNotEmpty() } }
+
     override val serviceProvider: CaptchaServiceProvider
         get() = CaptchaServiceProvider.NONE
 
     /**
      * Try each solver in order. Returns the first successful solution.
-     * If all solvers fail, returns a FAILED solution.
+     * If all solvers fail, returns a FAILED solution whose message names the provider
+     * that failed last and why — a caller that only reads "all solvers failed" has to
+     * open the server log to learn whether the siteKey, the quota or the API key was
+     * rejected.
      */
     override suspend fun solve(request: CaptchaSolveRequest): CaptchaSolution {
+        var lastFailure: String? = null
+
         for (solver in solvers) {
             try {
                 val solution = solver.solve(request)
@@ -46,15 +58,28 @@ open class ChainedCaptchaSolver(val conf: ImmutableConfig) : CaptchaSolver {
                     return solution
                 }
                 logger.debug("Solver {} failed: {}", solver.serviceProvider, solution.error)
+                lastFailure = failureOf(solver, solution.error)
             } catch (e: Exception) {
                 logger.warn("Solver {} threw exception: {}", solver.serviceProvider, e.message)
+                lastFailure = failureOf(solver, e.message)
             }
         }
 
-        return CaptchaSolution.failed(
-            CaptchaServiceProvider.NONE,
-            "All ${solvers.size} solver(s) failed to solve the CAPTCHA"
-        )
+        val message = buildString {
+            append("All ${solvers.size} solver(s) failed to solve the CAPTCHA")
+            lastFailure?.let { append("; last failure $it") }
+        }
+        return CaptchaSolution.failed(CaptchaServiceProvider.NONE, message)
+    }
+
+    /**
+     * One solver failure as a caller may see it: the provider and its reason, with
+     * configured API keys redacted (the raw text stays in the log above).
+     */
+    private fun failureOf(solver: CaptchaSolver, reason: String?): String {
+        val text = reason?.trim().orEmpty().ifEmpty { "no error details" }
+        val redacted = secretKeys.fold(text) { acc, key -> acc.replace(key, REDACTED_SECRET) }
+        return "(${solver.serviceProvider}): ${redacted.take(MAX_FAILURE_LENGTH)}"
     }
 
     /**
@@ -114,4 +139,21 @@ open class ChainedCaptchaSolver(val conf: ImmutableConfig) : CaptchaSolver {
      * An empty list means no CAPTCHA solving provider is configured.
      */
     val providers: List<CaptchaServiceProvider> get() = solvers.map { it.serviceProvider }
+
+    companion object {
+        /** Config keys holding provider credentials, checked before a message leaves the chain. */
+        private val API_KEY_PROPERTIES = listOf(
+            "captcha.capsolver.api.key",
+            "captcha.twocaptcha.api.key",
+            "captcha.anticaptcha.api.key"
+        )
+
+        private const val REDACTED_SECRET = "***"
+
+        /**
+         * Longest failure reason carried in a chain message: the message is a
+         * headline for a caller, the full text stays in the log.
+         */
+        private const val MAX_FAILURE_LENGTH = 200
+    }
 }

@@ -1240,8 +1240,59 @@ impl Drop for MockBrowser4Server {
     }
 }
 
-fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrowser4State>>) {
-    let Some((method, path, body)) = read_http_request(&mut stream) else {
+/// Plugin fixtures `GET /api/plugins` serves: `(JAR file name, manifest name)`.
+///
+/// Two entries are enough to pin the two names `plugin info` accepts — the full
+/// JAR name and the short name the CLI advertises (`captcha`).
+const MOCK_PLUGIN_FILES: &[(&str, &str)] = &[
+    ("browser4-swarm-4.14.1-SNAPSHOT.jar", "browser4-swarm"),
+    ("browser4-captcha-4.14.1-SNAPSHOT.jar", "browser4-captcha"),
+];
+
+/// One `PluginInfo` object, matching the backend's `GET /api/plugins` shape.
+fn mock_plugin_info_json(file_name: &str, manifest_name: &str) -> String {
+    serde_json::json!({
+        "fileName": file_name,
+        "fileSize": 1024,
+        "path": format!("/plugins/{file_name}"),
+        "loaded": true,
+        "enabled": true,
+        "manifest": {
+            "name": manifest_name,
+            "version": "4.12.0-rc.1",
+            "sdkVersion": "4.14.1-SNAPSHOT",
+            "description": "Mock plugin",
+        }
+    })
+    .to_string()
+}
+
+/// The plugin list array `GET /api/plugins` answers with.
+fn mock_plugin_list_json() -> String {
+    let plugins: Vec<serde_json::Value> = MOCK_PLUGIN_FILES
+        .iter()
+        .map(|(file_name, manifest_name)| {
+            serde_json::from_str(&mock_plugin_info_json(file_name, manifest_name))
+                .expect("plugin fixture must be valid JSON")
+        })
+        .collect();
+    serde_json::Value::Array(plugins).to_string()
+}
+
+/// The `PluginInfo` JSON for [requested], matching the backend's lookup rules
+/// (manifest name, JAR file name, or file name without `.jar`).
+fn mock_plugin_json(requested: &str) -> Option<String> {
+    MOCK_PLUGIN_FILES
+        .iter()
+        .find(|(file_name, manifest_name)| {
+            *file_name == requested
+                || file_name.trim_end_matches(".jar") == requested
+                || *manifest_name == requested
+        })
+        .map(|(file_name, manifest_name)| mock_plugin_info_json(file_name, manifest_name))
+}
+
+fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrowser4State>>) {    let Some((method, path, body)) = read_http_request(&mut stream) else {
         return;
     };
 
@@ -1275,7 +1326,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             &mut stream,
             "200 OK",
             "application/json",
-            r#"{"tools":["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize","crawl_submit","markdown_read","profile_import_list_sources","profile_import_import"]}"#,
+            r#"{"tools":["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize","crawl_submit","markdown_read","markdown_fetch","profile_import_list_sources","profile_import_import"]}"#,
         ),
         ("GET", "/mcp/tools/specs") => write_http_response(
             &mut stream,
@@ -1523,6 +1574,12 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 "markdown_read" => {
                     r##"{"markdown":"# Mock Read Article\n\nRead via the markdown plugin pipeline.","title":"Mock Read Article","byline":"","siteName":"","url":"https://mock.browser4.local","source":"extractor","charCount":64,"outline":[]}"##.to_string()
                 }
+                // Mirrors the shape the real markdown plugin returns for a
+                // failed fetch: HTTP 200 with a payload-level failure, which
+                // `tool call` must not present as success.
+                "markdown_fetch" => {
+                    r#"{"url":"https://example.com/404","linkCount":0,"success":false,"error":"HTTP 404: "}"#.to_string()
+                }
                 "html_snapshot_query" => {
                     let guard = state.lock().expect("mock Browser4 state mutex poisoned");
                     guard.custom_html_snapshot_query_response.clone().unwrap_or_else(|| {
@@ -1626,6 +1683,19 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 "application/json",
                 r#"{"closed":true,"abortedPendingTasks":0}"#,
             );
+        }
+        ("GET", "/api/plugins") => {
+            let body = mock_plugin_list_json();
+            write_http_response(&mut stream, "200 OK", "application/json", &body);
+        }
+        _ if method == "GET" && route.starts_with("/api/plugins/") => {
+            let requested = route.trim_start_matches("/api/plugins/");
+            match mock_plugin_json(requested) {
+                Some(body) => {
+                    write_http_response(&mut stream, "200 OK", "application/json", &body);
+                }
+                None => write_http_response(&mut stream, "404 Not Found", "text/plain", "not found"),
+            }
         }
         _ if method == "GET"
             && route.starts_with("/api/commands/")

@@ -41,7 +41,7 @@ import ai.platon.pulsar.skeleton.plugin.PluginManifest
 open class ImagesPlugin(
     override val manifest: PluginManifest = PluginManifest(
         name = "browser4-images",
-        version = "4.12.0-rc.1",
+        version = pluginVersion(),
         sdkVersion = Browser4Version.version,
         description = "Image detection and bulk download for Browser4",
         dependsOn = listOf("browser4-protocol", "browser4-agentic"),
@@ -59,5 +59,24 @@ open class ImagesPlugin(
 
     override fun onShutdown() {
         logger.info("browser4-images plugin shutting down")
+    }
+
+    companion object {
+        /**
+         * The plugin's own version, taken from the packaged JAR: the build
+         * filters `${project.version}` into the JAR manifest's
+         * `Implementation-Version` (and into `META-INF/browser4-plugin.json`,
+         * which is what `plugin list` displays), so a hardcoded literal can
+         * never drift from the artifact again.
+         *
+         * Falls back to the host version ([Browser4Version.version]) when there
+         * is no JAR manifest to read — an in-repo plugin is versioned in
+         * lockstep with the repository, and running from a directory classpath
+         * (IDE, unit tests) has no manifest at all.
+         */
+        fun pluginVersion(): String {
+            val implementationVersion = ImagesPlugin::class.java.`package`?.implementationVersion
+            return implementationVersion?.takeIf { it.isNotBlank() } ?: Browser4Version.version
+        }
     }
 }

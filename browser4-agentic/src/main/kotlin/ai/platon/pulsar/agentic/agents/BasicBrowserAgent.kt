@@ -48,19 +48,26 @@ open class BasicBrowserAgent constructor(
 
     private val lazyAgentToolManager by lazy {
         toolManagerInitialized.set(true)
-        // Workspace isolation: CLI-engine (browser) tasks get a per-agent
-        // scratch workspace so helper files never pollute the repository root;
-        // coding tasks keep CodingWorkspace.workspaceRoot.
-        val workspace = (this as? RobustBrowserAgent)
-            ?.takeIf { it.effectiveRunEngine == RunEngine.CLI_TOOL_LOOP }
-            ?.agentWorkspaceDir
-            ?: CodingWorkspace.workspaceRoot
-        AgentToolManager(_baseDir, this, workspaceRoot = workspace).also {
+        AgentToolManager(_baseDir, this, workspaceRoot = workspaceRoot).also {
             // Inner (native tool-calling loop) executions don't produce outer
             // AgentStates — record them so the finish-report guard can see them.
             it.toolExecutionRecorder = ::recordInnerToolExecution
         }
     }
+
+    /**
+     * The directory this agent's tools write into.
+     *
+     * Workspace isolation: CLI-engine (browser) tasks get a per-agent scratch
+     * workspace so helper files never pollute the repository root; coding tasks
+     * keep [CodingWorkspace.workspaceRoot]. Exposed so a finished task can report
+     * where its deliverables landed (see `AgentTaskStatus.workspace`).
+     */
+    val workspaceRoot: Path
+        get() = (this as? RobustBrowserAgent)
+            ?.takeIf { it.effectiveRunEngine == RunEngine.CLI_TOOL_LOOP }
+            ?.agentWorkspaceDir
+            ?: CodingWorkspace.workspaceRoot
 
     private val toolManagerInitialized = AtomicBoolean(false)
 

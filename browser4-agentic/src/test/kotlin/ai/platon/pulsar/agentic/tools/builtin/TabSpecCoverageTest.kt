@@ -56,6 +56,9 @@ class TabSpecCoverageTest {
         "harStop",
         "networkRoute",
         "networkUnroute",
+        // Read-only counterpart of the pair above: inspecting the active routes must
+        // not require removing them first.
+        "networkRoutes",
     )
 
     /** Mirrored methods that are deliberately not advertised as tools. */

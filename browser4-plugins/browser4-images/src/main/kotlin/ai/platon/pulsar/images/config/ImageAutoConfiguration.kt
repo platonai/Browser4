@@ -95,44 +95,20 @@ open class ImageAutoConfiguration(
         val builder = OkHttpClient.Builder()
             .followRedirects(true)
             .followSslRedirects(true)
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(120, TimeUnit.SECONDS)
+            .connectTimeout(imageConfig.connectTimeoutSeconds, TimeUnit.SECONDS)
+            .readTimeout(imageConfig.downloadTimeoutSeconds, TimeUnit.SECONDS)
+            .writeTimeout(imageConfig.downloadTimeoutSeconds, TimeUnit.SECONDS)
+            .callTimeout(imageConfig.downloadTimeoutSeconds, TimeUnit.SECONDS)
 
-        resolveProxy(imageConfig)?.let { builder.proxySelector(java.net.ProxySelector.of(it)) }
+        ImageProxyResolver.resolve(imageConfig.proxy)?.let {
+            logger.info("Image downloads use proxy {}:{} ({})", it.host, it.port, it.source)
+            builder.proxySelector(ImageProxySelector(it))
+        } ?: logger.info(
+            "Image downloads use no proxy — set image.download.proxy, HTTPS_PROXY or -Dhttps.proxyHost " +
+                "when direct egress is blocked"
+        )
+
         return builder.build()
-    }
-
-    /**
-     * Resolve the proxy address for image downloads.
-     *
-     * Chrome uses the OS system proxy (e.g. WinINET on Windows) while the JVM's
-     * DefaultProxySelector usually returns NO_PROXY (java.net.useSystemProxies=false
-     * in the shipped net.properties), so downloads silently bypass the proxy and
-     * fail with connection errors on machines where direct egress is blocked.
-     * Honored, in order: the `image.download.proxy` config key, then the
-     * HTTPS_PROXY / HTTP_PROXY environment variables.
-     */
-    private fun resolveProxy(config: ImageConfig): java.net.InetSocketAddress? {
-        val proxySpec = config.proxy
-            ?: System.getenv("HTTPS_PROXY") ?: System.getenv("https_proxy")
-            ?: System.getenv("HTTP_PROXY") ?: System.getenv("http_proxy")
-            ?: return null
-
-        return try {
-            val trimmed = proxySpec.trim()
-            val uri = if (trimmed.contains("://")) java.net.URI(trimmed) else java.net.URI("http://$trimmed")
-            val host = uri.host
-            if (host.isNullOrBlank()) {
-                logger.warn("Invalid image download proxy spec '{}': no host", proxySpec)
-                return null
-            }
-            val port = if (uri.port > 0) uri.port else 80
-            logger.info("Image download proxy enabled: {}:{}", host, port)
-            java.net.InetSocketAddress(host, port)
-        } catch (e: Exception) {
-            logger.warn("Invalid image download proxy spec '{}': {}", proxySpec, e.message)
-            null
-        }
     }
 
     @Bean(name = ["imageDetector"])

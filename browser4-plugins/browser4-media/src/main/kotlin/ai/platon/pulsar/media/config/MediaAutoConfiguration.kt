@@ -19,6 +19,7 @@ import ai.platon.pulsar.agentic.tools.ToolMount
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.media.MediaPlugin
 import ai.platon.pulsar.media.integration.MediaBrowseEventHandler
 import ai.platon.pulsar.media.service.FFmpegProcessManager
 import ai.platon.pulsar.media.service.MediaDownloader
@@ -76,6 +77,12 @@ open class MediaAutoConfiguration(
     }
 
     // ---- Beans ----
+
+    @Bean(name = ["mediaPlugin"])
+    @ConditionalOnMissingBean(name = ["mediaPlugin"])
+    open fun mediaPlugin(): MediaPlugin {
+        return MediaPlugin()
+    }
 
     @Bean(name = ["mediaConfig"])
     @ConditionalOnMissingBean(name = ["mediaConfig"])

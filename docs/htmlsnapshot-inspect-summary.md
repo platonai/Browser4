@@ -245,6 +245,8 @@ stats:
 **Page type inference:** The summary heuristically classifies the page as one of:
 
 - `Product Detail`
+- `Product Listing` — a repeated multi-column card grid that carries a price signal
+- `Listing / Grid` — a repeated multi-column card grid with no price signal (a news index, a directory)
 - `Search Results`
 - `Article / Content`
 - `Login / Auth`
@@ -256,6 +258,11 @@ stats:
 - `Forum`
 - `Documentation`
 - `General Page`
+
+The two grid types outrank the text-based types because repetition is the signal a listing page
+cannot express in its text: a catalogue whose 20 product cards are each an `<article>` element (the
+books.toscrape.com shape) is a listing, not an article, and a single buy box still wins on a detail
+page that also shows a "customers also viewed" rail.
 
 **Use case:** Run `summary` to answer "what's on this page?" before writing selectors for `get`/`query`. Especially useful on unfamiliar pages or for structural audits across a site.
 

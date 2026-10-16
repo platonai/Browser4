@@ -280,6 +280,11 @@ class CommandToolExecutor(
             // The agent's step count is the only monotonic progress signal the domain
             // has; a page load does not report one, and `null` is honest about that.
             processed = status.instructResults.size.takeIf { it > 0 },
+            // The domain's own code: callers key on 404 to tell "no such task" from a
+            // genuine failure without pattern-matching English error text.
+            statusCode = status.statusCode,
+            // Human-readable progress, present while the task is still healthy.
+            message = status.message,
             error = if (word == "failed") status.message else null,
             statusTool = "command_status",
             resultTool = "command_result",

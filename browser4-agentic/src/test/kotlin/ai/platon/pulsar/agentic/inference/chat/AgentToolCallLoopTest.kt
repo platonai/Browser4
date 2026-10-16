@@ -17,7 +17,6 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -486,10 +485,16 @@ class AgentToolCallLoopTest {
             inferenceTimeoutMs = 50,
         )
 
-        val error = assertThrows(TimeoutCancellationException::class.java) {
+        // Deliberately NOT a CancellationException: callers must be able to tell an
+        // inference timeout (a task failure worth reporting as such) apart from an
+        // outer cancellation (overall resolve timeout or user interrupt) — see
+        // LlmInferenceTimeoutException's KDoc. Asserting the raw
+        // TimeoutCancellationException here would re-blur exactly that difference.
+        val error = assertThrows(LlmInferenceTimeoutException::class.java) {
             runBlocking { loop.generate(listOf(UserMessage.from("do it"))) }
         }
-        assertTrue(error.message?.contains("Timed out") == true, error.message)
+        assertEquals(50L, error.timeoutMs, "the failure must name the budget it exceeded")
+        assertTrue(error.message?.contains("timed out") == true, error.message)
     }
 
     @Test

@@ -1,0 +1,313 @@
+{
+  "meta": {
+    "mode": "dev",
+    "date": "20261015-111443",
+    "source": "20261015-111443-agent-extraction.issues.json",
+    "scenario": "agent-extraction"
+  },
+  "background": {
+    "executionContext": "Commands (all from repo root, `./b4w.sh` — the project's documented Git-Bash wrapper that quotes args safely for `pwsh`; see note below):\n```\n./b4w.sh help ; read skills/browser4-cli/SKILL.md + references/agent.md\n./b4w.sh open --headless \"https://en.wikipedia.org/wiki/Python_(programming_language)\"   # daemon + backend auto-start\n./b4w.sh page-info\n./b4w.sh doctor                                                    # LLM: ✓ DEEPSEEK_API_KEY, model deepseek-v4-flash\n./b4w.sh extract \"…\" --schema '{\"fields\":[…]}]' --stdout           # step 2\n./b4w.sh extract \"…\" --schema \"@.test-sessions/…/python-schema.json\" --filename \".test-sessions/…/extract-result-schema.json\"   # step 3\n./b4w.sh summarize \"…\" --stdout                                    # step 4\n./b4w.sh summarize \"…\" --selector \"#History\" --stdout              # step 5\n./b4w.sh eval \"…\"                                                  # DOM check: History heading structure\n./b4w.sh agent run \"Navigate to …/Guido_van_Rossum and extract …\"  # step 6 → task id\n./b4w.sh agent status <id>  (×12, 20 s apart; log: agent-poll.log) # step 7 → done\n./b4w.sh agent result <id> ; ./b4w.sh agent list                   # step 8\n./b4w.sh tool call command_{status,result} --json '{\"id\":\"…\"}'     # verified payload is identical via raw MCP\n./b4w.sh status ; ./b4w.sh config list ; ./b4w.sh tab-list\nBROWSER4_CLI_STATE_DIR=<scratch>/state-fresh ./b4w.sh status       # controlled port-allocation experiment → 8282\nfind (repo, ~/.browser4) for the agent artifact; cp → scratch dir\n./b4w.sh extract \"What year was Python first released?\"            # default-output check (run from scratch dir)\n```\n\nKey decisions/workarounds: (1) used `./b4w.sh` rather than `./b4w.ps1` because Git Bash/MSYS rewrites `/`-leading args before PowerShell sees them — both CLAUDE.md and SKILL.md prescribe `b4w.sh` for this shell. (2) `goto --headless` was rejected; docs correctly state display mode is set by `open` — I used `open --headless`. (3) For the agent's missing data I had to locate the backend's per-task workspace on disk — no CLI command exposes it. (4) The \"port 1\" anomaly was root-caused with a fresh-state experiment.\n\nTimings: first command 19:00:57→19:03:34 (bundle reuse, AOT training, server ready 8.9 s, navigation); extract/summarize ≈12–13 s each; agent task ≈60–70 s; each CLI invocation thereafter ≈1 s overhead.",
+    "commands": "",
+    "task": "All nine task steps executed against the live Wikipedia page. Key outputs:\n\n**Step 2 — `extract` with inline JSON schema** (13 s, exit 0):\n\n\n**Step 3 — `extract` with a custom schema file** (standard JSON-Schema format with explicit types/`required`), result saved to `.test-sessions/20261015T0901431699046Z/extract-result-schema.json` (12 s):\n\nBoth documented schema formats (`{\"fields\":[…]}` and full JSON Schema) worked; the integer type and snake_case field names from the schema file were honored exactly.\n\n**Step 4 — `summarize` (whole page, 13 s):** coherent multi-section summary covering history (Guido van Rossum, CWI, 1991 first release, BDFL → Steering Council 2019), philosophy (Zen of Python), syntax/typing, ecosystem (905k+ PyPI projects, CPython/PyPy/MicroPython), naming (Monty Python), and influence.\n\n**Step 5 — `summarize --selector \"#History\"` (13 s):** correctly scoped — the summary covered only the History section (origins as ABC successor, Dec 1989 implementation, Python 0.9.0 in 1991, BDFL era to July 2018, Steering Council Jan 2019, naming, 2.0/3.0 dates). The `#History` id targets only the `<h2>` in the DOM, but the backend gathered the full section — this worked intuitively on the first try.\n\n**Steps 6–8 — autonomous agent task:** task ID **`fe162b8d-a16d-4a7f-b0e7-6d6999cff05a`**, submitted 19:05:07, reached terminal state `done` by 19:06:13 (~60–70 s for a 2-page navigation + extraction). `agent result` returned only a one-sentence **summary** — the actual biographical data was *not* in the payload. The agent had written its deliverable to `…/.browser4/workspaces/Browser4-4.14-04e5248d/app-data/agent/2026/10/15/<uuid>/workspace/guido_van_rossum.md` (found by filesystem search; archived to the scratch dir). Its contents: born 31 Jan 1956 in The Hague (Dutch), programmer/author, M.Sc. mathematics & CS (U. Amsterdam, 1982), IMO bronze 1974, creator of Python and BDFL until 12 Jul 2018, Python Steering Council through 2019; awards (Dr. Dobb's 1999, FSF 2001, NLUUG 2003, ACM Distinguished Engineer 2006, USENIX STUG 2007, CHM Fellow 2018, Dijkstra Fellow 2019, C&C Prize 2023); employers CWI, Google, Dropbox, Microsoft; residence Belmont, California.\n\n**Step 9 — comparison.** Synchronous `extract`/`summarize` (~13 s each, deterministic) operate on the page the session already shows and return verifiable structured JSON — ideal for single-page, known-target pulls (fields, a section, a page summary), especially with `--schema` for machine consumption. `agent run` is asynchronous and autonomous: it handled \"navigate somewhere else, plan, extract, return\" without any step-by-step instruction and ran server-side while the CLI was free — best for multi-step/multi-page/exploratory work or fire-and-forget submission. Its costs: ~5× the wall time here, nondeterministic, and **its deliverable is a prose summary — the extracted data must be retrieved from the backend's agent-workspace directory, not from `agent result`**, which makes it unreliable for tasks whose whole point is returning data. Practical rule: use `extract`/`summarize` when the page and fields are known; use `agent run` when navigation/exploration is needed or the task should run in the background, and expect to fetch artifacts from disk.",
+    "workarounds": ""
+  },
+  "assessment": {
+    "completionStatus": "Successful — all nine task steps executed against a live headless Chrome session: extract with inline and file-based JSON schemas, whole-page summarize, selector-scoped summarize, async agent task submission/polling/result retrieval, and the synchronous-vs-async comparison. The agent task completed correctly, but its extracted data was only obtainable by locating an undocumented backend workspace file on disk.",
+    "successRate": "90% — every command succeeded on the first functionally-correct invocation (one expected syntax error from using --headless with goto, per the documented open/goto split); the deduction is for the agent result being returned as a summary only, requiring filesystem archaeology, and for the misleading agent list status.",
+    "issuesFound": 8,
+    "majorBlockers": "None blocking. The workspace pre-existed with a corrupted recorded backend URL (port 1), which made status/banner output misleading but did not break execution; the agent-result payload gap forced a manual filesystem search to obtain the task deliverable.",
+    "mostConfusingAspects": "For a first-time user: (1) agent list reporting 'queued' for a task that agent status reports as done, with no hint which to trust; (2) docs promising a status vocabulary (RUNNING/COMPLETED, processState, isDone) that the CLI never prints; (3) a server URL of http://127.0.0.1:1 in status and the startup banner while the docs promise 8282+; (4) agent result delivering a summary while the real answer sits in an unmentioned directory; (5) extract/summarize defaulting to a saved file with only a link printed — easy to miss in scripts.",
+    "mostValuableImprovements": "1) Surface agent deliverables: include keyFindings/filesChanged in the result, add an artifact-listing command, or at least print the per-task workspace path. 2) Sync/refresh agent list status from the backend so it agrees with agent status. 3) Correct the agent status docs (or the payload) so the documented completion check actually works. 4) Validate recorded dev-mode backend URLs so a stale value can never stick forever, and show the URL's origin in status.",
+    "usabilityRating": 7
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "agent result returns only a prose summary — the extracted data is not retrievable through the CLI",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.sh agent run \"Navigate to https://en.wikipedia.org/wiki/Guido_van_Rossum and extract key biographical details: birth date, nationality, occupation, education, known for, and awards. Return them as a structured list.\"\n./b4w.sh agent status <task-id>   # -> status done\n./b4w.sh agent result <task-id>   # -> only a summary\n./b4w.sh tool call command_result --json '{\"id\":\"<task-id>\"}'   # identical payload",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The task asked the agent to return the extracted biographical details; agent result should contain those details (or a structured pointer to retrievable artifacts).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Payload was {\"taskId\":\"…\",\"status\":\"done\",…,\"result\":{\"summary\":\"Navigated to the Wikipedia article … Details returned as a structured list and saved to guido_van_rossum.md.\"}}. The actual data existed only in C:\\Users\\pereg\\.browser4\\workspaces\\Browser4-4.14-04e5248d\\app-data\\agent\\2026\\10\\15\\<uuid>\\workspace\\guido_van_rossum.md, discovered by filesystem search; no CLI command, help text, or doc names that location.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The task-result envelope carries only the agent's completion summary. The backend tracks richer completion data (ActionDescription exposes summary, keyFindings, filesChanged; RobustBrowserAgent.completeCliRun logs all three) and the agent writes deliverables into a per-task workspace under the backend app-data agent/<year>/<month>/<day>/<uuid>/workspace/, but none of that is surfaced to the caller. The generic MCP passthrough (tool call command_result) returns the same thin payload, so it is a backend/API contract gap, not just a CLI rendering omission.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/agents/RobustBrowserAgent.kt (completeCliRun / task-completion result assembly, ~line 1577) and cli/browser4-cli/src/main.rs (agent result handler)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Include keyFindings and filesChanged in the command_result payload, and return the agent's final textual answer when one exists\n- Add a CLI command to list/read agent artifacts, e.g. `agent files <task-id>` / `agent artifact <task-id> <name>`, resolving the per-task workspace server-side\n- At minimum, make `agent result` print the workspace path (or a download link) so the deliverable is reachable without filesystem archaeology\n- Document the agent workspace layout in references/agent.md",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "Documented agent status payload and completion check do not match the CLI output",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.sh agent status fe162b8d-a16d-4a7f-b0e7-6d6999cff05a\nCompare with skills/browser4-cli/references/agent.md (status example + status table) and SKILL.md section 6 ('isDone: true is the reliable completion check').",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Per docs: {\"id\":…,\"status\":\"RUNNING\"|\"COMPLETED\"|\"FAILED\"|\"EXPECTATION_FAILED\",\"statusCode\":null,\"processState\":\"processing\",\"message\":\"Navigating...\"} and completion detectable via isDone/processState.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Actual output: {\"taskId\":\"…\",\"status\":\"running\"|\"done\",\"statusTool\":\"command_status\",\"resultTool\":\"command_result\",\"cancelTool\":\"command_cancel\"} — field name taskId (not id), lowercase status values ('done' is not even in the documented vocabulary), and no processState, isDone, statusCode, or message field at all.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI normalizes the backend task payload into an envelope naming the MCP tools to use, with its own lowercase status vocabulary, while the reference docs kept an older/raw payload shape. An agent or script following the docs (polling for isDone or an uppercase COMPLETED) would poll forever.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/browser4-cli/references/agent.md (status example and status table, lines ~102-113) and skills/browser4-cli/SKILL.md section 6 (agent lifecycle paragraph)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Update the docs' payload example and status table to the actual lowercase status/taskId/statusTool shape, or make the CLI emit the backend's raw payload\n- State the authoritative terminal-state check for this build (status == \"done\" seen in practice; verify failed/cancelled spellings) and drop or qualify the isDone guidance\n- Add a `--json`/`--verbose` mode if the richer backend payload (processState/message) is available, so users can see progress detail",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "agent list shows a completed task as 'queued' indefinitely (local status never synced)",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.sh agent run \"…\"            # note task id\n./b4w.sh agent status <id>     # -> done\n./b4w.sh agent list            # -> same task still listed as 'queued' (also after agent result)\ncat ~/.browser4/workspaces/Browser4-4.14-04e5248d/async-tasks.json   # entry for the task has no lastStatus field",
+          "label": "Reproduction"
+        },
+        {
+          "body": "agent list should reflect the task's real state (queued/running/done), consistent with agent status.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "agent list printed 'Status: 2 total, 1 processing, 1 queued' with our completed task as 'queued' (including after agent result); a task submitted 2026-10-13 is still shown as 'processing' two days later.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "agent list renders from the local async-tasks.json; state.rs maps an empty lastStatus to the label 'queued' (state.rs ~1553). The only non-test writer of last_status is update_async_task_status, called solely from the agent run --wait timeout path (main.rs:14082). The normal submit/status/result path never writes progress or a terminal state, and agent list never refreshes from the backend, so the row stays 'queued' forever.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/state.rs (update_async_task_status, async-task list rendering ~line 1553) and cli/browser4-cli/src/main.rs line ~14082",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Refresh last_status from the backend when rendering agent list (or on agent status/result), marking rows it cannot refresh\n- Have agent status/result persist the observed status (including terminal 'done') into the local record\n- Surface staleness explicitly (e.g. 'queued (unpolled)' vs a verified timestamp) instead of a label that contradicts agent status",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "Dev-mode backend URL resolves to port 1 and is then sticky forever",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.sh open --headless \"https://en.wikipedia.org/wiki/Python_(programming_language)\"   # banner: 'Starting Browser4 dev server … on port 1'\n./b4w.sh status      # 'Server URL: http://127.0.0.1:1'\ncurl -s http://127.0.0.1:1/status   # -> redirect:/status.html (Browser4 really listens on TCP 1)\n# Contrast with a fresh state dir:\nBROWSER4_CLI_STATE_DIR=<scratch>/state-fresh ./b4w.sh status   # -> 'Server URL: http://127.0.0.1:8282' (documented behaviour)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Development checkouts use 'the first free port from 8282 upward' (references/development-mode.md), and status should show the URL the CLI actually talks to.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The CLI started the backend on and recorded port 1 (startup banner, status output, cli-state.json baseUrl 'http://127.0.0.1:1', cli-managed-processes.json port 1). netstat confirms a real LISTENING socket on 0.0.0.0:1 owned by the backend JVM (Windows does not privilege-restrict low ports). Commands still work because everything consistently uses the same URL, but the displayed/recorded server URL is wrong per documentation. With a fresh state dir the allocator correctly returns 8282, so the bad value is inherited from previously persisted state.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "decide_dev_base_url honours any recorded loopback URL whose port is not in the dev range 8282-8313 verbatim ('Anything else … honoured untouched'), so a value written once by an earlier session (state dir predates today: 2026-10-13) is never re-validated or re-allocated — there is no way back to 8282 without deleting state. The original writer of '1' is not identifiable from current state; note that ~/.browser4/cli-state.json (the global, non-workspace state file) was also rewritten with 'http://localhost:1' during this session, suggesting state-scope leakage worth investigating (workspace file holds 127.0.0.1:1, global file holds localhost:1).",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/daemon.rs (decide_dev_base_url / dev_base_url_for_workspace / resolve_base_url) and cli/browser4-cli/src/state.rs (read_state/write_state scoping)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Treat a recorded loopback URL outside the dev range, or one no live server ever answered on, as stale and re-allocate instead of honouring it forever\n- Show where the resolved URL came from in status (state file vs allocation vs --server vs config) so a stale value is diagnosable without source reading\n- Add a recovery command (e.g. config reset server / doctor --fix) that clears a bad recorded backend URL\n- Verify why the global ~/.browser4/cli-state.json is written during workspace-scoped runs",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "extract --filename help text contradicts the documented default output behaviour",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.sh --help extract",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Option descriptions consistent with each other and with behaviour.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "--filename is described as 'Save extracted content to a file instead of printing to stdout', while the Notes in the same help say output 'is saved to a timestamped file by default' and stdout is opt-in via --stdout. Observed behaviour matches the Notes (file + printed link only).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The per-option description was written for an earlier stdout-by-default design and not updated when file-by-default was introduced.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs or cli/browser4-cli/src/main.rs (extract/summarize clap option definitions)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Reword to 'Write the extracted content to this path instead of the timestamped default file'\n- Mention the default location (.browser4-cli/snapshot/) directly in the option help",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Mixed path separators in the printed output-file links",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.sh extract \"…\" --filename \".test-sessions/20261015T0901431699046Z/extract-result-schema.json\"",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A single normalized path that can be copied and pasted.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "[Extracted content](D:\\workspace\\Browser4\\Browser4-4.14\\.test-sessions/20261015T0901431699046Z/extract-result-schema.json) — backslashes from the cwd joined with forward slashes from the argument.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The printed path is assembled by joining the raw working directory with the user-supplied --filename string without normalizing separators.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs (extract/summarize result-file link printing)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Normalize the joined path (e.g. via PathBuf display) before printing\n- Emit the path as a file:// URL or plain text when --stdout is used in scripts",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Agent browsing happens in a context invisible to the invoking session and is undocumented",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.sh agent run \"Navigate to https://en.wikipedia.org/wiki/Guido_van_Rossum …\"\n# wait for done\n./b4w.sh tab-list ; ./b4w.sh page-info   # still only the pre-existing tab/page; no trace of the agent's navigation",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Docs should explain where the agent browses and how (if at all) its browser activity can be observed or debugged.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The agent's Chrome activity neither appears in the invoking session's tab list nor is exposed by any documented command (agent subcommands are run/status/result/list/cancel only); agent.md says nothing about the isolation.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The autonomous agent runs in its own browser context/workspace on the backend; the CLI has no command to attach to or enumerate that context, and the docs do not state the isolation.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/browser4-cli/references/agent.md (How It Works section)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Document explicitly that agent runs use an isolated browser context, and whether its tabs/screenshots are inspectable (e.g. via /pages.html or a session name)\n- If the context is addressable, add an `agent tabs <task-id>`/`agent screenshot <task-id>` escape hatch for debugging\n- Mention the per-task workspace directory (logs, artifacts) in the same section",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "Progress spinner keeps emitting animation frames when output is piped (non-TTY)",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.sh open --headless \"<url>\" | tail -40   (or capture output from an AI-agent harness)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Non-TTY output should degrade to a static start/finish line; SKILL.md positions the CLI for AI agents that capture stdout.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The server-startup spinner printed dozens of '⠋ Starting server... (Ns)…' frames with [K erase sequences into the pipe, burying the real messages; the navigation confirmation line itself appeared only as 'Session opened: …' with no explicit navigate confirmation.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The spinner writes frames unconditionally instead of checking whether stderr/stdout is a terminal (or isatty-style detection), so pipes/logs receive animation frames.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/daemon.rs (server-startup progress rendering)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Detect non-TTY output and print a single 'Starting server…' line plus the final 'Server ready in Ns' line\n- Respect --quiet for startup progress as well\n- Print an explicit navigation confirmation (URL + status) from open/goto even when a session was created first",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

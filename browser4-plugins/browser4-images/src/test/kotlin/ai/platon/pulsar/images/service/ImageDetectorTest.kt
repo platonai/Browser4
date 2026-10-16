@@ -15,6 +15,7 @@
  */
 package ai.platon.pulsar.images.service
 
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.images.config.ImageConfig
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
@@ -318,6 +319,88 @@ class ImageDetectorTest {
         assertEquals(1, result.size)
         assertEquals("meta", result[0].tagName)
         assertEquals("og:image", result[0].alt)
+    }
+
+    // ---- type (MIME) resolution ----
+
+    @Test
+    @DisplayName("parseResult fills the MIME type from the URL extension when the DOM declares none")
+    fun testParseResultInfersTypeFromUrl() {
+        val json = """
+        [
+            {
+                "tagName": "img",
+                "srcUrl": "250px-Flag_of_Nepal.svg.png",
+                "resolvedUrl": "https://upload.wikimedia.org/250px-Flag_of_Nepal.svg.png",
+                "type": null,
+                "width": 250, "height": 305,
+                "naturalWidth": null, "naturalHeight": null,
+                "alt": "Nepal", "isDataUri": false, "isSvg": false
+            },
+            {
+                "tagName": "source",
+                "srcUrl": "flag.avif",
+                "resolvedUrl": "https://example.com/flag.avif",
+                "type": "image/webp",
+                "width": null, "height": null,
+                "naturalWidth": null, "naturalHeight": null,
+                "alt": null, "isDataUri": false, "isSvg": false
+            },
+            {
+                "tagName": "meta",
+                "srcUrl": "https://example.com/image-service?id=7",
+                "resolvedUrl": "https://example.com/image-service?id=7",
+                "type": null,
+                "width": null, "height": null,
+                "naturalWidth": null, "naturalHeight": null,
+                "alt": "og:image", "isDataUri": false, "isSvg": false
+            }
+        ]
+        """.trimIndent()
+
+        val result = detector.parseResult(json)
+
+        assertEquals(3, result.size)
+        assertEquals("image/png", result[0].type)
+        // a declared type is authoritative over the URL guess
+        assertEquals("image/webp", result[1].type)
+        assertNull(result[2].type, "a URL with no extension and no declared type has no MIME hint")
+    }
+
+    @Test
+    @DisplayName("parseResult reads the MIME type declared by a data URI")
+    fun testParseResultInfersTypeFromDataUri() {
+        val json = """
+        [
+            {
+                "tagName": "img",
+                "srcUrl": "data:image/png;base64,iVBORw0KGgo==",
+                "resolvedUrl": "data:image/png;base64,iVBORw0KGgo==",
+                "type": null,
+                "width": 50, "height": 50,
+                "naturalWidth": null, "naturalHeight": null,
+                "alt": "inline", "isDataUri": true, "isSvg": false
+            }
+        ]
+        """.trimIndent()
+
+        val result = detector.parseResult(json)
+
+        assertEquals(1, result.size)
+        assertEquals("image/png", result[0].type)
+    }
+
+    @Test
+    @DisplayName("a source without a MIME hint still serializes a stable type key")
+    fun testSerializedSourceAlwaysCarriesTheTypeKey() {
+        val source = ImageDetector.ImageSource(
+            tagName = "meta",
+            resolvedUrl = "https://example.com/image-service?id=7",
+        )
+
+        val json = pulsarObjectMapper().writeValueAsString(source)
+
+        assertTrue(json.contains("\"type\":null"), "expected a stable type key in $json")
     }
 
     // ---- filter-related parsing (filters are applied in detect(), parseResult is pure) ----

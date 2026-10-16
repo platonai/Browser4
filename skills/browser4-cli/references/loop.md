@@ -33,7 +33,7 @@ Use **loop** for repeated task execution at fixed intervals — monitoring, heal
 
 ## How It Works
 
-Loop executes a task on a fixed interval, persists progress to `~/.browser4/loop-state.json` after each iteration, and resumes from the last completed iteration on restart. Interval is measured from start-to-start of iterations. Ctrl+C during execution saves progress before exit.
+Loop executes a task on a fixed interval, persists progress to `loop-state.json` inside the CLI's state directory after each iteration (see [Where the state lives](#where-the-state-lives)), and resumes from the last completed iteration on restart. Interval is measured from start-to-start of iterations. Ctrl+C during execution saves progress before exit.
 
 ## Modes
 
@@ -89,7 +89,7 @@ browser4-cli loop -i 1800 -- screenshot --full-page
 
 ### Named loops
 
-Run multiple independent loops concurrently with `--name` — each has its own state file under `~/.browser4/loops/<name>.json`:
+Run multiple independent loops concurrently with `--name` — each has its own state file under `<state-dir>/loops/<name>.json`:
 
 ```bash
 browser4-cli loop --name health --shell "curl -s https://api.example.com/health" -i 300
@@ -120,24 +120,24 @@ Pick up a loop after a crash or Ctrl+C with `--resume` (optionally `--name` to t
 | `--interval` | `-i` | u64 | `3600` (1 hour) | Seconds between iterations |
 | `--count` | `-n` | u64 | infinite | Maximum number of iterations |
 | `--timeout` | `-t` | u64 | `604800` (1 week) | Maximum total duration in seconds |
-| `--name` | | string | `"default"` | Loop name for persistence. Named loops are stored in `~/.browser4/loops/<name>.json`. Only letters, digits, dots, hyphens, and underscores are allowed. |
+| `--name` | | string | `"default"` | Loop name for persistence. Named loops are stored in `<state-dir>/loops/<name>.json`. Only letters, digits, dots, hyphens, and underscores are allowed. |
 | `--shell` | | bool | — | Execute task as a shell command |
 | `--pause` | | bool | — | Pause a running loop (control op), or start a new loop in paused state (when combined with a task) |
-| `--resume` | | bool | — | Resume a paused loop AND spawn a background process to start execution. Cannot be combined with a task. Optionally specify `--name` to target a named loop. |
-| `--stop` | | bool | — | Stop a running/paused loop and clear persisted state. Also writes a completion entry to the history log. |
+| `--resume` | | bool | — | Resume a paused loop. Spawns a background process only when the loop has no live worker (the state records the worker PID): a paused loop keeps its worker resident, so spawning again would run every iteration twice. Cannot be combined with a task. Optionally specify `--name` to target a named loop. |
+| `--stop` | | bool | — | Stop a running/paused loop, clear persisted state and verify the worker exited (it reports when a long iteration outlasts the wait). The worker writes the completion entry to the history log; with no live worker the control command writes it. |
 | `--status` | | bool | — | Show loop state and progress |
 | `--list` | | bool | — | List all persisted loops with name, iters (completed/max), interval, status, and task |
 | `--history` | | bool | — | Show recently completed loops (up to 200 most recent) |
 | `--keep-state` | | bool | — | Preserve the loop state file after normal completion (by default it is auto-cleaned) |
 | `--pause-all` | | bool | — | Pause all running loops at once |
-| `--resume-all` | | bool | — | Resume all paused loops at once and spawn background processes for each |
+| `--resume-all` | | bool | — | Resume all paused loops at once, spawning a background process only for loops without a live worker |
 | `--stop-all` | | bool | — | Stop and clear all persisted loops at once |
 
 ### Named loops
 
 Use `--name` to run multiple independent loops concurrently. Each named loop
-has its own state file under `~/.browser4/loops/<name>.json`. The default
-loop (no `--name`) uses `~/.browser4/loop-state.json`.
+has its own state file under `<state-dir>/loops/<name>.json`. The default
+loop (no `--name`) uses `<state-dir>/loop-state.json`.
 
 ```bash
 # Start a named health-check loop
@@ -175,7 +175,7 @@ browser4-cli loop --pause --shell "echo hi" -i 60 --name demo
 browser4-cli loop --resume --name demo
 # ▶  Loop "demo" resumed (was paused).
 #    Spawned background process (PID: 12345). Use --list to monitor, --pause to pause, --stop to clear.
-#    State file: C:\Users\...\.browser4\loops\demo.json
+#    State file: <state-dir>\loops\demo.json
 ```
 
 ### Normal completion
@@ -191,12 +191,20 @@ browser4-cli loop --shell "echo hi" --count 2
 # (state file is automatically removed)
 ```
 
+## Where the state lives
+
+`<state-dir>` is the CLI's state directory, resolved in this order: `BROWSER4_CLI_STATE_DIR`, the
+per-checkout namespace `~/.browser4/workspaces/<workspace-slug>` (only when the CLI runs from a
+source checkout — each checkout gets its own namespace so parallel checkouts cannot share loop
+state), then `~/.browser4`. `loop --list` prints the resolved value as `State directory: <path>`,
+which is the authoritative answer for the machine you are on; the file names below are relative to it.
+
 ## Persistence and resume
 
 ### State file
 
-Loop progress is persisted to `~/.browser4/loop-state.json` (default loop) or
-`~/.browser4/loops/<name>.json` (named loops) after each iteration:
+Loop progress is persisted to `<state-dir>/loop-state.json` (default loop) or
+`<state-dir>/loops/<name>.json` (named loops) after each iteration:
 
 ```json
 {
@@ -259,7 +267,7 @@ browser4-cli loop --status
 ### Loop history
 
 When a loop completes normally or is stopped via `--stop`, a completion entry
-is written to `~/.browser4/loop-history.jsonl`. Use `--history` to review
+is written to `<state-dir>/loop-history.jsonl`. Use `--history` to review
 past loop runs:
 
 ```bash
@@ -282,7 +290,7 @@ to preserve it for inspection:
 browser4-cli loop --shell "echo done" --count 2 --keep-state --name my-loop
 # ... runs 2 iterations ...
 # ✓  Loop finished — 2 iteration(s) completed.
-#    State preserved at: C:\Users\...\.browser4\loops\my-loop.json
+#    State preserved at: <state-dir>\loops\my-loop.json
 ```
 
 ## Output

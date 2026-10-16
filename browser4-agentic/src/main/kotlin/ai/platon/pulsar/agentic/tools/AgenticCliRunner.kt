@@ -609,6 +609,7 @@ class AgenticCliRunner(
             "browser_network_request" to "network_request",
             "browser_network_route" to "network_route",
             "browser_network_unroute" to "network_unroute",
+            "browser_network_routes" to "network_routes",
             "browser_har_start" to "har_start",
             "browser_har_stop" to "har_stop",
             "browser_frame_list" to "frame_list",
@@ -653,6 +654,7 @@ class AgenticCliRunner(
             "network_request" to ToolCall("tab", "networkRequestDetail", mutableMapOf()),
             "network_route" to ToolCall("tab", "networkRoute", mutableMapOf()),
             "network_unroute" to ToolCall("tab", "networkUnroute", mutableMapOf()),
+            "network_routes" to ToolCall("tab", "networkRoutes", mutableMapOf()),
             "har_start" to ToolCall("tab", "harStart", mutableMapOf()),
             "har_stop" to ToolCall("tab", "harStop", mutableMapOf()),
         )

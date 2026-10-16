@@ -5,7 +5,7 @@
 # Validates that a built plugin JAR has the correct structure for deployment
 # into a Browser4 installation's plugins/ directory.
 #
-# Usage: verify-plugin.sh <path-to-plugin.jar>
+# Usage: verify-plugin.sh <path-to-plugin.jar> [--strict]
 #
 # Checks:
 #   [PASS/FAIL] META-INF/browser4-plugin.json exists and is valid JSON
@@ -15,6 +15,8 @@
 #   [PASS/FAIL] AutoConfiguration.imports exists and is non-empty
 #   [PASS/FAIL] Plugin JAR is thin (no embedded dependency JARs)
 #   [PASS/FAIL] Kotlin classes compiled to Java 17 bytecode
+#   [PASS/WARN] browser4-plugin.json version matches the artifact version
+#               (--strict turns a mismatch into a FAIL)
 # =============================================================================
 
 set -euo pipefail
@@ -32,16 +34,27 @@ fail() { echo -e "${RED}[FAIL]${NC} $1"; FAIL=$((FAIL + 1)); }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <path-to-plugin.jar>"
+    echo "Usage: $0 <path-to-plugin.jar> [--strict]"
     exit 1
 fi
 
 JAR="$1"
 
+# Treat a plugin.json/artifact version mismatch as a FAIL instead of a WARN.
+STRICT=0
+for arg in "$@"; do
+    [ "$arg" = "--strict" ] && STRICT=1
+done
+
 if [ ! -f "$JAR" ]; then
     echo "Error: $JAR not found"
     exit 1
 fi
+
+# Manifest fields read in Check 1; declared here so `set -u` tolerates a JAR
+# whose manifest is missing or unreadable.
+NAME=""
+VERSION=""
 
 # Resolve to absolute path (needed for cd in temp directory extraction)
 JAR=$(realpath "$JAR" 2>/dev/null || readlink -f "$JAR" 2>/dev/null || echo "$(cd "$(dirname "$JAR")" && pwd)/$(basename "$JAR")")
@@ -198,6 +211,42 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Check 7: browser4-plugin.json "version" vs the artifact version
+# ---------------------------------------------------------------------------
+# `plugin list` renders the manifest value, so a literal that was never filtered
+# from the Maven project version makes the loaded build unidentifiable — a
+# 4.14.1-SNAPSHOT JAR reporting 4.12.0-rc.1. The artifact version comes from
+# META-INF/maven/.../pom.properties, with the JAR file name as the fallback.
+ARTIFACT_VERSION=""
+ARTIFACT_SOURCE=""
+
+POM_ENTRY=$(jar tf "$JAR" | grep 'META-INF/maven/.*/pom.properties' | head -1 || true)
+if [ -n "$POM_ENTRY" ]; then
+    (cd "$TMPDIR" && jar xf "$JAR" "$POM_ENTRY" 2>/dev/null) || true
+    if [ -f "$TMPDIR/$POM_ENTRY" ]; then
+        ARTIFACT_VERSION=$(grep '^version=' "$TMPDIR/$POM_ENTRY" | head -1 | sed 's/^version=//' | tr -d '\r' || true)
+        [ -n "$ARTIFACT_VERSION" ] && ARTIFACT_SOURCE="pom.properties"
+    fi
+fi
+
+if [ -z "$ARTIFACT_VERSION" ]; then
+    # '<plugin>-<version>[-shaded].jar' — the version starts with a digit
+    ARTIFACT_VERSION=$(basename "$JAR" | sed -n 's/^.\{1,\}-\([0-9][^/]*\)\(-shaded\)\?\.jar$/\1/p' || true)
+    [ -n "$ARTIFACT_VERSION" ] && ARTIFACT_SOURCE="JAR file name"
+fi
+
+if [ -z "$VERSION" ]; then
+    warn "browser4-plugin.json version: not declared — nothing to compare with the artifact version"
+elif [ -z "$ARTIFACT_VERSION" ]; then
+    warn "browser4-plugin.json version ($VERSION): the artifact version could not be determined (no pom.properties entry and an unparseable JAR name)"
+elif [ "$VERSION" = "$ARTIFACT_VERSION" ]; then
+    pass "Manifest version matches the artifact version: $VERSION"
+else
+    SKEW="browser4-plugin.json version '$VERSION' != artifact version '$ARTIFACT_VERSION' ($ARTIFACT_SOURCE): 'plugin list' renders the manifest value, so the loaded build cannot be identified. Filter the field from \${project.version} in the module's src/main/resources/META-INF/browser4-plugin.json — browser4-pdk/pom.xml already filters that resource. A plugin may also version itself independently (browser4-swarm reports 1.0.0), so confirm the value is intended."
+    if [ "$STRICT" = 1 ]; then fail "$SKEW"; else warn "$SKEW"; fi
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
@@ -209,8 +258,8 @@ if [ "$FAIL" -gt 0 ]; then
 else
     echo "Plugin JAR is ready for deployment."
     echo ""
-    echo "To install:"
-    echo "  curl -X POST http://localhost:8080/api/plugins/install -F \"file=@$JAR\""
-    echo "  # Or copy to the plugins/ directory and restart"
+    echo "To install (the server loads plugins/ at startup, so restart it afterwards):"
+    echo "  browser4-cli plugin install \"$JAR\""
+    echo "  # Or copy the JAR into the server's plugins/ directory and restart it"
     exit 0
 fi

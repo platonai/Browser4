@@ -136,22 +136,31 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
 
 **Headed-mode reliability and anti-bot notes**
 
-- After `open --headed`, the CLI verifies that a visible window actually exists
-  and warns when the session was launched headless anyway, or when the process is
-  headed but no window is detected. If you see that warning, `close` and retry
-  `open --headed` once. The check runs only for a **freshly created** session —
-  reconnecting to an existing session never runs it (the mode is already fixed),
-  which also prevents false "display-mode bug" alerts when a headless session is
-  reopened with `--headed`.
-- **The visibility check is Windows-only and machine-wide.** It enumerates every
-  `chrome.exe` launched with a remote-debugging port and a `PULSAR_CHROME`
-  profile marker; it cannot attribute a process to the CLI session that launched
-  it (the session→browser PID mapping lives inside the backend). A *visible*
-  result is trustworthy; a *negative* result can be skewed by other concurrent
-  Browser4 sessions — e.g. a headless session running alongside the headed one
-  just launched — which is why the warning states its detection is machine-wide.
-  On Unix the check is a stub that can never warn; verify window visibility
-  visually on Linux/macOS/CI.
+- After `open --headed` (or `open` in a headed default mode), the CLI asks the backend
+  whether a visible window actually exists for **this session** and reports the answer.
+  A warning is printed only when the check concludes the window is *hidden* — the
+  session was launched headless even though a window was requested, or its window is
+  minimized. If you see that warning, `close` and retry `open --headed` once. The check
+  runs only for a **freshly created** session — reconnecting to an existing session
+  never runs it (the mode is already fixed), which also prevents false "display-mode
+  bug" alerts when a headless session is reopened with `--headed`.
+- **The check answers three states, not two.** It reports `VISIBLE`, `HIDDEN` or
+  `UNKNOWN`, and “could not check” is deliberately its own answer: it is never rendered
+  as success *and* never as a warning. `VISIBLE` requires two independent facts to
+  agree — the process was not launched headless **and** the browser reports a
+  non-minimized window (`Browser.getWindowForTarget`) — because a headless Chrome
+  answers that call with a synthetic window too. `UNKNOWN` covers a browser that has
+  not been launched yet (the driver is created lazily by the first navigation, so
+  checking before that is meaningless), a missing PID marker, or an unreadable window
+  state.
+- **The check is session-scoped, on every platform.** It observes only this session's
+  browser: the PID from that session's own `launcher.pid` marker, that process's live
+  command line (`--headless` or not) and the window state read through the session's
+  own CDP driver. Nothing is inferred from other processes on the machine, so a
+  concurrent headless session can no longer skew the answer — the machine-wide process
+  scan that used to produce exactly that false positive is gone. The same facts are
+  available to scripts as the JSON of the `browser_window_state` tool
+  (`{visibility, verified, source, reason, observation{…}}`).
 - Browser4 passes plain `--headless` (never `--headless=new`), forces
   `--disable-blink-features=AutomationControlled`, and leaves user-agent rotation off by default because
   rotation itself is detectable.

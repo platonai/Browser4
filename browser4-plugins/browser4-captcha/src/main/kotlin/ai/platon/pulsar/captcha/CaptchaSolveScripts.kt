@@ -120,7 +120,7 @@ object CaptchaSolveScripts {
     val DETECT_HCAPTCHA = """
         (() => {
             try {
-                const result = { present: false, siteKey: null };
+                const result = { present: false, siteKey: null, widgetCount: 0 };
 
                 const hasHcaptcha = typeof hcaptcha !== 'undefined';
                 const hcaptchaIframes = document.querySelectorAll('iframe[src*="hcaptcha.com"]');
@@ -131,6 +131,7 @@ object CaptchaSolveScripts {
                 }
 
                 result.present = true;
+                result.widgetCount = hcaptchaDivs.length || hcaptchaIframes.length;
 
                 // Extract site key
                 if (hcaptchaDivs.length > 0) {
@@ -164,7 +165,7 @@ object CaptchaSolveScripts {
     val DETECT_TURNSTILE = """
         (() => {
             try {
-                const result = { present: false, siteKey: null, action: null, cdata: null };
+                const result = { present: false, siteKey: null, action: null, cdata: null, widgetCount: 0 };
 
                 const hasTurnstile = typeof turnstile !== 'undefined';
                 const turnstileDivs = document.querySelectorAll('.cf-turnstile, [data-turnstile-widget]');
@@ -176,6 +177,7 @@ object CaptchaSolveScripts {
                 }
 
                 result.present = true;
+                result.widgetCount = turnstileDivs.length || cfIframes.length;
 
                 // Extract site key
                 if (turnstileDivs.length > 0) {

@@ -25,8 +25,13 @@ import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.window.SessionWindowProbe
+import ai.platon.pulsar.chrome.window.WindowObservation
+import ai.platon.pulsar.chrome.window.WindowVisibilityPolicy
+import ai.platon.pulsar.chrome.window.WindowVisibilityReport
 import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.rest.session.SessionCloseReport
 import ai.platon.pulsar.rest.session.SessionStatus
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -180,6 +185,12 @@ class MCPToolController(
     private val toolResultCache: ToolResultCache = ToolResultCache.shared,
 ) {
     /**
+     * Session-scoped window verification (see [handleWindowState]). Stateless
+     * apart from the process-table seam, so one instance serves every call.
+     */
+    private val windowProbe = SessionWindowProbe()
+
+    /**
      * Shared receiver resolution — the very same helper backs the standard MCP
      * server, so a custom-domain tool cannot behave differently per channel.
      */
@@ -254,9 +265,11 @@ class MCPToolController(
          * Playwright-MCP style frontend tool name aliases: the names an agent
          * reaches for first, mapped to the internal tool they stand for.
          *
-         * The key set is kept in sync with [McpToolNames.frontendAliases] and
-         * asserted by `McpToolAliasParityTest`; visibility is internal so that
-         * test can read it.
+         * The key set equals [McpToolNames.dispatcherAliasNames] — the shared
+         * [McpToolNames.frontendAliases] plus the few names only this dispatcher
+         * resolves (see [McpToolNames.dispatcherOnlyAliasNames]) — and is asserted
+         * by `McpToolAliasParityTest`; visibility is internal so that test can
+         * read it.
          */
         internal val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
             "browser_navigate" to "navigate",
@@ -305,6 +318,14 @@ class MCPToolController(
             "browser_frame_list" to "frame_list",
             "browser_frame_switch" to "frame_switch",
             "browser_frame_main" to "frame_main",
+            // Session-scoped window verification: answers about THIS session's own
+            // browser, instead of a machine-wide process scan that can only ever
+            // describe other browsers (a session browser's temp context-group
+            // profile carries no workspace token). Dispatcher-only — there is no
+            // (domain, method) tool behind it, so it is listed in
+            // McpToolNames.dispatcherOnlyAliasNames rather than in the shared
+            // frontendAliases table.
+            "browser_window_state" to "window_state",
         )
 
         /**
@@ -583,6 +604,10 @@ class MCPToolController(
                 "delete_session_data" -> handleDeleteSessionData(request)
                 "attach_browser" -> handleAttachBrowser(request)
                 "check_session_ready" -> handleCheckSessionReady(request)
+                // Both the frontend alias and the internal name: the aliases are
+                // applied *after* this switch (inside dispatchToToolExecutor), so an
+                // inline tool has to accept the name the client actually sends.
+                "window_state", "browser_window_state" -> handleWindowState(request)
                 "command_batch" -> handleCommandBatch(request)
                 // All other tools → dynamic dispatch through CustomToolRegistry or AgentToolManager
                 else -> dispatchToToolExecutor(request)
@@ -632,6 +657,9 @@ class MCPToolController(
             "open_session", "close_session", "list_sessions",
             "close_all_sessions", "kill_all_sessions", "delete_session_data",
             "attach_browser", "check_session_ready",
+            // Session-scoped window verification (browser_window_state is the
+            // frontend alias): answers about THIS session's browser.
+            "window_state",
         )
 
         // Include every frontend tool alias so the CLI readiness probe
@@ -715,15 +743,51 @@ class MCPToolController(
 
     private fun handleCloseSession(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
-        val deleted = sessionManager.deleteSession(sessionId)
-        return if (deleted) {
+        val report = sessionManager.closeSession(sessionId)
+        return if (report != null) {
             // Whatever that session's reads returned is gone with its page.
             toolResultCache.invalidateSession(sessionId)
-            ResponseEntity.ok(textResponse("Session closed"))
+            // The text stays stable for existing clients; the structured payload
+            // is where the honest outcome lives: whether the browser process is
+            // VERIFIED gone (`browserTerminated` is null when it could not be
+            // checked) and what profile space the close reclaimed. A client that
+            // prints "Browser terminated" unconditionally is now able to stop.
+            ResponseEntity.ok(
+                textResponse(
+                    "Session closed",
+                    structuredContent = closeReportPayload(report),
+                )
+            )
         } else {
             ResponseEntity.ok(errorResponse("Session not found: $sessionId"))
         }
     }
+
+    /**
+     * The machine-readable form of [SessionCloseReport].
+     *
+     * `browserTerminated` is tri-state on purpose — `true`/`false`/absent-or-null
+     * — because "we could not check" is a different answer from both "it is
+     * gone" and "it is still running", and a client must be able to say so.
+     */
+    private fun closeReportPayload(report: SessionCloseReport): Map<String, Any?> = mapOf(
+        "sessionId" to report.sessionId,
+        "kind" to report.kind.name,
+        "sessionClosed" to true,
+        "browserTerminated" to report.browserTerminated,
+        "browserTermination" to report.termination,
+        "browserTerminationDetail" to report.processSummary,
+        "browserPid" to (report.process?.pid ?: 0L),
+        "profileCleanup" to report.profileCleanup,
+        "profileCleanupDetail" to report.profileSummary,
+        "profilePath" to (report.profile?.path?.toString() ?: ""),
+        "reclaimedBytes" to report.reclaimedBytes,
+        // A close that only detached from a browser other sessions still drive
+        // says so: the browser object, its tabs and its process were left as they
+        // were, which is not the same fact as "this session's browser is gone".
+        "detachedOnly" to report.detachedOnly,
+        "sharedWith" to report.sharedWith,
+    )
 
     private suspend fun handleListSessions(): ResponseEntity<MCPToolCallResponse> {
         val sessions = sessionManager.getAllSessions().map { s ->
@@ -756,6 +820,13 @@ class MCPToolController(
                 "browserName" to (s.browserIdentity?.name ?: ""),
                 "browserVersion" to (s.browserIdentity?.version ?: ""),
                 "browserUa" to (s.browserIdentity?.rawUa ?: ""),
+                // Which browser this session is REALLY driving, for sessions that
+                // attached to one: the verified endpoint/port and the session that
+                // already owned it. Without these, `list` shows a session name and
+                // a page but nothing that says where the page lives.
+                "endpoint" to (s.attachEvidence?.endpoint ?: ""),
+                "cdpPort" to (s.attachEvidence?.port ?: 0),
+                "ownedBySessionId" to (s.attachEvidence?.ownedBySessionId ?: ""),
             )
         }
         val json = pulsarObjectMapper().writeValueAsString(sessions)
@@ -792,17 +863,99 @@ class MCPToolController(
         return managed.url?.takeIf { it.isNotBlank() } ?: ""
     }
 
+    /**
+     * Answers whether the browser of THIS session has a visible window.
+     *
+     * The check is session-scoped on purpose. The CLI used to decide this from a
+     * machine-wide `chrome.exe` scan narrowed by a workspace token, which cannot
+     * see a session browser at all: those are launched under the shared temp
+     * context-group root and carry no workspace identifier. The lookup therefore
+     * only ever described *other* processes — producing a warning on a
+     * demonstrably visible headed window whenever an orphan happened to be alive,
+     * and silence (the very regression the check exists for) when none was.
+     *
+     * The response is a tri-state: `VISIBLE` / `HIDDEN` / `UNKNOWN`, with
+     * `verified=false` exactly when the check could not be performed. `UNKNOWN`
+     * is not a failure and must not be rendered as a warning.
+     */
+    private suspend fun handleWindowState(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val session = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("Session not found: $sessionId"))
+
+        val displayMode = runCatching { PulsarSettings.parse(session.capabilities).displayMode?.name }.getOrNull()
+        val facts = sessionManager.sessionBrowserFacts(sessionId)
+        if (facts == null) {
+            // No bound browser: nothing can be observed, and saying so is the
+            // honest answer — never a claim about a window that was not checked.
+            val report = WindowVisibilityPolicy.classify(WindowObservation(requestedDisplayMode = displayMode))
+            return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(windowStatePayload(sessionId, report))))
+        }
+
+        // The page targets the endpoint advertises are part of the evidence: a
+        // window check that says "visible" while the browser serves nothing would
+        // be describing a browser the session cannot use.
+        val targetUrls = if (facts.port > 0) {
+            runCatching {
+                PulsarSessionManager.verifyCdpEndpoint("http://127.0.0.1:${facts.port}").pageTargetUrls
+            }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
+
+        val report = windowProbe.probe(
+            driver = session.agenticSession.boundDriver,
+            contextDir = facts.contextDir,
+            debugPort = facts.port,
+            requestedDisplayMode = displayMode,
+            pageTargetUrls = targetUrls,
+        )
+        return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(windowStatePayload(sessionId, report))))
+    }
+
+    /** The JSON contract the CLI renders from: session id plus the full verdict. */
+    private fun windowStatePayload(
+        sessionId: String,
+        report: WindowVisibilityReport,
+    ): Map<String, Any?> = linkedMapOf<String, Any?>(
+        "sessionId" to sessionId,
+    ).apply {
+        putAll(report.toMap())
+    }
+
     private fun handleCloseAllSessions(): ResponseEntity<MCPToolCallResponse> {
-        val count = sessionManager.deleteAllSessions()
+        val reports = sessionManager.closeAllSessions()
         toolResultCache.clear()
-        return ResponseEntity.ok(textResponse("Closed $count session(s)"))
+        return ResponseEntity.ok(
+            textResponse("Closed ${reports.size} session(s)", closeAllReportPayload(reports))
+        )
     }
 
     private fun handleKillAllSessions(): ResponseEntity<MCPToolCallResponse> {
-        val count = sessionManager.deleteAllSessions()
+        val reports = sessionManager.closeAllSessions()
         toolResultCache.clear()
-        return ResponseEntity.ok(textResponse("Killed $count session(s)"))
+        return ResponseEntity.ok(
+            textResponse("Killed ${reports.size} session(s)", closeAllReportPayload(reports))
+        )
     }
+
+    /**
+     * The aggregate form of [closeReportPayload] for `close-all` / `kill-all`.
+     *
+     * The counts are separated on purpose: `browserTerminated` counts only the
+     * browsers PROVEN gone, `browserUnverified` the sessions whose process could
+     * not be checked, and `browserSurvived` the ones still running after the
+     * kill. Summing them into "N browsers terminated" is how a leaked Chrome
+     * stayed invisible.
+     */
+    private fun closeAllReportPayload(reports: List<SessionCloseReport>): Map<String, Any?> = mapOf(
+        "closed" to reports.size,
+        "browserTerminated" to reports.count { it.browserTerminated == true },
+        "browserSurvived" to reports.count { it.browserTerminated == false },
+        "browserUnverified" to reports.count { it.process != null && it.browserTerminated == null },
+        "reclaimedBytes" to reports.sumOf { it.reclaimedBytes },
+        "sessions" to reports.map { closeReportPayload(it) },
+    )
 
     private suspend fun handleDeleteSessionData(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -875,15 +1028,35 @@ class MCPToolController(
         )
         // Surface the verified browser identity (from /json/version) so the
         // CLI can print which browser the endpoint really drives instead of
-        // just the requested endpoint/channel.
+        // just the requested endpoint/channel. The attach evidence adds WHAT was
+        // observed at the endpoint — the port, the page targets, and whether the
+        // browser belongs to another live session — so a channel name that bound
+        // a browser the caller never opened is reported instead of implied.
         val identity = session.browserIdentity
-        val payload = mapOf(
+        val evidence = session.attachEvidence
+        val payload = mutableMapOf<String, Any?>(
             "sessionId" to session.sessionId,
             "browser" to (identity?.name ?: ""),
             "browserFamily" to (identity?.family ?: ""),
             "browserVersion" to (identity?.version ?: ""),
             "browserUa" to (identity?.rawUa ?: ""),
+            "verifiedBrowser" to (evidence?.verifiedBrowser ?: ""),
+            "endpoint" to (evidence?.endpoint ?: cdpEndpoint ?: ""),
+            "port" to (evidence?.port ?: cdpPort ?: 0),
+            "pageTargets" to (evidence?.pageTargetCount ?: 0),
+            "pageTargetUrls" to (evidence?.pageTargetUrls ?: emptyList<String>()),
+            // The session whose browser this endpoint already is ("" when the
+            // endpoint was unattached). A non-empty value means the bind was to a
+            // browser another session opened — the client must say so, and can
+            // point the user at `-s <owner>` or an explicit --cdp endpoint.
+            "ownedBySessionId" to (evidence?.ownedBySessionId ?: ""),
+            "reboundFromPort" to (evidence?.reboundFromPort ?: 0),
         )
+        if (evidence?.ownedBySessionId != null) {
+            payload["warning"] = "attached to the browser of session '${evidence.ownedBySessionId}' " +
+                "(port ${evidence.port}, ${evidence.pageTargetCount} page target(s)) — not a browser this " +
+                "session opened; pass an explicit --cdp http://127.0.0.1:${evidence.port} to pin the instance"
+        }
         return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(payload)))
     }
 
@@ -1745,9 +1918,11 @@ class MCPToolController(
         // Fail loud when an externally CDP-attached browser has died: getSession
         // does not run health resolution, so without this gate the stale driver
         // would return cached data (last URL from currentUrl, null from evaluate)
-        // with exit status 0. The message tells the user to re-attach.
+        // with exit status 0. The failure carries its own code — "the browser is
+        // gone" and "only the tab this session drove is gone" need different
+        // reactions from a script, and wording must not decide the status.
         sessionManager.cdpAttachedSessionUnavailable(managed)?.let {
-            return ResponseEntity.ok(errorResponse(it))
+            return ResponseEntity.ok(errorResponse(it.message, it.code))
         }
 
         val agent = managed.agenticSession.companionAgent as? BasicBrowserAgent
@@ -1991,6 +2166,14 @@ class MCPToolController(
 
     private fun textResponse(text: String): MCPToolCallResponse =
         MCPToolCallResponse(content = listOf(MCPContent(text = text)))
+
+    /**
+     * A successful response whose text stays stable for existing clients while
+     * the same facts travel in `structuredContent` for clients that branch on
+     * them (see [closeReportPayload]).
+     */
+    private fun textResponse(text: String, structuredContent: Map<String, Any?>): MCPToolCallResponse =
+        MCPToolCallResponse(content = listOf(MCPContent(text = text)), structuredContent = structuredContent)
 
     private fun textResponse(text: String, pagination: PaginationMeta?): MCPToolCallResponse =
         MCPToolCallResponse(content = listOf(MCPContent(text = text)), pagination = pagination)

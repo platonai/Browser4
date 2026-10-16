@@ -73,6 +73,9 @@ open class PptxBrowseEventHandler(
                         "Auto-generated PPTX for {}: {} ({} images embedded)",
                         pageUrl, output.path, output.embeddedImageCount
                     )
+                    output.warnings.forEach { warning ->
+                        logger.warn("Auto-generated PPTX for {} is partial: {}", pageUrl, warning)
+                    }
                 } catch (e: Exception) {
                     logger.warn("Auto-generate PPTX error on {}: {}", pageUrl, e.message)
                 }

@@ -160,12 +160,12 @@ Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedica
 
 The `list` command also has a **Display** column with the mode fixed at session creation — Headed / Headless / Supervised / Attached (`-` when unrecorded).
 
-> **`stop` deletes this checkout's saved session records.** `stop` (and `kill-all`) shuts the backend
-> down *and* removes every `sessions/*.json` record, so the next `list` prints **"No active browser
-> sessions."** and the documented **Stale / Refresh** rows never appear. The names survive in the
-> global `~/.browser4/session-registry.json`, so `browser4-cli -s my-job goto "<url>"` revives the
-> *same* session id (cookies/profile included). Use `close`/`close-all` when the CLI must stay able to
-> list and reconnect — record deletion on `stop` is silent today.
+> **`stop` keeps this checkout's session records; `close` deletes them.** `stop` (and `kill-all`)
+> shuts the backend down and marks every `sessions/*.json` record **stale** — the records stay on
+> disk, `list` shows them as **Status Unknown · Next open Refresh**, and the next `open`/`goto`
+> revives the *same* session id with its cookies and profile intact. `close`/`close-all` instead
+> remove the record of the session they close, so a later `open -s <name>` mints a **new** session id
+> and a fresh profile: run `state-save`/`state-load` around a `close` when browser state must survive.
 
 `list --all` adds a **Workspace** column and includes the sessions persisted by every other checkout on the machine — in development mode each checkout keeps its own state namespace under `~/.browser4/workspaces/`, so a session started in a sibling checkout is invisible to a plain `list`. The workspace you are running in is marked `*`. Those foreign rows come from local state only: this backend cannot verify another workspace's sessions, so they read **Status Unknown · URL `-` · Next open Refresh** — never treat them as dead, and close them from their own checkout. `--json` adds `workspace` + `workspace_current` to each row when `--all` is given.
 
@@ -244,7 +244,7 @@ session** and prints what it applied (`✓ Geolocation emulated: latitude=31.23,
 |---------------|---------|-------------|----------------|
 | `goto`, `open`, `close`, `close-all`, `reload` | Navigation & session management | Every session starts here; `close-all` cleans up every session | — |
 | `snapshot` | Capture accessibility tree (AXTree) with element refs; `/url` lines for links are opt-in via `-u`/`--urls`; `--selector` fails loudly when the CSS selector matches nothing | **Page structure & interaction** — find elements to click, fill, etc. Use `snapshot` when you need refs (e5, e36) to interact with. | [snapshot.md](references/snapshot.md) |
-| `snapshot grep` | Search the live full-page AX tree with regex (not the last saved file; auto-diff markers are not greppable) | Find elements by text or pattern. Patterns are **Rust regex** — `\|` is alternation, and a literal `$` is safest written `[$]` (`-i`, `-A/-B/-C`, `-F`, `-v`, `-c`, `-l` supported). Zero matches = exit 1 | — |
+| `snapshot grep` | Search the live full-page AX tree with regex (not the last saved file; add `--diff` to search the persisted auto-diff report of the last `snapshot --auto-diff` instead) | Find elements by text or pattern. Patterns are **Rust regex** — `\|` is alternation, and a literal `$` is safest written `[$]` (`-i`, `-A/-B/-C`, `-F`, `-v`, `-c`, `-l` supported). Zero matches = exit 1 | — |
 | `click`, `dblclick`, `drag`, `hover`, `mousemove`, `fill`, `type`, `press`, `select`, `check`, `generate-locator` | Page interaction | Form filling, button clicks, mouse actions, navigation. Clicks/hovers move the pointer onto the element first; `mousemove 5 5` clears a lingering `:hover`. `type --method auto\|chars\|exec` (needs a target ref) bulk-inserts long (>150 chars) or multi-line text in one `execCommand('insertText')` instead of typing per character | — |
 | `upload <ref> <file> [file...]` | Upload local files to a page file input | Send attachments/photos/documents to an `<input type="file">`; the target must be a file input, paths must be readable on the machine running the browser | [upload.md](references/upload.md) |
 | `focus`, `key`, `keyboard` | Focus an element / press a key (key & keyboard alias `press`) | Explicit focus before typing, agent-browser-style keypresses | — |
@@ -286,8 +286,8 @@ session** and prints what it applied (`✓ Geolocation emulated: latitude=31.23,
 | `config` | Persistent CLI defaults (server, timeout, proxy, session, extension_id) | Set default server URL, timeout, proxy, session name, or the id of a locally loaded extension | [config.md](references/config.md) |
 | `status`, `doctor`, `doctor log`, `doctor metrics`, `doctor status` | Server health & diagnostics | `doctor status` prints the aggregated status report (health, build, runtime, LLM, sessions, browsers, swarm, plugins, skills, metrics, logs) in layers: summary by default, `--verbose` for full detail, `--section <name>` for one report, `--json` for machine-readable output. `status` prints the web status panel URL (`http://<server>:18182/status`) — a live dashboard of the same reports; `http://<server>:18182/pages.html` shows every open page | — |
 | `batch` | Run several commands in one invocation | Scripted multi-step flows, fewer round-trips | [quickstart.md](references/quickstart.md) |
-| `tool call <mcp-name> [--json '{...}']` | Generic MCP tool passthrough | Invoke any MCP tool that has no dedicated CLI command — most notably plugin-provided agent tools. Tool names are snake_case: `captcha.detect` → `tool call captcha_detect`; args as JSON: `tool call captcha_solve --json '{"type": "RECAPTCHA_V2", "siteKey": "..."}'`. List tools via `plugin list` or GET /mcp/tools | — |
-| `console`, `cdp`, `pdf`, `page-info`, `go-back`, `go-forward`, `keydown`, `keyup`, `mousedown`, `mouseup`, `mousewheel`, `snapshot list`, `snapshot clean`, `crawl status\|result\|cancel\|resume\|clear\|list`, `swarm submit\|status\|result\|list\|close`, `chat`, `session-default`, `delete-data`, `kill-all`, `stop`, `uninstall`, `plugin-*` | Remaining command families (not covered here) | Discover with `browser4-cli help` / `browser4-cli help <command>` | — |
+| `tool call <mcp-name> [--json '{...}']` | Generic MCP tool passthrough | Invoke any MCP tool that has no dedicated CLI command — most notably plugin-provided agent tools. Tool names are snake_case: `captcha.detect` → `tool call captcha_detect`; args as JSON: `tool call captcha_solve --json '{"type": "RECAPTCHA_V2", "siteKey": "..."}'`. Enumerate tool names with `tool list` (or `GET /mcp/tools`) — `plugin list` lists installed plugin JARs, not tools — and `plugin <domain> <method> --help` documents one plugin tool; see [plugins.md](references/plugins.md) for which plugins a dev bundle ships and how to install the rest | — |
+| `console`, `cdp`, `pdf`, `page-info`, `go-back`, `go-forward`, `keydown`, `keyup`, `mousedown`, `mouseup`, `mousewheel`, `snapshot list`, `snapshot clean`, `crawl status\|result\|cancel\|resume\|clear\|list`, `swarm submit\|status\|result\|list\|close`, `chat`, `session-default`, `delete-data`, `kill-all`, `stop`, `uninstall`, `plugin list\|info\|install\|remove`, `plugin <domain> <method>`, `plugin-*` | Remaining command families (not covered here) | Discover with `browser4-cli help` / `browser4-cli help <command>`; plugin management, bundled-vs-installable plugin JARs and the install → restart workflow: [plugins.md](references/plugins.md) | — |
 | `experience save`, `experience query`, `experience list`, `experience deep learn` | Progressive experience memory | Reuse selectors, extraction patterns and blocker awareness across sessions — see the sibling skill | [browser4-experience](../browser4-experience/SKILL.md) |
 
 ### Refreshing This Skill
@@ -424,15 +424,9 @@ Proven copy-paste recipes — full walkthroughs in **[quick-patterns.md](referen
 12. **Typing text (`type`)** — `type "text" <ref>`; add `--method auto|chars|exec` (requires a target ref): `auto` (default) types short text per-character and switches to a one-shot `execCommand('insertText')` bulk insert for long (>150 chars) or multi-line text on textarea/contenteditable; `chars` forces per-character typing; `exec` forces the bulk insert. `--verify` keeps its strict read-back semantics for tool callers.
 13. **File Upload** — `upload <ref> <file> [file...]` uploads one or more local files to a page file input (`<input type="file">` only); the paths must be readable by the browser process (remote backend: resolved on the backend host). Multi-file, absolute paths, `--no-snapshot` supported; see [upload.md](references/upload.md).
 
-**Resilient selectors (PowerCSS):** `div:expr(width > 400 && height > 400)` filters by computed
-geometry/position/content density instead of class names, so it survives markup changes — usable in
-any CSS selector and in `htmlsnapshot get` / X-SQL selectors. Feature list and operators:
-[power-dom.md](references/power-dom.md); bridging refs to selectors: [css-selector-bridge.md](references/css-selector-bridge.md).
+**Resilient selectors (PowerCSS):** `div:expr(width > 400 && height > 400)` filters by computed geometry/position/content density instead of class names, so it survives markup changes — usable in any CSS selector and in `htmlsnapshot get` / X-SQL selectors. Operators: [power-dom.md](references/power-dom.md); refs → selectors: [css-selector-bridge.md](references/css-selector-bridge.md).
 
-**AI-powered extraction:** `agent run "<task>"` submits an async task — poll `agent status <id>` and
-read `agent result <id>`. A finished task reports `"processState": "completed"` (older payloads used
-`"done"`), so **`isDone: true` is the reliable completion check**; `agent list` shows all tracked
-tasks. `extract` / `summarize` are the synchronous variants. See [agent.md](references/agent.md).
+**AI-powered extraction:** `agent run "<task>"` submits an async task — poll `agent status <id>` and read `agent result <id>`. Both answer the shared task envelope (`{taskId, status, statusCode, message, error, …}`, vocabulary `queued|running|done|failed|cancelled`), so **`status: "done"` is the completion check** (terminal: `done`/`failed`/`cancelled`), and the payload carries the agent's `keyFindings`, `filesChanged` and the `workspace` its deliverables live in. `agent list` shows the same knowledge, refreshed from the backend on every call; `extract` / `summarize` are the synchronous variants. See [agent.md](references/agent.md).
 
 ## 7. Reference Map
 
@@ -470,7 +464,7 @@ Organized by task — follow the link that matches what you're trying to do:
 
 **Manage skills & configuration:**
 [skills.md](references/skills.md) — bundled skill files, backend skill management
-[config.md](references/config.md) — `config` command family: CLI defaults and server-side runtime overrides
+[config.md](references/config.md) — `config` command family: CLI defaults and server-side runtime overrides; what a dev bundle ships, plugin install/opt-in enablement: [plugins.md](references/plugins.md)
 [development-mode.md](references/development-mode.md) — one backend per checkout: development ports from 8282, per-checkout state and app data, workspace-scoped `stop`
 
 **AI-powered extraction:** [agent.md](references/agent.md) — `extract`, `summarize`, `agent run|status|result`, LLM provider config

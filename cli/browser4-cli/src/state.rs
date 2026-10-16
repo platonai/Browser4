@@ -581,6 +581,72 @@ pub fn clear_state(state_dir: Option<&Path>, session_name: Option<&str>) {
     }
 }
 
+/// A session name whose `close` discarded the browser profile that went with
+/// it.
+///
+/// `close` deletes the name's state record, so on the next `open -s <name>` the
+/// CLI cannot tell "a name that was never used" from "a name whose profile was
+/// just thrown away" — and that difference decides whether the user gets a
+/// restored profile or a brand-new one (133022#1).  The note is written by
+/// `close` and consumed by `open`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosedSessionNote {
+    /// Session id whose profile directory was discarded.
+    pub session_id: String,
+    /// RFC 3339 timestamp of the close, for humans.
+    pub closed_at: String,
+}
+
+/// File holding the [`ClosedSessionNote`] map.
+///
+/// It sits in the state-dir root (next to `cli-state.json`), never under
+/// `sessions/`, so neither `list` nor `close-all` can mistake it for a session
+/// record.
+fn closed_sessions_file(dir: &Path) -> PathBuf {
+    dir.join("closed-sessions.json")
+}
+
+/// Read the note map, treating an unreadable or corrupt file as empty.
+fn read_closed_sessions(dir: &Path) -> std::collections::BTreeMap<String, ClosedSessionNote> {
+    fs::read_to_string(closed_sessions_file(dir))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Record that `close` discarded the profile of the session called [name].
+///
+/// Best-effort: a failure only costs the `open` warning, so it never fails the
+/// close itself.
+pub fn remember_closed_session_in(dir: &Path, name: &str, session_id: &str) {
+    let mut notes = read_closed_sessions(dir);
+    notes.insert(
+        name.to_string(),
+        ClosedSessionNote {
+            session_id: session_id.to_string(),
+            closed_at: chrono::Utc::now().to_rfc3339(),
+        },
+    );
+    let Ok(json) = serde_json::to_string_pretty(&notes) else {
+        return;
+    };
+    if fs::create_dir_all(dir).is_ok() {
+        let _ = atomic_write(&closed_sessions_file(dir), json.as_bytes());
+    }
+}
+
+/// Take (and clear) the note for [name], if `close` discarded its profile.
+pub fn take_closed_session_note_in(dir: &Path, name: &str) -> Option<ClosedSessionNote> {
+    let mut notes = read_closed_sessions(dir);
+    let note = notes.remove(name)?;
+    if let Ok(json) = serde_json::to_string_pretty(&notes) {
+        if fs::create_dir_all(dir).is_ok() {
+            let _ = atomic_write(&closed_sessions_file(dir), json.as_bytes());
+        }
+    }
+    Some(note)
+}
+
 /// Clear the default CLI state plus all named session state files.
 pub fn clear_all_state(state_dir: Option<&Path>) {
     let dir = state_dir
@@ -743,6 +809,14 @@ pub struct LoopState {
     pub updated_at: String,
     /// Loop status: "running" or "stopped".
     pub status: String,
+    /// PID of the worker process that owns this loop, when one is known.
+    ///
+    /// Recorded at every persist so a control command can tell "a worker is
+    /// still running this loop" from "only the state file is left".  Without it
+    /// `--resume` spawned a second worker for a loop whose paused worker was
+    /// still resident, and both then ran every iteration (issue 122234#1).
+    #[serde(rename = "workerPid", default, skip_serializing_if = "Option::is_none")]
+    pub worker_pid: Option<u32>,
 }
 
 fn loop_state_file(state_dir: &Path, name: Option<&str>) -> PathBuf {
@@ -761,10 +835,109 @@ fn loop_state_file(state_dir: &Path, name: Option<&str>) -> PathBuf {
     }
 }
 
+/// Path of the stop sentinel for [name].
+///
+/// Derived from the state file name (so the same name sanitizing applies):
+/// `loops/x.json` gets `loops/x.stop`.
+fn loop_stop_file(state_dir: &Path, name: Option<&str>) -> PathBuf {
+    loop_state_file(state_dir, name).with_extension("stop")
+}
+
+/// Request a stop for [name] by creating its sentinel, returning the path.
+///
+/// The sentinel is deliberately separate from the progress file: the previous
+/// stop signal *was* the state file's `status`, and deleting that file is what
+/// let a worker which woke up mid-sleep recreate itself as "running" and revive
+/// the loop after `--stop-all` had already reported success (issue 122234#3).
+/// Only a control command — or the worker that honoured it — removes it.
+pub fn request_loop_stop(
+    state_dir: Option<&Path>,
+    name: Option<&str>,
+    requested_by: &str,
+) -> std::io::Result<PathBuf> {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    let path = loop_stop_file(&dir, name);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let body = serde_json::json!({
+        "requestedAt": chrono::Utc::now().to_rfc3339(),
+        "requestedBy": requested_by,
+        "workerPid": read_loop_state(state_dir, name).and_then(|ls| ls.worker_pid),
+    })
+    .to_string();
+    atomic_write(&path, body.as_bytes())?;
+    Ok(path)
+}
+
+/// True when a stop has been requested for [name] and not yet cleared.
+pub fn loop_stop_requested(state_dir: Option<&Path>, name: Option<&str>) -> bool {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    if loop_stop_file(&dir, name).exists() {
+        return true;
+    }
+    is_implicit_default_dir(state_dir) && loop_stop_file(&fallback_state_dir(), name).exists()
+}
+
+/// Clear the stop sentinel for [name] (the worker exied, or `--resume` un-stopped it).
+pub fn clear_loop_stop_request(state_dir: Option<&Path>, name: Option<&str>) {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    let _ = fs::remove_file(loop_stop_file(&dir, name));
+    if is_implicit_default_dir(state_dir) {
+        let _ = fs::remove_file(loop_stop_file(&fallback_state_dir(), name));
+    }
+}
+
+/// True when a process with [pid] is currently running.
+///
+/// Used to tell a live loop worker from a stale state file, so `--resume` can
+/// never start a second worker for the same loop.
+pub fn is_process_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // Signal 0 performs error checking but sends no signal: 0 while the
+        // process exists, -1 with ESRCH once it is gone.
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        unsafe { kill(pid as i32, 0) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        extern "system" {
+            fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> isize;
+            fn CloseHandle(hObject: isize) -> i32;
+        }
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle == 0 {
+                return false;
+            }
+            CloseHandle(handle);
+            true
+        }
+    }
+}
+
+/// The PID of the live worker that owns [name], when the state records one.
+///
+/// The current process counts too: a loop re-executed by its own worker (or a
+/// control command run inside the worker) must not be mistaken for "no worker".
+pub fn live_loop_worker_pid(state_dir: Option<&Path>, name: Option<&str>) -> Option<u32> {
+    let pid = read_loop_state(state_dir, name)?.worker_pid?;
+    is_process_alive(pid).then_some(pid)
+}
+
 /// Read the persisted loop state, if any.
 /// When the implicit default dir is used, also checks the fallback directory.
-pub fn read_loop_state(state_dir: Option<&Path>, name: Option<&str>) -> Option<LoopState> {
-    let dir = state_dir
+pub fn read_loop_state(state_dir: Option<&Path>, name: Option<&str>) -> Option<LoopState> {    let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
     let path = loop_state_file(&dir, name);
@@ -1369,7 +1542,7 @@ pub fn track_async_task_in_batch(
     write_async_tasks(&list, state_dir)
 }
 
-/// Remove completed/failed tasks from the tracked list.
+/// Remove completed/failed/cancelled tasks from the tracked list.
 #[allow(dead_code)]
 pub fn prune_async_tasks(state_dir: Option<&std::path::Path>) -> std::io::Result<usize> {
     let mut list = read_async_tasks(state_dir);
@@ -1379,14 +1552,25 @@ pub fn prune_async_tasks(state_dir: Option<&std::path::Path>) -> std::io::Result
         if s.is_empty() {
             return true; // keep — not yet polled
         }
-        // Standard lifecycle labels from friendly_agent_status / friendly_crawl_status
-        s != "completed" && !s.starts_with("failed")
+        // Standard lifecycle labels from friendly_agent_status / friendly_crawl_status,
+        // including the shared envelope's `cancelled` terminal state.
+        !is_terminal_async_status(s)
     });
     let removed = before - list.tasks.len();
     if removed > 0 {
         write_async_tasks(&list, state_dir)?;
     }
     Ok(removed)
+}
+
+/// Whether a local task label means the task can no longer change state.
+///
+/// Every lifecycle consumer (`prune`, `completed_at`, `agent list --clear`) shares
+/// this predicate: `cancelled` is terminal in the shared task envelope
+/// (`TaskEnvelopes.TERMINAL_STATUSES`), so treating it as in-flight kept cancelled
+/// work in the list forever.
+pub fn is_terminal_async_status(status: &str) -> bool {
+    status == "completed" || status == "cancelled" || status.starts_with("failed")
 }
 
 /// Update the last_status field for a tracked async task.
@@ -1401,8 +1585,7 @@ pub fn update_async_task_status(
         entry.last_status = status.to_string();
         // Set completed_at when transitioning to a terminal state, but only
         // if it hasn't been set yet (keep the first completion timestamp).
-        let is_terminal = status == "completed" || status.starts_with("failed");
-        if is_terminal && entry.completed_at.is_none() {
+        if is_terminal_async_status(status) && entry.completed_at.is_none() {
             entry.completed_at = Some(chrono::Utc::now().to_rfc3339());
         }
         write_async_tasks(&list, state_dir)?;
@@ -1925,6 +2108,32 @@ mod tests {
             .prefix("state-")
             .tempdir_in(&root)
             .unwrap()
+    }
+
+    #[test]
+    fn closed_session_notes_are_consumed_once() {
+        // 133022#1: `close` leaves a note so the next `open -s <name>` can warn
+        // that it starts a fresh profile; the note is taken once.
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+
+        assert_eq!(take_closed_session_note_in(dir, "research"), None);
+
+        remember_closed_session_in(dir, "research", "743ea2cf-1");
+        let note = take_closed_session_note_in(dir, "research").expect("note is stored");
+        assert_eq!(note.session_id, "743ea2cf-1");
+        assert!(!note.closed_at.is_empty());
+
+        // Consumed: the warning is not repeated on every later open.
+        assert_eq!(take_closed_session_note_in(dir, "research"), None);
+        // Another name is unaffected.
+        remember_closed_session_in(dir, "other", "abc");
+        assert_eq!(take_closed_session_note_in(dir, "research"), None);
+        assert!(take_closed_session_note_in(dir, "other").is_some());
+        // The note file never lands under `sessions/`, so `list` cannot mistake
+        // it for a session record.
+        assert!(dir.join("closed-sessions.json").is_file());
+        assert!(!dir.join("sessions").join("closed-sessions.json").exists());
     }
 
     #[test]
@@ -3058,6 +3267,7 @@ mod tests {
             started_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:10Z".to_string(),
             status: "running".to_string(),
+            worker_pid: Some(std::process::id()),
         }
     }
 
@@ -3085,9 +3295,92 @@ mod tests {
         assert_eq!(entries[1].task, "goto https://example.com");
     }
 
+    // -------------------------------------------------------------------
+    // Loop worker ownership and the stop sentinel (issues 122234#1/#3)
+    // -------------------------------------------------------------------
+
     #[test]
-    fn test_loop_state_path_points_at_existing_named_file() {
+    fn worker_pid_round_trips_and_survives_older_state_files() {
         let tmp = test_temp_dir();
+        let mut state = loop_state_sample(vec!["eval".to_string()]);
+        state.worker_pid = Some(4242);
+        write_loop_state(&state, Some(tmp.path()), Some("owned")).unwrap();
+        assert_eq!(
+            read_loop_state(Some(tmp.path()), Some("owned"))
+                .expect("state")
+                .worker_pid,
+            Some(4242)
+        );
+
+        // A state file written before the field existed still parses.
+        let legacy = tmp.path().join("loops").join("legacy.json");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(
+            &legacy,
+            r#"{"taskTokens":["eval","1+1"],"mode":"subcommand","intervalSecs":10,
+                "iterationsCompleted":1,"startedAt":"2026-01-01T00:00:00Z",
+                "updatedAt":"2026-01-01T00:00:10Z","status":"running"}"#,
+        )
+        .unwrap();
+        let parsed = read_loop_state(Some(tmp.path()), Some("legacy")).expect("legacy state");
+        assert_eq!(parsed.worker_pid, None);
+        assert_eq!(parsed.status, "running");
+    }
+
+    #[test]
+    fn live_loop_worker_pid_distinguishes_a_live_pid_from_a_stale_one() {
+        let tmp = test_temp_dir();
+        // The test process itself is alive.
+        let mut state = loop_state_sample(vec!["eval".to_string()]);
+        state.worker_pid = Some(std::process::id());
+        write_loop_state(&state, Some(tmp.path()), Some("live")).unwrap();
+        assert_eq!(
+            live_loop_worker_pid(Some(tmp.path()), Some("live")),
+            Some(std::process::id())
+        );
+
+        // A PID that cannot exist (0 is never a user process) is not live, so
+        // `--resume` may spawn a worker for that loop.
+        let mut stale = loop_state_sample(vec!["eval".to_string()]);
+        stale.worker_pid = Some(0);
+        write_loop_state(&stale, Some(tmp.path()), Some("stale")).unwrap();
+        assert_eq!(live_loop_worker_pid(Some(tmp.path()), Some("stale")), None);
+        assert!(!is_process_alive(0));
+        assert!(is_process_alive(std::process::id()));
+    }
+
+    #[test]
+    fn stop_sentinel_is_independent_of_the_state_file() {
+        let tmp = test_temp_dir();
+        write_loop_state(
+            &loop_state_sample(vec!["eval".to_string()]),
+            Some(tmp.path()),
+            Some("guarded"),
+        )
+        .unwrap();
+        assert!(!loop_stop_requested(Some(tmp.path()), Some("guarded")));
+
+        let sentinel = request_loop_stop(Some(tmp.path()), Some("guarded"), "stop").unwrap();
+        assert!(sentinel.ends_with("guarded.stop"), "{}", sentinel.display());
+        assert!(loop_stop_requested(Some(tmp.path()), Some("guarded")));
+        // The stop signal must survive the progress file being cleared, which is
+        // what let a mid-sleep worker revive a stopped loop before.
+        clear_loop_state(Some(tmp.path()), Some("guarded"));
+        assert!(loop_stop_requested(Some(tmp.path()), Some("guarded")));
+
+        clear_loop_stop_request(Some(tmp.path()), Some("guarded"));
+        assert!(!loop_stop_requested(Some(tmp.path()), Some("guarded")));
+
+        // The default loop gets its own sentinel next to loop-state.json.
+        request_loop_stop(Some(tmp.path()), None, "stop-all").unwrap();
+        assert!(loop_stop_requested(Some(tmp.path()), None));
+        assert!(tmp.path().join("loop-state.stop").exists());
+        clear_loop_stop_request(Some(tmp.path()), None);
+        assert!(!loop_stop_requested(Some(tmp.path()), None));
+    }
+
+    #[test]
+    fn test_loop_state_path_points_at_existing_named_file() {        let tmp = test_temp_dir();
         write_loop_state(
             &loop_state_sample(vec!["eval".to_string()]),
             Some(tmp.path()),

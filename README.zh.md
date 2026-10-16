@@ -524,9 +524,9 @@ browser4-cli htmlsnapshot readability --text-only --all
 | `chat <message>` | 发送纯 AI chat 请求，不自动追加浏览器上下文。 |
 | `chat-result <id>` | 获取异步 chat 任务结果。 |
 | `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。 |
-| `agent status <id>` | 查询运行中的任务状态。 |
-| `agent result <id>` | 获取已完成任务的结果。 |
-| `agent list` | 列出已跟踪的 agent 任务及其状态。 |
+| `agent status <id>` | 查询任务状态——共享状态信封（`status`：queued/running/done/failed/cancelled，另有 `statusCode`、`message` 与 agent 步数）。 |
+| `agent result <id>` | 获取已完成任务的结果：摘要、`keyFindings`、`filesChanged`，以及产物所在的 workspace 目录。 |
+| `agent list` | 列出已跟踪的 agent 任务（状态与 `agent status` 一致，每次调用都会向服务端刷新）；`--clear` 可移除已结束的任务。 |
 
 ```bash
 browser4-cli extract "product name, price, rating"
@@ -652,7 +652,20 @@ Browser4 中有两套不同的 “skill” 表面：
 
 #### 插件
 
-插件是运行在服务端的 JAR 扩展，用于扩展 Browser4 能力。
+插件是运行在服务端的 JAR 扩展，用于扩展 Browser4 能力。开发模式的运行时
+bundle 会随源码树一起打包首批插件：`browser4-swarm`、`browser4-images`、
+`browser4-markdown`、`browser4-media`、`browser4-seo`（SEO 为显式启用：
+`-Dbrowser4.plugins.enable=browser4-seo`）。`browser4-{captcha,pptx,profile-import,summary-demo}`
+需要按需安装：
+
+```bash
+browser4-cli plugin install "browser4-plugins/browser4-pptx/target/browser4-pptx-$(cat VERSION).jar"
+browser4-cli stop    # 下一条命令会自动重启开发后端
+```
+
+插件工具名是 `domain.method` 的 snake_case 形式
+（`image.detectImages` → `image_detect_images`），用 `browser4-cli tool list`
+（或 `GET /mcp/tools`）枚举；`plugin list` 列出的是已安装的插件 JAR，不是工具名。
 
 | 命令 | 说明 |
 |---|---|
@@ -660,6 +673,7 @@ Browser4 中有两套不同的 “skill” 表面：
 | `plugin info <name>` | 显示插件详情。 |
 | `plugin install <file>` | 从本地 JAR 文件安装插件。支持 `--replace`。 |
 | `plugin remove <name>` | 删除插件。支持 `-y`、`--yes`。 |
+| `tool list [--filter <substr>]` | 列出后端公布的全部 MCP 工具名（含插件工具）；`tool call <name> --json '{…}'` 调用其中之一。 |
 
 #### 高级 / 当前隐藏命令
 

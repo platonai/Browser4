@@ -50,6 +50,8 @@ class MediaToolExecutorTest {
     private var trimCallCount = 0
     private var compressCallCount = 0
     private var probeCallCount = 0
+    private var lastIncludeIframes: Boolean? = null
+    private var lastDownloadDir: Path? = null
 
     @BeforeEach
     fun setUp() {
@@ -58,10 +60,13 @@ class MediaToolExecutorTest {
 
         detectCallCount = 0; downloadCallCount = 0; transcodeCallCount = 0
         extractAudioCallCount = 0; trimCallCount = 0; compressCallCount = 0; probeCallCount = 0
+        lastIncludeIframes = null
+        lastDownloadDir = null
 
         val videoDetector = object : VideoDetector() {
-            override suspend fun detect(d: WebDriver): List<VideoDetector.VideoSource> {
+            override suspend fun detect(driver: WebDriver, includeIframes: Boolean): List<VideoDetector.VideoSource> {
                 detectCallCount++
+                lastIncludeIframes = includeIframes
                 return listOf(VideoDetector.VideoSource(tagName = "video", resolvedUrl = "https://x.com/v.mp4"))
             }
         }
@@ -70,6 +75,7 @@ class MediaToolExecutorTest {
                 url: String, outputDir: Path, filename: String?, headers: Map<String, String>
             ): MediaDownloader.DownloadResult {
                 downloadCallCount++
+                lastDownloadDir = outputDir
                 return MediaDownloader.DownloadResult(
                     url = url,
                     filePath = outputDir.resolve(filename ?: "video.mp4").toString(),
@@ -137,6 +143,35 @@ class MediaToolExecutorTest {
         assertNotNull(result.value)
         assertEquals(1, (result.value as List<*>).size)
         assertEquals(1, detectCallCount)
+        assertEquals(true, lastIncludeIframes)
+    }
+
+    @Test
+    @DisplayName("detectVideos forwards includeIframes=false")
+    fun testDetectVideosForwardsIncludeIframes() = runBlocking {
+        val tc = ToolCall("media", "detectVideos", mutableMapOf("includeIframes" to "false"))
+        val result = executor.callFunctionOn(tc, driver)
+        assertNotNull(result.value)
+        assertEquals(1, detectCallCount)
+        assertEquals(false, lastIncludeIframes)
+    }
+
+    @Test
+    @DisplayName("detectVideos rejects a non-boolean includeIframes")
+    fun testDetectVideosRejectsNonBooleanIncludeIframes() = runBlocking {
+        val tc = ToolCall("media", "detectVideos", mutableMapOf("includeIframes" to "maybe"))
+        val result = executor.callFunctionOn(tc, driver)
+        assertNotNull(result.exception)
+        assertTrue(result.exception?.message?.contains("includeIframes") ?: false)
+        assertEquals(0, detectCallCount)
+    }
+
+    @Test
+    @DisplayName("detectVideos spec documents includeIframes")
+    fun testDetectVideosSpecDocumentsIncludeIframes() {
+        val spec = executor.getToolSpecs()["detectVideos"]
+        assertNotNull(spec)
+        assertTrue(spec!!.arguments.any { it.name == "includeIframes" }, "includeIframes must be a documented argument")
     }
 
     // ---- download ----
@@ -172,6 +207,18 @@ class MediaToolExecutorTest {
         val result = executor.callFunctionOn(tc, driver)
         assertTrue((result.value as MediaDownloader.DownloadResult).success)
         assertEquals(1, downloadCallCount)
+    }
+
+    @Test
+    @DisplayName("download defaults to the absolute configured directory")
+    fun testDownloadUsesAbsoluteDefaultDir() = runBlocking {
+        val tc = ToolCall("media", "download", mutableMapOf("url" to "https://example.com/v.mp4"))
+        executor.callFunctionOn(tc, driver)
+
+        val dir = lastDownloadDir
+        assertNotNull(dir)
+        assertTrue(dir!!.isAbsolute, "the default download dir must never resolve against the process CWD")
+        assertEquals(config.downloadDirPath(), dir)
     }
 
     // ---- process ----

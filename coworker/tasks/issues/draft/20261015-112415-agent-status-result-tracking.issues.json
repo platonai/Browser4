@@ -1,0 +1,277 @@
+{
+  "meta": {
+    "date": "20261015-112415",
+    "source": "20261015-112415-agent-status-result-tracking.issues.json",
+    "mode": "dev",
+    "scenario": "agent-status-result-tracking"
+  },
+  "background": {
+    "workarounds": "",
+    "executionContext": "**Setup:** `pwd` verified at repo root; `./b4w.ps1 help`; read `skills/browser4-cli/SKILL.md` + `references/agent.md`; `./b4w.ps1 --help agent`, `--help \"agent list\"`, `--help \"agent status\"`; `./b4w.ps1 doctor` (backend up, dev bundle matches checkout, LLM configured). Environment note: the shared task store already held 2 leftover tasks from an earlier run (19:05 same day, and 2026-10-13, still labelled `processing`) — they were kept visible per design and later removed with `--clear --all`.\n\n**Commands used (all via `./b4w.ps1`):** `agent run` (×5 including probes), `agent status` (×30+ polls), `agent result`, `agent list` (×7), `agent list --clear`, `agent list --clear --all`, `doctor`, plus source inspection (`cli/browser4-cli/src/main.rs`, `state.rs`; `browser4-rest/.../CommandToolExecutor.kt`; `browser4-agentic/.../TaskEnvelopes.kt`) and git history to identify the contract change (`8f574d6881 feat(mcp): one async contract for long-running tools`).\n\n**Key decisions/workarounds:**\n- Since `isDone`/`processState` never appear, polling used the envelope's `status` word as the completion signal (step 4 adapted).\n- To exercise the clear step meaningfully, I waited for the two new tasks to reach server-side `done` (verified at 19:19:24) before running `--clear` — the strict expectation (all cleared) still failed.\n- Demonstrated the only working cleanup path: `agent list --clear --all` → \"Cleared 8 tracked agent task(s).\" → final list prints \"No tracked async tasks.\"\n- Extra probe to bound the blast radius: `agent run \"…\" --wait --wait-timeout 90` while concurrently polling `agent status` — the task was `done` at **t+5 s**, yet the CLI printed \"processing…\" for 90 s and exited **1** with \"timed out\". Same failure for a 45 s probe. This is the documented wait workflow (agent.md §Pattern 2) being unusable.\n\n**Evidence artifacts** (in `.test-sessions/20261015T0901431699046Z/`): `agent-lifecycle-evidence.md` (full raw log + source-level root cause), `agent-result-li-group.txt`, `agent-wait-exitcode.txt`, `agent-wait-timed.txt`.",
+    "commands": "**Key decisions/workarounds:**\n- Since `isDone`/`processState` never appear, polling used the envelope's `status` word as the completion signal (step 4 adapted).\n- To exercise the clear step meaningfully, I waited for the two new tasks to reach server-side `done` (verified at 19:19:24) before running `--clear` — the strict expectation (all cleared) still failed.\n- Demonstrated the only working cleanup path: `agent list --clear --all` → \"Cleared 8 tracked agent task(s).\" → final list prints \"No tracked async tasks.\"\n- Extra probe to bound the blast radius: `agent run \"…\" --wait --wait-timeout 90` while concurrently polling `agent status` — the task was `done` at **t+5 s**, yet the CLI printed \"processing…\" for 90 s and exited **1** with \"timed out\". Same failure for a 45 s probe. This is the documented wait workflow (agent.md §Pattern 2) being unusable.\n\n**Evidence artifacts** (in `.test-sessions/20261015T0901431699046Z/`): `agent-lifecycle-evidence.md` (full raw log + source-level root cause), `agent-result-li-group.txt`, `agent-wait-exitcode.txt`, `agent-wait-timed.txt`.",
+    "task": "The `agent run` → `agent status` → `agent result` → `agent list` lifecycle was exercised end-to-end on the local dev stack (CLI 4.14.1, backend 4.14.1-SNAPSHOT, LLM configured via `DEEPSEEK_API_KEY` — so agent tasks genuinely executed; the \"failed (417) because no LLM key\" path was **not** exercised).\n\n| Step | Check | Result |\n|---|---|---|\n| 1 | `agent run` prints \"Task submitted: 1a6da78e-…\", exit 0 | ✅ |\n| 2 | Task appears in `agent list`; ID/COMMAND match; STATUS = `queued` (not \"done\") | ✅ |\n| 3 | `agent status`: exit 0, valid JSON, **`statusCode` integer / `processState` / `isDone`** | ❌ fields absent entirely |\n| 4 | Poll until `\"isDone\": true` | ❌ `isDone` never exists; completion only visible as `\"status\":\"done\"` |\n| 5 | `agent result`: exit 0, not `null`, contains a real summary (\"a Lie group is a group that is also a differentiable (smooth) manifold…\") | ✅ |\n| 6 | `agent list` shows terminal label (`completed` / `failed (…)`) | ❌ still `queued` after server said `done` |\n| 7 | Task persists across list calls, no auto-prune | ✅ (persistence works; label still wrong) |\n| 8 | Two new tasks submitted (`f1894d9a…`, `58ba63df…`) | ✅ |\n| 9 | All three tasks appear in `agent list` | ✅ (plus 2 pre-existing leftovers from earlier runs) |\n| 10 | `agent list --clear` confirms clearing | ❌ `Cleared 0 tracked agent task(s).` — finished tasks kept as \"in-flight\" |\n| 11 | Final list shows \"No tracked async tasks.\" | ❌ tasks still listed (message reachable only via `--clear --all`) |\n\n**Bottom line:** submission, status (raw), and result retrieval work well; the **tracking/listing surface is disconnected from reality**. Every task that reached `\"status\":\"done\"` server-side (3/3) still displayed `queued` in `agent list` forever, so steps 3, 4, 6, 10 and 11 of the scenario fail. The root cause is one partially-migrated contract: the backend now answers `command_status` with the shared task envelope (`{taskId, status, statusTool, resultTool, cancelTool}` — `queued|running|done|failed|cancelled`), while every CLI-side consumer that reconciles lifecycle state (`agent list` refresh, `--clear`, `agent run --wait`) still looks for the old `processState` / `isDone` / `statusCode` / `finishTime` fields, finds none, and silently keeps its stale cache."
+  },
+  "assessment": {
+    "completionStatus": "Partially Successful — the lifecycle runs end-to-end and result retrieval is solid (submit, poll via raw status, result, persistence across list calls all work; the Lie-group task genuinely completed and returned a correct summary). However, half the acceptance criteria fail: agent status lacks the documented statusCode/processState/isDone fields (steps 3-4), agent list never shows the terminal label (steps 6-7), agent list --clear clears nothing and the final list never shows 'No tracked async tasks.' (steps 10-11). All failures trace to a single unmigrated contract: CLI-side lifecycle consumers still read the pre-TaskEnvelopes status shape.",
+    "successRate": "60% — steps 1, 2, 5, 8, 9 fully passed; 7 partially (persistence held, label wrong); 3, 4, 6, 10, 11 failed on the specified verifications.",
+    "issuesFound": 7,
+    "majorBlockers": "Status reconciliation between the backend's shared task envelope and the CLI's lifecycle consumers. Because refreshed_agent_status() ignores the envelope's status word, no agent task ever reaches a terminal cached state, which simultaneously breaks: (a) agent list STATUS/FINISHED/DURATION/ELAPSED columns, (b) agent list --clear, (c) agent run --wait (verified: task done at t+5s, CLI waited 90s and exited 1), and (d) the honesty of the --clear --all warning. The scenario's documented polling field isDone and failure label 'failed (417)' are unobtainable in this build.",
+    "mostConfusingAspects": "For a first-time user: (1) agent status returns neither the fields the documentation (and --help hints) promise nor the labels agent list uses — three vocabularies coexist (docs: RUNNING/COMPLETED; status envelope: queued/running/done/failed/cancelled; list: queued/processing/completed/failed); (2) agent list confidently shows 'queued' for tasks that finished minutes or days ago, with no hint the value is a placeholder; (3) --clear answers 'Cleared 0 … Kept N in-flight' about work that is verifiably finished; (4) --wait silently burns its whole timeout and exits 1 on a task that succeeded in 5 seconds.",
+    "mostValuableImprovements": "1) Make one canonical task-status contract across backend, CLI and docs — ideally by having the status envelope carry (or the CLI map) a single terminal indicator consumed by agent status, agent list, --clear and --wait in the same way. 2) Fix refreshed_agent_status() to consume the shared envelope (queued/running/done/failed/cancelled) — one function repairs three of the seven issues. 3) Add e2e/unit tests pinned to the real envelope fixture so a future contract change cannot silently blank out lifecycle state again. 4) Update agent.md/SKILL.md and the CLI hints to the fields that actually exist.",
+    "usabilityRating": 5
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "agent status no longer returns the documented statusCode / processState / isDone fields",
+      "severity": "High",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.ps1 agent run \"Navigate to https://en.wikipedia.org/wiki/Li_group and describe what a Lie group is\"\n./b4w.ps1 agent status <task-id>",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Per skills/browser4-cli/references/agent.md (section 3) and SKILL.md, the output is JSON containing an integer \"statusCode\" (e.g. 200/417/102), a \"processState\" (\"done\" when finished) and a boolean \"isDone\" — the documented reliable completion check. agent.md shows e.g. {\"id\":\"…\",\"status\":\"RUNNING\",\"statusCode\":null,\"processState\":\"processing\",\"message\":\"Navigating...\"}.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Every poll (even after completion) returns only the shared envelope: {\"taskId\":\"1a6da78e-…\",\"status\":\"running\"|\"done\",\"statusTool\":\"command_status\",\"resultTool\":\"command_result\",\"cancelTool\":\"command_cancel\"}. No statusCode, processState, isDone, message or finishTime ever appear; the docs' example field \"id\" is now \"taskId\"; the vocabulary is queued/running/done/failed/cancelled instead of the documented RUNNING/COMPLETED/FAILED/EXPECTATION_FAILED. Four different vocabularies coexist (docs; this envelope; agent list's queued/processing/completed/failed; swarm's labels).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The backend was migrated to the shared async contract (commit 8f574d6881 'one async contract for long-running tools'): CommandToolExecutor.envelopeOf() serializes TaskEnvelopes.of(...), which emits only taskId/status/processed/error/statusTool/resultTool/cancelTool and drops the legacy CommandStatus fields (statusCode, processState, isDone, message, finishTime). The CLI's agent-status handler prints this payload verbatim (main.rs:14339) and the skill docs/help were never updated to the new contract.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/agent/tool/CommandToolExecutor.kt:envelopeOf(); skills/browser4-cli/references/agent.md (section 3 'Poll Status')",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Pick one canonical contract and make everything agree: either enrich the status envelope with processState/statusCode/isDone (mapped from CommandStatus at envelopeOf time), or rewrite agent.md + SKILL.md + `--help agent status` to document taskId/status/statusTool/resultTool/cancelTool and the queued|running|done|failed|cancelled vocabulary\n- Update the agent.md example payload and the status table (currently RUNNING/COMPLETED/FAILED/EXPECTATION_FAILED, none of which the backend emits)\n- Add an e2e assertion (Rust scenario + Kotlin contract test) that pins the documented status JSON shape so future contract migrations cannot silently invalidate the docs\n- Consider keeping statusCode in the envelope: scenarios and users key on 'failed (417)' style codes that are now unobtainable",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "agent list never shows a terminal status for agent tasks — finished tasks display 'queued' forever",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 agent run \"<any task>\"\n# wait until ./b4w.ps1 agent status <id> reports \"status\":\"done\"\n./b4w.ps1 agent list",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The STATUS column shows a standard terminal label — `completed` or `failed (<code>)` — once the backend reports the task finished (scenario steps 6/7).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "All three tasks that completed server-side (verified \"status\":\"done\" via agent status) still render STATUS=queued in every subsequent agent list call; FINISHED, DURATION and ELAPSED stay '-' for every row. A leftover task from 2026-10-13 still showed 'processing' two days later. The local store ~/.browser4/workspaces/Browser4-4.14-04e5248d/async-tasks.json contains entries with NO lastStatus field at all for tasks submitted today, proving the refresh never lands.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "refreshed_agent_status() (main.rs:15488) only accepts a status payload if it contains processState, isDone, statusCode or finishTime; the backend's new shared envelope contains none of these (it carries `status`). The function therefore returns None for every poll, the refresh loop in handle_agent_list (main.rs:14527-14559) leaves the cached lastStatus empty, and format_async_task_list_opts (state.rs, ~line 1547) renders an empty last_status as the literal 'queued'. completed_at is likewise never set, which is why FINISHED/DURATION/ELAPSED remain '-'. The same dead branch pattern exists in extract_readable_agent_status (main.rs:14664, now test-only).",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:refreshed_agent_status() and handle_agent_list() refresh loop; display fallback in cli/browser4-cli/src/state.rs:format_async_task_list_opts()",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Teach refreshed_agent_status() the shared envelope: map status queued->queued, running->processing, done->completed, failed->failed (use the envelope's error field for the reason), cancelled->cancelled; keep the legacy processState/isDone path as a fallback\n- Add a unit test using the real envelope JSON ({taskId, status:done, statusTool:command_status,…}) asserting it maps to 'completed' — the existing tests only feed the legacy shape, which is why this regression slipped through\n- Also read the envelope's `error` so failed tasks can display like 'failed (error)' rather than staying non-terminal\n- Cross-check: agent list --clear and the --clear --all warning both consume last_status, so fixing this one function repairs issues 3 and 7 as well",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "agent list --clear cannot clear finished agent tasks ('Cleared 0')",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 agent list --clear\n./b4w.ps1 agent list",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Tasks that finished (the scenario's step 10) are removed and the output confirms a non-zero count, e.g. 'Cleared N tracked agent task(s).'; the follow-up list shows 'No tracked async tasks.' (step 11).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "'Cleared 0 tracked agent task(s).' followed by 'Kept 5 in-flight task(s) still running server-side; re-run with --all to remove them from tracking too.' — even though all three scenario tasks had already completed server-side and were verified 'done'. The tasks remain in the next agent list, so 'No tracked async tasks.' is never reached. Only 'agent list --clear --all' works: it cleared all 8 tasks and then the list printed 'No tracked async tasks.'",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "agent_clear_drops_task() (main.rs:14442) drops a tracked agent task only when its cached status is terminal ('completed' or starts with 'failed'). Because of issue 2, no cached status can ever become terminal — every fresh task keeps an empty last_status — so the default clear removes nothing. The clear branch also runs before the server refresh in handle_agent_list, so even a correct cache would first have to be refreshed by a previous agent list call.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:agent_clear_drops_task() / handle_agent_list() clear branch",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Fixing refreshed_agent_status (issue 2) makes the default --clear work; until then, consider refreshing terminal state inside the clear branch before deciding what to drop\n- Treat a never-polled entry (empty last_status) as unknown rather than 'in-flight' when the server answers terminal for it\n- Add a regression test: finished task + agent list --clear => task removed, message 'Cleared 1 tracked agent task(s).'",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "agent run --wait always times out even when the task completes in seconds (exit 1)",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 agent run \"reply with the single word ok\" --wait --wait-timeout 90\n# concurrently: ./b4w.ps1 agent status <task-id>  (every 4s)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Per agent.md Pattern 2, --wait blocks until the task reaches a terminal state, prints the final result and exits 0 — here at roughly t+5s when the task finished.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The server reported \"status\":\"done\" already at t+5s and for the entire remainder, but the CLI kept printing '[Ns] processing...' and at t+90s exited with 'Error: Agent task <id> timed out after 90s' and exit code 1. Reproduced twice (45s and 90s windows); both tasks were verified 'done' server-side after the timeouts. The documented wait workflow is effectively a fixed-length sleep whose result is always discarded.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The wait loop in handle_agent_run (main.rs:14078-14148) reads only parsed.get(\"processState\") and treats the task as terminal exclusively on \"done\"/\"completed\". The current command_status envelope never carries processState (it carries status: queued|running|done|failed|cancelled), so the success branch is unreachable and the loop can only exit through the timeout branch (which exits non-zero and marks the local status 'processing').",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_agent_run() --wait loop (≈14094-14148)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Treat envelope status in {done, failed, cancelled} as terminal in the wait loop; on failed, surface the envelope's error/statusCode instead of the generic timeout message\n- Keep the legacy processState branch as a fallback for older backends and add a unit/e2e test that a task which reaches status=done mid-wait returns its result with exit 0\n- Since --wait now always burns its full window, consider printing a warning when repeated polls show status=done but the loop cannot consume it",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "agent result empty-payload hint points at instructResults/--json that never appear; --json missing from help",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 --help \"agent status\"   (shows no options at all)\n./b4w.ps1 agent status <id> --json\n# and the hint printed by agent result for an empty result: 'agent status <id> --json (check instructResults for extracted data)'",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Help documents the flags the command actually accepts, and the CLI's own recovery hints reference fields that exist.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "--json is accepted and changes the output envelope ({\"status\":\"ok\",\"command\":\"agent-status\",\"output\":{...}}) but is undocumented in agent status --help. The instructResults field the hint points at never appears in any status payload (envelopeOf only converts it to a numeric 'processed' count), so a user following the hint finds nothing.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The hint in handle_agent_result (main.rs ~14413) predates the TaskEnvelopes migration; CommandStatus.instructResults is internal to the backend and is no longer serialized. The agent status help entry declares no options while the command accepts --json via the generic option path.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_agent_result() empty-result hint; help specs for 'agent status'",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Update the hint to reference real fields (result, processed, error) or re-expose instructResults in the envelope if it is genuinely useful\n- Document --json (and its envelope shape) in `--help agent status` / `--help agent result`\n- Add a help-coverage test that every accepted flag appears in the command's help output",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Unknown task id reports status 'failed' with no reason; the CLI's friendly not-found message is dead code",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 agent status 00000000-0000-0000-0000-000000000000\n./b4w.ps1 agent result 00000000-0000-0000-0000-000000000000",
+          "label": "Reproduction"
+        },
+        {
+          "body": "An actionable error such as 'No agent task found with id '…'. Run `agent list` to see tracked tasks.' (the message the CLI still contains), or at minimum a failed envelope with an error/reason field.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Both commands print {\"taskId\":\"00000000-…\",\"status\":\"failed\",\"statusTool\":\"command_status\",…} with exit 0 and no error or message explaining why. The typed-ID-mistake case (wrong ID, cleared task) is indistinguishable from a genuine task failure without a reason.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "handle_agent_status/handle_agent_result (main.rs:14331, 14387) only detect an unknown id when the payload is null/absent. Since commit bc3268c176 the backend returns CommandStatus.notFound(id) serialized as a structured envelope (status=failed) whose message is blank, so the 'error' field is dropped (TaskEnvelopes.of omits blank errors) and the CLI's dedicated not-found branch can never fire.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_agent_status()/handle_agent_result() null-payload guards; browser4-rest CommandStatus.notFound",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Populate a message for the notFound status (e.g. 'No task found with id …') so the envelope's error field carries it\n- Or detect the backend's notFound marker in the CLI and print the existing friendly message\n- Keep exit code 0 if the JSON status is the contract, but make the reason visible",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "agent list --clear --all warning claims completed tasks 'keep running server-side'",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 agent list --clear --all   (after tasks finished; verified via agent status = done)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The detached-task warning (added to protect in-flight work) should only name tasks that may actually still be running, or clearly qualify that their local state is unknown.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "'Warning: 8 in-flight task(s) were removed from tracking but keep running server-side' — 7 of the 8 listed ids had already completed (server said 'done'); only the local cache was stale. A user may wait or re-poll tasks that finished long ago, or distrust the CLI's lifecycle reporting entirely.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The warning is derived from the same cached last_status that issue 2 prevents from ever becoming terminal, so every task is classified as in-flight regardless of its real state.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_agent_list() --clear --all detached-task warning (≈14500-14511)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Recompute statuses (or qualify the message as 'unverified locally — check with agent status <id>') before asserting tasks are still running\n- Alternatively print the last known cached status next to each id so the user can judge",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

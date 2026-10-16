@@ -19,12 +19,17 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import kotlin.io.path.*
 
 /**
  * Tests for [ImageUtils] pure utility functions.
  */
 class ImageUtilsTest {
+
+    @TempDir
+    lateinit var tempDir: Path
 
     // ---- validateUrl ----
 
@@ -457,5 +462,165 @@ class ImageUtilsTest {
     fun testDefaultHttpReasonReturnsEmptyForUnmappedCodes() {
         assertEquals("", ImageUtils.defaultHttpReason(200))
         assertEquals("", ImageUtils.defaultHttpReason(418))
+    }
+
+    // ---- percentDecode / suggestFilename decoding ----
+
+    @Test
+    @DisplayName("percentDecode decodes escaped parentheses and dashes")
+    fun testPercentDecodeDecodesEscapes() {
+        assertEquals("250px-Flag_of_Switzerland_(Pantone).svg", ImageUtils.percentDecode("250px-Flag_of_Switzerland_%28Pantone%29.svg"))
+        assertEquals("Vatican_City_(2023–present).svg", ImageUtils.percentDecode("Vatican_City_%282023%E2%80%93present%29.svg"))
+    }
+
+    @Test
+    @DisplayName("percentDecode keeps a literal plus and undecodable text")
+    fun testPercentDecodeKeepsPlusAndMalformedInput() {
+        // '+' is a legal path character, never a space
+        assertEquals("a+b.png", ImageUtils.percentDecode("a+b.png"))
+        // a malformed escape must not throw or corrupt the segment
+        assertEquals("100%_off.png", ImageUtils.percentDecode("100%_off.png"))
+    }
+
+    @Test
+    @DisplayName("suggestFilename percent-decodes the URL path segment")
+    fun testSuggestFilenamePercentDecodesPathSegment() {
+        val url = "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/Flag_of_Switzerland_%28Pantone%29.svg/250px-Flag_of_Switzerland_%28Pantone%29.svg.png"
+        assertEquals("250px-Flag_of_Switzerland_(Pantone).svg.png", ImageUtils.suggestFilename(url))
+    }
+
+    @Test
+    @DisplayName("suggestFilename sanitizes separators a decoded escape may introduce")
+    fun testSuggestFilenameSanitizesDecodedSeparator() {
+        val name = ImageUtils.suggestFilename("https://example.com/a%2F..%2Fb.png")
+        assertFalse(name.contains('/'))
+        assertFalse(name.contains(".."))
+    }
+
+    // ---- guessMimeType ----
+
+    @Test
+    @DisplayName("guessMimeType infers a MIME type from the URL extension")
+    fun testGuessMimeTypeInfersFromExtension() {
+        assertEquals("image/png", ImageUtils.guessMimeType("https://example.com/250px-Flag.svg.png"))
+        assertEquals("image/webp", ImageUtils.guessMimeType("https://example.com/photo.WEBP?x=1"))
+        assertEquals("image/svg+xml", ImageUtils.guessMimeType("https://example.com/logo.svg"))
+        assertEquals("image/jpeg", ImageUtils.guessMimeType("https://example.com/photo.jpg#frag"))
+        assertEquals("image/x-icon", ImageUtils.guessMimeType("https://example.com/favicon.ico"))
+    }
+
+    @Test
+    @DisplayName("guessMimeType reads the declared type of a data URI")
+    fun testGuessMimeTypeReadsDataUriHeader() {
+        assertEquals("image/png", ImageUtils.guessMimeType("data:image/png;base64,iVBORw0KGgo="))
+        assertEquals("image/gif", ImageUtils.guessMimeType("DATA:image/gif;base64,R0lGOD"))
+    }
+
+    @Test
+    @DisplayName("guessMimeType returns null when the URL carries no hint")
+    fun testGuessMimeTypeReturnsNullWithoutHint() {
+        assertNull(ImageUtils.guessMimeType("https://example.com/image"))
+        assertNull(ImageUtils.guessMimeType("https://example.com/page.html"))
+        assertNull(ImageUtils.guessMimeType(null))
+        assertNull(ImageUtils.guessMimeType("   "))
+    }
+
+    // ---- readImageDimensions / parseWebpDimensions ----
+
+    @Test
+    @DisplayName("readImageDimensions reads a PNG written by ImageIO")
+    fun testReadImageDimensionsReadsPng() {
+        val file = tempDir.resolve("flag.png")
+        writePng(file, 7, 5)
+
+        assertEquals(7 to 5, ImageUtils.readImageDimensions(file))
+    }
+
+    @Test
+    @DisplayName("readImageDimensions reads a WebP header, which the JDK cannot decode")
+    fun testReadImageDimensionsReadsWebp() {
+        val file = tempDir.resolve("flag.webp")
+        file.writeBytes(webpLossless(250, 305))
+
+        assertEquals(250 to 305, ImageUtils.readImageDimensions(file))
+    }
+
+    @Test
+    @DisplayName("readImageDimensions returns null for a file that is not an image")
+    fun testReadImageDimensionsReturnsNullForNonImage() {
+        val file = tempDir.resolve("page.html")
+        file.writeText("<html><body>not an image</body></html>")
+
+        assertNull(ImageUtils.readImageDimensions(file))
+    }
+
+    @Test
+    @DisplayName("parseWebpDimensions reads all three WebP variants")
+    fun testParseWebpDimensionsReadsAllVariants() {
+        assertEquals(250 to 305, ImageUtils.parseWebpDimensions(webpLossless(250, 305)))
+        assertEquals(1280 to 720, ImageUtils.parseWebpDimensions(webpExtended(1280, 720)))
+        assertEquals(640 to 480, ImageUtils.parseWebpDimensions(webpLossy(640, 480)))
+    }
+
+    @Test
+    @DisplayName("parseWebpDimensions rejects truncated or non-WebP headers")
+    fun testParseWebpDimensionsRejectsInvalidHeaders() {
+        assertNull(ImageUtils.parseWebpDimensions(ByteArray(10)))
+        assertNull(ImageUtils.parseWebpDimensions("RIFF____PNG_".toByteArray()))
+        assertNull(ImageUtils.parseWebpDimensions(ImageUtils.parseWebpDimensions(webpLossless(1, 1))?.let { ByteArray(30) } ?: ByteArray(30)))
+    }
+
+    // ---- helpers ----
+
+    private fun writePng(path: Path, width: Int, height: Int) {
+        val image = java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        javax.imageio.ImageIO.write(image, "png", path.toFile())
+    }
+
+    /** `VP8L` lossless header: signature 0x2F, then 14 bits of width-1 and height-1. */
+    private fun webpLossless(width: Int, height: Int): ByteArray {
+        val header = riffHeader("VP8L")
+        header[20] = 0x2F
+        val bits = (width - 1) or ((height - 1) shl 14)
+        header[21] = (bits and 0xFF).toByte()
+        header[22] = ((bits ushr 8) and 0xFF).toByte()
+        header[23] = ((bits ushr 16) and 0xFF).toByte()
+        header[24] = ((bits ushr 24) and 0xFF).toByte()
+        return header
+    }
+
+    /** `VP8X` extended header: 24-bit canvas width-1 and height-1. */
+    private fun webpExtended(width: Int, height: Int): ByteArray {
+        val header = riffHeader("VP8X")
+        writeLe24(header, 24, width - 1)
+        writeLe24(header, 27, height - 1)
+        return header
+    }
+
+    /** `VP8 ` lossy header: frame tag + start code, then 14-bit dimensions. */
+    private fun webpLossy(width: Int, height: Int): ByteArray {
+        val header = riffHeader("VP8 ")
+        header[23] = 0x9D.toByte()
+        header[24] = 0x01
+        header[25] = 0x2A
+        header[26] = (width and 0xFF).toByte()
+        header[27] = ((width ushr 8) and 0x3F).toByte()
+        header[28] = (height and 0xFF).toByte()
+        header[29] = ((height ushr 8) and 0x3F).toByte()
+        return header
+    }
+
+    private fun riffHeader(fourCc: String): ByteArray {
+        val header = ByteArray(30)
+        "RIFF".toByteArray(Charsets.US_ASCII).copyInto(header, 0)
+        "WEBP".toByteArray(Charsets.US_ASCII).copyInto(header, 8)
+        fourCc.toByteArray(Charsets.US_ASCII).copyInto(header, 12)
+        return header
+    }
+
+    private fun writeLe24(target: ByteArray, offset: Int, value: Int) {
+        target[offset] = (value and 0xFF).toByte()
+        target[offset + 1] = ((value ushr 8) and 0xFF).toByte()
+        target[offset + 2] = ((value ushr 16) and 0xFF).toByte()
     }
 }

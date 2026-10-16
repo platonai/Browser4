@@ -741,8 +741,9 @@ fn check_unnamed_slot_free(
     if let Some(ref existing_id) = state.session_id {
         return Err(format!(
             "An unnamed session already exists: {existing_id}\n\
-             Use `-s <name>` to create a named session instead, e.g.:\n  \
-             browser4-cli -s myname ...\n\
+             An unnamed session already drives a browser, so a second attach must not displace it.\n\
+             Name your sessions with `-s <name>` instead, e.g.:\n  \
+             browser4-cli -s myname attach --cdp chrome\n\
              Or run `browser4-cli close` to end the current unnamed session first."
         ));
     }
@@ -974,6 +975,26 @@ async fn create_session(
     new_state.display_mode = requested_headed
         .map(|headed| if headed { "headed" } else { "headless" }.to_string());
     write_state(&new_state, None, session_name).map_err(|e| e.to_string())?;
+    // A *named* session that `close` discarded comes back with a new id and
+    // therefore a brand-new browser profile.  The name alone cannot show it —
+    // close deletes the name's state record — so `close` leaves a note behind
+    // and this is the one place that can warn (133022#1).
+    if let Some(name) = session_name {
+        if let Some(note) =
+            state::take_closed_session_note_in(&state::resolve_default_state_dir(), name)
+        {
+            eprintln!(
+                "⚠  Session '{name}' was closed earlier: the browser profile of session {} was discarded.",
+                note.session_id
+            );
+            eprintln!(
+                "   This open starts a FRESH profile — cookies/localStorage from that run are gone."
+            );
+            eprintln!(
+                "   To carry state across a close, run `state-save <file>` before closing and `state-load <file>` after reopening."
+            );
+        }
+    }
     Ok(session_id)
 }
 
@@ -2246,9 +2267,11 @@ async fn handle_attach(
             let hint = if parsed_args.get("extension").is_some() {
                 "browser4-cli -s <name> attach --extension"
             } else if parsed_args.get("cdp").is_some() {
-                "browser4-cli -s <name> attach --cdp <endpoint>"
+                // Same restriction as --extension, and attach.md documents the
+                // pattern this way (114038#6).
+                "browser4-cli -s <name> attach --cdp chrome"
             } else {
-                "browser4-cli -s <name> attach ..."
+                "browser4-cli -s <name> attach --cdp <url|channel>"
             };
             return Err(format!("{e}\nHint: {hint}"));
         }
@@ -2615,14 +2638,30 @@ async fn handle_attach(
     match current_session_url(client, &effective_base_url, session_name).await {
         Ok(url) if !url.is_empty() => {
             cli_println!("Current page: {}", url);
+            json_field("attach_verified", json!(true));
         }
         Ok(_) => {
-            cli_println!("⚠  Attached, but the browser reported no current page URL.");
-            cli_println!("   The CDP endpoint may be reachable yet not driving this browser.");
+            // A warning, not a headline: it changes how the result must be read,
+            // so it goes to stderr (stdout stays the success payload) and into the
+            // JSON envelope for scripts.
+            eprintln!("⚠  Attached, but the browser reported no current page URL.");
+            eprintln!("   The CDP endpoint may be reachable yet not driving this browser.");
+            json_field("attach_verified", json!(false));
         }
         Err(error) => {
-            cli_println!("⚠  Attached, but could not read the page: {}", error);
-            cli_println!("   Verify the CDP endpoint is running and reachable, then retry.");
+            // "Attached to …" must not read as success when the session cannot be
+            // driven at all (114038#1). The backend now rebuilds an unhealthy bound
+            // driver on re-attach, so re-running attach IS the recovery to name —
+            // and the error itself says whether the tab or the whole browser went
+            // away, so this hint no longer has to contradict it.
+            eprintln!(
+                "⚠  Attached, but the session is NOT usable — could not read the page: {}",
+                error
+            );
+            eprintln!(
+                "   Re-run the same attach to rebuild the driver, then check the browser with: browser4-cli list"
+            );
+            json_field("attach_verified", json!(false));
         }
     }
 
@@ -2736,11 +2775,13 @@ async fn handle_open(
                 warn_if_page_looks_blocked(client, base_url, &session_id, url).await;
                 post_command_snapshot(client, base_url, &session_id).await;
 
-                // Headed launches should show a visible window. Diagnose the
-                // Browser4-managed browser state instead of guessing from any
-                // chrome window on the system: the user's own browser must not
-                // mask a missing headed window, and a headed session that was
-                // launched headless (display-mode regression) must be called out.
+                // Window verification: ask the backend about *this session's*
+                // browser.  The old CLI-side scan enumerated every
+                // PULSAR_CHROME process on the machine, could not see this
+                // session's browser and produced false warnings (120433#1/#2);
+                // `browser_window_state` is session-scoped.  It runs after the
+                // navigation because the browser is launched lazily — before
+                // that the honest answer is UNKNOWN.
                 let headed = tool_params
                     .get("headed")
                     .and_then(|v| v.as_bool())
@@ -2751,50 +2792,41 @@ async fn handle_open(
                 // request against the existing session would cry "display-mode
                 // bug" for expected behavior.
                 if headed && !reused_existing_session {
-                    // The first window can appear a moment after navigation
-                    // settles — brief retries avoid false warnings on slow
-                    // cold starts.
-                    let mut state = crate::daemon::browser4_window_state();
-                    for _ in 0..5 {
-                        if !state.found_browser || state.headed_window_visible {
+                    // The window can appear a moment after navigation settles —
+                    // brief retries avoid warning on a slow cold start.
+                    let mut probe = probe_window_state(client, base_url, &session_id).await;
+                    for _ in 0..3 {
+                        if probe.as_ref().is_some_and(|p| p.visibility != "HIDDEN") {
                             break;
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        state = crate::daemon::browser4_window_state();
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                        probe = probe_window_state(client, base_url, &session_id).await;
                     }
-
-                    if state.found_browser && !state.headed_browser {
-                        // The probe enumerates every Browser4-managed chrome in
-                        // this workspace; it cannot be scoped to the session that
-                        // was just created, so the wording must not assert that
-                        // *this* session is headless — another session's headless
-                        // browser produces exactly this result (reported as a
-                        // false "running HEADLESS" warning on a headed launch).
-                        cli_println!(
-                            "⚠  Could not confirm a visible window for this --headed session: every Browser4-managed browser detected for this workspace is running HEADLESS."
-                        );
-                        cli_println!(
-                            "   The browser is functional, but it may have no window. Close it with 'close'"
-                        );
-                        cli_println!(
-                            "   and retry 'open --headed' once; if the window is still missing it is a display-mode bug."
-                        );
-                        cli_println!(
-                            "   (Detection is machine-wide and cannot be scoped to this session, so this is a hint — another session's headless browser can produce it.)"
-                        );
-                    } else if state.headed_browser && !state.headed_window_visible {
-                        cli_println!(
-                            "⚠  A headed Browser4 browser process is running, but no visible window was detected."
-                        );
-                        cli_println!(
-                            "   The browser is functional (navigation succeeded) — if the window is missing,"
-                        );
-                        cli_println!(
-                            "   close it with 'close' and retry 'open --headed' once."
-                        );
-                        cli_println!(
-                            "   (Detection is machine-wide: every PULSAR_CHROME browser is counted, so other sessions can skew this result.)"
-                        );
+                    if let Some(probe) = probe {
+                        // Structured verdict for scripts: present in --json, and
+                        // never dropped under --quiet.
+                        json_field("window_visibility", json!(probe.visibility));
+                        json_field("window_verified", json!(probe.visibility == "VISIBLE"));
+                        json_field("window_source", json!(probe.source));
+                        json_field("window_reason", json!(probe.reason));
+                        // Only HIDDEN warns, and only here, where a window was
+                        // requested.  UNKNOWN is never a failure: it means the
+                        // probe could not tell, so it stays silent.
+                        if probe.visibility == "HIDDEN" {
+                            eprintln!(
+                                "⚠  No visible window for this --headed session ({}; source: {}).",
+                                if probe.reason.is_empty() {
+                                    "the backend reported HIDDEN"
+                                } else {
+                                    probe.reason.as_str()
+                                },
+                                probe.source
+                            );
+                            eprintln!(
+                                "   The browser is functional (navigation succeeded) — close it with 'close'"
+                            );
+                            eprintln!("   and retry 'open --headed' once.");
+                        }
                     }
                 }
             }
@@ -3372,13 +3404,122 @@ async fn verify_click_navigation(
     }
 }
 
+/// Verdict of the backend's session-scoped `browser_window_state` probe.
+struct WindowProbe {
+    /// `VISIBLE`, `HIDDEN` or `UNKNOWN`.
+    visibility: String,
+    /// Where the verdict came from (`CDP_WINDOW`, `PROCESS_COMMAND_LINE`, …).
+    source: String,
+    /// Human-readable explanation, used verbatim in the warning.
+    reason: String,
+}
+
+/// Ask the backend whether the session's browser has a visible window.
+///
+/// The probe is scoped to the session (a machine-wide process scan could not
+/// attribute a window to the session that was just opened).  `None` means the
+/// probe itself failed — that is *not* a visibility verdict and must not warn.
+async fn probe_window_state(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+) -> Option<WindowProbe> {
+    let raw = call_tool(
+        client,
+        base_url,
+        "browser_window_state",
+        json!({ "sessionId": session_id }),
+    )
+    .await
+    .ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    Some(WindowProbe {
+        visibility: value
+            .get("visibility")
+            .and_then(|v| v.as_str())
+            .unwrap_or("UNKNOWN")
+            .to_string(),
+        source: value
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("NONE")
+            .to_string(),
+        reason: value
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
+
+/// Report the close outcome of a managed session from the backend's tri-state
+/// verdict (133022#2): `browserTerminated` is `true` (process gone), `false`
+/// (process survived) or `null` (the backend could not tell), so only `true`
+/// may be printed as "Browser terminated."
+fn report_managed_close(report: &Option<Value>) {
+    let field = |name: &str| {
+        report
+            .as_ref()
+            .and_then(|value| value.get(name))
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let terminated = report
+        .as_ref()
+        .and_then(|value| value.get("browserTerminated"))
+        .and_then(|value| value.as_bool());
+    let termination = field("browserTermination");
+    let detail = field("browserTerminationDetail");
+    json_field("browser_terminated", json!(terminated));
+    json_field("browser_termination", json!(termination));
+    json_field("profile_cleanup", json!(field("profileCleanup")));
+
+    match terminated {
+        Some(true) => cli_println!("Session closed. Browser terminated."),
+        Some(false) => {
+            cli_println!(
+                "Session closed, but the browser process is still running ({}).",
+                if termination.is_empty() {
+                    "browserTerminated=false"
+                } else {
+                    termination.as_str()
+                }
+            );
+            if !detail.is_empty() {
+                cli_println!("   {}", detail);
+            }
+            eprintln!(
+                "⚠  The browser did not exit — reap it with `kill-all` if it is not needed."
+            );
+        }
+        None => {
+            cli_println!(
+                "Session closed. The backend did not report whether the browser exited{}.",
+                if termination.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({termination})")
+                }
+            );
+            if !detail.is_empty() {
+                cli_println!("   {}", detail);
+            }
+        }
+    }
+}
+
 /// Best-effort close of an existing backend session.
 ///
 /// Reports a warning when the backend cannot confirm the close, so the user
 /// knows the backend session (and its browser) may still be alive.  Such
 /// orphaned sessions are reaped by the backend after its idle timeout.
-async fn warn_if_session_close_failed(client: &Client, base_url: &str, session_id: &str) {
-    if let Err(err) = call_tool(
+async fn warn_if_session_close_failed(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+) -> Option<Value> {
+    match call_tool(
         client,
         base_url,
         "close_session",
@@ -3386,13 +3527,17 @@ async fn warn_if_session_close_failed(client: &Client, base_url: &str, session_i
     )
     .await
     {
-        eprintln!(
-            "⚠  Warning: the backend could not confirm closing session {}: {}",
-            session_id, err
-        );
-        eprintln!(
-            "   The session may still be running — retry `close` or use `close-all` to clean up."
-        );
+        Ok(raw) => serde_json::from_str(&raw).ok(),
+        Err(err) => {
+            eprintln!(
+                "⚠  Warning: the backend could not confirm closing session {}: {}",
+                session_id, err
+            );
+            eprintln!(
+                "   The session may still be running — retry `close` or use `close-all` to clean up."
+            );
+            None
+        }
     }
 }
 
@@ -3415,8 +3560,15 @@ async fn handle_close(
     let is_attached = state.kind.is_attached();
     // Ignore errors — session might already be closed (the warning is printed
     // by warn_if_session_close_failed so the user is not left in the dark).
-    warn_if_session_close_failed(client, base_url, &session_id).await;
+    let close_report = warn_if_session_close_failed(client, base_url, &session_id).await;
     clear_state(None, session_name);
+    // A named managed session loses its profile directory with its session id,
+    // so a later `open -s <name>` cannot restore anything: leave a note for that
+    // open to warn about the fresh profile (133022#1).  Attached sessions have
+    // no managed profile, so they are not recorded.
+    if let (Some(name), false) = (session_name, is_attached) {
+        state::remember_closed_session_in(&state::resolve_default_state_dir(), name, &session_id);
+    }
     if is_attached {
         if state.kind == crate::state::SessionKind::ExtensionAttached {
             cli_println!("Disconnected from Browser4 Chrome Extension. Your browser tabs and the extension remain active. Re-attach with `attach --extension`.");
@@ -3431,6 +3583,12 @@ async fn handle_close(
             } else {
                 false
             };
+            // `close` on an attached session closes the tab(s) the session was
+            // driving (114038#5); say so instead of letting unsaved user state
+            // disappear silently.  The external browser itself is not ours.
+            eprintln!(
+                "⚠  Disconnecting closes the tab(s) this session was driving; the external browser keeps running."
+            );
             if retained {
                 cli_println!(
                     "Disconnected from attached browser at {}. The browser is still running.",
@@ -3446,7 +3604,7 @@ async fn handle_close(
             json_field("browser_retained", json!(retained));
         }
     } else {
-        cli_println!("Session closed. Browser terminated.");
+        report_managed_close(&close_report);
     }
     json_field("closed", json!(true));
     Ok(())
@@ -3637,80 +3795,86 @@ async fn handle_tab_list(
         cli_println!("No tabs found.");
         return Ok(());
     } else {
-        // Human-readable table: Index | GUID | Title | URL
-        // The active tab is marked with a ▶ prefix on its index.
-        let has_active = tabs.iter().any(|t| t.active);
-        let idx_w = "Index"
-            .len()
-            .max(tabs.last().map(|t| t.index.to_string().len()).unwrap_or(0));
-        let guid_w = "GUID".len();
-        let title_w = "Title".len().max(
-            tabs.iter()
-                .map(|t| t.title.len())
-                .max()
-                .unwrap_or(0)
-                .min(60),
-        );
-        let url_w = "URL"
-            .len()
-            .max(tabs.iter().map(|t| t.url.len()).max().unwrap_or(0).min(80));
-
-        cli_println!(
-            "  {:<idx_w$}  {:<guid_w$}  {:<title_w$}  {:<url_w$}",
-            "Index",
-            "GUID",
-            "Title",
-            "URL",
-            idx_w = idx_w,
-            guid_w = guid_w,
-            title_w = title_w,
-            url_w = url_w,
-        );
-        cli_println!(
-            "  {:-<idx_w$}  {:-<guid_w$}  {:-<title_w$}  {:-<url_w$}",
-            "",
-            "",
-            "",
-            "",
-            idx_w = idx_w,
-            guid_w = guid_w,
-            title_w = title_w,
-            url_w = url_w,
-        );
-        for tab in &tabs {
-            let guid_display = format_guid_display(tab.guid.as_deref());
-            let title = if tab.title.is_empty() {
-                "(no title)".to_string()
-            } else if tab.title.len() > 60 {
-                format!("{}…", &tab.title[..59])
-            } else {
-                tab.title.clone()
-            };
-            let url = if tab.url.len() > 80 {
-                format!("{}…", &tab.url[..79])
-            } else {
-                tab.url.clone()
-            };
-            let active_marker = if tab.active && has_active {
-                "▶ "
-            } else {
-                "  "
-            };
-            cli_println!(
-                "  {}{:<idx_w$}  {:<guid_w$}  {:<title_w$}  {:<url_w$}",
-                active_marker,
-                tab.index,
-                guid_display,
-                title,
-                url,
-                idx_w = idx_w,
-                guid_w = guid_w,
-                title_w = title_w,
-                url_w = url_w,
-            );
-        }
+        cli_println!("{}", format_tab_table(&tabs));
     }
     Ok(())
+}
+
+/// Elide `text` to at most `max` characters, appending `…`.
+///
+/// Character-aware on purpose: the table used `&text[..59]`, which panics when
+/// a multi-byte title or URL has a character boundary there.
+fn truncate_for_table(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Render the human-readable `tab-list` table: `Index | GUID | Title | URL`.
+///
+/// Column widths come from the cells that are actually printed, so the header
+/// and its dashed separator line up with the data rows.  Two defects are pinned
+/// here (134222#3/#4): the GUID column kept its 4-char header width while GUIDs
+/// are 32 characters (they overflowed the cell and pushed Title/URL ~30 columns
+/// right of their headers), and the active-tab `▶` marker was not reserved in
+/// the header, shifting active rows.
+fn format_tab_table(tabs: &[TabInfo]) -> String {
+    let has_active = tabs.iter().any(|tab| tab.active);
+    let rows: Vec<(String, String, String, String)> = tabs
+        .iter()
+        .map(|tab| {
+            // The marker occupies the cell's first two columns in every row, so
+            // the header reserves them too.
+            let marker = if tab.active && has_active { "▶ " } else { "  " };
+            (
+                format!("{marker}{}", tab.index),
+                format_guid_display(tab.guid.as_deref()),
+                if tab.title.is_empty() {
+                    "(no title)".to_string()
+                } else {
+                    truncate_for_table(&tab.title, 60)
+                },
+                truncate_for_table(&tab.url, 80),
+            )
+        })
+        .collect();
+
+    let index_header = "  Index";
+    let idx_w = index_header
+        .chars()
+        .count()
+        .max(rows.iter().map(|r| r.0.chars().count()).max().unwrap_or(0));
+    let guid_w = "GUID"
+        .chars()
+        .count()
+        .max(rows.iter().map(|r| r.1.chars().count()).max().unwrap_or(0));
+    let title_w = "Title"
+        .chars()
+        .count()
+        .max(rows.iter().map(|r| r.2.chars().count()).max().unwrap_or(0));
+    let url_w = "URL"
+        .chars()
+        .count()
+        .max(rows.iter().map(|r| r.3.chars().count()).max().unwrap_or(0));
+
+    let mut lines: Vec<String> = Vec::with_capacity(rows.len() + 2);
+    lines.push(format!(
+        "{:<idx_w$}  {:<guid_w$}  {:<title_w$}  {:<url_w$}",
+        index_header, "GUID", "Title", "URL"
+    ));
+    lines.push(format!(
+        "{:-<idx_w$}  {:-<guid_w$}  {:-<title_w$}  {:-<url_w$}",
+        "", "", "", ""
+    ));
+    for (index, guid, title, url) in &rows {
+        lines.push(format!(
+            "{index:<idx_w$}  {guid:<guid_w$}  {title:<title_w$}  {url:<url_w$}"
+        ));
+    }
+    lines.join("\n")
 }
 
 async fn handle_tab_new(
@@ -4268,6 +4432,9 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
 
     json_field("results", json!(close_summary.results));
     json_field("errors", json!(close_summary.errors));
+    json_field("browser_terminated", json!(close_summary.browser_terminated));
+    json_field("browser_survived", json!(close_summary.browser_survived));
+    json_field("browser_unverified", json!(close_summary.browser_unverified));
 
     // Report the locally-tracked count instead of the server's count, which may
     // include internal sessions that the user never sees in `list` output.
@@ -4275,6 +4442,16 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
         cli_println!("No sessions to close.");
     } else {
         cli_println!("Closed {} session(s)", local_count);
+    }
+    // Say what happened to the browsers instead of implying they are gone
+    // (133022#2): the survivors are the leak the issue reported.
+    let survived = close_summary.browser_survived.unwrap_or(0);
+    let unverified = close_summary.browser_unverified.unwrap_or(0);
+    if survived > 0 || unverified > 0 {
+        eprintln!(
+            "⚠  {} browser process(es) still running, {} unverified — reaping them is `kill-all`.",
+            survived, unverified
+        );
     }
     if !close_summary.errors.is_empty() {
         eprintln!("close-all warnings: {}", close_summary.errors.join(" | "));
@@ -4645,6 +4822,17 @@ async fn handle_kill_all() -> Result<(), String> {
 struct CloseAllSummary {
     results: Vec<String>,
     errors: Vec<String>,
+    /// Browser processes the backend confirmed gone (`browserTerminated`).
+    browser_terminated: Option<u64>,
+    /// Browser processes the backend confirmed still running.
+    browser_survived: Option<u64>,
+    /// Browser processes the backend could not classify.
+    browser_unverified: Option<u64>,
+}
+
+/// Read a numeric aggregate field from a `close_all_sessions` response.
+fn count_field(value: &Value, field: &str) -> Option<u64> {
+    value.get(field).and_then(|v| v.as_u64())
 }
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
@@ -5283,6 +5471,14 @@ async fn close_all_sessions_across_servers(client: &Client, base_url: &str) -> C
         match call_tool(client, &url, "close_all_sessions", json!({})).await {
             Ok(result) => {
                 if url == normalized_base_url {
+                    // The local server's aggregate carries the real outcome:
+                    // {closed, browserTerminated, browserSurvived,
+                    //  browserUnverified, reclaimedBytes, sessions[]}.
+                    if let Ok(value) = serde_json::from_str::<Value>(&result) {
+                        summary.browser_terminated = count_field(&value, "browserTerminated");
+                        summary.browser_survived = count_field(&value, "browserSurvived");
+                        summary.browser_unverified = count_field(&value, "browserUnverified");
+                    }
                     summary.results.push(result);
                 } else {
                     summary.results.push(format!("{}: {}", url, result));
@@ -7315,34 +7511,11 @@ fn strip_url_lines(snap: &str) -> String {
         .join("\n")
 }
 
-/// The backend emits a viewport footer (e.g. "This page has 3 viewports …
-/// You are currently viewing viewport 0") even for full-page captures (no
-/// `-v` flag), which contradicts the CLI's own full-page header.  Strip the
-/// footer block from the tree body when the capture was not viewport-scoped.
-fn strip_viewport_footer(snap: &str) -> String {
-    let lines: Vec<&str> = snap.lines().collect();
-    let is_footer = |line: &str| {
-        let t = line.trim_start_matches('#').trim();
-        (t.starts_with("This page has") && t.contains("viewport"))
-            || t.starts_with("You are currently viewing viewport")
-    };
-    // Walk backwards: only strip when the footer lines sit at the very end.
-    let mut end = lines.len();
-    while end > 0 && lines[end - 1].trim().is_empty() {
-        end -= 1;
-    }
-    let mut start = end;
-    while start > 0 && is_footer(lines[start - 1]) {
-        start -= 1;
-    }
-    if start == end {
-        return snap.to_string();
-    }
-    let mut out: Vec<&str> = Vec::with_capacity(lines.len());
-    out.extend_from_slice(&lines[..start]);
-    out.extend_from_slice(&lines[end..]);
-    out.join("\n")
-}
+/// The backend `ariaSnapshot` body is repaired by
+/// [`snapshot::normalize_capture_body`] inside `handle_snapshot` — it drops the
+/// viewport header/footer of a whole-page capture, unglues its `# ---` block
+/// from the last node line and re-flows whole-line-quoted nodes
+/// (snapshot-mastery #3/#7/#8).
 
 async fn handle_snapshot(
     client: &Client,
@@ -7447,18 +7620,21 @@ async fn handle_snapshot(
         snap
     };
 
-    // No -v filter: strip the backend's contradictory viewport footer
-    // ("You are currently viewing viewport 0") from full-page captures.
+    // Repair the backend body before it is printed or persisted
+    // (snapshot-mastery #3/#7/#8): the `# Viewport State` header and the
+    // trailing navigation footer describe one viewport even for a whole-page
+    // capture, the `# ---` footer is glued onto the last node line, and a node
+    // whose accessible name contains ": " is emitted as one whole-line quoted
+    // scalar.  `viewports` is `None` for a capture without `-v`, i.e. the
+    // whole-page case.
     let viewports = tool_params
         .get("viewports")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
-    let snap_footer_stripped;
-    let snap = if viewports.is_none() {
-        snap_footer_stripped = strip_viewport_footer(snap);
-        snap_footer_stripped.as_str()
-    } else {
-        snap
+    let normalized;
+    let snap = {
+        normalized = snapshot::normalize_capture_body(snap, viewports);
+        normalized.as_str()
     };
 
     // Prepend a YAML comment header documenting the snapshot scope so users
@@ -7728,6 +7904,11 @@ async fn handle_snapshot(
             };
             cli_println!("{}", diff_output);
             json_field("diff_previous", json!(prev_path.display().to_string()));
+            // Persist the appendix so `snapshot grep --diff` (and any external
+            // grep) can search it after the page has moved on (#5).
+            if let Err(e) = snapshot::save_diff_report(&out_path, &diff_output) {
+                eprintln!("⚠️  Could not persist the diff report: {e}");
+            }
         } else {
             cli_println!("### Diff");
             cli_println!(
@@ -7753,6 +7934,23 @@ async fn handle_snapshot(
     Ok(())
 }
 
+/// Text `snapshot grep --diff` searches: the newest persisted auto-diff report.
+///
+/// The report is written next to the capture by `snapshot --auto-diff`
+/// (`<capture>.diff.txt`), because a diff appendix exists only in that response
+/// text — a freshly captured tree can never contain its `## Added` / `+ …`
+/// lines (snapshot-mastery #5).
+fn grep_source_from_diff_report(dir: &Path) -> Result<String, String> {
+    let report = snapshot::latest_diff_report(dir).ok_or_else(|| {
+        format!(
+            "No auto-diff report in {} — run `snapshot --auto-diff` first \
+             (the report is written next to the capture as <capture>.diff.txt).",
+            dir.display()
+        )
+    })?;
+    std::fs::read_to_string(&report).map_err(|e| format!("Cannot read {}: {e}", report.display()))
+}
+
 async fn handle_snapshot_grep(
     client: &Client,
     base_url: &str,
@@ -7761,7 +7959,12 @@ async fn handle_snapshot_grep(
     session_name: Option<&str>,
     grep_options: &GrepOptions,
 ) -> Result<(), String> {
-    let source = if let Some(selector) = &grep_options.selector {
+    let source = if grep_options.diff {
+        // Search the appendix of the last `snapshot --auto-diff` instead of
+        // re-capturing the page: the `## Added` / `+ …` lines never appear in a
+        // live tree (#5).
+        grep_source_from_diff_report(&snapshot::snapshot_dir())?
+    } else if let Some(selector) = &grep_options.selector {
         // Scoped search: first get snapshot scoped to the CSS selector
         with_session(client, base_url, session_name, false, |session_id| {
             let client = client.clone();
@@ -7802,6 +8005,37 @@ async fn handle_snapshot_grep(
 
     let (page, page_size, show_all) = parse_page_opts(tool_params);
     run_grep_on_source(&source, grep_options, "snapshot", page, page_size, show_all)
+}
+
+/// Which auto-diff reports `snapshot clean` should remove.
+///
+/// `reports_newest_first` must be sorted by modification time, newest first.  A
+/// report belongs to the capture it was written beside (`<capture>.yml` →
+/// `<capture>.diff.txt`), so it goes when that capture goes.  Reports left by a
+/// `--stdout` capture have no `.yml` companion at all; those are bounded by the
+/// same `keep` retention count, and `--all` removes every report.
+fn stale_diff_reports(
+    reports_newest_first: &[PathBuf],
+    deleted_captures: &[PathBuf],
+    keep: usize,
+    remove_all: bool,
+) -> Vec<PathBuf> {
+    use std::collections::HashSet;
+
+    let deleted: HashSet<PathBuf> = deleted_captures.iter().cloned().collect();
+
+    reports_newest_first
+        .iter()
+        .enumerate()
+        .filter(|(index, report)| {
+            if remove_all || *index >= keep {
+                return true;
+            }
+            snapshot::diff_report_capture_path(report)
+                .is_some_and(|capture| deleted.contains(&capture))
+        })
+        .map(|(_, report)| report.clone())
+        .collect()
 }
 
 /// List saved snapshot files with timestamps and sizes.
@@ -8021,6 +8255,41 @@ fn handle_snapshot_clean(args: &Value) -> Result<(), String> {
                     }
                 }
             }
+        }
+    }
+
+    // Auto-diff reports are derived artifacts of their capture
+    // (snapshot-mastery #5): they follow the capture out, and the ones left by a
+    // `--stdout` capture (no `.yml` companion) are bounded by the same `keep`
+    // retention count instead of accumulating forever (#10).
+    let mut reports: Vec<(PathBuf, u64)> = Vec::new();
+    if snap_dir.is_dir() {
+        if let Ok(iter) = fs::read_dir(&snap_dir) {
+            for entry in iter.flatten() {
+                let path = entry.path();
+                if !path
+                    .to_string_lossy()
+                    .ends_with(snapshot::DIFF_REPORT_SUFFIX)
+                {
+                    continue;
+                }
+                if let Ok(meta) = path.metadata() {
+                    reports.push((path, meta.len()));
+                }
+            }
+        }
+    }
+    reports.sort_by(|a, b| {
+        let ta = fs::metadata(&a.0).ok().and_then(|m| m.modified().ok());
+        let tb = fs::metadata(&b.0).ok().and_then(|m| m.modified().ok());
+        tb.cmp(&ta) // newest first
+    });
+    let report_paths: Vec<PathBuf> = reports.iter().map(|(path, _)| path.clone()).collect();
+    let deleted_captures: Vec<PathBuf> = to_delete.iter().map(|(path, _)| path.clone()).collect();
+    let stale = stale_diff_reports(&report_paths, &deleted_captures, keep, remove_all);
+    for (path, size) in reports {
+        if stale.contains(&path) {
+            to_delete.push((path, size));
         }
     }
 
@@ -8721,7 +8990,9 @@ async fn handle_scrape(
                 continue;
             };
             let bytes = download_artifact(client, base_url, &name).await?;
-            let path = dir.join(&name);
+            // Normalised so the printed [Artifact] link and the JSON field use a
+            // single separator style even when `--output` came with `/`.
+            let path = normalize_path_display(&dir.join(&name));
             save_binary(&path, &bytes).map_err(|e| describe_io_error(&e))?;
             doc[*field] = json!(path.to_string_lossy());
             written.push(path);
@@ -10231,9 +10502,11 @@ fn htmlsnapshot_attr_suggestion_lines() -> [&'static str; 3] {
 /// This list MUST stay in sync with the backend `html_snapshot_scrape[_all]`
 /// executor and the fields documented in help.rs / commands.rs. It was once
 /// missing `textcontent`, so the documented clipped-text remedy errored in the
-/// CLI before ever reaching the backend (which accepted it).
+/// CLI before ever reaching the backend (which accepted it). `outerhtml` is the
+/// element *itself* (`<article class="product_pod">…</article>`) where `html` is
+/// its inner markup — asking for "the HTML of the container" needed it.
 fn html_snapshot_allowed_fields() -> &'static [&'static str] {
-    &["text", "textcontent", "html", "attr"]
+    &["text", "textcontent", "html", "outerhtml", "attr"]
 }
 
 /// Validate the `field` argument of `htmlsnapshot get [all]` with an error
@@ -10241,12 +10514,12 @@ fn html_snapshot_allowed_fields() -> &'static [&'static str] {
 fn validate_html_snapshot_field(field: &str) -> Result<(), String> {
     if field.is_empty() {
         return Err(
-            "Field is required: text, textcontent, html, or attr.".to_string()
+            "Field is required: text, textcontent, html, outerhtml, or attr.".to_string()
         );
     }
     if !html_snapshot_allowed_fields().contains(&field) {
         return Err(format!(
-            "Unknown field '{}'. Use text, textcontent, html, or attr.",
+            "Unknown field '{}'. Use text, textcontent, html, outerhtml, or attr.",
             field
         ));
     }
@@ -10294,12 +10567,22 @@ async fn handle_html_snapshot_get(
         }
     }
 
+    // Determine if this is a "get all" (querySelectorAll) call vs a "get" (single element).
+    // It decides both the response shape asked for below and how the result is rendered.
+    let is_get_all = tool_name.ends_with("_all");
+
     let result = with_session_paginated(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
         let tool_name = tool_name.to_string();
         let mut params = tool_params.clone();
         params["sessionId"] = json!(session_id);
+        // `get all` asks for the pagination envelope so the selector's TOTAL match
+        // count survives --offset/--limit: the bare array is the sliced values, and
+        // its length cannot answer "does this selector match N elements?".
+        if is_get_all {
+            params["includeMeta"] = json!(true);
+        }
         async move { call_tool_with_result(&client, &base_url, &tool_name, params).await }
     })
     .await
@@ -10322,16 +10605,20 @@ async fn handle_html_snapshot_get(
     })?;
 
     let server_pagination = result.pagination;
-    let text = result.text;
+    // `get all` answers the envelope `includeMeta` asked for
+    // ({values,totalMatches,returned,offset,limit}); everything else — a `get`, an
+    // older server, an error text — passes through as the raw payload.
+    let (text, total_matches) = if is_get_all {
+        split_get_all_envelope(&result.text)
+    } else {
+        (result.text.clone(), None)
+    };
 
     // Output the result
     let empty_result = text == "null" || text.is_empty() || text.trim() == "[]";
     // Only HTML output is paginated by default; text extraction rarely exceeds
     // practical limits for single-field extraction so it defaults to --all.
-    let paginate = (field == "html") && !empty_result;
-
-    // Determine if this is a "get all" (querySelectorAll) call vs a "get" (single element)
-    let is_get_all = tool_name.ends_with("_all");
+    let paginate = matches!(field, "html" | "outerhtml") && !empty_result;
 
     if empty_result {
         let display_selector = if selector.is_empty() {
@@ -10366,7 +10653,7 @@ async fn handle_html_snapshot_get(
             display_selector
         );
         cli_println!(
-            "  Note: `htmlsnapshot grep <pattern>` searches raw HTML TEXT with a regex — it is not a CSS-selector validator."
+            "  Note: `htmlsnapshot grep <pattern>` searches the captured HTML TEXT (an annotated serialization, not the page's View-Source) with a regex — it is not a CSS-selector validator."
         );
     } else if is_get_all && !json_active() {
         // For "get all" mode, a single result is a perfectly valid outcome
@@ -10374,24 +10661,22 @@ async fn handle_html_snapshot_get(
         // product title) — never imply the page changed since capture.  A
         // count of 0 cannot reach this branch ("[]" and "" are handled as
         // empty results above, with the staleness guidance).
-        cli_println!("{}", text);
-        // Element count straight from the JSON array — this is the reliable
-        // "does the selector match N elements?" answer; grep -c counts LINES
-        // and must not be used for this.
-        let array_count = if text.trim().starts_with('[') {
-            serde_json::from_str::<Vec<serde_json::Value>>(&text)
-                .map(|arr| arr.len())
-                .ok()
-        } else {
-            None
-        };
-        match array_count {
-            // One match is the normal outcome for a unique selector (`h1`,
-            // `#id`, a single form field): use the same count wording as the
-            // n>1 arm instead of a nagging "may be too narrow" template.
-            Some(1) => cli_println!("1 element matched."),
-            Some(n) => cli_println!("{} elements matched.", n),
-            None => {}
+        //
+        // One value per numbered line: a 93-element result is scanned
+        // top-to-bottom instead of scrolling sideways through a single JSON
+        // line.  `--json` (and `--quiet`) keep the raw array for scripts.
+        match serde_json::from_str::<Vec<serde_json::Value>>(&text) {
+            Ok(arr) => {
+                for line in format_get_all_values(&arr) {
+                    cli_println!("{}", line);
+                }
+                // The count line reports the selector's TOTAL match count, not the
+                // returned slice: with --offset/--limit the two differ, and the total
+                // is the answer to "does my selector match N elements?".
+                let total = total_matches.map(|t| t as usize);
+                cli_println!("{}", format_get_all_count_line(arr.len(), total));
+            }
+            Err(_) => cli_println!("{}", text),
         }
     } else if paginate {
         if let Some(ref pm) = server_pagination {
@@ -10444,14 +10729,67 @@ async fn handle_html_snapshot_get(
     }
     // Expose the element count in --json mode too, so machine consumers can
     // verify "selector matches exactly N" without measuring the result array.
+    // `match_count` is the selector's TOTAL match count (it survives
+    // --offset/--limit); `returned_count` is the size of the returned slice.
     if is_get_all {
-        let match_count = serde_json::from_str::<Vec<serde_json::Value>>(&text)
+        let returned = serde_json::from_str::<Vec<serde_json::Value>>(&text)
             .map(|arr| arr.len())
             .unwrap_or(0);
+        let match_count = total_matches.map(|t| t as usize).unwrap_or(returned);
         json_field("match_count", json!(match_count));
+        json_field("returned_count", json!(returned));
     }
 
     Ok(())
+}
+
+/// The `get all` answer as `(values_json, totalMatches)`.
+///
+/// The backend returns the bare JSON array unless `includeMeta` was requested, so
+/// anything that is not the envelope (a `get`, an older server, an error body) is
+/// passed through untouched and simply carries no total.
+fn split_get_all_envelope(payload: &str) -> (String, Option<u64>) {
+    let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return (payload.to_string(), None);
+    };
+    let values = obj
+        .get("values")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "[]".to_string());
+    let total = obj.get("totalMatches").and_then(|v| v.as_u64());
+    (values, total)
+}
+
+/// One numbered line per extracted value — how `get all` renders its result in
+/// human mode, so a long list reads top-to-bottom instead of as one JSON line.
+///
+/// Values are printed verbatim: an empty value is an empty item after its index
+/// (it is a matched element whose field is empty, not a missing row).
+fn format_get_all_values(values: &[serde_json::Value]) -> Vec<String> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let value = v
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| v.to_string());
+            format!("{:>4}. {}", i + 1, value)
+        })
+        .collect()
+}
+
+/// The human count line of `get all`: the selector's **total** match count, naming
+/// the returned slice when `--offset`/`--limit` made the two differ.
+fn format_get_all_count_line(returned: usize, total: Option<usize>) -> String {
+    let total = total.unwrap_or(returned);
+    if total > returned {
+        format!("{} of {} elements matched.", returned, total)
+    } else if total == 1 {
+        "1 element matched.".to_string()
+    } else {
+        format!("{} elements matched.", total)
+    }
 }
 
 /// Resolves an `@file` path for --sql and --selector. Tries the Browser4 repo
@@ -10718,6 +11056,18 @@ fn sql_uses_dom_first_img_expr(sql: &str) -> bool {
 /// did not already pick a non-default format.
 fn should_suggest_query_output_format(format: &str, result_only: bool, stdout_is_terminal: bool) -> bool {
     stdout_is_terminal && !result_only && format.eq_ignore_ascii_case("json")
+}
+
+/// True when `htmlsnapshot query` writes a machine-readable payload to stdout.
+///
+/// That is the case for every format except the human `table` view, and only
+/// when `--output-file` did not already divert the payload.  Tips must then go
+/// to stderr: the default format is `json`, so the previous
+/// `format != "json"` test classified the *default* run as human output and
+/// appended three tip lines to the JSON envelope on stdout —
+/// `query --sql "…" > out.json` no longer parsed as JSON.
+fn query_stdout_is_structured(output_file: Option<&str>, format: &str) -> bool {
+    output_file.is_none() && !format.eq_ignore_ascii_case("table")
 }
 
 async fn handle_html_snapshot_query(
@@ -11010,10 +11360,11 @@ async fn handle_html_snapshot_query(
         cli_println!("{}", output);
     }
 
-    // When a machine-readable payload (csv/table) went to stdout, human chatter
-    // (tips) must go to stderr instead — otherwise `query --format csv > out.csv`
-    // picks up tip lines and the redirect is corrupted.
-    let structured_stdout = output_file.is_none() && format != "json";
+    // When a machine-readable payload went to stdout, human chatter (tips) must
+    // go to stderr instead — otherwise `query --sql … > out.json` (the DEFAULT
+    // format) and `query --format csv > out.csv` pick up tip lines and the
+    // redirect is corrupted.
+    let structured_stdout = query_stdout_is_structured(output_file, &format);
     let emit_tip = |text: &str| {
         if structured_stdout {
             if !quiet_active() && !json_active() {
@@ -11200,7 +11551,18 @@ fn is_wpsi_summary(yaml: &str) -> bool {
 
 /// Parse the WPSI YAML summary and produce a compact outline for stdout display.
 /// The full summary is always saved to file; this extracts the key structure.
-fn format_summary_outline(yaml: &str, verbose: bool) -> String {
+///
+/// [page_url] and [page_title] come from the command's own metadata (the YAML's
+/// `page:` section carries the same URL and the type), so the outline prints one
+/// `### Page` block with URL, title and type together — the caller used to print its
+/// own `### Page`/URL/Title header and the outline a second one right below it
+/// (issue html-snapshot-extraction#3).
+fn format_summary_outline(
+    yaml: &str,
+    verbose: bool,
+    page_url: &str,
+    page_title: &str,
+) -> String {
     let mut outline = String::new();
 
     // Track which top-level section we're in and accumulate items.
@@ -11336,12 +11698,26 @@ fn format_summary_outline(yaml: &str, verbose: bool) -> String {
                 } else if let Some(sel) = trim_prefix(trimmed, "selector:") {
                     cur_linkgroup_selector = sel.trim().trim_matches('"').to_string();
                 } else if let Some(item) = trim_prefix(trimmed, "itemTag:") {
-                    // When we see the itemTag, the selector for this group is complete
+                    // When we see the itemTag, the group has a usable suggestion: the
+                    // container selector narrowed to the repeated item tag.  A more
+                    // precise `itemSelector:` may follow and replace it in place.
                     if !cur_linkgroup_selector.is_empty() {
-                        linkgroup_selectors.push(cur_linkgroup_selector.clone());
+                        linkgroup_selectors
+                            .push(format!("{} {}", cur_linkgroup_selector, item.trim()));
                     }
                     if let Some(last) = linkgroup_items.last_mut() {
                         *last = format!("{} > {}", last, item.trim());
+                    }
+                } else if let Some(item_sel) = trim_prefix(trimmed, "itemSelector:") {
+                    // The group's OWN item selector (`article.product_pod`).  The
+                    // suggested command must target the repeated item, not any
+                    // descendant anchor of the container: `".row a"` returned 93
+                    // sidebar/pagination anchors for the 20 product cards.
+                    let candidate = item_sel.trim().trim_matches('"').to_string();
+                    if !candidate.is_empty() {
+                        if let Some(last) = linkgroup_selectors.last_mut() {
+                            *last = candidate;
+                        }
                     }
                 } else if let Some(count) = trim_prefix(trimmed, "count:") {
                     if let Some(last) = linkgroup_items.last_mut() {
@@ -11433,8 +11809,12 @@ fn format_summary_outline(yaml: &str, verbose: bool) -> String {
     }
 
     // ---- Build output ----
-    // Page section
+    // Page section: URL and title (command metadata) plus the YAML's page type under
+    // ONE heading. Two `### Page` blocks — one from this outline, one from the caller —
+    // were the reported defect.
     outline.push_str("### Page\n");
+    outline.push_str(&format!("- Page URL: {}\n", page_url));
+    outline.push_str(&format!("- Page Title: {}\n", page_title));
     outline.push_str(&format!(
         "- Type: {}\n",
         if page_type.is_empty() {
@@ -11568,9 +11948,24 @@ fn format_summary_outline(yaml: &str, verbose: bool) -> String {
         outline.push_str("\n### Suggested Commands\n");
         outline.push_str("  Copy-paste ready — use these to extract data:\n");
 
-        // Suggest commands for link groups (best available targets)
-        for sel in linkgroup_selectors.iter().take(3) {
-            let cmd = format!("htmlsnapshot get all text \"{} a\" --limit 20", sel);
+        // Suggest commands for link groups (best available targets). The selector is
+        // the group's own item selector when the summary carries one, otherwise the
+        // container narrowed by the item tag — never the old `"<container> a"`, which
+        // matched every descendant anchor instead of the repeated items.
+        //
+        // De-duplicated: two groups can collapse to the same selector (two `ol.row`
+        // groups, say) and used to consume two of the three slots with one line
+        // printed twice.
+        let mut seen_selectors: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+        let suggestions: Vec<&str> = linkgroup_selectors
+            .iter()
+            .map(|s| s.as_str())
+            .filter(|s| seen_selectors.insert(s))
+            .take(3)
+            .collect();
+        for sel in suggestions {
+            let cmd = format!("htmlsnapshot get all text \"{}\" --limit 20", sel);
             outline.push_str(&format!("  {}\n", cmd));
         }
 
@@ -11742,10 +12137,9 @@ async fn handle_html_snapshot_summary(
         // printed verbatim (the full content is already saved to file).
         println!("{}", summary);
     } else {
-        let outline = format_summary_outline(summary, verbose);
-        cli_println!("### Page");
-        cli_println!("- Page URL: {}", url);
-        cli_println!("- Page Title: {}", title);
+        // URL/Title come from the command's own metadata and Type from the YAML, so
+        // the outline prints all three lines under ONE `### Page` heading.
+        let outline = format_summary_outline(summary, verbose, url, title);
         cli_println!("{}", outline);
         cli_println!("");
         cli_println!("💾 Full summary saved to {}", out_path.display());
@@ -11854,6 +12248,70 @@ fn sql_suggestion_safe(selector: &str) -> bool {
     !selector.contains(['\'', '"', '$', '`', '\\'])
 }
 
+/// The auto-discovery narration of `htmlsnapshot inspect`, as the lines it prints.
+///
+/// [original_match_count] is the backend's count for the **caller's** selector,
+/// measured before the analysis substituted another element set:
+///
+/// - `Some(0)` — the caller's selector matched nothing, so the analysis is about a
+///   *different*, auto-discovered element set; the narration must say that first and
+///   must never claim the caller's selector repeats (issue
+///   htmlsnapshot-inspect-discovery#1);
+/// - `Some(1)` with a caller-supplied selector — the caller named a single container
+///   and its repeating children are what was analysed;
+/// - anything else (including `None` from an older server) — the historical wording,
+///   which is true when the caller's own selector is the analysed one.
+fn inspect_auto_discovery_lines(
+    original_selector: &str,
+    effective_selector: &str,
+    analyzed: u64,
+    match_count: i64,
+    original_match_count: Option<i64>,
+    user_supplied_selector: bool,
+) -> Vec<String> {
+    let closing = [
+        "    Bare inspect answers \"what repeats?\" — for a page landmark outline".to_string(),
+        "    (header/nav/main/aside/footer), use `htmlsnapshot summary`.".to_string(),
+    ];
+    let analyzed_line = format!(
+        "    It analyzed {} of the {} occurrences to find selectors that work consistently.",
+        analyzed, match_count
+    );
+
+    match original_match_count {
+        Some(0) => vec![
+            format!("  🔍 Your selector \"{}\" matched 0 elements.", original_selector),
+            format!(
+                "    The analysis below is about a DIFFERENT element set: the auto-discovered repeating pattern \"{}\".",
+                effective_selector
+            ),
+            analyzed_line,
+            closing[0].clone(),
+            closing[1].clone(),
+        ],
+        Some(1) if user_supplied_selector => vec![
+            format!("  🔍 Your selector \"{}\" matched a single container.", original_selector),
+            format!(
+                "    Its repeating children were analysed as \"{}\" — the selectors below are that child pattern, not \"{}\" itself.",
+                effective_selector, original_selector
+            ),
+            analyzed_line,
+            closing[0].clone(),
+            closing[1].clone(),
+        ],
+        _ => vec![
+            format!("  🔍 Auto-discovered repeating pattern from \"{}\"", original_selector),
+            format!(
+                "    The tool found that \"{}\" repeats as a sibling group (e.g. a product grid, search result list).",
+                original_selector
+            ),
+            analyzed_line,
+            closing[0].clone(),
+            closing[1].clone(),
+        ],
+    }
+}
+
 async fn handle_html_snapshot_inspect(
     client: &Client,
     base_url: &str,
@@ -11922,6 +12380,10 @@ async fn handle_html_snapshot_inspect(
             m.remove("selector");
         }
     }
+    // Whether the CALLER named a selector. A bare `inspect` lets the server default
+    // to `:root`, which matches exactly one element (the root), so the wording below
+    // must not lecture the user about "your selector" when they passed none.
+    let user_supplied_selector = !selector.is_empty();
 
     let result = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
@@ -11947,6 +12409,11 @@ async fn handle_html_snapshot_inspect(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let original_selector = data.get("originalSelector").and_then(|v| v.as_str());
+    // How many elements the CALLER's selector matched, counted by the backend before
+    // the analysis substituted another element set: 0 = matched nothing, 1 = a single
+    // container whose children were analysed, >1 = the caller's selector IS the
+    // analysed one. Absent on an older server.
+    let original_match_count = data.get("originalMatchCount").and_then(|v| v.as_i64());
     let speculative_selector = data.get("speculativeSuggestion").and_then(|v| v.as_str());
     let speculative_count = data.get("speculativeMatchCount").and_then(|v| v.as_i64());
 
@@ -12000,12 +12467,12 @@ async fn handle_html_snapshot_inspect(
                 "       htmlsnapshot inspect \"[class*=\"{}\"]\"",
                 class_hint
             );
-            cli_println!("     Or search the raw HTML for this class name:");
+            cli_println!("     Or search the captured HTML for this class name:");
             cli_println!("       htmlsnapshot grep \"{}\"", class_hint);
         } else {
             cli_println!("  💡 Try these troubleshooting steps:");
             cli_println!(
-                "       htmlsnapshot grep \"{}\"    # search raw HTML for matching text",
+                "       htmlsnapshot grep \"{}\"    # search the captured HTML for matching text",
                 selector.trim_matches(|c: char| c == '.'
                     || c == '#'
                     || c == '['
@@ -12034,11 +12501,16 @@ async fn handle_html_snapshot_inspect(
     );
     if auto_discovered {
         if let Some(orig) = original_selector {
-            cli_println!("  🔍 Auto-discovered repeating pattern from \"{}\"", orig);
-            cli_println!("    The tool found that \"{}\" repeats as a sibling group (e.g. a product grid, search result list).", orig);
-            cli_println!("    It analyzed {} of the {} occurrences to find selectors that work consistently.", analyzed, match_count);
-            cli_println!("    Bare inspect answers \"what repeats?\" — for a page landmark outline");
-            cli_println!("    (header/nav/main/aside/footer), use `htmlsnapshot summary`.");
+            for line in inspect_auto_discovery_lines(
+                orig,
+                selector,
+                analyzed,
+                match_count,
+                original_match_count,
+                user_supplied_selector,
+            ) {
+                cli_println!("{}", line);
+            }
         }
     } else if let (Some(sel), Some(count)) = (speculative_selector, speculative_count) {
         // Only show speculative suggestion when we did NOT auto-discover
@@ -12420,6 +12892,10 @@ struct GrepOptions {
     context: Option<usize>,
     invert_match: bool,
     count: bool,
+    /// `-o` / `--only-matching`: print each matched part on its own line, one per
+    /// OCCURRENCE — the way to count occurrences (`grep -o <pat> | wc -l`) where
+    /// [count] counts matching LINES.
+    only_matching: bool,
     files_with_matches: bool,
     fixed_strings: bool,
     word_regexp: bool,
@@ -12429,6 +12905,9 @@ struct GrepOptions {
     /// When true, search the raw HTML including <script> and <style> content.
     /// By default (false), script and style tag content is stripped before matching.
     raw_html: bool,
+    /// When true, search the persisted auto-diff report of the last
+    /// `snapshot --auto-diff` instead of a freshly captured tree (#5).
+    diff: bool,
 }
 
 fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
@@ -12529,6 +13008,10 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
             .get("count")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        only_matching: tool_params
+            .get("only-matching")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         files_with_matches: tool_params
             .get("files-with-matches")
             .and_then(|v| v.as_bool())
@@ -12552,6 +13035,10 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
             .map(|s| s.to_string()),
         raw_html: tool_params
             .get("raw-html")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        diff: tool_params
+            .get("diff")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
     })
@@ -13021,6 +13508,59 @@ fn run_grep_on_source(
         })
         .collect();
 
+    // --only-matching (-o): one line per OCCURRENCE instead of one line per matched
+    // line. This is how a caller counts occurrences — `grep -o <pat> | wc -l` —
+    // while -c below keeps GNU grep's meaning, a count of matching LINES. Handled
+    // before --count/-l so the flag actually reaches the output, and context flags
+    // do not apply (GNU grep ignores them with -o).
+    if grep_options.only_matching {
+        let occurrences = collect_only_matching_lines(
+            &re,
+            &lines,
+            &matched_indices,
+            !grep_options.no_line_number,
+        );
+        if occurrences.is_empty() {
+            // Nothing printable: no line matched, or -o was combined with -v (an
+            // inverted line has no matched part). Same zero-match exit as the normal
+            // path — GNU grep exits 1 when -o prints nothing.
+            json_field("matches", json!(0));
+            json_field("total_lines", json!(total_lines));
+            return Err("__grep_no_matches__".to_string());
+        }
+        let now = chrono::Utc::now();
+        let ts = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        match source_label {
+            "snapshot" => eprintln!("# snapshot content @ {}", ts),
+            "htmlsnapshot" => eprintln!("# live page HTML @ {}", ts),
+            _ => {}
+        }
+        let full_output = occurrences.join("\n");
+        if skip_pagination(show_all) {
+            cli_println!("{}", full_output);
+        } else {
+            let (page_content, meta) = paginate_output(&full_output, page, page_size);
+            cli_println!("{}", page_content);
+            if meta.is_truncated {
+                cli_println!("{}", format_pagination_footer(&meta));
+            }
+        }
+        json_field("snapshot_timestamp", json!(ts));
+        json_field("total_chars", json!(full_output.len()));
+        json_field("occurrences", json!(occurrences.len()));
+        json_field("matches", json!(occurrences.len()));
+        json_field("total_lines", json!(total_lines));
+        json_field("page_size", json!(page_size));
+        json_field(
+            "truncated",
+            json!(!skip_pagination(show_all) && occurrences.len() > page_size),
+        );
+        if let Some(sel) = &grep_options.selector {
+            json_field("selector", json!(sel));
+        }
+        return Ok(());
+    }
+
     // --count: print only the count (deferred exit so zero matches
     // still returns Err("__grep_no_matches__") for GNU grep semantics).
     if grep_options.count {
@@ -13143,10 +13683,35 @@ fn run_grep_on_source(
     Ok(())
 }
 
+/// The `grep -o` lines of one command: every occurrence of the pattern, one per
+/// line, prefixed with the 1-based number of the line it came from (`12:`) unless
+/// `--no-line-number` is set.
+///
+/// One entry per OCCURRENCE, so the length of the result is an occurrence count —
+/// the number `-c` cannot give, because `-c` counts matching lines (a minified
+/// single-line document counts once however many times the pattern occurs).
+fn collect_only_matching_lines(
+    re: &regex::Regex,
+    lines: &[&str],
+    matched_indices: &[usize],
+    show_line_numbers: bool,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for &idx in matched_indices {
+        for m in re.find_iter(lines[idx]) {
+            if show_line_numbers {
+                out.push(format!("{}:{}", idx + 1, m.as_str()));
+            } else {
+                out.push(m.as_str().to_string());
+            }
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // pagination support (shared between htmlsnapshot get/grep and snapshot grep)
 // ---------------------------------------------------------------------------
-
 /// Metadata about a paginated output.
 #[derive(Debug)]
 struct PaginationMeta {
@@ -14095,17 +14660,40 @@ async fn handle_agent_run(
                 .get("processState")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            // Read the shared envelope first. The loop used to know only the legacy
+            // `processState`, so a task that reached `status: done` five seconds in
+            // could never take the success branch: `--wait` burned its whole timeout
+            // and discarded the result it was waiting for (issue 112415#4).
+            let envelope_word = envelope_status_word(&parsed);
+            let terminal_word = if !envelope_word.is_empty() {
+                if is_terminal_shared_status(&envelope_word) {
+                    envelope_word.clone()
+                } else {
+                    String::new()
+                }
+            } else if matches!(process_state, "done" | "completed")
+                || parsed
+                    .get("isDone")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            {
+                "done".to_string()
+            } else if matches!(process_state, "failed" | "error") {
+                "failed".to_string()
+            } else {
+                String::new()
+            };
 
-            match process_state {
-                // Successful terminal states: "done" (legacy sync path) and
-                // "completed" (StatefulAgentRunner's done+OK state).
-                "done" | "completed" => {
+            match terminal_word.as_str() {
+                // Successful terminal state.
+                "done" => {
                     let status_code = parsed
                         .get("statusCode")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(200);
                     let failure_reason = parsed
                         .get("failureReason")
+                        .or_else(|| parsed.get("error"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
                     if status_code >= 400 || failure_reason.is_some() {
@@ -14125,22 +14713,40 @@ async fn handle_agent_run(
                     let _ = update_async_task_status(&task_id, "completed", None);
                     return Ok(());
                 }
-                "failed" | "error" => {
+                "failed" => {
+                    // The envelope carries the reason in `error`; the legacy payload
+                    // carried it in `message`/`failureReason`.
                     let message = parsed
-                        .get("message")
+                        .get("error")
                         .and_then(|v| v.as_str())
+                        .or_else(|| parsed.get("failureReason").and_then(|v| v.as_str()))
+                        .or_else(|| parsed.get("message").and_then(|v| v.as_str()))
                         .unwrap_or("Agent task failed");
                     let _ = update_async_task_status(&task_id, "failed", None);
                     return Err(format!("Agent task failed: {}", message));
                 }
+                "cancelled" => {
+                    let _ = update_async_task_status(&task_id, "cancelled", None);
+                    return Err(format!(
+                        "Agent task {} was cancelled. Use 'agent status {}' to see its final state.",
+                        task_id, task_id
+                    ));
+                }
                 _ => {
-                    // Show progress indicator
+                    // Show progress indicator, with the agent's own description and
+                    // step count when the envelope has them.
                     let elapsed = start.elapsed().as_secs();
                     if elapsed > 0 && elapsed % 5 == 0 {
-                        let msg = parsed
+                        let mut msg = parsed
                             .get("message")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("processing...");
+                            .unwrap_or("processing...")
+                            .to_string();
+                        if let Some(steps) = parsed.get("processed").and_then(|v| v.as_u64()) {
+                            if steps > 0 {
+                                msg.push_str(&format!(" ({} step(s))", steps));
+                            }
+                        }
                         cli_println!("  [{}s] {}", elapsed, msg);
                     }
                 }
@@ -14239,11 +14845,19 @@ async fn detect_missing_llm_error_for_submitted_agent_task(
         let Some(parsed) = serde_json::from_str::<Value>(&status).ok() else {
             return Ok(None);
         };
-        let Some(process_state) = parsed.get("processState").and_then(|value| value.as_str())
-        else {
-            return Ok(None);
+        // Terminal per the shared envelope (`status`) or the legacy `processState`.
+        // Reading only `processState` here meant a task the envelope had already
+        // finished was polled for the whole failure-detection window.
+        let envelope_word = envelope_status_word(&parsed);
+        let terminal = if !envelope_word.is_empty() {
+            is_terminal_shared_status(&envelope_word)
+        } else {
+            matches!(
+                parsed.get("processState").and_then(|value| value.as_str()),
+                Some("done") | Some("completed") | Some("failed") | Some("error")
+            )
         };
-        if process_state == "done" {
+        if terminal {
             return Ok(None);
         }
     }
@@ -14253,17 +14867,27 @@ async fn detect_missing_llm_error_for_submitted_agent_task(
 
 fn extract_missing_llm_configuration_message(status_payload: &str) -> Option<String> {
     let parsed = serde_json::from_str::<Value>(status_payload).ok()?;
-    let process_state = parsed
-        .get("processState")
-        .and_then(|value| value.as_str())?;
+    let envelope_word = envelope_status_word(&parsed);
+    let finished = if !envelope_word.is_empty() {
+        is_terminal_shared_status(&envelope_word)
+    } else {
+        matches!(
+            parsed.get("processState").and_then(|value| value.as_str()),
+            Some("done") | Some("completed")
+        ) || parsed
+            .get("isDone")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    };
     let status_code = parsed.get("statusCode").and_then(|value| value.as_i64())?;
-    if process_state != "done" || status_code < 400 {
+    if !finished || status_code < 400 {
         return None;
     }
 
     let message = parsed
         .get("message")
         .and_then(|value| value.as_str())
+        .or_else(|| parsed.get("error").and_then(|value| value.as_str()))
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
     if is_missing_llm_configuration_message(message) {
@@ -14310,6 +14934,92 @@ fn format_missing_llm_error(raw_message: &str, command_name: &str) -> String {
     format!("❌ {command_name} requires an LLM API key\n\n{body}")
 }
 
+/// The reason when a `command_status`/`command_result` payload is the backend's
+/// structured not-found answer (`statusCode` 404), else `None`.
+///
+/// The backend serializes an unknown id as a status envelope, not as `null`, so the
+/// null-payload guards alone could never fire: a mistyped id printed
+/// `{"status":"failed"}` with exit 0 and no reason (issue 112415#6).
+fn agent_envelope_not_found_reason(parsed: &Value) -> Option<String> {
+    let code = parse_status_code_from_json(parsed);
+    if code != "404" && code != "SC_NOT_FOUND" {
+        return None;
+    }
+    Some(
+        parsed
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("the backend has no record of this task id")
+            .to_string(),
+    )
+}
+
+/// Print where an agent task's deliverables live, when the payload names them.
+///
+/// `agent result` printed only the completion summary for a task whose whole point
+/// was returning data, and the artifact itself was reachable only by searching the
+/// backend's app-data tree by hand (issue 111443#1). The payload now carries the
+/// agent's own completion report (`keyFindings`, `filesChanged`, `problems`) and the
+/// workspace its tools wrote into.
+fn print_agent_deliverables(payload: &Value) {
+    let strings = |key: &str| -> Vec<String> {
+        payload
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let findings = strings("keyFindings");
+    let files = strings("filesChanged");
+    let problems = strings("problems");
+    let workspace = payload
+        .get("workspace")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+
+    if findings.is_empty() && files.is_empty() && problems.is_empty() && workspace.is_none() {
+        return;
+    }
+
+    cli_println!("");
+    if !findings.is_empty() {
+        cli_println!("Key findings:");
+        for finding in findings.iter().take(20) {
+            cli_println!("  - {}", finding);
+        }
+        if findings.len() > 20 {
+            cli_println!("  ... and {} more", findings.len() - 20);
+        }
+    }
+    if !files.is_empty() {
+        cli_println!("Files the agent reported changing:");
+        for file in files.iter().take(20) {
+            cli_println!("  {}", file);
+        }
+        if files.len() > 20 {
+            cli_println!("  ... and {} more", files.len() - 20);
+        }
+    }
+    if !problems.is_empty() {
+        cli_println!("Unresolved problems reported by the agent:");
+        for problem in problems.iter().take(10) {
+            cli_println!("  - {}", problem);
+        }
+    }
+    if let Some(workspace) = workspace {
+        cli_println!("Task workspace: {}", workspace);
+        cli_println!("  (the agent's deliverables live here; `agent result --json` prints the same path in `workspace`)");
+    }
+}
+
 async fn handle_agent_status(
     client: &Client,
     base_url: &str,
@@ -14334,6 +15044,17 @@ async fn handle_agent_status(
         json_field("task_id", json!(id));
         json_field("error", json!(format!("No agent task found with id {}", id)));
         return Err(format!("No agent task found with id '{}'. Run `agent list` to see tracked tasks.", id));
+    }
+
+    // An unknown id is answered with a structured notFound envelope, which carries
+    // the reason; report it instead of printing a bare `status: failed`.
+    if let Some(reason) = parsed.as_ref().and_then(agent_envelope_not_found_reason) {
+        json_field("task_id", json!(id));
+        json_field("error", json!(reason));
+        return Err(format!(
+            "No agent task found with id '{}'. Run `agent list` to see tracked tasks.",
+            id
+        ));
     }
 
     cli_println!("{}", result);
@@ -14393,44 +15114,82 @@ async fn handle_agent_result(
         return Err(format!("No agent task found with id '{}'. Run `agent list` to see tracked tasks.", id));
     }
 
-    // Detect empty result: the agent completed successfully but commandResult
-    // is {} — the extracted data is likely in instructResults instead.  Point
-    // the user at `agent status --json` to inspect instructResults.
+    // An unknown id is answered with a structured notFound envelope — report it with
+    // the reason the envelope carries instead of printing a bare `status: failed`.
+    let parsed_payload = parsed_null_check.clone();
+    if let Some(reason) = parsed_payload.as_ref().and_then(agent_envelope_not_found_reason) {
+        json_field("task_id", json!(id));
+        json_field("error", json!(reason));
+        return Err(format!(
+            "No agent task found with id '{}'. Run `agent list` to see tracked tasks.",
+            id
+        ));
+    }
+
+    // Detect an empty result: the agent completed successfully but the payload
+    // carries no summary or data. Point at the fields that actually exist — the
+    // previous hint named `instructResults`, which the backend stopped serializing,
+    // so following it led nowhere (issue 112415#5).
     let trimmed = result.trim();
-    let is_empty_result = trimmed == "{}" || trimmed.is_empty();
-    if is_empty_result && !json_active() {
+    let body_is_json_object = parsed_payload
+        .as_ref()
+        .map(|v| v.is_object())
+        .unwrap_or(false);
+    let payload = parsed_payload
+        .as_ref()
+        .and_then(|v| v.get("result"))
+        .unwrap_or(&Value::Null);
+    let payload_is_empty = match payload {
+        Value::Object(map) => map.is_empty(),
+        Value::Null => true,
+        _ => false,
+    };
+    let nothing_to_show =
+        trimmed.is_empty() || trimmed == "{}" || (body_is_json_object && payload_is_empty);
+    if nothing_to_show && !json_active() {
+        cli_println!("⚠️  The result carries no data.");
+        cli_println!("The task may have completed successfully but produced no summary or");
+        cli_println!("structured payload. Try:");
         cli_println!(
-            "⚠️  The result is empty ({}).",
-            if trimmed.is_empty() {
-                "no output"
-            } else {
-                "{}"
-            }
-        );
-        cli_println!("The agent task may have completed successfully but the extracted data was");
-        cli_println!("not serialized into commandResult. Try:");
-        cli_println!(
-            "  agent status {} --json   (check instructResults for extracted data)",
+            "  agent status {}          (status, statusCode, message and error)",
             id
         );
-        cli_println!(
-            "  agent status {}          (check processState and message)",
-            id
-        );
+        cli_println!("  agent status {} --json   (the same envelope as JSON)", id);
+        cli_println!("If the agent wrote its deliverable to a file, `agent result` names the");
+        cli_println!("task workspace it wrote into.");
     }
 
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field("raw", json!(&result));
+    if !json_active() {
+        print_agent_deliverables(payload);
+    }
     Ok(())
 }
 
-/// A tracked task's status is terminal once it completed or failed.
+/// A tracked task's status is terminal once it completed, failed or was cancelled.
 ///
 /// Used by `agent list --clear` to tell history apart from work that is still
-/// live server-side.
+/// live server-side, so it must agree with the shared envelope's terminal set
+/// (`done`/`failed`/`cancelled`).
 fn agent_task_status_is_terminal(status: &str) -> bool {
-    status == "completed" || status.starts_with("failed")
+    state::is_terminal_async_status(status)
+}
+
+/// Local status for a tracked task the backend answered "no such id" for.
+///
+/// Distinct from a failure and from an empty (never-polled) status: the work may
+/// well have finished long ago, but nothing can be polled for this id again, so
+/// `--clear` may drop the row without pretending the task is still running.
+const AGENT_STATUS_GONE: &str = "gone (not tracked by the backend)";
+
+/// Whether a tracked task can be dropped by the default `agent list --clear`.
+///
+/// History (terminal) and rows the backend no longer knows about are droppable;
+/// queued/processing and never-polled rows are kept because they may still be live.
+fn agent_clear_drops_terminal(task: &state::AsyncTaskEntry) -> bool {
+    agent_task_status_is_terminal(&task.last_status) || task.last_status == AGENT_STATUS_GONE
 }
 
 /// Whether `agent list --clear` should drop one tracked async task.
@@ -14446,8 +15205,9 @@ fn agent_clear_drops_task(task: &state::AsyncTaskEntry, remove_all: bool) -> boo
     if remove_all {
         return true;
     }
-    // Drop history; keep work that is still live.
-    agent_task_status_is_terminal(&task.last_status)
+    // Drop history and rows the backend no longer knows about; keep work that is
+    // still live.
+    agent_clear_drops_terminal(task)
 }
 
 async fn handle_agent_list(
@@ -14456,10 +15216,22 @@ async fn handle_agent_list(
     tool_params: &Value,
 ) -> Result<(), String> {
     // Support --clear to remove tracked agent tasks. By default only terminal
-    // (completed/failed) tasks are removed; queued/processing tasks stay so
+    // (completed/failed/cancelled) tasks are removed; queued/processing tasks stay so
     // they can still be monitored (they keep running server-side regardless).
-    // --clear --all restores the old "remove everything" behavior and warns
-    // about the in-flight tasks it detaches.
+    // --clear --all restores the old "remove everything" behavior and reports what it
+    // detaches, with the status it actually observed.
+    //
+    // The branch refreshes from the server BEFORE deciding: it used to run first and
+    // trust the cached label, so while the cache was stuck at "queued" (the shared
+    // envelope was not being read) `--clear` cleared nothing while telling the user
+    // the finished tasks were "still running server-side" (issues 112415#3/#7).
+    let backend_reachable = client
+        .head(base_url.to_string())
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+        .is_ok();
+
     if tool_params
         .get("clear")
         .and_then(|v| v.as_bool())
@@ -14470,14 +15242,37 @@ async fn handle_agent_list(
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let mut list = read_async_tasks(None);
+
+        if backend_reachable {
+            for entry in &mut list.tasks {
+                if entry.command != "agent" {
+                    continue;
+                }
+                // A definite "the server has no record of this id" is not a reason to
+                // keep the row: nothing can ever be polled for it again.
+                match refresh_tracked_agent_task(client, base_url, entry).await {
+                    AgentStatusRefresh::Gone => entry.last_status = AGENT_STATUS_GONE.to_string(),
+                    _ => {}
+                }
+            }
+        }
+
         let before = list.tasks.len();
-        let detached: Vec<String> = if remove_all {
+        // What `--all` detaches, with the status observed for it: a task confirmed
+        // running is named as such, a task we could not poll is marked unverified
+        // rather than asserted to be alive.
+        let detached: Vec<(String, String)> = if remove_all {
             list.tasks
                 .iter()
-                .filter(|t| {
-                    t.command == "agent" && !agent_task_status_is_terminal(&t.last_status)
+                .filter(|t| t.command == "agent" && !agent_task_status_is_terminal(&t.last_status))
+                .map(|t| {
+                    let label = if t.last_status.is_empty() {
+                        "unverified (never polled)".to_string()
+                    } else {
+                        t.last_status.clone()
+                    };
+                    (t.task_id.clone(), label)
                 })
-                .map(|t| t.task_id.clone())
                 .collect()
         } else {
             Vec::new()
@@ -14492,18 +15287,29 @@ async fn handle_agent_list(
         write_async_tasks(&list, None).map_err(|e| e.to_string())?;
         cli_println!("Cleared {} tracked agent task(s).", removed);
         if !remove_all && kept > 0 {
+            let live = list
+                .tasks
+                .iter()
+                .filter(|t| t.command == "agent")
+                .filter(|t| !t.last_status.is_empty())
+                .count();
             cli_println!(
-                "Kept {} in-flight task(s) still running server-side; re-run with --all to remove them from tracking too.",
-                kept
+                "Kept {} agent task(s) that are not finished ({}, re-run with --all to remove them from tracking too).",
+                kept,
+                if backend_reachable {
+                    format!("{live} with a verified non-terminal status")
+                } else {
+                    "backend unreachable — statuses are cached, not verified".to_string()
+                }
             );
         }
         if remove_all && !detached.is_empty() {
             eprintln!(
-                "Warning: {} in-flight task(s) were removed from tracking but keep running server-side (use `agent status <id>` to inspect):",
+                "Warning: {} unfinished task(s) were removed from tracking (their server-side work is unchanged):",
                 detached.len()
             );
-            for id in detached.iter().take(10) {
-                eprintln!("  {}", id);
+            for (id, label) in detached.iter().take(10) {
+                eprintln!("  {}  {}", id, label);
             }
             if detached.len() > 10 {
                 eprintln!("  ... and {} more", detached.len() - 10);
@@ -14516,14 +15322,6 @@ async fn handle_agent_list(
 
     let mut list = read_async_tasks(None);
 
-    // Pre-flight check: skip live refresh if backend is unreachable.
-    let backend_reachable = client
-        .head(base_url.to_string())
-        .timeout(std::time::Duration::from_secs(3))
-        .send()
-        .await
-        .is_ok();
-
     if backend_reachable {
         // Refresh status for agent tasks from the server so the display is consistent
         // with `agent status`. Tasks that fail to query keep their cached last_status.
@@ -14531,30 +15329,7 @@ async fn handle_agent_list(
             if entry.command != "agent" {
                 continue;
             }
-            if let Ok(status_json) = get_command_status(client, base_url, &entry.task_id).await {
-                let Some(fresh) = refreshed_agent_status(&entry.last_status, &status_json) else {
-                    continue;
-                };
-                entry.last_status = fresh;
-                // Prefer backend finishTime; fall back to local clock.
-                // Only set completed_at when it hasn't been set yet — once set,
-                // keep the first completion timestamp (don't overwrite on later polls).
-                let now_completed =
-                    entry.last_status == "completed" || entry.last_status.starts_with("failed");
-                if now_completed && entry.completed_at.is_none() {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
-                        if let Some(ts) = parsed
-                            .get("finishTime")
-                            .and_then(|v| v.as_str())
-                            .filter(|s| !s.is_empty())
-                        {
-                            entry.completed_at = Some(ts.to_string());
-                        } else {
-                            entry.completed_at = Some(chrono::Utc::now().to_rfc3339());
-                        }
-                    }
-                }
-            }
+            let _ = refresh_tracked_agent_task(client, base_url, entry).await;
         }
         let _ = write_async_tasks(&list, None);
     } else {
@@ -15477,48 +16252,182 @@ fn friendly_agent_status(process_state: &str, is_done: bool, status_code: &str) 
     }
 }
 
-/// Map a fresh server status onto the cached local one for `agent list` refresh.
+/// The status words of the shared async-task envelope (`TaskEnvelopes.STATUSES`).
 ///
-/// Returns `None` when the cache must stay untouched:
-/// - the backend answered "null"/empty (task id unknown after a restart), or
-/// - a structured notFound answer (statusCode 404 / SC_NOT_FOUND), or
-/// - the cached status is terminal (completed/failed) while the fresh one is
-///   not — terminal states never regress (P2.5 regression: a restarted backend
-///   answering "null" used to poison cached terminal statuses with "queued").
-fn refreshed_agent_status(cached: &str, status_json: &str) -> Option<String> {
+/// Every long-running domain (agent, crawl, swarm, command) answers its status tool
+/// with this one shape, so the CLI has a single vocabulary to consume.
+const SHARED_TASK_STATUSES: [&str; 5] = ["queued", "running", "done", "failed", "cancelled"];
+
+/// Whether a shared-envelope status word means "stop polling".
+fn is_terminal_shared_status(word: &str) -> bool {
+    matches!(word, "done" | "failed" | "cancelled")
+}
+
+/// The shared envelope's `status` word, lowercased; empty when the payload carries
+/// no word from the shared vocabulary.
+///
+/// Case-insensitive because older backends emitted `RUNNING`/`COMPLETED` in the same
+/// field, and an unknown word deliberately yields `""` so the caller falls back to
+/// the legacy fields instead of guessing.
+fn envelope_status_word(parsed: &Value) -> String {
+    parsed
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| SHARED_TASK_STATUSES.contains(&s.as_str()))
+        .unwrap_or_default()
+}
+
+/// The short label inside `failed (…)`: the status code when the backend sent one,
+/// else the first line of the envelope's `error`, else a generic marker.
+fn failure_label(status_code: &str, error: Option<&str>) -> String {
+    if !status_code.is_empty() {
+        return status_code.to_lowercase();
+    }
+    error
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .and_then(|e| e.lines().next())
+        .map(|line| line.chars().take(60).collect::<String>())
+        .unwrap_or_else(|| "error".to_string())
+}
+
+/// Map the shared task envelope onto the CLI's lifecycle vocabulary.
+///
+/// The backend migrated every long-running tool to one envelope —
+/// `{taskId, status, statusCode, message, error, …}` with
+/// `queued|running|done|failed|cancelled` — while the CLI's lifecycle consumers kept
+/// reading the legacy `processState`/`isDone`/`statusCode`/`finishTime` fields. No
+/// agent task could therefore ever reach a terminal cached state: `agent list`
+/// reported finished work as "queued" forever, `--clear` cleared nothing and
+/// `--wait` burned its whole timeout (issues 112415#1/#2/#3/#4, 111443#1/#3).
+///
+/// Returns `None` for a word outside the vocabulary so a caller keeps its cache
+/// rather than inventing a status.
+fn friendly_envelope_status(word: &str, status_code: &str, error: Option<&str>) -> Option<String> {
+    match word {
+        "queued" => Some("queued".to_string()),
+        "running" => Some("processing".to_string()),
+        "done" => Some("completed".to_string()),
+        "cancelled" => Some("cancelled".to_string()),
+        "failed" => Some(format!("failed ({})", failure_label(status_code, error))),
+        _ => None,
+    }
+}
+
+/// What one `command_status` poll says about a locally tracked agent task.
+///
+/// The three cases must stay apart: `agent list` keeps its cache unless the answer
+/// is usable (P2.5 — a restarted backend answering "null" used to poison terminal
+/// statuses), while `--clear` needs to know that the server answered *and* has no
+/// record of the id, because "your local row cannot be monitored any more" is not
+/// "your task is still running server-side".
+enum AgentStatusRefresh {
+    /// The server answered with a usable status; the cache takes it.
+    Fresh(String),
+    /// The server answered, but has no record of the id (404 / not found).
+    Gone,
+    /// No usable answer (unreachable, `null`, or unrelated JSON) — leave the cache.
+    Unavailable,
+}
+
+/// Classify a fresh server status against the cached local one.
+fn classify_agent_status(cached: &str, status_json: &str) -> AgentStatusRefresh {
     let trimmed = status_json.trim();
-    if trimmed == "null" || trimmed.is_empty() {
-        return None;
+    if trimmed == "null" || trimmed == "\"null\"" || trimmed.is_empty() {
+        return AgentStatusRefresh::Unavailable;
     }
-    let parsed: Value = serde_json::from_str(trimmed).ok()?;
-    // Require at least one known status field — a bare `{}` (or unrelated JSON)
-    // must not map to "queued" and overwrite the cache.
-    let has_status_field = parsed.get("processState").is_some()
-        || parsed.get("isDone").is_some()
-        || parsed.get("statusCode").is_some()
-        || parsed.get("finishTime").is_some();
-    if !has_status_field {
-        return None;
-    }
+    let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
+        return AgentStatusRefresh::Unavailable;
+    };
     let status_code = parse_status_code_from_json(&parsed);
     if status_code == "404" || status_code == "SC_NOT_FOUND" {
-        return None;
+        return AgentStatusRefresh::Gone;
     }
-    let process_state = parsed
-        .get("processState")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let is_done = parsed
-        .get("isDone")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let fresh = friendly_agent_status(process_state, is_done, &status_code);
-    let cached_terminal = cached == "completed" || cached.starts_with("failed");
-    let fresh_terminal = fresh == "completed" || fresh.starts_with("failed");
-    if cached_terminal && !fresh_terminal {
-        return None;
+    // The shared envelope is the current contract; the legacy fields stay as a
+    // fallback so a mixed-version pair keeps labelling correctly.
+    let envelope_word = envelope_status_word(&parsed);
+    let fresh = if !envelope_word.is_empty() {
+        let error = parsed.get("error").and_then(|v| v.as_str());
+        friendly_envelope_status(&envelope_word, &status_code, error)
+    } else {
+        // Require at least one known legacy status field — a bare `{}` (or unrelated
+        // JSON) must not map to "queued" and overwrite the cache.
+        let has_status_field = parsed.get("processState").is_some()
+            || parsed.get("isDone").is_some()
+            || parsed.get("statusCode").is_some()
+            || parsed.get("finishTime").is_some();
+        if !has_status_field {
+            return AgentStatusRefresh::Unavailable;
+        }
+        let process_state = parsed
+            .get("processState")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let is_done = parsed
+            .get("isDone")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        Some(friendly_agent_status(process_state, is_done, &status_code))
+    };
+    let Some(fresh) = fresh else {
+        return AgentStatusRefresh::Unavailable;
+    };
+    // Terminal states never regress: a restarted backend answering "created" for a
+    // task whose cached status is terminal must not reopen it.
+    if agent_task_status_is_terminal(cached) && !agent_task_status_is_terminal(&fresh) {
+        return AgentStatusRefresh::Unavailable;
     }
-    Some(fresh)
+    AgentStatusRefresh::Fresh(fresh)
+}
+
+/// Map a fresh server status onto the cached local one for `agent list` refresh.
+///
+/// Returns `None` when the cache must stay untouched: the backend answered
+/// "null"/empty (task id unknown after a restart), a structured notFound answer, or
+/// a fresh status that would downgrade a cached terminal one.
+fn refreshed_agent_status(cached: &str, status_json: &str) -> Option<String> {
+    match classify_agent_status(cached, status_json) {
+        AgentStatusRefresh::Fresh(fresh) => Some(fresh),
+        AgentStatusRefresh::Gone | AgentStatusRefresh::Unavailable => None,
+    }
+}
+
+/// Poll the backend for one tracked agent task and fold the answer into its record.
+///
+/// Shared by `agent list`'s display refresh and its `--clear` branch so both decide
+/// on the same observation: previously `--clear` trusted the cached label, which the
+/// stale cache kept non-terminal forever (issue 112415#3).
+async fn refresh_tracked_agent_task(
+    client: &Client,
+    base_url: &str,
+    entry: &mut state::AsyncTaskEntry,
+) -> AgentStatusRefresh {
+    let Ok(status_json) = get_command_status(client, base_url, &entry.task_id).await else {
+        return AgentStatusRefresh::Unavailable;
+    };
+    let cached = entry.last_status.clone();
+    let verdict = classify_agent_status(&cached, &status_json);
+    if let AgentStatusRefresh::Fresh(fresh) = &verdict {
+        entry.last_status = fresh.clone();
+        // Prefer backend finishTime; fall back to the local clock. Only set
+        // completed_at when it is unset — the first completion timestamp wins.
+        if agent_task_status_is_terminal(fresh) && entry.completed_at.is_none() {
+            entry.completed_at = Some(
+                serde_json::from_str::<Value>(&status_json)
+                    .ok()
+                    .and_then(|parsed| {
+                        parsed
+                            .get("finishTime")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    })
+                    .filter(|ts| !ts.is_empty())
+                    .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            );
+        }
+    }
+    verdict
 }
 
 /// Map crawl status strings to the same lifecycle labels.
@@ -15590,17 +16499,26 @@ fn is_crawl_terminal_failure_status(status: &str) -> bool {
 /// Whether a tracked task's status label matches a `crawl list --status` filter.
 ///
 /// `last_status` is the friendly label stored by the tracking layer (see
-/// [friendly_crawl_status]): "failed (timeout)" matches `--status failed`, and an
-/// interrupted task matches only `--status interrupted` — it is terminal and
-/// resumable, so lumping it in with "running" (nothing is moving it) or "failed"
-/// (its work is not lost) would be wrong both ways.
+/// [friendly_crawl_status] and [crawl_tracked_status_label]): "failed (timeout)"
+/// matches `--status failed`, a run that finished with pages missing matches it
+/// too through its `partial failure (…)` label — its exit code was 6, so hiding
+/// it from the failed filter is how a user auditing history lost the one run
+/// that was not clean (#115140#3) — and an interrupted task matches only
+/// `--status interrupted`: it is terminal and resumable, so lumping it in with
+/// "running" (nothing is moving it) or "failed" (its work is not lost) would be
+/// wrong both ways.
 fn crawl_status_filter_matches(filter: &str, last_status: &str) -> bool {
     let sf = filter.to_lowercase();
     let s = last_status.to_lowercase();
     match sf.as_str() {
         "completed" => s == "completed" || s == "done" || s == "ok",
         "running" => s == "running" || s == "queued" || s == "created",
-        "failed" => s.starts_with("failed") || s.contains("error") || s.contains("timeout"),
+        "failed" => {
+            s.starts_with("failed")
+                || s.starts_with("partial failure")
+                || s.contains("error")
+                || s.contains("timeout")
+        }
         "queued" => s == "queued" || s == "created",
         "interrupted" => s == "interrupted",
         "not found" | "not-found" => s.contains("not found"),
@@ -16890,7 +17808,11 @@ async fn handle_crawl_list(
             if let Ok(text) = get_crawl_result(client, base_url, &entry.task_id).await {
                 if let Ok(parsed) = serde_json::from_str::<Value>(&text) {
                     if let Some(s) = parsed.get("status").and_then(|v| v.as_str()) {
-                        let friendly = friendly_crawl_status(s);
+                        // The payload's loss ledger decides whether a terminal
+                        // "OK" really was a clean run: a crawl that exited 6 was
+                        // relabelled "completed" here on every refresh, losing
+                        // the partial-failure accounting the run had recorded.
+                        let friendly = crawl_tracked_status_label(s, &parsed);
                         // If the server no longer knows about this task, mark it for removal
                         // so it doesn't linger in the list as "not found"
                         if friendly.contains("not found") {
@@ -16900,8 +17822,9 @@ async fn handle_crawl_list(
                     }
                     // Only set completed_at when it hasn't been set yet — once set,
                     // keep the first completion timestamp (don't overwrite on later polls).
-                    let now_completed =
-                        entry.last_status == "completed" || entry.last_status.starts_with("failed");
+                    let now_completed = entry.last_status == "completed"
+                        || entry.last_status.starts_with("failed")
+                        || entry.last_status.starts_with("partial failure");
                     if now_completed && entry.completed_at.is_none() {
                         if let Some(ts) = parsed
                             .get("finishTime")
@@ -16919,13 +17842,14 @@ async fn handle_crawl_list(
         // Remove stale entries that the server has already cleaned up
         if !stale_ids.is_empty() {
             list.tasks.retain(|t| !stale_ids.contains(&t.task_id));
-            // Routine housekeeping — only shows when stale tasks > 0
-            if stale_ids.len() > 20 {
-                cli_println!(
-                    "Pruned {} completed tasks from local tracking (routine cleanup).",
-                    stale_ids.len()
-                );
-            }
+            // Routine housekeeping, but never silent: a row disappearing from
+            // `crawl list` used to be unexplained below 20 removals, so the list
+            // looked like it had lost a task (#115140#6).
+            cli_println!(
+                "Pruned {} tracked task(s) the backend no longer knows (routine cleanup; \
+                 `crawl list --clear` removes the rest).",
+                stale_ids.len()
+            );
         }
         // Also prune tasks older than 24h to prevent unbounded accumulation
         let age_cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
@@ -16933,8 +17857,15 @@ async fn handle_crawl_list(
         let before = list.tasks.len();
         list.tasks
             .retain(|t| t.command != "crawl" || t.submitted_at >= age_cutoff_str);
-        let _aged_out = before - list.tasks.len();
+        let aged_out = before - list.tasks.len();
         let _ = write_async_tasks(&list, None);
+        if aged_out > 0 {
+            cli_println!(
+                "Dropped {} task record(s) older than the 24h local retention window \
+                 (local tracking only — backend records and crawl checkpoints are untouched).",
+                aged_out
+            );
+        }
     } else {
         cli_println!("Note: Backend unreachable — showing cached statuses. Run `crawl <url>` or `open <url>` to auto-start the backend for live status.");
     }
@@ -17907,11 +18838,13 @@ fn validate_crawl_timeout(value: &str) -> Result<(), String> {
 /// The parallelism report for a finished crawl: the budget it ran under and the
 /// peak number of fetch units it actually had in flight.
 ///
-/// Reported so "the pages were collected with several tabs" is something the
-/// user can check rather than take on faith.  A peak of 1 on a crawl with
-/// several units means the collection was serial no matter what `--parallel`
-/// asked for — which is exactly the failure a parallelism budget exists to
-/// prevent, and it would otherwise be invisible.
+/// A *unit* is one seed URL's fetch-and-extract round (one browser tab while it
+/// runs); links discovered inside a unit are fetched from the shared tab pool.
+/// The line spells that out because "peak 1 unit(s) in flight" on a 11-page
+/// single-seed crawl read as "the flag was ignored" (#115140#5) — one seed can
+/// never peak above 1, and a peak of 1 with several units means the collection
+/// was serial no matter what `--parallel` asked for, which is exactly the
+/// failure a parallelism budget exists to prevent.
 fn crawl_parallelism_note(parsed: &Value) -> Option<String> {
     let budget = parsed["parallelTabs"].as_i64().unwrap_or(0);
     if budget <= 0 {
@@ -17928,7 +18861,9 @@ fn crawl_parallelism_note(parsed: &Value) -> Option<String> {
         ""
     };
     Some(format!(
-        "Parallelism: budget {} tab(s), peak {} unit(s) in flight{}",
+        "Parallelism: budget {} tab(s), peak {} seed unit(s) in flight{} \
+         (a unit is one seed URL's fetch-and-extract round, one tab each; \
+         links found inside a unit come from the shared tab pool)",
         budget, peak, verdict
     ))
 }
@@ -18289,6 +19224,142 @@ fn crawl_failure_counts(parsed: &Value, page_count: usize) -> (usize, usize) {
     (page_count.saturating_sub(broken_pages), failed)
 }
 
+/// The first per-page failure reason the terminal crawl payload carries.
+///
+/// The reason exists per page (`pages[].extractionError`, or the backend's loss
+/// ledger `failedPages[].reason`) but was only reachable through
+/// `crawl result <id> --verbose`; naming it where the completion line is
+/// printed makes the cause visible next to the counts it explains.
+fn crawl_first_failure_reason(parsed: &Value) -> Option<String> {
+    let from_pages = parsed["pages"].as_array().and_then(|pages| {
+        pages.iter().find_map(|page| {
+            page["extractionError"]
+                .as_str()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .map(String::from)
+        })
+    });
+    let from_ledger = parsed["failedPages"].as_array().and_then(|lost| {
+        lost.iter().find_map(|page| {
+            page["reason"]
+                .as_str()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .map(String::from)
+        })
+    });
+    from_pages.or(from_ledger)
+}
+
+/// The completion line for a crawl that delivered rows.
+///
+/// `attempted` is the number of pages the crawl *tried*; the payload's
+/// `failedPages` / `pagesExpected` split that into delivered and lost, and
+/// [`crawl_failure_counts`] folds in pages that came back with no usable
+/// content.  Reporting `attempted` as "pages crawled" announced "10 pages
+/// crawled" for a run whose every page failed extraction — one line above
+/// "Summary: ok: 0, failed: 10" — so when anything failed the line names the
+/// successes, the expected total and the first reason instead.
+fn crawl_completion_line(parsed: &Value, attempted: usize, rows: usize) -> String {
+    // Share the terminal accounting with the tracked-status label so the line a
+    // crawl prints and the row `crawl list` stores can never disagree.
+    let (failed, expected, ok_pages) = crawl_terminal_page_accounting(parsed);
+    if failed == 0 {
+        return format!("{attempted} pages crawled, {rows} rows extracted.");
+    }
+    let reason = crawl_first_failure_reason(parsed)
+        .map(|reason| {
+            let single_line = reason.replace(['\r', '\n'], " ");
+            let shown = if single_line.chars().count() > 120 {
+                format!("{}…", single_line.chars().take(119).collect::<String>())
+            } else {
+                single_line
+            };
+            format!(" — first failure: {shown}")
+        })
+        .unwrap_or_default();
+    format!(
+        "{ok_pages} of {expected} page(s) crawled ({failed} failed){reason}, {rows} rows extracted. \
+         Use `crawl result <id> --verbose` for every failed page."
+    )
+}
+
+/// The label a tracked crawl task should carry for a terminal payload.
+///
+/// The backend keeps `status = OK` for a crawl whose pages partly failed — by
+/// design, so a poller stops on the terminal status — which is why a run that
+/// exited 6 was stored as "completed" and `crawl list --status failed` could
+/// never find it (#115140#3).  `status` still decides the *lifecycle* label
+/// (queued / processing / completed / interrupted / failed…), and the payload's
+/// loss ledger decides whether that "completed" was clean.
+fn crawl_tracked_status_label(status: &str, parsed: &Value) -> String {
+    let friendly = friendly_crawl_status(status);
+    if friendly != "completed" {
+        return friendly;
+    }
+    let (failed, expected, ok_pages) = crawl_terminal_page_accounting(parsed);
+    if failed == 0 {
+        return friendly;
+    }
+    format!("partial failure ({ok_pages} of {expected} pages ok)")
+}
+
+/// `(failed_pages, expected_pages, successful_pages)` for a terminal crawl
+/// payload, derived from the backend's own accounting.
+///
+/// * `failedPages` is the loss ledger of URLs the crawl never got a page back
+///   for; a page that was delivered but carries no usable content
+///   (`extractionError`, or a 0-byte body) counts as a failure too;
+/// * `pagesFound` is the delivered count, so successes are the delivered pages
+///   that produced content;
+/// * `pagesExpected` is the backend's own work-item total
+///   (`pagesFound + failedPages.size`); when it is absent the two counts are
+///   summed, so a historical row still reports a coherent denominator.
+fn crawl_terminal_page_accounting(parsed: &Value) -> (usize, usize, usize) {
+    let broken_pages = parsed["pages"]
+        .as_array()
+        .map(|pages| {
+            pages
+                .iter()
+                .filter(|page| {
+                    page["extractionError"].as_str().is_some()
+                        || page["contentLength"].as_i64().unwrap_or(-1) == 0
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    let seed_errors = parsed["seedStatuses"]
+        .as_array()
+        .map(|statuses| {
+            statuses
+                .iter()
+                .filter(|status| status["status"].as_str().unwrap_or("") == "error")
+                .count()
+        })
+        .unwrap_or(0);
+
+    let (lost_pages, failed) = match parsed["failedPages"].as_array() {
+        Some(lost) => (lost.len(), lost.len() + broken_pages),
+        // Without the ledger the two failure signals overlap (a seed that errors
+        // is normally also a lost page), so the larger one is the honest count.
+        None => (0, broken_pages.max(seed_errors)),
+    };
+
+    let delivered = parsed["pagesFound"]
+        .as_i64()
+        .map(|found| found.max(0) as usize)
+        .or_else(|| parsed["pages"].as_array().map(|pages| pages.len()))
+        .unwrap_or(0);
+    let ok_pages = delivered.saturating_sub(broken_pages);
+    let expected = parsed["pagesExpected"]
+        .as_i64()
+        .map(|value| value.max(0) as usize)
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| ok_pages + failed.max(lost_pages));
+    (failed, expected, ok_pages)
+}
+
 async fn handle_crawl(
     client: &Client,
     base_url: &str,
@@ -18441,15 +19512,34 @@ async fn handle_crawl(
             return Err(format!(
                 "--format {fmt} only applies to --sql result sets, but no --sql was provided, \
                  so the output would be a plain-text listing rather than {fmt}. Refusing to write \
-                 it to {path:?}. Add --sql, or drop --format (and use a non-{fmt} filename)."
+                 it to {path:?}. Add --sql, or drop --format. For a JSON page listing of a plain \
+                 crawl use the global --json flag before the command — it needs no --sql."
             )
             .into());
         }
         crawl_status_println!(
             "Warning: --format {} has no effect without --sql. \
-             Use --sql to produce structured output, or omit --format for plain-text output.",
+             Use --sql to produce structured output, or omit --format for plain-text output. \
+             (The global --json flag prints the page listing as JSON without --sql.)",
             fmt
         );
+    }
+
+    // The global --json flag prints its envelope on stdout while `-o` still
+    // receives the human-readable listing, so `--json crawl … -o out.json`
+    // produced a .json file that was not JSON — the same lying-file problem as
+    // the --format guardrail above, and refused the same way instead of writing
+    // prose under a JSON name.
+    if !has_sql && json_active() {
+        if let Some(path) = tool_params.get("output").and_then(|v| v.as_str()) {
+            return Err(format!(
+                "--json prints the JSON envelope on stdout, while --output would receive the \
+                 plain-text listing — {path:?} would not be JSON. Refusing to write it. Drop \
+                 --output to read the envelope (it already carries the page listing), or add \
+                 --sql to make --output receive a structured result set."
+            )
+            .into());
+        }
     }
 
     // The backend LoadOptions tokenizer cannot carry a literal double quote
@@ -18884,9 +19974,8 @@ async fn handle_crawl(
                         );
                     } else {
                         crawl_status_println!(
-                            "{} pages crawled, {} rows extracted.",
-                            page_count,
-                            all_extracted.len()
+                            "{}",
+                            crawl_completion_line(&parsed, page_count, all_extracted.len())
                         );
                     }
 
@@ -19435,6 +20524,15 @@ const DEFAULT_LOOP_INTERVAL_SECS: u64 = 3600; // 1 hour
 const DEFAULT_LOOP_TIMEOUT_SECS: u64 = 604800; // 1 week
 const PAUSE_POLL_INTERVAL_SECS: u64 = 2; // How often to check for resume while paused
 
+/// How long `--stop-all` waits for signalled workers to clear their state files
+/// before reporting which loops still look active.
+///
+/// A worker only notices the stop at its next checkpoint, so a loop in the
+/// middle of a long iteration legitimately outlives this wait; the command
+/// reports that instead of asserting success (which is what made a still-running
+/// loop look stopped — issue 122234#3).
+const STOP_ALL_SETTLE_TIMEOUT_SECS: u64 = 10;
+
 fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
     let mut out = LoopArgs {
         interval_secs: DEFAULT_LOOP_INTERVAL_SECS,
@@ -19854,9 +20952,15 @@ async fn run_browser4_cli(tokens: &[String]) -> Result<String, String> {
 /// Spawn a detached background process that survives parent exit.
 ///
 /// On Windows, uses `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` so the
-/// child is not tied to the parent console / process tree.  On Unix the
-/// child is simply spawned — the OS reparents it to init when the parent
-/// exits.
+/// child is not tied to the parent console / process tree, and clears the
+/// inherit flag on this process's own std handles for the duration of the
+/// spawn: `Command::spawn` passes `bInheritHandles = TRUE`, so every
+/// *inheritable* handle of the parent — including the write end of a caller's
+/// pipe — is duplicated into the worker.  The worker never writes to it, but
+/// keeping it open meant a piped `loop --resume | cat` never saw EOF and
+/// appeared to hang (issue 122234#2).  On Unix `Command::spawn` only dups the
+/// explicitly configured descriptors and sets `CLOEXEC` on the rest, so no
+/// handle leaks and no equivalent step is needed.
 fn spawn_detached(exe: &std::path::Path, args: &[String], log_path: Option<&std::path::Path>) -> Result<u32, String> {
     let mut cmd = std::process::Command::new(exe);
     cmd.args(args)
@@ -19885,11 +20989,82 @@ fn spawn_detached(exe: &std::path::Path, args: &[String], log_path: Option<&std:
         cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
     }
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn background process: {}", e))?;
+    #[cfg(windows)]
+    let restore_inherit = win_std_handles_disable_inherit();
 
-    Ok(child.id())
+    let spawn_result = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn background process: {}", e));
+
+    #[cfg(windows)]
+    win_std_handles_restore(restore_inherit);
+
+    Ok(spawn_result?.id())
+}
+
+/// Clear `HANDLE_FLAG_INHERIT` on stdin/stdout/stderr for the next spawn.
+///
+/// Returns the handles with their previous flags so [`win_std_handles_restore`]
+/// can put them back.  The WinAPI functions are declared here the same way
+/// `daemon.rs` declares `OpenProcess`, so no extra crate is needed.
+#[cfg(windows)]
+fn win_std_handles_disable_inherit() -> Vec<(*mut core::ffi::c_void, u32)> {
+    const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+    const STD_INPUT_HANDLE: u32 = 0xFFFF_FFF6; // (DWORD)-10
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFF_FFF5; // (DWORD)-11
+    const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4; // (DWORD)-12
+
+    // Declared with the same signatures `daemon.rs` uses for these symbols, so
+    // the crate has one declaration of each rather than two that disagree.
+    extern "system" {
+        fn GetStdHandle(n_std_handle: u32) -> *mut core::ffi::c_void;
+        fn GetHandleInformation(h_object: *mut core::ffi::c_void, lpdw_flags: *mut u32) -> i32;
+        fn SetHandleInformation(
+            h_object: *mut core::ffi::c_void,
+            dw_mask: u32,
+            dw_flags: u32,
+        ) -> i32;
+    }
+
+    let mut previous: Vec<(*mut core::ffi::c_void, u32)> = Vec::new();
+    for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        unsafe {
+            let handle = GetStdHandle(id);
+            if handle.is_null() || handle as isize == -1 {
+                continue;
+            }
+            let mut flags: u32 = 0;
+            if GetHandleInformation(handle, &mut flags) == 0 {
+                continue;
+            }
+            if flags & HANDLE_FLAG_INHERIT == 0 {
+                // Already non-inheritable — nothing to restore for this handle.
+                continue;
+            }
+            if SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) != 0 {
+                previous.push((handle, flags));
+            }
+        }
+    }
+    previous
+}
+
+/// Restore the std-handle flags collected by [`win_std_handles_disable_inherit`].
+#[cfg(windows)]
+fn win_std_handles_restore(previous: Vec<(*mut core::ffi::c_void, u32)>) {
+    const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+    extern "system" {
+        fn SetHandleInformation(
+            h_object: *mut core::ffi::c_void,
+            dw_mask: u32,
+            dw_flags: u32,
+        ) -> i32;
+    }
+    for (handle, flags) in previous {
+        unsafe {
+            SetHandleInformation(handle, HANDLE_FLAG_INHERIT, flags & HANDLE_FLAG_INHERIT);
+        }
+    }
 }
 
 /// Handle the `loop` command — execute a task periodically with persistence,
@@ -19943,6 +21118,16 @@ async fn handle_loop(
                 );
             }
             cli_println!("\nColumns: name, iters (completed[/max]), interval, status, task.");
+            // The auto-clean hint used to appear only when the list was empty, so
+            // a loop that finished while others kept running simply vanished from
+            // the table with no explanation (#8).  Always explain it, and name the
+            // state directory the rows live in — in dev mode that is the
+            // per-checkout workspace directory, not `~/.browser4` (#7).
+            cli_println!("Completed loops are auto-cleaned — see `browser4-cli loop --history` (--keep-state retains the state file).");
+            cli_println!(
+                "State directory: {}",
+                state::resolve_default_state_dir().display()
+            );
             cli_println!("Use --status [name] for full details, --pause/--resume [name] to control, --stop [name] to clear.");
         }
         json_field("loops", json!(entries));
@@ -20094,35 +21279,100 @@ async fn handle_loop(
             Some(ls) => {
                 let total = ls.iterations_completed;
                 let was_active = ls.status == "running" || ls.status == "paused";
+                let live_worker = state::live_loop_worker_pid(None, loop_name);
+                let label = loop_name.unwrap_or("default");
 
-                // Write a history entry before clearing state.
-                let history_entry = state::LoopHistoryEntry {
-                    name: loop_name.unwrap_or("default").to_string(),
-                    task_tokens: ls.task_tokens.clone(),
-                    mode: ls.mode.clone(),
-                    iterations_completed: total,
-                    exit_reason: "stopped".to_string(),
-                    completed_at: Utc::now().to_rfc3339(),
-                };
-                let _ = state::write_loop_history(&history_entry, None);
+                // The sentinel is written FIRST and is independent of the
+                // progress file: a worker that wakes from a sleep no longer
+                // finds "no state file" and recreates itself as running.
+                if was_active {
+                    let _ = state::request_loop_stop(None, loop_name, "stop");
+                }
 
-                // For an active loop, persist status "stopped" so the worker
-                // detects the signal at its next checkpoint and exits on its own
-                // (clearing the state file itself). Deleting the file here would
-                // let the worker's next progress persist recreate it as "running",
-                // making the loop appear to revive.
+                // History is written by the worker — the only process that can
+                // observe why the loop ended — so the control command writes an
+                // entry only for a loop that had no worker left to do it (an
+                // already-inactive record).  A loop that was running may still
+                // have a worker that has not persisted its PID yet, and writing
+                // here as well produced two entries per stop (#122234#6).
+                if !was_active {
+                    let history_entry = state::LoopHistoryEntry {
+                        name: label.to_string(),
+                        task_tokens: ls.task_tokens.clone(),
+                        mode: ls.mode.clone(),
+                        iterations_completed: total,
+                        exit_reason: "stopped".to_string(),
+                        completed_at: Utc::now().to_rfc3339(),
+                    };
+                    let _ = state::write_loop_history(&history_entry, None);
+                }
+
+                // For an active loop, persist status "stopped" as well so workers
+                // that only poll the status file also see the signal.  Deleting
+                // the file here would let the worker's next progress persist
+                // recreate it as "running", making the loop appear to revive.
                 if was_active {
                     let _ = state::set_loop_status(None, loop_name, "stopped");
                 } else {
                     state::clear_loop_state(None, loop_name);
+                    state::clear_loop_stop_request(None, loop_name);
                 }
-                let label = loop_name.unwrap_or("default");
-                if was_active {
+
+                if let Some(pid) = live_worker {
+                    // Verify the worker actually exits before claiming success:
+                    // the old message asserted it while the loop kept running.
+                    let deadline = std::time::Instant::now()
+                        + std::time::Duration::from_secs(STOP_ALL_SETTLE_TIMEOUT_SECS);
+                    while std::time::Instant::now() < deadline && state::is_process_alive(pid) {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            PAUSE_POLL_INTERVAL_SECS * 250,
+                        ))
+                        .await;
+                    }
+                    if state::is_process_alive(pid) {
+                        cli_println!(
+                            "⏹  Stop signaled to loop \"{}\" ({} iteration(s) so far); \
+                             worker PID {} is still finishing its current iteration after {}s.",
+                            label,
+                            total,
+                            pid,
+                            STOP_ALL_SETTLE_TIMEOUT_SECS
+                        );
+                        cli_println!(
+                            "   It exits at its next checkpoint and then clears its state and \
+                             writes the history entry; re-run --stop to confirm."
+                        );
+                        json_field("worker_still_running", json!(true));
+                    } else {
+                        cli_println!(
+                            "✓  Loop \"{}\" stopped ({} iteration(s)); worker PID {} exited.",
+                            label,
+                            total,
+                            pid
+                        );
+                        json_field("worker_still_running", json!(false));
+                    }
+                    json_field("worker_pid", json!(pid));
+                } else if was_active {
+                    // No PID is recorded yet — the worker may still be starting
+                    // (a `--resume` spawns it and returns immediately).  The
+                    // sentinel is deliberately LEFT in place so that worker stops
+                    // at its first checkpoint instead of running on as an orphan;
+                    // `--resume` clears it when the user wants the loop to live.
                     cli_println!(
-                        "⏹  Stop signaled to loop \"{}\" ({} iteration(s) so far). \
-                         The worker will exit at its next checkpoint and clear its state.",
-                        label, total
+                        "⏹  Stop signaled to loop \"{}\" (was {} with {} iteration(s)); no worker \
+                         PID was recorded yet, so the stop request stays pending until a worker \
+                         honours it.",
+                        label,
+                        ls.status,
+                        total
                     );
+                    cli_println!(
+                        "   A starting worker exits at its first checkpoint; `loop --resume` \
+                         clears the pending request."
+                    );
+                    json_field("worker_pid", json!(null));
+                    json_field("worker_still_running", json!(null));
                 } else {
                     cli_println!(
                         "✓  Loop \"{}\" state cleared (was {} with {} iteration(s)).",
@@ -20161,10 +21411,26 @@ async fn handle_loop(
             cli_println!("No persisted loops to stop.");
             return Ok(());
         }
-        // Signal active (running/paused) loops via status "stopped" so their
-        // workers exit at the next checkpoint and clear their own state files.
-        // Deleting those files here would let a worker's next persist recreate
-        // them as "running" (the loops would appear to revive).
+        // Signal active (running/paused) loops two ways: the stop sentinel —
+        // which is independent of the progress file, so a worker that wakes up
+        // mid-sleep cannot miss it — and the status field, which workers that
+        // are polling pick up as before.  Deleting the state files here would
+        // let a worker's next persist recreate them as "running" (the loops
+        // would appear to revive).
+        let mut live_pids: Vec<(String, u32)> = Vec::new();
+        for entry in &entries {
+            let name_opt = if entry.name == "default" {
+                None
+            } else {
+                Some(entry.name.as_str())
+            };
+            if let Some(pid) = state::live_loop_worker_pid(None, name_opt) {
+                live_pids.push((entry.name.clone(), pid));
+            }
+            if entry.status == "running" || entry.status == "paused" {
+                let _ = state::request_loop_stop(None, name_opt, "stop-all");
+            }
+        }
         let signaled_count =
             state::set_all_loop_statuses_filtered(None, Some("running"), "stopped")
                 + state::set_all_loop_statuses_filtered(None, Some("paused"), "stopped");
@@ -20180,14 +21446,75 @@ async fn handle_loop(
                     Some(entry.name.as_str())
                 };
                 state::clear_loop_state(None, name_opt);
+                state::clear_loop_stop_request(None, name_opt);
                 removed += 1;
             }
         }
+
+        if signaled_count > 0 {
+            // A signalled worker only exits at its next checkpoint (up to one
+            // iteration away).  Wait for the recorded worker PIDs to actually
+            // disappear and report what happened instead of asserting success:
+            // the old success line was printed before any worker could react,
+            // and a loop was still running minutes later (#122234#3).
+            let deadline = std::time::Instant::now()
+                + std::time::Duration::from_secs(STOP_ALL_SETTLE_TIMEOUT_SECS);
+            while std::time::Instant::now() < deadline
+                && live_pids
+                    .iter()
+                    .any(|(_, pid)| state::is_process_alive(*pid))
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(PAUSE_POLL_INTERVAL_SECS * 250))
+                    .await;
+            }
+        }
+        let surviving_workers: Vec<String> = live_pids
+            .iter()
+            .filter(|(_, pid)| state::is_process_alive(*pid))
+            .map(|(name, pid)| format!("{name} (PID {pid})"))
+            .collect();
+        let survivors: Vec<String> = state::list_loop_states(None)
+            .iter()
+            .filter(|e| e.status == "running" || e.status == "paused")
+            .map(|e| e.name.clone())
+            .collect();
+
         cli_println!(
             "⏹  Stop signaled to {} active loop(s); removed {} inactive state file(s).",
             signaled_count,
             removed
         );
+        if !surviving_workers.is_empty() {
+            cli_println!(
+                "⚠  {} worker(s) still alive after {}s: {}.",
+                surviving_workers.len(),
+                STOP_ALL_SETTLE_TIMEOUT_SECS,
+                surviving_workers.join(", ")
+            );
+            cli_println!(
+                "   They exit at the next checkpoint (a long iteration can outlast this wait); \
+                 re-run --stop-all to confirm."
+            );
+        }
+        if !survivors.is_empty() {
+            cli_println!(
+                "⚠  {} loop(s) still report running/paused: {}.",
+                survivors.len(),
+                survivors.join(", ")
+            );
+        }
+        // Every loop that reported inactive had no worker; a signalled worker
+        // clears its own file and sentinel when it exits.  Anything left belongs
+        // to a loop whose worker may still be exiting, so it is never deleted
+        // here (a deleted file is what let a mid-sleep worker recreate itself as
+        // "running" and revive the loop).  With no active loop at all the whole
+        // store is stale state, which is exactly what clear_all_loop_states is for.
+        if signaled_count == 0 {
+            let cleared = state::clear_all_loop_states(None);
+            if cleared != removed {
+                removed = cleared;
+            }
+        }
         for entry in &entries {
             cli_println!(
                 "   - {} ({} iters, was {})",
@@ -20199,6 +21526,7 @@ async fn handle_loop(
         json_field("stopped_all", json!(true));
         json_field("signaled_count", json!(signaled_count));
         json_field("cleared_count", json!(removed));
+        json_field("survivors", json!(survivors));
         json_field("loops", json!(entries));
         return Ok(());
     }
@@ -20233,6 +21561,8 @@ async fn handle_loop(
                 started_at: started_at.clone(),
                 updated_at: Utc::now().to_rfc3339(),
                 status: "paused".to_string(),
+                // Created paused: no worker exists until `--resume` spawns one.
+                worker_pid: None,
             };
             let state_path = state::loop_state_path(None, loop_name);
             if let Err(e) = state::write_loop_state(&state, None, loop_name) {
@@ -20304,17 +21634,41 @@ async fn handle_loop(
     // --- --resume: set loop status to "running" and spawn execution ---
     if parsed.resume {
         let state_path = state::loop_state_path(None, loop_name);
+        // A paused loop keeps its worker resident (the worker polls the state
+        // file and continues on its own), so spawning here produced TWO workers
+        // for one loop and every iteration ran twice (122234#1).  Un-stopping
+        // also clears any stop sentinel left by a previous `--stop`.
+        let live_worker = state::live_loop_worker_pid(None, loop_name);
+        state::clear_loop_stop_request(None, loop_name);
         match state::set_loop_status(None, loop_name, "running") {
             Some(prev) => {
                 let label = loop_name.unwrap_or("default");
                 if prev == "running" {
                     cli_println!("▶  Loop \"{}\" is already running.", label);
+                    if let Some(pid) = live_worker {
+                        cli_println!("   Worker PID {} is alive — not starting a second one.", pid);
+                    }
                     cli_println!("   State file: {}", state_path.display());
                     json_field("resumed", json!(true));
                     json_field("name", json!(label));
                     json_field("previous_status", json!(prev));
+                    json_field("worker_pid", json!(live_worker));
                 } else {
                     cli_println!("▶  Loop \"{}\" resumed (was {}).", label, prev);
+                    if let Some(pid) = live_worker {
+                        // The resident worker picks the status change up at its
+                        // next poll; starting another one would duplicate it.
+                        cli_println!(
+                            "   Existing worker PID {} continues this loop — no new worker started.",
+                            pid
+                        );
+                        cli_println!("   Iteration output: {}", state_path.with_extension("log").display());
+                        json_field("resumed", json!(true));
+                        json_field("name", json!(label));
+                        json_field("previous_status", json!(prev));
+                        json_field("worker_pid", json!(pid));
+                        return Ok(());
+                    }
 
                     // Read the full loop state to reconstruct the command and
                     // spawn a detached background process that actually executes
@@ -20452,6 +21806,17 @@ async fn handle_loop(
             } else {
                 Some(entry.name.as_str())
             };
+            // Same ownership rule as `--resume`: a live worker picks the status
+            // change up itself, so spawning another one would duplicate it.
+            state::clear_loop_stop_request(None, name);
+            if let Some(pid) = state::live_loop_worker_pid(None, name) {
+                cli_println!(
+                    "   - {} (worker PID {} still alive — signalled, no new worker)",
+                    entry.name,
+                    pid
+                );
+                continue;
+            }
             if let Some(ls) = state::read_loop_state(None, name) {
                 // Reconstruct CLI arguments
                 let mut cmd_args: Vec<String> = vec!["loop".to_string()];
@@ -20606,6 +21971,9 @@ async fn handle_loop(
             started_at: started.to_string(),
             updated_at: Utc::now().to_rfc3339(),
             status: status.to_string(),
+            // This process owns the loop: recorded so `--pause`/`--resume`/`--stop`
+            // can tell a live worker from a leftover state file (122234#1).
+            worker_pid: Some(std::process::id()),
         };
         if let Err(e) = state::write_loop_state(&state, None, loop_name) {
             if !write_warned.replace(true) {
@@ -20628,10 +21996,28 @@ async fn handle_loop(
         "running",
     );
 
+    // Set when a control command (`--stop` / `--stop-all`) ended this run, so
+    // the history entry this worker writes is labelled "stopped" instead of
+    // "interrupted" (#122234#6).
+    let mut stopped_by_control = false;
+
     loop {
         // --- check for external signals (stop / pause) ---
+        // The stop sentinel is authoritative and independent of the progress
+        // file: a control command writes it first, so a worker that wakes from a
+        // sleep cannot miss the stop and recreate the state file as "running"
+        // (issue 122234#3).
+        if state::loop_stop_requested(None, loop_name) {
+            stopped_by_control = true;
+            cli_println!(
+                "\nStop requested. Halting after {} iteration(s).",
+                iteration.saturating_sub(1)
+            );
+            break;
+        }
         if let Some(existing) = state::read_loop_state(None, loop_name) {
             if existing.status == "stopped" {
+                stopped_by_control = true;
                 cli_println!(
                     "\nStop signal detected. Halting after {} iteration(s).",
                     iteration.saturating_sub(1)
@@ -20654,8 +22040,14 @@ async fn handle_loop(
 
                 // Poll until resumed or stopped
                 loop {
+                    if state::loop_stop_requested(None, loop_name) {
+                        stopped_by_control = true;
+                        cli_println!("Stop requested while paused. Halting.");
+                        break;
+                    }
                     match state::read_loop_state(None, loop_name) {
                         Some(current) if current.status == "stopped" => {
+                            stopped_by_control = true;
                             cli_println!("Stop signal detected while paused. Halting.");
                             // Break outer loop by using the stopped check at top
                             break;
@@ -20668,6 +22060,7 @@ async fn handle_loop(
                             // State file disappeared (e.g. deleted externally or
                             // by a --stop that cleared it). Treat as a stop signal
                             // to avoid an orphaned paused process.
+                            stopped_by_control = true;
                             cli_println!("State file removed while paused — treating as stop. Halting.");
                             break;
                         }
@@ -20781,24 +22174,62 @@ async fn handle_loop(
                     // the server's command_run endpoint. Print a concise
                     // human-readable line instead of the full envelope.
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(output) {
-                        let summary = json.get("commandResult")
-                            .and_then(|cr| cr.get("pageSummary"))
-                            .or_else(|| json.get("instructResults")
-                                .and_then(|ir| ir.as_array()?.first())
-                                .and_then(|first| first.get("result")))
-                            .and_then(|v| v.as_str());
+                        // The envelope carries the agent's text under
+                        // `commandResult.summary` (and a top-level `message`);
+                        // looking only for `pageSummary`/`instructResults[0]`
+                        // missed both, and the fallback then dumped the whole
+                        // ~2.5 KB envelope per iteration (#122234#4).
+                        let summary = json
+                            .get("commandResult")
+                            .and_then(|cr| cr.get("summary"))
+                            .or_else(|| {
+                                json.get("commandResult")
+                                    .and_then(|cr| cr.get("pageSummary"))
+                            })
+                            .or_else(|| {
+                                json.get("instructResults")
+                                    .and_then(|ir| ir.as_array()?.first())
+                                    .and_then(|first| first.get("result"))
+                            })
+                            .or_else(|| json.get("message"))
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty());
                         if let Some(s) = summary {
                             // First 120 chars for monitoring
-                            let trimmed = s.trim();
-                            let display = if trimmed.len() > 120 {
-                                format!("{}...", &trimmed[..117])
+                            let display = if s.chars().count() > 120 {
+                                format!("{}...", s.chars().take(117).collect::<String>())
                             } else {
-                                trimmed.to_string()
+                                s.to_string()
                             };
                             cli_println!("  {}", display);
                         } else {
                             // Fallback: print the raw output (not valid JSON)
                             cli_println!("{}", output);
+                        }
+                        // A payload-level failure must be visible even though the
+                        // envelope itself arrived: name the reason on stderr.
+                        let failure = json
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| {
+                                json.get("commandResult")
+                                    .and_then(|cr| cr.get("error"))
+                                    .and_then(|v| v.as_str())
+                            })
+                            .map(str::trim)
+                            .filter(|e| !e.is_empty());
+                        let success = json
+                            .get("success")
+                            .and_then(|v| v.as_bool())
+                            .or_else(|| {
+                                json.get("commandResult")
+                                    .and_then(|cr| cr.get("success"))
+                                    .and_then(|v| v.as_bool())
+                            });
+                        if success == Some(false) || failure.is_some() {
+                            let reason = failure.unwrap_or("the command reported success:false");
+                            eprintln!("  [FAILED] {}", reason);
                         }
                     } else {
                         // Not valid JSON — print as-is
@@ -20835,6 +22266,13 @@ async fn handle_loop(
         let persist_status = match current_status.as_str() {
             "stopped" | "paused" => current_status.as_str(),
             _ => "running",
+        };
+        // A stop request always wins over a stale "running" status: persisting
+        // "running" here is what let a worker revive a stopped loop.
+        let persist_status = if state::loop_stop_requested(None, loop_name) {
+            "stopped"
+        } else {
+            persist_status
         };
         persist(
             &parsed.task_tokens,
@@ -20913,7 +22351,23 @@ async fn handle_loop(
                         },
                     }
 
-                    // Check for external pause/stop signal during sleep
+                    // Check for external pause/stop signal during sleep.  The
+                    // sentinel is checked first: it survives even if the state
+                    // file was already cleared by another worker.
+                    if state::loop_stop_requested(None, loop_name) {
+                        stopped_by_control = true;
+                        persist(
+                            &parsed.task_tokens,
+                            mode_key,
+                            parsed.interval_secs,
+                            parsed.count,
+                            parsed.timeout_secs,
+                            iteration.saturating_sub(1),
+                            &started_at,
+                            "stopped",
+                        );
+                        break; // exit the sleep loop, top-of-loop will handle
+                    }
                     if let Some(current) = state::read_loop_state(None, loop_name) {
                         if current.status == "stopped" || current.status == "paused" {
                             // Persist and let the top-of-loop check handle it
@@ -20947,13 +22401,18 @@ async fn handle_loop(
         .filter(|r| r.get("ok").and_then(|v| v.as_bool()) == Some(false))
         .count();
 
-    // Determine the exit reason for the history log.
+    // Determine the exit reason for the history log.  A control-command stop is
+    // reported as such — this worker is the only process that can observe it, so
+    // it is also the only writer of the entry (#122234#6).
+    let stopped_by_control = stopped_by_control || state::loop_stop_requested(None, loop_name);
     let exit_reason = {
         let count_reached = parsed.count.map_or(false, |max| total >= max);
         let timed_out = parsed
             .timeout_secs
             .map_or(false, |t| overall_start.elapsed().as_secs() >= t);
-        if count_reached && !timed_out {
+        if stopped_by_control {
+            "stopped"
+        } else if count_reached && !timed_out {
             "count-reached"
         } else if timed_out {
             "timeout"
@@ -20976,6 +22435,11 @@ async fn handle_loop(
         completed_at: Utc::now().to_rfc3339(),
     };
     let _ = state::write_loop_history(&history_entry, None);
+
+    // The worker honoured the stop request: clear the sentinel so the next run
+    // of this loop (and `--resume`) starts from a clean slate.  The sentinel is
+    // removed only here or by a control command, never by the progress file.
+    state::clear_loop_stop_request(None, loop_name);
 
     // Clear persisted state on normal completion — the summary was already
     // printed and re-running the same command starts a fresh loop anyway.
@@ -21709,6 +23173,10 @@ async fn handle_plugin_list(client: &reqwest::Client, base_url: &str) -> Result<
     if let Some(plugins) = parsed.as_array() {
         if plugins.is_empty() {
             cli_println!("No plugins installed.");
+            cli_println!(
+                "Install one with `browser4-cli plugin install <path-to-plugin.jar>`, \
+                 then restart the backend so it is loaded."
+            );
             json_field("plugins", json!([]));
             return Ok(());
         }
@@ -21751,6 +23219,14 @@ async fn handle_plugin_list(client: &reqwest::Client, base_url: &str) -> Result<
                 name, version, sdk, status, desc
             );
         }
+        // This command lists plugin JARs, not the tools they contribute; the
+        // help text used to send users here to find tool names.
+        cli_println!("");
+        cli_println!("This lists plugin JARs. Their callable MCP tools:");
+        cli_println!("  browser4-cli tool list                 every advertised tool name");
+        cli_println!("  browser4-cli tool list --filter captcha  names matching a substring");
+        cli_println!("  browser4-cli plugin <domain> --help    methods of one plugin domain");
+        cli_println!("Details for one plugin: browser4-cli plugin info <name>");
     } else {
         cli_println!("{}", response);
     }
@@ -21758,6 +23234,7 @@ async fn handle_plugin_list(client: &reqwest::Client, base_url: &str) -> Result<
     Ok(())
 }
 
+/// Resolve the user's plugin argument and fetch that plugin.
 async fn handle_plugin_info(
     client: &reqwest::Client,
     base_url: &str,
@@ -21769,7 +23246,19 @@ async fn handle_plugin_info(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "Plugin name is required".to_string())?;
 
-    let response = http::get_plugin(client, base_url, name).await?;
+    // The backend matches the manifest name or the JAR file name only, so a
+    // short name the CLI itself advertises elsewhere (`plugin captcha`, and the
+    // domain printed by `plugin`) used to answer a bare
+    // "HTTP request failed with status 404 Not Found and an empty response body".
+    // Resolve it against the installed plugins first and say which name was used.
+    let (resolved_name, note) = resolve_installed_plugin(client, base_url, name).await?;
+    if let Some(note) = note.as_deref() {
+        if !quiet_active() && !json_active() {
+            eprintln!("ℹ️  {note}");
+        }
+    }
+
+    let response = http::get_plugin(client, base_url, &resolved_name).await?;
     let parsed: serde_json::Value = serde_json::from_str(&response)
         .map_err(|e| format!("Failed to parse plugin info response: {}", e))?;
 
@@ -21835,27 +23324,326 @@ async fn handle_plugin_info(
     Ok(())
 }
 
+/// An installed plugin as the CLI has to reference it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InstalledPluginRef {
+    /// JAR file name — always accepted by `GET /api/plugins/{name}`.
+    file_name: String,
+    /// Manifest name, when the JAR declares one.
+    manifest_name: Option<String>,
+}
+
+/// Normalize a plugin reference into the keys that may match an installed JAR.
+///
+/// Accepts what users actually type: the short name the CLI advertises
+/// (`captcha`), the artifact base name (`browser4-captcha`), the full JAR name
+/// (`browser4-captcha-4.14.1-SNAPSHOT.jar`) and a path to it.
+fn plugin_reference_keys(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    // A path is as good as its file name: `plugins/browser4-media.jar`.
+    let base = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+    let lower = base.to_ascii_lowercase();
+
+    let mut keys = vec![lower.clone()];
+    let without_ext = lower.strip_suffix(".jar").unwrap_or(&lower).to_string();
+    let stem = plugin_stem(&without_ext);
+    let singular = depluralize(&stem);
+    for key in [without_ext, stem, singular] {
+        if !key.is_empty() && !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// `browser4-captcha-4.14.1-snapshot` → `captcha`.
+///
+/// Everything from the first version-looking segment on is dropped, and the
+/// `browser4-` artifact prefix with it, so the JAR name and the plugin's tool
+/// domain agree.
+fn plugin_stem(name: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    for segment in name.split('-') {
+        if segment
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit())
+        {
+            break;
+        }
+        kept.push(segment);
+    }
+    let joined = kept.join("-");
+    joined
+        .strip_prefix("browser4-")
+        .unwrap_or(&joined)
+        .to_string()
+}
+
+/// Drop a trailing plural `s` (`images` → `image`) without mangling `ss`.
+fn depluralize(name: &str) -> String {
+    if name.len() > 1 && name.ends_with('s') && !name.ends_with("ss") {
+        name[..name.len() - 1].to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// Resolve `input` to the JAR file name of an installed plugin.
+///
+/// Error text lists the installed plugins and the discovery commands, because
+/// the backend's own 404 body is empty — the user saw
+/// "HTTP request failed with status 404 Not Found and an empty response body"
+/// with no hint that `captcha` is not one of its accepted names.
+fn resolve_plugin_reference(
+    input: &str,
+    installed: &[InstalledPluginRef],
+) -> Result<String, String> {
+    let wanted = plugin_reference_keys(input);
+    if wanted.is_empty() {
+        return Err("Plugin name is required".to_string());
+    }
+
+    if let Some(found) = installed.iter().find(|plugin| {
+        let mut keys = plugin_reference_keys(&plugin.file_name);
+        if let Some(manifest) = plugin.manifest_name.as_deref() {
+            for key in plugin_reference_keys(manifest) {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        // An exact match on any accepted spelling wins.
+        keys.iter().any(|key| wanted.contains(key))
+    }) {
+        return Ok(found.file_name.clone());
+    }
+
+    let names: Vec<&str> = installed
+        .iter()
+        .map(|plugin| plugin.file_name.as_str())
+        .collect();
+    Err(format!(
+        "Unknown plugin '{}'. Installed plugins: {}\n\
+         Run `browser4-cli plugin list` for details, or `browser4-cli tool list` \
+         for the MCP tools they expose.",
+        input,
+        if names.is_empty() {
+            "(none)".to_string()
+        } else {
+            names.join(", ")
+        }
+    ))
+}
+
+/// Resolve the user's plugin argument to an installed JAR, using the backend's
+/// plugin list when it is reachable.
+///
+/// Returns the name to query plus an optional note naming the substitution.  A
+/// plugin list that cannot be fetched leaves the argument untouched so the
+/// backend's own answer (or error) is what the user sees.
+async fn resolve_installed_plugin(
+    client: &reqwest::Client,
+    base_url: &str,
+    input: &str,
+) -> Result<(String, Option<String>), String> {
+    let Ok(body) = http::list_plugins(client, base_url).await else {
+        return Ok((input.to_string(), None));
+    };
+    let Ok(parsed) = serde_json::from_str::<Value>(&body) else {
+        return Ok((input.to_string(), None));
+    };
+    let installed: Vec<InstalledPluginRef> = parsed
+        .as_array()
+        .map(|plugins| {
+            plugins
+                .iter()
+                .filter_map(|plugin| {
+                    let file_name = plugin.get("fileName").and_then(|v| v.as_str())?;
+                    Some(InstalledPluginRef {
+                        file_name: file_name.to_string(),
+                        manifest_name: plugin
+                            .get("manifest")
+                            .and_then(|m| m.get("name"))
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if installed.is_empty() {
+        return Ok((input.to_string(), None));
+    }
+
+    let resolved = resolve_plugin_reference(input, &installed)?;
+    let note = (resolved != input)
+        .then(|| format!("resolved plugin '{input}' to installed plugin '{resolved}'"));
+    Ok((resolved, note))
+}
+
+/// True when [raw] contains a glob wildcard the CLI has to expand itself.
+fn contains_glob_wildcard(raw: &str) -> bool {
+    raw.contains('*') || raw.contains('?')
+}
+
+/// Expand a single-directory glob pattern (`dir/prefix-*.jar`) against the
+/// filesystem.
+///
+/// PowerShell does not expand wildcards for native commands, so the documented
+/// `plugin install …/browser4-captcha-*.jar` arrives at the CLI verbatim and has
+/// to be expanded here.
+fn expand_glob_pattern(pattern: &str) -> Vec<PathBuf> {
+    let path = Path::new(pattern);
+    let Some(file_pattern) = path.file_name().and_then(|n| n.to_str()) else {
+        return Vec::new();
+    };
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let Ok(regex) = glob_to_regex(file_pattern) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&parent) else {
+        return Vec::new();
+    };
+    let mut matches: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_file())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| regex.is_match(name))
+        })
+        .map(|entry| entry.path())
+        .collect();
+    matches.sort();
+    matches
+}
+
+/// Compile a file-name glob (`*`, `?`) into an anchored regex.
+fn glob_to_regex(pattern: &str) -> Result<regex::Regex, regex::Error> {
+    let mut source = String::from("^");
+    for ch in pattern.chars() {
+        match ch {
+            '*' => source.push_str(".*"),
+            '?' => source.push('.'),
+            other => source.push_str(&regex::escape(&other.to_string())),
+        }
+    }
+    source.push('$');
+    regex::Regex::new(&source)
+}
+
+/// Resolve `plugin install`'s positional argument(s) to exactly one JAR path.
+///
+/// Two shapes reach this function and both must end in "the JAR you meant" or an
+/// error naming the candidates:
+/// * a shell-expanded wildcard — six positionals that `build_command_args`
+///   joins with spaces into one path that cannot exist (the previous error
+///   echoed that bogus join, hiding the real cause);
+/// * a literal wildcard, which the CLI expands itself.
+///
+/// When several files match, the artifact whose name contains this CLI's
+/// version is preferred and the choice is reported — the documented command
+/// matched six versioned JARs and gave no hint which one belongs to the
+/// checkout.
+fn resolve_plugin_install_path(
+    raw: &str,
+    version: &str,
+) -> Result<(PathBuf, Option<String>), String> {
+    let tokens: Vec<&str> = raw.split_whitespace().filter(|t| !t.is_empty()).collect();
+    if tokens.is_empty() {
+        return Err("Plugin JAR file path is required".to_string());
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for token in &tokens {
+        let path = Path::new(token);
+        if path.is_file() {
+            candidates.push(path.to_path_buf());
+            continue;
+        }
+        if contains_glob_wildcard(token) {
+            let expanded = expand_glob_pattern(token);
+            if expanded.is_empty() {
+                return Err(format!(
+                    "Plugin file not found: {token}\nNo file matches that pattern."
+                ));
+            }
+            candidates.extend(expanded);
+            continue;
+        }
+        return Err(format!("Plugin file not found: {token}"));
+    }
+    candidates.sort();
+    candidates.dedup();
+
+    if candidates.len() == 1 {
+        return Ok((candidates.remove(0), None));
+    }
+
+    let matched: Vec<&PathBuf> = candidates
+        .iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains(version))
+        })
+        .collect();
+    if let [only] = matched.as_slice() {
+        let chosen = (*only).clone();
+        let note = format!(
+            "{} files matched; installing the version-matched artifact {}",
+            candidates.len(),
+            chosen.display()
+        );
+        return Ok((chosen, Some(note)));
+    }
+
+    let names: Vec<String> = candidates
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    Err(format!(
+        "Expected exactly one plugin JAR, got {}:\n  {}\n\
+         Pass one of them, or a pattern that matches a single file \
+         (the version-matched artifact contains '{version}').",
+        candidates.len(),
+        names.join("\n  ")
+    ))
+}
+
 async fn handle_plugin_install(
     client: &reqwest::Client,
     base_url: &str,
     tool_params: &serde_json::Value,
 ) -> Result<(), String> {
-    let file_path = tool_params
+    let raw_path = tool_params
         .get("file")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "Plugin JAR file path is required".to_string())?;
+
+    let (file_path, note) = resolve_plugin_install_path(raw_path, VERSION)?;
+    if let Some(note) = note.as_deref() {
+        if !quiet_active() && !json_active() {
+            eprintln!("ℹ️  {note}");
+        }
+    }
+    let file_path = file_path.to_string_lossy().to_string();
 
     let replace = tool_params
         .get("replace")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    if !std::path::Path::new(file_path).exists() {
-        return Err(format!("Plugin file not found: {}", file_path));
-    }
-
-    let response = http::install_plugin(client, base_url, file_path, replace).await?;
+    let response = http::install_plugin(client, base_url, &file_path, replace).await?;
     let parsed: serde_json::Value = serde_json::from_str(&response)
         .map_err(|e| format!("Failed to parse plugin install response: {}", e))?;
 
@@ -22544,42 +24332,29 @@ async fn handle_dynamic_plugin_command(
     domain: &str,
     global: &GlobalFlags,
 ) -> Result<(), CliError> {
-    // Discover available plugin tools from the server
-    let tools_url = format!("{}/mcp/tools", base_url.trim_end_matches('/'));
-    let tools_response = client.get(&tools_url).send().await.map_err(|e| {
-        CliError(
-            ExitCode::Server,
-            format!("Failed to fetch plugin tool list: {}", e),
-        )
-    })?;
-
-    let tools_body = tools_response.text().await.map_err(|e| {
-        CliError(
-            ExitCode::Server,
-            format!("Failed to read plugin tool list: {}", e),
-        )
-    })?;
-
-    let tools_json: Value = serde_json::from_str(&tools_body).map_err(|e| {
-        CliError(
-            ExitCode::Server,
-            format!("Failed to parse plugin tool list: {}", e),
-        )
-    })?;
-
-    let tools: Vec<&str> = tools_json
-        .get("tools")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|t| t.as_str()).collect())
-        .unwrap_or_default();
+    let tool_names = fetch_advertised_tool_names(client, base_url)
+        .await
+        .map_err(|e| CliError(ExitCode::Server, e))?;
+    let tools: Vec<&str> = tool_names.iter().map(String::as_str).collect();
 
     // If domain is empty (bare `plugin` command), list all available plugin tools
     if domain.is_empty() {
         let domains = available_plugin_domains(&tools);
         if domains.is_empty() {
             cli_println!("No plugin tools available.");
+            cli_println!(
+                "Installed plugins: browser4-cli plugin list   All advertised tools: browser4-cli tool list"
+            );
         } else {
-            cli_println!("Available plugin commands:\n{}", format_plugin_domains(&domains));
+            cli_println!(
+                "Available plugin tools ({} domain(s), `plugin <domain> <method>`):",
+                domains.len()
+            );
+            cli_println!("{}", format_plugin_domains(&domains));
+            cli_println!("");
+            cli_println!("Call one with: browser4-cli plugin <domain> <method> [--key value]");
+            cli_println!("Or directly:   browser4-cli tool call <domain>_<method> [--json '{{...}}']");
+            cli_println!("Every advertised tool name: browser4-cli tool list");
         }
         json_field("result", json!(domains));
         return Ok(());
@@ -22594,11 +24369,16 @@ async fn handle_dynamic_plugin_command(
         let hint = if domains.is_empty() {
             "  (no plugin tools available)".to_string()
         } else {
-            format!("Available plugin commands:\n{}", format_plugin_domains(&domains))
+            format!("Available plugin tools:\n{}", format_plugin_domains(&domains))
         };
+        // The plugin exists in this checkout but is not installed: name the JAR
+        // and the install command instead of only the tool name.
+        let install_hint = suggest_plugin_jar_for_domain(domain)
+            .map(|jar| format!("\n{}", plugin_install_hint(&jar)))
+            .unwrap_or_default();
         return Err(CliError(
             ExitCode::Usage,
-            format!("No plugin tools found for '{}'.\n{}", domain, hint,),
+            format!("No plugin tools found for '{}'.\n{}{}", domain, hint, install_hint),
         ));
     }
 
@@ -22651,6 +24431,136 @@ async fn handle_dynamic_plugin_command(
     Ok(())
 }
 
+/// Fetch the MCP tool names the backend advertises (`GET /mcp/tools`).
+///
+/// The single place that talks to the tool-listing endpoint, shared by the
+/// plugin command surface, `tool list` and the help path so they cannot drift
+/// on how a "no tools" answer is spelled.
+async fn fetch_advertised_tool_names(
+    client: &Client,
+    base_url: &str,
+) -> Result<Vec<String>, String> {
+    let tools_url = format!("{}/mcp/tools", base_url.trim_end_matches('/'));
+    let tools_response = client
+        .get(&tools_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch the MCP tool list from {tools_url}: {e}"))?;
+    let status = tools_response.status();
+    let tools_body = tools_response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read the MCP tool list from {tools_url}: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("GET {tools_url} returned HTTP {status}"));
+    }
+    let tools_json: Value = serde_json::from_str(&tools_body)
+        .map_err(|e| format!("Failed to parse the MCP tool list from {tools_url}: {e}"))?;
+    Ok(tools_json
+        .get("tools")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// List the MCP tool names the running backend advertises (`tool list`).
+async fn handle_tool_list(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), CliError> {
+    let tools = fetch_advertised_tool_names(client, base_url)
+        .await
+        .map_err(|e| CliError(ExitCode::Server, e))?;
+    let filter = tool_params
+        .get("filter")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|f| !f.is_empty());
+
+    let matched: Vec<&String> = tools
+        .iter()
+        .filter(|name| tool_name_matches_filter(name, filter))
+        .collect();
+
+    for name in &matched {
+        cli_println!("{}", name);
+    }
+    json_field("tools", json!(matched));
+    json_field("tool_count", json!(matched.len()));
+
+    if !json_active() {
+        match filter {
+            Some(filter) => eprintln!(
+                "{} of {} advertised MCP tool(s) match '{filter}'.",
+                matched.len(),
+                tools.len()
+            ),
+            None => eprintln!("{} advertised MCP tool(s).", matched.len()),
+        }
+        if matched.is_empty() {
+            eprintln!(
+                "Plugins are listed by `browser4-cli plugin list`; \
+                 plugin tool domains by `browser4-cli plugin`."
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Case-insensitive substring match used by `tool list --filter`.
+fn tool_name_matches_filter(name: &str, filter: Option<&str>) -> bool {
+    match filter {
+        None => true,
+        Some(filter) => name
+            .to_ascii_lowercase()
+            .contains(&filter.to_ascii_lowercase()),
+    }
+}
+
+/// Helper for diagnostics that name a tool call's target and payload.
+///
+/// `tool call` is a passthrough: the backend returns the tool's own result,
+/// including tools that report failure *inside* their payload (`success:false`
+/// or a non-empty `error`) rather than as a transport error.  Printing that and
+/// exiting 0 makes a failed tool look like a success to any script that checks
+/// `$?`, so the failure is surfaced on stderr and can be turned into a non-zero
+/// exit with `--fail-on-error`.
+fn tool_call_failure_summary(tool_name: &str, result: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_str(result).ok()?;
+    tool_call_failure_summary_from_json(tool_name, &parsed)
+}
+
+/// [tool_call_failure_summary] over an already-parsed payload.
+///
+/// An envelope (`{"status":"ok","output":{...}}`) is unwrapped first, so a tool
+/// result nested in the CLI's own envelope is inspected as well.
+fn tool_call_failure_summary_from_json(tool_name: &str, parsed: &Value) -> Option<String> {
+    let payload = parsed.get("output").unwrap_or(parsed);
+
+    let failed = payload
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .map(|ok| !ok)
+        .unwrap_or(false);
+    let error = payload
+        .get("error")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|e| !e.is_empty() && !e.eq_ignore_ascii_case("null"));
+
+    if !failed && error.is_none() {
+        return None;
+    }
+    let reason = error.unwrap_or("the tool reported success:false");
+    Some(format!("{tool_name} reported a failure: {reason}"))
+}
+
 /// Invoke an arbitrary MCP tool by name (`tool call <mcp-name> [--json '{...}']`).
 ///
 /// Generic passthrough for tools that have no dedicated CLI command — most
@@ -22663,6 +24573,7 @@ async fn handle_tool_call(
     tool_name: &str,
     tool_args: Value,
     global: &GlobalFlags,
+    fail_on_error: bool,
 ) -> Result<(), CliError> {
     let session_name = global.session_name.as_deref();
     let timeout_override = global.timeout_secs;
@@ -22685,11 +24596,31 @@ async fn handle_tool_call(
         },
     )
     .await
-    .map_err(|e| CliError(ExitCode::General, e))?;
+    .map_err(|e| CliError(ExitCode::General, enrich_unknown_tool_error(e, tool_name)))?;
 
     cli_println!("{}", result);
     json_field("result", json_text_or_value(&result));
+
+    // A tool that reports its own failure must not look like a success: the
+    // payload stays on stdout untouched, the diagnostic goes to stderr, and
+    // --fail-on-error turns it into a non-zero exit for scripts.
+    if let Some(failure) = tool_call_failure_summary(tool_name, &result) {
+        if !quiet_active() {
+            eprintln!("⚠️  {failure}");
+        }
+        if fail_on_error {
+            return Err(CliError(
+                ExitCode::PartialFailure,
+                format!("{failure}\nThe tool result is on stdout; re-run without --fail-on-error to ignore it."),
+            ));
+        }
+    }
     Ok(())
+}
+
+/// Parse the `--fail-on-error` option of `tool call`.
+fn parse_tool_call_fail_on_error(raw: Option<Value>) -> bool {
+    raw.and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
 /// Parse the `--json` option of `tool call` into a JSON object map.
@@ -22733,8 +24664,91 @@ fn parse_tool_call_json(raw: Option<&str>) -> Result<serde_json::Map<String, Val
 
 /// Extract the available plugin tool domains from the server's tool list
 /// (filtering out built-in tools), deduplicated and sorted.
-fn available_plugin_domains(tools: &[&str]) -> Vec<String> {
-    let builtin_prefixes = [
+///
+/// `GET /mcp/tools` is a flat name list, so `domain -> methods` has to be
+/// reconstructed.  Splitting every name at its **last** underscore (the
+/// previous implementation) invented domains out of method words —
+/// `captcha_get_balance` became the domain `captcha_get`, so `captcha_detect`
+/// never appeared in the listing and `plugin captcha_get` was advertised as a
+/// command that does not exist — and camelCase API names, which the naming
+/// layer snake_cases per capital (`baseURL` → `base_u_r_l`), produced
+/// single-letter domains (`base`, `nano`, `outer`) out of core `tab`/`system`
+/// methods.
+///
+/// A name is treated as a plugin tool when **all** of these hold:
+/// * it is not one of the tools the CLI's own command registry already exposes,
+/// * it is not under a built-in tool-domain prefix, and
+/// * its snake form has no run of two or more single-letter tokens — such a run
+///   is a per-capital acronym split, not a `domain_method` boundary.
+///
+/// The domain is then the first token and the method the remainder, which keeps
+/// `plugin <domain> <method>` resolvable (`media` + `detect_videos` →
+/// `media_detect_videos`); the grouping is only a listing aid, the pair is what
+/// the invocation needs.
+fn available_plugin_domains(tools: &[&str]) -> Vec<PluginToolDomain> {
+    let builtin = builtin_tool_names();
+    let mut grouped: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+
+    for tool in tools {
+        if is_builtin_tool_name_by_shape(tool) || builtin.contains(*tool) {
+            continue;
+        }
+        let Some((domain, method)) = split_plugin_tool_name(tool) else {
+            continue;
+        };
+        grouped
+            .entry(domain.to_string())
+            .or_default()
+            .push(method.to_string());
+    }
+
+    grouped
+        .into_iter()
+        .map(|(domain, mut methods)| {
+            methods.sort();
+            methods.dedup();
+            PluginToolDomain { domain, methods }
+        })
+        .collect()
+}
+
+/// One plugin tool domain and the method names advertised under it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct PluginToolDomain {
+    /// Tool domain, e.g. `captcha`.
+    domain: String,
+    /// Method names as they appear after the domain prefix, e.g. `get_balance`.
+    methods: Vec<String>,
+}
+
+/// True when [tool] belongs to a tool domain the CLI already exposes as its own
+/// command — by name shape (session lifecycle, frontend aliases, snapshot/DOM
+/// helpers) or because a `CommandDef` maps to it.
+fn is_builtin_tool_name(tool: &str) -> bool {
+    is_builtin_tool_name_by_shape(tool) || builtin_tool_names().contains(tool)
+}
+
+/// The shape-only half of [`is_builtin_tool_name`].
+///
+/// The registry half is the expensive part (it walks every `CommandDef`), so
+/// callers testing many names build that set once and call this directly.
+fn is_builtin_tool_name_by_shape(tool: &str) -> bool {
+    /// Session-lifecycle tools every backend advertises
+    /// (`MCPToolController.buildStaticToolNames`), listed exactly because their
+    /// names do not share a common prefix — `list_sessions` would otherwise be
+    /// split into the domain `list`.
+    const BUILTIN_EXACT_NAMES: &[&str] = &[
+        "open_session",
+        "close_session",
+        "list_sessions",
+        "close_all_sessions",
+        "kill_all_sessions",
+        "delete_session_data",
+        "attach_browser",
+        "check_session_ready",
+    ];
+    const BUILTIN_PREFIXES: &[&str] = &[
         "browser_",
         "open_",
         "close_",
@@ -22765,31 +24779,309 @@ fn available_plugin_domains(tools: &[&str]) -> Vec<String> {
         "delete_cookies",
         "generate_locator",
     ];
+    BUILTIN_EXACT_NAMES.contains(&tool) || BUILTIN_PREFIXES.iter().any(|p| tool.starts_with(p))
+}
 
-    tools
-        .iter()
-        .filter(|t| !builtin_prefixes.iter().any(|p| t.starts_with(p)))
-        .map(|t| {
-            // Extract domain from tool name.
-            // Uses rsplitn (split from the right, limit 2) so compound
-            // domains like "my_plugin_generate" resolve to "my_plugin"
-            // instead of just "my".  All current plugin methods are
-            // single words (generate, detect, convert, solve), so the
-            // last underscore reliably separates domain from method.
-            t.rsplitn(2, '_').nth(1).unwrap_or(t).to_string()
-        })
-        .collect::<std::collections::BTreeSet<_>>() // deduplicate and sort
-        .into_iter()
+/// Every MCP tool name the CLI's own command registry maps to.
+///
+/// This is the *positive* built-in filter: a name in this set has a first-class
+/// CLI command, so listing it as a plugin tool would be wrong no matter how it
+/// is spelled.  The `tool_name_fn` closures are total functions of the argument
+/// map (they only read it through the `get_*` helpers), so calling them with an
+/// empty map is safe and side-effect free.
+fn builtin_tool_names() -> std::collections::HashSet<String> {
+    let empty = HashMap::new();
+    commands_map()
+        .values()
+        .map(|def| (def.tool_name_fn)(&empty))
+        .filter(|name| !name.is_empty())
         .collect()
 }
 
-/// Format plugin domains as a human-readable command list.
-fn format_plugin_domains(domains: &[String]) -> String {
+/// Split `<domain>_<method>` out of an MCP tool name, or `None` when the name
+/// is not a plugin tool (`fill`, `document_u_r_i`, …).
+fn split_plugin_tool_name(tool: &str) -> Option<(&str, &str)> {
+    let (domain, method) = tool.split_once('_')?;
+    if domain.is_empty() || method.is_empty() {
+        return None;
+    }
+    // `document_u_r_i` / `base_u_r_l` / `nano_d_o_m` / `outer_h_t_m_l`: the
+    // naming layer inserts an underscore before every capital, so a run of
+    // single-letter tokens is an acronym, not a domain/method boundary.
+    if has_single_letter_token_run(method) {
+        return None;
+    }
+    Some((domain, method))
+}
+
+/// True when [name] contains two or more consecutive single-character tokens.
+fn has_single_letter_token_run(name: &str) -> bool {
+    let mut run = 0usize;
+    for token in name.split('_') {
+        if token.chars().count() == 1 {
+            run += 1;
+            if run >= 2 {
+                return true;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    false
+}
+
+/// Format plugin domains as a human-readable `domain  method, method` list.
+fn format_plugin_domains(domains: &[PluginToolDomain]) -> String {
+    let width = domains
+        .iter()
+        .map(|d| d.domain.chars().count())
+        .max()
+        .unwrap_or(0);
     domains
         .iter()
-        .map(|d| format!("  plugin {}", d))
+        .map(|d| {
+            format!(
+                "  {:<width$}  {}",
+                d.domain,
+                d.methods.join(", "),
+                width = width
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// `plugin` subcommands that are static CLI commands, not tool domains.
+const BUILTIN_PLUGIN_SUBCOMMANDS: &[&str] = &["list", "info", "install", "remove", "commands"];
+
+/// Identify a plugin tool domain named by a help request.
+///
+/// Answers both spellings users type — `--help plugin-markdown` and
+/// `plugin markdown --help` — and `None` for the static `plugin` subcommands so
+/// their own help pages stay in charge.
+fn plugin_domain_help_target(command: &str, args: &[String]) -> Option<String> {
+    if let Some(domain) = command.strip_prefix("plugin-") {
+        if !domain.is_empty() && !BUILTIN_PLUGIN_SUBCOMMANDS.contains(&domain) {
+            return Some(domain.to_string());
+        }
+        return None;
+    }
+    // `plugin <domain> --help`: the second word is the domain, unless it is a
+    // flag or one of the static subcommands.
+    if command == "plugin" {
+        let candidate = args.iter().skip(1).find(|arg| !arg.starts_with('-'))?;
+        if !BUILTIN_PLUGIN_SUBCOMMANDS.contains(&candidate.as_str()) {
+            return Some(candidate.clone());
+        }
+    }
+    None
+}
+
+/// Short help for the `tool` passthrough surface: `tool --help`, bare `tool`.
+///
+/// `tool` is a prefix-only command (it maps to no single backend tool), so it
+/// had no help page: `--help tool` printed a two-line stub and bare `tool`
+/// dumped the whole ~360-line reference with exit 2.
+fn print_tool_surface_help() {
+    cli_println!("browser4-cli tool — call any advertised MCP tool by name");
+    cli_println!("");
+    cli_println!("  browser4-cli tool list [--filter <substr>]   list the advertised tool names");
+    cli_println!("  browser4-cli tool call <mcp-name> [--json '{{...}}']   invoke one tool");
+    cli_println!("  browser4-cli tool call <name> --fail-on-error          exit non-zero on success:false");
+    cli_println!("  browser4-cli plugin <domain> --help          methods of one plugin domain");
+    cli_println!("");
+    cli_println!("Tool names are snake_case: captcha.detect -> captcha_detect.");
+    cli_println!("Plugin-declared commands also work directly, e.g. browser4-cli profile import.");
+}
+
+/// The usage error for a `tool` subcommand the CLI does not implement.
+///
+/// Bare `tool` and `tool <typo>` used to print the whole general reference with
+/// no hint which subcommands exist — and the `tool call` help text pointed at
+/// `plugin list`, which lists plugin JARs rather than tools.
+fn unknown_tool_subcommand_message(subcommand: Option<&str>) -> String {
+    let named = subcommand
+        .map(|sub| format!("Unknown subcommand '{sub}' for 'tool'."))
+        .unwrap_or_else(|| "'tool' needs a subcommand.".to_string());
+    format!(
+        "{named}\nSupported: `tool call <mcp-name>`, `tool list [--filter <substr>]`.\n\
+         Run `browser4-cli tool list` for the advertised tool names, or \
+         `browser4-cli plugin` for plugin tool domains."
+    )
+}
+
+///
+/// Plugin tool commands are discovered at runtime, so the static help path can
+/// only fall through to `Unknown command: plugin-markdown` plus the whole
+/// ~350-line reference — even for a domain whose command works. Returns `false`
+/// when the domain has no advertised tools (or the backend is unreachable), so
+/// the caller keeps its existing fallback.
+/// Focused message for `--help plugin-<domain>` when the domain's methods cannot
+/// be listed.
+///
+/// Falling through to the caller would print `Unknown command: plugin-<domain>`
+/// followed by the whole ~200-line command reference, which hides the real
+/// cause and buries the answer.
+fn report_plugin_domain_help_unavailable(domain: &str, cause: &str) {
+    eprintln!("Plugin tool domain '{domain}' has no help to show: {cause}");
+    eprintln!("  - List every advertised tool:  browser4-cli tool list");
+    eprintln!("  - Check the backend:           browser4-cli status");
+    eprintln!(
+        "  - Plugin commands are served by the running backend; install the plugin (or start the backend) and retry."
+    );
+}
+
+async fn print_plugin_domain_help(base_url: &str, domain: &str) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    else {
+        report_plugin_domain_help_unavailable(domain, "the CLI could not build an HTTP client");
+        return true;
+    };
+    let Ok(tools) = fetch_advertised_tool_names(&client, base_url).await else {
+        report_plugin_domain_help_unavailable(
+            domain,
+            "the backend did not report its tool list — is it running? is the plugin installed?",
+        );
+        return true;
+    };
+    let prefix = format!("{domain}_");
+    let mut methods: Vec<&str> = tools
+        .iter()
+        .filter(|tool| tool.starts_with(&prefix))
+        .map(|tool| &tool[prefix.len()..])
+        .collect();
+    if methods.is_empty() {
+        report_plugin_domain_help_unavailable(
+            domain,
+            "the backend advertised no tools for this domain — is the plugin installed?",
+        );
+        return true;
+    }
+    methods.sort();
+    methods.dedup();
+
+    cli_println!("Plugin tool domain '{domain}' ({} method(s)):", methods.len());
+    for method in &methods {
+        cli_println!("  {method}");
+    }
+    cli_println!("");
+    cli_println!("Call one with: browser4-cli plugin {domain} <method> [--key value]");
+    cli_println!("Or directly:   browser4-cli tool call {domain}_<method> [--json '{{...}}']");
+    cli_println!("Every advertised tool name: browser4-cli tool list");
+    true
+}
+
+/// The member of `browser4-plugins/` that provides [domain]'s tools, if this is
+/// a source checkout that has built it.
+///
+/// `tool call media_detect_videos` on a checkout whose `browser4-media` plugin
+/// was built but not installed answered "unknown tool" and nothing else, so the
+/// user had to find the JAR by hand.  Only source checkouts can be searched: an
+/// installed release returns `None` and the original error stands unchanged.
+fn suggest_plugin_jar_for_domain(domain: &str) -> Option<PathBuf> {
+    let root = crate::daemon::dev_workspace_root()?;
+    let modules_dir = root.join("browser4-plugins");
+    let wanted = depluralize(&domain.to_ascii_lowercase());
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(&modules_dir).ok()?.flatten() {
+        let module = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        let stem = plugin_stem(&module);
+        if stem != wanted && depluralize(&stem) != wanted {
+            continue;
+        }
+        if let Some(jar) = newest_plugin_jar(&entry.path().join("target")) {
+            candidates.push(jar);
+        }
+    }
+    candidates.sort();
+    // Prefer the artifact built for this CLI's version.
+    if let Some(matching) = candidates.iter().find(|jar| {
+        jar.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(VERSION))
+    }) {
+        return Some(matching.clone());
+    }
+    candidates.into_iter().next()
+}
+
+/// The newest `*.jar` in [target_dir], or `None` when it holds none.
+///
+/// Ties are broken by path so the choice is deterministic for a caller that
+/// reports it to the user.
+fn newest_plugin_jar(target_dir: &Path) -> Option<PathBuf> {
+    let mut jars: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(target_dir)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.path().is_file())
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".jar"))
+        .filter_map(|entry| {
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, entry.path()))
+        })
+        .collect();
+    jars.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    jars.into_iter().next().map(|(_, path)| path)
+}
+
+/// The install recipe for a plugin JAR this checkout has already built.
+fn plugin_install_hint(jar: &Path) -> String {
+    format!(
+        "The tool is provided by a plugin this checkout has built but not installed:\n  {}\n\
+         Install it and restart the backend so it loads:\n  browser4-cli plugin install \"{}\"\n  browser4-cli stop",
+        jar.display(),
+        jar.display()
+    )
+}
+
+/// True when a backend error says the requested MCP tool name is not registered.
+///
+/// Covers both phrasings the backend uses: the `UNKNOWN_TOOL` error code and the
+/// "Unknown tool: <name>" message.
+fn is_unknown_tool_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("unknown tool")
+        || lower.contains("unknown_tool")
+        || lower.contains("tool not found")
+        || lower.contains("no such tool")
+}
+
+/// Append the in-repo plugin JAR and its install command to an unknown-tool
+/// error, so "unknown tool" is actionable instead of a dead end.
+fn enrich_unknown_tool_error(message: String, tool_name: &str) -> String {
+    if !is_unknown_tool_error(&message) {
+        return message;
+    }
+    let Some(domain) = tool_name.split('_').next().filter(|d| !d.is_empty()) else {
+        return message;
+    };
+    let Some(jar) = suggest_plugin_jar_for_domain(domain) else {
+        return message;
+    };
+    format!("{message}\n{}", plugin_install_hint(&jar))
+}
+
+/// Short help for the `plugin` surface itself: `plugin`, `plugin --help`.///
+/// The bare command lists plugin tools from the backend; this page keeps the
+/// static picture (subcommands + how to reach the dynamic surface) in the
+/// binary, so it works with no backend at all.
+fn print_plugin_surface_help() {
+    cli_println!("browser4-cli plugin — installed plugins and the tools they expose");
+    cli_println!("");
+    cli_println!("  browser4-cli plugin                    plugin tool domains and their methods");
+    cli_println!("  browser4-cli plugin <domain> <method>  run one plugin tool");
+    cli_println!("  browser4-cli plugin <domain> --help    methods of one plugin domain");
+    cli_println!("  browser4-cli plugin list               installed plugin JARs (not tools)");
+    cli_println!("  browser4-cli plugin info <name>        details for one installed plugin");
+    cli_println!("  browser4-cli plugin install <jar>      install a plugin (then restart the backend)");
+    cli_println!("  browser4-cli plugin remove <name>      remove a plugin");
+    cli_println!("  browser4-cli plugin commands           commands declared by plugins ([plugin])");
+    cli_println!("");
+    cli_println!("  browser4-cli tool list                 every advertised MCP tool name");
+    cli_println!("  browser4-cli tool call <name>          invoke a tool by its MCP name");
 }
 
 /// Convert a kebab-case flag name to camelCase for plugin tool parameters.
@@ -23949,6 +26241,7 @@ async fn handle_status(
     client: &Client,
     base_url: &str,
     session_name: Option<&str>,
+    server_override: Option<&str>,
 ) -> Result<(), String> {
     cli_println!("Browser4 Status");
     cli_println!("===============");
@@ -23957,6 +26250,22 @@ async fn handle_status(
 
     json_field("cli_version", json!(VERSION));
     json_field("server_url", json!(base_url));
+
+    // Where the URL came from, and which recorded value (if any) the resolver
+    // rejected as stale.  Without this a server URL that disagrees with the
+    // documentation (e.g. a corrupt port recorded by an older session) can only
+    // be diagnosed by reading the resolver's source.
+    let resolved = daemon::resolve_base_url_with_origin(server_override, session_name);
+    cli_println!("  resolved from: {}", resolved.source.label());
+    json_field("server_url_source", json!(resolved.source.label()));
+    if let Some(rejected) = resolved.rejected_recorded.as_deref() {
+        cli_println!(
+            "  ignored recorded URL: {} (not usable — re-allocated; \
+             remove ~/.browser4/workspaces/<checkout>/cli-state.json to reset)",
+            rejected
+        );
+        json_field("server_url_recorded_ignored", json!(rejected));
+    }
 
     // Show installed runtime bundle info (informational only).
     if let Some(metadata) = daemon::read_installed_browser4_runtime_metadata() {
@@ -26472,10 +28781,11 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         }
         return None;
     }
-    // "tool" is a prefix-only command (tool call <name>). Only rewrite known
-    // subcommands so anything else passes through to the unknown-command error.
+    // "tool" is a prefix-only command (tool call <name>, tool list). Only
+    // rewrite known subcommands so anything else passes through to the
+    // unknown-command error.
     if prefix == "tool" {
-        let known_subs = ["call"];
+        let known_subs = ["call", "list"];
         if known_subs.contains(&sub.as_str()) {
             let mut rewritten = vec![format!("tool-{}", sub)];
             rewritten.extend(args[2..].iter().cloned());
@@ -26515,6 +28825,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "swarm-list" => Some("swarm list"),
         "swarm-close" => Some("swarm close"),
         "tool-call" => Some("tool call"),
+        "tool-list" => Some("tool list"),
         "chat-result" => Some("chat result"),
         "crawl-status" => Some("crawl status"),
         "crawl-result" => Some("crawl result"),
@@ -26625,18 +28936,18 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
 fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::GlobalFlags, bool) {
     if let Some(rewritten) = rewrite_prefixed_command(&global.args) {
         let cmd = rewritten[0].clone();
-        let (args, quiet, timeout_secs) = hoist_post_command_global_flags(&cmd, &rewritten);
+        let hoisted = hoist_post_command_global_flags(&cmd, &rewritten);
         let new_global = args::GlobalFlags {
             session_name: global.session_name.clone(),
             server_url: global.server_url.clone(),
             json: global.json,
-            quiet: global.quiet || quiet,
+            quiet: global.quiet || hoisted.quiet,
             proxy_url: global.proxy_url.clone(),
             show_tip: global.show_tip,
-            pretty: global.pretty,
+            pretty: global.pretty || hoisted.pretty,
             help_json: global.help_json,
-            timeout_secs: global.timeout_secs.or(timeout_secs),
-            args,
+            timeout_secs: global.timeout_secs.or(hoisted.timeout_secs),
+            args: hoisted.args,
         };
         (cmd, new_global, true)
     } else {
@@ -26644,21 +28955,33 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
             return (String::new(), global.clone(), false);
         };
         let cmd = raw_command.clone();
-        let (args, quiet, timeout_secs) = hoist_post_command_global_flags(&cmd, &global.args);
+        let hoisted = hoist_post_command_global_flags(&cmd, &global.args);
         let new_global = args::GlobalFlags {
             session_name: global.session_name.clone(),
             server_url: global.server_url.clone(),
             json: global.json,
-            quiet: global.quiet || quiet,
+            quiet: global.quiet || hoisted.quiet,
             proxy_url: global.proxy_url.clone(),
             show_tip: global.show_tip,
-            pretty: global.pretty,
+            pretty: global.pretty || hoisted.pretty,
             help_json: global.help_json,
-            timeout_secs: global.timeout_secs.or(timeout_secs),
-            args,
+            timeout_secs: global.timeout_secs.or(hoisted.timeout_secs),
+            args: hoisted.args,
         };
         (cmd, new_global, false)
     }
+}
+
+/// Global flags hoisted out of a command's own argument list.
+struct HoistedGlobalFlags {
+    /// The command's arguments with the hoisted tokens removed.
+    args: Vec<String>,
+    /// `-q` / `--quiet` was seen after the command name.
+    quiet: bool,
+    /// `--timeout <secs>` / `--timeout=<secs>` was seen after the command name.
+    timeout_secs: Option<u64>,
+    /// `--pretty` was seen after the command name.
+    pretty: bool,
 }
 
 /// Hoist well-known global flags that appear AFTER the subcommand into the
@@ -26667,17 +28990,18 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
 /// are parsed as positional subcommand args and rejected with
 /// "unexpected positional arguments".
 ///
-/// `-q`/`--quiet` is hoisted unconditionally — no command defines a `quiet`
-/// option.  `--timeout` is only hoisted when the command does NOT define its
-/// own `timeout` option (several commands do: `wait`, `click`, `pdf`, ...).
-/// `--json` is deliberately NOT hoisted: after the command it may belong to
-/// the command itself (e.g. `batch --json` reads JSON input from stdin).
+/// `-q`/`--quiet` and `--pretty` are hoisted unconditionally — no command
+/// defines either option.  `--timeout` is only hoisted when the command does
+/// NOT define its own `timeout` option (several commands do: `wait`, `click`,
+/// `pdf`, ...).  `--json` is deliberately NOT hoisted: after the command it may
+/// belong to the command itself (e.g. `batch --json` reads JSON input from
+/// stdin).
 ///
-/// Returns `(args, hoisted_quiet, hoisted_timeout_secs)`.
-fn hoist_post_command_global_flags(
-    command: &str,
-    raw_args: &[String],
-) -> (Vec<String>, bool, Option<u64>) {
+/// Hoisting `--pretty` is what makes `list --json --pretty` render pretty JSON:
+/// the flag used to be left in the command's args, where
+/// `validate_command_options` tolerated it (it is a late global flag key) but
+/// nothing ever consumed it, so it was silently ignored.
+fn hoist_post_command_global_flags(command: &str, raw_args: &[String]) -> HoistedGlobalFlags {
     let cmd_map = commands_map();
     let has_timeout_opt = cmd_map
         .get(command)
@@ -26686,12 +29010,18 @@ fn hoist_post_command_global_flags(
     let mut args = Vec::with_capacity(raw_args.len());
     let mut quiet = false;
     let mut timeout_secs = None;
+    let mut pretty = false;
     let mut i = 0;
     while i < raw_args.len() {
         let arg = raw_args[i].as_str();
         if i > 0 {
             if arg == "-q" || arg == "--quiet" {
                 quiet = true;
+                i += 1;
+                continue;
+            }
+            if arg == "--pretty" {
+                pretty = true;
                 i += 1;
                 continue;
             }
@@ -26711,7 +29041,12 @@ fn hoist_post_command_global_flags(
         args.push(raw_args[i].clone());
         i += 1;
     }
-    (args, quiet, timeout_secs)
+    HoistedGlobalFlags {
+        args,
+        quiet,
+        timeout_secs,
+        pretty,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -28134,11 +30469,36 @@ async fn run(
         // so no request is made at all; every other target may have
         // plugin-declared commands, whose section is fetched afterwards on a
         // short budget (the page is already on screen by then).
+        //
+        // `--help plugin-<domain>` is the exception: the domain is discovered
+        // from the backend's tool list, and answering it from the static table
+        // produced "Unknown command: plugin-<domain>" plus the full reference.
+        if let Some(domain) = sub.as_deref().and_then(|target| {
+            plugin_domain_help_target(target, &global.args)
+        }) {
+            if print_plugin_domain_help(&base_url, &domain).await {
+                return Ok(());
+            }
+        }
         let exact_command = sub
             .as_deref()
             .is_some_and(|target| matches!(classify_help_target(target), HelpTarget::Command(_)));
         let handled = print_help(sub.as_deref());
         if !handled {
+            // `--help plugin` and `--help tool` have no static pages either;
+            // show each surface's own reference instead of "Unknown command" plus
+            // everything.
+            match sub.as_deref() {
+                Some("plugin") => {
+                    print_plugin_surface_help();
+                    return Ok(());
+                }
+                Some("tool") => {
+                    print_tool_surface_help();
+                    return Ok(());
+                }
+                _ => {}
+            }
             // Unknown locally — it may still be a plugin-declared command, and
             // that genuinely needs the backend's specs.
             let specs = fetch_all_declared_cli_specs(&base_url).await;
@@ -28198,6 +30558,24 @@ async fn run(
     // When the user passes --help/-h after a command (e.g. `htmlsnapshot --help`),
     // print the help for that command instead of complaining about the form.
     if global.args.iter().any(|a| a == "--help" || a == "-h") {
+        // `plugin <domain> --help` answers with the domain's methods: the
+        // command exists but has no static page, so the old path printed
+        // "Unknown command: plugin" plus the whole reference.
+        if let Some(domain) = plugin_domain_help_target(command, &global.args) {
+            if print_plugin_domain_help(&base_url, &domain).await {
+                return Ok(());
+            }
+        }
+        if command == "plugin" {
+            print_plugin_surface_help();
+            return Ok(());
+        }
+        // `tool --help` documents the passthrough surface, which has no
+        // CommandDef-level help page of its own.
+        if command == "tool" {
+            print_tool_surface_help();
+            return Ok(());
+        }
         // Static help is answered by the binary; the backend is only consulted
         // when the target is not a command/category/prefix the CLI knows, which
         // is when it could still be a plugin-declared command.
@@ -28297,6 +30675,22 @@ async fn run(
                 ensure_server_running(&base_url, should_enforce_server_version(global)).await?;
                 let client = make_client();
                 return handle_dynamic_plugin_command(&client, &base_url, domain, global).await;
+            }
+
+            if command == "tool" {
+                // `tool` is prefix-only (`tool call` / `tool list`): a missing or
+                // unknown subcommand is a usage error, not a reason to print the
+                // whole general reference (which is what happened before, with
+                // no hint that `tool list` exists).
+                let subcommand = global
+                    .args
+                    .get(1)
+                    .map(String::as_str)
+                    .filter(|arg| !arg.starts_with('-'));
+                return Err(CliError(
+                    ExitCode::Usage,
+                    unknown_tool_subcommand_message(subcommand),
+                ));
             }
 
             if let Some(message) = misplaced_option_message(command) {
@@ -28709,7 +31103,13 @@ async fn run(
             handle_stop(&base_url).await?;
         }
         "status" => {
-            handle_status(&client, &base_url, global.session_name.as_deref()).await?;
+            handle_status(
+                &client,
+                &base_url,
+                global.session_name.as_deref(),
+                global.server_url.as_deref(),
+            )
+            .await?;
         }
         "doctor" => {
             handle_doctor(&client, &base_url, &parsed).await?;
@@ -29664,7 +32064,8 @@ async fn run(
                     CliError(
                         ExitCode::Usage,
                         "tool call requires a tool name, e.g. `tool call captcha_detect`. \
-                         List available tools with `plugin list` or GET /mcp/tools."
+                         List the advertised names with `tool list`, or a plugin domain's \
+                         methods with `plugin <domain> --help`."
                             .to_string(),
                     )
                 })?;
@@ -29673,14 +32074,20 @@ async fn run(
             let tool_args = parse_tool_call_json(
                 tool_params.get("json").and_then(|v| v.as_str()),
             )?;
+            let fail_on_error =
+                parse_tool_call_fail_on_error(tool_params.get("failOnError").cloned());
             handle_tool_call(
                 &client,
                 &base_url,
                 &name,
                 Value::Object(tool_args),
                 global,
+                fail_on_error,
             )
             .await?;
+        }
+        "tool-list" => {
+            handle_tool_list(&client, &base_url, &tool_params).await?;
         }
         "set" => {
             // `set <mode>` maps to a raw CDP call whose successful result is an
@@ -32327,19 +34734,63 @@ mod tests {
         assert!(out.contains("textbox \"Search\""));
     }
 
+    // The obsolete `strip_viewport_footer` tests lived here: their fixture ended
+    // the backend footer without its trailing bare `#` line, which is the only
+    // shape the old backward walk could match — the real footer made it a no-op
+    // (snapshot-mastery #3).  The replacement lives in `snapshot::tests`
+    // (`strip_viewport_nav_footer_*`, `normalize_capture_body_repairs_a_whole_page_capture`),
+    // which use the real footer shape.
+
     #[test]
-    fn strip_viewport_footer_removes_contradictory_footer() {
-        let snap = "# Snapshot\n- generic [ref=e1]:\n# This page has 3 viewports...\n# You are currently viewing viewport 0 (absolute).";
-        let out = strip_viewport_footer(snap);
-        assert!(!out.contains("You are currently viewing viewport"));
-        assert!(out.contains("generic [ref=e1]"));
+    fn snapshot_grep_diff_reads_the_latest_report() {
+        let tmp = test_temp_dir();
+        snapshot::save_diff_report(
+            &tmp.path().join("snapshot-a.yml"),
+            "## Added\n\n+ link \"New\" [ref=e3] [box=10,140,100,30]\n",
+        )
+        .expect("save diff report");
+
+        let source = grep_source_from_diff_report(tmp.path()).expect("report is readable");
+
+        assert!(source.contains("## Added"), "{source}");
+        assert!(source.contains("+ link \"New\" [ref=e3]"), "{source}");
     }
 
     #[test]
-    fn strip_viewport_footer_keeps_content_when_no_footer() {
-        let snap = "# Snapshot\n- generic [ref=e1]:\n";
-        let out = strip_viewport_footer(snap);
-        assert_eq!(out, snap);
+    fn snapshot_grep_diff_without_a_report_names_the_fix() {
+        let tmp = test_temp_dir();
+
+        let err = grep_source_from_diff_report(tmp.path()).expect_err("no report yet");
+
+        assert!(err.contains("No auto-diff report"), "{err}");
+        assert!(err.contains("snapshot --auto-diff"), "{err}");
+    }
+
+    #[test]
+    fn snapshot_clean_prunes_diff_reports_with_their_capture() {
+        let dir = PathBuf::from("snaps");
+        // newest first, as `handle_snapshot_clean` sorts them
+        let reports = vec![
+            dir.join("snapshot-b.diff.txt"),
+            dir.join("snapshot-a.diff.txt"),
+        ];
+
+        // `snapshot-a.yml` is going away, so its report follows it; the report
+        // whose capture is kept stays.
+        assert_eq!(
+            stale_diff_reports(&reports, &[dir.join("snapshot-a.yml")], 10, false),
+            vec![dir.join("snapshot-a.diff.txt")]
+        );
+        // `--all` removes every report.
+        assert_eq!(stale_diff_reports(&reports, &[], 10, true).len(), 2);
+        // Reports beyond the retention count go too — they can come from a
+        // `--stdout` capture, which persists no `.yml` to key on.
+        assert_eq!(
+            stale_diff_reports(&reports, &[], 1, false),
+            vec![dir.join("snapshot-a.diff.txt")]
+        );
+        // Nothing to delete when every capture is kept and the count fits.
+        assert!(stale_diff_reports(&reports, &[], 10, false).is_empty());
     }
 
     #[test]
@@ -32361,6 +34812,68 @@ mod tests {
         let string_false = serde_json::json!({ "index": 0, "active": "False" });
         let tab = parse_tab_entry(&string_false).expect("case-insensitive string parses");
         assert!(!tab.active);
+    }
+
+    #[test]
+    fn tab_list_table_header_aligns_with_data_rows() {
+        let tabs = vec![
+            TabInfo {
+                index: 0,
+                url: "https://example.com/a/very/long/path/that/keeps/going".to_string(),
+                title: "First".to_string(),
+                guid: Some("0123456789abcdef0123456789abcdef".to_string()),
+                active: false,
+            },
+            TabInfo {
+                index: 1,
+                url: "about:blank".to_string(),
+                title: "Second".to_string(),
+                guid: None,
+                active: true,
+            },
+        ];
+
+        let table = format_tab_table(&tabs);
+        let lines: Vec<&str> = table.lines().collect();
+
+        assert_eq!(lines.len(), 4, "header + separator + 2 rows:\n{table}");
+        // Every row has the same width, so each column sits under its header.
+        let width = lines[0].chars().count();
+        for line in &lines {
+            assert_eq!(
+                line.chars().count(),
+                width,
+                "row '{line}' does not align:\n{table}"
+            );
+        }
+        // The 32-char GUID is printed in full (it used to overflow a 4-char cell).
+        assert!(
+            table.contains("0123456789abcdef0123456789abcdef"),
+            "{table}"
+        );
+        // The active tab is the one `--json` reports as active, marked with ▶;
+        // the inactive row reserves the same two columns.
+        assert!(lines[3].starts_with("▶ 1"), "{table}");
+        assert!(lines[2].starts_with("  0"), "{table}");
+    }
+
+    #[test]
+    fn truncate_for_table_never_splits_a_character() {
+        assert_eq!(truncate_for_table("short", 60), "short");
+        assert_eq!(
+            truncate_for_table(&"a".repeat(100), 60),
+            format!("{}…", "a".repeat(59))
+        );
+        // The limit counts characters, and a byte-wise cut used to panic on
+        // multi-byte text.
+        let accents = "é".repeat(100);
+        let truncated = truncate_for_table(&accents, 60);
+        assert_eq!(truncated.chars().count(), 60, "{truncated}");
+        assert!(truncated.ends_with('…'), "{truncated}");
+        assert!(
+            accents.starts_with(truncated.trim_end_matches('…')),
+            "{truncated}"
+        );
     }
 
     #[test]
@@ -33657,65 +36170,93 @@ mod tests {
 
     #[test]
     fn hoist_global_flags_hoists_quiet_after_command() {
-        let (args, quiet, timeout) =
+        let hoisted =
             hoist_post_command_global_flags("htmlsnapshot", &["htmlsnapshot".into(), "-q".into()]);
         assert!(
-            quiet,
+            hoisted.quiet,
             "post-command -q must be hoisted to the global quiet flag"
         );
-        assert!(timeout.is_none());
-        assert_eq!(args, vec!["htmlsnapshot"]);
+        assert!(hoisted.timeout_secs.is_none());
+        assert_eq!(hoisted.args, vec!["htmlsnapshot"]);
+    }
+
+    #[test]
+    fn hoist_global_flags_hoists_pretty_after_command() {
+        // Regression: `list --json --pretty` printed compact JSON and exited 0
+        // — the post-command --pretty was tolerated by option validation but
+        // never consumed, so the flag was silently ignored.
+        let hoisted = hoist_post_command_global_flags(
+            "list",
+            &["list".into(), "--json".into(), "--pretty".into()],
+        );
+        assert!(
+            hoisted.pretty,
+            "post-command --pretty must set the global pretty flag"
+        );
+        // `--json` stays in the command's args: it may belong to the command.
+        assert_eq!(hoisted.args, vec!["list", "--json"]);
+        assert!(!hoisted.quiet);
+    }
+
+    #[test]
+    fn hoist_global_flags_keeps_the_command_token_for_pretty() {
+        // Index 0 is the command itself — `--pretty` written *before* the
+        // command never reaches this function, and a command literally named
+        // `--pretty` must survive untouched.
+        let hoisted =
+            hoist_post_command_global_flags("--pretty", &["--pretty".into(), "--pretty".into()]);
+        assert!(hoisted.pretty, "the post-command occurrence is hoisted");
+        assert_eq!(hoisted.args, vec!["--pretty"]);
     }
 
     #[test]
     fn hoist_global_flags_hoists_timeout_when_command_has_no_timeout_option() {
-        let (args, quiet, timeout) = hoist_post_command_global_flags(
+        let hoisted = hoist_post_command_global_flags(
             "webdb-export",
             &["webdb-export".into(), "--timeout".into(), "30".into()],
         );
-        assert_eq!(timeout, Some(30));
-        assert!(!quiet);
-        assert_eq!(args, vec!["webdb-export"]);
+        assert_eq!(hoisted.timeout_secs, Some(30));
+        assert!(!hoisted.quiet);
+        assert_eq!(hoisted.args, vec!["webdb-export"]);
 
         // The `--timeout=<secs>` spelling is hoisted too.
-        let (args_eq, _, timeout_eq) = hoist_post_command_global_flags(
+        let hoisted_eq = hoist_post_command_global_flags(
             "webdb-export",
             &["webdb-export".into(), "--timeout=45".into()],
         );
-        assert_eq!(timeout_eq, Some(45));
-        assert_eq!(args_eq, vec!["webdb-export"]);
+        assert_eq!(hoisted_eq.timeout_secs, Some(45));
+        assert_eq!(hoisted_eq.args, vec!["webdb-export"]);
     }
 
     #[test]
     fn hoist_global_flags_keeps_command_defined_timeout() {
         // `wait` defines its own --timeout option (milliseconds) — hoisting
         // it would steal a legitimate subcommand option.
-        let (args, _quiet, timeout) = hoist_post_command_global_flags(
+        let hoisted = hoist_post_command_global_flags(
             "wait",
             &["wait".into(), "--timeout".into(), "5000".into()],
         );
-        assert!(timeout.is_none());
-        assert_eq!(args, vec!["wait", "--timeout", "5000"]);
+        assert!(hoisted.timeout_secs.is_none());
+        assert_eq!(hoisted.args, vec!["wait", "--timeout", "5000"]);
     }
 
     #[test]
     fn hoist_global_flags_keeps_json_for_batch_stdin_mode() {
         // `--json` after the command may belong to the command itself
         // (`batch --json` reads JSON input from stdin) — never hoisted.
-        let (args, _quiet, _timeout) =
+        let hoisted =
             hoist_post_command_global_flags("batch", &["batch".into(), "--json".into()]);
-        assert_eq!(args, vec!["batch", "--json"]);
+        assert_eq!(hoisted.args, vec!["batch", "--json"]);
     }
 
     #[test]
     fn hoist_global_flags_never_rewrites_the_command_token() {
         // Index 0 is the command itself — even when the command name is
         // shaped like a hoistable flag it must survive untouched.
-        let (args, quiet, timeout) =
-            hoist_post_command_global_flags("-q", &["-q".into(), "extra".into()]);
-        assert!(!quiet);
-        assert!(timeout.is_none());
-        assert_eq!(args, vec!["-q", "extra"]);
+        let hoisted = hoist_post_command_global_flags("-q", &["-q".into(), "extra".into()]);
+        assert!(!hoisted.quiet);
+        assert!(hoisted.timeout_secs.is_none());
+        assert_eq!(hoisted.args, vec!["-q", "extra"]);
     }
 
     #[test]
@@ -34613,18 +37154,258 @@ mod tests {
 
     /// Regression: `textcontent` is documented in help/SKILL.md and accepted by
     /// the backend, but the CLI gate used to reject it before dispatch. Every
-    /// documented field must be accepted; unknown ones still error.
+    /// documented field must be accepted; unknown ones still error. `outerhtml`
+    /// is the sibling the same gate must not lose either (its `html` neighbour is
+    /// inner markup only).
     #[test]
     fn html_snapshot_get_accepts_every_documented_field() {
-        for field in ["text", "textcontent", "html", "attr"] {
+        for field in ["text", "textcontent", "html", "outerhtml", "attr"] {
             validate_html_snapshot_field(field).unwrap_or_else(|e| {
                 panic!("documented field {field:?} must be accepted, got error: {e}")
             });
         }
         let err = validate_html_snapshot_field("bogus").expect_err("unknown field must be rejected");
         assert!(err.contains("textcontent"), "error must list every field: {err}");
-        assert!(err.contains("Use text, textcontent, html, or attr"), "{err}");
+        assert!(err.contains("outerhtml"), "error must list every field: {err}");
+        assert!(err.contains("Use text, textcontent, html, outerhtml, or attr"), "{err}");
         assert!(validate_html_snapshot_field("").is_err(), "empty field must be rejected");
+    }
+
+    /// Issue html-snapshot-extraction#6: `-o/--only-matching` was advertised in
+    /// `help` for both grep commands but parsed nowhere, so `grep -o '[$][0-9.]+'`
+    /// printed whole lines. The shared collector is the fix: one entry per
+    /// OCCURRENCE, line-number prefixed, which is also the occurrence count `-c`
+    /// (matching LINES) cannot give.
+    #[test]
+    fn grep_only_matching_collects_every_occurrence_on_its_line() {
+        let re = regex::Regex::new(r"[$][0-9.]+").unwrap();
+        let lines = vec!["price $19.99 and $5.00", "no price here", "$12"];
+        let matched: Vec<usize> = vec![0, 2];
+
+        assert_eq!(
+            collect_only_matching_lines(&re, &lines, &matched, true),
+            vec!["1:$19.99".to_string(), "1:$5.00".to_string(), "3:$12".to_string()]
+        );
+        assert_eq!(
+            collect_only_matching_lines(&re, &lines, &matched, false),
+            vec!["$19.99".to_string(), "$5.00".to_string(), "$12".to_string()]
+        );
+        // The flag must reach GrepOptions: an unparsed key was the original defect.
+        let parsed = parse_grep_options(&serde_json::json!({
+            "pattern": "[$][0-9.]+",
+            "only-matching": true,
+            "count": false,
+        }))
+        .expect("pattern present");
+        assert!(parsed.only_matching, "-o must be parsed into GrepOptions");
+    }
+
+    /// Issues html-snapshot-extraction#2 / htmlsnapshot-inspect-discovery#2 and
+    /// #4: the "Suggested Commands" block advertised "copy-paste ready" commands
+    /// built as `"<container-selector> a"`.  On a product grid that matched 93
+    /// sidebar/pagination anchors instead of the 20 cards, two groups could
+    /// collapse to the same `.row` selector and print the same line twice, and a
+    /// multi-class element produced an invalid descendant selector
+    /// (`.col-sm-8 col-md-9`) before the backend fix.
+    #[test]
+    fn summary_suggested_commands_use_the_item_selector_without_duplicates() {
+        let yaml = r#"
+page:
+  title: "All products"
+  url: "https://books.toscrape.com/"
+  type: "Product Listing"
+
+linkGroups:
+  - container: "ol.row"
+    selector: ".row"
+    itemTag: article
+    itemSelector: "article.product_pod"
+    count: 20
+    columnCount: 4
+  - container: "ol.row"
+    selector: ".row"
+    itemTag: article
+    itemSelector: "article.product_pod"
+    count: 20
+    columnCount: 4
+"#;
+
+        let outline = format_summary_outline(yaml, false, "https://books.toscrape.com/", "All products");
+        assert!(
+            outline.contains("htmlsnapshot get all text \"article.product_pod\" --limit 20"),
+            "the suggestion must target the group's own item selector: {outline}"
+        );
+        assert_eq!(
+            outline.matches("htmlsnapshot get all text").count(),
+            1,
+            "identical suggestions must be collapsed: {outline}"
+        );
+        assert!(
+            !outline.contains(".row a"),
+            "the container+anchor form must be gone: {outline}"
+        );
+        // Issue html-snapshot-extraction#3: exactly one Page heading, carrying URL,
+        // title and type together.
+        assert_eq!(
+            outline.matches("### Page").count(),
+            1,
+            "the Page block must be emitted once: {outline}"
+        );
+        assert!(outline.contains("- Page URL: https://books.toscrape.com/"), "{outline}");
+        assert!(outline.contains("- Page Title: All products"), "{outline}");
+        assert!(outline.contains("- Type: Product Listing"), "{outline}");
+        assert!(
+            !outline.contains("### Page\n- Type") || outline.contains("- Page URL"),
+            "the type must not open a second Page block: {outline}"
+        );
+    }
+
+    /// When the summary carries no `itemSelector:` (a plugin algorithm's YAML),
+    /// the container narrowed by the item tag is still a usable target.
+    #[test]
+    fn summary_suggested_commands_fall_back_to_container_plus_item_tag() {
+        let yaml = r#"
+linkGroups:
+  - container: "ol.row"
+    selector: ".row"
+    itemTag: article
+    count: 20
+    columnCount: 4
+"#;
+
+        let outline = format_summary_outline(yaml, false, "https://example.com/dir", "Directory");
+        assert!(
+            outline.contains("htmlsnapshot get all text \".row article\" --limit 20"),
+            "without an itemSelector the container + item tag is the target: {outline}"
+        );
+    }
+
+    /// Issue htmlsnapshot-inspect-discovery#1: `htmlsnapshot inspect ".no-such-thing"`
+    /// printed "The tool found that \".no-such-thing\" repeats as a sibling group"
+    /// while the header named the auto-discovered `.product_pod` — the prose asserted
+    /// that a selector matching nothing repeats. The narration now branches on the
+    /// backend's `originalMatchCount`.
+    #[test]
+    fn inspect_narration_never_claims_a_non_matching_selector_repeats() {
+        let missing = inspect_auto_discovery_lines(
+            ".no-such-thing",
+            "article.product_pod",
+            3,
+            20,
+            Some(0),
+            true,
+        );
+        let joined = missing.join("\n");
+        assert!(
+            joined.contains("matched 0 elements"),
+            "the 0-match case must be stated first: {joined}"
+        );
+        assert!(
+            joined.contains("DIFFERENT element set") && joined.contains("article.product_pod"),
+            "the analysed pattern must be named: {joined}"
+        );
+        assert!(
+            !joined.contains("repeats as a sibling group"),
+            "a selector that matched nothing must not be narrated as repeating: {joined}"
+        );
+
+        // A single container: its repeating children were analysed.
+        let container = inspect_auto_discovery_lines(
+            ".sidebar",
+            ".sidebar li",
+            3,
+            51,
+            Some(1),
+            true,
+        )
+        .join("\n");
+        assert!(
+            container.contains("matched a single container"),
+            "the 1-match case must say what was analysed: {container}"
+        );
+        assert!(
+            !container.contains("repeats as a sibling group"),
+            "the container itself does not repeat: {container}"
+        );
+
+        // The caller's own selector is the analysed one: the historical wording holds.
+        let matching = inspect_auto_discovery_lines(
+            "article.product_pod",
+            "article.product_pod",
+            3,
+            20,
+            Some(20),
+            true,
+        )
+        .join("\n");
+        assert!(matching.contains("repeats as a sibling group"), "{matching}");
+
+        // A bare inspect (no selector from the caller) keeps the generic wording even
+        // though the server default `:root` matches one element.
+        let bare = inspect_auto_discovery_lines(":root", "article.product_pod", 3, 20, Some(1), false)
+            .join("\n");
+        assert!(bare.contains("Auto-discovered repeating pattern"), "{bare}");
+    }
+
+    /// Regression (issue html-snapshot-extraction#1): `get all` used to derive its
+    /// count from the returned array, so `--offset 5 --limit 5` reported
+    /// "5 elements matched." for a 20-element selector. The envelope's
+    /// `totalMatches` is counted before the slice and is what the count line and
+    /// `match_count` must report.
+    #[test]
+    fn get_all_envelope_carries_the_total_match_count() {
+        let (values, total) = split_get_all_envelope(
+            r#"{"offset":5,"limit":5,"returned":2,"totalMatches":20,"values":["a","b"]}"#,
+        );
+        assert_eq!(values, r#"["a","b"]"#);
+        assert_eq!(total, Some(20));
+
+        // A bare array (no includeMeta) and a non-envelope body pass through untouched.
+        assert_eq!(
+            split_get_all_envelope(r#"["a"]"#),
+            (r#"["a"]"#.to_string(), None)
+        );
+        assert_eq!(
+            split_get_all_envelope("ERROR: nope"),
+            ("ERROR: nope".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn get_all_count_line_reports_the_total_not_the_slice() {
+        assert_eq!(
+            format_get_all_count_line(5, Some(20)),
+            "5 of 20 elements matched."
+        );
+        assert_eq!(
+            format_get_all_count_line(20, Some(20)),
+            "20 elements matched."
+        );
+        assert_eq!(format_get_all_count_line(1, Some(1)), "1 element matched.");
+        assert_eq!(
+            format_get_all_count_line(1, Some(20)),
+            "1 of 20 elements matched."
+        );
+        // No total (an older server, or a bare array): fall back to the returned count.
+        assert_eq!(format_get_all_count_line(3, None), "3 elements matched.");
+    }
+
+    /// Issue html-snapshot-extraction#5: human mode prints one numbered value per
+    /// line; the JSON array stays for `--json`. An empty value is an empty item
+    /// after its index — a matched element with an empty field, not a missing row.
+    #[test]
+    fn get_all_values_render_one_numbered_line_each() {
+        let values: Vec<serde_json::Value> =
+            serde_json::from_str(r#"["Books","","next"]"#).unwrap();
+
+        assert_eq!(
+            format_get_all_values(&values),
+            vec![
+                "   1. Books".to_string(),
+                "   2. ".to_string(),
+                "   3. next".to_string()
+            ]
+        );
     }
 
     /// Regression: inspect's "Try these next" commands used to be rendered with
@@ -34800,10 +37581,29 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_prefixed_command_supports_tool_list() {
+        // Regression: `tool list` was not a subcommand, so it fell through to
+        // the unknown-command path and printed the entire general reference
+        // instead of the tool names.
+        let rewritten = rewrite_prefixed_command(&[
+            "tool".to_string(),
+            "list".to_string(),
+            "--filter".to_string(),
+            "captcha".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten, vec!["tool-list", "--filter", "captcha"]);
+        assert_eq!(
+            rewrite_prefixed_command(&["tool".to_string(), "list".to_string()]).unwrap(),
+            vec!["tool-list"]
+        );
+    }
+
+    #[test]
     fn rewrite_prefixed_command_leaves_unknown_tool_subcommand_unchanged() {
         assert!(rewrite_prefixed_command(&[
             "tool".to_string(),
-            "list".to_string(),
+            "bogus".to_string(),
         ])
         .is_none());
     }
@@ -34811,6 +37611,525 @@ mod tests {
     #[test]
     fn preferred_spaced_command_form_includes_tool_call() {
         assert_eq!(preferred_spaced_command_form("tool-call"), Some("tool call"));
+        assert_eq!(preferred_spaced_command_form("tool-list"), Some("tool list"));
+    }
+
+    // ── plugin tool listing / discovery ───────────────────────────────────
+
+    /// The tool names observed in the captcha/images/markdown/media/pptx
+    /// reports, plus core built-ins that used to leak into the plugin listing.
+    fn reported_advertised_tools() -> Vec<&'static str> {
+        vec![
+            "captcha_detect",
+            "captcha_get_balance",
+            "captcha_solve",
+            "captcha_solve_image",
+            "image_detect_images",
+            "image_download",
+            "image_download_all",
+            "markdown_convert",
+            "markdown_discover_links",
+            "media_detect_videos",
+            "media_download",
+            "pptx_generate",
+            "browser_click",
+            "html_snapshot_query",
+            "command_result",
+            "click",
+            "fill",
+            "navigate",
+            "base_u_r_l",
+            "document_u_r_i",
+            "nano_d_o_m",
+            "outer_h_t_m_l",
+            "list_sessions",
+            "open_session",
+        ]
+    }
+
+    #[test]
+    fn plugin_domains_keep_multi_word_methods_under_the_real_domain() {
+        // Regression: the listing split every name at its LAST underscore, so
+        // `captcha_get_balance` produced the domain `captcha_get`,
+        // `captcha_detect` never appeared, and `plugin captcha_get` was
+        // advertised although no such domain exists.
+        let domains = available_plugin_domains(&reported_advertised_tools());
+        let names: Vec<&str> = domains.iter().map(|d| d.domain.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["captcha", "image", "markdown", "media", "pptx"],
+            "domains were {names:?}"
+        );
+
+        let captcha = domains.iter().find(|d| d.domain == "captcha").unwrap();
+        assert_eq!(
+            captcha.methods,
+            vec!["detect", "get_balance", "solve", "solve_image"]
+        );
+        // The method spelling must stay resolvable: `plugin captcha get_balance`
+        // → `captcha_get_balance`.
+        for method in &captcha.methods {
+            assert!(
+                reported_advertised_tools().contains(&format!("captcha_{method}").as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_domains_exclude_builtin_tools_and_acronym_splits() {
+        // Core tools (prefixed or not) and the naming layer's per-capital
+        // snake_case output (`baseURL` → `base_u_r_l`) are not plugin domains.
+        let domains = available_plugin_domains(&reported_advertised_tools());
+        for absent in [
+            "captcha_get",
+            "captcha_solve",
+            "browser",
+            "html",
+            "command",
+            "base",
+            "document",
+            "nano",
+            "outer",
+            "list",
+            "open",
+        ] {
+            assert!(
+                !domains.iter().any(|d| d.domain == absent),
+                "'{absent}' must not be listed as a plugin domain: {domains:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_tool_name_split_rejects_acronym_runs() {
+        assert_eq!(
+            split_plugin_tool_name("media_detect_videos"),
+            Some(("media", "detect_videos"))
+        );
+        assert_eq!(split_plugin_tool_name("pptx_generate"), Some(("pptx", "generate")));
+        // No domain separator at all (`click`, `navigate`).
+        assert_eq!(split_plugin_tool_name("click"), None);
+        // A run of single-letter tokens is an acronym split, not a boundary.
+        for name in ["base_u_r_l", "document_u_r_i", "nano_d_o_m", "outer_h_t_m_l"] {
+            assert_eq!(split_plugin_tool_name(name), None, "{name}");
+        }
+        assert_eq!(split_plugin_tool_name("_leading"), None);
+        assert_eq!(split_plugin_tool_name("trailing_"), None);
+    }
+
+    #[test]
+    fn plugin_domain_listing_renders_domain_and_methods() {
+        let domains = available_plugin_domains(&reported_advertised_tools());
+        let rendered = format_plugin_domains(&domains);
+        assert!(rendered.contains("captcha"), "{rendered}");
+        assert!(rendered.contains("detect, get_balance, solve, solve_image"), "{rendered}");
+        // The banner the user sees must not advertise the old pseudo-commands.
+        assert!(!rendered.contains("captcha_get"), "{rendered}");
+    }
+
+    // ── plugin reference resolution ───────────────────────────────────────
+
+    fn installed_plugins() -> Vec<InstalledPluginRef> {
+        [
+            "browser4-captcha-4.14.1-SNAPSHOT.jar",
+            "browser4-images-4.14.1-SNAPSHOT.jar",
+            "browser4-swarm-4.14.1-SNAPSHOT.jar",
+        ]
+        .iter()
+        .map(|file_name| InstalledPluginRef {
+            file_name: (*file_name).to_string(),
+            manifest_name: None,
+        })
+        .collect()
+    }
+
+    #[test]
+    fn plugin_stem_drops_the_artifact_prefix_and_version() {
+        assert_eq!(plugin_stem("browser4-captcha-4.14.1-snapshot"), "captcha");
+        assert_eq!(plugin_stem("browser4-markdown"), "markdown");
+        assert_eq!(plugin_stem("my-plugin-1.0"), "my-plugin");
+        assert_eq!(plugin_stem("captcha"), "captcha");
+        assert_eq!(depluralize("images"), "image");
+        assert_eq!(depluralize("media"), "media");
+        assert_eq!(depluralize("css"), "css");
+    }
+
+    #[test]
+    fn plugin_info_accepts_the_short_name_the_cli_advertises() {
+        // `plugin info captcha` used to answer a bare 404 with an empty body
+        // while `plugin` itself printed `captcha` as a domain.
+        let installed = installed_plugins();
+        for input in [
+            "captcha",
+            "browser4-captcha",
+            "browser4-captcha-4.14.1-SNAPSHOT.jar",
+            "path/to/browser4-captcha-4.14.1-SNAPSHOT.jar",
+            "CAPTCHA",
+        ] {
+            assert_eq!(
+                resolve_plugin_reference(input, &installed).unwrap(),
+                "browser4-captcha-4.14.1-SNAPSHOT.jar",
+                "input was {input}"
+            );
+        }
+        // The plural JAR name is matched by its singular stem too.
+        assert_eq!(
+            resolve_plugin_reference("image", &installed).unwrap(),
+            "browser4-images-4.14.1-SNAPSHOT.jar"
+        );
+    }
+
+    #[test]
+    fn plugin_info_unknown_name_lists_the_installed_plugins() {
+        let error = resolve_plugin_reference("nope", &installed_plugins()).unwrap_err();
+        assert!(error.contains("Unknown plugin 'nope'"), "{error}");
+        assert!(error.contains("browser4-captcha-4.14.1-SNAPSHOT.jar"), "{error}");
+        assert!(error.contains("browser4-swarm-4.14.1-SNAPSHOT.jar"), "{error}");
+        assert!(error.contains("plugin list"), "{error}");
+        assert!(error.contains("tool list"), "{error}");
+
+        let empty = resolve_plugin_reference("nope", &[]).unwrap_err();
+        assert!(empty.contains("(none)"), "{empty}");
+        assert!(resolve_plugin_reference("  ", &installed_plugins())
+            .unwrap_err()
+            .contains("required"));
+    }
+
+    #[test]
+    fn plugin_manifest_name_is_a_matchable_reference() {
+        let installed = vec![InstalledPluginRef {
+            file_name: "custom-artifact-2.0.jar".to_string(),
+            manifest_name: Some("browser4-custom".to_string()),
+        }];
+        assert_eq!(
+            resolve_plugin_reference("custom", &installed).unwrap(),
+            "custom-artifact-2.0.jar"
+        );
+        assert_eq!(
+            resolve_plugin_reference("browser4-custom", &installed).unwrap(),
+            "custom-artifact-2.0.jar"
+        );
+    }
+
+    // ── plugin install path resolution ────────────────────────────────────
+
+    #[test]
+    fn glob_to_regex_anchors_and_supports_wildcards() {
+        let regex = glob_to_regex("browser4-captcha-*.jar").unwrap();
+        assert!(regex.is_match("browser4-captcha-4.14.1-SNAPSHOT.jar"));
+        assert!(!regex.is_match("browser4-image-4.14.1-SNAPSHOT.jar"));
+        assert!(!regex.is_match("xxbrowser4-captcha-1.jar"));
+        let single = glob_to_regex("a?.jar").unwrap();
+        assert!(single.is_match("ab.jar"));
+        assert!(!single.is_match("abc.jar"));
+    }
+
+    /// Sorted `*.jar` file names directly inside [dir].
+    ///
+    /// The glob-expansion tests assert against this snapshot of their own temp
+    /// directory, so a stray file (or a missing write) fails at the fixture
+    /// rather than looking like a resolver flake.
+    fn jar_names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .expect("temp dir must be readable")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.ends_with(".jar"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn plugin_install_accepts_one_existing_jar() {
+        let dir = test_temp_dir();
+        let jar = dir.path().join("browser4-captcha-4.14.1-SNAPSHOT.jar");
+        std::fs::write(&jar, b"x").unwrap();
+        assert_eq!(jar_names_in(dir.path()), vec!["browser4-captcha-4.14.1-SNAPSHOT.jar"]);
+
+        let (path, note) =
+            resolve_plugin_install_path(&jar.to_string_lossy(), "4.14.1").unwrap();
+        assert_eq!(path, jar);
+        assert!(note.is_none());
+    }
+
+    #[test]
+    fn plugin_install_expands_a_literal_wildcard() {
+        // PowerShell does not expand native-command wildcards, so the documented
+        // `plugin install …/browser4-captcha-*.jar` arrives verbatim.  The
+        // fixture directory is asserted to hold exactly one matching jar, so the
+        // verdict cannot depend on anything outside this test's own temp dir.
+        let dir = test_temp_dir();
+        std::fs::write(dir.path().join("browser4-captcha-4.14.1-SNAPSHOT.jar"), b"x").unwrap();
+        std::fs::write(dir.path().join("unrelated.txt"), b"x").unwrap();
+        assert_eq!(
+            jar_names_in(dir.path()),
+            vec!["browser4-captcha-4.14.1-SNAPSHOT.jar"]
+        );
+
+        let pattern = dir
+            .path()
+            .join("browser4-captcha-*.jar")
+            .to_string_lossy()
+            .to_string();
+        assert!(Path::new(&pattern).is_absolute(), "fixture must be absolute");
+
+        let (path, note) = resolve_plugin_install_path(&pattern, "4.14.1").unwrap();
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("browser4-captcha-4.14.1-SNAPSHOT.jar")
+        );
+        assert!(note.is_none());
+    }
+
+    #[test]
+    fn plugin_install_prefers_the_version_matched_artifact_and_says_so() {
+        // The documented wildcard matched six versioned JARs in a real
+        // checkout; the CLI must land on the one built for this CLI.  Exactly
+        // one of the three fixture jars carries the version.
+        let dir = test_temp_dir();
+        for name in [
+            "browser4-captcha-4.14.0-rc.5.jar",
+            "browser4-captcha-4.14.1-SNAPSHOT.jar",
+            "browser4-captcha-4.14.0-rc.10.jar",
+        ] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        assert_eq!(
+            jar_names_in(dir.path()),
+            vec![
+                "browser4-captcha-4.14.0-rc.10.jar",
+                "browser4-captcha-4.14.0-rc.5.jar",
+                "browser4-captcha-4.14.1-SNAPSHOT.jar",
+            ]
+        );
+        let pattern = dir
+            .path()
+            .join("browser4-captcha-*.jar")
+            .to_string_lossy()
+            .to_string();
+
+        let (path, note) = resolve_plugin_install_path(&pattern, "4.14.1").unwrap();
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("browser4-captcha-4.14.1-SNAPSHOT.jar")
+        );
+        let note = note.expect("the choice must be reported, not silent");
+        assert!(note.contains("3 files matched"), "{note}");
+        assert!(note.contains("4.14.1-SNAPSHOT"), "{note}");
+    }
+
+    #[test]
+    fn plugin_install_rejects_an_ambiguous_set_with_the_candidates() {
+        // A shell-expanded wildcard arrives as several space-joined positionals
+        // in one string; the old error echoed that bogus join and called it
+        // "not found".
+        let dir = test_temp_dir();
+        for name in ["a.jar", "b.jar"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let joined = format!(
+            "{} {}",
+            dir.path().join("a.jar").to_string_lossy(),
+            dir.path().join("b.jar").to_string_lossy()
+        );
+
+        let error = resolve_plugin_install_path(&joined, "4.14.1").unwrap_err();
+        assert!(error.contains("Expected exactly one plugin JAR, got 2"), "{error}");
+        assert!(error.contains("a.jar"), "{error}");
+        assert!(error.contains("b.jar"), "{error}");
+    }
+
+    #[test]
+    fn plugin_install_reports_a_missing_path_verbatim() {
+        let error =
+            resolve_plugin_install_path("does/not/exist.jar", "4.14.1").unwrap_err();
+        assert_eq!(error, "Plugin file not found: does/not/exist.jar");
+
+        let empty_glob = resolve_plugin_install_path("nothing/*.jar", "4.14.1").unwrap_err();
+        assert!(empty_glob.contains("No file matches that pattern"), "{empty_glob}");
+
+        assert!(resolve_plugin_install_path("   ", "4.14.1")
+            .unwrap_err()
+            .contains("required"));
+    }
+
+    // ── tool call failure surfacing ───────────────────────────────────────
+
+    #[test]
+    fn tool_call_reports_a_payload_level_failure() {
+        // `tool call markdown_fetch --json '{"url":"…/404"}'` printed
+        // {"success":false,"error":"HTTP 404: "} and exited 0 with an empty
+        // stderr, so a script checking $? saw success.
+        let failure = tool_call_failure_summary(
+            "markdown_fetch",
+            r#"{"url":"https://httpbin.org/status/404","linkCount":0,"success":false,"error":"HTTP 404: "}"#,
+        )
+        .expect("a success:false payload is a failure");
+        assert!(failure.contains("markdown_fetch"), "{failure}");
+        assert!(failure.contains("HTTP 404"), "{failure}");
+
+        // An envelope-wrapped result is inspected too.
+        assert!(tool_call_failure_summary(
+            "image_download",
+            r#"{"status":"ok","output":{"success":false,"error":"no route"}}"#
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn tool_call_success_payloads_are_not_failures() {
+        for payload in [
+            r#"{"success":true}"#,
+            r#"{"result":"ok"}"#,
+            r#"{"success":true,"error":null}"#,
+            r#"{"success":true,"error":""}"#,
+            "plain text result",
+        ] {
+            assert!(
+                tool_call_failure_summary("some_tool", payload).is_none(),
+                "{payload} must not be reported as a failure"
+            );
+        }
+        // A non-empty error without a success flag is still a failure.
+        assert!(tool_call_failure_summary("x", r#"{"error":"boom"}"#).is_some());
+    }
+
+    #[test]
+    fn tool_call_fail_on_error_option_is_opt_in() {
+        assert!(!parse_tool_call_fail_on_error(None));
+        assert!(!parse_tool_call_fail_on_error(Some(json!(false))));
+        assert!(parse_tool_call_fail_on_error(Some(json!(true))));
+    }
+
+    // ── tool / plugin help routing ────────────────────────────────────────
+
+    #[test]
+    fn tool_name_filter_matches_case_insensitively() {
+        assert!(tool_name_matches_filter("captcha_detect", None));
+        assert!(tool_name_matches_filter("captcha_detect", Some("captcha")));
+        assert!(tool_name_matches_filter("captcha_detect", Some("CAPTCHA")));
+        assert!(tool_name_matches_filter("captcha_detect", Some("detect")));
+        assert!(!tool_name_matches_filter("captcha_detect", Some("media")));
+    }
+
+    #[test]
+    fn plugin_domain_help_target_covers_both_spellings() {
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            plugin_domain_help_target("plugin-markdown", &args(&["plugin-markdown", "--help"])),
+            Some("markdown".to_string())
+        );
+        assert_eq!(
+            plugin_domain_help_target("plugin-media", &args(&["plugin-media"])),
+            Some("media".to_string())
+        );
+        assert_eq!(
+            plugin_domain_help_target("plugin", &args(&["plugin", "markdown", "--help"])),
+            Some("markdown".to_string())
+        );
+        // Static subcommands keep their own help pages.
+        for builtin in ["list", "info", "install", "remove", "commands"] {
+            assert_eq!(
+                plugin_domain_help_target(
+                    &format!("plugin-{builtin}"),
+                    &args(&[&format!("plugin-{builtin}")])
+                ),
+                None,
+                "plugin-{builtin}"
+            );
+            assert_eq!(
+                plugin_domain_help_target("plugin", &args(&["plugin", builtin])),
+                None,
+                "plugin {builtin}"
+            );
+        }
+        assert_eq!(
+            plugin_domain_help_target("plugin", &args(&["plugin", "--help"])),
+            None,
+            "bare `plugin --help` shows the surface help, not a domain"
+        );
+        assert_eq!(
+            plugin_domain_help_target("plugin", &args(&["plugin"])),
+            None
+        );
+    }
+
+    #[test]
+    fn unknown_tool_subcommand_names_the_supported_ones() {
+        let named = unknown_tool_subcommand_message(Some("bogus"));
+        assert!(named.contains("Unknown subcommand 'bogus'"), "{named}");
+        assert!(named.contains("tool list"), "{named}");
+        assert!(named.contains("tool call <mcp-name>"), "{named}");
+
+        let bare = unknown_tool_subcommand_message(None);
+        assert!(bare.contains("'tool' needs a subcommand"), "{bare}");
+        assert!(bare.contains("plugin"), "{bare}");
+    }
+
+    // ── missing-plugin diagnosis ──────────────────────────────────────────
+
+    #[test]
+    fn unknown_tool_errors_are_recognised_case_insensitively() {
+        assert!(is_unknown_tool_error("Unknown tool: media_detect_videos"));
+        assert!(is_unknown_tool_error("[UNKNOWN_TOOL] media_detect_videos"));
+        assert!(is_unknown_tool_error("Tool not found: media_download"));
+        assert!(!is_unknown_tool_error("Session 12 is not ready"));
+        assert!(!is_unknown_tool_error("HTTP request timed out"));
+    }
+
+    #[test]
+    fn unknown_tool_errors_gain_the_built_plugin_install_recipe() {
+        // `tool call media_detect_videos` said only "unknown tool" although the
+        // checkout had built browser4-media; the JAR and install command must
+        // come with it.  The assertion tolerates a checkout without that plugin
+        // built (the error is then returned unchanged).
+        let message = "Unknown tool: media_detect_videos".to_string();
+        let enriched = enrich_unknown_tool_error(message.clone(), "media_detect_videos");
+        if enriched != message {
+            assert!(
+                enriched.contains("browser4-cli plugin install"),
+                "expected the install recipe in: {enriched}"
+            );
+            assert!(enriched.contains("browser4-media"), "{enriched}");
+        }
+
+        // Non-unknown errors are never rewritten.
+        let other = "Session 12 is not ready".to_string();
+        assert_eq!(
+            enrich_unknown_tool_error(other.clone(), "media_download"),
+            other
+        );
+    }
+
+    #[test]
+    fn newest_plugin_jar_picks_the_most_recent_jar() {
+        let dir = test_temp_dir();
+        assert!(newest_plugin_jar(dir.path()).is_none());
+
+        std::fs::write(dir.path().join("browser4-media-4.14.0.jar"), b"x").unwrap();
+        std::fs::write(dir.path().join("not-a-jar.txt"), b"x").unwrap();
+        std::fs::create_dir_all(dir.path().join("subdir")).unwrap();
+        std::fs::write(dir.path().join("browser4-media-4.14.1-SNAPSHOT.jar"), b"x").unwrap();
+
+        let newest = newest_plugin_jar(dir.path()).expect("a jar must be found");
+        assert!(
+            newest.ends_with("browser4-media-4.14.1-SNAPSHOT.jar")
+                || newest.ends_with("browser4-media-4.14.0.jar"),
+            "unexpected jar: {}",
+            newest.display()
+        );
+        // A directory named *.jar must not be reported as a file.
+        std::fs::create_dir_all(dir.path().join("browser4-fake-1.0.jar")).unwrap();
+        assert!(newest_plugin_jar(dir.path()).is_some());
+    }
+
+    #[test]
+    fn plugin_install_hint_names_the_jar_and_both_steps() {
+        let hint = plugin_install_hint(Path::new("browser4-plugins/browser4-media/target/media.jar"));
+        assert!(hint.contains("browser4-cli plugin install"), "{hint}");
+        assert!(hint.contains("browser4-cli stop"), "{hint}");
+        assert!(hint.contains("media.jar"), "{hint}");
     }
 
     #[test]
@@ -40267,6 +43586,172 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // crawl completion line (issue 115140#4)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn crawl_completion_line_counts_successes_not_attempts() {
+        // Regression: a 10-page crawl whose every page failed extraction printed
+        // "10 pages crawled, 10 rows extracted." directly above
+        // "Summary: ok: 0, failed: 10".
+        let parsed = json!({
+            "status": "OK",
+            "pagesFound": 10,
+            "pagesExpected": 10,
+            "failedPages": [],
+            "pages": (0..10)
+                .map(|i| json!({
+                    "url": format!("https://example.com/{i}"),
+                    "contentLength": 1000,
+                    "extractionError": "The X-SQL extracted no data: every field is empty for https://example.com",
+                }))
+                .collect::<Vec<_>>(),
+        });
+
+        let line = crawl_completion_line(&parsed, 10, 10);
+        assert!(
+            line.starts_with("0 of 10 page(s) crawled (10 failed)"),
+            "got: {line}"
+        );
+        assert!(
+            line.contains("first failure: The X-SQL extracted no data"),
+            "the reason must be visible without a second command: {line}"
+        );
+        assert!(!line.contains("10 pages crawled"), "got: {line}");
+    }
+
+    #[test]
+    fn crawl_completion_line_reports_lost_pages_from_the_ledger() {
+        let parsed = json!({
+            "status": "OK",
+            "pagesFound": 2,
+            "pagesExpected": 3,
+            "failedPages": [{"url": "https://example.com/x", "reason": "connection reset"}],
+            "pages": [
+                {"url": "https://example.com/a", "contentLength": 1000},
+                {"url": "https://example.com/b", "contentLength": 900},
+            ],
+        });
+
+        let line = crawl_completion_line(&parsed, 3, 2);
+        assert!(line.starts_with("2 of 3 page(s) crawled (1 failed)"), "got: {line}");
+        assert!(line.contains("first failure: connection reset"), "got: {line}");
+    }
+
+    #[test]
+    fn crawl_completion_line_is_unchanged_for_a_clean_crawl() {
+        let parsed = json!({
+            "status": "OK",
+            "pagesFound": 3,
+            "pagesExpected": 3,
+            "failedPages": [],
+            "pages": [
+                {"url": "https://example.com/a", "contentLength": 1000},
+                {"url": "https://example.com/b", "contentLength": 1000},
+                {"url": "https://example.com/c", "contentLength": 1000},
+            ],
+        });
+        assert_eq!(
+            crawl_completion_line(&parsed, 3, 3),
+            "3 pages crawled, 3 rows extracted."
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // tracked crawl labels and the --status filter (issue 115140#3)
+    // -------------------------------------------------------------------
+
+    /// The payload of the reported all-empty-extraction run: status OK with the
+    /// loss ledger telling the real story.
+    fn partial_failure_payload() -> Value {
+        json!({
+            "status": "OK",
+            "pagesFound": 10,
+            "pagesExpected": 10,
+            "failedPages": [],
+            "pages": (0..10)
+                .map(|i| json!({
+                    "url": format!("https://example.com/{i}"),
+                    "contentLength": 1000,
+                    "extractionError": "The X-SQL extracted no data: every field is empty",
+                }))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    #[test]
+    fn crawl_tracked_status_label_keeps_the_partial_failure_accounting() {
+        // Regression: the list refresh relabelled this run "completed" on every
+        // poll, so a run that exited 6 looked clean forever.
+        assert_eq!(
+            crawl_tracked_status_label("OK", &partial_failure_payload()),
+            "partial failure (0 of 10 pages ok)"
+        );
+        // A clean terminal crawl keeps the plain lifecycle label.
+        let clean = json!({
+            "status": "OK",
+            "pagesFound": 3,
+            "pagesExpected": 3,
+            "failedPages": [],
+            "pages": [
+                {"url": "https://example.com/a", "contentLength": 1000},
+                {"url": "https://example.com/b", "contentLength": 1000},
+                {"url": "https://example.com/c", "contentLength": 1000},
+            ],
+        });
+        assert_eq!(crawl_tracked_status_label("OK", &clean), "completed");
+        // Non-terminal statuses are untouched: `status = OK` still means "the
+        // poller should stop", so the ledger must not rewrite other labels.
+        assert_eq!(crawl_tracked_status_label("Processing", &partial_failure_payload()), "processing");
+        assert_eq!(
+            crawl_tracked_status_label("Request Timeout", &partial_failure_payload()),
+            "failed (timeout)"
+        );
+        assert_eq!(
+            crawl_tracked_status_label("Interrupted", &partial_failure_payload()),
+            "interrupted"
+        );
+    }
+
+    #[test]
+    fn crawl_tracked_status_label_counts_lost_pages_from_the_ledger() {
+        let payload = json!({
+            "status": "OK",
+            "pagesFound": 2,
+            "pagesExpected": 3,
+            "failedPages": [{"url": "https://example.com/x", "reason": "connection reset"}],
+            "pages": [
+                {"url": "https://example.com/a", "contentLength": 1000},
+                {"url": "https://example.com/b", "contentLength": 900},
+            ],
+        });
+        assert_eq!(
+            crawl_tracked_status_label("OK", &payload),
+            "partial failure (2 of 3 pages ok)"
+        );
+    }
+
+    #[test]
+    fn crawl_status_filter_matches_partial_failures_under_failed() {
+        // `crawl list --status failed` used to match nothing for a run that
+        // exited 6 with every page failed.
+        assert!(crawl_status_filter_matches(
+            "failed",
+            "partial failure (0 of 10 pages ok)"
+        ));
+        assert!(!crawl_status_filter_matches(
+            "completed",
+            "partial failure (0 of 10 pages ok)"
+        ));
+        assert!(crawl_status_filter_matches("failed", "failed (timeout)"));
+        assert!(crawl_status_filter_matches("interrupted", "interrupted"));
+        assert!(!crawl_status_filter_matches("failed", "interrupted"));
+        // The lifecycle labels are unchanged.
+        assert!(crawl_status_filter_matches("completed", "completed"));
+        assert!(crawl_status_filter_matches("running", "queued"));
+    }
+
+    // -------------------------------------------------------------------
     // write_crawl_output tests
     // -------------------------------------------------------------------
 
@@ -40570,6 +44055,168 @@ mod tests {
         // poison the cache exactly like the old "null" answer did.
         assert_eq!(refreshed_agent_status("completed", "{}"), None);
         assert_eq!(refreshed_agent_status("queued", "{ }"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Shared task envelope (112415#1/#2/#4): the CLI must consume the envelope the
+    // backend actually sends, not only the pre-migration processState fields.
+    // -----------------------------------------------------------------------
+
+    /// The exact payload the current backend returns from `command_status`.
+    const ENVELOPE_DONE: &str = r#"{"taskId":"1a6da78e","status":"done","statusCode":200,
+        "statusTool":"command_status","resultTool":"command_result","cancelTool":"command_cancel"}"#;
+
+    #[test]
+    fn envelope_status_word_is_case_insensitive_and_closed() {
+        assert_eq!(
+            envelope_status_word(&serde_json::json!({"status": "RUNNING"})),
+            "running"
+        );
+        assert_eq!(
+            envelope_status_word(&serde_json::json!({"status": " done "})),
+            "done"
+        );
+        // A word outside the shared vocabulary is ignored, so the caller falls back
+        // to the legacy fields instead of inventing a lifecycle label.
+        assert_eq!(
+            envelope_status_word(&serde_json::json!({"status": "EXPECTATION_FAILED"})),
+            ""
+        );
+        assert_eq!(envelope_status_word(&serde_json::json!({})), "");
+    }
+
+    #[test]
+    fn friendly_envelope_status_maps_the_shared_vocabulary() {
+        assert_eq!(
+            friendly_envelope_status("queued", "", None),
+            Some("queued".to_string())
+        );
+        assert_eq!(
+            friendly_envelope_status("running", "", None),
+            Some("processing".to_string())
+        );
+        assert_eq!(
+            friendly_envelope_status("done", "", None),
+            Some("completed".to_string())
+        );
+        assert_eq!(
+            friendly_envelope_status("cancelled", "", None),
+            Some("cancelled".to_string())
+        );
+        // A failure names the code when the backend sent one …
+        assert_eq!(
+            friendly_envelope_status("failed", "417", Some("boom")),
+            Some("failed (417)".to_string())
+        );
+        // … and falls back to the first line of the envelope's error otherwise.
+        assert_eq!(
+            friendly_envelope_status("failed", "", Some("boom\nsecond line")),
+            Some("failed (boom)".to_string())
+        );
+        assert_eq!(
+            friendly_envelope_status("failed", "", None),
+            Some("failed (error)".to_string())
+        );
+        assert_eq!(friendly_envelope_status("unknown", "", None), None);
+    }
+
+    #[test]
+    fn refreshed_agent_status_reads_the_shared_envelope() {
+        // The regression this pins: with only the legacy fields recognised, a
+        // finished task never became terminal and `agent list` showed "queued" forever.
+        assert_eq!(
+            refreshed_agent_status("queued", ENVELOPE_DONE),
+            Some("completed".to_string())
+        );
+        let running = r#"{"taskId":"t1","status":"running"}"#;
+        assert_eq!(
+            refreshed_agent_status("queued", running),
+            Some("processing".to_string())
+        );
+        let cancelled = r#"{"taskId":"t1","status":"cancelled"}"#;
+        assert_eq!(
+            refreshed_agent_status("processing", cancelled),
+            Some("cancelled".to_string())
+        );
+        let failed = r#"{"taskId":"t1","status":"failed","statusCode":417,"error":"no page content"}"#;
+        assert_eq!(
+            refreshed_agent_status("processing", failed),
+            Some("failed (417)".to_string())
+        );
+        // The terminal-state guard still holds for envelope payloads.
+        let queued = r#"{"taskId":"t1","status":"queued"}"#;
+        assert_eq!(refreshed_agent_status("completed", queued), None);
+        assert_eq!(refreshed_agent_status("cancelled", queued), None);
+    }
+
+    #[test]
+    fn classify_agent_status_distinguishes_gone_from_unavailable() {
+        // The server answering "no such id" is not the same as no answer at all:
+        // `agent list --clear` may drop the first and must keep the second.
+        let not_found =
+            r#"{"taskId":"t1","status":"failed","statusCode":404,"error":"No task found with id 't1'."}"#;
+        assert!(matches!(
+            classify_agent_status("queued", not_found),
+            AgentStatusRefresh::Gone
+        ));
+        assert!(matches!(
+            classify_agent_status("queued", "null"),
+            AgentStatusRefresh::Unavailable
+        ));
+        assert!(matches!(
+            classify_agent_status("queued", r#"{"taskId":"t1"}"#),
+            AgentStatusRefresh::Unavailable
+        ));
+        assert!(matches!(
+            classify_agent_status("queued", "not json"),
+            AgentStatusRefresh::Unavailable
+        ));
+    }
+
+    #[test]
+    fn envelope_not_found_reason_requires_the_404_code() {
+        let not_found =
+            serde_json::json!({"status": "failed", "statusCode": 404, "error": "No task found with id 'x'."});
+        assert_eq!(
+            agent_envelope_not_found_reason(&not_found),
+            Some("No task found with id 'x'.".to_string())
+        );
+        // A genuine task failure keeps exit 0 and prints its payload.
+        let failed = serde_json::json!({"status": "failed", "statusCode": 417});
+        assert_eq!(agent_envelope_not_found_reason(&failed), None);
+        // A 404 without a reason still explains itself.
+        let bare = serde_json::json!({"status": "failed", "statusCode": 404});
+        assert!(agent_envelope_not_found_reason(&bare).is_some());
+    }
+
+    #[test]
+    fn agent_task_status_is_terminal_includes_cancelled_and_gone() {
+        assert!(agent_task_status_is_terminal("cancelled"));
+        assert!(!agent_task_status_is_terminal("processing"));
+        // A row the backend no longer knows about is droppable history even though
+        // "gone" is not a terminal *task* state.
+        let gone = state::AsyncTaskEntry {
+            task_id: "t1".to_string(),
+            command: "agent".to_string(),
+            last_status: AGENT_STATUS_GONE.to_string(),
+            ..Default::default()
+        };
+        assert!(agent_clear_drops_task(&gone, false));
+    }
+
+    #[test]
+    fn missing_llm_message_is_detected_on_the_shared_envelope() {
+        // The envelope has no processState, so the pre-migration check could never
+        // fire and the user got a bare failure instead of the actionable message.
+        let envelope = r#"{"taskId":"t1","status":"failed","statusCode":417,
+            "message":"The LLM is not configured. Set an API key environment variable such as DEEPSEEK_API_KEY."}"#;
+        assert!(extract_missing_llm_configuration_message(envelope).is_some());
+        // And the legacy shape still works.
+        let legacy = r#"{"statusCode":417,"processState":"done","message":"LLM API key is not configured"}"#;
+        assert!(extract_missing_llm_configuration_message(legacy).is_some());
+        // A healthy running task is not a failure.
+        let running = r#"{"taskId":"t1","status":"running","message":"LLM is not configured"}"#;
+        assert!(extract_missing_llm_configuration_message(running).is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -42829,6 +46476,23 @@ mod tests {
         assert!(!should_suggest_query_output_format("json", true, true), "--result-only already requested");
         assert!(!should_suggest_query_output_format("table", false, true), "table already readable");
         assert!(!should_suggest_query_output_format("csv", false, true));
+    }
+
+    #[test]
+    fn inline_sql_tips_go_to_stderr_for_the_default_json_format() {
+        // Regression: `htmlsnapshot query --sql "…" > out.json` wrote the JSON
+        // envelope *plus* three tip lines to stdout (`json.load` → "Extra
+        // data"), because the tip-stream test was `format != "json"` — which
+        // classified the DEFAULT format as human output.
+        assert!(
+            query_stdout_is_structured(None, "json"),
+            "the default JSON envelope is machine-readable stdout"
+        );
+        assert!(query_stdout_is_structured(None, "csv"));
+        // The human table view keeps its tips on stdout.
+        assert!(!query_stdout_is_structured(None, "table"));
+        // With --output-file the payload went to a file, so stdout is human chatter.
+        assert!(!query_stdout_is_structured(Some("out.json"), "json"));
     }
 
     // ── extract envelope unwrap ────────────────────────────────────────────

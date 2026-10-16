@@ -59,6 +59,10 @@ open class PptxGenerator(
         private const val IMAGE_MAX_HEIGHT = 324.0
         private const val FONT_FAMILY = "Arial"
         private const val MONO_FONT = "Consolas"
+
+        /** Title used for the leading section on pages whose content starts before
+         *  the first heading — an empty title would render as " (continued 1)". */
+        const val DEFAULT_LEAD_SECTION_TITLE = "Overview"
     }
 
     /**
@@ -66,18 +70,36 @@ open class PptxGenerator(
      *
      * @property path               absolute path to the generated PPTX
      * @property embeddedImageCount images actually placed on slides (not block count)
-     * @property skippedImageCount  image blocks dropped by the per-slide cap or slide overflow
-     * @property failedImageCount   images that could not be downloaded
+     * @property skippedImageCount  image blocks that could not be placed on any slide
+     *                              (no downloaded bytes, unsupported format, embed failure)
+     * @property failedImageCount   image URLs whose download failed
+     * @property downloadedImageCount image URLs downloaded successfully
+     * @property skippedBlockCount  non-image content blocks that were not rendered
+     * @property skippedBlockKinds  not-rendered block count per block kind
+     * @property imageDownloadMillis wall clock spent downloading images
+     * @property imageDownloadDeadlineExceeded whether the image download phase expired
+     * @property warnings           human readable diagnostics for a partial deck
      */
     data class PptxGenerationOutput(
         val path: Path,
         val embeddedImageCount: Int,
         val skippedImageCount: Int,
         val failedImageCount: Int,
+        val downloadedImageCount: Int = 0,
+        val skippedBlockCount: Int = 0,
+        val skippedBlockKinds: Map<String, Int> = emptyMap(),
+        val imageDownloadMillis: Long = 0,
+        val imageDownloadDeadlineExceeded: Boolean = false,
+        val warnings: List<String> = emptyList(),
     )
 
     /**
      * Generate a PPTX file from extracted content blocks.
+     *
+     * The image download phase is bounded (see [PptxConfig.downloadTotalTimeoutSeconds]),
+     * and blocks that do not fit a slide are carried into a continuation slide instead
+     * of being discarded, so the returned [PptxGenerationOutput] always describes the
+     * deck that was actually written.
      */
     open suspend fun generate(
         blocks: List<ContentBlock>,
@@ -92,23 +114,34 @@ open class PptxGenerator(
 
         var embeddedImageCount = 0
         var skippedImageCount = 0
+        var skippedBlockCount = 0
+        val skippedBlockKinds = mutableMapOf<String, Int>()
 
         try {
-            // 1. Download all referenced images
+            // 1. Download all referenced images — bounded by the per-image and the
+            //    overall download deadline, so a blocked host degrades to a partial
+            //    deck instead of hanging past the server's async budget.
             val download = imageDownloader.downloadImages(blocks)
             val imageBytes = download.bytes
+            logger.info(
+                "PPTX download stage: {}/{} images in {} ms (failed {}, skipped {}, aborted {})",
+                download.downloaded, download.total, download.durationMillis,
+                download.failed, download.skipped, download.aborted
+            )
 
             // 2. Create title slide
             createTitleSlide(slideShow, pageTitle, pageUrl)
 
             // 3. Group blocks into sections by heading hierarchy
-            val sections = groupIntoSections(blocks)
+            val sections = groupIntoSections(blocks, pageTitle)
 
             // 4. Create content slides for each section
             for (section in sections) {
                 val counts = createSectionSlides(slideShow, section, imageBytes)
-                embeddedImageCount += counts.embedded
-                skippedImageCount += counts.skipped
+                embeddedImageCount += counts.embeddedImages
+                skippedImageCount += counts.skippedImages
+                skippedBlockCount += counts.skippedBlocks
+                counts.skippedKinds.forEach { (kind, count) -> skippedBlockKinds.merge(kind, count, Int::plus) }
             }
 
             // 5. Write to file
@@ -119,12 +152,9 @@ open class PptxGenerator(
                 slideShow.write(fos)
             }
 
-            if (skippedImageCount > 0) {
-                logger.warn(
-                    "PPTX generation: {} images embedded, {} skipped (per-slide cap / slide overflow)",
-                    embeddedImageCount, skippedImageCount
-                )
-            }
+            val warnings = buildWarnings(download, skippedBlockCount, skippedBlockKinds, embeddedImageCount)
+            warnings.forEach { logger.warn("PPTX generation warning: {}", it) }
+
             logger.info(
                 "Generated PPTX with {} slides for '{}': {}",
                 slideShow.slides.size, pageTitle.take(80), outputPath
@@ -135,10 +165,50 @@ open class PptxGenerator(
                 embeddedImageCount = embeddedImageCount,
                 skippedImageCount = skippedImageCount,
                 failedImageCount = download.failed,
+                downloadedImageCount = download.downloaded,
+                skippedBlockCount = skippedBlockCount,
+                skippedBlockKinds = skippedBlockKinds.toMap(),
+                imageDownloadMillis = download.durationMillis,
+                imageDownloadDeadlineExceeded = download.deadlineExceeded,
+                warnings = warnings,
             )
         } finally {
             slideShow.close()
         }
+    }
+
+    /**
+     * Build the diagnostics that describe a partial deck.
+     *
+     * @param download the image download outcome
+     * @param skippedBlockCount content blocks that were not rendered
+     * @param skippedBlockKinds not-rendered block count per kind
+     * @param embeddedImageCount images placed on slides
+     * @return warning lines, empty when the deck is complete
+     */
+    private fun buildWarnings(
+        download: PptxImageDownloader.DownloadResult,
+        skippedBlockCount: Int,
+        skippedBlockKinds: Map<String, Int>,
+        embeddedImageCount: Int,
+    ): List<String> {
+        val warnings = mutableListOf<String>()
+        warnings += imageDownloader.describeShortfall(download)
+
+        if (skippedBlockCount > 0) {
+            val detail = skippedBlockKinds
+                .filterKeys { it != "image" }
+                .entries
+                .joinToString(", ") { "${it.key}: ${it.value}" }
+            warnings += "$skippedBlockCount content block(s) could not be rendered and are missing " +
+                    "from the deck ($detail)."
+        }
+
+        if (download.total > 0 && download.downloaded > 0 && download.partial && embeddedImageCount < download.downloaded) {
+            warnings += "${download.downloaded - embeddedImageCount} downloaded image(s) are not on any slide " +
+                    "(per-slide image cap or unusable image data)."
+        }
+        return warnings
     }
 
     // ---- Slide creation ----
@@ -183,44 +253,71 @@ open class PptxGenerator(
         subRun.setFontColor(Color(0x66, 0x66, 0x66))
     }
 
-    private data class SlideImageCounts(val embedded: Int, val skipped: Int)
+    private data class SectionSlideCounts(
+        val embeddedImages: Int,
+        val skippedImages: Int,
+        val skippedBlocks: Int,
+        val skippedKinds: Map<String, Int>,
+    )
+
+    /**
+     * How one content slide turned out.
+     *
+     * @property embeddedImages images placed on the slide
+     * @property skippedImages  image blocks that can never be placed
+     * @property skippedBlocks  non-image blocks that can never be rendered
+     * @property skippedKinds   not-rendered count per block kind
+     * @property carriedBlocks  blocks that did not fit and belong on the next slide
+     */
+    private data class ContentSlideOutcome(
+        val embeddedImages: Int,
+        val skippedImages: Int,
+        val skippedBlocks: Int,
+        val skippedKinds: Map<String, Int>,
+        val carriedBlocks: List<ContentBlock>,
+    )
 
     private fun createSectionSlides(
         slideShow: XMLSlideShow,
         section: Section,
         imageBytes: Map<String, ByteArray>,
-    ): SlideImageCounts {
-        val blocks = section.blocks
-        if (blocks.isEmpty()) return SlideImageCounts(0, 0)
+    ): SectionSlideCounts {
+        if (section.blocks.isEmpty()) return SectionSlideCounts(0, 0, 0, emptyMap())
 
-        var blockIndex = 0
+        var pending = section.blocks
         var continuationIndex = 0
         var embedded = 0
-        var skipped = 0
+        var skippedImages = 0
+        var skippedBlocks = 0
+        val skippedKinds = mutableMapOf<String, Int>()
 
-        while (blockIndex < blocks.size) {
-            val remainingBlocks = blocks.size - blockIndex
-            val chunkSize = if (remainingBlocks <= config.maxContentBlocksPerSlide) {
-                remainingBlocks
-            } else {
-                findSplitPoint(blocks, blockIndex, config.maxContentBlocksPerSlide)
+        // Blocks that do not fit a slide are carried into a continuation slide
+        // instead of being discarded, so every extracted block reaches the deck.
+        while (pending.isNotEmpty()) {
+            val slideTitle = continuationTitle(section.title, continuationIndex)
+            val outcome = createContentSlide(slideShow, slideTitle, pending, imageBytes)
+
+            embedded += outcome.embeddedImages
+            skippedImages += outcome.skippedImages
+            skippedBlocks += outcome.skippedBlocks
+            outcome.skippedKinds.forEach { (kind, count) -> skippedKinds.merge(kind, count, Int::plus) }
+
+            val carried = outcome.carriedBlocks
+            if (carried.size >= pending.size) {
+                // Defensive: a slide always renders its first block, so this cannot
+                // happen — but never spin forever if that invariant is ever broken.
+                logger.warn("PPTX generation: giving up on {} unrenderable blocks", carried.size)
+                skippedImages += carried.count { it.type == "image" }
+                skippedBlocks += carried.count { it.type != "image" }
+                carried.forEach { skippedKinds.merge(it.type.ifBlank { "unknown" }, 1, Int::plus) }
+                break
             }
 
-            val chunk = blocks.subList(blockIndex, blockIndex + chunkSize)
-            val slideTitle = if (continuationIndex == 0) {
-                section.title
-            } else {
-                "${section.title} (continued $continuationIndex)"
-            }
-
-            val counts = createContentSlide(slideShow, slideTitle, chunk, imageBytes)
-            embedded += counts.embedded
-            skipped += counts.skipped
-
-            blockIndex += chunkSize
+            pending = carried
             continuationIndex++
         }
-        return SlideImageCounts(embedded, skipped)
+
+        return SectionSlideCounts(embedded, skippedImages, skippedBlocks, skippedKinds)
     }
 
     private fun createContentSlide(
@@ -228,7 +325,7 @@ open class PptxGenerator(
         slideTitle: String,
         blocks: List<ContentBlock>,
         imageBytes: Map<String, ByteArray>,
-    ): SlideImageCounts {
+    ): ContentSlideOutcome {
         val slide = slideShow.createSlide()
         val slideWidth = config.slideWidth.toDouble()
         val slideHeight = config.slideHeight.toDouble()
@@ -252,61 +349,135 @@ open class PptxGenerator(
         }
 
         val contentTop = if (slideTitle.isNotBlank()) MARGIN + TITLE_HEIGHT + 10.0 else MARGIN
+        val usableBottom = slideHeight - MARGIN
         var yOffset = contentTop
         val contentWidth = slideWidth - MARGIN * 2
         var imageCountOnSlide = 0
+        var placedBlocks = 0
         var embedded = 0
-        var skipped = 0
+        var skippedImages = 0
+        var skippedBlocks = 0
+        val skippedKinds = mutableMapOf<String, Int>()
+        var carried: List<ContentBlock> = emptyList()
 
-        for (block in blocks) {
+        for ((index, block) in blocks.withIndex()) {
+            if (!isRenderable(block)) {
+                // Nothing to draw (missing text/rows/items/src) or an unknown block
+                // kind: count it by kind so the loss is reported, never silent.
+                if (block.type == "image") skippedImages++ else skippedBlocks++
+                skippedKinds.merge(block.type.ifBlank { "unknown" }, 1, Int::plus)
+                continue
+            }
+
+            // The first block is always rendered, even when it is taller than the
+            // slide, so the section loop is guaranteed to make progress.
+            if (index > 0) {
+                if (placedBlocks >= config.maxContentBlocksPerSlide) {
+                    carried = blocks.subList(index, blocks.size)
+                    break
+                }
+                // Height-aware split: close the slide before a block would overflow
+                // it, and put that block on a continuation slide instead of losing it.
+                if (yOffset + estimateBlockHeight(block, contentWidth) > usableBottom) {
+                    carried = blocks.subList(index, blocks.size)
+                    break
+                }
+            }
+
             when (block.type) {
                 "heading" -> {
                     yOffset = addHeadingBlock(slide, block, yOffset, contentWidth)
+                    placedBlocks++
                 }
                 "paragraph" -> {
                     yOffset = addParagraphBlock(slide, block, yOffset, contentWidth)
+                    placedBlocks++
                 }
                 "image" -> {
-                    if (imageCountOnSlide < config.maxImagesPerSlide) {
+                    val bytes = block.src?.let { imageBytes[it] }
+                    if (bytes == null) {
+                        // Not downloaded (or unusable): carrying it forward would never
+                        // succeed, so count it as a loss instead of looping on it.
+                        skippedImages++
+                        skippedKinds.merge("image", 1, Int::plus)
+                    } else if (index > 0 && imageCountOnSlide >= config.maxImagesPerSlide) {
+                        // Per-slide image cap reached — continue on the next slide.
+                        carried = blocks.subList(index, blocks.size)
+                        break
+                    } else {
                         val newOffset = addImageBlock(slideShow, slide, block, imageBytes, yOffset, contentWidth)
                         if (newOffset != yOffset) {
                             imageCountOnSlide++
                             embedded++
+                            placedBlocks++
                         } else {
                             // addImageBlock returned without placing the image
-                            // (download bytes missing / embed failure) — count as
-                            // failed-to-embed, not as a silent drop.
+                            // (embed failure) — count it, not a silent drop.
+                            skippedImages++
+                            skippedKinds.merge("image", 1, Int::plus)
                         }
                         yOffset = newOffset
-                    } else {
-                        // Per-slide image cap reached — the image is dropped.
-                        skipped++
                     }
                 }
                 "table" -> {
                     yOffset = addTableBlock(slide, block, yOffset, contentWidth)
+                    placedBlocks++
                 }
                 "list" -> {
                     yOffset = addListBlock(slide, block, yOffset, contentWidth)
+                    placedBlocks++
                 }
                 "code" -> {
                     yOffset = addCodeBlock(slide, block, yOffset, contentWidth)
+                    placedBlocks++
                 }
                 "blockquote" -> {
                     yOffset = addBlockquoteBlock(slide, block, yOffset, contentWidth)
+                    placedBlocks++
+                }
+                else -> {
+                    if (block.type == "image") skippedImages++ else skippedBlocks++
+                    skippedKinds.merge(block.type.ifBlank { "unknown" }, 1, Int::plus)
                 }
             }
-
-            if (yOffset > slideHeight - MARGIN) {
-                // Slide overflow: remaining blocks in this chunk are dropped.
-                // Count any remaining image blocks as skipped.
-                skipped += blocks
-                    .subList(blocks.indexOf(block) + 1, blocks.size)
-                    .count { it.type == "image" }
-                break
-            }
         }
-        return SlideImageCounts(embedded, skipped)
+
+        return ContentSlideOutcome(embedded, skippedImages, skippedBlocks, skippedKinds, carried)
+    }
+
+    /**
+     * Whether a block carries anything the renderers can draw.
+     *
+     * Blocks without text/rows/items/source would otherwise disappear between
+     * extraction and the deck without any accounting.
+     */
+    private fun isRenderable(block: ContentBlock): Boolean = when (block.type) {
+        "heading", "paragraph", "blockquote", "code" -> !block.text.isNullOrBlank()
+        "table" -> !block.rows.isNullOrEmpty()
+        "list" -> !block.items.isNullOrEmpty()
+        "image" -> !block.src.isNullOrBlank()
+        else -> false
+    }
+
+    /**
+     * Estimate the vertical space [block] needs, mirroring the block renderers, so a
+     * slide can be closed before the block would overflow it.
+     */
+    private fun estimateBlockHeight(block: ContentBlock, contentWidth: Double): Double {
+        return when (block.type) {
+            "heading" -> LINE_SPACING * 1.5 + 4
+            "paragraph" -> estimateTextLines(block.text.orEmpty(), contentWidth, BODY_FONT_SIZE) * LINE_SPACING + 4
+            "blockquote" ->
+                estimateTextLines(block.text.orEmpty(), contentWidth - 20, BODY_FONT_SIZE) * LINE_SPACING + 14
+            "code" -> block.text.orEmpty().lines().take(20).size * (LINE_SPACING * 0.9) + 18
+            "table" -> (block.rows?.size ?: 0) * LINE_SPACING + 16
+            "list" -> (block.items?.size ?: 0) * LINE_SPACING + 8
+            "image" -> {
+                val (_, height) = scaleImage(block.width ?: 0, block.height ?: 0, IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT)
+                height + 6 + if (block.alt.isNullOrBlank()) 0.0 else LINE_SPACING + 4
+            }
+            else -> LINE_SPACING
+        }
     }
 
     // ---- Individual block renderers ----
@@ -524,9 +695,23 @@ open class PptxGenerator(
 
     // ---- Content organization ----
 
-    private fun groupIntoSections(blocks: List<ContentBlock>): List<Section> {
+    /**
+     * Group content blocks into sections, one per heading at (or above) the top
+     * heading level found on the page.
+     *
+     * Content that precedes the first heading (Wikipedia's lead section, a blog
+     * intro) gets [pageTitle] as its title, falling back to
+     * [DEFAULT_LEAD_SECTION_TITLE] — an empty title used to render continuation
+     * slides as `" (continued 1)"`.
+     *
+     * @param blocks the extracted content blocks in document order
+     * @param pageTitle the page title, used to title the leading section
+     * @return the sections in document order
+     */
+    private fun groupIntoSections(blocks: List<ContentBlock>, pageTitle: String): List<Section> {
         if (blocks.isEmpty()) return emptyList()
 
+        val leadTitle = leadSectionTitle(pageTitle)
         val headingLevels = blocks
             .filter { it.type == "heading" && it.level != null }
             .map { it.level!! }
@@ -539,11 +724,12 @@ open class PptxGenerator(
         var currentSectionTitle: String? = null
 
         for (block in blocks) {
+            // The page <title> is rendered on the title slide, not as content.
             if (block.type == "title") continue
 
             if (block.type == "heading" && block.level != null && block.level <= sectionLevel + 1) {
                 if (currentSectionBlocks.isNotEmpty()) {
-                    sections.add(Section(currentSectionTitle ?: "", currentSectionBlocks.toList()))
+                    sections.add(Section(currentSectionTitle ?: leadTitle, currentSectionBlocks.toList()))
                 }
                 currentSectionTitle = block.text ?: ""
                 currentSectionBlocks = mutableListOf()
@@ -553,24 +739,40 @@ open class PptxGenerator(
         }
 
         if (currentSectionBlocks.isNotEmpty()) {
-            sections.add(Section(currentSectionTitle ?: "", currentSectionBlocks.toList()))
+            sections.add(Section(currentSectionTitle ?: leadTitle, currentSectionBlocks.toList()))
         }
 
         if (sections.isEmpty() && blocks.isNotEmpty()) {
-            sections.add(Section("", blocks.filter { it.type != "title" }))
+            sections.add(Section(leadTitle, blocks.filter { it.type != "title" }))
         }
 
         return sections
     }
 
-    private fun findSplitPoint(blocks: List<ContentBlock>, start: Int, maxPerSlide: Int): Int {
-        val end = (start + maxPerSlide).coerceAtMost(blocks.size)
-        for (i in end - 1 downTo start + 1) {
-            when (blocks[i].type) {
-                "paragraph", "heading", "list", "blockquote", "code" -> return i - start + 1
-            }
-        }
-        return maxPerSlide
+    /**
+     * Title of the section that precedes the first heading.
+     *
+     * @param pageTitle the page title; blank titles fall back to
+     *        [DEFAULT_LEAD_SECTION_TITLE] so no slide title is ever empty
+     * @return the section title
+     */
+    private fun leadSectionTitle(pageTitle: String): String =
+        pageTitle.trim().takeIf { it.isNotBlank() } ?: DEFAULT_LEAD_SECTION_TITLE
+
+    /**
+     * Title of the [continuationIndex]-th slide of a section.
+     *
+     * The suffix is only added from the second slide on, and a blank section title
+     * never produces a title that starts with a space.
+     *
+     * @param sectionTitle the section's own title
+     * @param continuationIndex 0 for the section's first slide
+     * @return the slide title
+     */
+    private fun continuationTitle(sectionTitle: String, continuationIndex: Int): String {
+        val base = sectionTitle.trim()
+        if (continuationIndex == 0) return base
+        return if (base.isEmpty()) "Continued $continuationIndex" else "$base (continued $continuationIndex)"
     }
 
     // ---- Utility functions ----

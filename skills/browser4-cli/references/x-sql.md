@@ -99,6 +99,8 @@ WHERE DOM_IS_NOT_NIL(DOM)
 > ```
 >
 > `htmlsnapshot inspect` flags clipped samples and prints a ready `htmlsnapshot get all attr "<sel>" <attr>` line when it detects the pattern; you can also compare `get all text "h3 a"` with `get all attr "h3 a" title` to confirm.
+>
+> **The selector inside a `DOM_*` function is evaluated INSIDE the row, not on the whole page.** `FROM DOM_LOAD_AND_SELECT(@url, 'article.product_pod')` makes each matched card the root of the row's DOM, so `DOM_FIRST_ATTR(DOM, 'h3 a', 'title')` looks for an `h3 a` *within that card*. A page-level reference written for the whole document (e.g. `'a'`, which is the card's image link before its `h3` link) therefore resolves to a different element and silently returns `""` — one empty value per row is the symptom. Read the printed sample value next to the selector as the contract: if the snippet does not return that value, the selector is not container-relative.
 
 ### Machine-readable numeric output
 

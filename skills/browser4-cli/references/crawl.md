@@ -169,7 +169,7 @@ browser4-cli crawl --seed-file urls.txt -d 0 --parallel 1 --refresh   # strictly
 | `--sql` | | string | — | X-SQL query. Use `@url` as page URL placeholder. Prefix with `@` to read from file |
 | `--sql-stdin` | | bool | — | Read query from stdin (avoids shell quoting issues) |
 | `--sql-base64` | | string/bool | — | Base64 query — value form, or bare flag over `--sql` |
-| `--format` | | string | `table` | Output format: `json`, `csv`, or `table` |
+| `--format` | | string | `table` | Output format for X-SQL rows: `json`, `csv`, or `table`.  Requires `--sql`: without it the CLI **warns on stdout** but **refuses** (exit 1, writes nothing) when `--output` is also given, because the file would hold the plain-text listing under a `csv`/`json` name.  For a JSON *page listing* of a plain crawl use the global `--json` flag before the command — no `--sql` needed |
 | `--output` | `-o` | string | — | Write results to file instead of stdout |
 | `--verbose` | | bool | — | Show per-URL processing status in the crawl results (also surfaces per-page X-SQL diagnostics instead of only the aggregate error count) |
 
@@ -225,7 +225,7 @@ browser4-cli crawl --seed-file urls.txt -d 0 --parallel 1 --refresh   # strictly
 
 ### Page listing (no --sql)
 
-Without X-SQL, the default output lists the crawled pages:
+Without X-SQL, the default output lists the crawled pages.  `--format csv|json` cannot format that listing: on stdout it only warns, and with `--output` the CLI refuses (exit 1, no file) rather than writing prose into a `.csv`/`.json` path.  For a JSON page listing use the global flag — `browser4-cli --json crawl "<url>" -d 1` prints the envelope, and `--json` with `-o` is refused for the same reason.
 
 ```
 Crawl task submitted: 550e8400-e29b-41d4-a716-446655440000
@@ -393,7 +393,7 @@ manage and monitor the task afterwards.
 | `crawl cancel <task-id>` | Cancel a running or queued task; it transitions to TIMEOUT and stays visible in `crawl list` until cleared or expired by TTL.  `{"cancelled": false}` means no running worker was found — the record is still queryable.  A cancellation does **not** throw the work away: the checkpoint is kept, the record reports what is left, and `crawl resume <task-id>` continues it |
 | `crawl resume <task-id>` | Continue an interrupted task from its checkpoint — see [`crawl resume`](#crawl-resume) below |
 | `crawl clear` | Remove completed, cancelled and failed tasks from the store; running tasks are not affected.  A checkpoint that still has work left is **kept**, so a cleared timed-out task can still be resumed by id, and interrupted tasks are not touched at all (they are not finished tasks); `crawl clear --all` is the explicit way to discard resumable state — after it, an interrupted task can only be submitted again |
-| `crawl list` | List all tracked crawl tasks across all sessions |
+| `crawl list` | List all tracked crawl tasks across all sessions.  This is **housekeeping state, not an audit log**: listing prunes entries the backend no longer knows and entries older than 24 h, and prints what it removed.  Backend records and crawl checkpoints are never affected; `crawl result <task-id>` still works for a pruned id |
 
 ```bash
 browser4-cli crawl status <task-id>
@@ -448,7 +448,7 @@ A record also carries the resume bookkeeping, whether or not the task was ever i
 |---|---|---|
 | `--limit` | int | Show at most N tasks (latest first) |
 | `--offset` | int | Skip the first N tasks |
-| `--status` | string | Filter by status: `completed`, `running`, `failed`, `queued`, `interrupted`, `not found` |
+| `--status` | string | Filter by status: `completed`, `running`, `failed`, `queued`, `interrupted`, `not found`.  `failed` also matches a run whose label is `partial failure (<ok> of <expected> pages ok)` — a crawl that finished with pages missing keeps `status = OK` on the backend (so a poller stops) while the CLI records the partial failure |
 | `--since` | time | Show only tasks submitted since a relative time (e.g. `1h`, `30m`, `1d`) |
 | `--clear` | bool | Remove all tracked tasks from the list |
 

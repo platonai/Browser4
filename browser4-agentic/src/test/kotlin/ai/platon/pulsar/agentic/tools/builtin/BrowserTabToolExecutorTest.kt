@@ -9,6 +9,7 @@ import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.chrome.protocol.DialogEvent
 import ai.platon.pulsar.chrome.protocol.DialogHandler
 import ai.platon.pulsar.common.math.geometric.RectD
@@ -1645,5 +1646,113 @@ class BrowserTabToolExecutorTest {
 
             assertEquals("No element matches selector \"#pay-heading\".", result.exception?.cause?.message)
         }
+    }
+
+    // ------------------------------------------------------------------
+    // ariaSnapshot --selector: the selector must reach the page as a real
+    // JavaScript string literal, and a failed query must not read as "no match".
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("ariaSnapshot quotes and escapes the CSS selector it evaluates")
+    fun ariaSnapshotQuotesAndEscapesSelector() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        val selector = "div[data-x='a b']"
+        val captured = mutableListOf<String>()
+        `when`(driver.evaluateValue(Mockito.anyString())).thenAnswer { invocation ->
+            captured += invocation.getArgument<String>(0)
+            true
+        }
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>("selector" to selector)),
+            driver
+        )
+
+        assertTrue(result.success, "the probe must not fail for a valid selector: ${result.exception}")
+        assertEquals(1, captured.size)
+        // The escaped selector has to be INSIDE quotes: without them the generated
+        // script was a syntax error for every selector, so `snapshot --selector`
+        // could never work.
+        assertEquals("!!document.querySelector('div[data-x=\\'a b\\']')", captured[0])
+    }
+
+    @Test
+    @DisplayName("ariaSnapshot reports a selector that matched nothing as a target miss")
+    fun ariaSnapshotReportsNoMatchAsTargetMiss() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        `when`(driver.evaluateValue(Mockito.anyString())).thenReturn(false)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>("selector" to "#missing")),
+            driver
+        )
+
+        val message = result.exception?.cause?.message.orEmpty()
+        assertTrue(message.contains("no element matches selector"), message)
+        assertEquals(
+            ToolErrorCode.TARGET_NOT_FOUND,
+            ToolErrorMapper.classifyMessage(message),
+            "an empty match is a permanent target miss, not a usage error: $message"
+        )
+    }
+
+    @Test
+    @DisplayName("ariaSnapshot surfaces a failed selector query instead of reporting no match")
+    fun ariaSnapshotSurfacesFailedQuery() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        val failure = RuntimeException("SyntaxError: '>>>' is not a valid selector")
+        `when`(driver.evaluateValue(Mockito.anyString())).thenThrow(failure)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>("selector" to ">>>")),
+            driver
+        )
+
+        val message = result.exception?.cause?.message.orEmpty()
+        assertTrue(message.contains("could not be evaluated"), message)
+        assertTrue(message.contains(">>>"), "the selector must be named: $message")
+        assertTrue(
+            message.contains("not a valid selector"),
+            "the underlying JavaScript/DOM message must survive: $message",
+        )
+        assertFalse(
+            message.contains("no element matches selector"),
+            "a failed query is not an empty match: $message",
+        )
+    }
+
+    @Test
+    @DisplayName("ariaSnapshot refuses to read a non-boolean probe result as no match")
+    fun ariaSnapshotRejectsNonBooleanProbeResult() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        // A driver that answers with something unexpected must not be read as
+        // "the selector matched nothing" — that is how a broken probe looked like
+        // a legitimate empty result.
+        `when`(driver.evaluateValue(Mockito.anyString())).thenReturn(3)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>("selector" to "#x")),
+            driver
+        )
+
+        val message = result.exception?.cause?.message.orEmpty()
+        assertTrue(message.contains("instead of a boolean"), message)
+        assertFalse(message.contains("no element matches selector"), message)
+    }
+
+    @Test
+    @DisplayName("ariaSnapshot without a selector never probes the page")
+    fun ariaSnapshotWithoutSelectorSkipsProbe() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>()),
+            driver
+        )
+
+        assertTrue(result.success, "unscoped capture must still work: ${result.exception}")
+        Mockito.verify(driver, Mockito.never()).evaluateValue(Mockito.anyString())
+        Unit
     }
 }

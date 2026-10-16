@@ -517,9 +517,9 @@ These commands require an LLM key.
 | `chat <message>` | Send a plain AI chat request without auto-appended browser context. |
 | `chat-result <id>` | Retrieve the result of an async chat task. |
 | `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. Supports `--wait` (block for the result) and `--wait-timeout <seconds>` (default 600). |
-| `agent status <id>` | Check a running task. |
-| `agent result <id>` | Fetch a completed result. |
-| `agent list` | List tracked agent tasks and their status. |
+| `agent status <id>` | Check a task — the shared status envelope (`status`: queued/running/done/failed/cancelled, plus `statusCode`, `message` and the agent's step count). |
+| `agent result <id>` | Fetch a completed task's result: its summary, `keyFindings`, `filesChanged` and the workspace its deliverables live in. |
+| `agent list` | List tracked agent tasks with the same statuses (refreshed from the backend on every call); `--clear` untracks the finished ones. |
 
 ```bash
 browser4-cli extract "product name, price, rating"
@@ -646,7 +646,21 @@ These commands operate on Browser4's learned experience store.
 
 #### Plugins
 
-Plugins are server-side JARs that extend Browser4.
+Plugins are server-side JARs that extend Browser4. A development runtime bundle
+ships the first-party plugins the checkout builds — `browser4-swarm`,
+`browser4-images`, `browser4-markdown`, `browser4-media` and `browser4-seo`
+(SEO is opt-in: enable it with `-Dbrowser4.plugins.enable=browser4-seo`).
+`browser4-{captcha,pptx,profile-import,summary-demo}` are installed on demand:
+
+```bash
+browser4-cli plugin install "browser4-plugins/browser4-pptx/target/browser4-pptx-$(cat VERSION).jar"
+browser4-cli stop    # the next command restarts the dev backend
+```
+
+Plugin tool names are the snake_case form of `domain.method`
+(`image.detectImages` → `image_detect_images`) and are enumerated by
+`browser4-cli tool list` (or `GET /mcp/tools`); `plugin list` lists installed plugin
+JARs, not tools.
 
 | Command | Description |
 |---|---|
@@ -654,6 +668,7 @@ Plugins are server-side JARs that extend Browser4.
 | `plugin info <name>` | Show plugin details. |
 | `plugin install <file>` | Install a plugin from a local JAR file. Supports `--replace`. |
 | `plugin remove <name>` | Remove a plugin. Supports `-y`, `--yes`. |
+| `tool list [--filter <substr>]` | List every MCP tool name the backend advertises (plugin tools included); `tool call <name> --json '{…}'` invokes one. |
 
 #### Advanced and currently hidden commands
 

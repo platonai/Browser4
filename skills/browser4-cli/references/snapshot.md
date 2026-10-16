@@ -14,7 +14,7 @@ The `snapshot` command captures the page's **accessibility tree** (AX tree) — 
 browser4-cli goto "https://example.com"
 browser4-cli snapshot -v 0              # capture accessibility tree (viewport 0 = current visible screen)
 browser4-cli click <ref>                # interact using refs from the snapshot
-browser4-cli snapshot -v 0 --auto-diff  # see what changed vs previous snapshot
+browser4-cli snapshot -v 0 --auto-diff  # capture + diff vs the previous snapshot
 ```
 
 For quick inline viewing without opening a file, add `--stdout`:
@@ -50,11 +50,24 @@ Use **snapshot** to observe the page and discover interactive element refs — i
 
 The snapshot file path is printed to stderr after capture. Snapshot files can be large — use viewport pagination or `snapshot grep` instead of reading them directly.
 
+### Node line shape
+
+Every node line has the same shape, so line-based readers and `grep` see a uniform document:
+
+```text
+- <role> "<accessible name>" [ref=e<id>] [box=x,y,w,h] [level=N] [disabled] [checked] …
+```
+
+- `<role>` is the accessibility role (`generic`, `button`, `link`, `textbox`, `heading`, `listitem`, …).
+- The accessible name is always a **double-quoted scalar**; a name containing `: ` or `"` no longer switches the whole line to a different YAML shape, and a `"` inside a name stays escaped as `\"`.
+- `[ref=…]` is the handle `click` / `fill` / `type` accept; `[box=…]` is the bounding box in CSS pixels (`--no-boxes` drops it).
+- Property lines (`- /url: …`, `- /value: …`) and text children (`- text: …`) are indented under the node they belong to.
+
 ## Commands
 
 ```bash
 browser4-cli snapshot [--viewport N|-v N] [--stdout] [--json] [--quiet]   # capture accessibility tree
-browser4-cli snapshot --auto-diff [--viewport N|-v N]                      # diff vs previous snapshot
+browser4-cli snapshot --auto-diff [--viewport N|-v N]                      # capture + diff vs previous snapshot
 browser4-cli snapshot --interactive|-i [--viewport N|-v N]                 # interactive-only mode
 browser4-cli snapshot --stdout --page N                                    # paginate stdout output
 browser4-cli snapshot grep [OPTIONS] <pattern>                             # search snapshot content with regex
@@ -74,6 +87,22 @@ browser4-cli snapshot -v -1    # one screen above the current position
 
 Without `--viewport`, the snapshot captures the full page in a single file — this can be very large on long pages. Prefer `-v 0` for what's visible; use `-v 1`, `-v 2`, ... or scroll the page for elements further down.
 
+### What the capture says about its own scope
+
+The header of every capture states which of the two it is:
+
+```yaml
+# Viewport State
+# - scope: whole page (all 10 viewports; no --viewport filter)
+# - viewportHeight: 1080px
+# - viewportsTotal: 10
+#
+```
+
+…for a capture **without** `-v`, and `# - processingViewport: <spec>` for an explicitly scoped one.
+
+A capture made without `-v` is **not** a viewport-0 capture: it holds the whole page, including elements far below the fold, whose `[box=…]` y-values grow well past the viewport height. `-v 0` is the single screenful currently visible. Do not read "full page" into `-v 0`, and do not read "one screenful" into a plain `snapshot` — the header now tells the two apart, and a whole-page capture carries no viewport-navigation footer.
+
 ## Stdout Pagination
 
 `--stdout` (and its alias `--raw`) prints the snapshot to stdout **paginated at 2000 lines/page by default**. When the tree is truncated:
@@ -85,7 +114,7 @@ Pass `--page N` to page through (`--page-size N` changes the size), or `--all` /
 
 ## Auto-Diff
 
-`--auto-diff` compares the current snapshot against the most recent snapshot for the same session and viewport, highlighting changes:
+`--auto-diff` captures as usual, then **appends a diff appendix** comparing the capture against the most recent deliberate snapshot in the snapshot directory (auto-snapshots written after interactions are skipped):
 
 ```bash
 browser4-cli snapshot -v 0                # baseline snapshot
@@ -93,18 +122,45 @@ browser4-cli fill <email-ref> "user@example.com"
 browser4-cli fill <password-ref> "password"
 browser4-cli click <submit-ref>
 browser4-cli wait --load networkidle
-browser4-cli snapshot -v 0 --auto-diff    # shows what changed after form submission
+browser4-cli snapshot -v 0 --auto-diff    # capture + diff vs the baseline
 ```
 
-The diff marks elements as added (`+`), removed (`-`), or modified (`~`), making it easy to spot navigation results, error messages, or confirmation text.
+> **It is not a filtered view.** The complete current tree is printed first (exactly as without `--auto-diff`), followed by `### Diff` and the appendix. To read only the delta, capture with `--stdout --all` and look below `### Diff`, or redirect the whole output to a file and use an external `grep`.
+
+The appendix has three sections, and every entry is one line in the same node shape the tree uses — `<marker> <role> "<name>" [ref=…] [box=…]`:
+
+```text
+# Snapshot Diff: snapshot-<older>.yml → snapshot-<newer>.yml
+# 3 added, 1 removed, 1 modified
+
+## Removed
+
+- link "Old" [ref=e4] [box=10,100,100,30]
+
+## Modified
+
+~ textbox "Query" [ref=e20] [box=10,60,100,30]
+  /ref: "e2" → "e20"
+  /value: "hello" → "hello2"
+
+## Added
+
++ button "Save draft" [ref=e7078] [box=640,512,120,40]
+```
+
+- `+` = added, `-` = removed, `~` = modified. The `[ref=…]` is the **current** page's ref, so an added or modified element can be acted on straight from the appendix.
+- Modified entries list what changed as indented `/ref:`, `/value:` and `/url:` lines. Element matching tolerates position and name drift, so an element whose *only* difference is its accessible name is not reported.
+- Names longer than 60 characters are elided with `…`.
+- `-` also starts every YAML sequence item, so the `## Removed` / `## Modified` / `## Added` section headers — not the marker alone — are what tell a diff line from a tree line.
+- A navigation reassigns every ref, so after `goto`/`click` the appendix is mostly removals plus additions. That is expected, not a page rewrite.
+- `### Diff` with `# No previous snapshot found — this is the first capture in this session.` means there was no deliberate baseline to compare against; capture once (`snapshot -v 0`) before interacting.
+- The appendix is also **persisted** as `<capture>.diff.txt` next to the capture (also for `--stdout` captures, which write no `.yml`), so it can be searched later with `snapshot grep --diff` or any external `grep` — see [Searching the auto-diff appendix](#searching-the-auto-diff-appendix). `snapshot clean` deletes a report together with its capture.
 
 > **`wait --load networkidle` only proves the network went quiet.** A page that computes results in JS after load (dashboards, bot-detection verdicts) can still be blank when the wait reports success, and a diff then shows nothing. Poll the result element first — `wait "<result-selector>"` — and treat `networkidle` as a network-settling extra step.
 
-> **Note:** `--auto-diff` requires a previous snapshot in the same session. If no previous snapshot exists, it behaves like a normal capture with a warning.
-
 ## Snapshot Grep
 
-`snapshot grep` captures a **fresh, live, full-page AX tree** from the server and searches it with regex — it does not read the most recently saved snapshot file, and it cannot see auto-diff markers (`+`/`-`/`~`) because those exist only in the `--auto-diff` response text, never in a persisted file:
+`snapshot grep` captures a **fresh, live, full-page AX tree** from the server and searches it with regex — it does not read the most recent saved snapshot file, and it cannot see auto-diff markers (`+`/`-`/`~`, `## Added`, …) because those exist only in the `--auto-diff` response text, never in a captured tree:
 
 ```bash
 browser4-cli snapshot grep "See also"             # search live full-page tree
@@ -112,6 +168,25 @@ browser4-cli snapshot grep -i "price|rating"      # case-insensitive regex alter
 browser4-cli snapshot grep -A 3 -B 1 "Checkout"   # show surrounding context lines
 browser4-cli snapshot grep --page N <pattern>     # paginate grep results
 browser4-cli snapshot grep --all <pattern>        # disable pagination (default: 2K lines)
+```
+
+### Searching the auto-diff appendix
+
+`snapshot --auto-diff` persists its appendix next to the capture (`<capture>.diff.txt`), and `--diff` searches that report instead of the live tree:
+
+```bash
+browser4-cli snapshot -v 0 --auto-diff --stdout --all   # capture + diff; writes snapshot-<ts>.diff.txt
+browser4-cli snapshot grep --diff -c -F "## Added"      # how many entries were added
+browser4-cli snapshot grep --diff -F "+ link"           # the added link entries
+browser4-cli snapshot grep --diff -A 3 "## Modified"    # context around a section
+```
+
+With no report on disk, `--diff` fails with the fix (`No auto-diff report in … — run snapshot --auto-diff first`). The same report is a plain text file, so an external `grep` works too:
+
+```bash
+browser4-cli snapshot -v 0 --auto-diff --stdout --all > diff.txt
+grep -i -C 3 "pattern language" diff.txt     # any match
+grep -c '^+ ' diff.txt                       # how many entries were added
 ```
 
 > **Zero matches = exit code 1** (GNU grep semantics). Use `browser4-cli snapshot grep -c <pattern>` to get the count and check `$LASTEXITCODE` / `$?` — no stdout parsing needed.
@@ -123,8 +198,11 @@ browser4-cli snapshot grep --all <pattern>        # disable pagination (default:
 | `-B N` | Show N lines before each match |
 | `-C N` | Show N lines before and after each match |
 | `-n` | GNU grep `-n` compatibility — line numbers are printed by default, so `-n` is a no-op here |
+| `--diff` | Search the persisted auto-diff report of the last `snapshot --auto-diff` instead of a fresh tree |
 | `--page N` | Show page N of paginated results |
 | `--all` | Disable pagination (show all results) |
+
+> **The short flags are grep's, not `snapshot`'s:** here `-i` is case-insensitive (not `--interactive`), `-v` selects non-matching lines (not a viewport index) and `-c` counts matches (not `--compact`). Long forms (`--ignore-case`, `--invert-match`, `--count`) are unambiguous.
 
 Patterns are **Rust regex** (same dialect as `htmlsnapshot grep`): `|` is alternation (an escaped `\|` is also accepted and converted), `^`/`$` anchor the start/end of a line, so write a literal `$` as `[$]` (e.g. `'[$][0-9.]+'` for prices) — it survives every shell layer (`\$` also compiles as an escaped dollar, but is easy to lose between shell layers). Use `-F` to match plain text. See the [htmlsnapshot grep dialect notes](htmlsnapshot.md#regex-dialect) for details.
 
@@ -226,7 +304,7 @@ browser4-cli fill <email-ref> "user@example.com"   # interact
 browser4-cli fill <password-ref> "password"
 browser4-cli click <submit-ref>
 browser4-cli wait --load networkidle               # network settled — nothing more
-browser4-cli snapshot -v 0 --auto-diff             # verify: see what changed
+browser4-cli snapshot -v 0 --auto-diff             # verify: capture + diff appendix
 ```
 
 ### Find Elements by Text
@@ -261,7 +339,7 @@ browser4-cli snapshot -v 0 --json   # clean JSON for scripts/agents
 | `--viewport N`, `-v N` | Capture viewport N (0 = current visible screen; negative = above). Paginates long pages into fixed-height chunks. |
 | `--stdout` | Print snapshot to stdout instead of saving to file. Large trees are paginated (default 2000 lines/page); when truncated, a hint is appended to stdout when piped and the full footer goes to stderr. |
 | `--raw` | Alias of `--stdout` — strip page info and print only snapshot content. |
-| `--auto-diff` | Diff against the previous **deliberate** snapshot (skips auto-snapshots after interactions). After a navigation or interaction that changes the page, `click <ref> --no-snapshot` preserves the pre-interaction baseline for a clean diff. |
+| `--auto-diff` | Capture, then append a diff appendix (`### Diff` + `## Removed` / `## Modified` / `## Added`) against the previous **deliberate** snapshot (auto-snapshots after interactions are skipped). The full tree is printed first — the appendix is not a filtered view. The appendix is also persisted as `<capture>.diff.txt`, searchable with `snapshot grep --diff`. After a navigation or interaction that changes the page, `click <ref> --no-snapshot` preserves the pre-interaction baseline for a clean diff. |
 | `--interactive`, `-i` | Interactive-only rendering (strict filter); see Interactive Mode. |
 | `--json` | Single-line JSON envelope on stdout only. All tips, hints, and warnings are suppressed. |
 | `--quiet`, `-q` | Suppress all normal output; only errors appear on stderr. |
@@ -274,8 +352,8 @@ browser4-cli snapshot -v 0 --json   # clean JSON for scripts/agents
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `snapshot --stdout` dumps a huge tree | Full page captured; stdout output is paginated at 2000 lines/page by default, but a single page is still large | Use `-v 0` viewport chunks, or `--stdout --page N` / `--page-size N`; `--all` / `--page-size 0` for the complete tree; `snapshot grep` for targeted reads |
-| `snapshot grep` finds nothing | Pattern doesn't match the accessibility tree (refs/labels, not raw HTML) | Match against element names and labels; use `htmlsnapshot grep` for raw HTML; check exit code (`1` = no matches) |
-| `snapshot --selector` returns an error | The CSS selector matched no element on the page | Verify the selector with `htmlsnapshot get text "<sel>"` first |
+| `snapshot grep` finds nothing | Pattern doesn't match the accessibility tree (refs/labels, not raw HTML) | Match against element names and labels; use `htmlsnapshot grep` for the captured HTML (an annotated serialization: `vi` boxes and synthetic `<link rel="normalizedURI">` head elements); check exit code (`1` = no matches) |
+| `snapshot --selector` / `snapshot grep --selector` fails | Either the selector is not valid CSS (`article[[`) or it is valid and matches nothing: the backend probe now quotes and escapes the selector, so a bad one fails loudly (`SyntaxError` / `Invalid CSS selector`) instead of being reported as “matched no element” | Read the error: a syntax/`[INVALID_ARGUMENT]` error means fix the selector; `no element matches selector '<sel>'` means the selector is valid but the element is not in this frame yet — re-`snapshot`, check the frame, or verify with `is visible "<sel>"` / `htmlsnapshot get text "<sel>"` |
 | Missing refs in `-i` mode | Strict interactive-only filter | Use `snapshot -v 0` instead |
 | Stale refs after interaction | Refs are single-use handles | Re-snapshot after any interaction — see [SKILL.md §5](../SKILL.md#5-critical-warnings) |
 

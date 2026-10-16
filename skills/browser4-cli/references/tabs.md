@@ -43,6 +43,13 @@ All four accept `-s <session>` (DEFAULT session otherwise) and `--json`.
   over CDP and never makes one the browser's foreground tab, so `active: true` does not mean the tab
   is the window's selected tab, and it does not mean the page sees itself as focused — that comes
   from the per-tab focus emulation (see [browser-modes.md](browser-modes.md)).
+- **Active-tab marker:** the human table prefixes the active tab's index with `▶ ` (the other rows
+  are indented so the columns stay aligned): `▶ 0  a1b2c3…  Example  https://example.com`. The marker
+  is drawn only when the backend reported an active tab for the session, so a table with no marker
+  means “the active tab could not be determined”, never “no tab is active”. A session that has just
+  been opened and never switched reports its **first** tab as active (there is no front driver until
+  something calls `tab-select`, and the backend falls back to the first tab rather than reporting
+  every row inactive).
 - **Session scoping:** Prefix tab commands with `-s <session-id>` to target a non-default session.
   The `list` command shows all tracked sessions and their IDs.
 - **Last-tab behavior:** Chrome requires at least one open tab. Closing the last tab makes Chrome

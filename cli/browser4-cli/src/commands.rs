@@ -782,6 +782,22 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
+        // Hidden alias: the dispatcher has accepted `"close" | "disconnect"`
+        // for a long time and attach.md promises the spelling in several
+        // places, but without a registry entry the command lookup failed first
+        // with "Unknown command: 'disconnect'" (114038#2).
+        CommandDef {
+            name: "disconnect",
+            description: "Alias of close — close the browser session (attached sessions detach; the external browser keeps running)",
+            category: Category::Browsers,
+            hidden: true,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
         CommandDef {
             name: "install",
             description: "Install the self-contained Browser4 runtime bundle (dependency jars + bundled JRE + launcher scripts)",
@@ -1932,7 +1948,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file. Large trees are paginated (default 2000 lines/page) — when truncated, a hint is appended to stdout (and the full footer goes to stderr). Use --all or --page-size 0 to print the complete tree.", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture specific screen-height page chunks (viewports). Each chunk = one screen height (~viewport height px). Indices are scroll-relative: 0 = current visible screen, 1 = one below, -1 = one above. Formats: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7). Example: -v 1-3 captures the 2nd through 4th screen-heights.", is_bool: false, short: Some("v") },
-                OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture. Note: after page navigation (goto/open), all elements appear as changed because the entire DOM is new.", is_bool: true, short: None },
+                OptionDef { name: "auto-diff", description: "Capture, then append a diff appendix against the previous deliberate snapshot: `### Diff` with `## Removed` / `## Modified` / `## Added` sections, each line `+|-|~ role \"name\" [ref=…] [box=…]`. The full current tree is printed first — this is not a filtered view, so read the appendix (or redirect and grep it, or use `snapshot grep --diff`). The report is also persisted next to the capture as <capture>.diff.txt. Note: after page navigation (goto/open), all elements appear as changed because the entire DOM is new.", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000; 0 = unlimited)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
@@ -1985,13 +2001,14 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
                 OptionDef { name: "context", short: Some("C"), is_bool: false, description: "Show N lines before and after each match" },
                 OptionDef { name: "invert-match", short: Some("v"), is_bool: true, description: "Select non-matching lines" },
-                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching lines" },
+                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching LINES — a minified one-line page counts once, however many times the pattern occurs. For the number of OCCURRENCES use -o <pattern> and count its output lines (`... grep -o '[$][0-9.]+' | wc -l`)" },
                 OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist" },
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
-                OptionDef { name: "only-matching", short: Some("o"), is_bool: true, description: "Print only the matched parts of each line (grep -o), one match per line — the way to harvest a value such as [$][0-9.]+ from the surrounding markup" },
+                OptionDef { name: "only-matching", short: Some("o"), is_bool: true, description: "Print only the matched parts of each line (grep -o), one match per line — the way to harvest a value such as [$][0-9.]+ from the surrounding markup, and to count OCCURRENCES (`| wc -l`) where -c counts matching lines" },
                 OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
+                OptionDef { name: "diff", short: None, is_bool: true, description: "Search the auto-diff report persisted by the last `snapshot --auto-diff` (next to its capture as <capture>.diff.txt) instead of a freshly captured tree — the only way to find its `## Added` / `## Removed` / `+ ` / `- ` lines, which never appear in a live tree" },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
@@ -2401,7 +2418,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "tool-call",
-            description: "Invoke any MCP tool by name (generic passthrough) and print the JSON result. Use this for plugin-provided agent tools that have no dedicated CLI command, e.g. `tool call captcha_detect`, `tool call captcha_get_balance`. Tool names use snake_case (captcha.detect -> captcha_detect); list available tools with `plugin list` or GET /mcp/tools. Arguments can be passed as a JSON object via --json.",
+            description: "Invoke any MCP tool by name (generic passthrough) and print the JSON result. Use this for plugin-provided agent tools that have no dedicated CLI command, e.g. `tool call captcha_detect`, `tool call captcha_get_balance`. Tool names use snake_case (captcha.detect -> captcha_detect); list them with `tool list` (or GET /mcp/tools), and see a plugin domain's methods with `plugin <domain> --help`. Arguments can be passed as a JSON object via --json.",
             category: Category::DevTools,
             hidden: false,
             batch_supported: false,
@@ -2410,12 +2427,32 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "json", description: "Tool arguments as a JSON object string, e.g. '{\"type\": \"RECAPTCHA_V2\", \"siteKey\": \"...\"}'", is_bool: false, short: None },
+                OptionDef { name: "fail-on-error", description: "Exit non-zero when the tool reports a failure in its payload (success:false or a non-empty error field), so shell scripts can branch on the exit code", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| get_str(args, "name").unwrap_or_default().to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "name": get_str(args, "name").unwrap_or_default() });
                 if let Some(js) = get_opt_str(args, "json") { p["json"] = json!(js); }
+                if let Some(true) = get_bool(args, "fail-on-error") { p["failOnError"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "tool-list",
+            description: "List the MCP tool names the running backend advertises (GET /mcp/tools), one per line. Use --filter to narrow the list, and `tool call <name>` to invoke one. `plugin list` lists installed plugin JARs; this lists the callable tools they contribute.",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "filter", description: "Only print tool names containing this substring (case-insensitive), e.g. --filter captcha", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(f) = get_opt_str(args, "filter") { p["filter"] = json!(f); }
                 p
             },
         },
@@ -3849,7 +3886,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[ArgDef { name: "instruction", description: "What data to extract, e.g. 'product name, price, ratings'", optional: false }],
             options: &[
                 OptionDef { name: "schema", description: "JSON Schema or {fields:[...]} format to constrain extracted data.  Supports @file.json to avoid shell quoting.", is_bool: false, short: None },
-                OptionDef { name: "filename", description: "Save extracted content to a file instead of printing to stdout", is_bool: false, short: None },
+                OptionDef { name: "filename", description: "Write the extracted content to this path instead of the timestamped default file (relative to the working directory; default: .browser4-cli/snapshot/). Use --stdout/--raw to print instead of saving", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Print extracted content directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print extracted content directly to stdout", is_bool: true, short: None },
             ],
@@ -3873,7 +3910,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[ArgDef { name: "instruction", description: "Summarization instruction, e.g. 'summarize the product reviews'", optional: true }],
             options: &[
                 OptionDef { name: "selector", description: "CSS selector to limit the scope of summarization", is_bool: false, short: None },
-                OptionDef { name: "filename", description: "Save summary to a file instead of printing to stdout", is_bool: false, short: None },
+                OptionDef { name: "filename", description: "Write the summary to this path instead of the timestamped default file (relative to the working directory; default: .browser4-cli/snapshot/). Use --stdout/--raw to print instead of saving", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Print summary directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print summary directly to stdout", is_bool: true, short: None },
             ],
@@ -3970,7 +4007,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
-            options: &[],
+            options: &[
+                OptionDef { name: "json", description: "Wrap the shared status envelope (taskId, status, statusCode, message, processed, error) in a JSON result instead of printing it alone", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_status".to_string(),
             tool_params_fn: |args| {
@@ -3984,7 +4023,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
-            options: &[],
+            options: &[
+                OptionDef { name: "json", description: "Emit the envelope and its payload as one JSON object instead of printing them as text", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {
@@ -3999,10 +4040,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "clear", description: "Remove terminal (completed/failed) tracked agent tasks; in-flight tasks are kept unless --all is given", is_bool: true, short: None },
-                OptionDef { name: "all", description: "With --clear, also remove in-flight (queued/processing) tasks, which keep running server-side", is_bool: true, short: None },
+                OptionDef { name: "clear", description: "Remove terminal (completed/failed/cancelled) tracked agent tasks; unfinished tasks are kept unless --all is given", is_bool: true, short: None },
+                OptionDef { name: "all", description: "With --clear, also remove unfinished tasks, which keep running server-side", is_bool: true, short: None },
                 OptionDef { name: "limit", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
                 OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Emit the cleared/kept counts as a JSON object (with --clear) instead of the human summary", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
@@ -4220,7 +4262,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "sql <query>", description: "X-SQL query to extract structured data from each crawled page. Use @url as the page URL placeholder. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "sql-base64 <base64>", description: "Base64-encoded X-SQL query (avoids shell quoting issues on Windows). Both shapes work: `--sql-base64 <base64>` supplies the query itself, and a bare `--sql-base64` (a flag, no value) decodes the --sql/stdin value.", is_bool: false, short: None },
-                OptionDef { name: "format <fmt>", description: "Output format for X-SQL extracted data (requires --sql): json, csv, or table (default: table). Has no effect without --sql.", is_bool: false, short: None },
+                OptionDef { name: "format <fmt>", description: "Output format for X-SQL extracted data (requires --sql): json, csv, or table (default: table). Without --sql it only warns on stdout, but combined with --output the CLI refuses (exit 1, writes nothing) because the file would carry the plain-text listing under a csv/json name. For a JSON page listing of a plain crawl use the global --json flag BEFORE the command — it needs no --sql.", is_bool: false, short: None },
                 OptionDef { name: "output <file>", description: "Write results to a file instead of stdout", is_bool: false, short: Some("o") },
                 OptionDef { name: "out-link-selector <css>", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
                 OptionDef { name: "out-link-pattern <regex>", description: "Regex pattern to filter extracted links (default: .+). Git Bash/MSYS: a value starting with '/' is rewritten into a Windows path before the CLI starts — run `./b4w.sh` (or export MSYS2_ARG_CONV_EXCL='*'), or drop the leading slash (write -olp \"product/\")", is_bool: false, short: Some("olp") },
@@ -4235,7 +4277,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "ignore-url-query", description: "Remove query parameters from discovered out-link hrefs before loading (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
                 OptionDef { name: "no-norm", description: "Disable URL normalization of discovered out-link hrefs (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
                 OptionDef { name: "readonly", description: "Non-destructive mode: loads may be served from the page store and are never written back; wins over --refresh", is_bool: true, short: None },
-                OptionDef { name: "parallel <n>", description: "Collect up to <n> pages/tabs at the same time (default: 4, 1 = sequential). Each parallel unit needs its own browser tab", is_bool: false, short: None },
+                OptionDef { name: "parallel <n>", description: "Run up to <n> crawl units at the same time (default: 4, 1 = sequential). A unit is one seed URL's fetch-and-extract round, and each unit in flight uses its own browser tab; links discovered inside a unit are fetched from the shared tab pool. A single-seed crawl therefore peaks at 1 unit by design — the completion report's 'peak N unit(s) in flight' counts those units, not pages", is_bool: false, short: None },
                 OptionDef { name: "timeout <dur>", description: "Maximum time the crawl may run before the server cancels it: seconds, or a duration such as 30s, 10m, 1h (default: 10m; max 1h). A crawl that runs out of budget reports the pages it never started instead of being cut off silently", is_bool: false, short: None },
                 OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
                 OptionDef { name: "verbose", description: "Show per-URL processing status in crawl results", is_bool: true, short: None },
@@ -4533,12 +4575,12 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get",
-            description: "Extract elements from a FRESH snapshot of the active tab's page (text, textcontent, html, attr). The live tab is captured first, then read, so changes that exist only in the tab (forms, SPA updates, `eval`) are visible without a separate capture. Use --expires <dur> to serve the snapshot already in the store instead when it is younger than <dur>, which reads the previous snapshot version without touching the tab. Supports batch mode for multi-step workflows.",
+            description: "Extract elements from a FRESH snapshot of the active tab's page (text, textcontent, html, outerhtml, attr). The live tab is captured first, then read, so changes that exist only in the tab (forms, SPA updates, `eval`) are visible without a separate capture. Use --expires <dur> to serve the snapshot already in the store instead when it is younger than <dur>, which reads the previous snapshot version without touching the tab. Supports batch mode for multi-step workflows.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text = whitespace-normalized inner text; textcontent = the raw textContent (whitespace and newlines kept). Neither is a rendered-text read, so CSS overflow does not clip them, and neither recovers text already truncated in the page's own HTML — use attr (e.g. the title attribute) for that", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, outerhtml, or attr. text = whitespace-normalized inner text; textcontent = the raw textContent (whitespace and newlines kept); html = the element's INNER markup; outerhtml = the element ITSELF (`<article class=\"product_pod\">…</article>`). Neither text field is a rendered-text read, so CSS overflow does not clip them, and neither recovers text already truncated in the page's own HTML — use attr (e.g. the title attribute) for that", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -4568,7 +4610,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text = whitespace-normalized inner text; textcontent = the raw textContent (whitespace and newlines kept). Neither is a rendered-text read, so CSS overflow does not clip them, and neither recovers text already truncated in the page's own HTML — use attr (e.g. the title attribute) for that", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, outerhtml, or attr. text = whitespace-normalized inner text; textcontent = the raw textContent (whitespace and newlines kept); html = the element's INNER markup; outerhtml = the element ITSELF (`<article class=\"product_pod\">…</article>`). Neither text field is a rendered-text read, so CSS overflow does not clip them, and neither recovers text already truncated in the page's own HTML — use attr (e.g. the title attribute) for that", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -4666,7 +4708,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-export",
-            description: "Export a FRESH snapshot of the active tab's page to a local file: the live tab is captured first, so the export is the page as it is right now. The file path can be passed as a positional argument or via --file.",
+            description: "Export a FRESH snapshot of the active tab's page to a local file: the live tab is captured first, so the export is the page as it is right now. The file path can be passed as a positional argument or via --file. The artifact is an ANNOTATED serialization, not the page's View-Source: every element carries vi=\"x y w h\" (plus tv0/tv1 text-node rects) and <head> gains synthetic <link rel=\"normalizedURI\">/<link rel=\"href\"> elements that exist only in the serialized output — filter link[rel=\"normalizedURI\"], link[rel=\"href\"] when the head must be pristine.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -4688,7 +4730,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "clean",
-                    description: "Strip <script>, <style>, comments, and non-standard attributes (keeps 'vi', aria-*, data-*, role, and standard HTML5 attrs)",
+                    description: "Strip <script>, <style>, comments and non-standard attributes (keeps 'vi', aria-*, data-*, role, and standard HTML5 attrs). The injected <link rel=\"normalizedURI\">/<link rel=\"href\"> head elements stay: they are standard markup, not non-standard attributes",
                     is_bool: true,
                     short: None,
                 },
@@ -4752,7 +4794,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-grep",
-            description: "Search a FRESH snapshot of the active tab's page using regex patterns with grep-style output. The live tab is captured first, so the search sees the page as it is right now.",
+            description: "Search a FRESH snapshot of the active tab's page using regex patterns with grep-style output. The live tab is captured first, so the search sees the page as it is right now. It searches the captured HTML text — an annotated serialization (vi=\"…\" boxes, synthetic head links), not the page's View-Source — so a pattern can match tool-generated markup as well; script/style content is skipped unless --raw-html is given.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -4768,18 +4810,18 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "before-context <n>", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
                 OptionDef { name: "context <n>", short: Some("C"), is_bool: false, description: "Show N lines before and after each match" },
                 OptionDef { name: "invert-match", short: Some("v"), is_bool: true, description: "Select non-matching lines" },
-                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching lines" },
+                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching LINES — a minified one-line page counts once, however many times the pattern occurs. For the number of OCCURRENCES use -o <pattern> and count its output lines (`... grep -o '[$][0-9.]+' | wc -l`)" },
                 OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist" },
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
-                OptionDef { name: "only-matching", short: Some("o"), is_bool: true, description: "Print only the matched parts of each line (grep -o), one match per line — the way to harvest a value such as [$][0-9.]+ from the surrounding markup" },
+                OptionDef { name: "only-matching", short: Some("o"), is_bool: true, description: "Print only the matched parts of each line (grep -o), one match per line — the way to harvest a value such as [$][0-9.]+ from the surrounding markup, and to count OCCURRENCES (`| wc -l`) where -c counts matching lines" },
                 OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
-                OptionDef { name: "selector <css>", short: None, is_bool: false, description: "CSS selector to scope the search to (querySelector semantics: first match only). Use --selector-all to search across all matching elements." },
+                OptionDef { name: "selector <css>", short: None, is_bool: false, description: "CSS selector to scope the search to (querySelector semantics: first match only). Use --selector-all to search across all matching elements. Searches the captured (annotated) HTML, so patterns can match the injected vi boxes and head links." },
                 OptionDef { name: "selector-all <css>", short: None, is_bool: false, description: "CSS selector to scope the search to all matching elements (querySelectorAll semantics). Each element's inner HTML is searched independently, and results are annotated with the element index." },
                 OptionDef { name: "page <n>", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
                 OptionDef { name: "page-size <n>", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
-                OptionDef { name: "raw-html", short: None, is_bool: true, description: "Search the raw HTML including <script> and <style> content. By default, script/style tags are stripped to avoid false positives from JavaScript code." },
+                OptionDef { name: "raw-html", short: None, is_bool: true, description: "Also search the <script> and <style> CONTENT of the captured HTML. By default script/style tags are stripped to avoid false positives from JavaScript code. This widens what is searched — it does not switch to the site's View-Source." },
                 OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) searches the live page, a positive value searches the stored snapshot while it is younger than the window, without touching the tab" },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -4881,7 +4923,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Plugins ----
         CommandDef {
             name: "plugin-list",
-            description: "List all installed Browser4 plugins in the server's plugins directory",
+            description: "List all installed Browser4 plugins in the server's plugins directory. This lists plugin JARs, not the tools they expose — run `tool list` (or GET /mcp/tools) for the callable MCP tool names.",
             category: Category::Plugins,
             hidden: false,
             batch_supported: false,
@@ -4893,12 +4935,12 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "plugin-info",
-            description: "Show details for a single installed plugin (manifest name or JAR file name)",
+            description: "Show details for a single installed plugin. Accepts the manifest name, the JAR file name, or the plugin's short name (e.g. 'captcha' for browser4-captcha-<version>.jar); an unknown name reports the installed plugins instead of a bare 404.",
             category: Category::Plugins,
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "name", description: "Plugin name (manifest name or JAR file name)", optional: false },
+                ArgDef { name: "name", description: "Plugin name (manifest name, JAR file name, or short name such as 'captcha')", optional: false },
             ],
             options: &[],
             e2e_coverage: E2eCoverage::Excluded,
@@ -4909,12 +4951,12 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "plugin-install",
-            description: "Install a Browser4 plugin from a local JAR file (requires server restart to activate)",
+            description: "Install a Browser4 plugin from a local JAR file (requires server restart to activate). Pass exactly one JAR; a shell wildcard that expands to several files is rejected with the candidate list, and a literal wildcard is expanded by the CLI.",
             category: Category::Plugins,
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "file", description: "Path to the plugin JAR file", optional: false },
+                ArgDef { name: "file", description: "Path to the plugin JAR file (exactly one, e.g. browser4-plugins/browser4-captcha/target/browser4-captcha-4.14.1-SNAPSHOT.jar); wildcards are supported", optional: false },
             ],
             options: &[
                 OptionDef { name: "replace", description: "Overwrite an existing plugin with the same name", is_bool: true, short: None },
@@ -5812,6 +5854,25 @@ mod tests {
                 cmd.name
             );
         }
+    }
+
+    #[test]
+    fn disconnect_is_a_registered_alias_of_close() {
+        // The dispatcher accepts `"close" | "disconnect"` (and attach.md
+        // documents the spelling in several places), so the registry must know
+        // the name too — otherwise the lookup fails first with
+        // "Unknown command: 'disconnect'" (114038#2).
+        let map = commands_map();
+        let close = map.get("close").expect("close is registered");
+        let disconnect = map.get("disconnect").expect("disconnect alias is registered");
+
+        assert!(disconnect.hidden, "the alias stays out of `help` listings");
+        assert_eq!(disconnect.category, close.category);
+        let no_args: HashMap<String, Value> = HashMap::new();
+        assert_eq!(
+            (disconnect.tool_name_fn)(&no_args),
+            (close.tool_name_fn)(&no_args)
+        );
     }
 
     #[test]

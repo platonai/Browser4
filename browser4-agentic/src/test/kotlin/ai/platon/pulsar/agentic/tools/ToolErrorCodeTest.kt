@@ -236,4 +236,78 @@ class ToolErrorCodeTest {
             "wire codes must be unique"
         )
     }
+
+    @Test
+    @DisplayName("a refused attach endpoint is not a retryable CDP error")
+    fun refusedEndpointIsNotACdpError() {
+        // The exact message the attach path renders. Every attach message names a
+        // "CDP endpoint", so the broad `"cdp" in text` rule used to win first and
+        // answer CDP_ERROR ("retrying may help") for a connection that nothing is
+        // listening on — advice that can never work.
+        val unreachable = "attach_browser failed: CDP endpoint http://127.0.0.1:19999 is not reachable: " +
+            "nothing is listening on that address (connection refused). " +
+            "Start the target browser with --remote-debugging-port and retry attach."
+
+        assertEquals(ToolErrorCode.ENDPOINT_UNREACHABLE, ToolErrorMapper.classifyMessage(unreachable))
+        assertFalse(
+            ToolErrorCode.ENDPOINT_UNREACHABLE.retryable,
+            "repeating the same attach against a dead endpoint cannot succeed"
+        )
+
+        // A refused connection is still an upstream transport failure elsewhere —
+        // the point is that the specific rule is reached before the generic one.
+        assertEquals(
+            ToolErrorCode.UPSTREAM_ERROR,
+            ToolErrorMapper.classifyMessage("fetch failed: connection refused to the origin server")
+        )
+    }
+
+    @Test
+    @DisplayName("a non-CDP endpoint and a page-less browser get their own codes")
+    fun otherEndpointConditionsAreDistinct() {
+        assertEquals(
+            ToolErrorCode.ENDPOINT_NOT_CDP,
+            ToolErrorMapper.classifyMessage(
+                "attach_browser failed: CDP endpoint http://127.0.0.1:19888 is reachable but is not a " +
+                    "Chrome DevTools discovery endpoint (GET /json/version → HTTP 404)."
+            )
+        )
+        assertEquals(
+            ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS,
+            ToolErrorMapper.classifyMessage(
+                "attach_browser failed: CDP endpoint http://127.0.0.1:19889 is reachable but has no page " +
+                    "targets (browser=Chrome/999.0.0.0 pages=0). Open a tab in the target browser, then retry attach"
+            )
+        )
+        // The three endpoint codes are distinct states, so a machine consumer can
+        // branch without string-matching the prose.
+        assertEquals(
+            3,
+            setOf(
+                ToolErrorCode.ENDPOINT_UNREACHABLE,
+                ToolErrorCode.ENDPOINT_NOT_CDP,
+                ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS,
+            ).size
+        )
+    }
+
+    @Test
+    @DisplayName("an attach failure carries its observed code through a wrapper")
+    fun attachFailureKeepsItsCode() {
+        val failure = AttachFailureException(
+            "CDP endpoint http://127.0.0.1:19999 is not reachable: nothing is listening on that address.",
+            ToolErrorCode.ENDPOINT_UNREACHABLE,
+        )
+
+        assertEquals(ToolErrorCode.ENDPOINT_UNREACHABLE, ToolErrorMapper.classify(failure))
+        assertEquals(
+            ToolErrorCode.ENDPOINT_UNREACHABLE,
+            ToolErrorMapper.classify(IllegalStateException("attach_browser failed", failure)),
+            "a wrapper must not lose the classification of its cause"
+        )
+        assertFalse(
+            failure is IllegalArgumentException,
+            "an attach failure is not a usage error: the call's shape was valid, so it must not get the signature dump"
+        )
+    }
 }

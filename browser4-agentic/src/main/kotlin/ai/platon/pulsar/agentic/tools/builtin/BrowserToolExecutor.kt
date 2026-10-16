@@ -29,11 +29,19 @@ class BrowserToolExecutor(
             domain = domain,
             method = "switchTab",
             arguments = listOf(
-                ToolSpec.Arg("index", "Int?", "null", "Zero-based tab index."),
-                ToolSpec.Arg("tabId", "String?", "null", "Tab GUID; give either this or index."),
+                ToolSpec.Arg("index", "Int?", "null", "Zero-based tab index as published by listTabs (stable creation order)."),
+                ToolSpec.Arg("tabId", "String?", "null", "Tab GUID; the robust target, give either this or index."),
             ),
             returnType = "WebDriver",
             description = "Switch to a specific browser tab by its zero-based index or GUID",
+            help = """
+                switchTab(index: Int?, tabId: String?)
+
+                Prefer tabId (the GUID from listTabs): it identifies the tab itself, so it
+                keeps working after tabs are opened or closed. `index` is the position in
+                listTabs' stable creation-ordered listing — not Chrome's tab-strip
+                position, which Browser4 cannot rely on because tabs are opened over CDP.
+            """.trimIndent(),
             examples = listOf(
                 ToolExample(title = "Switch to the second tab", args = mapOf("index" to "1")),
             ),
@@ -52,11 +60,18 @@ class BrowserToolExecutor(
             domain = domain,
             method = "closeTab",
             arguments = listOf(
-                ToolSpec.Arg("index", "Int?", "null", "Zero-based tab index."),
-                ToolSpec.Arg("tabId", "String?", "null", "Tab GUID; give either this or index."),
+                ToolSpec.Arg("index", "Int?", "null", "Zero-based tab index as published by listTabs (stable creation order)."),
+                ToolSpec.Arg("tabId", "String?", "null", "Tab GUID; the robust target, give either this or index."),
             ),
             returnType = "Boolean",
             description = "Close a tab by zero-based index or GUID, or the current tab when omitted",
+            help = """
+                closeTab(index: Int?, tabId: String?)
+
+                Prefer tabId (the GUID from listTabs): it identifies the tab itself and
+                survives unrelated opens/closes. `index` is the position in listTabs'
+                stable creation-ordered listing, not Chrome's tab-strip position.
+            """.trimIndent(),
             examples = listOf(
                 ToolExample(title = "Close the second tab", args = mapOf("index" to "1")),
             ),
@@ -67,6 +82,15 @@ class BrowserToolExecutor(
             arguments = emptyList(),
             returnType = "List<Map<String, Any>>",
             description = "List all tabs with index, guid, title, url, and a boolean active marker",
+            help = """
+                listTabs()
+
+                Each entry: index, guid, title, url, active (a JSON boolean). `index` is the
+                tab's position in this listing, ordered by stable driver-creation order, so
+                repeated calls agree and switchTab/closeTab resolve the same position. It is
+                NOT Chrome's tab-strip position. Targets that must survive tab churn should
+                use `guid` (pass it as `tabId`).
+            """.trimIndent(),
             examples = listOf(ToolExample(title = "List every tab", runnable = true)),
         )
     }
@@ -142,16 +166,24 @@ class BrowserToolExecutor(
             }
 
             "listTabs" -> {
-                val frontGuid = (browser.frontDriver as? AbstractWebDriver)?.guid
-                browser.listDrivers().mapIndexed { i, driver ->
+                // `frontDriver` is only set by bringToFront(), so a freshly opened
+                // managed session has none — see [TabActivity] for why the first
+                // tab is then the active one instead of no tab at all. The list is
+                // ordered by driver creation id, so the published `index` is stable
+                // across calls and is the position `switchTab`/`closeTab` resolve.
+                val drivers = TabActivity.orderedTabDrivers(browser)
+                val activeGuid = TabActivity.resolveActiveGuid(drivers, browser.frontDriver)
+                drivers.mapIndexed { i, driver ->
                     mapOf(
-                        "index" to i.toString(),
+                        // A real number: the CLI accepts a string too, but sortable
+                        // JSON should not depend on a client's leniency.
+                        "index" to i,
                         "guid" to driver.guid,
                         "title" to driver.title(),
                         "url" to driver.currentUrl(),
                         // Emit a real Boolean so JSON consumers parse `active` without
                         // string-to-bool coercion.
-                        "active" to (driver.guid == frontGuid)
+                        "active" to (driver.guid == activeGuid)
                     )
                 }
             }
@@ -238,7 +270,9 @@ class BrowserToolExecutor(
         val index = parseTabIndex(args, functionName)
         if (index != null) {
             require(index >= 0) { "Tab index must be non-negative for $functionName" }
-            val drivers = browser.listDrivers().filterIsInstance<AbstractWebDriver>()
+            // The same ordered listing `listTabs` publishes, so an index a client
+            // just read addresses the tab it read it for.
+            val drivers = TabActivity.orderedTabDrivers(browser)
             return drivers.getOrNull(index)
                 ?: throw IllegalArgumentException("Tab index '$index' out of range; found ${drivers.size} tabs")
         }
@@ -258,7 +292,9 @@ class BrowserToolExecutor(
             val front = (browser.frontDriver as? AbstractWebDriver)
                 ?.takeIf { browser.drivers.containsKey(it.guid) }
             return front
-                ?: browser.listDrivers().filterIsInstance<AbstractWebDriver>().firstOrNull()
+                // Same stable order as the listing, so "the first tab" means the
+                // same tab in `listTabs` and here.
+                ?: TabActivity.orderedTabDrivers(browser).firstOrNull()
                 ?: throw IllegalArgumentException("No browser tabs are currently open")
         }
 

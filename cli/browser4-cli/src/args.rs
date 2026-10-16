@@ -374,10 +374,16 @@ fn looks_like_negative_value(token: &str) -> bool {
 /// A token that is a known global flag mistakenly placed after the command
 /// name (e.g. `htmlsnapshot -q`).  Used to produce a targeted error hint
 /// instead of a bare "unexpected positional arguments" rejection.
+///
+/// `-s` / `--session` belongs here even though it takes a value: it is the
+/// global session selector, no command declares it as its own option, and
+/// `open -s research <url>` / `goto <url> -s research` is the mistake a
+/// first-time user makes most often — it must name the placement rule.
 fn is_global_flag_token(token: &str) -> bool {
     matches!(
         token,
         "-q" | "--quiet"
+            | "-s" | "--session"
             | "--json"
             | "--pretty"
             | "--show-tip"
@@ -385,6 +391,12 @@ fn is_global_flag_token(token: &str) -> bool {
             | "--help-json"
             | "--timeout"
     ) || token.starts_with("--timeout=")
+        || token.starts_with("--session=")
+}
+
+/// True when [token] is the global session selector (`-s` / `--session[…=]`).
+fn is_session_flag_token(token: &str) -> bool {
+    matches!(token, "-s" | "--session") || token.starts_with("--session=")
 }
 
 /// Global flags the CLI also accepts *after* the command name, so a
@@ -498,6 +510,12 @@ pub fn validate_command_options(
         display,
         suggestion
     );
+    // A misplaced `-s`/`--session` is the global session selector, not a typo:
+    // say where it belongs instead of leaving the user to dig the rule out of
+    // the docs.
+    if unknown.iter().any(|key| *key == "s" || *key == "session") {
+        message.push_str(SESSION_FLAG_POSITION_HINT);
+    }
     if supported.is_empty() {
         message.push_str("\nThis command accepts no options.");
     } else {
@@ -510,14 +528,26 @@ pub fn validate_command_options(
 
 /// Build the hint appended to "unexpected positional arguments" errors when
 /// any offending token is a global flag.
+///
+/// The session flag gets its own wording: `-s <name>` takes a value, so the
+/// generic "global flags must appear before the command" hint would not show
+/// where the value goes.
 fn global_flag_hint(tokens: &[&String]) -> String {
-    if tokens.iter().any(|t| is_global_flag_token(t)) {
-        " (global flags must appear before the command, e.g. 'browser4-cli -q htmlsnapshot')"
-            .to_string()
-    } else {
-        String::new()
+    if tokens.iter().any(|t| is_session_flag_token(t)) {
+        return SESSION_FLAG_POSITION_HINT.to_string();
     }
+    if tokens.iter().any(|t| is_global_flag_token(t)) {
+        return " (global flags must appear before the command, e.g. 'browser4-cli -q htmlsnapshot')"
+            .to_string();
+    }
+    String::new()
 }
+
+/// Placement rule for the global `-s`/`--session` flag, spelled with the
+/// example a user needs (`-s research open <url>`).
+const SESSION_FLAG_POSITION_HINT: &str = "\n'-s/--session' is a GLOBAL flag — its position is part of the syntax: \
+     place it before the command, e.g. 'browser4-cli -s research open <url>' \
+     (not 'browser4-cli open -s research <url>').";
 
 /// Map a command's own option table to the `--long (-s)` spellings a usage
 /// error should list, or `None` when the command is unknown or a passthrough.
@@ -1523,6 +1553,57 @@ mod tests {
         assert!(result
             .unwrap_err()
             .contains("unexpected positional arguments"));
+    }
+
+    #[test]
+    fn test_misplaced_session_flag_names_the_placement_rule() {
+        // `open -s research <url>` is the mistake a first-time user makes most
+        // often; `-s` is the global session selector and its position is part
+        // of the syntax, so the error must spell out where it goes.
+        let mut raw = HashMap::new();
+        raw.insert(
+            "_".to_string(),
+            json!(["open", "-s", "research", "https://example.com"]),
+        );
+        raw.insert("s".to_string(), json!(true));
+        let err = build_command_args(&raw, &["url"], &[]).unwrap_err();
+        assert!(err.contains("-s/--session"), "got: {err}");
+        assert!(
+            err.contains("browser4-cli -s research open <url>"),
+            "the hint must show the corrected form: {err}"
+        );
+
+        // `goto <url> -s test` takes the option-validation path instead.
+        let parsed = HashMap::from([
+            ("_".to_string(), json!(["goto", "https://example.com", "-s", "test"])),
+            ("s".to_string(), json!(true)),
+        ]);
+        let validated = validate_command_options("goto", &parsed).unwrap_err();
+        assert!(validated.contains("unknown option --s"), "got: {validated}");
+        assert!(
+            validated.contains("browser4-cli -s research open <url>"),
+            "validation errors must carry the same hint: {validated}"
+        );
+
+        // A stray token that merely contains "s" must not attract the hint.
+        let mut unrelated = HashMap::new();
+        unrelated.insert("_".to_string(), json!(["htmlsnapshot", "extra"]));
+        assert!(!build_command_args(&unrelated, &[], &[])
+            .unwrap_err()
+            .contains("-s/--session"));
+    }
+
+    #[test]
+    fn test_session_flag_token_detection() {
+        for token in ["-s", "--session", "--session=research"] {
+            assert!(is_global_flag_token(token), "{token} is a global flag");
+            assert!(is_session_flag_token(token), "{token} is the session flag");
+        }
+        for token in ["-q", "--json", "--pretty", "--timeout"] {
+            assert!(is_global_flag_token(token), "{token} is a global flag");
+            assert!(!is_session_flag_token(token), "{token} is not -s/--session");
+        }
+        assert!(!is_global_flag_token("--selector"));
     }
 
     #[test]

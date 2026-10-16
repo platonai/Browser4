@@ -21,6 +21,10 @@ import ai.platon.pulsar.api.model.WebDriverException
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.chrome.session.ProcessTermination
+import ai.platon.pulsar.chrome.session.ProcessTerminationReport
+import ai.platon.pulsar.rest.session.SessionBrowserFacts
+import ai.platon.pulsar.rest.session.SessionCloseReport
 import ai.platon.pulsar.rest.session.SessionKind
 import ai.platon.pulsar.rest.session.SessionStatus
 import ai.platon.pulsar.core.api.WebDriver
@@ -122,20 +126,113 @@ class MCPToolControllerTest {
     }
 
     @Test
+    fun `test browser_window_state alias reports UNKNOWN when nothing can be observed`() = runBlocking {
+        // No bound browser: the honest answer is "could not check", never a
+        // claim about a window (and never a warning).
+        `when`(sessionManager.sessionBrowserFacts(sessionId)).thenReturn(null)
+        `when`(managedSession.capabilities).thenReturn(null)
+
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "browser_window_state", arguments = mapOf("sessionId" to sessionId)),
+            response
+        )
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java)
+        assertEquals(sessionId, payload["sessionId"])
+        assertEquals("UNKNOWN", payload["visibility"])
+        assertEquals(false, payload["verified"])
+        assertEquals("NONE", payload["source"])
+        assertTrue((payload["reason"] as String).isNotBlank())
+    }
+
+    @Test
+    fun `test browser_window_state reports HIDDEN for a headless session`() = runBlocking {
+        `when`(sessionManager.sessionBrowserFacts(sessionId))
+            .thenReturn(SessionBrowserFacts(contextDir = null, port = 0, ownsBrowser = true))
+        `when`(managedSession.capabilities).thenReturn(mapOf("displayMode" to "HEADLESS"))
+
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "browser_window_state", arguments = mapOf("sessionId" to sessionId)),
+            response
+        )
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java)
+        // A headless session has no window by construction: verified HIDDEN, so a
+        // client can skip the "no visible window" warning entirely.
+        assertEquals("HIDDEN", payload["visibility"])
+        assertEquals(true, payload["verified"])
+        assertEquals("DISPLAY_MODE", payload["source"])
+    }
+
+    @Test
+    fun `test window_state reports session not found`() = runBlocking {
+        val missing = "no-such-session"
+        `when`(sessionManager.getSession(missing)).thenReturn(null)
+
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "window_state", arguments = mapOf("sessionId" to missing)),
+            response
+        )
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.content[0].text.contains("Session not found"), result.body!!.content[0].text)
+        assertEquals(true, result.body!!.isError)
+        Unit
+    }
+
+    @Test
     fun `test close session`() = runBlocking {
         val request = MCPToolCallRequest(
             tool = "close_session",
             arguments = mapOf("sessionId" to sessionId)
         )
-        `when`(sessionManager.deleteSession(sessionId)).thenReturn(true)
+        `when`(sessionManager.closeSession(sessionId))
+            .thenReturn(closeReport(sessionId, ProcessTermination.TERMINATED))
 
         val result = controller.callTool(request, response)
 
         assertEquals(HttpStatus.OK, result.statusCode)
         assertEquals("Session closed", result.body!!.content[0].text)
-        Mockito.verify(sessionManager).deleteSession(sessionId)
+        // `browserTerminated` is tri-state: true/false/null, where null means "could
+        // not be checked" — the value a client must not print as "terminated".
+        val payload = result.body!!.structuredContent!!
+        assertEquals(true, payload["browserTerminated"])
+        assertEquals("TERMINATED", payload["browserTermination"])
+        assertEquals(sessionId, payload["sessionId"])
+        Mockito.verify(sessionManager).closeSession(sessionId)
         Unit
     }
+
+    @Test
+    fun `test close session reports an unverifiable browser as null, not as terminated`() = runBlocking {
+        val request = MCPToolCallRequest(
+            tool = "close_session",
+            arguments = mapOf("sessionId" to sessionId)
+        )
+        `when`(sessionManager.closeSession(sessionId))
+            .thenReturn(closeReport(sessionId, ProcessTermination.NO_PID_FILE))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        val payload = result.body!!.structuredContent!!
+        assertEquals(null, payload["browserTerminated"], "no pid marker means nothing was proven")
+        assertEquals("NO_PID_FILE", payload["browserTermination"])
+        Unit
+    }
+
+    /**
+     * A close report with only the process outcome set; the profile fields stay
+     * NOT_APPLICABLE so each test asserts one fact at a time.
+     */
+    private fun closeReport(sessionId: String, outcome: ProcessTermination): SessionCloseReport =
+        SessionCloseReport(
+            sessionId = sessionId,
+            kind = SessionKind.BROWSER4_LAUNCHED,
+            process = ProcessTerminationReport(outcome = outcome, pid = 4242, detail = "test"),
+        )
 
     @Test
     fun `test list sessions`() = runBlocking {
@@ -222,23 +319,45 @@ class MCPToolControllerTest {
     @Test
     fun `test close all sessions`() = runBlocking {
         val request = MCPToolCallRequest(tool = "close_all_sessions")
-        `when`(sessionManager.deleteAllSessions()).thenReturn(5)
+        `when`(sessionManager.closeAllSessions()).thenReturn(
+            listOf(
+                closeReport(sessionId, ProcessTermination.TERMINATED),
+                closeReport("session-2", ProcessTermination.SURVIVED),
+            )
+        )
 
         val result = controller.callTool(request, response)
 
         assertEquals(HttpStatus.OK, result.statusCode)
-        assertEquals("Closed 5 session(s)", result.body!!.content[0].text)
+        assertEquals("Closed 2 session(s)", result.body!!.content[0].text)
+        // The aggregate separates "gone" from "could not be checked": summing them
+        // into one count is how a leaked browser stayed invisible.
+        val payload = result.body!!.structuredContent!!
+        assertEquals(2, payload["closed"])
+        assertEquals(1, payload["browserTerminated"])
+        assertEquals(1, payload["browserSurvived"])
+        assertEquals(0, payload["browserUnverified"])
     }
 
     @Test
     fun `test kill all sessions`() = runBlocking {
         val request = MCPToolCallRequest(tool = "kill_all_sessions")
-        `when`(sessionManager.deleteAllSessions()).thenReturn(3)
+        `when`(sessionManager.closeAllSessions()).thenReturn(
+            listOf(
+                closeReport("s1", ProcessTermination.TERMINATED),
+                closeReport("s2", ProcessTermination.TERMINATED),
+                closeReport("s3", ProcessTermination.NO_PID_FILE),
+            )
+        )
 
         val result = controller.callTool(request, response)
 
         assertEquals(HttpStatus.OK, result.statusCode)
         assertEquals("Killed 3 session(s)", result.body!!.content[0].text)
+        val payload = result.body!!.structuredContent!!
+        assertEquals(3, payload["closed"])
+        assertEquals(2, payload["browserTerminated"])
+        assertEquals(1, payload["browserUnverified"], "a session with no pid marker was never verified")
     }
 
     @Test

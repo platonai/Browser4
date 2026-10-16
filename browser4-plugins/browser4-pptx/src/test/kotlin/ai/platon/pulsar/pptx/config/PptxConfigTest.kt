@@ -15,9 +15,11 @@
  */
 package ai.platon.pulsar.pptx.config
 
+import ai.platon.pulsar.common.config.MutableConfig
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import java.nio.file.Path
 
 /**
  * Tests for [PptxConfig] data class.
@@ -29,9 +31,13 @@ class PptxConfigTest {
     fun testDefaultConfig() {
         val config = PptxConfig()
 
-        assertEquals("downloads/pptx", config.outputDir)
+        // The default output dir is absolute and anchored under the user's
+        // ~/.browser4 state dir, never a CWD-relative "downloads/pptx".
+        assertEquals(PptxConfig.defaultOutputDir(), config.outputDir)
+        assertTrue(Path.of(config.outputDir).isAbsolute)
         assertEquals(10 * 1024 * 1024L, config.maxDownloadSize)
         assertEquals(30, config.downloadTimeoutSeconds)
+        assertEquals(60, config.downloadTotalTimeoutSeconds)
         assertEquals(3, config.concurrentDownloads)
         assertFalse(config.autoGenerateEnabled)
         assertEquals(120, config.maxTitleLength)
@@ -41,8 +47,11 @@ class PptxConfigTest {
         assertEquals(6, config.maxContentBlocksPerSlide)
         assertTrue(config.skipSvg)
         assertTrue(config.skipDataUris)
-        // proxy defaults to null — falls back to HTTPS_PROXY/HTTP_PROXY env vars.
+        // proxy defaults to null — falls back to HTTPS_PROXY/HTTP_PROXY env vars,
+        // the JVM proxy properties and the OS system proxy.
         assertNull(config.proxy)
+        assertTrue(config.useSystemProxy)
+        assertTrue(config.excludeSelectors.isEmpty())
     }
 
     @Test
@@ -88,5 +97,46 @@ class PptxConfigTest {
         assertEquals(540, modified.slideHeight) // unchanged
         assertEquals(config.maxDownloadSize, modified.maxDownloadSize)
         assertEquals(config.concurrentDownloads, modified.concurrentDownloads)
+    }
+
+    @Test
+    @DisplayName("defaultOutputDir is anchored at ~/.browser4/downloads/pptx")
+    fun testDefaultOutputDirIsUnderUserHome() {
+        val expected = Path.of(System.getProperty("user.home"), ".browser4", "downloads", "pptx")
+        assertEquals(expected.toString(), PptxConfig.defaultOutputDir())
+    }
+
+    @Test
+    @DisplayName("fromConfig falls back to the absolute default output dir and honours the override")
+    fun testFromConfigOutputDir() {
+        assertEquals(PptxConfig.defaultOutputDir(), PptxConfig.fromConfig(MutableConfig()).outputDir)
+
+        val conf = MutableConfig()
+        conf.set("pptx.output.dir", "/data/pptx")
+        assertEquals("/data/pptx", PptxConfig.fromConfig(conf).outputDir)
+    }
+
+    @Test
+    @DisplayName("fromConfig reads the download deadline, system proxy flag and exclude selectors")
+    fun testFromConfigReadsDeadlineSystemProxyAndSelectors() {
+        val conf = MutableConfig()
+        conf.set("pptx.download.total-timeout.seconds", "90")
+        conf.set("pptx.download.use-system-proxy", "false")
+        conf.set("pptx.detect.exclude-selectors", ".ad-banner, #sponsor ,")
+
+        val config = PptxConfig.fromConfig(conf)
+
+        assertEquals(90, config.downloadTotalTimeoutSeconds)
+        assertFalse(config.useSystemProxy)
+        assertEquals(listOf(".ad-banner", "#sponsor"), config.excludeSelectors)
+    }
+
+    @Test
+    @DisplayName("fromConfig maps an empty exclude-selectors value to an empty list")
+    fun testFromConfigMapsBlankExcludeSelectorsToEmptyList() {
+        val conf = MutableConfig()
+        conf.set("pptx.detect.exclude-selectors", "  ")
+
+        assertTrue(PptxConfig.fromConfig(conf).excludeSelectors.isEmpty())
     }
 }

@@ -18,7 +18,11 @@ This script builds a platform-native runtime bundle for Browser4.  It:
 The output is a .zip (Windows) or .tar.gz (Linux/macOS) archive containing:
   runtime/           - bundled JRE (stripped, compressed)
   lib/               - application and dependency JARs
-  plugins/           - optional plugin JARs (auto-discovered via classpath wildcard)
+  plugins/           - plugin JARs (auto-discovered via classpath wildcard): the
+                       first-party plugins this checkout builds (see
+                       $defaultBundledPlugins) plus every JAR a previous bundle
+                       build or `browser4-cli plugin install` left behind — a
+                       rebuild preserves those instead of deleting them.
   bin/               - launch scripts (start.sh, start.bat)
   runtime-bundle.json - metadata
 
@@ -621,7 +625,9 @@ function Get-BundleMetadataJson(
     [string]$mainClass,
     [string[]]$plugins = @(),
     [string]$pluginVersion = '',
-    [string[]]$pluginWarnings = @()
+    [string[]]$pluginWarnings = @(),
+    [string[]]$availablePlugins = @(),
+    [string[]]$preservedPlugins = @()
 ) {
     $metadata = [ordered]@{
         assetName = $assetName
@@ -637,6 +643,11 @@ function Get-BundleMetadataJson(
         plugins = $plugins
         pluginVersion = $pluginVersion
         pluginWarnings = $pluginWarnings
+        # First-party plugins the checkout builds but this bundle does not ship
+        # (`browser4-cli plugin install <jar>` makes them available), and JARs a
+        # previous install left in plugins/ that this rebuild carried over.
+        availablePlugins = $availablePlugins
+        preservedPlugins = $preservedPlugins
         builtAtUtc = [DateTime]::UtcNow.ToString('o')
     }
     return ($metadata | ConvertTo-Json -Depth 6)
@@ -898,6 +909,25 @@ if ((Test-Path $assetPath) -and (-not $Force)) {
 }
 
 New-Item -ItemType Directory -Force -Path $resolvedOutputDirectory | Out-Null
+# Preserve the plugin JARs a previous `browser4-cli plugin install` (or an
+# earlier build) put into the bundle's plugins/ directory.  The resets below
+# delete that directory as part of the build tree — which used to make an
+# installed plugin disappear silently on the next rebuild, with nothing in the
+# output tying the loss to the build.  The snapshot lives outside the reset
+# scope and is restored after this build's own plugins are in place.
+$pluginSnapshotDirectory = Join-Path $resolvedOutputDirectory '.plugin-snapshot'
+Reset-CleanDirectory $pluginSnapshotDirectory 'plugin snapshot directory'
+$preservedPluginJars = @()
+if (Test-Path -LiteralPath $pluginsDirectory -PathType Container) {
+    $preservedPluginJars = @(Get-ChildItem -LiteralPath $pluginsDirectory -File -Filter '*.jar' -ErrorAction SilentlyContinue)
+    foreach ($preservedJar in $preservedPluginJars) {
+        Copy-Item -LiteralPath $preservedJar.FullName -Destination (Join-Path $pluginSnapshotDirectory $preservedJar.Name) -Force
+    }
+}
+if ($preservedPluginJars.Count -gt 0) {
+    Write-Host "Preserving $($preservedPluginJars.Count) installed plugin JAR(s) across this rebuild." -ForegroundColor DarkCyan
+}
+
 # Reset (not just ensure) the working directories so a re-run over an existing
 # build always starts from a clean slate — jlink refuses to write into a
 # non-empty output directory.  Reset-CleanDirectory renames before deleting so
@@ -982,8 +1012,23 @@ $libJarCount = (Get-ChildItem -Path $libDirectory -File -Filter '*.jar' | Measur
 Write-Host "Collected $libJarCount jars in lib/" -ForegroundColor Green
 
 # --------------------------------------------------------------------------
-# Bundle the browser4-swarm plugin (the swarm REST facade is a thin shell that
-# delegates to this plugin; without it /api/swarm/** returns 503).
+# Bundle the first-party plugins this checkout builds.
+#
+# The swarm plugin is mandatory (the swarm REST facade is a thin shell that
+# delegates to it; without it /api/swarm/** returns 503), but the other
+# in-repo plugins matter just as much for a source checkout: their tools are
+# documented as part of the CLI surface, yet a bundle that ships none of them
+# makes `plugin <domain> <method>` fail with an unknown-tool error while the
+# built JAR sits in the Maven local repository — with nothing in the output
+# naming the plugin or the install command.
+#
+# Membership rules for $defaultBundledPlugins — keep them explicit, a wrong
+# entry is a bundle that shadows host classes or fails to boot:
+#   * the module builds a thin JAR (host classes come from lib/*), and
+#   * every non-`browser4-*` dependency in the module POM exists in lib/*, and
+#   * the plugin constructs no bean that needs an external service at startup
+#     (first-party plugins are @Lazy + @ConditionalOnProperty(matchIfMissing =
+#     true), so an unconfigured plugin fails only when its tool is called).
 #
 # Two failures made this step ship a bundle with no (or a version-skewed)
 # plugin, and both were invisible in the CLI's rebuild output:
@@ -996,6 +1041,13 @@ Write-Host "Collected $libJarCount jars in lib/" -ForegroundColor Green
 # The plugin outcome is therefore recorded in the bundle metadata and reported
 # at the end of the build (the CLI prints the build's own stdout/stderr only
 # when the build fails, so the metadata is what other tools can read).
+#
+# JARs that `browser4-cli plugin install` (or a previous build) put into
+# plugins/ are snapshotted before the clean-slate reset and carried over
+# afterwards, so an installed plugin survives a rebuild instead of silently
+# disappearing with the build-output tree.  A carried-over JAR never shadows a
+# plugin this build bundles: same-plugin duplicates are dropped (newest wins)
+# and the decision is reported.
 # --------------------------------------------------------------------------
 
 function Get-CheckedOutProjectVersion([string]$repositoryRoot) {
@@ -1090,89 +1142,301 @@ function Resolve-MavenLocalRepository([string]$mavenCommand) {
     return ''
 }
 
+function Get-PluginJarIdentity([string]$jarName) {
+    <#
+    .SYNOPSIS
+        Split a plugin JAR file name into its plugin name and version.
+    .DESCRIPTION
+        Follows the Maven artifact convention '<plugin>-<version>[-shaded].jar':
+        'browser4-images-4.14.1-SNAPSHOT.jar' yields Plugin 'browser4-images',
+        Version '4.14.1-SNAPSHOT'.  A name without a parseable version returns
+        $null, and so does the 'original-<artifact>-<version>.jar' intermediate
+        maven-shade-plugin leaves next to a shaded artifact — that file is not a
+        deployable plugin.
+    .OUTPUTS
+        PSCustomObject with Plugin/Version, or $null when the name does not
+        follow the convention (e.g. a third-party JAR without a version).
+    #>
+    if ($jarName -like 'original-*') { return $null }
+    if ($jarName -match '^(?<plugin>.+?)-(?<version>\d[^/]*?)(?:-shaded)?\.jar$') {
+        return [pscustomobject]@{ Plugin = $Matches['plugin']; Version = $Matches['version'] }
+    }
+    return $null
+}
+
 function Get-PluginVersionFromJarName([string]$jarName) {
     <#
     .SYNOPSIS
-        Extract the version from 'browser4-swarm-<version>[-classifier].jar'.
+        Extract the version from '<plugin>-<version>[-shaded].jar'.
     .OUTPUTS
         String — the parsed version, or '' when the name does not match.
     #>
-    if ($jarName -match '^browser4-swarm-(.+)\.jar$') { return $Matches[1] }
+    $identity = Get-PluginJarIdentity -jarName $jarName
+    if ($identity) { return $identity.Version }
+    return ''
+}
+
+function Get-PluginBaseNameFromJarName([string]$jarName) {
+    <#
+    .SYNOPSIS
+        Extract the plugin (artifact) name from '<plugin>-<version>.jar'.
+    .OUTPUTS
+        String — the parsed plugin name, or '' when the name does not match.
+    #>
+    $identity = Get-PluginJarIdentity -jarName $jarName
+    if ($identity) { return $identity.Plugin }
+    return ''
+}
+
+function Select-BundlePluginJar {
+    <#
+    .SYNOPSIS
+        Pick the plugin JAR that matches the checked-out project version.
+    .DESCRIPTION
+        Version first: a JAR from another release train must never be bundled,
+        because it looks installed while behaving unpredictably.  Only
+        same-version candidates (e.g. several snapshot installs) are ranked by
+        mtime.
+    .OUTPUTS
+        PSCustomObject: Jar (the selected file, or $null) and FoundVersions
+        (every version parsed from the candidates, for the warning message).
+    #>
+    param(
+        [object[]]$Candidates = @(),
+        [string]$ProjectVersion = ''
+    )
+
+    $foundVersions = [System.Collections.Generic.List[string]]::new()
+    $matching = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($candidate in $Candidates) {
+        $version = Get-PluginVersionFromJarName -jarName $candidate.Name
+        if ($version) { $foundVersions.Add($version) }
+        if ($version -and $ProjectVersion -and $version.Equals($ProjectVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $matching.Add($candidate)
+        }
+    }
+
+    $selected = $null
+    if ($matching.Count -gt 0) {
+        $selected = $matching | Sort-Object { $_.LastWriteTime } -Descending | Select-Object -First 1
+    }
+
+    return [pscustomobject]@{
+        Jar = $selected
+        FoundVersions = @($foundVersions | Sort-Object -Unique)
+    }
+}
+
+function Select-PreservedPluginJars {
+    <#
+    .SYNOPSIS
+        Decide which JARs from a pre-build plugins/ snapshot survive a rebuild.
+    .DESCRIPTION
+        A rebuild resets the bundle directory, which deletes plugins/ — the very
+        directory `browser4-cli plugin install` writes to.  Every JAR found there
+        before the reset is a candidate for restoration, with two rules:
+
+          * a JAR belonging to a plugin this build bundles is dropped (the fresh
+            copy wins; loading two versions of one plugin is not supported);
+          * when the same plugin appears more than once, the newest JAR wins.
+
+    .OUTPUTS
+        PSCustomObject: Restore (the JARs to copy back) and Dropped (one
+        human-readable line per JAR that is not restored, for the build report).
+    #>
+    param(
+        [object[]]$PreservedJars = @(),
+        [string[]]$BundledPluginNames = @()
+    )
+
+    $restore = [System.Collections.Generic.List[object]]::new()
+    $dropped = [System.Collections.Generic.List[string]]::new()
+    $byPlugin = @{}
+
+    foreach ($jar in $PreservedJars) {
+        $bundlingPlugin = $null
+        foreach ($pluginName in $BundledPluginNames) {
+            if ($jar.Name -like "$pluginName-*") { $bundlingPlugin = $pluginName; break }
+        }
+        if ($bundlingPlugin) {
+            $dropped.Add("$($jar.Name): dropped — this build bundles $bundlingPlugin itself, and the bundled JAR wins")
+            continue
+        }
+
+        $identity = Get-PluginJarIdentity -jarName $jar.Name
+        # A name without a version cannot be grouped; keep it under its own key.
+        $key = if ($identity) { $identity.Plugin } else { $jar.Name }
+        if (-not $byPlugin.ContainsKey($key)) {
+            $byPlugin[$key] = [System.Collections.Generic.List[object]]::new()
+        }
+        $byPlugin[$key].Add($jar)
+    }
+
+    foreach ($key in ($byPlugin.Keys | Sort-Object)) {
+        $group = @($byPlugin[$key] | Sort-Object { $_.LastWriteTime } -Descending)
+        $restore.Add($group[0])
+        for ($i = 1; $i -lt $group.Count; $i++) {
+            $dropped.Add("$($group[$i].Name): dropped — $key is installed more than once; the newest JAR ($($group[0].Name)) is kept")
+        }
+    }
+
+    return [pscustomobject]@{
+        Restore = @($restore)
+        Dropped = @($dropped)
+    }
+}
+
+function Resolve-SourceTreePluginJar {
+    <#
+    .SYNOPSIS
+        Find the JAR a plugin module built in this checkout, for the install hint.
+    .DESCRIPTION
+        Prefers 'browser4-plugins/<module>/target/<module>-<version>.jar' and
+        falls back to the newest non-source JAR of that module, so the reported
+        `plugin install` command works without the caller guessing a version.
+    .OUTPUTS
+        String — the absolute JAR path, or '' when the module has not been built.
+    #>
+    param(
+        [string]$RepositoryRoot,
+        [string]$ModuleName,
+        [string]$ProjectVersion = ''
+    )
+
+    if (-not $RepositoryRoot -or -not $ModuleName) { return '' }
+    $targetDirectory = [System.IO.Path]::Combine($RepositoryRoot, 'browser4-plugins', $ModuleName, 'target')
+    if (-not (Test-Path -LiteralPath $targetDirectory -PathType Container)) { return '' }
+
+    if ($ProjectVersion) {
+        $preferred = Join-Path $targetDirectory "$ModuleName-$ProjectVersion.jar"
+        if (Test-Path -LiteralPath $preferred -PathType Leaf) { return $preferred }
+    }
+
+    $candidate = Get-ChildItem -LiteralPath $targetDirectory -File -Filter "$ModuleName-*.jar" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '(sources|javadoc|original-)' } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($candidate) { return $candidate.FullName }
     return ''
 }
 
 $projectVersion = Get-CheckedOutProjectVersion -repositoryRoot $repoRoot
 $localRepo = Resolve-MavenLocalRepository -mavenCommand $mvnCmd
-$swarmGroupDir = [System.IO.Path]::Combine($localRepo, 'ai', 'platon', 'pulsar', 'browser4-swarm')
+
+# First-party plugin modules this bundle ships.  swarm is not optional (its REST
+# facade is a thin shell that answers 503 without it); the rest are the in-repo
+# plugins whose tools the CLI documents as usable from a source checkout.
+# Membership rules and the exclusion rationale live in the section comment above.
+$defaultBundledPlugins = @(
+    'browser4-swarm',
+    'browser4-images',
+    'browser4-markdown',
+    'browser4-media',
+    'browser4-seo'
+)
+
+# In-repo plugins deliberately NOT bundled: each needs something the bundle does
+# not provide (an external service, a shaded dependency tree, a missing library)
+# or is a demo.  They stay installable with `browser4-cli plugin install <jar>`,
+# and the build names them — with the exact command — so their absence is
+# discoverable instead of looking like a capability that never existed.
+$optionalPlugins = @(
+    @{ Module = 'browser4-captcha'; Reason = 'needs an external CAPTCHA-solving service' },
+    @{ Module = 'browser4-pptx'; Reason = 'shaded JAR (embeds Apache POI); install it on demand' },
+    @{ Module = 'browser4-profile-import'; Reason = 'needs dd-plist, which the bundle does not ship' },
+    @{ Module = 'browser4-summary-demo'; Reason = 'demo module' }
+)
 
 $pluginBundleWarnings = [System.Collections.Generic.List[string]]::new()
 $bundledPluginNames = [System.Collections.Generic.List[string]]::new()
+$bundledPluginBaseNames = [System.Collections.Generic.List[string]]::new()
+$availablePlugins = [System.Collections.Generic.List[string]]::new()
 $bundledPluginVersion = ''
-$swarmJar = $null
 
 Write-Host "Maven local repository: $localRepo" -ForegroundColor DarkGray
 if ($projectVersion) {
     Write-Host "Checked-out project version: $projectVersion" -ForegroundColor DarkGray
 }
 
-$pluginCandidates = @(
-    Get-ChildItem -Path $swarmGroupDir -Recurse -File -Filter 'browser4-swarm-*.jar' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -notmatch 'sources|javadoc' }
-)
+foreach ($pluginModule in $defaultBundledPlugins) {
+    $pluginGroupDir = [System.IO.Path]::Combine($localRepo, 'ai', 'platon', 'pulsar', $pluginModule)
+    $pluginInstallHint = "Build and install the matching plugin, then rebuild the bundle:`n" +
+        "    mvn install -pl browser4-plugins/$pluginModule -DskipTests`n" +
+        "    (or run this script again with -SkipMavenInstall after installing it)"
 
-$swarmInstallHint = "Install the matching plugin and rebuild the bundle:`n" +
-    "    mvn install -pl browser4-plugins/browser4-swarm -DskipTests`n" +
-    "    (or run this script again with -SkipMavenInstall after installing it)"
-
-if ($pluginCandidates.Count -eq 0) {
-    $pluginBundleWarnings.Add(
-        "No browser4-swarm plugin JAR found under $swarmGroupDir. " +
-        "Every /api/swarm/** endpoint will answer 503 until the plugin is installed.`n" +
-        $swarmInstallHint)
-} else {
-    $versionedCandidates = @(
-        foreach ($candidate in $pluginCandidates) {
-            @{ Jar = $candidate; Version = (Get-PluginVersionFromJarName -jarName $candidate.Name) }
-        }
-    )
-    $matchingCandidates = @(
-        $versionedCandidates | Where-Object {
-            $_.Version -and $projectVersion -and $_.Version.Equals($projectVersion, [System.StringComparison]::OrdinalIgnoreCase)
-        }
+    # Thin JARs only: a '-shaded' artifact embeds its own dependencies and would
+    # shadow the host classes the bundle already provides on the classpath.
+    $pluginCandidates = @(
+        Get-ChildItem -Path $pluginGroupDir -Recurse -File -Filter "$pluginModule-*.jar" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch 'sources|javadoc|original-|-shaded\.jar$' }
     )
 
-    if ($matchingCandidates.Count -gt 0) {
-        # Version first; only same-version JARs (e.g. several snapshot installs)
-        # are ranked by mtime.
-        $swarmJar = ($matchingCandidates | Sort-Object { $_.Jar.LastWriteTime } -Descending | Select-Object -First 1).Jar
-    } else {
-        $foundVersions = @(
-            $versionedCandidates |
-                ForEach-Object { $_.Version } |
-                Where-Object { $_ } |
-                Sort-Object -Unique
-        ) -join ', '
-        if (-not $foundVersions) { $foundVersions = '(unparseable JAR names)' }
+    if ($pluginCandidates.Count -eq 0) {
         $pluginBundleWarnings.Add(
-            "Found browser4-swarm JAR(s) for other versions in $swarmGroupDir, but none for the " +
-            "checked-out project version '$projectVersion' (found: $foundVersions). " +
-            "Refusing to bundle a plugin from another release train — a version-skewed plugin " +
-            "looks installed while behaving unpredictably.`n" +
-            $swarmInstallHint)
+            "browser4-plugins/$pluginModule is part of this checkout but has no JAR in the Maven local " +
+            "repository ($pluginGroupDir), so it is NOT bundled and its tools are missing.`n" +
+            $pluginInstallHint)
+        continue
     }
+
+    $selection = Select-BundlePluginJar -Candidates $pluginCandidates -ProjectVersion $projectVersion
+    if ($selection.Jar) {
+        Copy-Item -LiteralPath $selection.Jar.FullName -Destination (Join-Path $pluginsDirectory $selection.Jar.Name) -Force
+        $bundledPluginNames.Add($selection.Jar.Name)
+        $bundledPluginBaseNames.Add($pluginModule)
+        if (-not $bundledPluginVersion) { $bundledPluginVersion = $projectVersion }
+        Write-Host "  + Plugin: $($selection.Jar.Name)" -ForegroundColor Green
+        continue
+    }
+
+    $foundVersions = if ($selection.FoundVersions.Count -gt 0) {
+        $selection.FoundVersions -join ', '
+    } else {
+        '(unparseable JAR names)'
+    }
+    $pluginBundleWarnings.Add(
+        "Found $pluginModule JAR(s) in $pluginGroupDir, but none for the checked-out project version " +
+        "'$projectVersion' (found: $foundVersions). Refusing to bundle a plugin from another release " +
+        "train — a version-skewed plugin looks installed while behaving unpredictably.`n" +
+        $pluginInstallHint)
 }
 
-if ($swarmJar) {
-    Copy-Item -LiteralPath $swarmJar.FullName -Destination (Join-Path $pluginsDirectory $swarmJar.Name) -Force
-    $bundledPluginNames.Add($swarmJar.Name)
-    $bundledPluginVersion = Get-PluginVersionFromJarName -jarName $swarmJar.Name
-    Write-Host "  + Plugin: $($swarmJar.Name)" -ForegroundColor Green
-} else {
-    foreach ($warning in $pluginBundleWarnings) {
-        Write-Host ''
-        Write-Host "WARNING: $warning" -ForegroundColor Yellow
+# Record the in-repo plugins this bundle does not ship, with the exact command
+# that makes each one available.
+foreach ($optional in $optionalPlugins) {
+    $optionalJar = Resolve-SourceTreePluginJar -RepositoryRoot $repoRoot -ModuleName $optional.Module -ProjectVersion $projectVersion
+    $entry = "$($optional.Module) — $($optional.Reason); "
+    if ($optionalJar) {
+        $entry += "install: browser4-cli plugin install `"$optionalJar`""
+    } else {
+        $entry += "build first: mvn install -pl browser4-plugins/$($optional.Module) -DskipTests"
+    }
+    $availablePlugins.Add($entry)
+}
+
+# Carry the preserved JARs back into the fresh plugins/ directory.  A JAR that
+# belongs to a plugin this build bundles is dropped (the bundled copy wins: two
+# versions of one plugin must not end up on the classpath), and so is an older
+# duplicate of a plugin installed more than once.
+$preservedPluginNames = [System.Collections.Generic.List[string]]::new()
+if ($preservedPluginJars.Count -gt 0) {
+    $preservedSelection = Select-PreservedPluginJars -PreservedJars $preservedPluginJars `
+        -BundledPluginNames $bundledPluginBaseNames.ToArray()
+    foreach ($preservedJar in $preservedSelection.Restore) {
+        $snapshotJar = Join-Path $pluginSnapshotDirectory $preservedJar.Name
+        if (-not (Test-Path -LiteralPath $snapshotJar -PathType Leaf)) { continue }
+        Copy-Item -LiteralPath $snapshotJar -Destination (Join-Path $pluginsDirectory $preservedJar.Name) -Force
+        $preservedPluginNames.Add($preservedJar.Name)
+    }
+    foreach ($dropNote in $preservedSelection.Dropped) {
+        $pluginBundleWarnings.Add("plugin carried over from the previous bundle: $dropNote")
+    }
+    if ($preservedPluginNames.Count -gt 0) {
+        Write-Host "  + Preserved: $($preservedPluginNames -join ', ')" -ForegroundColor DarkCyan
     }
 }
+Reset-CleanDirectory $pluginSnapshotDirectory 'plugin snapshot directory' -Recreate:$false
 
 # --------------------------------------------------------------------------
 # Clean up unnecessary JARs from the runtime bundle.
@@ -1722,7 +1986,8 @@ if (-not $SkipCli) {
 Set-Content -LiteralPath (Join-Path $bundleDirectory 'runtime-bundle.json') `
     -Value (Get-BundleMetadataJson -assetName $AssetName -modules $modules -mainClass $MainClass `
         -plugins $bundledPluginNames.ToArray() -pluginVersion $bundledPluginVersion `
-        -pluginWarnings $pluginBundleWarnings.ToArray()) `
+        -pluginWarnings $pluginBundleWarnings.ToArray() `
+        -availablePlugins $availablePlugins.ToArray() -preservedPlugins $preservedPluginNames.ToArray()) `
     -Encoding UTF8
 
 # --------------------------------------------------------------------------
@@ -1780,9 +2045,27 @@ if ($bundledPluginNames.Count -gt 0) {
     Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Yellow
     Write-Host ' WARNING: this bundle ships NO plugins.' -ForegroundColor Yellow
     Write-Host ' Every /api/swarm/** endpoint will answer 503 "Swarm backend is not installed".' -ForegroundColor Yellow
+    Write-Host ' The condition is also recorded in the bundle manifest (pluginWarnings).' -ForegroundColor Yellow
+    Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Yellow
+}
+
+if ($preservedPluginNames.Count -gt 0) {
+    Write-Host "Preserved installed plugin(s): $($preservedPluginNames -join ', ')" -ForegroundColor DarkCyan
+}
+
+if ($pluginBundleWarnings.Count -gt 0) {
+    Write-Host ''
+    Write-Host 'Plugin warnings:' -ForegroundColor Yellow
     foreach ($warning in $pluginBundleWarnings) {
         Write-Host "   - $warning" -ForegroundColor Yellow
     }
-    Write-Host ' The condition is also recorded in the bundle manifest (pluginWarnings).' -ForegroundColor Yellow
-    Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Yellow
+    Write-Host ' They are also recorded in the bundle manifest (pluginWarnings).' -ForegroundColor DarkYellow
+}
+
+if ($availablePlugins.Count -gt 0) {
+    Write-Host ''
+    Write-Host 'In-repo plugins NOT bundled by default (install on demand):' -ForegroundColor DarkCyan
+    foreach ($entry in $availablePlugins) {
+        Write-Host "   - $entry" -ForegroundColor DarkCyan
+    }
 }

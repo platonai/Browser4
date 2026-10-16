@@ -23,7 +23,7 @@ Use these recipes when you need **structured data** from listing and detail page
 
 ## How It Works
 
-Extraction scenarios use the same building blocks: `get` extracts the first match of a CSS selector, `get all` every match, `query` runs X-SQL over the snapshot for correlated fields, and `export` archives raw HTML for offline analysis or trend tracking.
+Extraction scenarios use the same building blocks: `get` extracts the first match of a CSS selector, `get all` every match, `query` runs X-SQL over the snapshot for correlated fields, and `export` archives the captured HTML — the annotated serialization (`vi` boxes plus synthetic `normalizedURI`/`href` head links), not the site's View-Source — for offline analysis or trend tracking.
 
 ## Patterns
 
@@ -125,7 +125,7 @@ diff product-page-20260621.html product-page-20260622.html
 
 **Problem:** You need the top 10 headlines, bylines, and timestamps from a news homepage every morning, formatted as structured data.
 
-**Why HTML Snapshot:** X-SQL can extract multiple articles from a listing page in one shot. The `export` command preserves the raw HTML for archival or later re-parsing with different selectors.
+**Why HTML Snapshot:** X-SQL can extract multiple articles from a listing page in one shot. The `export` command preserves the captured HTML — an annotated serialization (`vi` boxes, synthetic head links), see the Export section of [htmlsnapshot.md](htmlsnapshot.md) — for archival or later re-parsing with different selectors.
 
 ### 2a. One-shot extraction with X-SQL
 

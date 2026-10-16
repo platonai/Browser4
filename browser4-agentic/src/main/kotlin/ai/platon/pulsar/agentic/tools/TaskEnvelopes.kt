@@ -65,6 +65,8 @@ object TaskEnvelopes {
             "processed": {"type": "integer"},
             "total": {"type": "integer"},
             "elapsedMs": {"type": "integer"},
+            "statusCode": {"type": "integer"},
+            "message": {"type": "string"},
             "error": {"type": "string"},
             "statusTool": {"type": "string"},
             "resultTool": {"type": "string"},
@@ -86,6 +88,11 @@ object TaskEnvelopes {
      * @param status one of [STATUSES]; unknown values are reported as `failed`
      *   rather than silently passed through, so a new backend state cannot look
      *   like a healthy one
+     * @param statusCode the domain's own status code (HTTP-style), when it has one.
+     *   Callers key on it to tell "not found" (404) from a genuine task failure
+     *   without parsing English error text.
+     * @param message human-readable status description, e.g. the agent's current
+     *   step. Unlike [error] it is present while the task is still healthy.
      */
     fun of(
         taskId: String,
@@ -94,6 +101,8 @@ object TaskEnvelopes {
         processed: Int? = null,
         total: Int? = null,
         elapsedMs: Long? = null,
+        statusCode: Int? = null,
+        message: String? = null,
         error: String? = null,
         statusTool: String? = null,
         resultTool: String? = null,
@@ -107,6 +116,8 @@ object TaskEnvelopes {
         processed?.let { envelope["processed"] = it }
         total?.let { envelope["total"] = it }
         elapsedMs?.let { envelope["elapsedMs"] = it }
+        statusCode?.let { envelope["statusCode"] = it }
+        message?.takeIf { it.isNotBlank() }?.let { envelope["message"] = it }
         error?.takeIf { it.isNotBlank() }?.let { envelope["error"] = it }
         statusTool?.let { envelope["statusTool"] = it }
         resultTool?.let { envelope["resultTool"] = it }

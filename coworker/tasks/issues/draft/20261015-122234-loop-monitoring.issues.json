@@ -1,0 +1,313 @@
+{
+  "meta": {
+    "source": "20261015-122234-loop-monitoring.issues.json",
+    "date": "20261015-122234",
+    "mode": "dev",
+    "scenario": "loop-monitoring"
+  },
+  "background": {
+    "executionContext": "**Setup:** `pwd` (repo root ✓), created the run scratch dir, `./b4w.ps1 status` (backend already UP, dev bundle matches checkout 4.14.1-SNAPSHOT, port 8282), read `skills/browser4-cli/SKILL.md` (500 lines) + `references/loop.md` + `./b4w.ps1 help loop` before touching the command.\n\n**Commands used (all via `./b4w.ps1`):** `status`, `help`, `help loop`, `loop \"…\" --count 2 --interval 10 --name health-check`, `loop --list` (×5), `loop --status --name …` (×3), `loop --shell … --count 2 --interval 5 --name shell-test`, `loop --count 2 --interval 5 --name cli-test -- status`, `loop --pause --shell … --name paused-test`, `loop --resume --name …`, `loop --pause --name …`, `loop --stop --name …`, `loop --shell \"echo tick\" -i 5 -t 30 --name timeout-test`, `loop --stop-all` (×3), `loop --history` (×2), plus `tasklist` and direct inspection of `~/.browser4/workspaces/…/loops/*.json|.log|../loop-history.jsonl`.\n\n**Decisions/workarounds:**\n- The three loops were launched **in the background** (run_in_background) so the list could be inspected while they ran — a first-time user would hit the same need, since `loop` runs in the foreground.\n- **`loop --resume` hung** when piped (120 s+, released only when the worker was stopped). I isolated it with a controlled A/B (`| cat` → exit 124 after `timeout 20s`; `> file` → exit 0) and switched to file redirection for all later resume calls.\n- `--stop-all` claimed success while a worker kept running; the workaround was running `--stop-all` a second time (which stopped it).\n- Extra verification beyond the script: live-loop `--stop-all`, and a pause→resume→pause→resume probe that uncovered the duplicate-worker defect.\n\n**Timeline highlights:** health-check 20:10:58–20:11:45 · shell-test 20:11:25–20:11:30 · cli-test 20:11:29–20:11:34 · paused-test 20:11:43 created → resumed 20:11:52 → paused 20:14:15 → stopped 20:14:24 · timeout-test 20:14:48–20:15:19 (31 s) · duplicate-worker probe 20:18:08–20:20:09 · final cleanup verified 20:21.",
+    "workarounds": "",
+    "commands": "**Decisions/workarounds:**\n- The three loops were launched **in the background** (run_in_background) so the list could be inspected while they ran — a first-time user would hit the same need, since `loop` runs in the foreground.\n- **`loop --resume` hung** when piped (120 s+, released only when the worker was stopped). I isolated it with a controlled A/B (`| cat` → exit 124 after `timeout 20s`; `> file` → exit 0) and switched to file redirection for all later resume calls.\n- `--stop-all` claimed success while a worker kept running; the workaround was running `--stop-all` a second time (which stopped it).\n- Extra verification beyond the script: live-loop `--stop-all`, and a pause→resume→pause→resume probe that uncovered the duplicate-worker defect.\n\n**Timeline highlights:** health-check 20:10:58–20:11:45 · shell-test 20:11:25–20:11:30 · cli-test 20:11:29–20:11:34 · paused-test 20:11:43 created → resumed 20:11:52 → paused 20:14:15 → stopped 20:14:24 · timeout-test 20:14:48–20:15:19 (31 s) · duplicate-worker probe 20:18:08–20:20:09 · final cleanup verified 20:21.",
+    "task": "**Outcome: successful.** All 12 loop-workflow steps were executed, and the requested data was produced.\n\n**The health-check task itself** (step 1): the plain-text loop drove the server-side agent, which open `https://httpbin.org/get` in a headless session, captured a snapshot and reported back:\n\n> *\"Page loaded with HTTP 200, readyState complete (~3.35s load, ~1.3KB), rendering the expected httpbin JSON echo (origin 42.2.225.93, empty args, standard Chrome 155 request headers). No anti-bot challenge or redirect… Only interactive element is the \"美观输出\" (pretty-print) checkbox (ref e17); main content block is generic ref e14.\"*\n\nBoth iterations (26 s each, `--interval 10` → second iteration started immediately, matching the documented start-to-start semantics) succeeded; the loop finished with `✓ Loop finished — 2 iteration(s) completed`, exit 0, state auto-cleaned, and `loop --history` shows `health-check 2 iters count reached`.\n\n**Step-by-step results:** (1) `health-check` created and run (count 2, interval 10 s) ✅ · (2) listed while running → row `▶ health-check 0/2 iters 10s intv running` ✅ · (3) `--status` showed task/mode/interval/iterations/timeout-remaining/state path ✅ · (4) `shell-test` (`--shell`, count 2, 5 s) printed the time twice, 5.0 s apart ✅ · (5) `cli-test` (`-- status`, count 2, 5 s) printed the full server status panel twice ✅ · (6) list showed 2 of the 3 loops — `shell-test` had already completed and auto-cleaned ✅ (with a discoverability caveat, Issue 8) · (7) `paused-test` created with `--pause`; list and status both showed `paused` ✅ · (8) resume printed `Spawned background process (PID: 43072)`, pause flipped it back to paused ✅ (but the pair exposed Issue 2) · (9) `--stop` halted it and cleared state ✅ · (10) `--timeout 30` loop ran 6 iterations at 5 s and stopped with `Timeout reached (30s)…` at 31 s wall clock ✅ · (11) `--stop-all` on an empty set said `No persisted loops to stop.`; with a live loop it signalled and killed it — but it also produced a false success in one scenario (Issue 3) ✅⚠️ · (12) final `loop --list` → `No persisted loops.` ✅ and `tasklist` confirms zero `browser4-cli` worker processes."
+  },
+  "assessment": {
+    "completionStatus": "Successful — all 12 loop-workflow steps completed and the requested page-status result was produced (httpbin.org/get: HTTP 200, readyState complete, httpbin JSON echo, no challenge/redirect). All loops were created, listed, inspected, paused, resumed, stopped, timeout-terminated and cleaned up; final state verified free of worker processes and persisted loops. The evaluation additionally uncovered three high-severity reliability defects in loop lifecycle control.",
+    "successRate": "92% — every task step produced its expected user-visible outcome; deductions come from two behaviours that required workarounds (the resumed loop hanging a piped invocation, and --stop-all needing a second run to actually stop the loop).",
+    "issuesFound": 8,
+    "majorBlockers": "No blocker prevented completing the task. Two behaviours forced workarounds: (1) `loop --resume` never returns when its output is piped, so it had to be run with file redirection / in the background; (2) `--stop-all` reported success while a duplicated worker kept the loop alive, requiring a second --stop-all before the final cleanup could be verified.",
+    "mostConfusingAspects": "For a first-time user: plain-text loops print a multi-KB raw JSON agent envelope instead of the clean iteration output shown in the docs (and the JSON contains a contradictory pageStatusCode 201 next to a stated HTTP 200); a completed loop silently disappears from --list while other loops remain; the documented state-file paths (~/.browser4/loops/...) are empty in a dev checkout because the real files live under the per-checkout workspace directory; and pause/resume semantics are not what they seem — a paused loop keeps its worker resident, resume spawns a second one, and the loop then runs twice per tick.",
+    "mostValuableImprovements": "1) Fix the --resume spawn model: never run two workers for one loop (record the worker PID in the loop state and check liveness before pausing/resuming/spawning). 2) Make stop trustworthy: keep the stop signal independent of the progress file and verify workers actually exited before reporting success. 3) Fix the plain-text output key lookup (commandResult.summary) so iterations print the intended one-line summary. 4) Make the detached spawn not inherit the caller's pipe handles so loop --resume is safe in scripts/CI/agents. 5) De-duplicate the loop history and label stop reasons correctly. 6) Update the state-path documentation and always hint about auto-cleaned completed loops.",
+    "usabilityRating": 6
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "loop --resume hangs any caller that pipes the CLI's output (detached worker inherits the pipe)",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 loop --pause --shell \"echo hi\" -i 60 --name r1\n./b4w.ps1 loop --resume --name r1 | cat        # never returns while the loop lives\n# control (same loop, no pipe):\n./b4w.ps1 loop --resume --name r1 > out.txt 2>&1   # returns immediately\nMeasured: `timeout 20s bash -c './b4w.ps1 loop --resume --name pipe-test 2>&1 | cat'` → exit 124 (killed); the same command with `> file` → exit 0. A separate `| tee` invocation stayed 'running' for 120s and completed (exit 0) at the exact moment the worker was killed with `loop --stop`."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The command prints '▶ Loop \"r1\" resumed (was paused). Spawned background process (PID: …)' and exits immediately, as documented in loop.md / --help loop."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "With a piped stdout/stderr the invocation does not return until the background worker exits — i.e. forever for an infinite loop. Any wrapper that captures output (tee, CI log capture, Python subprocess.PIPE, an AI agent's tool harness) blocks."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "spawn_detached() spawns the worker via std::process::Command with its own stdout/stderr redirected to loops/<name>.log, but on Windows Rust's Command::spawn passes bInheritHandles=TRUE, so every *inheritable* handle of the parent is duplicated into the child — including the write end of the caller's pipe (MSYS/Windows pipe handles are inheritable). The worker thus keeps the pipe open even though it never writes to it, so the reader never sees EOF. The file-redirect control shows this is handle inheritance, not writing."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:spawn_detached() (line 19860), called from the --resume handler at line 20366 and --resume-all at 20484"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Clear the inherit flag on the parent's own std handles around the spawn (SetHandleInformation(hStd, HANDLE_FLAG_INHERIT, 0)), or create the child with a PROC_THREAD_ATTRIBUTE_HANDLE_LIST restricted to the log-file handle.\n- Alternatively raise the spawn to a fully detached process (CREATE_BREAKAWAY_FROM_JOB + explicit non-inheritable stdio) and never share handles with the caller.\n- Add a regression test that pipes `loop --resume` output and asserts the command returns promptly.\n- Until fixed, document the workaround (redirect loop --resume output to a file instead of a pipe) in loop.md and the --help text."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "pause followed by resume leaves two workers running the same loop — every iteration executes twice",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 loop --pause --shell \"echo dupe tick\" -i 20 --name dupe-test\n./b4w.ps1 loop --resume --name dupe-test   # worker A (PID 46016)\n./b4w.ps1 loop --pause  --name dupe-test   # worker A stays resident, prints 'Waiting for resume...'\n./b4w.ps1 loop --resume --name dupe-test   # worker B (PID 41380)\ntasklist | grep -i browser4-cli            # → 2 browser4-cli.exe for ONE loop\ncat <workspace>/loops/dupe-test.log        # iterations 3,3,4,4,5 — each tick ran twice"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Exactly one worker per loop. --resume continues the paused loop (or replaces its worker); the task executes once per interval and the iteration counter advances once per tick."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "After pause→resume, two workers run the same loop concurrently: the resident paused worker resumes itself and the newly spawned worker also starts. Iteration numbers appear twice in the log (3,3,4,4,5), each iteration's task runs twice ~0.3 s apart, and both processes write to the same state file (iteration count advances at double rate and --count/--timeout budgets burn twice as fast)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "--pause only flips the persisted status; the worker polls the state file ('⏸ Pause signal detected … Waiting for resume…', main.rs:20643) and continues on its own when the status becomes 'running'. --resume both flips the status (main.rs:20307) and spawns a brand-new detached worker (main.rs:20366) with no check for a live worker of that loop. The loop state file records no owning PID/lock, so duplicate ownership is undetectable."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:20307 (--resume status flip) and 20366 (spawn_detached call), interacting with the worker's pause/resume wait at 20643"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Record the worker PID (and start time) in loops/<name>.json at spawn; have --pause/--resume/--stop check liveness before acting.\n- Pick one ownership model: either --pause terminates the worker and only --resume starts one, or --resume is a pure status flip that never spawns when a live worker exists.\n- Add a lock or pid file per loop name and refuse to start a second worker while one is alive.\n- Cover it with a test: pause → resume → assert one process and no duplicated iteration numbers in the log."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "--stop-all reports success while the loop keeps running (false success, loop revives)",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1) create the duplicate-worker state from the previous issue (pause → resume → pause → resume).\n2) ./b4w.ps1 loop --stop-all\n   → '⏹  Stop signaled to 1 active loop(s); removed 0 inactive state file(s). | - dupe-test (5 iters, was running)'\n3) sleep 25; ./b4w.ps1 loop --status --name dupe-test   → still '▶ Loop Running', 6 iters\ntasklist | grep browser4-cli                            → still one worker alive\n4) Iterations 6 and 7 ran at 20:19:43 and 20:20:03 — after the reported success. A second --stop-all was required to stop it."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "After --stop-all the loop is stopped, its worker(s) exit, the state is cleared, and --list/--status show nothing running."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The command reports success immediately; one worker keeps running for ~2 more minutes and two more iterations, and the state file is re-created as 'running'. A user believing --stop-all guarantees 'no orphaned loops' is wrong."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The stop signal IS the state file's status field. One worker saw 'stopped', exited and cleared the file; the other worker was mid-sleep, woke with no state file (read_loop_state → None → current_status defaults to 'running', main.rs:20828-20838) and re-persisted itself as running — reviving the loop after the CLI had already printed success. Deleting the file destroys the stop signal for any remaining worker, and the control op never verifies that workers actually exited."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:20157-20180 (--stop-all handler) and 20828-20844 (post-iteration persist treating a missing file as 'running')"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Keep the stop signal outside the progress file (e.g. a loops/<name>.stop sentinel that only a control command removes), or a stopRequested flag that worker exit must never clear.\n- Make 'state file missing' mean 'unknown' rather than 'running' when a stop was requested.\n- Before printing success, verify the recorded worker PID(s) exited; if any survive, say so and keep polling.\n- Re-check the stop condition between the sleep and the persist so a worker cannot resurrect a stopped loop."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "Plain-text loop iterations dump the full raw JSON agent envelope instead of the intended one-line summary",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 loop \"Navigate to https://httpbin.org/get, take a snapshot, and report the page status\" --count 2 --interval 10 --name health-check"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A concise human-readable line per iteration — the CLI's own code comment says 'Print a concise human-readable line instead of the full envelope', and loop.md's Output section shows clean iteration bodies."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Each iteration prints a ~2.5 KB single-line JSON blob (id, event, processState, eventTrace, agentHistory, agentState … with the summary duplicated three times inside), unreadable without external JSON tooling."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Key mismatch in the plain-text renderer: it looks for commandResult.pageSummary or instructResults[0].result, while the server's command_run envelope returns the text under commandResult.summary (and a top-level message). The lookup misses and the code falls into its 'not valid JSON / fallback' branch that prints the entire raw output."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:20780-20805 (plain-text result rendering inside handle_loop)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add commandResult.summary and the top-level message to the summary lookup chain, keeping the existing 120-character trim.\n- Only print the full envelope in --json / verbose mode; otherwise always print one line plus an error line when the envelope reports failure.\n- Add a unit test that feeds a real command_run envelope (with commandResult.summary) through the renderer."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "pageStatusCode 201 contradicts the reported page status in the same record",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Same command as above; each iteration's JSON contains \"pageStatusCode\":201 while the message in the same record says the page 'loaded with HTTP 200' and 'document.readyState = complete'."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The field a user asked about ('report the page status') carries the page's HTTP status (200) — or is omitted when unknown."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "201 (SC_CREATED) is reported for a page that returned 200; the two values inside one record disagree, which is actively misleading for anyone (or any agent) parsing the loop output."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "pageStatusCode is initialized to ProtocolStatusCodes.SC_CREATED (201) in the response model and is only updated on paths that explicitly pass it; the refresh(statusCode) overload deliberately leaves it unchanged ('do not change pageStatusCode', Models.kt:172), and the PerceptiveAgent/command_run path appears to return the untouched default. The crawl path does set it (StatefulPageVisitor.kt:205)."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-agent-tools/src/main/kotlin/ai/platon/pulsar/agentic/tools/advanced/crawl/Models.kt:45 (default SC_CREATED); fix belongs where the agent/command_run result is assembled"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Populate pageStatusCode from the navigation response of the visited page before returning the envelope, or serialize it as null/absent when no page status was observed.\n- Add a test asserting the reported pageStatusCode equals the observed HTTP status for a successful visit."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Loop state/history paths documented as ~/.browser4/... but they live in the per-checkout workspace directory",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 help loop   → 'Progress is saved to ~/.browser4/loop-state.json (default) or ~/.browser4/loops/<name>.json (named loops)'\nskills/browser4-cli/references/loop.md — same paths, plus ~/.browser4/loop-history.jsonl\nls ~/.browser4/loops/    → empty\nls ~/.browser4/workspaces/Browser4-4.14-04e5248d/loops/   → health-check.json etc. (and loop-history.jsonl one level up)"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The help text and references name the location actually used (or explain the dev-mode namespace)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every loop document points at ~/.browser4/loops/; in this checkout the real files are under ~/.browser4/workspaces/<checkout>-<hash>/. development-mode.md never mentions loops. A user hunting for a stuck loop's state file or the history log is sent to an empty directory."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Per-checkout workspace namespacing (development mode) was introduced after the loop docs/help were written; only the runtime output paths (--status, creation messages) were updated."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/help.rs (loop persistence text), skills/browser4-cli/references/loop.md, skills/browser4-cli/SKILL.md (§3 loop row); state.rs:825 loop_state_path()"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Update the help/reference text to say the state lives in the CLI's state directory, which in development mode is the checkout's workspace directory, and that `loop --status` prints the exact path.\n- Consider printing the resolved state directory in `loop --list` (one footer line) so the path is discoverable without --status."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Stopping a loop writes two history entries, and --stop-all mislabels the reason as 'interrupted'",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 loop --stop --name paused-test\n./b4w.ps1 loop --history\n→ the same run appears twice, 1 s apart:\n   ✓ paused-test 3 iters stopped by user …\n   ✓ paused-test 3 iters interrupted  …\nAfter this session: 13 history entries for 9 real loop runs; both --stop-all stops are recorded only as 'interrupted'."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "One history entry per loop run, labelled with what actually happened (user stop vs interruption vs count/timeout)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Duplicate entries for every --stop (paused-test, pipe-test ×3, dupe-test ×2), inflating the history and making 'interrupted' indistinguishable from a crash; user-initiated --stop-all is recorded as 'interrupted'."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Two independent writers. The --stop control op writes a LoopHistoryEntry with exitReason 'stopped' before signalling (main.rs:20095-20107), and the worker writes its own entry when it exits, deriving the reason only from count/timeout (main.rs:20947-20961, written at 20978) — it cannot observe that the stop was user-initiated. --stop-all writes no entry at all, so only the worker's 'interrupted' entry survives."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:20095-20107 (--stop history write) and 20947-20978 (worker exit-reason + history write)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Make the worker the single writer of the history entry and have it read the stop status to label the reason 'stopped'.\n- Or have the control ops write the entry and have the worker skip writing when the state file is already gone/stopped.\n- Make --stop-all record 'stopped' for each loop it signals, so history reasons are consistent."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "A completed loop vanishes from --list with no hint while other loops remain",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Start three count-limited loops; wait for the shortest one to finish; ./b4w.ps1 loop --list\n→ header says '2 persisted loop(s)'; the finished loop is simply absent, and the footer only lists the Columns legend.\nThe hint 'Completed loops are auto-cleaned — see browser4-cli loop --history' is printed ONLY when the list is completely empty."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Listing loops tells the user what happened to the missing loop — e.g. that completed loops are auto-cleaned and where to find them (--history / --keep-state)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The row silently disappears; the history/keep-state hint appears only in the empty-list branch, so users with other loops running have no clue why a loop vanished (this is exactly the 'you should see three named loops' expectation in the task walkthrough)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "list_loop_states() returns only persisted (running/paused/stopped) states; the explanatory line lives only in the `entries.is_empty()` branch of the --list handler."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:handle_loop --list branch (~line 19930-19950)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Always print the one-line auto-clean/history footer (or a '-N completed since the last listing' note) when the table is non-empty too.\n- Alternatively keep completed loops listed with a ✓ status until the user clears them or a retention window passes.\n- Mention --keep-state in the same footer."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

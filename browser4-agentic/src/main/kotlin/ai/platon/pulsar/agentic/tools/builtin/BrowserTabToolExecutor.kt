@@ -1045,6 +1045,54 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
     }
 
     /**
+     * Whether [selector] matches an element in the page, for the `ariaSnapshot`
+     * scoped capture.
+     *
+     * Two things this must not do, both of which it used to:
+     *
+     * 1. Emit `document.querySelector(<selector>)` with the selector interpolated
+     *    *unquoted*. The escaped text is meant for a single-quoted JavaScript
+     *    string literal, so the literal must actually be there — without the
+     *    quotes the generated script is a syntax error for EVERY selector
+     *    (`document.querySelector(#main)`), which made `snapshot --selector`
+     *    unable to work at all.
+     * 2. Collapse "the query itself failed" into "no element matched". A selector
+     *    the page's CSS parser rejects (or a driver/evaluation failure) is a
+     *    different fact from an empty match, and reporting it as an empty match
+     *    hides the real message — the syntax error, the DOMException, the
+     *    transport failure. Those are rethrown here with the selector and the
+     *    underlying message attached.
+     *
+     * @return true when the query ran and matched; false when it ran and matched
+     *   nothing
+     * @throws IllegalStateException when the query could not be evaluated
+     */
+    private suspend fun ariaSnapshotSelectorMatches(driver: WebDriver, selector: String): Boolean {
+        val expression = "!!document.querySelector('${Browser4WebDriver.escapeJsSelector(selector)}')"
+        val result = try {
+            driver.evaluateValue(expression)
+        } catch (e: Exception) {
+            throw IllegalStateException(
+                "ariaSnapshot: CSS selector '$selector' could not be evaluated ($expression): " +
+                    "${e.message ?: e.javaClass.simpleName}",
+                e
+            )
+        }
+        return when (result) {
+            is Boolean -> result
+            null -> throw IllegalStateException(
+                "ariaSnapshot: CSS selector '$selector' produced no result ($expression); " +
+                    "the page did not answer the selector query"
+            )
+
+            else -> throw IllegalStateException(
+                "ariaSnapshot: CSS selector '$selector' produced ${result::class.simpleName} instead of a " +
+                    "boolean ($expression); the selector query did not run as expected"
+            )
+        }
+    }
+
+    /**
      * After a navigation-triggering action, detect whether the page started navigating and wait for
      * the DOM to settle before returning.
      *
@@ -1902,11 +1950,12 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 // full page tree, which is indistinguishable from a successful
                 // scoped capture (Issue 1).
                 if (selector != null) {
-                    val found = driver.evaluateValue(
-                        "!!document.querySelector(${Browser4WebDriver.escapeJsSelector(selector)})"
-                    ) as? Boolean ?: false
-                    require(found) {
-                        "ariaSnapshot: CSS selector '$selector' matched no element on the page"
+                    require(ariaSnapshotSelectorMatches(driver, selector)) {
+                        // Worded with the phrase the error mapper recognises as a
+                        // target miss, so "the page does not contain it" is told
+                        // apart from "your call was malformed" all the way to the
+                        // client's error code.
+                        "ariaSnapshot: no element matches selector '$selector' on the page"
                     }
                 }
 

@@ -46,7 +46,7 @@ If no valid LLM key is configured, `agent run` fails fast with a clear error.
 ```bash
 browser4-cli agent run "Open browser4.io and summarize the hero section"
 # agent run prints a UUID task id (e.g. 3b27930e-48bc-4460-aae7-be521f0a9194)
-browser4-cli agent status <task-id>   # poll until COMPLETED
+browser4-cli agent status <task-id>   # poll until "status": "done"
 browser4-cli agent result <task-id>
 ```
 
@@ -58,13 +58,44 @@ Use **agent** for natural-language tasks where you describe what you want withou
 
 `agent run` submits a natural-language task to the Browser4 backend, which uses an LLM to plan and execute browser actions autonomously. The agent reasons about the page, discovers elements, and adapts — it does not need refs or step-by-step instructions. Tasks run asynchronously; poll with `agent status` and fetch results with `agent result`. `extract` and `summarize` are synchronous variants that operate on the current page.
 
+### Where the agent browses, and where it writes
+
+The agent runs **on the backend**, driving the session's own browser through the
+session's bound driver — it is not a second browser you can attach to. Two
+consequences matter in practice:
+
+- **Its navigation is not visible in your session's tab list.** The backend saves
+  the URL you were on before the task and navigates back to it when the task ends,
+  so `tab-list`, `page-info` and `snapshot` keep showing your own page and the
+  agent's intermediate pages never appear there. Observe its work through
+  `agent status` (step count and message) and through the artifacts it reports.
+- **Its deliverables are files, not always fields.** When a task says "extract X",
+  the agent usually writes the data into a file under its own per-task **workspace**
+  and returns a short summary. `agent result` names that directory (`workspace`) and
+  lists the files the agent reported (`filesChanged`), so the deliverable is
+  reachable without searching the backend's app-data tree by hand:
+
+```bash
+browser4-cli agent result <task-id>
+# ...
+# Key findings:
+#   - Born 31 January 1956 in The Hague
+# Files the agent reported changing:
+#   guido_van_rossum.md
+# Task workspace: C:\Users\me\.browser4\...\agent\2026\10\15\<uuid>\workspace
+```
+
+The workspace lives on the machine that runs the backend — when the backend is
+remote, copy the artifacts from there (or have the agent return the data inline).
+Each task gets its own workspace, so artifacts of two tasks never collide.
+
 ## Patterns
 
 ### 1. Asynchronous Multi-Step Task
 
 ```bash
 browser4-cli agent run "Go to amazon.com, search for 'wireless headphones', extract the top 5 product titles and prices"
-browser4-cli agent status <task-id>   # poll until COMPLETED
+browser4-cli agent status <task-id>   # poll until "status": "done"
 browser4-cli agent result <task-id>
 ```
 
@@ -99,25 +130,60 @@ browser4-cli agent result <task-id>
 browser4-cli agent status <task-id>
 ```
 
-Returns JSON:
+Returns the **shared task envelope** — the same shape every long-running tool
+(`crawl`, `swarm`, `command`) answers with:
+
 ```json
-{"id":"3b27930e-48bc-4460-aae7-be521f0a9194","status":"RUNNING","statusCode":null,"processState":"processing","message":"Navigating..."}
+{"taskId":"3b27930e-48bc-4460-aae7-be521f0a9194","status":"running","statusCode":202,
+ "message":"Agent planning next action","processed":3,
+ "statusTool":"command_status","resultTool":"command_result","cancelTool":"command_cancel"}
 ```
 
-| Status | Meaning |
+| Field | Meaning |
 |---|---|
-| `RUNNING` | Agent is actively working |
-| `COMPLETED` | Task finished — call `agent result` |
-| `FAILED` | Task errored — inspect `message` and `statusCode` |
-| `EXPECTATION_FAILED` | Precondition failed (e.g., missing LLM config, status 417) |
+| `taskId` | The task id (also printed by `agent run`) |
+| `status` | `queued` \| `running` \| `done` \| `failed` \| `cancelled` — the **only** field to branch on |
+| `statusCode` | The backend's own code (200 done, 404 no such task, 417 failed) |
+| `message` | Human-readable progress while the task is healthy |
+| `processed` | Agent step count, present once steps were recorded |
+| `error` | Present only when `status` is `failed` |
+| `statusTool` / `resultTool` / `cancelTool` | The MCP tools a generic client should call next |
+
+**Terminal check:** poll until `status` is `done`, `failed` or `cancelled`.
+`queued`/`running` mean "keep polling". Do not wait for the pre-4.14
+`processState`/`isDone` fields — the envelope above is the contract, and a task
+that is `done` never changes again.
+
+An unknown id answers `{"status":"failed","statusCode":404,...}` with the reason
+in `error`, which `agent status`/`agent result` report as
+`No agent task found with id '…'` and exit non-zero.
+
+`agent list` renders the same knowledge as local labels — `queued`, `processing`,
+`completed`, `failed (<code>)`, `cancelled` — refreshed from the backend on every
+call, so its STATUS never contradicts `agent status`.
 
 ### 4. Fetch Results
 
 ```bash
 browser4-cli agent result <task-id>
+browser4-cli agent result <task-id> --json   # envelope + payload as one JSON object
 ```
 
 Always confirm completion via `agent status` first — incomplete tasks may return empty or partial results.
+
+The payload is the agent's **completion report**, not just a summary:
+
+```json
+{"taskId":"…","status":"done","processed":7,
+ "result":{"summary":"…","keyFindings":["…"],"filesChanged":["report.md"],
+           "problems":[],"workspace":"…/agent/2026/10/15/<uuid>/workspace"}}
+```
+
+`result.summary` is what the agent reported; `keyFindings` and `filesChanged`
+carry the deliverable itself, and `workspace` is the directory its tools wrote
+into. Human output prints the findings, the changed files and the workspace path
+below the raw JSON, so a task whose answer is a file is usable without
+filesystem archaeology.
 
 ### 5. Composing with Standard Commands
 
@@ -156,6 +222,8 @@ browser4-cli summarize --selector "#content"
 |------|-----------|-------------|
 | `--wait` | `agent run` | Block until the task reaches a terminal state, then print the result |
 | `--wait-timeout <secs>` | `agent run` | Wait window in seconds (default 600; env `BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS`) |
+| `--json` | `agent status`, `agent result`, `agent list` | Emit the envelope as JSON instead of the human rendering |
+| `--all` | `agent list --clear` | Also untrack tasks that are not finished (they keep running server-side) |
 | `--schema <json>` | `extract` | Enforce a JSON output schema for the extraction |
 | `--selector <css>` | `summarize` | Scope summarization to elements matching a CSS selector |
 
@@ -164,8 +232,10 @@ browser4-cli summarize --selector "#content"
 | Symptom | Recovery |
 |----------|---------|
 | `agent run` exits non-zero | Check backend is reachable and LLM key is configured |
-| Task stuck in RUNNING | Poll `agent status` — some tasks take minutes |
-| Status/result returns unexpected payload | Inspect `status`, `statusCode`, `message` fields |
-| Task lost after backend restart | Task IDs may not persist; re-submit the task |
+| `No agent task found with id '…'` | The backend has no record of that id (cleared, expired, or the backend restarted) — `agent list` shows what is still tracked |
+| Task still `running` after minutes | Poll `agent status` — browsing agents routinely take minutes; `processed` shows whether it is still stepping |
+| `agent result` says the result carries no data | The agent may have written its deliverable to a file: the same output names the `workspace` it wrote into |
+| `agent list` shows a different status than `agent status` | `agent list` refreshes from the backend on every call; if the backend is unreachable it prints a note and shows cached labels |
+| Task lost after backend restart | Task ids may not persist; re-submit the task |
 | `extract`/`summarize` blocking too long | Use `agent run` for async execution instead |
 | Agent subcommands in batch mode | Not supported — use standalone commands |

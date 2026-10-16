@@ -3,9 +3,25 @@
 //!
 //! Elements are matched by (role, accessible-name, bounding-box proximity)
 //! using a greedy bipartite matching algorithm with configurable tolerance.
+//!
+//! Every diff entry is rendered as one line in the *same* node shape the tree
+//! uses, prefixed by an unambiguous marker — `+` added, `-` removed, `~`
+//! modified:
+//!
+//! ```text
+//! ## Added
+//!
+//! + button "Save draft" [ref=e7078] [box=640,512,120,40]
+//! ```
+//!
+//! The marker is followed by the canonical `role "name" [ref=…] [box=…]` shape,
+//! so a diff line can be grepped for exactly and its `[ref=…]` used directly
+//! (snapshot-mastery issue #4).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+use crate::snapshot::canonicalize_node_line;
 
 /// A parsed node from the accessibility-tree YAML.
 #[derive(Debug, Clone)]
@@ -19,6 +35,9 @@ struct SnapNode {
     name: String,
     /// Element ref, e.g. "e42"
     ref_id: String,
+    /// Bracketed attribute run as rendered, e.g. `[ref=e4] [box=10,100,100,30]`.
+    /// Kept verbatim so a diff line carries every attribute the tree line had.
+    attrs: String,
     /// Bounding box parsed from `[box=x,y,w,h]`
     box_rect: Option<BoxRect>,
     /// URL property value (`/url: ...`)
@@ -143,7 +162,11 @@ fn parse_snapshot(content: &str) -> Vec<SnapNode> {
     let mut i = 0;
 
     while i < lines.len() {
-        let line = lines[i];
+        // A node whose accessible name forced the backend to quote the whole key
+        // is re-flowed first, so the *name* is parsed instead of a role that
+        // swallowed the opening quote (#8).
+        let canonical = canonicalize_node_line(lines[i]);
+        let line = canonical.as_deref().unwrap_or(lines[i]);
         let trimmed = line.trim();
 
         // Skip comment lines, empty lines, and document separators
@@ -192,6 +215,10 @@ fn parse_snapshot(content: &str) -> Vec<SnapNode> {
 
         // Parse name (quoted string, if present)
         let (name, rest) = parse_quoted_name(rest);
+
+        // Keep the bracketed attribute run verbatim so a diff line carries the
+        // ref — and every other attribute — the tree line had.
+        let attrs = extract_attr_run(rest);
 
         // Parse bracketed attributes
         let bracketed = parse_bracketed_attrs(rest);
@@ -253,6 +280,7 @@ fn parse_snapshot(content: &str) -> Vec<SnapNode> {
             role,
             name,
             ref_id,
+            attrs,
             box_rect,
             url,
             value,
@@ -302,6 +330,21 @@ fn parse_quoted_name(s: &str) -> (String, &str) {
     let name = name.replace("\\\"", "\"").replace("\\\\", "\\");
     let rest = &s[end..];
     (name, rest)
+}
+
+/// Extract the bracketed attribute run (`[ref=e4] [box=10,100,100,30]`) from
+/// the text that follows a node's quoted name.
+///
+/// Returns an empty string when the node carries no attributes, so the diff
+/// renderer never emits a stray space.
+fn extract_attr_run(rest: &str) -> String {
+    let (Some(start), Some(end)) = (rest.find('['), rest.rfind(']')) else {
+        return String::new();
+    };
+    if end < start {
+        return String::new();
+    }
+    rest[start..=end].trim().to_string()
 }
 
 /// Parse all `[key=value]` bracketed attributes from a string.
@@ -532,44 +575,34 @@ fn format_diff_output(diffs: &[DiffEntry], before: &PathBuf, after: &PathBuf) ->
         for entry in matches {
             match entry {
                 DiffEntry::Added(node) => {
-                    lines.push(format!(
-                        "+ {} {} \"{}\"",
-                        node.role,
-                        short_id(&node.ref_id),
-                        truncate_str(&node.name, 60),
-                    ));
+                    lines.push(format_diff_node_line('+', node));
                     if let Some(v) = &node.value {
                         if !v.is_empty() {
-                            lines.push(format!("  + /value: \"{}\"", truncate_str(v, 80)));
+                            lines.push(format!(
+                                "  + /value: \"{}\"",
+                                escape_diff_name(&truncate_str(v, 80))
+                            ));
                         }
                     }
                 }
                 DiffEntry::Removed(node) => {
-                    lines.push(format!(
-                        "- {} {} \"{}\"",
-                        node.role,
-                        short_id(&node.ref_id),
-                        truncate_str(&node.name, 60),
-                    ));
+                    lines.push(format_diff_node_line('-', node));
                 }
                 DiffEntry::Modified {
-                    before: _b,
-                    after: _a,
+                    before,
+                    after,
                     changes,
                 } => {
-                    let node = &_b;
-                    let node_a = &_a;
-                    let id = if node.ref_id == node_a.ref_id {
-                        short_id(&node.ref_id)
-                    } else {
-                        format!("{}→{}", short_id(&node.ref_id), short_id(&node_a.ref_id))
-                    };
-                    lines.push(format!(
-                        "~ {} {} \"{}\"",
-                        node.role,
-                        id,
-                        truncate_str(&node.name, 60),
-                    ));
+                    // The *current* node is the actionable one, so its ref and
+                    // box are the ones a reader can use directly.
+                    lines.push(format_diff_node_line('~', after));
+                    if before.ref_id != after.ref_id {
+                        lines.push(format!(
+                            "  /ref: \"{}\" → \"{}\"",
+                            ref_or_none(&before.ref_id),
+                            ref_or_none(&after.ref_id)
+                        ));
+                    }
                     for c in changes {
                         lines.push(format!("  {}", c));
                     }
@@ -582,23 +615,69 @@ fn format_diff_output(diffs: &[DiffEntry], before: &PathBuf, after: &PathBuf) ->
     lines.join("\n")
 }
 
-fn short_id(ref_id: &str) -> String {
-    if ref_id.is_empty() {
-        return "?".to_string();
+/// Render one diff line: `<marker> <role> "<name>" <attrs>`.
+///
+/// The marker is `+` (added), `-` (removed) or `~` (modified); the rest is the
+/// canonical tree node shape, so `grep '^+ button'` and pasting the `[ref=…]`
+/// into an interaction command both work (#4).  Only the name is quoted, and it
+/// is JSON-escaped, so a name containing `"` no longer turns the whole line into
+/// a different scalar shape (#8).
+fn format_diff_node_line(marker: char, node: &SnapNode) -> String {
+    let mut line = String::with_capacity(node.role.len() + node.name.len() + node.attrs.len() + 8);
+    line.push(marker);
+    line.push(' ');
+    line.push_str(&node.role);
+    if !node.name.is_empty() {
+        line.push_str(" \"");
+        line.push_str(&escape_diff_name(&truncate_str(&node.name, 60)));
+        line.push('"');
     }
-    if ref_id.len() <= 6 {
-        ref_id.to_string()
+    if !node.attrs.is_empty() {
+        line.push(' ');
+        line.push_str(&node.attrs);
+    }
+    line
+}
+
+/// Escape a name for the diff line's double-quoted scalar.
+fn escape_diff_name(name: &str) -> String {
+    let mut escaped = String::with_capacity(name.len());
+    for ch in name.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+/// Render a ref for a change line, naming the empty case explicitly.
+fn ref_or_none(ref_id: &str) -> &str {
+    if ref_id.is_empty() {
+        "(none)"
     } else {
-        ref_id[..6].to_string()
+        ref_id
     }
 }
 
+/// Truncate `s` to at most `max` bytes, appending `…`, without splitting a
+/// UTF-8 character (accessibility names are routinely non-ASCII, and slicing
+/// them at a byte offset used to panic).
 fn truncate_str(s: &str, max: usize) -> String {
     if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max - 1])
+        return s.to_string();
     }
+    let limit = max.saturating_sub('…'.len_utf8()).max(1);
+    let mut end = 0;
+    for (index, ch) in s.char_indices() {
+        let next = index + ch.len_utf8();
+        if next > limit {
+            break;
+        }
+        end = next;
+    }
+    format!("{}…", &s[..end])
 }
 
 // ---------------------------------------------------------------------------
@@ -608,6 +687,27 @@ fn truncate_str(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a node the way [parse_snapshot] would, so the diff tests state the
+    /// tree shape they mean instead of every field by hand.
+    fn test_node(role: &str, name: &str, ref_id: &str, rect: Option<[f64; 4]>) -> SnapNode {
+        let attrs = match rect {
+            Some([x, y, w, h]) => format!("[ref={ref_id}] [box={x},{y},{w},{h}]"),
+            None => format!("[ref={ref_id}]"),
+        };
+        SnapNode {
+            depth: 0,
+            role: role.to_string(),
+            name: name.to_string(),
+            ref_id: ref_id.to_string(),
+            attrs,
+            box_rect: rect.map(|[x, y, w, h]| BoxRect { x, y, w, h }),
+            url: None,
+            value: None,
+            text: None,
+            raw_line: String::new(),
+        }
+    }
 
     #[test]
     fn test_parse_basic_snapshot() {
@@ -659,38 +759,18 @@ mod tests {
     #[test]
     fn test_diff_added_removed() {
         // Different roles and boxes far apart → no match
-        let before = vec![SnapNode {
-            depth: 0,
-            role: "button".into(),
-            name: "Submit".into(),
-            ref_id: "e1".into(),
-            box_rect: Some(BoxRect {
-                x: 0.0,
-                y: 0.0,
-                w: 100.0,
-                h: 40.0,
-            }),
-            url: None,
-            value: None,
-            text: None,
-            raw_line: String::new(),
-        }];
-        let after = vec![SnapNode {
-            depth: 0,
-            role: "link".into(),
-            name: "New Link".into(),
-            ref_id: "e99".into(),
-            box_rect: Some(BoxRect {
-                x: 500.0,
-                y: 500.0,
-                w: 80.0,
-                h: 20.0,
-            }),
-            url: None,
-            value: None,
-            text: None,
-            raw_line: String::new(),
-        }];
+        let before = vec![test_node(
+            "button",
+            "Submit",
+            "e1",
+            Some([0.0, 0.0, 100.0, 40.0]),
+        )];
+        let after = vec![test_node(
+            "link",
+            "New Link",
+            "e99",
+            Some([500.0, 500.0, 80.0, 20.0]),
+        )];
 
         let diffs = compute_diff(&before, &after);
         // Different role → no match → old removed, new added
@@ -701,40 +781,12 @@ mod tests {
 
     #[test]
     fn test_diff_value_changed() {
-        let before = vec![SnapNode {
-            depth: 0,
-            role: "textbox".into(),
-            name: "Query".into(),
-            ref_id: "e3".into(),
-            box_rect: Some(BoxRect {
-                x: 100.0,
-                y: 80.0,
-                w: 400.0,
-                h: 40.0,
-            }),
-            url: None,
-            value: Some("".into()),
-            text: None,
-            raw_line: String::new(),
-        }];
-        let after = vec![SnapNode {
-            depth: 0,
-            role: "textbox".into(),
-            name: "Query".into(),
-            ref_id: "e99".into(),
-            box_rect: Some(BoxRect {
-                x: 100.0,
-                y: 80.0,
-                w: 400.0,
-                h: 40.0,
-            }),
-            url: None,
-            value: Some("Laser-Engraved Crystal".into()),
-            text: None,
-            raw_line: String::new(),
-        }];
+        let mut before_node = test_node("textbox", "Query", "e3", Some([100.0, 80.0, 400.0, 40.0]));
+        before_node.value = Some(String::new());
+        let mut after_node = test_node("textbox", "Query", "e99", Some([100.0, 80.0, 400.0, 40.0]));
+        after_node.value = Some("Laser-Engraved Crystal".into());
 
-        let diffs = compute_diff(&before, &after);
+        let diffs = compute_diff(&[before_node], &[after_node]);
         assert_eq!(diffs.len(), 1);
         match &diffs[0] {
             DiffEntry::Modified { changes, .. } => {
@@ -749,28 +801,160 @@ mod tests {
 
     #[test]
     fn test_diff_identical_no_output() {
-        let node = SnapNode {
-            depth: 0,
-            role: "button".into(),
-            name: "Submit".into(),
-            ref_id: "e1".into(),
-            box_rect: Some(BoxRect {
-                x: 0.0,
-                y: 0.0,
-                w: 100.0,
-                h: 40.0,
-            }),
-            url: None,
-            value: None,
-            text: None,
-            raw_line: String::new(),
-        };
-        let before = vec![node.clone()];
-        let after = vec![node.clone()];
-        let diffs = compute_diff(&before, &after);
+        let node = test_node("button", "Submit", "e1", Some([0.0, 0.0, 100.0, 40.0]));
+
+        let diffs = compute_diff(&[node.clone()], &[node]);
+
         assert!(
             diffs.is_empty(),
             "Identical elements should produce no diff"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Diff document shape (#4, #8)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_diff_document_lines_use_the_canonical_node_shape() {
+        // Regression (#4): diff lines used to be `+ button e7078 "name"` — no
+        // [ref=], no [box=], and the id truncated to six bytes, so a changed
+        // element could not be acted on from the diff.
+        let before_yaml = "- generic [ref=e1] [box=0,0,100,100]:\n\
+                           \x20 - link \"Old\" [ref=e4] [box=10,100,100,30]\n\
+                           \x20 - textbox \"Query\" [ref=e2] [box=10,60,100,30]:\n\
+                           \x20   - /value: \"hello\"\n";
+        let after_yaml = "- generic [ref=e1] [box=0,0,100,100]:\n\
+                          \x20 - link \"New\" [ref=e3] [box=10,140,100,30]\n\
+                          \x20 - textbox \"Query\" [ref=e20] [box=10,60,100,30]:\n\
+                          \x20   - /value: \"hello2\"\n";
+
+        let diffs = compute_diff(&parse_snapshot(before_yaml), &parse_snapshot(after_yaml));
+        let rendered = format_diff_output(
+            &diffs,
+            &PathBuf::from("before.yml"),
+            &PathBuf::from("after.yml"),
+        );
+
+        assert!(
+            rendered.contains("\n- link \"Old\" [ref=e4] [box=10,100,100,30]\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("\n+ link \"New\" [ref=e3] [box=10,140,100,30]\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("\n~ textbox \"Query\" [ref=e20] [box=10,60,100,30]\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("\n  /value: \"hello\" → \"hello2\"\n"),
+            "{rendered}"
+        );
+        // A reassigned ref is reported like any other change, not by truncating
+        // the id into the entry header.
+        assert!(
+            rendered.contains("\n  /ref: \"e2\" → \"e20\"\n"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn test_diff_line_escapes_quotes_and_colons_in_names() {
+        // Regression (#8 fallout): a name holding `"` used to render as
+        // `+ "table e7305 ""` — a malformed line no reader could parse.
+        let node = test_node(
+            "heading",
+            "A Pattern \"Language\": Towns",
+            "e7",
+            Some([10.0, 20.0, 300.0, 40.0]),
+        );
+
+        let rendered = format_diff_output(
+            &[DiffEntry::Added(node)],
+            &PathBuf::from("a.yml"),
+            &PathBuf::from("b.yml"),
+        );
+
+        assert!(
+            rendered.contains(
+                "+ heading \"A Pattern \\\"Language\\\": Towns\" [ref=e7] [box=10,20,300,40]"
+            ),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn test_diff_node_line_omits_an_empty_name() {
+        let node = test_node("generic", "", "e5", None);
+
+        assert_eq!(format_diff_node_line('+', &node), "+ generic [ref=e5]");
+        assert_eq!(format_diff_node_line('-', &node), "- generic [ref=e5]");
+    }
+
+    #[test]
+    fn test_parse_snapshot_reads_a_whole_line_quoted_node() {
+        // The backend quotes the whole key when the name breaks a YAML plain
+        // scalar (#8); the diff must still read role, name and attributes.
+        let yaml = "- \"generic \\\"A Pattern Language: Towns, Buildings, Construction\\\" [ref=e7306] [box=1116,216,309,49]\"\n";
+
+        let nodes = parse_snapshot(yaml);
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].role, "generic");
+        assert_eq!(
+            nodes[0].name,
+            "A Pattern Language: Towns, Buildings, Construction"
+        );
+        assert_eq!(nodes[0].ref_id, "e7306");
+        assert_eq!(nodes[0].attrs, "[ref=e7306] [box=1116,216,309,49]");
+        assert_eq!(
+            nodes[0].box_rect.as_ref().map(|box_rect| box_rect.x),
+            Some(1116.0)
+        );
+    }
+
+    #[test]
+    fn test_extract_attr_run() {
+        assert_eq!(
+            extract_attr_run(" [ref=e4] [box=10,100,100,30]"),
+            "[ref=e4] [box=10,100,100,30]"
+        );
+        assert_eq!(extract_attr_run("[disabled]"), "[disabled]");
+        assert_eq!(extract_attr_run(": inlined text"), "");
+        assert_eq!(extract_attr_run(""), "");
+    }
+
+    #[test]
+    fn test_truncate_str_keeps_multibyte_names_intact() {
+        assert_eq!(truncate_str("hello", 60), "hello");
+        assert_eq!(
+            truncate_str(&"a".repeat(100), 60),
+            format!("{}…", "a".repeat(57))
+        );
+        // 'é' is two bytes, so a 60-byte cut used to land inside a character
+        // and panic on the slice.
+        let accents = "é".repeat(40);
+        let truncated = truncate_str(&accents, 60);
+        assert!(truncated.ends_with('…'), "{truncated}");
+        assert!(
+            accents.starts_with(truncated.trim_end_matches('…')),
+            "{truncated}"
+        );
+    }
+
+    #[test]
+    fn test_find_previous_snapshot_ignores_auto_diff_reports() {
+        // A persisted auto-diff report (#5) lives next to the captures but must
+        // never become a diff baseline.
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let capture = tmp.path().join("snapshot-a.yml");
+        std::fs::write(&capture, "- generic [ref=e1]\n").expect("write baseline");
+        crate::snapshot::save_diff_report(&capture, "## Added\n").expect("save diff report");
+        let current = tmp.path().join("snapshot-b.yml");
+        std::fs::write(&current, "- generic [ref=e2]\n").expect("write current");
+
+        assert_eq!(find_previous_snapshot(&current), Some(capture));
     }
 }

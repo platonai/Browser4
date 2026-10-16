@@ -16,6 +16,7 @@
 package ai.platon.pulsar.media.config
 
 import ai.platon.pulsar.common.config.ImmutableConfig
+import java.nio.file.Path
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -31,8 +32,13 @@ data class MediaConfig(
     /** Path to the ffprobe binary. Default: "ffprobe" */
     val ffprobePath: String = "ffprobe",
 
-    /** Base directory for downloaded media files */
-    val downloadDir: String = "downloads/media",
+    /**
+     * Base directory for downloaded media files.
+     *
+     * Absolute by default, anchored under the user's Browser4 state dir; override with
+     * `media.download.dir`.
+     */
+    val downloadDir: String = defaultDownloadDir(),
 
     /** Maximum allowed download size in bytes (default: 500 MB) */
     val maxDownloadSize: Long = 500 * 1024 * 1024L,
@@ -49,8 +55,29 @@ data class MediaConfig(
     /** Maximum concurrent downloads */
     val concurrentDownloads: Int = 3,
 ) {
+    /**
+     * The download directory as an absolute [Path].
+     *
+     * Every download path is resolved through this accessor so a relative
+     * `media.download.dir` override can never silently resolve against the backend
+     * process working directory.
+     */
+    fun downloadDirPath(): Path = Path.of(downloadDir).toAbsolutePath()
+
     companion object {
         private const val PREFIX = "media."
+
+        /**
+         * Default download directory, anchored at the user's Browser4 state dir
+         * (`~/.browser4/downloads/media`) instead of the backend process CWD.
+         *
+         * A relative default resolved inside the runtime bundle build tree
+         * (`browser4-apps/browser4-bundle/target/runtime-bundle/_work/...`), where users
+         * could not find the file and a bundle rebuild could wipe it. Set
+         * `media.download.dir` to any absolute path to move the destination.
+         */
+        fun defaultDownloadDir(): String =
+            Path.of(System.getProperty("user.home"), ".browser4", "downloads", "media").toString()
 
         /**
          * Build a [MediaConfig] from the application configuration.
@@ -59,7 +86,7 @@ data class MediaConfig(
             return MediaConfig(
                 ffmpegPath = conf.get("${PREFIX}ffmpeg.path", "ffmpeg"),
                 ffprobePath = conf.get("${PREFIX}ffprobe.path", "ffprobe"),
-                downloadDir = conf.get("${PREFIX}download.dir", "downloads/media"),
+                downloadDir = conf.get("${PREFIX}download.dir", defaultDownloadDir()),
                 maxDownloadSize = conf.getLong("${PREFIX}download.max-size", 500 * 1024 * 1024L),
                 downloadTimeoutSeconds = conf.getLong("${PREFIX}download.timeout.seconds", 300),
                 ffmpegTimeoutSeconds = conf.getLong("${PREFIX}ffmpeg.timeout.seconds", 600),

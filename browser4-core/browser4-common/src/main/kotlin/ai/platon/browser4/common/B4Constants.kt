@@ -121,5 +121,28 @@ object B4Constants {
 
     const val VAR_IS_SCRAPE = "IS_SCRAPE"
 
+    /**
+     * The value of a page-level HTTP status field when **no page status was
+     * observed** (`0`).
+     *
+     * Page status fields (`pageStatusCode` on `CommandStatus`, `ScrapeResponse`,
+     * `PageVisitStatus`, `AgentTaskStatus`) describe the *page*, not the task, so
+     * they must not be defaulted to a task-lifecycle code: `201 / SC_CREATED`
+     * ("created") was exactly that mistake — every agent/loop record reported
+     * `"pageStatusCode": 201` next to a message saying the page loaded with HTTP
+     * 200, and a monitoring script keying on the field misclassified the task.
+     *
+     * `0` is the honest representation: HTTP status codes start at 100, so no real
+     * response can be confused with it, it keeps the field an `Int` (the MCP
+     * result schemas, the swarm persistence JSONL and every existing consumer stay
+     * valid), and it matches the codebase's existing "absent" convention for
+     * `NetworkResourceResponse.httpStatusCode`. A real `201` from a page is
+     * therefore still distinguishable from "not observed".
+     *
+     * Producers must set the field from an observation when they have one (see
+     * `DocumentHttpStatus`), and leave it at this value when they do not.
+     */
+    const val PAGE_STATUS_UNKNOWN = 0
+
     const val BROWSER4_CONTEXT_CONFIG_LOCATION = "classpath:browser4-beans/app-context.xml"
 }

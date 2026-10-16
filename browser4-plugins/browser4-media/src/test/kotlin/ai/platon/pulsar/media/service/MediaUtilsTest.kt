@@ -278,4 +278,87 @@ class MediaUtilsTest {
     fun testFormatFileSizeFormatsGb() {
         assertTrue(MediaUtils.formatFileSize(2L * 1024 * 1024 * 1024).contains("GB"))
     }
+
+    // ---- isOpaqueMediaUrl ----
+
+    @Test
+    @DisplayName("isOpaqueMediaUrl detects blob and mediasource URLs")
+    fun testIsOpaqueMediaUrlDetectsMseUrls() {
+        assertTrue(MediaUtils.isOpaqueMediaUrl("blob:https://example.com/8e7f22de"))
+        assertTrue(MediaUtils.isOpaqueMediaUrl("BLOB:https://example.com/8e7f22de"))
+        assertTrue(MediaUtils.isOpaqueMediaUrl("mediasource:https://example.com/stream"))
+    }
+
+    @Test
+    @DisplayName("isOpaqueMediaUrl returns false for downloadable URLs and null")
+    fun testIsOpaqueMediaUrlReturnsFalseForHttp() {
+        assertFalse(MediaUtils.isOpaqueMediaUrl("https://cdn.com/stream.m3u8"))
+        assertFalse(MediaUtils.isOpaqueMediaUrl("data:video/mp4;base64,AAAA"))
+        assertFalse(MediaUtils.isOpaqueMediaUrl(null))
+        assertFalse(MediaUtils.isOpaqueMediaUrl("   "))
+    }
+
+    // ---- summarizeDataUri ----
+
+    @Test
+    @DisplayName("summarizeDataUri replaces a long base64 payload with its decoded size")
+    fun testSummarizeDataUriSummarisesLongBase64() {
+        val payload = "A".repeat(1200)
+
+        assertEquals("data:video/mp4;base64,<900 B>", MediaUtils.summarizeDataUri("data:video/mp4;base64,$payload"))
+    }
+
+    @Test
+    @DisplayName("summarizeDataUri accounts for base64 padding")
+    fun testSummarizeDataUriAccountsForPadding() {
+        val payload = "A".repeat(1000) + "==" // 1002 chars -> 751 - 2 bytes
+
+        assertEquals("data:video/mp4;base64,<749 B>", MediaUtils.summarizeDataUri("data:video/mp4;base64,$payload"))
+    }
+
+    @Test
+    @DisplayName("summarizeDataUri reports the payload length for non-base64 data URIs")
+    fun testSummarizeDataUriHandlesPlainPayload() {
+        val payload = "%41".repeat(100)
+
+        assertEquals("data:text/plain,<${payload.length} B>", MediaUtils.summarizeDataUri("data:text/plain,$payload"))
+    }
+
+    @Test
+    @DisplayName("summarizeDataUri keeps short data URIs verbatim")
+    fun testSummarizeDataUriKeepsShortValues() {
+        val uri = "data:video/webm;base64,AAAA"
+
+        assertTrue(uri.length <= MediaUtils.DATA_URI_VERBATIM_LIMIT)
+        assertEquals(uri, MediaUtils.summarizeDataUri(uri))
+    }
+
+    @Test
+    @DisplayName("summarizeDataUri is idempotent")
+    fun testSummarizeDataUriIsIdempotent() {
+        // A summary produced by the in-page probe (or an earlier pass) must survive untouched,
+        // even when its own metadata is long enough to pass the verbatim limit.
+        val short = "data:video/mp4;base64,<900 B>"
+        val long = "data:text/plain;charset=utf-8;" + "a".repeat(200) + ",<123 B>"
+
+        assertEquals(short, MediaUtils.summarizeDataUri(short))
+        assertTrue(long.length > MediaUtils.DATA_URI_VERBATIM_LIMIT)
+        assertEquals(long, MediaUtils.summarizeDataUri(long))
+    }
+
+    @Test
+    @DisplayName("summarizeDataUri never touches ordinary URLs")
+    fun testSummarizeDataUriIgnoresOrdinaryUrls() {
+        val url = "https://cdn.com/" + "a".repeat(500) + "/stream.m3u8"
+
+        assertEquals(url, MediaUtils.summarizeDataUri(url))
+    }
+
+    @Test
+    @DisplayName("summarizeDataUri leaves a data URI without a payload separator alone")
+    fun testSummarizeDataUriWithoutComma() {
+        val value = "data:" + "x".repeat(500)
+
+        assertEquals(value, MediaUtils.summarizeDataUri(value))
+    }
 }

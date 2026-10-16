@@ -74,6 +74,45 @@ enum class ToolErrorCode(
     /** The browser rejected the command. */
     CDP_ERROR(true, 502, "The browser refused the command; retrying may help."),
 
+    /**
+     * Nothing is listening on the CDP endpoint the caller named.
+     *
+     * Reported for `attach --cdp <endpoint>` when the address refuses the
+     * connection. Deliberately **not** [CDP_ERROR]: no browser ever saw the
+     * command, so "retrying may help" is false — the user has to start the
+     * target browser with remote debugging (or name the browser that is already
+     * running) before the identical call can succeed. It is also not a usage
+     * error: the endpoint was well-formed, it simply is not there.
+     */
+    ENDPOINT_UNREACHABLE(
+        false, 502,
+        "Start the target browser with --remote-debugging-port, or point --cdp at the browser that is running, then retry attach.",
+    ),
+
+    /**
+     * Something answered HTTP at the endpoint but it is not a Chrome DevTools
+     * discovery endpoint (no `/json/version`).
+     *
+     * A plain web server answers the same way, so this code states the certain
+     * fact only — which endpoint it was and what it returned.
+     */
+    ENDPOINT_NOT_CDP(
+        false, 502,
+        "Point --cdp at the browser's DevTools port (`--remote-debugging-port`), or use `attach --extension` for Chrome's built-in remote debugging.",
+    ),
+
+    /**
+     * The endpoint is a live browser but exposes no page target to drive.
+     *
+     * Attaching would bind a session to a browser it cannot navigate, so it
+     * fails instead. Opening a tab in the target browser makes the identical
+     * call succeed.
+     */
+    ENDPOINT_NO_PAGE_TARGETS(
+        false, 409,
+        "Open a tab in the target browser, then retry attach.",
+    ),
+
     /** A downstream service failed. */
     UPSTREAM_ERROR(true, 502, "An upstream service failed; retrying may help."),
 
@@ -128,6 +167,32 @@ interface CodedFailure {
 class TargetNotFoundException(
     message: String,
     override val code: ToolErrorCode = ToolErrorCode.TARGET_NOT_FOUND,
+) : RuntimeException(message), CodedFailure
+
+/**
+ * The CDP endpoint an attach named cannot host a session.
+ *
+ * Thrown by the attach path once it has probed the endpoint, so the code is the
+ * *observed* condition rather than an inference from prose: nothing listening
+ * ([ToolErrorCode.ENDPOINT_UNREACHABLE]), something that is not CDP answering
+ * ([ToolErrorCode.ENDPOINT_NOT_CDP]), or a live browser with no page target
+ * ([ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS]). Every one of them is
+ * non-retryable — the same call against the same endpoint fails the same way —
+ * which is exactly what the previous `CDP_ERROR` (declared retryable) told a
+ * client to keep doing.
+ *
+ * Like [TargetNotFoundException] it deliberately does **not** extend
+ * `IllegalArgumentException`: the call's shape was valid (the endpoint was
+ * well-formed and reachable enough to answer), so it must not be answered with
+ * the tool's signature/help dump. The message carries the user-visible cause —
+ * the endpoint, what answered, and what to do — because it is rendered verbatim
+ * to the CLI.
+ *
+ * @property code the observed condition; see the class KDoc.
+ */
+class AttachFailureException(
+    message: String,
+    override val code: ToolErrorCode,
 ) : RuntimeException(message), CodedFailure
 
 /**
@@ -221,13 +286,29 @@ object ToolErrorMapper {
             isTimeoutPhrase(text) -> ToolErrorCode.TIMEOUT
             "cancelled" in text || "canceled" in text -> ToolErrorCode.CANCELLED
 
+            // Endpoint-level attach failures are matched BEFORE the generic CDP
+            // rule below. Every attach message names a "CDP endpoint", so the
+            // broad `"cdp" in text` match used to win first and report a refused
+            // connection as a retryable CDP_ERROR ("retrying may help") — while
+            // the message itself says nothing is listening, which retrying can
+            // never fix. The specific, observed condition must decide the code.
+            "is not reachable" in text -> ToolErrorCode.ENDPOINT_UNREACHABLE
+            "nothing is listening" in text -> ToolErrorCode.ENDPOINT_UNREACHABLE
+            "not a chrome devtools" in text -> ToolErrorCode.ENDPOINT_NOT_CDP
+            "reachable but has no page targets" in text -> ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS
+            "reachable but lists no page target" in text -> ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS
+            // A refused/reset connection is an upstream transport failure, never a
+            // browser that rejected a command — it stays UPSTREAM_ERROR, but the
+            // rule must be evaluated before the generic "cdp" match to be reached
+            // at all ("CDP endpoint … connection refused").
+            "connection refused" in text || "connection reset" in text -> ToolErrorCode.UPSTREAM_ERROR
+
             "cdp" in text || "devtools" in text || "browserprotocol" in text -> ToolErrorCode.CDP_ERROR
             // A DOM node id can go stale between resolution and use (a concurrent
             // click, a re-render, a frame swap). The node is gone, not the request:
             // tell the client to retry rather than reporting INTERNAL.
             "no node with given id" in text -> ToolErrorCode.CDP_ERROR
             "node is detached" in text || "element is not attached" in text -> ToolErrorCode.CDP_ERROR
-            "connection refused" in text || "connection reset" in text -> ToolErrorCode.UPSTREAM_ERROR
             "conflict" in text || "already exists" in text -> ToolErrorCode.CONFLICT
 
             else -> ToolErrorCode.INTERNAL

@@ -118,6 +118,11 @@ object ToolResultSchemas {
 
     /**
      * `html_snapshot.scrape_all` → a JSON array of the extracted field values.
+     *
+     * A caller that passes `includeMeta: true` asks for the pagination envelope instead —
+     * `{"offset":0,"limit":-1,"returned":20,"totalMatches":20,"values":[…]}` — because the array
+     * alone cannot report how many elements the selector matched once `offset`/`limit` sliced it.
+     * The bare array stays the default answer, so this schema describes the default shape.
      */
     const val HTML_SNAPSHOT_SCRAPE_ALL = """{"type":"array","items":{"type":"string"}}"""
 

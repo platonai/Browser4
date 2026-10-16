@@ -71,10 +71,10 @@ pub(super) fn test_profile_import_command(ctx: &mut E2ECtx) {
         dynamic.stdout
     );
 
-    // Bare `plugin` is intentionally rejected with a subcommand hint (see
-    // preferred_prefixed_group_form); server-driven listing lives behind
-    // `plugin list` and `plugin-<domain>` invocations. The dynamic path above
-    // already proves server-side discovery works end to end.
+    // Bare `plugin` lists the plugin tool domains the backend advertises
+    // (`test_e2e_plugin_tool_surface` pins that surface, together with
+    // `tool list` and `plugin <domain> --help`). The dynamic path above already
+    // proves server-side discovery works end to end.
 
     // Plugin-declared CLI command: the plugin manifest (ToolSpec.cliName)
     // declares `profile import`; the CLI discovers it from /mcp/tools/specs
@@ -5315,6 +5315,29 @@ pub(super) fn test_crawl_with_output_file(ctx: &mut E2ECtx) {
         "Expected page info in output file, got:\n{}",
         file_content
     );
+
+    // `--json` with `--output` (and no --sql) used to write the human-readable
+    // listing into the file while the envelope went to stdout, so a `.json`
+    // output held prose.  It is refused now, like the --format csv/json sibling.
+    let json_output_path = ctx.workspace_dir.join("crawl-json-output.json");
+    let json_output_arg = format!("--output={}", json_output_path.to_string_lossy());
+    let refused = run_command_expecting_failure(
+        ctx,
+        &[
+            "--json",
+            "crawl",
+            "https://example.com/json-output-test",
+            "--depth=0",
+            &json_output_arg,
+        ],
+        "would not be JSON",
+    );
+    assert_ne!(refused.exit_code, 0);
+    assert!(
+        !json_output_path.exists(),
+        "--json with --output must not create a non-JSON file at {}",
+        json_output_path.display()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -6861,6 +6884,46 @@ pub(super) fn test_htmlsnapshot_query(ctx: &mut E2ECtx) {
         result.stderr
     );
 
+    // Regression (x-sql report #1): the inline-`--sql` tip was written to
+    // stdout, so `htmlsnapshot query --sql "…" > out.json` picked up three tip
+    // lines after the envelope and no longer parsed as JSON.  The default
+    // `--format json` is machine-readable stdout, so the tip belongs on stderr.
+    assert!(
+        serde_json::from_str::<serde_json::Value>(result.stdout.trim()).is_ok(),
+        "stdout must carry exactly the JSON envelope, got:\n{}",
+        result.stdout
+    );
+    assert!(
+        !result.stdout.contains("Tip:"),
+        "stdout must stay free of tips, got:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stderr.contains("Tip: Use --sql @file.sql"),
+        "the inline-SQL tip must go to stderr, got:\n{}",
+        result.stderr
+    );
+
+    // The human `--format table` view keeps its tips on stdout: nothing there
+    // is parsed by a machine.
+    let table = run_command(
+        ctx,
+        &[
+            "htmlsnapshot",
+            "query",
+            "--sql",
+            "SELECT h1 FROM page",
+            "--format",
+            "table",
+        ],
+    );
+    assert_eq!(table.exit_code, 0, "expected --format table to succeed:\n{}", table.stderr);
+    assert!(
+        table.stdout.contains("Tip: Use --sql @file.sql"),
+        "the human table view keeps tips on stdout, got:\n{}",
+        table.stdout
+    );
+
     let tool_calls = mock_server.snapshot().tool_calls;
     let query_call = tool_calls
         .iter()
@@ -7462,6 +7525,248 @@ pub(super) fn test_plugin_markdown_read(ctx: &mut E2ECtx) {
     );
 }
 
+/// The plugin/tool discovery surface: `tool list` prints tool names, bare
+/// `plugin` groups them by domain with their methods, `plugin <domain> --help`
+/// answers with that domain's methods, and a tool-reported failure is not
+/// silently a success.
+pub(super) fn test_plugin_tool_surface(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // `tool list` used to print the entire general command reference (exit 0),
+    // so a user reasonably concluded it had worked.
+    let listed = run_command(ctx, &["tool", "list"]);
+    assert_eq!(
+        listed.exit_code, 0,
+        "expected tool list to succeed:\n{}",
+        listed.stderr
+    );
+    assert!(
+        listed.stdout.contains("markdown_read") && listed.stdout.contains("profile_import_import"),
+        "expected advertised tool names in:\n{}",
+        listed.stdout
+    );
+    assert!(
+        !listed.stdout.contains("Quick Start"),
+        "tool list must not print the general reference:\n{}",
+        listed.stdout
+    );
+
+    let filtered = run_command(ctx, &["tool", "list", "--filter", "markdown"]);
+    assert_eq!(filtered.exit_code, 0, "{}", filtered.stderr);
+    assert!(
+        filtered.stdout.contains("markdown_read") && filtered.stdout.contains("markdown_fetch"),
+        "expected only markdown tools in:\n{}",
+        filtered.stdout
+    );
+    assert!(
+        !filtered.stdout.contains("profile_import_import"),
+        "--filter must drop non-matching names:\n{}",
+        filtered.stdout
+    );
+
+    // Bare `plugin` lists domains with their methods. The old listing split
+    // names at the last underscore and advertised `markdown_discover` /
+    // `profile_import_list` — domains that do not exist.
+    let domains = run_command(ctx, &["plugin"]);
+    assert_eq!(
+        domains.exit_code, 0,
+        "expected bare plugin to succeed:\n{}",
+        domains.stderr
+    );
+    assert!(
+        domains.stdout.contains("markdown") && domains.stdout.contains("fetch, read"),
+        "expected markdown methods (fetch, read) in:\n{}",
+        domains.stdout
+    );
+    assert!(
+        domains.stdout.contains("import_list_sources"),
+        "expected the full method name in:\n{}",
+        domains.stdout
+    );
+    assert!(
+        !domains.stdout.contains("markdown_discover") && !domains.stdout.contains("profile_import_list"),
+        "invented domains must not be advertised:\n{}",
+        domains.stdout
+    );
+    assert!(
+        !domains.stdout.contains("browser_navigate")
+            && !domains.stdout.contains("crawl_submit")
+            && !domains.stdout.contains("list_sessions"),
+        "built-in tools must not be listed as plugin tools:\n{}",
+        domains.stdout
+    );
+
+    // `--help plugin-<domain>` and `plugin <domain> --help` answer with the
+    // domain's methods instead of "Unknown command" plus the whole reference.
+    for args in [
+        vec!["help", "plugin-markdown"],
+        vec!["plugin", "markdown", "--help"],
+    ] {
+        let domain_help = run_command(ctx, &args);
+        assert_eq!(
+            domain_help.exit_code, 0,
+            "expected domain help to succeed for {args:?}:\n{}",
+            domain_help.stderr
+        );
+        assert!(
+            domain_help.stdout.contains("Plugin tool domain 'markdown'"),
+            "expected the domain help for {args:?} in:\n{}",
+            domain_help.stdout
+        );
+        assert!(
+            domain_help.stdout.contains("read") && domain_help.stdout.contains("fetch"),
+            "expected the domain's methods for {args:?} in:\n{}",
+            domain_help.stdout
+        );
+        assert!(
+            !domain_help.stdout.contains("Unknown command")
+                && !domain_help.stdout.contains("Quick Start"),
+            "the general reference must not be dumped for {args:?}:\n{}",
+            domain_help.stdout
+        );
+    }
+
+    // `plugin --help` / `tool --help` document the surfaces themselves.
+    let plugin_help = run_command(ctx, &["plugin", "--help"]);
+    assert_eq!(plugin_help.exit_code, 0, "{}", plugin_help.stderr);
+    assert!(
+        plugin_help.stdout.contains("browser4-cli plugin"),
+        "expected the plugin surface help in:\n{}",
+        plugin_help.stdout
+    );
+    let tool_help = run_command(ctx, &["tool", "--help"]);
+    assert_eq!(tool_help.exit_code, 0, "{}", tool_help.stderr);
+    assert!(
+        tool_help.stdout.contains("tool list") && tool_help.stdout.contains("tool call"),
+        "expected the tool surface help in:\n{}",
+        tool_help.stdout
+    );
+
+    // A missing/unknown `tool` subcommand is a usage error, not a help dump.
+    let bare_tool = run_command_allowing_failure(ctx, &["tool"]);
+    assert_ne!(bare_tool.exit_code, 0, "bare tool must fail");
+    assert!(
+        bare_tool.stderr.contains("needs a subcommand"),
+        "expected a focused usage error in:\n{}",
+        bare_tool.stderr
+    );
+    let bogus_tool = run_command_allowing_failure(ctx, &["tool", "bogus"]);
+    assert_ne!(bogus_tool.exit_code, 0, "tool bogus must fail");
+    assert!(
+        bogus_tool.stderr.contains("Unknown subcommand 'bogus'"),
+        "expected a focused usage error in:\n{}",
+        bogus_tool.stderr
+    );
+
+    // `tool call --help --examples` ships runnable examples in the binary.
+    let examples = run_command(ctx, &["tool", "call", "--help", "--examples"]);
+    assert_eq!(examples.exit_code, 0, "{}", examples.stderr);
+    assert!(
+        !examples.stdout.contains("No examples available"),
+        "tool call must advertise examples:\n{}",
+        examples.stdout
+    );
+    assert!(
+        examples.stdout.contains("tool list") && examples.stdout.contains("captcha_detect"),
+        "expected the static tool examples in:\n{}",
+        examples.stdout
+    );
+
+    // `plugin list` keeps its JAR contract but points at the tool listing, and
+    // `plugin info` accepts the short name the CLI advertises elsewhere.
+    let plugins = run_command(ctx, &["plugin", "list"]);
+    assert_eq!(plugins.exit_code, 0, "expected plugin list to succeed:\n{}", plugins.stderr);
+    assert!(
+        plugins.stdout.contains("browser4-swarm-4.14.1-SNAPSHOT.jar")
+            && plugins.stdout.contains("browser4-captcha-4.14.1-SNAPSHOT.jar"),
+        "expected the installed plugin JARs in:\n{}",
+        plugins.stdout
+    );
+    assert!(
+        plugins.stdout.contains("tool list"),
+        "plugin list must point at `tool list` for tool names:\n{}",
+        plugins.stdout
+    );
+
+    // `plugin info captcha` used to answer a bare 404 with an empty body while
+    // `plugin` itself advertised `captcha` as a domain.
+    let info = run_command(ctx, &["plugin", "info", "captcha"]);
+    assert_eq!(info.exit_code, 0, "expected plugin info to succeed:\n{}", info.stderr);
+    assert!(
+        info.stdout.contains("browser4-captcha-4.14.1-SNAPSHOT.jar"),
+        "expected the resolved plugin in:\n{}",
+        info.stdout
+    );
+    assert!(
+        info.stderr.contains("resolved plugin 'captcha'"),
+        "the substitution must be reported:\n{}",
+        info.stderr
+    );
+
+    let unknown = run_command_allowing_failure(ctx, &["plugin", "info", "nope"]);
+    assert_ne!(unknown.exit_code, 0, "an unknown plugin must fail");
+    assert!(
+        unknown.stderr.contains("Unknown plugin 'nope'")
+            && unknown.stderr.contains("browser4-swarm-4.14.1-SNAPSHOT.jar"),
+        "the error must list the installed plugins:\n{}",
+        unknown.stderr
+    );
+
+    // A tool that reports success:false is surfaced on stderr; only
+    // --fail-on-error turns it into a non-zero exit.
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+    let failed = run_command(
+        ctx,
+        &[
+            "tool",
+            "call",
+            "markdown_fetch",
+            "--json",
+            "{\"url\": \"https://example.com/404\"}",
+        ],
+    );
+    assert_eq!(
+        failed.exit_code, 0,
+        "without --fail-on-error the exit stays 0:\n{}",
+        failed.stderr
+    );
+    assert!(
+        failed.stderr.contains("markdown_fetch reported a failure"),
+        "expected a failure warning on stderr:\n{}",
+        failed.stderr
+    );
+    assert!(
+        failed.stdout.contains("\"success\":false"),
+        "the payload must stay on stdout:\n{}",
+        failed.stdout
+    );
+
+    let strict = run_command_allowing_failure(
+        ctx,
+        &[
+            "tool",
+            "call",
+            "markdown_fetch",
+            "--json",
+            "{\"url\": \"https://example.com/404\"}",
+            "--fail-on-error",
+        ],
+    );
+    assert_ne!(
+        strict.exit_code, 0,
+        "--fail-on-error must exit non-zero:\n{}",
+        strict.stdout
+    );
+    assert!(
+        strict.stderr.contains("markdown_fetch reported a failure"),
+        "expected the failure reason on stderr:\n{}",
+        strict.stderr
+    );
+}
+
 /// When the server returns an error for html_snapshot_capture, the CLI propagates it.
 pub(super) fn test_htmlsnapshot_error_propagation(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
@@ -7982,9 +8287,37 @@ pub(super) fn test_snapshot_diff_command(ctx: &mut E2ECtx) {
         diff.stdout
     );
     assert!(
-        diff.stdout.contains("- link e4 \"Old\"") && diff.stdout.contains("+ link e3 \"New\""),
-        "Expected removed/added link entries in:\n{}",
+        diff.stdout.contains("- link \"Old\" [box=10,100,100,30] [ref=e4]")
+            && diff.stdout.contains("+ link \"New\" [box=10,140,100,30] [ref=e3]"),
+        "Expected removed/added link entries carrying their refs and boxes in:\n{}",
         diff.stdout
+    );
+
+    // A node the backend emitted as one whole-line quoted scalar (its name holds
+    // ": ") must be read as a node and re-emitted in the canonical shape, never
+    // as the malformed `+ "generic e7306 ""` line (snapshot-mastery #8).
+    let quoted = snap_dir.join("quoted.yml");
+    std::fs::write(
+        &quoted,
+        "- \"generic \\\"A Pattern Language: Towns, Buildings, Construction\\\" [ref=e7306] [box=1116,216,309,49]\"\n",
+    )
+    .expect("write whole-line-quoted snapshot");
+
+    let quoted_diff = run_command(
+        ctx,
+        &[
+            "diff",
+            "snapshot",
+            before.to_str().expect("before path"),
+            quoted.to_str().expect("quoted path"),
+        ],
+    );
+    assert!(
+        quoted_diff.stdout.contains(
+            "+ generic \"A Pattern Language: Towns, Buildings, Construction\" [ref=e7306] [box=1116,216,309,49]"
+        ),
+        "Expected the whole-line-quoted node in the canonical shape in:\n{}",
+        quoted_diff.stdout
     );
 
     // Missing files produce a readable error instead of a panic.
@@ -7997,6 +8330,163 @@ pub(super) fn test_snapshot_diff_command(ctx: &mut E2ECtx) {
         bad.stdout.contains("Cannot read") || bad.exit_code != 0,
         "Expected a readable error for missing files, got:\n{}",
         bad.stdout
+    );
+}
+
+// ---------------------------------------------------------------------------
+// snapshot body normalization: whole-page scope header/footer, glued footer,
+// whole-line-quoted node (snapshot-mastery #3/#7/#8)
+// ---------------------------------------------------------------------------
+
+/// A whole-page backend body carrying all three rendering defects: a
+/// `# Viewport State` block claiming viewport 0, the `# ---` navigation footer
+/// glued onto the last node line, and a node whose name contains `": "` emitted
+/// as one whole-line quoted scalar.
+const RAW_WHOLE_PAGE_BODY: &str = "# Viewport State\n\
+# - processingViewport: 0\n\
+# - viewportHeight: 1080px\n\
+# - viewportsTotal: 10\n\
+# - hiddenTopHeight: 0px\n\
+# - hiddenBottomHeight: 9571px\n\
+#\n\
+- generic [ref=e8184]:\n\
+\x20\x20- heading \"Christopher Alexander\" [ref=e8185] [box=10,10,300,40]\n\
+\x20\x20- \"generic \\\"A Pattern Language: Towns, Buildings, Construction\\\" [ref=e7306] [box=1116,216,309,49]\"\n\
+\x20\x20- list [ref=e8185] [box=1897,1072,0,0]# ---\n\
+# This page has 10 viewports (page chunks split by viewport height). You are currently viewing viewport 0 (absolute).\n\
+#   snapshot -v 1          # scroll down one viewport\n\
+#\n";
+
+pub(super) fn test_snapshot_stdout_normalization(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_browser_snapshot_response(RAW_WHOLE_PAGE_BODY);
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // No -v: the capture holds the whole page, so the header says so and the
+    // backend's viewport-0 metadata and navigation footer are dropped.
+    let whole = run_command(ctx, &["snapshot", "--stdout", "--all"]);
+    assert!(
+        whole
+            .stdout
+            .contains("# - scope: whole page (all 10 viewports; no --viewport filter)"),
+        "Expected the whole-page scope line in:\n{}",
+        whole.stdout
+    );
+    assert!(
+        !whole.stdout.contains("processingViewport")
+            && !whole.stdout.contains("hiddenBottomHeight")
+            && !whole.stdout.contains("You are currently viewing viewport"),
+        "Misleading single-viewport metadata survived (#3):\n{}",
+        whole.stdout
+    );
+    // #7: the footer starts on its own line instead of being concatenated onto
+    // the last node, so that node stays parseable.
+    assert!(
+        whole
+            .stdout
+            .lines()
+            .any(|line| line == "  - list [ref=e8185] [box=1897,1072,0,0]"),
+        "Expected the last node on its own line in:\n{}",
+        whole.stdout
+    );
+    // #8: the quoted node is re-flowed into the canonical node shape.
+    assert!(
+        whole.stdout.contains(
+            "  - generic \"A Pattern Language: Towns, Buildings, Construction\" [ref=e7306] [box=1116,216,309,49]"
+        ),
+        "Expected the whole-line-quoted node in the canonical shape in:\n{}",
+        whole.stdout
+    );
+    assert!(
+        !whole.stdout.contains("\\\""),
+        "No node line may keep the whole-line-quoted scalar escaping (#8):\n{}",
+        whole.stdout
+    );
+
+    // With -v the backend header and footer describe what was asked for, so they
+    // stay; only the glued line and the quoted node are repaired.
+    let scoped = run_command(ctx, &["snapshot", "-v", "0", "--stdout", "--all"]);
+    assert!(
+        scoped.stdout.contains("# - processingViewport: 0"),
+        "A viewport capture keeps its (true) viewport metadata:\n{}",
+        scoped.stdout
+    );
+    assert!(
+        scoped
+            .stdout
+            .contains("You are currently viewing viewport 0 (absolute)"),
+        "A viewport capture keeps its navigation footer:\n{}",
+        scoped.stdout
+    );
+    assert!(
+        scoped
+            .stdout
+            .lines()
+            .any(|line| line == "  - list [ref=e8185] [box=1897,1072,0,0]"),
+        "The glued footer line is repaired for viewport captures too:\n{}",
+        scoped.stdout
+    );
+}
+
+// ---------------------------------------------------------------------------
+// snapshot grep --diff (searches the persisted auto-diff report) — #5
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_grep_diff_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let before = "- button \"Search\" [box=10,20,100,30] [ref=e1]:\n\
+                  \x20 - link \"Old\" [box=10,100,100,30] [ref=e4]\n";
+    let after = "- button \"Search\" [box=10,20,100,30] [ref=e1]:\n\
+                 \x20 - link \"New\" [box=10,140,100,30] [ref=e3]\n";
+
+    mock_server.set_browser_snapshot_response(before);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+    // A deliberate capture is the baseline the diff compares against.
+    run_command(ctx, &["snapshot"]);
+
+    mock_server.set_browser_snapshot_response(after);
+    let diff = run_command(ctx, &["snapshot", "--auto-diff", "--stdout", "--all"]);
+    assert!(
+        diff.stdout.contains("### Diff"),
+        "Expected the diff appendix in:\n{}",
+        diff.stdout
+    );
+    assert!(
+        diff.stdout
+            .contains("+ link \"New\" [box=10,140,100,30] [ref=e3]"),
+        "Expected the added link in the canonical diff shape in:\n{}",
+        diff.stdout
+    );
+
+    // The appendix is persisted next to the capture, so grep can search it —
+    // a freshly captured tree can never contain these markers.
+    let counted = run_command(
+        ctx,
+        &["snapshot", "grep", "--diff", "-c", "-F", "## Added"],
+    );
+    assert_eq!(
+        counted.stdout.trim(),
+        "1",
+        "Expected exactly one `## Added` section in the persisted report:\nstdout:>>>\n{}\n<<<\nstderr:>>>\n{}\n<<<",
+        counted.stdout,
+        counted.stderr
+    );
+
+    let added = run_command(ctx, &["snapshot", "grep", "--diff", "-F", "+ link \"New\""]);
+    assert!(
+        added
+            .stdout
+            .contains("+ link \"New\" [box=10,140,100,30] [ref=e3]"),
+        "Expected the added entry to be greppable in the persisted report:\n{}",
+        added.stdout
     );
 }
 

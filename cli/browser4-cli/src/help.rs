@@ -109,6 +109,7 @@ pub fn public_command_name(name: &str) -> &str {
         "webminer-views" => "webminer views",
         "agent-cancel" => "agent cancel",
         "tool-call" => "tool call",
+        "tool-list" => "tool list",
         "chat-result" => "chat result",
         "doctor-status" => "doctor status",
         "skills-list" => "skills list",
@@ -585,19 +586,23 @@ pub fn generate_help() -> String {
 
     // Plugin tools
     lines.push("\n── Plugin tools ─────────────────────────────────────────────────────".to_string());
-    lines.push("  Installed plugins expose tools via the plugin-<name> <method> pattern:".to_string());
-    lines.push("    plugin-<name>              invoke the default tool for a plugin domain".to_string());
-    lines.push("    plugin-<name> <method>     invoke a specific method (e.g. plugin-media download --url ...)".to_string());
-    lines.push("    plugin                     list all available plugin tool domains".to_string());
-    lines.push("    tool call <mcp-name>       invoke any MCP tool directly (e.g. tool call captcha_detect)".to_string());
-    lines.push("  Use `plugin list` to see installed plugins and their status.".to_string());
+    lines.push("  Plugin domains are invoked as `plugin <domain> <method>`:".to_string());
+    lines.push("    plugin                     plugin tool domains with their methods".to_string());
+    lines.push("    plugin <domain> --help     methods of one plugin domain".to_string());
+    lines.push("    plugin <domain> <method>   run one method (e.g. plugin media detectVideos)".to_string());
+    lines.push("    tool list [--filter <x>]   every advertised MCP tool name (GET /mcp/tools)".to_string());
+    lines.push("    tool call <mcp-name>       invoke any MCP tool (e.g. tool call captcha_detect)".to_string());
+    lines.push("  `plugin list` lists the installed plugin JARs and their status, not their tools.".to_string());
 
     // Server plugins (first-party)
     lines.push("\n── Server plugins ───────────────────────────────────────────────────".to_string());
-    lines.push("  First-party plugins ship as JARs under browser4-plugins/<name>/target/*.jar".to_string());
-    lines.push("  (e.g. browser4-captcha). They are optional and not bundled by default.".to_string());
+    lines.push("  First-party plugins live in browser4-plugins/<name>/target/*.jar.".to_string());
+    lines.push("  Bundled by default: swarm, images, markdown, media, seo.".to_string());
+    lines.push("  Install on demand: captcha, pptx, profile-import, summary-demo.".to_string());
     lines.push("    browser4-cli plugin install browser4-plugins/<name>/target/*.jar".to_string());
     lines.push("    browser4-cli stop                    # next command auto-restarts the dev backend".to_string());
+    lines.push("  The CLI expands the * wildcard (PowerShell does not, for native commands); when".to_string());
+    lines.push("  several JARs match, the one for this CLI's version is installed and reported.".to_string());
     lines.push("  After restart, plugin tools are callable via: browser4-cli tool call <mcp-name>".to_string());
     lines.push("  Tool names are snake_case (captcha.detect -> captcha_detect); see docs/config.md §CAPTCHA.".to_string());
 
@@ -1208,7 +1213,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         ));
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql-stdin < query.sql".to_string());
-        lines.push("  browser4-cli htmlsnapshot query --sql-base64 \"$(base64 -w0 query.sql)\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql-base64 \"$(base64 -w0 query.sql)\"        # bash / macOS".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql-base64 ([Convert]::ToBase64String([IO.File]::ReadAllBytes('query.sql')))   # PowerShell".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --result-only".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --format table".to_string());
     }
@@ -1818,6 +1824,26 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    may disconnect the extension. Re-attach with `attach --extension` if this occurs."
                 .to_string(),
         );
+        lines.push(wrap_text(
+            "  - Outcome: the endpoint is verified before the session is bound — `/json/version` must answer and `/json` (or `Target.getTargets` on a browser-level WebSocket) must list at least one page target. Unreachable, page-less and non-CDP endpoints fail loudly with a non-zero exit and a dedicated, non-retryable code: ENDPOINT_UNREACHABLE, ENDPOINT_NOT_CDP (something answered but is not a DevTools endpoint, e.g. HTTP 404 on /json/version) or ENDPOINT_NO_PAGE_TARGETS.",
+            "  ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "  - After binding, the browser's product is re-read and compared with the probe: if the debugging port changed hands (another instance grabbed it) the attach fails naming both products and every observed page target, instead of silently driving a different browser.",
+            "  ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "  - Multi-instance hazard: `--cdp <channel>` resolves the first attachable candidate, which may be a browser other than the one you just opened — pin the instance with `--cdp http://localhost:<port>`. Attaching to a browser a live session already drives is allowed and reported: the warning names the owning session and the response carries `ownedBySessionId`.",
+            "  ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "  - One unnamed session at a time: if the unnamed slot already drives a browser, attach refuses (for --cdp, --endpoint and --extension alike) and asks for `-s <name>`. Use `-s <name>` to attach a second browser under its own session name; closing one name never tears down another.",
+            "  ",
+            4,
+        ));
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli attach --cdp http://localhost:9222".to_string());
@@ -1828,6 +1854,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli attach --extension msedge".to_string());
         lines.push("  browser4-cli attach --endpoint http://browser4-server:18182".to_string());
         lines.push("  browser4-cli attach --endpoint http://remote:18182 --cdp chrome".to_string());
+        lines.push(String::new());
+        lines.push("  # A named session attaches a second browser without touching the unnamed slot".to_string());
+        lines.push("  browser4-cli -s scrape attach --cdp chrome".to_string());
+        lines.push(String::new());
+        lines.push("  # Failure example — a reachable endpoint with no page target".to_string());
+        lines.push("  #   Error: [ENDPOINT_NO_PAGE_TARGETS] attach_browser failed: ... has no page target".to_string());
+        lines.push("  #   Fix: open a tab in that browser (or use --cdp <url> naming the right instance)".to_string());
     }
 
     if cmd.name == "open" {
@@ -1870,6 +1903,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    Written after the command (`open <url> -s job-42`) it is rejected as a positional argument."
                 .to_string(),
         );
+        lines.push(wrap_text(
+            "Window verification: after a fresh `open --headed` (not a reconnect) the CLI asks the backend for the session's window state and prints a warning on stderr only when the verdict is HIDDEN — the reason and its source (CDP window, process command line or the requested display mode) are included. The verdict is also in the --json envelope as window_visibility / window_verified / window_source / window_reason, so --quiet never hides it. UNKNOWN is not a failure: it means the probe could not tell (e.g. no window system), and nothing is printed.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "A named session whose `close` discarded its profile is announced when it is opened again: the browser starts with a fresh profile. Move state with `state-save` before closing and `state-load` after reopening.",
+            "  - ",
+            4,
+        ));
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli open https://browser4.io                      # headless (default)".to_string());
@@ -2516,7 +2559,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Subcommands:".to_string());
         lines.push(format_with_gap(
             "  htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]",
-            "Extract elements from a FRESH snapshot of the active page (the tab is captured first): text, textcontent, html, attr",
+            "Extract elements from a FRESH snapshot of the active page (the tab is captured first): text, textcontent, html, outerhtml, attr",
             50,
         ));
         lines.push(format_with_gap(
@@ -2572,12 +2615,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(wrap_text(
-            "The `get` subcommand supports four fields: `text` (the element's whitespace-normalized inner text), `textcontent` (the raw textContent — original whitespace and newlines kept; neither of the two is a rendered-text read, so CSS overflow does not clip them), `html` (inner HTML), and `attr` (attribute value). Neither text field can recover text that the page itself truncated in its HTML source (e.g. a clipped link label) — use `attr` (often the `title` attribute) or open the detail page for that.",
+            "The `get` subcommand supports five fields: `text` (the element's whitespace-normalized inner text), `textcontent` (the raw textContent — original whitespace and newlines kept; neither of the two is a rendered-text read, so CSS overflow does not clip them), `html` (the element's INNER markup), `outerhtml` (the element ITSELF, wrapper tag and classes included — the field to use when a task asks for \"the HTML of the container\"), and `attr` (attribute value). Neither text field can recover text that the page itself truncated in its HTML source (e.g. a clipped link label) — use `attr` (often the `title` attribute) or open the detail page for that.",
             "  - ",
             4,
         ));
         lines.push(wrap_text(
-            "Argument order: `get <field:text|textcontent|html|attr> <css-selector> [attribute-name]`.  When using `attr`, the third argument is the attribute name (e.g. `href`, `src`, `class`).",
+            "Argument order: `get <field:text|textcontent|html|outerhtml|attr> <css-selector> [attribute-name]`.  When using `attr`, the third argument is the attribute name (e.g. `href`, `src`, `class`).",
             "  - ",
             4,
         ));
@@ -2623,7 +2666,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(wrap_text(
-            "Export a fresh snapshot of the active page's HTML to a local file with `htmlsnapshot export --file <path>`. Add `--clean` to strip scripts, styles, and non-standard attributes. The export captures the tab first, so it is already the page as it is right now.",
+            "Export a fresh snapshot of the active page's HTML to a local file with `htmlsnapshot export --file <path>`. Add `--clean` to strip scripts, styles, and non-standard attributes. The export captures the tab first, so it is already the page as it is right now. The file is an ANNOTATED serialization, not View-Source: every element carries a vi=\"x y w h\" visual box (plus tv0/tv1 text-node rects) and <head> gains synthetic <link rel=\"normalizedURI\">/<link rel=\"href\"> elements that are absent from the live DOM. --clean keeps both, so filter those link elements when you need a pristine head.",
             "  - ",
             4,
         ));
@@ -2633,7 +2676,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(wrap_text(
-            "Search a fresh snapshot of the active page's HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -n (GNU grep compatibility - line numbers are printed by default, so -n is a no-op), -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Regex dialect is Rust regex: | is alternation (an escaped \\| is also accepted and converted), and ^/$ anchor the start/end of a line, so write a literal dollar as [$] (e.g. '[$][0-9]+') — it survives every shell layer; add -F to match plain text.",
+            "Search a fresh snapshot of the active page's HTML with regex patterns using `htmlsnapshot grep <pattern>`. It searches the CAPTURED HTML text — an annotated serialization (vi=\"…\" boxes, synthetic <link rel=\"normalizedURI\">/<link rel=\"href\"> head elements), not the page's View-Source — so a pattern can match tool-generated markup as well. Supports standard grep flags: -e (repeatable), -i, -n (GNU grep compatibility - line numbers are printed by default, so -n is a no-op), -A, -B, -C, -v, -c, -o, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Regex dialect is Rust regex: | is alternation (an escaped \\| is also accepted and converted), and ^/$ anchor the start/end of a line, so write a literal dollar as [$] (e.g. '[$][0-9]+') — it survives every shell layer; add -F to match plain text.",
             "  - ",
             4,
         ));
@@ -2711,7 +2754,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli htmlsnapshot query --sql-stdin < query.sql".to_string());
         lines.push(String::new());
         lines.push("  # Decode a base64-encoded X-SQL query (avoids shell quoting issues)".to_string());
+        lines.push("  # bash / macOS:".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql-base64 \"$(base64 -w0 query.sql)\"".to_string());
+        lines.push("  # PowerShell:".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql-base64 ([Convert]::ToBase64String([IO.File]::ReadAllBytes('query.sql')))".to_string());
         lines.push(String::new());
         lines.push("  # Return only the resultSet array, omitting wrapper metadata".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --result-only".to_string());
@@ -2778,7 +2824,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(wrap_text(
-            "field=text collapses whitespace, textcontent keeps it raw, html returns inner markup, and attr needs the attribute name as the third argument. Add --absolute to resolve href/src against the page URL — attribute values are otherwise returned exactly as the page holds them (often relative).",
+            "field=text collapses whitespace, textcontent keeps it raw, html returns the inner markup, outerhtml the element itself, and attr needs the attribute name as the third argument. Add --absolute to resolve href/src against the page URL — attribute values are otherwise returned exactly as the page holds them (often relative).",
             "  - ",
             4,
         ));
@@ -2881,7 +2927,17 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(wrap_text(
-            "snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -n, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --selector-all, --page N, --page-size N, and --all.",
+            "snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -n, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --selector-all, --diff, --page N, --page-size N, and --all.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "The short flags follow grep semantics here and deliberately differ from the `snapshot` command's: -i is case-insensitive (not --interactive), -v selects non-matching lines (not a viewport index), and -c counts matches (not --compact).",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "This search always runs against a freshly captured tree, so it can never see --auto-diff markers (`## Added`, `+ `, `- `): redirect `snapshot --auto-diff --stdout --all` to a file and grep that, or use `snapshot grep --diff` for the persisted diff report.",
             "  - ",
             4,
         ));
@@ -2938,6 +2994,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Notes:".to_string());
         lines.push(wrap_text(
             "The search runs against a fresh snapshot of the active page, not against a saved file. --selector scopes the snapshot itself, so matches stay inside that subtree.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "A fresh tree never contains --auto-diff markers (`## Added`, `+ `, `- `). Use --diff to search the diff report persisted by the last `snapshot --auto-diff` (written next to its capture as <capture>.diff.txt), or redirect that command's output to a file and grep it.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Short flags follow grep (not `snapshot`) semantics: -i is case-insensitive, -v selects non-matching lines, -c counts matches — not --interactive / --viewport / --compact.",
             "  - ",
             4,
         ));
@@ -3107,13 +3173,26 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Persistence & Control:".to_string());
         lines.push(
-            "  - Progress is saved to ~/.browser4/loop-state.json (default) or"
+            "  - Progress is saved after each iteration to the CLI state directory:"
                 .to_string(),
         );
         lines.push(
-            "    ~/.browser4/loops/<name>.json (named loops) after each iteration."
+            "    <state dir>/loop-state.json (default) or <state dir>/loops/<name>.json (named"
                 .to_string(),
         );
+        lines.push(
+            "    loops), plus <state dir>/loop-history.jsonl.  In a source checkout the state dir"
+                .to_string(),
+        );
+        lines.push(
+            "    is the per-checkout workspace directory (~/.browser4/workspaces/<checkout>-<hash>),"
+                .to_string(),
+        );
+        lines.push(
+            "    not ~/.browser4; `loop --list` prints the resolved path and `loop --status` the"
+                .to_string(),
+        );
+        lines.push("    exact state file.".to_string());
         lines.push(
             "  - If the process is interrupted (Ctrl+C), the loop can be resumed by running"
                 .to_string(),
@@ -3327,19 +3406,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Tab insertion position is determined by Chrome (not Browser4). The"
+            "  - The tab's index is its position in the backend's tab listing (creation order),"
                 .to_string(),
         );
         lines.push(
-            "    position varies by platform: on Windows headless CDP, new tabs appear"
+            "    which is NOT the browser window's tab-strip order — a brand-new tab can land"
                 .to_string(),
         );
         lines.push(
-            "    at index 0 (before the active tab); on macOS they typically appear"
+            "    anywhere in it. Read the index from `tab-list` instead of predicting it, and"
                 .to_string(),
         );
         lines.push(
-            "    after the active tab. Always run `tab-list` to verify positions."
+            "    prefer `--guid` when the order matters (a GUID is stable across calls)."
                 .to_string(),
         );
         lines.push(
@@ -3368,6 +3447,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Outputs a table with Index, GUID, Title, and URL columns by default."
                 .to_string(),
         );
+        lines.push(wrap_text(
+            "The active tab — the one page commands act on — is marked with ▶ next to its index (a freshly opened session marks its first tab active). `--json` reports the same fact as the `active` boolean on each tab.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Index is the position in this listing (creation order), not the browser's tab-strip order, and it can shift when tabs are created or closed — use `--guid` for a stable target.",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - Use --json as a global flag (BEFORE the command) for machine-readable"
                 .to_string(),
@@ -3462,19 +3551,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - New tabs are inserted by Chrome — position varies by platform (Windows"
+            "  - Index is the tab's position in the backend's tab listing (creation order),"
                 .to_string(),
         );
         lines.push(
-            "    headless CDP inserts at index 0; macOS inserts after the active tab)."
+            "    not the browser's tab-strip order: a new tab can land anywhere in it, and"
                 .to_string(),
         );
         lines.push(
-            "    Existing tabs beyond the insertion point shift their indices. Run tab-list"
+            "    creating or closing tabs shifts later indices. Read the index from `tab-list`"
                 .to_string(),
         );
         lines.push(
-            "    after creating new tabs to see the actual layout."
+            "    rather than predicting it, or use --guid for a stable target."
                 .to_string(),
         );
         lines.push(
@@ -3941,6 +4030,24 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
         &[
             "browser4-cli pushstate \"/checkout/step-2\"",
             "browser4-cli pushstate \"?page=2\"",
+        ],
+    ),
+    (
+        "tool-call",
+        &[
+            "browser4-cli tool list",
+            "browser4-cli tool call captcha_detect",
+            "browser4-cli tool call captcha_detect --json '{\"minConfidence\": 0.5}'",
+            "browser4-cli tool list --filter image",
+            "browser4-cli tool call markdown_fetch --json '{\"url\": \"https://example.com\"}' --fail-on-error",
+        ],
+    ),
+    (
+        "tool-list",
+        &[
+            "browser4-cli tool list",
+            "browser4-cli tool list --filter captcha",
+            "browser4-cli tool list --json",
         ],
     ),
 ];
@@ -5538,6 +5645,112 @@ mod tests {
     }
 
     #[test]
+    fn session_and_tab_help_document_the_diagnostics() {
+        // 113230#4 / 114038#6: attach help carries the endpoint-verification
+        // contract; 120433#4: open help documents the window diagnostic;
+        // 134222#1/#4: tab help explains the index and the active marker.
+        fn flat(text: &str) -> String {
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        }
+
+        let cmds = all_commands();
+        let help_for = |name: &str| {
+            let cmd = cmds.iter().find(|c| c.name == name).unwrap();
+            flat(&generate_command_help(cmd))
+        };
+
+        let attach = help_for("attach");
+        for needle in [
+            "ENDPOINT_UNREACHABLE",
+            "ENDPOINT_NOT_CDP",
+            "ENDPOINT_NO_PAGE_TARGETS",
+            "re-read and compared",
+            "ownedBySessionId",
+            "One unnamed session at a time",
+        ] {
+            assert!(attach.contains(needle), "attach help lacks '{needle}':\n{attach}");
+        }
+
+        let open = help_for("open");
+        assert!(
+            open.contains("Window verification"),
+            "open help must document the window diagnostic:\n{open}"
+        );
+        assert!(
+            open.contains("UNKNOWN is not a failure"),
+            "open help must say UNKNOWN is not a failure:\n{open}"
+        );
+
+        let tab_new = help_for("tab-new");
+        assert!(
+            tab_new.contains("creation order"),
+            "tab-new help must explain the index:\n{tab_new}"
+        );
+        assert!(
+            !tab_new.contains("platform"),
+            "the platform-specific insertion claim is back:\n{tab_new}"
+        );
+
+        let tab_list = help_for("tab-list");
+        assert!(tab_list.contains("▶"), "tab-list help must document the marker:\n{tab_list}");
+        assert!(
+            tab_list.contains("`active` boolean"),
+            "tab-list help must document the JSON field:\n{tab_list}"
+        );
+
+        let tab_select = help_for("tab-select");
+        assert!(
+            tab_select.contains("creation order"),
+            "tab-select help must explain the index:\n{tab_select}"
+        );
+    }
+
+    #[test]
+    fn snapshot_help_matches_the_implemented_auto_diff_behaviour() {
+        // The `--auto-diff` option description and the grep notes must state
+        // what the command really prints (snapshot-mastery #4/#5/#9): a capture
+        // followed by an appendix, not a filtered view; grep cannot see the
+        // appendix unless it is asked for it with --diff.
+        fn flat(text: &str) -> String {
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        }
+
+        let cmds = all_commands();
+        let help_for = |name: &str| {
+            let cmd = cmds.iter().find(|c| c.name == name).unwrap();
+            flat(&generate_command_help(cmd))
+        };
+
+        let snapshot = help_for("snapshot");
+        assert!(
+            snapshot.contains("this is not a filtered view"),
+            "`snapshot --help` must not imply --auto-diff filters the tree:\n{snapshot}"
+        );
+        assert!(
+            !snapshot.contains("show only what changed"),
+            "the obsolete --auto-diff wording is back:\n{snapshot}"
+        );
+        assert!(
+            snapshot.contains("can never see --auto-diff markers"),
+            "`snapshot --help` must state the grep limitation next to the grep note:\n{snapshot}"
+        );
+
+        let grep = help_for("snapshot-grep");
+        assert!(
+            grep.contains("--diff Search the auto-diff report persisted by the last"),
+            "snapshot grep --diff must be documented as a bare boolean option:\n{grep}"
+        );
+        assert!(
+            grep.contains("grep (not `snapshot`) semantics"),
+            "the short-flag collision must be documented:\n{grep}"
+        );
+        assert!(
+            grep.contains("persisted by the last `snapshot --auto-diff`"),
+            "the diff report must be described:\n{grep}"
+        );
+    }
+
+    #[test]
     fn test_generate_command_help_options_show_value_placeholders() {
         // Value-taking options render with a placeholder (--max-files <n>,
         // --sql <query>) so they are visually distinct from boolean flags,
@@ -5693,8 +5906,8 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-get").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot get <field> [selector] [name]"));
-        assert!(help.contains("Extract elements from a FRESH snapshot of the active tab's page (text, textcontent, html, attr)"));
-        assert!(help.contains("What to extract: text, textcontent, html, or attr"));
+        assert!(help.contains("Extract elements from a FRESH snapshot of the active tab's page (text, textcontent, html, outerhtml, attr)"));
+        assert!(help.contains("What to extract: text, textcontent, html, outerhtml, or attr"));
         assert!(help.contains("Attribute name (required for attr field)"));
         assert!(!help.contains("browser4-cli htmlsnapshot-get"));
     }
@@ -5752,7 +5965,7 @@ mod tests {
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot get all <field> [selector] [name]"));
         assert!(help.contains("Extract ALL matching elements from a FRESH snapshot of the active tab's page (querySelectorAll semantics)"));
-        assert!(help.contains("What to extract: text, textcontent, html, or attr"));
+        assert!(help.contains("What to extract: text, textcontent, html, outerhtml, or attr"));
         assert!(help.contains("Attribute name (required for attr field)"));
         assert!(help.contains("--offset"));
         assert!(help.contains("--limit"));

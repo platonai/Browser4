@@ -73,18 +73,20 @@ open class MediaDownloader(
      * Download a media file directly via OkHttp.
      *
      * @param url        the media URL to download
-     * @param outputDir  directory to save the file in (created if not exists)
+     * @param outputDir  directory to save the file in (created if not exists); defaults to
+     *   `media.download.dir`, resolved to an absolute path
      * @param filename   optional filename override; if null, derived from URL/headers
      * @param headers    additional HTTP headers to send
      * @return [DownloadResult] describing the outcome
      */
     open suspend fun download(
         url: String,
-        outputDir: Path = Path.of(config.downloadDir),
+        outputDir: Path = config.downloadDirPath(),
         filename: String? = null,
         headers: Map<String, String> = defaultHeaders(),
     ): DownloadResult = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
+        val destinationDir = outputDir.toAbsolutePath()
         val validatedUrl = try {
             MediaUtils.validateUrl(url)
         } catch (e: IllegalArgumentException) {
@@ -99,7 +101,8 @@ open class MediaDownloader(
         }
 
         try {
-            Files.createDirectories(outputDir)
+            Files.createDirectories(destinationDir)
+            logger.info("Downloading {} into {}", validatedUrl, destinationDir)
 
             val requestBuilder = Request.Builder().url(validatedUrl)
             headers.forEach { (key, value) -> requestBuilder.addHeader(key, value) }
@@ -146,10 +149,10 @@ open class MediaDownloader(
             val contentType = body.contentType()?.toString()
             val finalName = filename ?: MediaUtils.suggestFilename(validatedUrl, contentType)
             val safeName = MediaUtils.sanitizeFilename(finalName)
-            val outputPath = outputDir.resolve(safeName)
+            val outputPath = destinationDir.resolve(safeName)
 
             // Prevent path traversal
-            MediaUtils.requirePathWithinBase(outputDir, outputPath)
+            MediaUtils.requirePathWithinBase(destinationDir, outputPath)
 
             // Stream to disk
             body.byteStream().use { input ->
@@ -192,7 +195,7 @@ open class MediaDownloader(
 
                     val durationMs = System.currentTimeMillis() - startTime
                     logger.info("Downloaded {} ({}) in {}ms",
-                        safeName, MediaUtils.formatFileSize(totalRead), durationMs)
+                        outputPath.toAbsolutePath(), MediaUtils.formatFileSize(totalRead), durationMs)
 
                     DownloadResult(
                         url = validatedUrl,

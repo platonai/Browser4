@@ -71,7 +71,8 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 | Command | Description |
 |---|---|
 | `open [url]` | Open a browser session or refresh the saved one if it is no longer active |
-| `close` | Close the browser |
+| `close` | Close the browser. Reports what actually happened: the backend's tri-state (`browserTerminated` true/false/null) decides whether “terminated” is printed, and survivors are named |
+| `disconnect` | Alias of `close`, for an attached session: it detaches from the external browser (whose tabs this session was driving are closed) instead of pretending to terminate it |
 | `list` | List browser sessions with their status and next-open behavior. `--all` adds a Workspace column covering the sessions persisted by every other checkout; `--verbose` lifts the URL/Session-ID column caps |
 | `close-all` | Close all browser sessions without stopping the Browser4 backend |
 | `kill-all` | Forcefully stop the Browser4 backend and kill all browser processes |
@@ -242,8 +243,9 @@ extensions) are also possible via `open --profile` or PROTOTYPE mode. See
 |---|---|
 | `extract <instruction>` | Extract data from the current page. Without `--schema` the result is always the fixed `{title, content, links}` envelope — the instruction shapes the text inside `content`; pass `--schema` (JSON Schema or `{"fields":[…]}`) to get named top-level fields |
 | `agent run <task>` | Run an autonomous agent task (async, returns task ID). `--wait` blocks for the result; `--wait-timeout <seconds>` tunes the wait window (default 600). |
-| `agent status <id>` | Check the status of a running agent task |
-| `agent result <id>` | Get the result of a completed agent task |
+| `agent status <id>` | Check a task — the shared status envelope (`status`: `queued`/`running`/`done`/`failed`/`cancelled`, plus `statusCode`, `message` and the agent's step count). `done`/`failed`/`cancelled` are terminal; an unknown id answers `statusCode: 404` with the reason and exits non-zero. |
+| `agent result <id>` | Get a completed task's result: its summary plus the agent's `keyFindings`, `filesChanged`, `problems` and the `workspace` its deliverables live in (a task whose answer is a file is reachable from here). |
+| `agent list` | List tracked agent tasks with the same statuses (refreshed from the backend on every call); `--clear` untracks the finished ones. |
 
 ### Swarm
 
@@ -434,6 +436,23 @@ Skills are AI agent instruction files bundled into the CLI binary at compile tim
 | `webminer views <result-dir>` | Rebuild interactive views from an existing clustering result |
 
 Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`). The same `~/.scent/webminer` installation is used by the [web-miner skill](../../skills/browser4-web-miner/SKILL.md).
+
+### Plugins & MCP tools
+
+| Command | Description |
+|---|---|
+| `plugin list` | List the installed plugin JARs (and their load/enabled status) — **not** the tools they expose |
+| `plugin info <name>` | Show one installed plugin; the short name the CLI advertises (`captcha`, `browser4-captcha`, a JAR name or a path) resolves to the installed artifact, and a miss lists what is installed |
+| `plugin install <file>` | Install a plugin from a local JAR (a shell-expanded glob or a literal `*` also works; when several JARs match, the one matching this CLI's version is installed and the choice is reported). Restart the backend afterwards |
+| `plugin remove <name>` | Remove a plugin |
+| `plugin <domain> <method>` | Run one plugin tool, e.g. `plugin media detectVideos` |
+| `plugin <domain> --help` | The methods of one plugin domain (also `--help plugin-<domain>`) |
+| `tool list [--filter <substr>]` | Every MCP tool name the backend advertises (or `GET /mcp/tools`) |
+| `tool call <name> [--json '{…}']` | Invoke any advertised tool by name; `--fail-on-error` exits non-zero when the payload reports `success:false` (a failure is otherwise reported on stderr with exit 0) |
+
+A development runtime bundle ships the first-party plugins the checkout builds (`swarm`, `images`,
+`markdown`, `media`, `seo`); `captcha`, `pptx`, `profile-import` and `summary-demo` are installed on
+demand. See `skills/browser4-cli/references/plugins.md` for the full story.
 
 ### Install / Admin
 

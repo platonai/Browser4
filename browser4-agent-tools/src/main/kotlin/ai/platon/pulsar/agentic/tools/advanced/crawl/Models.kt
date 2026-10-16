@@ -1,8 +1,8 @@
 package ai.platon.pulsar.agentic.tools.advanced.crawl
 
+import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.sql.SQLTemplate
-import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.event.ServerSideEventHandlers
 import com.fasterxml.jackson.annotation.JsonCreator
@@ -42,7 +42,16 @@ data class QueryRequest @JsonCreator constructor(
 data class ScrapeResponse(
     var id: String? = null,
     var statusCode: Int = ResourceStatus.SC_CREATED,
-    var pageStatusCode: Int = ProtocolStatusCodes.SC_CREATED,
+    /**
+     * The HTTP status of the PAGE this task loaded, or [PAGE_STATUS_UNKNOWN] when
+     * no page status was observed.
+     *
+     * Deliberately not a task-lifecycle code: this field used to default to
+     * `201 / SC_CREATED` ("created"), which every task that never set it reported
+     * as the page's HTTP status — contradicting the same record's message. A real
+     * `201` returned by a page is still representable and distinguishable.
+     */
+    var pageStatusCode: Int = PAGE_STATUS_UNKNOWN,
     var pageContentBytes: Int = 0,
 
     /**
@@ -346,7 +355,7 @@ data class PageVisitStatus(
      * */
     var processState: String = "created", // created, in_progress, done
 
-    var pageStatusCode: Int = ProtocolStatusCodes.SC_CREATED,
+    var pageStatusCode: Int = PAGE_STATUS_UNKNOWN,
     var pageContentBytes: Int = 0,
 
     var message: String? = null, // additional message, e.g. the action flow

@@ -24,7 +24,7 @@ struct Tip {
 
 const TIPS_SNAPSHOT: &[Tip] = &[
     Tip {
-        text: "Use `snapshot --auto-diff` after interactions to see only what changed — the fastest way to verify actions",
+        text: "Use `snapshot --auto-diff` after interactions to capture and diff against the previous snapshot — the appendix lists the added/removed elements with their refs",
     },
     Tip {
         text: "Use `snapshot -v 0` for the current visible screen — avoids large snapshots exceeding context limits",

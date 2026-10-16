@@ -95,9 +95,14 @@ Checks that the JAR contains:
 - `META-INF/spring/…AutoConfiguration.imports` — Spring auto-configuration entry
 - Compiled `.class` files
 - No embedded dependency JARs (thin-JAR requirement)
+- A manifest `version` that matches the artifact version (`plugin list` renders
+  the manifest value, so a hand-maintained literal makes the loaded build
+  unidentifiable). Reported as a warning; `-Strict` / `--strict` makes it a
+  failure.
 
 ```powershell
 .\bin\verify-plugin.ps1 path\to\plugin.jar
+.\bin\verify-plugin.ps1 path\to\plugin.jar -Strict
 ```
 
 ### `start-runtime.ps1`
