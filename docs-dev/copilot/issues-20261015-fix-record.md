@@ -43,7 +43,7 @@
 > scenarios at all**, and `loop-monitoring#4` keeps a raw-envelope fallback when a
 > payload carries no summary.
 
-Source: 18 `coworker/tasks/issues/draft/20261015-*.issues.md` files (132 reported
+Source: 18 `coworker/tasks/issues/review/done/2026/1015/20261015-*.issues.md` files (132 reported
 issues). This document records what was changed for each reported defect, what was
 deliberately not changed, and why. Issue numbering is `<file-short-name>#N`, where
 the short name is the draft file without its date prefix — e.g.
