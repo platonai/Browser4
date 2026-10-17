@@ -199,6 +199,43 @@ pub(super) fn test_close_active_session(ctx: &mut E2ECtx) {
         !state_file_path(&ctx.state_dir, None).exists(),
         "Expected state file to be removed after close"
     );
+
+    // `disconnect` is the documented alias of `close` (attach.md spells it in
+    // several places) and must resolve through the same dispatcher arm. The
+    // registry entry alone is not coverage: the harness self-check requires
+    // every command marked E2eCoverage::Tested to be exercised here.
+    fs::write(state_file_path(&ctx.state_dir, None), state.to_string())
+        .expect("write state fixture");
+    let alias_result = run_command(ctx, &["disconnect"]);
+    assert_eq!(
+        alias_result.exit_code, 0,
+        "expected disconnect to succeed, stderr:\n{}",
+        alias_result.stderr
+    );
+    assert!(
+        alias_result.stdout.contains("Session closed."),
+        "Expected disconnect to report the same outcome as close, got:\n{}",
+        alias_result.stdout
+    );
+    assert!(
+        !alias_result.stderr.contains("Unknown command"),
+        "disconnect must not fall through to the unknown-command path:\n{}",
+        alias_result.stderr
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.close_session_calls,
+        vec![
+            "swarm-session-1".to_string(),
+            "swarm-session-1".to_string()
+        ],
+        "disconnect must call close_session exactly like close does"
+    );
+    assert!(
+        !state_file_path(&ctx.state_dir, None).exists(),
+        "Expected state file to be removed after disconnect"
+    );
 }
 
 pub(super) fn test_close_no_active_session(ctx: &mut E2ECtx) {

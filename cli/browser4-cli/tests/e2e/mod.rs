@@ -5156,6 +5156,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "open",
         "list",
         "close",
+        // test_close_active_session — the documented alias of close
+        "disconnect",
         // test_session_default_*
         "session-default",
         // test_close_*, test_close_all_*
