@@ -25,7 +25,7 @@ The plugin is a Maven dependency. Add it to your project:
 <dependency>
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-images</artifactId>
-    <version>4.14.1-SNAPSHOT</version>
+    <version>4.14.1</version>
 </dependency>
 ```
 
