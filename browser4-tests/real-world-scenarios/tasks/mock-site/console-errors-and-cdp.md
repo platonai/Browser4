@@ -3,7 +3,7 @@
 Before running this scenario, ensure MockSite is running on localhost:18080 (`./bin/test.ps1 mock-site`).
 
 This scenario covers page-side diagnostics and the low-level escape hatches: `console`, `errors`,
-`dialog-status`, `cdp`, and `tool call`.
+`dialog-status`, `cdp`, `tool list`, and `tool call`.
 
 Fixtures:
 - `http://localhost:18080/assets/consolelog.html` — logs `here:<url>` to the console on load.
@@ -32,7 +32,7 @@ Fixtures:
 
 ### 4. Generic tool passthrough
 
-9. List the available agent tools (`plugin list`, or `GET /mcp/tools` on the backend) and pick one concrete tool name.
+9. List the available agent tools with `tool list` (one name per line) and narrow it with `tool list --filter <substring>`. Compare that list with `plugin list` and note which one actually names callable tools; pick one concrete tool name.
 10. Invoke that tool through `tool call <name> --json '<args>'` and compare the result with the equivalent typed CLI command (if one exists).
 
 ### 5. Dialog state
@@ -47,7 +47,7 @@ Fixtures:
 2. **AC2 — page errors:** `errors` reports the uncaught `Fancy error!` with a source/line reference; `console` alone does not surface it as a page error.
 3. **AC3 — clearing:** after `console --clear` a subsequent `console` read is empty; after `errors --clear` a subsequent `errors` read is empty.
 4. **AC4 — raw CDP:** `cdp Runtime.evaluate --json '{"expression":"document.title"}'` returns the same title as `eval document.title`.
-5. **AC5 — tool passthrough:** `tool call <name> --json '<args>'` prints a JSON result for a tool name discovered from the tool listing; record the exact name and whether its arguments were discoverable without reading backend source.
+5. **AC5 — tool discovery and passthrough:** `tool list` prints the callable MCP tool names, one per line, and works without a page session; `tool list --filter <substring>` keeps only names containing it (case-insensitive), and a filter that matches nothing prints nothing rather than falling back to the full list. `tool call <name> --json '<args>'` then prints a JSON result for a name taken from that listing; record the exact name and whether its arguments were discoverable without reading backend source.
 6. **AC6 — dialog state is queryable:** after clicking `#confirm-target` without handling it, `dialog-status` reports a pending dialog and identifies its type/message — it must not report "no dialog" while the page is blocked.
 7. **AC7 — dialog handling:** `dialog-accept` resolves the confirm dialog and `#state-log` then shows `confirmResult: "accepted"`; a click followed by `dialog-dismiss` produces `"dismissed"`; the prompt case records the typed value (or `__dismissed__` when dismissed).
 8. **AC8 — no silent failure:** every command that cannot act (unknown tool name, invalid JSON params, no browser session) fails with a non-zero exit and an actionable message; record the exact text otherwise.
@@ -56,4 +56,4 @@ Fixtures:
 
 - Are the console/error commands discoverable by a first-time user who only knows "I want to see what the page logged"?
 - Does `dialog-status` explain that it is session/tab scoped, and does the CLI clearly distinguish "no dialog" from "cannot tell"?
-- Is `tool call` documented well enough to use without reading the backend, including how to discover tool names and their argument shapes?
+- Is `tool list` discoverable as the way to find tool names (as opposed to `plugin list`, which lists installed plugin JARs), and is `tool call` documented well enough to use without reading the backend, including how to discover a tool's argument shapes?
