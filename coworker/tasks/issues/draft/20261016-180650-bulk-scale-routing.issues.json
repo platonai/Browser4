@@ -1,0 +1,169 @@
+{
+  "meta": {
+    "scenario": "bulk-scale-routing",
+    "date": "20261016-180650",
+    "mode": "dev",
+    "source": "20261016-180650-bulk-scale-routing.issues.json"
+  },
+  "background": {
+    "executionContext": "",
+    "commands": "",
+    "workarounds": "",
+    "task": ""
+  },
+  "assessment": {
+    "completionStatus": "Successful — all six acceptance criteria (AC1–AC6) verified end-to-end against the local MockSite and the source-built backend. AC3 needed a retry because of one intermittent 0-byte capture episode; every other step worked on the first attempt.",
+    "successRate": "93% — 6/6 criteria passed; 3 of 4 AC3 crawl attempts were clean, one lost 4/6 pages to the reliability bug; no step failed for documentation or discoverability reasons.",
+    "issuesFound": 4,
+    "majorBlockers": "None permanent. Two friction points slowed the run: (1) the intermittent 0-byte capture failure in the first depth>=1 crawl forced an investigation and a re-run; (2) MockSite's cold Maven preflight served nothing on :18080 for ~17 minutes (documented as 10–15 min), which looks like a stall to a first-time user. The stale-bundle state resolved itself automatically via the first browser command.",
+    "mostConfusingAspects": "The stale-bundle startup messaging: help/status announced a manual rebuild and 'dev mode refuses to start', yet the next normal command rebuilt and started by itself — the three messages describe different behaviours for the same state, and status mixed in an unrelated globally installed bundle version. Also confusing: a crawl whose pages all failed to deliver content is reported by `crawl result` as backend status 'OK' while only `crawl list` shows 'partial failure (2 of 6 pages ok)' (documented trade-off, so not filed as an issue).",
+    "mostValuableImprovements": "1) Fix the intermittent capture failure (0-byte contentLength with HTTP 200) so crawl never records an empty page as delivered — it is the only defect that silently loses data. 2) Unify the stale-bundle messages and make it explicit that the next browser command rebuilds automatically. 3) Align per-command `--help` texts with the reference docs (loop state path, swarm auto-prune) — the references are accurate, the help strings lag. 4) Consider a startup banner/line for the MockSite preflight so the 10–15-minute build is visibly 'working', not 'hung'.",
+    "usabilityRating": 8
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Intermittent 0-byte page captures in crawl link-discovery mode (browser runtime injection failure)",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl \"http://localhost:18080/generated/crawl/index.html\" -d 2 -ol \"a.product\" -olp \"product/\"\n(Observed on the first run after backend startup, against MockSite fixture pages that had stale ~75h-old page-store entries. 4 of 6 discovered pages came back empty.)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "All discovered pages on an already-running local site fetch with content; no pages reported as '0 bytes'.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "4 of 6 pages were recorded with httpStatus 200 but contentLength 0 and no title; CLI printed '⚠ 4 of 6 page(s) had fetch or extraction errors' and exited non-zero (documented exit 6); 'crawl list' recorded 'partial failure (2 of 6 pages ok)'. Backend log: 'WARN ... JavaScript is not injected | .../product/2.html' and 'WARN ... The Browser4 runtime (__pulsar_utils__) is not available on this page (re-injection failed); capture continues without the runtime-dependent helpers'; the failed loads took up to 10.011s (= MAX_JAVASCRIPT_INJECTION_RETRIES 10 x JAVASCRIPT_INJECTION_POLL_MS 1000ms). An immediate re-run (--refresh) fetched 10/10 pages; a later run without --refresh and a run after a cold backend restart also fetched 10/10 — the failure is intermittent, not deterministic. No in-run retry appears in the backend log for the failed URLs.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Inferred: on some page loads (observed in a depth>=1 crawl that reuses shared tab-pool tabs), the driver-side runtime script (__pulsar_utils__) never became available; waitForJavascriptInjected polls 10x1s and times out, and the bounded re-injection in ensurePulsarUtils also fails. Capture then 'continues without the runtime-dependent helpers' and produced a zero-length document while the protocol status stayed 200. The crawl records it as a found-but-empty page rather than a delivery failure, and the depth>=1 delivery retry (resolveDeliveryAttempt) did not re-load the URL within the run. Why injection fails intermittently needs backend investigation — a likely candidate is a tab/driver binding race on reused tabs, consistent with the existing 'protocol-handler deregistration races' comment that motivated the shared-session design for depth-0 seeds (CrawlRoundRunner.crawlDepth0).",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/browser4-protocol/src/main/kotlin/ai/platon/pulsar/protocol/browser/emulator/impl/InteractiveBrowserEmulator.kt:waitForJavascriptInjected() and ensurePulsarUtils(); retry decision: browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/crawl/CrawlRoundRunner.kt:resolveDeliveryAttempt() (CrawlSupport.kt:577)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Treat contentLength==0 as a delivery failure in the depth>=1 path and force the one retry (resolveDeliveryAttempt) even when a parse event fired with a non-empty document, so a zero-byte capture cannot settle a URL as success.\n- Log the injection timeout at WARN with task id + tab/session id in the crawl context, so the race that causes 'JavaScript is not injected' is diagnosable from logs.\n- For a page whose runtime is missing, prefer re-navigating on a freshly created tab over continuing capture without the runtime helpers, and consider a longer/backoff injection window.\n- Add an e2e assertion that every discovered page in a MockSite fixture crawl has contentLength > 0 and a non-empty title.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "Stale-bundle diagnostics mislead: wrapper demands a manual rebuild and status claims 'dev mode refuses to start', while browser commands auto-rebuild and start",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "On a checkout whose sources look newer than the built bundle:\n1. ./b4w.ps1 help  -> 'Backend sources changed since the runtime bundle was last built. Rebuild with: $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = \"1\"; b4w <command>'\n2. ./b4w.ps1 status -> 'Matches checkout: no (sources_newer_than_bundle) — dev mode refuses to start'\n3. ./b4w.ps1 goto about:blank -> auto-rebuilds the bundle (~5.5 min) and starts the backend, with no manual flag",
+          "label": "Reproduction"
+        },
+        {
+          "body": "One consistent story: either the stale-bundle state automatically resolves on the next browser command (message should say so), or it genuinely refuses to start (and then it should refuse).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Three different messages; the status text explicitly says the mode refuses to start, yet the very next browser command rebuilds and starts unattended. The same status output also prints 'Installed bundle: v4.14.0' and '⚠ Version mismatch: CLI is 4.14.1 but installed backend is v4.14.0', which refers to a globally installed bundle that dev mode does not run — noise that can send a first-time user chasing the wrong problem. The warning also prints for purely local commands that never touch the backend (help, config).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The staleness check distinguishes two kinds (version_mismatch vs sources_newer_than_bundle), but daemon.rs:report_rows() renders the hard-refusal wording ('dev mode refuses to start') for both, while the launcher treats sources_newer_than_bundle as 'rebuild then start'. Separately, b4w.ps1 prints the manual-rebuild notice for every invocation while the mismatch persists, even though the CLI would rebuild automatically on demand; the installed-bundle version line is compared without excluding dev-mode runs.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/daemon.rs:7391 (LocalBundleProvenance::report_rows) and b4w.ps1:455 (backend-source hash check)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Render per-kind status text: 'sources newer than bundle — the next browser command rebuilds and starts it automatically' vs the true refusal wording only for version_mismatch.\n- Gate the b4w.ps1 rebuild notice to commands that will actually use the backend, or drop it in favour of a one-line note that the rebuild is automatic.\n- When the dev-mode local bundle is present, suppress or clearly label the 'Installed bundle' version-mismatch line as unrelated to dev mode.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "loop --help documents the loop state path without the per-checkout workspace namespace",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.ps1 --help loop  ->  '--name ... Named loops are stored in ~/.browser4/loops/<name>.json'\n./b4w.ps1 loop --status --name mock-price-watch  ->  'State file: C:\\Users\\pereg\\.browser4\\workspaces\\Browser4-4.14-04e5248d\\loops\\mock-price-watch.json'",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The help text should match where the file actually lands (reference loop.md §Where the state lives documents the resolution order correctly: BROWSER4_CLI_STATE_DIR -> per-checkout workspace namespace -> ~/.browser4).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Help tells a source-checkout user to look under ~/.browser4/loops/<name>.json, which does not exist in dev mode; the actual file is namespaced per checkout under workspaces/<checkout-hash>/loops/.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The loop --name help string (commands.rs:1198) predates the dev-mode workspace namespacing; the reference doc was updated but the CLI's own help text was not.\nNote: this is consistent with the context elsewhere in the help where ~/.browser4 paths are used bare.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs:1198 (loop --name help text)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Rephrase to point at the resolved path instead of a fixed one, e.g. 'stored under the CLI state directory (<state-dir>/loops/<name>.json — run `loop --list` to see the resolved path)', matching loop.md's wording.\n- Optionally print the resolved state directory in `loop --status` output header as well (it already prints the full state-file path, which is good).",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "swarm create --help does not mention that prior sessions' completed swarm tasks are pruned automatically",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.ps1 swarm create --max-browser-contexts 2 --max-open-tabs 4\n-> 'Auto-cleaned 12 completed swarm task(s) from prior sessions (non-interactive auto-clean; use `swarm list` before `swarm create` if you need to keep them): <12 ids>'\n./b4w.ps1 --help swarm-create  ->  only documents --clear-stale ('Clear stale swarm tasks from prior sessions before creating the new session')",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The command help should disclose the automatic pruning (and the absence of an opt-out), as the swarm.md reference does.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "A user reading only --help learns of --clear-stale but not that every swarm create silently prunes the tracked completed tasks of prior sessions (there is no --keep flag). The tracked task list of a previous session is gone unless `swarm list` was captured first; results themselves are retained, and the runtime message does name the pruned ids.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "CLI help text for swarm create was not updated when the automatic pruning behaviour was added; the reference document (skills/browser4-cli/references/swarm.md §5) documents it, including the missing --keep opt-out.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs (swarm create help text)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a help note: 'completed tasks from prior sessions are pruned automatically on create; run `swarm list` first if you need the history; --clear-stale additionally clears still-pending tasks'.\n- Consider adding a --keep (or --no-clean) opt-out, as swarm.md already flags the gap.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}
