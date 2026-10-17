@@ -486,11 +486,27 @@ function Skip-Check {
 # Current page URL as reported by the page itself (`eval`, not a cached driver
 # field).  Returns $null when the evaluation failed, so callers can tell
 # "no session / stale context" apart from "the URL did not change".
+#
+# `eval` prints the evaluated value itself and has no `--result-only` option
+# (that one belongs to `htmlsnapshot query`); passing it made the CLI exit 2
+# with "unknown option", so this helper returned $null for every page.
 function Get-CurrentHref {
-    $href = ((Invoke-Cli eval "location.href" --result-only) -join ' ').Trim()
+    $out = @(Invoke-Cli eval "location.href")
     if (-not $global:LastCliSucceeded) { return $null }
-    if ($href -match "`n") { $href = ($href -split "`n")[-1].Trim() }
-    return $href
+    # The value is a plain stdout line; stderr diagnostics are collected with a
+    # "[stderr] " prefix and must not be mistaken for the URL.  Prefer a line
+    # that actually looks like a URL (a page href always carries a scheme —
+    # http:, https:, file:, about:, data:, …) and fall back to the last plain
+    # line, so an unexpected placeholder line cannot win.
+    $fallback = $null
+    for ($i = $out.Count - 1; $i -ge 0; $i--) {
+        $line = "$($out[$i])".Trim()
+        if (-not $line) { continue }
+        if ($line.StartsWith('[stderr]')) { continue }
+        if ($line -match '^[A-Za-z][A-Za-z0-9+.\-]*:') { return $line }
+        if ($null -eq $fallback) { $fallback = $line }
+    }
+    return $fallback
 }
 
 # Probe whether the browser still has an entry to traverse forward to.
@@ -504,7 +520,7 @@ function Get-CurrentHref {
 # reported success without navigating although the browser could have.
 function Test-BrowserCanGoForward {
     $before = Get-CurrentHref
-    $null = Invoke-Cli eval "history.forward(); 'probe'" --result-only
+    $null = Invoke-Cli eval "history.forward(); 'probe'"
     Start-Sleep -Seconds 2
     $after = Get-CurrentHref
     if ($null -eq $before -or $null -eq $after) {
