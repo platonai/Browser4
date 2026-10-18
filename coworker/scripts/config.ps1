@@ -68,12 +68,15 @@ if ($script:configData.ContainsKey('DSH')) {
 #
 # Priority (highest to lowest):
 #   1. $env:BROWSER4_AGENT — global machine/user override
-#   2. Config arrays in config.psd1: CLAUDE > KIMI > CODEX > DSH
+#   2. Config arrays in config.psd1: DSH > CLAUDE > KIMI > CODEX
 #   3. Fallback: copilot
 #
-# Valid env var values: claude, kimi, codex, dsh, copilot
+# Valid env var values: dsh, claude, kimi, codex, copilot
+#
+# dsh (DeepSeek Harness) is the preferred external harness: it is first here and
+# first in the real-world scenario PATH auto-detection (common.ps1).
 
-$script:KnownAgentBackends = @('claude', 'kimi', 'codex', 'dsh', 'copilot')
+$script:KnownAgentBackends = @('dsh', 'claude', 'kimi', 'codex', 'copilot')
 
 function Get-AgentBackend {
     # ── $env:BROWSER4_AGENT takes precedence over everything ──────────────────
@@ -86,9 +89,9 @@ function Get-AgentBackend {
         Write-Host "  Known values: $($script:KnownAgentBackends -join ', ')" -ForegroundColor DarkGray
     }
 
+    if ($DSH) { return 'dsh' }
     if ($CLAUDE) { return 'claude' }
     if ($KIMI) { return 'kimi' }
     if ($CODEX) { return 'codex' }
-    if ($DSH) { return 'dsh' }
     return 'copilot'
 }

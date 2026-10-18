@@ -2159,6 +2159,11 @@ function Start-NativeCommand {
         Maximum seconds to wait for the output pipes to reach EOF after the
         command exited (default 10).
 
+    .PARAMETER NoStdinRedirect
+        Keep an oversized prompt on the command line.  Needed by backends whose
+        CLI refuses stdin (dsh), where redirecting the prompt would strip the
+        only task argument and fail the run.
+
     .EXAMPLE
         Start-NativeCommand -FilePath 'claude' -ArgumentList @('-p', $prompt) `
             -CaptureFile $tempFile
@@ -2189,6 +2194,11 @@ function Start-NativeCommand {
         # Chrome) can hold them open long after the command is gone, so the drain
         # is bounded.  See Wait-NativeCommandOutputDrain.
         [double] $DrainTimeoutSec = 10,
+
+        # Keep a large prompt on the command line instead of redirecting it to
+        # stdin.  Backends whose CLI rejects stdin (dsh: its headless profile
+        # reads one positional task and fails on a missing task) must set this.
+        [switch] $NoStdinRedirect,
 
         # ── Checkpoint support ──────────────────────────────────────────
         # When both parameters are provided the output handler writes a
@@ -2310,10 +2320,13 @@ function Start-NativeCommand {
     # Two prompt styles are supported:
     #   - `-p <prompt>` style (claude, kimi): the argument following -p.
     #   - trailing positional prompt (codex `exec ... <prompt>`, opencode
-    #     `run <prompt>`, dsh `run <prompt>`): the final argument when it is
-    #     large.  codex/opencode/dsh read the prompt from stdin when it is
-    #     piped and no prompt argument is present.
-    if ($isWindowsPlatform) {
+    #     `run <prompt>`): the final argument when it is large.  codex and
+    #     opencode read the prompt from stdin when it is piped and no prompt
+    #     argument is present.
+    # dsh is NOT in that list — `dsh --profile headless <task>` takes the task
+    # as a positional argument and fails on a missing task, so callers pass
+    # -NoStdinRedirect and keep its prompt on the command line.
+    if ($isWindowsPlatform -and -not $NoStdinRedirect) {
         $promptValue = $null
         $promptIsPositional = $false
         $foundP = $false
@@ -2357,6 +2370,10 @@ function Start-NativeCommand {
         } else {
             foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
         }
+    } elseif ($isWindowsPlatform) {
+        # -NoStdinRedirect: the prompt must stay on argv (dsh's headless app
+        # rejects a missing task), so pass every argument and let .NET escape it.
+        foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
     } else {
         # Unix: no command-line length concerns — pass all arguments directly.
         foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
@@ -3284,13 +3301,13 @@ function Get-ScenarioAgentArgs {
           kimi:     -p <prompt>
           opencode: run <prompt>
           codex:    exec --dangerously-bypass-approvals-and-sandbox --ephemeral <prompt>
-          dsh:      run <prompt>
+          dsh:      --profile headless <prompt>
 
         This is the single source of truth for agent CLI argument building.
         All scenario scripts and the test runner use this function instead of
         duplicating the backend switch block.
     .PARAMETER Agent
-        The agent backend name (claude, kimi, opencode, codex, or dsh).
+        The agent backend name (dsh, claude, kimi, opencode, or codex).
     .PARAMETER Prompt
         The task prompt text.
     .PARAMETER Silent
@@ -3325,8 +3342,10 @@ function Get-ScenarioAgentArgs {
             return @('exec', '--dangerously-bypass-approvals-and-sandbox', '--ephemeral', $Prompt)
         }
         'dsh' {
-            # dsh run <task> runs non-interactively through a headless profile.
-            return @('run', $Prompt)
+            # dsh boots a profile explicitly; the headless profile answers one task,
+            # prints the final assistant message, and exits.  The task is a
+            # positional argument — dsh has no `run` subcommand.
+            return @('--profile', 'headless', $Prompt)
         }
         default {
             # Unknown agent — assume -p mode (claude-compatible)
@@ -3338,17 +3357,21 @@ function Get-ScenarioAgentArgs {
 function Get-ScenarioAgent {
     <#
     .SYNOPSIS
-        Resolve which agent CLI (claude, kimi, opencode, codex, or dsh) scenario
+        Resolve which agent CLI (dsh, claude, kimi, opencode, or codex) scenario
         scripts should invoke.
     .DESCRIPTION
         Priority (highest to lowest):
           1. $script:scenarioAgentCli — explicit script-level override
           2. $env:BROWSER4_AGENT — global machine/user override
-          3. Auto-detection from PATH: claude > kimi > opencode > codex > dsh
-          4. Fallback: 'claude'
+          3. Auto-detection from PATH: dsh > claude > kimi > opencode > codex
+          4. Fallback: 'dsh'
 
-        Callers may force a backend by setting $script:scenarioAgentCli = 'kimi'
-        (or 'claude', 'opencode', 'codex', 'dsh') after dot-sourcing this module.
+        dsh (DeepSeek Harness) is the preferred external harness: it wins both
+        the auto-detection order and the fallback, matching Get-AgentBackend in
+        coworker/scripts/config.ps1.
+
+        Callers may force a backend by setting $script:scenarioAgentCli = 'claude'
+        (or 'dsh', 'kimi', 'opencode', 'codex') after dot-sourcing this module.
         Set BROWSER4_AGENT in the environment to configure globally.
     #>
 
@@ -3365,21 +3388,22 @@ function Get-ScenarioAgent {
         Write-Host "  Known values: claude, kimi, opencode, codex, dsh" -ForegroundColor DarkGray
     }
 
-    # 3. Auto-detection from PATH
+    # 3. Auto-detection from PATH — dsh (DeepSeek Harness) is the preferred
+    #    external harness and is probed first.
+    if (Get-Command dsh -ErrorAction SilentlyContinue) { return 'dsh' }
     if (Get-Command claude -ErrorAction SilentlyContinue) { return 'claude' }
     if (Get-Command kimi -ErrorAction SilentlyContinue) { return 'kimi' }
     if (Get-Command opencode -ErrorAction SilentlyContinue) { return 'opencode' }
     if (Get-Command codex -ErrorAction SilentlyContinue) { return 'codex' }
-    if (Get-Command dsh -ErrorAction SilentlyContinue) { return 'dsh' }
 
     # 4. Fallback
-    return 'claude'
+    return 'dsh'
 }
 
 function Invoke-Agent {
     <#
     .SYNOPSIS
-        Invoke the configured agent CLI (claude, kimi, opencode, codex, or dsh) to run
+        Invoke the configured agent CLI (dsh, claude, kimi, opencode, or codex) to run
         a scenario and evaluate browser4-cli usability.
     .DESCRIPTION
         Runs the agent CLI resolved by Get-ScenarioAgent with the given prompt.
@@ -3396,7 +3420,7 @@ function Invoke-Agent {
           - kimi:   -p <prompt>; auto-approves tool calls via -p mode.
           - opencode: run <prompt>; no permission or --silent flags.
           - codex:  exec --dangerously-bypass-approvals-and-sandbox <prompt>.
-          - dsh:    run <prompt>; runs non-interactively through a headless profile.
+          - dsh:    --profile headless <prompt>; one task, then exit.
     .PARAMETER Prompt
         The full prompt including the general evaluation instructions and
         task-specific instructions.
@@ -3495,6 +3519,11 @@ function Invoke-Agent {
     $startParams = @{
         FilePath     = $agent
         ArgumentList = $agentArgs
+    }
+    # dsh reads its task from a positional argument and rejects stdin, so its
+    # prompt must stay on the command line even when it is long.
+    if ($agent -eq 'dsh') {
+        $startParams['NoStdinRedirect'] = $true
     }
     if ($captureFile) {
         $startParams['CaptureFile'] = $captureFile

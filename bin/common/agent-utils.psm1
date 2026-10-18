@@ -15,14 +15,18 @@
 # ═══════════════════════════════════════════════════════════════════
 
 # agent-utils.psm1
-# AI Agent utilities — resolve and invoke AI assistants (claude, copilot, etc.)
+# AI Agent utilities — resolve and invoke AI assistants (dsh, claude, copilot, etc.)
 #
 # Provides:
 #   - Get-AiAnalyzer         — resolve the best available AI CLI on PATH
+#   - Get-AiAnalyzerArguments — per-backend CLI argument builder
 #   - Test-AiAvailable       — check if any AI is available
 #   - Test-CopilotAvailable  — backward-compatible alias for Test-AiAvailable
 #   - Invoke-AiAnalysis      — invoke the best available AI with a prompt
 #   - Invoke-CopilotAnalysis — backward-compatible wrapper over Invoke-AiAnalysis
+#
+# dsh (DeepSeek Harness) is the preferred external harness and is probed first;
+# claude and copilot are the fallbacks.
 #
 # Usage:
 #   Import-Module "$PSScriptRoot\agent-utils.psm1" -Force
@@ -39,13 +43,14 @@
 # ============================================================================
 # Module-level state (script-scoped)
 # ============================================================================
-$script:AiAnalyzer = $null  # resolved AI CLI: 'claude', 'copilot', or $null
+$script:AiAnalyzer = $null  # resolved AI CLI: 'dsh', 'claude', 'copilot', or $null
 
 # Ordered list of known AI CLIs to probe, with their display names.
+# dsh first: it is the preferred external harness across the repository.
 $script:KnownAnalyzers = @(
+    @{ Bin = 'dsh';     Name = 'DSH'      },
     @{ Bin = 'claude';  Name = 'Claude'   },
-    @{ Bin = 'copilot'; Name = 'Copilot'  },
-    @{ Bin = 'dsh';     Name = 'DSH'      }
+    @{ Bin = 'copilot'; Name = 'Copilot'  }
 )
 
 # ============================================================================
@@ -56,10 +61,10 @@ $script:KnownAnalyzers = @(
     Resolve the best available AI CLI on the current PATH.
 
 .DESCRIPTION
-    Probes known AI CLIs in priority order (claude > copilot) and caches
+    Probes known AI CLIs in priority order (dsh > claude > copilot) and caches
     the result so repeated calls never re-scan PATH.
 
-    Returns the binary name string ('claude', 'copilot') on success,
+    Returns the binary name string ('dsh', 'claude', 'copilot') on success,
     or $null when no AI CLI is found.
 
 .PARAMETER ForceRefresh
@@ -67,7 +72,7 @@ $script:KnownAnalyzers = @(
 
 .EXAMPLE
     $ai = Get-AiAnalyzer
-    if ($ai) { & $ai -p "hello" }
+    if ($ai) { $answer = Invoke-AiAnalysis -Prompt "hello" -Analyzer $ai }
 #>
 function Get-AiAnalyzer {
     [CmdletBinding()]
@@ -134,6 +139,69 @@ function Test-CopilotAvailable {
 }
 
 # ============================================================================
+# Per-backend CLI argument builder
+# ============================================================================
+<#
+.SYNOPSIS
+    Build the CLI arguments for one AI analyzer invocation.
+
+.DESCRIPTION
+    Each known AI CLI has its own non-interactive prompt grammar, so the caller
+    must not assume claude's flags:
+
+      claude:  -p <prompt> --add-dir <promptDir>   prompt flag + extra directory
+      copilot: -p <prompt>                         prompt flag
+      dsh:     --profile headless <prompt>         positional task, no stdin
+
+    One source of truth: adding a backend is a single branch here instead of a
+    change at every invocation site.
+
+.PARAMETER Analyzer
+    The resolved analyzer binary name (dsh, claude, copilot).
+
+.PARAMETER Prompt
+    The short prompt handed to the CLI.
+
+.PARAMETER PromptDir
+    Directory holding the prompt file, for CLIs that need an explicit
+    extra-directory allowance (claude's --add-dir). Ignored by the others.
+
+.EXAMPLE
+    $args = Get-AiAnalyzerArguments -Analyzer dsh -Prompt "read /tmp/p.md"
+    & dsh @args
+#>
+function Get-AiAnalyzerArguments {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Analyzer,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Prompt,
+
+        [string]$PromptDir = ''
+    )
+
+    switch ($Analyzer) {
+        'dsh' {
+            # dsh has no prompt flag and no stdin mode: the headless profile runs
+            # one positional task, prints the answer, and exits.
+            return @('--profile', 'headless', $Prompt)
+        }
+        'claude' {
+            if ($PromptDir) {
+                return @('-p', $Prompt, '--add-dir', $PromptDir)
+            }
+            return @('-p', $Prompt)
+        }
+        default {
+            # copilot and unknown CLIs: plain prompt flag
+            return @('-p', $Prompt)
+        }
+    }
+}
+
+# ============================================================================
 # Core: invoke the best available AI with a prompt
 # ============================================================================
 <#
@@ -159,8 +227,8 @@ function Test-CopilotAvailable {
     Each file is read with its path as a header.
 
 .PARAMETER Analyzer
-    Force a specific AI CLI ('claude' or 'copilot').  When omitted the best
-    available is auto-detected.
+    Force a specific AI CLI ('dsh', 'claude', or 'copilot').  When omitted the
+    best available is auto-detected (dsh first).
 
 .PARAMETER OutputFile
     When provided, the AI response is saved to this file path (UTF-8).
@@ -196,7 +264,7 @@ function Invoke-AiAnalysis {
 
         [string[]]$FilePaths,
 
-        [ValidateSet('claude', 'copilot')]
+        [ValidateSet('dsh', 'claude', 'copilot')]
         [string]$Analyzer = '',
 
         [string]$OutputFile = '',
@@ -209,7 +277,8 @@ function Invoke-AiAnalysis {
     # Resolve analyzer
     $analyzer = if ($Analyzer) { $Analyzer } else { Get-AiAnalyzer }
     if (-not $analyzer) {
-        Write-Warning 'Invoke-AiAnalysis: No AI CLI found on PATH (checked: claude, copilot)'
+        $knownList = ($script:KnownAnalyzers | ForEach-Object { $_.Bin }) -join ', '
+        Write-Warning "Invoke-AiAnalysis: No AI CLI found on PATH (checked: $knownList)"
         return $null
     }
 
@@ -233,7 +302,8 @@ function Invoke-AiAnalysis {
 
     # Announce
     if (-not $Quiet) {
-        $displayName = if ($analyzer -eq 'claude') { 'Claude' } else { 'Copilot' }
+        $known = $script:KnownAnalyzers | Where-Object { $_.Bin -eq $analyzer } | Select-Object -First 1
+        $displayName = if ($known) { $known.Name } else { $analyzer }
         Write-Host "`n🤖 Running AI analysis with $displayName ..." -ForegroundColor Magenta
         Write-Verbose "   Prompt length: $($fullPrompt.Length) chars"
     }
@@ -253,7 +323,10 @@ function Invoke-AiAnalysis {
         # This keeps the command-line argument tiny regardless of prompt size.
         $shortPrompt = "Please read the instructions in the file '$promptFile' and follow them exactly. Do not summarise the file — execute every instruction it contains."
         $tempDir = Split-Path $promptFile -Parent
-        $result = & $analyzer -p $shortPrompt --add-dir $tempDir 2>&1
+        # Per-backend flags: claude needs --add-dir, dsh needs its profile and has
+        # no prompt flag at all, so the grammar never lives at the call site.
+        $analyzerArgs = Get-AiAnalyzerArguments -Analyzer $analyzer -Prompt $shortPrompt -PromptDir $tempDir
+        $result = & $analyzer @analyzerArgs 2>&1
         $sw.Stop()
         $text = ($result | Out-String).Trim()
 
@@ -323,6 +396,7 @@ function Invoke-CopilotAnalysis {
 # ============================================================================
 Export-ModuleMember -Function @(
     'Get-AiAnalyzer',
+    'Get-AiAnalyzerArguments',
     'Test-AiAvailable',
     'Test-CopilotAvailable',
     'Invoke-AiAnalysis',

@@ -1400,7 +1400,7 @@ function Invoke-AiReview {
     .DESCRIPTION
         Sends issue details to the AI agent and parses the response for a
         decision.  When -Batch is set, all issues are reviewed together.
-        Uses the Coworker-configured agent backend (claude > kimi > copilot).
+        Uses the Coworker-configured agent backend (dsh > claude > kimi > copilot).
     .PARAMETER ParsedFile
         The structured review file.
     .PARAMETER Issue

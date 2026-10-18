@@ -32,10 +32,10 @@
     Performance, ...; chore/ci/style/revert/build and version-bump commits are
     skipped). Pass -Agent auto to opt in: the AI agent generates ONLY the
     "What's New" highlights section on top of those sections (backend
-    auto-resolved via coworker/scripts/workers/agent.ps1: claude, codex, kimi,
-    dsh, or gh copilot), or -Agent <name> to pin a specific backend (claude,
-    kimi, codex, dsh, copilot). The combined notes are used as the annotated
-    tag message (unless -message is given) and shown as a preview.
+    auto-resolved via coworker/scripts/workers/agent.ps1: dsh (preferred),
+    claude, codex, kimi, or gh copilot), or -Agent <name> to pin a specific
+    backend (dsh, claude, kimi, codex, copilot). The combined notes are used as
+    the annotated tag message (unless -message is given) and shown as a preview.
 
     Non-interactive hosts (CI/automation): set BROWSER4_RELEASE_YES=1 to
     auto-confirm every prompt and to auto-skip the release-message prompt
@@ -60,11 +60,11 @@
 
 .PARAMETER Agent
     Generate AI release notes using an agent backend. Values: auto (resolve the
-    backend via coworker/scripts/workers/agent.ps1: claude, kimi, codex, dsh,
-    or gh copilot), or a specific backend name (claude, kimi, codex, dsh,
-    copilot). Without this flag the script uses the raw commit list and never
-    invokes an AI agent. A pinned backend overrides $env:BROWSER4_AGENT and the
-    config.psd1 backend order for this invocation.
+    backend via coworker/scripts/workers/agent.ps1: dsh (preferred), claude,
+    kimi, codex, or gh copilot), or a specific backend name (dsh, claude, kimi,
+    codex, copilot). Without this flag the script uses the raw commit list and
+    never invokes an AI agent. A pinned backend overrides $env:BROWSER4_AGENT
+    and the config.psd1 backend order for this invocation.
 
 .PARAMETER SyncMain
     When HEAD is ahead of origin/main (fast-forward possible), automatically
@@ -98,7 +98,7 @@ param(
     [switch]$DryRun,
     [switch]$SyncMain,
     [switch]$Force,
-    [ValidateSet('auto', 'claude', 'kimi', 'codex', 'dsh', 'copilot')]
+    [ValidateSet('auto', 'dsh', 'claude', 'kimi', 'codex', 'copilot')]
     [string]$Agent = ""
 )
 
@@ -563,7 +563,7 @@ if ($prevTag) {
 # ═══════════════════════════════════════════════════════════════════
 # AI agent helpers — generate release notes via an available agent.
 # Reuses coworker/scripts/workers/agent.ps1 (the canonical per-backend
-# invocation) when present, so claude/kimi/codex/dsh/copilot all work
+# invocation) when present, so dsh/claude/kimi/codex/copilot all work
 # with their correct CLI flags and Windows stdin handling.
 # ═══════════════════════════════════════════════════════════════════
 

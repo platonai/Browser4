@@ -723,16 +723,21 @@ if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
     $savedCodex = $CODEX
     $savedDsh = $DSH
     try {
+        $CLAUDE = @('claude'); $DSH = @('dsh')
+        Assert-Equal -Label 'Get-AgentBackend: dsh wins over claude' `
+            -Actual (Get-AgentBackend) -Expected 'dsh'
+
+        $DSH = $null
         $CLAUDE = @('claude'); $KIMI = @('kimi')
-        Assert-Equal -Label 'Get-AgentBackend: claude wins over kimi' `
+        Assert-Equal -Label 'Get-AgentBackend: claude wins over kimi when no dsh' `
             -Actual (Get-AgentBackend) -Expected 'claude'
 
         $CLAUDE = $null; $KIMI = @('kimi')
-        Assert-Equal -Label 'Get-AgentBackend: kimi when no claude' `
+        Assert-Equal -Label 'Get-AgentBackend: kimi when no dsh/claude' `
             -Actual (Get-AgentBackend) -Expected 'kimi'
 
         $CLAUDE = $null; $KIMI = $null; $CODEX = @('codex')
-        Assert-Equal -Label 'Get-AgentBackend: codex when no claude/kimi' `
+        Assert-Equal -Label 'Get-AgentBackend: codex when no dsh/claude/kimi' `
             -Actual (Get-AgentBackend) -Expected 'codex'
 
         $CLAUDE = $null; $KIMI = $null; $CODEX = $null; $DSH = @('dsh')

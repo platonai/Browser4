@@ -465,14 +465,17 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Assert-True 'dsh was invoked' ($null -ne $script:CapturedArgs)
     Assert-NotContains 'dsh: no --dangerously-skip-permissions' ($script:CapturedArgs -join ' ') `
         '--dangerously-skip-permissions'
-    Assert-Equal 'dsh: first arg is run' 'run' $script:CapturedArgs[0]
+    Assert-Equal 'dsh: first arg is --profile' '--profile' $script:CapturedArgs[0]
+    Assert-Equal 'dsh: second arg selects the headless profile' 'headless' $script:CapturedArgs[1]
     Assert-True 'dsh: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'dsh test')
+    Assert-True 'dsh: no stale `run` subcommand' (-not ($script:CapturedArgs -contains 'run'))
 
     Write-TestGroup 'dsh backend with -Silent flag'
     $script:CapturedArgs = $null
     Invoke-Agent -Prompt 'dsh silent' -Silent
     Assert-NotContains 'dsh: --silent is never passed' ($script:CapturedArgs -join ' ') '--silent'
-    Assert-Equal 'dsh silent: first arg is run' 'run' $script:CapturedArgs[0]
+    Assert-Equal 'dsh silent: first arg is --profile' '--profile' $script:CapturedArgs[0]
+    Assert-Equal 'dsh silent: second arg selects the headless profile' 'headless' $script:CapturedArgs[1]
     Assert-True 'dsh silent: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'dsh silent')
 
     # Clean up the mocks so they do not leak.
@@ -531,6 +534,26 @@ Write-Host '━━━ Get-ScenarioAgent: Backend Detection (opencode, codex, dsh
         ($commonContent -match 'Get-Command codex.*return.*codex')
     Assert-True 'Auto-detection includes dsh' `
         ($commonContent -match 'Get-Command dsh.*return.*dsh')
+
+    # dsh (DeepSeek Harness) is the preferred external harness: it must be the
+    # FIRST probe in Get-ScenarioAgent, and the no-agent fallback must be dsh.
+    $scenarioAgentMatch = [regex]::Match($commonContent, 'function Get-ScenarioAgent \{[\s\S]*?\n\}')
+    $scenarioAgentBody = $scenarioAgentMatch.Value
+    $dshProbe = $scenarioAgentBody.IndexOf("Get-Command dsh -ErrorAction SilentlyContinue")
+    $claudeProbe = $scenarioAgentBody.IndexOf("Get-Command claude -ErrorAction SilentlyContinue")
+    Assert-True 'Get-ScenarioAgent found' ($scenarioAgentBody.Length -gt 0)
+    Assert-True 'Auto-detection probes dsh first' `
+        ($dshProbe -ge 0 -and $claudeProbe -ge 0 -and $dshProbe -lt $claudeProbe)
+    Assert-True "Auto-detection falls back to dsh" `
+        ($scenarioAgentBody -match "#\s*4\.\s*Fallback\s+return 'dsh'")
+
+    # Regression: dsh has no `run` subcommand — its headless app takes the task
+    # as a positional argument, so the branch must build `--profile headless`.
+    Assert-True 'dsh invocation selects the headless profile' `
+        ($commonContent -match "'dsh'\s*\{[\s\S]{0,400}?return @\('--profile', 'headless'")
+    # opencode legitimately uses `run`; only the dsh branch must not.
+    Assert-True 'dsh invocation has no stale run subcommand' `
+        ($commonContent -notmatch "'dsh'\s*\{[^}]*'run'")
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

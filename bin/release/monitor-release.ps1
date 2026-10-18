@@ -54,8 +54,8 @@
 
 .PARAMETER Agent
     Passed through to trigger-release.ps1 to generate AI release notes: auto
-    (resolve the backend) or a specific backend name (claude, kimi, codex, dsh,
-    copilot). Without it, the raw commit list is used.
+    (resolve the backend, dsh preferred) or a specific backend name (dsh,
+    claude, kimi, codex, copilot). Without it, the raw commit list is used.
 
 .PARAMETER SkipVersionBump
     Skip the automatic post-release version bump. By default, after a successful
@@ -101,7 +101,7 @@ param(
     [switch]$SkipVersionBump,
     [switch]$NoSyncMain,
     [int]$MaxMonitorMinutes = 0,
-    [ValidateSet('auto', 'claude', 'kimi', 'codex', 'dsh', 'copilot')]
+    [ValidateSet('auto', 'dsh', 'claude', 'kimi', 'codex', 'copilot')]
     [string]$Agent = ""
 )
 
