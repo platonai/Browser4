@@ -181,15 +181,45 @@ fn normalize_cookie_domain(domain: &str) -> Option<String> {
     }
 }
 
+/// True for a Windows drive-qualified path (`C:\x`, `C:/x`, `C:x`) on *any*
+/// host.
+///
+/// `std::path::Path::is_absolute()` only answers for the host platform: on
+/// Linux and macOS `C:/tmp/dl` parses as a relative path whose first component
+/// merely looks like a drive, so joining it onto the CWD fabricates
+/// `<cwd>/C:/tmp/dl` — a directory that cannot exist on either machine.  Keep
+/// the drive form verbatim: the backend (and the Chrome it drives) may live on
+/// a different OS than the CLI, which is exactly the case `download --dir` and
+/// `webdb export --output-dir` are used for.
+///
+/// Drive-*relative* forms (`C:tmp`, bare `C:`) are kept verbatim too.  They
+/// mean "the current directory on drive C", which the CLI cannot resolve for
+/// another host, and `Path::join` is host-dependent here (it truncates on
+/// Windows and prepends the CWD on POSIX), so resolving them client-side would
+/// produce a different — and always wrong — directory per platform.
+fn has_windows_drive_prefix(dir: &str) -> bool {
+    let mut chars = dir.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some(drive), Some(':')) if drive.is_ascii_alphabetic()
+    )
+}
+
 /// Resolve a user-supplied output directory to an absolute path against the
 /// CLI's current working directory.  Paths that are already absolute (native
-/// drive/UNC forms, or rooted with `/` or `\` like the POSIX-style `/tmp/x`
-/// the tests and docs use) are returned unchanged.  Relative paths are joined
-/// onto `std::env::current_dir()` so the backend writes exports where the
-/// caller expects instead of resolving them against the backend's own CWD.
+/// drive/UNC forms, a Windows `C:\`/`C:/` path even when the CLI runs on
+/// POSIX, or rooted with `/` or `\` like the POSIX-style `/tmp/x` the tests and
+/// docs use) are returned unchanged, as is any other drive-qualified form.  A
+/// path with no drive or root is joined onto `std::env::current_dir()` so the
+/// backend writes exports where the caller expects instead of resolving them
+/// against the backend's own CWD.
 fn absolutize_local_dir(dir: &str) -> String {
     let path = std::path::Path::new(dir);
-    if path.is_absolute() || dir.starts_with('/') || dir.starts_with('\\') {
+    if path.is_absolute()
+        || dir.starts_with('/')
+        || dir.starts_with('\\')
+        || has_windows_drive_prefix(dir)
+    {
         return dir.to_string();
     }
     match std::env::current_dir() {
@@ -6545,6 +6575,59 @@ mod tests {
         assert_eq!(params["method"], "Browser.setDownloadBehavior");
         assert_eq!(params["params"]["behavior"], "allow");
         assert_eq!(params["params"]["downloadPath"], "C:/tmp/dl");
+    }
+
+    #[test]
+    fn test_absolutize_local_dir_keeps_foreign_absolute_forms() {
+        // A Windows path stays untouched even when the CLI itself runs on
+        // POSIX: `Path::is_absolute()` is host-relative, so a Linux runner used
+        // to prepend its own CWD and hand Chrome `<cwd>/C:/tmp/dl`.  This is
+        // the nightly Linux regression.
+        for dir in [
+            "C:/tmp/dl",
+            "C:\\tmp\\dl",
+            "c:/tmp/dl",
+            "Z:\\",
+            "C:tmp",
+            "/tmp/dl",
+            "/tmp/dl/",
+            "\\server\\share\\dl",
+            "//server/share/dl",
+        ] {
+            assert_eq!(
+                absolutize_local_dir(dir),
+                dir,
+                "must be kept verbatim: {dir}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_absolutize_local_dir_resolves_relative_forms() {
+        // A path with no drive qualifier is still resolved against the CWD.
+        for dir in ["downloads", "./downloads", "export/out", "..\\out"] {
+            let resolved = absolutize_local_dir(dir);
+            assert_ne!(resolved, dir, "must be resolved against the CWD: {dir}");
+            assert!(
+                std::path::Path::new(&resolved).is_absolute(),
+                "expected an absolute path for {dir}, got: {resolved}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_has_windows_drive_prefix() {
+        assert!(has_windows_drive_prefix("C:/tmp"));
+        assert!(has_windows_drive_prefix("C:\\tmp"));
+        assert!(has_windows_drive_prefix("c:\\"));
+        // Drive-qualified but relative: kept verbatim, never resolved here.
+        assert!(has_windows_drive_prefix("C:"));
+        assert!(has_windows_drive_prefix("C:tmp"));
+        assert!(!has_windows_drive_prefix("/tmp"));
+        assert!(!has_windows_drive_prefix("downloads"));
+        // Two letters plus a colon is not a drive.
+        assert!(!has_windows_drive_prefix("CD:/tmp"));
+        assert!(!has_windows_drive_prefix("1:/tmp"));
     }
 
     #[test]

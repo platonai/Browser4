@@ -899,6 +899,14 @@ pub fn clear_loop_stop_request(state_dir: Option<&Path>, name: Option<&str>) {
 /// Used to tell a live loop worker from a stale state file, so `--resume` can
 /// never start a second worker for the same loop.
 pub fn is_process_alive(pid: u32) -> bool {
+    // PID 0 is never a user process and must never look alive: on Unix
+    // `kill(0, sig)` targets the caller's *process group*, so the signal-0
+    // probe reports success and a state file carrying `"workerPid": 0` (a
+    // truncated or hand-edited file) would pin the loop as owned forever —
+    // `--resume` would then refuse to start a replacement worker.
+    if pid == 0 {
+        return false;
+    }
     #[cfg(unix)]
     {
         // Signal 0 performs error checking but sends no signal: 0 while the

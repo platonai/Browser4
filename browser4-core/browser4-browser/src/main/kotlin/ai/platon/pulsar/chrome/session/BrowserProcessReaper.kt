@@ -277,8 +277,19 @@ class BrowserProcessReaper(
 
             // Tolerate a shortened/8.3 form of the same path: the profile data dir
             // sits in a rotation dir whose name is unique enough to identify it.
-            val profileDir = normalizeForMatch(contextDir.fileName?.toString().orEmpty())
-            val rotationDir = normalizeForMatch(contextDir.parent?.fileName?.toString().orEmpty())
+            //
+            // Split the *text* on both separators instead of asking `Path` for
+            // `fileName` / `parent`: a `Path` only knows the host's separator, so
+            // `C:\...\PULSAR_CHROME\cx.007` is one single component on Linux and
+            // both halves came back wrong — the tolerance then silently never
+            // matched, which is what turned this test red on the Linux nightly.
+            val components = contextDir.toString()
+                .replace('\\', '/')
+                .trimEnd('/')
+                .split('/')
+                .filter { it.isNotEmpty() }
+            val profileDir = normalizeForMatch(components.getOrNull(components.lastIndex).orEmpty())
+            val rotationDir = normalizeForMatch(components.getOrNull(components.lastIndex - 1).orEmpty())
             return command.contains("--user-data-dir") &&
                 profileDir.isNotBlank() &&
                 rotationDir.isNotBlank() &&
