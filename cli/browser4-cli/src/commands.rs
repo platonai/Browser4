@@ -680,6 +680,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "profile", description: "Path to browser profile directory", is_bool: false, short: None },
                 OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false, short: None },
                 OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false, short: None },
+                OptionDef { name: "display-mode <mode>", description: "Display mode of the new session: GUI, HEADLESS (the default), or SUPERVISED. Fixed at session creation; it replaces --headed/--headless, so pass one of them, not both", is_bool: false, short: None },
+                OptionDef { name: "max-open-tabs <n>", description: "Maximum number of open tabs in the session's browser context (backend default when omitted)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| {
@@ -717,6 +719,17 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(interact_level) = get_opt_str(args, "interact-level") {
                     params["interactLevel"] = json!(interact_level);
+                }
+                // `--display-mode` is the backend's own spelling of the display
+                // axis (the same capability `swarm create --display-mode` sets),
+                // so it is forwarded verbatim and normalized to the backend's
+                // upper-case enum.  `--max-open-tabs` caps the tab count of the
+                // session's browser context.
+                if let Some(display_mode) = get_opt_str(args, "display-mode") {
+                    params["displayMode"] = json!(display_mode.trim().to_ascii_uppercase());
+                }
+                if let Some(max_open_tabs) = get_opt_str(args, "max-open-tabs") {
+                    params["maxOpenTabs"] = json!(max_open_tabs.trim());
                 }
                 params
             },
@@ -1645,6 +1658,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "button", description: "Button to click: left (default), right, or middle", optional: true },
             ],
             options: &[
+                OptionDef { name: "count <n>", description: "Click this many times (2 = double click, 3 = triple click). Each press carries an increasing clickCount, which is what turns a triple click into a text selection; combines with --button but not with --modifiers", is_bool: false, short: None },
                 OptionDef { name: "modifiers", description: "Modifier key held during the click: Control, Shift, Alt, or Meta (one key; use `keydown`/`keyup` to hold a key across commands)", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
@@ -1655,6 +1669,17 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({ "ref": get_str(args, "ref").unwrap_or_default() });
                 if let Some(b) = get_opt_str(args, "button") { p["button"] = json!(b); }
+                // `tab.click(selector, count)` drives CDP clickCount, so the CLI
+                // forwards an integer.  An unparsable value is forwarded as-is:
+                // the backend then rejects it loudly ("Parameter 'count' must
+                // be Int") instead of the CLI silently clicking once.
+                if let Some(raw) = get_opt_str(args, "count") {
+                    let raw = raw.trim();
+                    match raw.parse::<i64>() {
+                        Ok(count) => p["count"] = json!(count),
+                        Err(_) => p["count"] = json!(raw),
+                    }
+                }
                 if let Some(m) = args.get("modifiers") { p["modifiers"] = m.clone(); }
                 if args.contains_key("auto-dismiss-dialogs") { p["autoDismissDialogs"] = json!(true); }
                 p
@@ -7112,6 +7137,93 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
 
         assert_eq!(params["profileMode"], "TEMPORARY");
+    }
+
+    #[test]
+    fn test_open_params_with_display_mode() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("display-mode".to_string(), json!("headless"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        // The capability travels in the backend's own upper-case enum spelling.
+        assert_eq!(params["displayMode"], "HEADLESS");
+        // `headed` stays absent: the reconnect path treats a `headed` key as an
+        // explicit --headed/--headless flag, and display-mode is reported
+        // separately.
+        assert!(params.get("headed").is_none());
+    }
+
+    #[test]
+    fn test_open_params_with_max_open_tabs() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("max-open-tabs".to_string(), json!(" 4 "));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["maxOpenTabs"], "4");
+    }
+
+    #[test]
+    fn test_open_params_omit_new_capabilities_when_not_requested() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let args = HashMap::new();
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert!(params.get("displayMode").is_none());
+        assert!(params.get("maxOpenTabs").is_none());
+    }
+
+    #[test]
+    fn test_click_params_with_count() {
+        let map = commands_map();
+        let cmd = map.get("click").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#click-count-target"));
+        args.insert("count".to_string(), json!("3"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        // The backend spec declares `count` as Int ("Click this many times"), and
+        // CDP clickCount is the whole point of the option — send a number.
+        assert_eq!(params["count"], 3);
+        assert_eq!(params["ref"], "#click-count-target");
+    }
+
+    #[test]
+    fn test_click_params_forwards_unparsable_count_verbatim() {
+        let map = commands_map();
+        let cmd = map.get("click").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#click-count-target"));
+        args.insert("count".to_string(), json!("abc"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        // Not silently dropped: the backend rejects it loudly ("Parameter
+        // 'count' must be Int"), which keeps a typo from clicking once.
+        assert_eq!(params["count"], "abc");
+    }
+
+    #[test]
+    fn test_click_params_count_with_button() {
+        let map = commands_map();
+        let cmd = map.get("click").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#click-count-target"));
+        args.insert("count".to_string(), json!("2"));
+        args.insert("button".to_string(), json!("right"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["count"], 2);
+        assert_eq!(params["button"], "right");
     }
 
     #[test]

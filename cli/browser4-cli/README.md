@@ -70,7 +70,7 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 
 | Command | Description |
 |---|---|
-| `open [url]` | Open a browser session or refresh the saved one if it is no longer active |
+| `open [url]` | Open a browser session or refresh the saved one if it is no longer active. `--headed`/`--headless` pick the display mode, `--display-mode GUI\|HEADLESS\|SUPERVISED` is the same choice in the backend's own spelling (exclusive with the boolean pair), `--max-open-tabs <n>` caps the session's tabs, `--profile-mode`/`--profile`/`--interact-level` tune the rest, `--fresh` starts over instead of reconnecting |
 | `close` | Close the browser. Reports what actually happened: the backend's tri-state (`browserTerminated` true/false/null) decides whether “terminated” is printed, and survivors are named |
 | `disconnect` | Alias of `close`, for an attached session: it detaches from the external browser (whose tabs this session was driving are closed) instead of pretending to terminate it |
 | `list` | List browser sessions with their status and next-open behavior. `--all` adds a Workspace column covering the sessions persisted by every other checkout; `--verbose` lifts the URL/Session-ID column caps |
@@ -104,7 +104,7 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 
 | Command | Description |
 |---|---|
-| `click <ref> [button]` | Perform click on a web page. `--modifiers`, `--follow` (detect new tabs) |
+| `click <ref> [button]` | Perform click on a web page. `--count <n>` clicks n times in one call (2 = double click, 3 = triple click; not with `--modifiers`), `--modifiers`, `--follow` (detect new tabs), `--auto-dismiss-dialogs` |
 | `dblclick <ref> [button]` | Perform double click on a web page. `--modifiers`, `--follow` (detect new tabs) |
 | `hover <ref>` | Hover over element on page |
 | `drag <startRef> <endRef>` | Perform drag and drop between two elements |

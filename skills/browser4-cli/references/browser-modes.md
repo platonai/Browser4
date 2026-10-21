@@ -78,14 +78,20 @@ session (whose state container) × display (how it renders) × source (whose bro
 | Mode | Flag | When it is the right choice | Cost / risk |
 |---|---|---|---|
 | **HEADLESS** (default) | `--headless` (implicit) | AI agents, CI, Docker, batch extraction | more likely to be fingerprinted as automation; nobody can intervene |
-| **GUI** | `--headed` | a human must act (login, CAPTCHA, scan a QR code); demonstrations; visual debugging; keeping a browser open for inspection; the **one-shot retry** after a site blocks the headless browser as a bot (see *Bot-detection escalation*) | uses the desktop; impossible in CI/no-display environments |
-| **SUPERVISED** | `swarm create --display-mode SUPERVISED` / `displayMode` capability | wrapping Chrome in an external supervisor process — in practice an Xvfb-based wrapper on Linux | inert unless the supervisor is configured (see below) |
+| **GUI** | `--headed` / `open --display-mode GUI` | a human must act (login, CAPTCHA, scan a QR code); demonstrations; visual debugging; keeping a browser open for inspection; the **one-shot retry** after a site blocks the headless browser as a bot (see *Bot-detection escalation*) | uses the desktop; impossible in CI/no-display environments |
+| **SUPERVISED** | `open --display-mode SUPERVISED` (swarm: `swarm create --display-mode SUPERVISED`) | wrapping Chrome in an external supervisor process — in practice an Xvfb-based wrapper on Linux | inert unless the supervisor is configured (see below) |
+
+`--headed`/`--headless` and `--display-mode` are two spellings of the same axis: the boolean is the
+shorthand, `--display-mode GUI|HEADLESS|SUPERVISED` is the backend capability written the way the
+session sees it. `open` accepts exactly one of them — combining `--display-mode` with
+`--headed`/`--headless` is a usage error rather than a silent precedence rule. `open --max-open-tabs <n>`
+caps how many tabs the session's context may keep open.
 
 **Resolution order:** (1) `browser.display.mode` in the server config (shipped default `HEADLESS`); (2) the
 session's own display preference wins over the server default — an explicit `displayMode` capability beats
 the `headed` boolean, and both beat the server default; (3) `open` always sends an explicit preference
-(`--headed` → GUI, otherwise HEADLESS), so the server default in practice only applies to sessions created
-by other clients.
+(`--headed`/`--display-mode` → that mode, otherwise HEADLESS), so the server default in practice only
+applies to sessions created by other clients.
 
 **Environment overrides**
 

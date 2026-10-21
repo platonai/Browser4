@@ -749,6 +749,10 @@ pub fn generate_quick_reference() -> String {
         "Visible browser for login/CAPTCHA (ignored when reconnecting — add --fresh)",
     ));
     lines.push(fmt_cmd(
+        "open --display-mode GUI|HEADLESS [url]",
+        "Same display choice in the backend's own spelling (replaces --headed/--headless)",
+    ));
+    lines.push(fmt_cmd(
         "close · list · attach",
         "Close the session · list sessions · attach to an external browser",
     ));
@@ -1483,6 +1487,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - ",
             4,
         ));
+        lines.push(wrap_text(
+            "--count <n> clicks the same element n times in one call (2 = double click, 3 = triple click for text selection), each press carrying an increasing clickCount. It combines with --button but not with --modifiers — a repeated click repeats one button press.",
+            "  - ",
+            4,
+        ));
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli click e5".to_string());
@@ -1490,6 +1499,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli click e12 --auto-dismiss-dialogs".to_string());
         lines.push("  browser4-cli click e7 --follow".to_string());
         lines.push("  browser4-cli click e3 --modifiers Control".to_string());
+        lines.push("  browser4-cli click \"#note\" --count=3            # triple click".to_string());
     }
 
     if cmd.name == "fill" {
@@ -1878,7 +1888,17 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(wrap_text(
-            "When reconnecting, `--headless`/`--headed` are ignored (the display mode is set when the session is created); a warning is printed on stderr.",
+            "When reconnecting, `--headless`/`--headed`/`--display-mode` are ignored (the display mode is set when the session is created); a warning is printed on stderr.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "`--display-mode GUI|HEADLESS|SUPERVISED` is the backend's own display capability (the same one `swarm create --display-mode` sets). It carries the display choice by itself, so do not combine it with `--headed`/`--headless`.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "`--max-open-tabs <n>` caps how many tabs the session's browser context may keep open; `--interact-level` and `--profile-mode` tune the rest of the session.",
             "  - ",
             4,
         ));
@@ -1918,6 +1938,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli open https://browser4.io                      # headless (default)".to_string());
         lines.push("  browser4-cli open --headed https://browser4.io              # visible browser window".to_string());
         lines.push("  browser4-cli open --headless https://browser4.io            # explicit headless".to_string());
+        lines.push("  browser4-cli open --display-mode GUI https://browser4.io    # same axis, backend spelling".to_string());
+        lines.push("  browser4-cli open --max-open-tabs 4 https://browser4.io    # cap the tab count".to_string());
         lines.push("  browser4-cli open --fresh --headless https://browser4.io    # new session, not a reconnect".to_string());
         lines.push("  browser4-cli -s job-42 open https://browser4.io            # named session (global flag first)".to_string());
     }
