@@ -393,11 +393,16 @@ private val createdSessions = mutableListOf<String>()
         )
 
         // The driver re-bind (and the capture path's own lazy guard) must have re-established the
-        // isolated world on the re-selected tab: subsequent evaluations resolve through the isolated
-        // world where __pulsar_utils__ lives.
+        // isolated world on the re-selected tab.  `browser_evaluate` defaults to the page's own
+        // (main) world, where the runtime is deliberately invisible, so ask for the isolated world
+        // explicitly: that is where __pulsar_utils__ lives.
         val runtimeProbe = callTool(
             "browser_evaluate",
-            mapOf("sessionId" to sessionId, "expression" to "typeof window.__pulsar_utils__")
+            mapOf(
+                "sessionId" to sessionId,
+                "expression" to "typeof window.__pulsar_utils__",
+                "world" to "isolated"
+            )
         )
         assertNotError(runtimeProbe)
         assertEquals(
