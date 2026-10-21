@@ -1621,7 +1621,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     trapCheckFiles = fileArg,
                     timeoutSeconds = 600,
                 )
-                planText + "\n\n--- Verification ---\n" + report.format()
+                planText + "\n\n--- Verification ---\n" + (if (json) report.toJson() else report.format())
             }
 
             "tokenStats" -> {
