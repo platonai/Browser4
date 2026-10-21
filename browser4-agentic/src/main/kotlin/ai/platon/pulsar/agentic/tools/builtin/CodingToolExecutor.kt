@@ -1544,12 +1544,13 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 if (json) report.toJson() else report.format()
             }
             "devTask" -> {
-                validateArgs(args, allowed = setOf("task", "verify", "runTests", "execute", "module"), required = setOf("task"), functionName)
+                validateArgs(args, allowed = setOf("task", "verify", "runTests", "execute", "module", "json"), required = setOf("task"), functionName)
                 val task = paramString(args, "task", functionName)!!
                 val verify = paramBool(args, "verify", functionName, required = false, default = false) ?: false
                 val runTests = paramBool(args, "runTests", functionName, required = false, default = false) ?: false
                 val execute = paramBool(args, "execute", functionName, required = false, default = false) ?: false
                 val moduleOverride = paramString(args, "module", functionName, required = false, default = null)
+                val json = paramBool(args, "json", functionName, required = false, default = false) ?: false
 
                 // Resolve module mentions against the LIVE pom graph when possible.
                 val graph = runCatching { scanModuleGraph(fs) }.getOrNull()
