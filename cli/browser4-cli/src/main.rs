@@ -1029,6 +1029,34 @@ fn reconnect_display_mode_mismatch(
     }
 }
 
+/// The display flag a command's params asked for, as `(headed, flag spelling)`.
+///
+/// `--display-mode` outranks `--headed`/`--headless` because it is the
+/// authoritative capability (see
+/// [build_open_session_capabilities_with_test_mode]); the warning that a
+/// reconnect ignores the flag must name the flag the user actually typed.
+/// `None` means no display flag was passed at all.
+fn requested_display_flag(tool_params: &Value) -> Option<(bool, String)> {
+    let display_mode = tool_params
+        .get("displayMode")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty());
+    if let Some(mode) = display_mode {
+        return Some((
+            display_mode_is_headed(mode),
+            format!("--display-mode={mode}"),
+        ));
+    }
+    tool_params
+        .get("headed")
+        .and_then(Value::as_bool)
+        .map(|headed| {
+            let flag = if headed { "--headed" } else { "--headless" };
+            (headed, flag.to_string())
+        })
+}
+
 /// Format the "Session opened" message.
 /// Named sessions show both the alias and the UUID so the user can track either.
 fn format_session_opened_message(session_name: Option<&str>, session_id: &str) -> String {
@@ -1158,9 +1186,32 @@ fn build_open_session_capabilities_with_test_mode(
         caps["profileMode"] = pm.clone();
     }
 
-    // Default to headless when no explicit headed/headless preference is given.
-    let headed = tool_params.get("headed").cloned().unwrap_or(json!(false));
+    // `--display-mode` is the authoritative display choice: it is the backend's
+    // own `displayMode` capability (which `PulsarSettings.parseDisplayMode`
+    // gives priority over `headed`), and it implies the headed flag so the
+    // persisted state and the reconnect warning keep tracking what was asked
+    // for.  Without it, `--headed`/`--headless` decide and the default is
+    // headless.
+    let requested_display_mode = tool_params
+        .get("displayMode")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let headed = match requested_display_mode {
+        Some(mode) => json!(display_mode_is_headed(mode)),
+        None => tool_params.get("headed").cloned().unwrap_or(json!(false)),
+    };
+    if let Some(mode) = requested_display_mode {
+        caps["displayMode"] = json!(mode.to_ascii_uppercase());
+    }
     caps["headed"] = headed;
+
+    // Tab cap of the session's browser context.  `PulsarSettings` reads it back
+    // with `toIntOrNull()`, so an unusable value would be dropped silently —
+    // `validate_command_semantics` rejects it up front instead.
+    if let Some(max_open_tabs) = tool_params.get("maxOpenTabs") {
+        caps["maxOpenTabs"] = max_open_tabs.clone();
+    }
 
     let persistent = tool_params
         .get("persistent")
@@ -1554,20 +1605,20 @@ async fn get_or_create_navigation_session(
 
     // When reconnecting to an existing session, inform the user what page is active
     if reused_existing_session {
-        // A `headed` key in the params means the user passed --headless/--headed
-        // explicitly, but the display mode was fixed when the session was
-        // created — surface that the flag is being ignored ONLY when the
-        // requested mode differs from the active session's. Re-running
+        // A `headed`/`displayMode` key in the params means the user passed a
+        // display flag explicitly, but the display mode was fixed when the
+        // session was created — surface that the flag is being ignored ONLY when
+        // the requested mode differs from the active session's. Re-running
         // `open --headed` against an already-headed session is a no-op that
         // must stay silent; an unknown active mode (older state file) keeps
         // the conservative warning rather than hiding a dropped preference.
-        let requested_headed = tool_params.get("headed").and_then(Value::as_bool);
-        if reconnect_display_mode_mismatch(requested_headed, state.display_mode.as_deref()) {
-            let flag = if requested_headed == Some(true) { "--headed" } else { "--headless" };
-            eprintln!(
-                "browser4-cli: warning: {flag} ignored: reconnecting to existing session \
-                 (close it first or use `open --fresh` to start a new one)"
-            );
+        if let Some((requested_headed, flag)) = requested_display_flag(&tool_params) {
+            if reconnect_display_mode_mismatch(Some(requested_headed), state.display_mode.as_deref()) {
+                eprintln!(
+                    "browser4-cli: warning: {flag} ignored: reconnecting to existing session \
+                     (close it first or use `open --fresh` to start a new one)"
+                );
+            }
         }
         if let Ok(url_result) = call_tool(
             client,
@@ -2782,9 +2833,15 @@ async fn handle_open(
                 // `browser_window_state` is session-scoped.  It runs after the
                 // navigation because the browser is launched lazily — before
                 // that the honest answer is UNKNOWN.
-                let headed = tool_params
-                    .get("headed")
-                    .and_then(|v| v.as_bool())
+                //
+                // `--display-mode GUI|SUPERVISED` requests a window just as
+                // `--headed` does, so it must trigger the same verification
+                // (`requested_display_flag` resolves both spellings, and names
+                // the one the user typed for the warning below).
+                let requested_display = requested_display_flag(tool_params);
+                let headed = requested_display
+                    .as_ref()
+                    .map(|(headed, _)| *headed)
                     .unwrap_or(false);
                 // Skip the diagnosis entirely on RECONNECT: the display mode is
                 // fixed at session creation and the flag was already ignored
@@ -2792,6 +2849,10 @@ async fn handle_open(
                 // request against the existing session would cry "display-mode
                 // bug" for expected behavior.
                 if headed && !reused_existing_session {
+                    let requested_flag = requested_display
+                        .as_ref()
+                        .map(|(_, flag)| flag.as_str())
+                        .unwrap_or("--headed");
                     // The window can appear a moment after navigation settles —
                     // brief retries avoid warning on a slow cold start.
                     let mut probe = probe_window_state(client, base_url, &session_id).await;
@@ -2814,7 +2875,7 @@ async fn handle_open(
                         // probe could not tell, so it stays silent.
                         if probe.visibility == "HIDDEN" {
                             eprintln!(
-                                "⚠  No visible window for this --headed session ({}; source: {}).",
+                                "⚠  No visible window for this {requested_flag} session ({}; source: {}).",
                                 if probe.reason.is_empty() {
                                     "the backend reported HIDDEN"
                                 } else {
@@ -2825,7 +2886,7 @@ async fn handle_open(
                             eprintln!(
                                 "   The browser is functional (navigation succeeded) — close it with 'close'"
                             );
-                            eprintln!("   and retry 'open --headed' once.");
+                            eprintln!("   and retry 'open {requested_flag}' once.");
                         }
                     }
                 }
@@ -28424,6 +28485,98 @@ fn validate_command_semantics(
             }
         }
     }
+    if command == "click" {
+        // `click --count` drives CDP `clickCount`, so the value has to be a
+        // whole number of clicks. The backend's `paramInt` rejects garbage too,
+        // but only after a session exists and the call has crossed the wire:
+        // name the bad value here, before anything is dispatched.
+        if let Some(raw) = parsed.get("count") {
+            match raw {
+                Value::String(value) => match value.trim().parse::<i64>() {
+                    Ok(count) if count >= 1 => {}
+                    Ok(count) => {
+                        return Err(format!(
+                            "invalid --count {count} for click: the click count must be at least 1"
+                        ))
+                    }
+                    Err(_) => {
+                        return Err(format!(
+                            "invalid --count '{value}' for click: expected a whole number of clicks (e.g. --count=3)"
+                        ))
+                    }
+                },
+                // A valueless `--count` parses as `true`; no other JSON shape
+                // can be a click count either.
+                _ => {
+                    return Err(
+                        "invalid --count for click: expected a whole number of clicks (e.g. --count=3)"
+                            .to_string(),
+                    )
+                }
+            }
+        }
+        // The driver's click overloads take a repeat count or a modifier, never
+        // both; combining them reached the backend and came back as a generic
+        // "click requires 'selector' plus optionally …".
+        if parsed.contains_key("count") && parsed.contains_key("modifiers") {
+            return Err(
+                "click cannot combine --count with --modifiers: a repeated click repeats one \
+                 button press, so pass one of them (use keydown/keyup to hold a key across \
+                 separate clicks)"
+                    .to_string(),
+            );
+        }
+    }
+    if command == "open" {
+        // `--display-mode` is the backend's own display axis; it replaces the
+        // `--headed`/`--headless` boolean rather than layering on it, and the
+        // mode is fixed when the session is created — so a value the backend
+        // would silently drop must fail here instead.
+        if let Some(raw) = parsed.get("display-mode") {
+            let mode = match raw {
+                Value::String(value) => value.trim().to_ascii_uppercase(),
+                _ => {
+                    return Err(
+                        "invalid --display-mode for open: expected GUI, HEADLESS, or SUPERVISED"
+                            .to_string(),
+                    )
+                }
+            };
+            if !matches!(mode.as_str(), "GUI" | "HEADLESS" | "SUPERVISED") {
+                return Err(format!(
+                    "invalid --display-mode '{mode}' for open. Valid modes: GUI, HEADLESS, SUPERVISED"
+                ));
+            }
+            let conflicting = if parsed.contains_key("headed") {
+                Some("--headed")
+            } else if parsed.contains_key("headless") {
+                Some("--headless")
+            } else {
+                None
+            };
+            if let Some(flag) = conflicting {
+                return Err(format!(
+                    "open cannot combine --display-mode={mode} with {flag}: --display-mode already \
+                     carries the display choice, so pass only one of them"
+                ));
+            }
+        }
+        // `PulsarSettings` reads `maxOpenTabs` with `toIntOrNull()`, so a bad
+        // value would be dropped silently instead of bounding the tab count.
+        if let Some(raw) = parsed.get("max-open-tabs") {
+            let valid = match raw {
+                Value::String(value) => matches!(value.trim().parse::<u32>(), Ok(tabs) if tabs >= 1),
+                _ => false,
+            };
+            if !valid {
+                return Err(format!(
+                    "invalid --max-open-tabs '{}' for open: expected a positive whole number \
+                     (e.g. --max-open-tabs 4)",
+                    raw.as_str().unwrap_or_default()
+                ));
+            }
+        }
+    }
     if command == "type" {
         // --method needs a ref target: exec/verify need a read-back target and
         // auto/chars make no sense on the "currently focused element" path.
@@ -35232,6 +35385,50 @@ mod tests {
     }
 
     #[test]
+    fn build_open_session_capabilities_forwards_display_mode_capability() {
+        // `open --display-mode` is the same capability `swarm create` sets; the
+        // backend's PulsarSettings parses it (and prefers it over `headed`), so
+        // the CLI must not swallow it.
+        let caps = build_open_session_capabilities_with_test_mode(
+            &json!({ "displayMode": "headless" }),
+            false,
+        );
+
+        assert_eq!(caps["displayMode"], json!("HEADLESS"));
+        // The headed flag mirrors the mode so the persisted state and the
+        // reconnect warning describe the session that was actually requested.
+        assert_eq!(caps["headed"], json!(false));
+    }
+
+    #[test]
+    fn build_open_session_capabilities_derives_headed_from_a_gui_display_mode() {
+        let caps = build_open_session_capabilities_with_test_mode(
+            &json!({ "displayMode": "GUI" }),
+            false,
+        );
+
+        assert_eq!(caps["displayMode"], json!("GUI"));
+        assert_eq!(caps["headed"], json!(true));
+    }
+
+    #[test]
+    fn build_open_session_capabilities_forwards_max_open_tabs() {
+        let caps = build_open_session_capabilities_with_test_mode(
+            &json!({ "maxOpenTabs": "4" }),
+            false,
+        );
+
+        assert_eq!(caps["maxOpenTabs"], json!("4"));
+    }
+
+    #[test]
+    fn build_open_session_capabilities_omits_max_open_tabs_when_not_requested() {
+        let caps = build_open_session_capabilities_with_test_mode(&json!({}), false);
+
+        assert!(caps.get("maxOpenTabs").is_none());
+    }
+
+    #[test]
     fn build_open_session_request_defaults_to_default_session_id() {
         let request = build_open_session_request(None, None);
 
@@ -36036,6 +36233,127 @@ mod tests {
         assert!(validate_command_semantics("har-start", &empty).is_ok());
         // Other commands are unaffected.
         assert!(validate_command_semantics("network-requests", &empty).is_ok());
+    }
+
+    #[test]
+    fn validate_click_count_accepts_positive_whole_numbers() {
+        for valid in ["1", "3", " 2 "] {
+            let mut parsed = HashMap::new();
+            parsed.insert("ref".to_string(), json!("#click-count-target"));
+            parsed.insert("count".to_string(), json!(valid));
+            assert!(
+                validate_command_semantics("click", &parsed).is_ok(),
+                "count={valid} should be accepted"
+            );
+        }
+        // `--count` also works with an explicit button (a triple right click).
+        let mut parsed = HashMap::new();
+        parsed.insert("ref".to_string(), json!("#click-count-target"));
+        parsed.insert("count".to_string(), json!("3"));
+        parsed.insert("button".to_string(), json!("right"));
+        assert!(validate_command_semantics("click", &parsed).is_ok());
+    }
+
+    #[test]
+    fn validate_click_count_rejects_non_positive_and_non_numeric_values() {
+        for (invalid, expected) in [
+            ("0", "at least 1"),
+            ("-2", "at least 1"),
+            ("abc", "whole number"),
+            ("3.5", "whole number"),
+        ] {
+            let mut parsed = HashMap::new();
+            parsed.insert("ref".to_string(), json!("#click-count-target"));
+            parsed.insert("count".to_string(), json!(invalid));
+            let err = validate_command_semantics("click", &parsed).unwrap_err();
+            assert!(
+                err.contains(expected),
+                "count={invalid} should be rejected with '{expected}', got: {err}"
+            );
+        }
+
+        // A valueless `--count` parses as `true`; that is not a click count.
+        let mut parsed = HashMap::new();
+        parsed.insert("ref".to_string(), json!("#click-count-target"));
+        parsed.insert("count".to_string(), json!(true));
+        let err = validate_command_semantics("click", &parsed).unwrap_err();
+        assert!(err.contains("invalid --count"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_click_rejects_count_combined_with_modifiers() {
+        // The driver's click overloads take a repeat count OR a modifier.
+        let mut parsed = HashMap::new();
+        parsed.insert("ref".to_string(), json!("#click-count-target"));
+        parsed.insert("count".to_string(), json!("3"));
+        parsed.insert("modifiers".to_string(), json!("Shift"));
+        let err = validate_command_semantics("click", &parsed).unwrap_err();
+        assert!(err.contains("cannot combine --count with --modifiers"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_open_display_mode_accepts_the_backend_modes() {
+        for valid in ["GUI", "headless", " Supervised "] {
+            let mut parsed = HashMap::new();
+            parsed.insert("display-mode".to_string(), json!(valid));
+            assert!(
+                validate_command_semantics("open", &parsed).is_ok(),
+                "display-mode={valid} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_open_display_mode_rejects_unknown_modes() {
+        let mut parsed = HashMap::new();
+        parsed.insert("display-mode".to_string(), json!("WINDOWED"));
+        let err = validate_command_semantics("open", &parsed).unwrap_err();
+        assert!(err.contains("WINDOWED"), "got: {err}");
+        assert!(err.contains("GUI, HEADLESS, SUPERVISED"), "got: {err}");
+
+        // A valueless `--display-mode` parses as `true`, which is not a mode.
+        let mut parsed = HashMap::new();
+        parsed.insert("display-mode".to_string(), json!(true));
+        let err = validate_command_semantics("open", &parsed).unwrap_err();
+        assert!(err.contains("invalid --display-mode"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_open_rejects_display_mode_combined_with_headed_flags() {
+        for flag in ["headed", "headless"] {
+            let mut parsed = HashMap::new();
+            parsed.insert("display-mode".to_string(), json!("HEADLESS"));
+            parsed.insert(flag.to_string(), json!(true));
+            let err = validate_command_semantics("open", &parsed).unwrap_err();
+            assert!(
+                err.contains(&format!("--{flag}")),
+                "the error must name --{flag}: {err}"
+            );
+            assert!(err.contains("pass only one of them"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn validate_open_max_open_tabs_requires_a_positive_whole_number() {
+        let mut parsed = HashMap::new();
+        parsed.insert("max-open-tabs".to_string(), json!("4"));
+        assert!(validate_command_semantics("open", &parsed).is_ok());
+
+        for invalid in ["0", "-1", "four", "2.5"] {
+            let mut parsed = HashMap::new();
+            parsed.insert("max-open-tabs".to_string(), json!(invalid));
+            let err = validate_command_semantics("open", &parsed).unwrap_err();
+            assert!(
+                err.contains("positive whole number"),
+                "max-open-tabs={invalid} should be rejected, got: {err}"
+            );
+        }
+
+        // Valueless flag.
+        let mut parsed = HashMap::new();
+        parsed.insert("max-open-tabs".to_string(), json!(true));
+        let err = validate_command_semantics("open", &parsed).unwrap_err();
+        assert!(err.contains("invalid --max-open-tabs"), "got: {err}");
     }
 
     // -----------------------------------------------------------------------
@@ -38726,6 +39044,46 @@ linkGroups:
     }
 
     // --- display-mode label normalization / session row Display column ---
+
+    #[test]
+    fn requested_display_flag_prefers_display_mode_over_the_headed_boolean() {
+        // `open --display-mode=GUI` never sets `headed` itself, yet the reconnect
+        // warning must still fire (and name the flag the user typed) when the
+        // active session runs the other mode.
+        assert_eq!(
+            requested_display_flag(&json!({ "displayMode": "GUI" })),
+            Some((true, "--display-mode=GUI".to_string()))
+        );
+        assert_eq!(
+            requested_display_flag(&json!({ "displayMode": "headless" })),
+            Some((false, "--display-mode=headless".to_string()))
+        );
+        // SUPERVISED renders windowed, so it counts as headed for the warning.
+        assert_eq!(
+            requested_display_flag(&json!({ "displayMode": "SUPERVISED" })),
+            Some((true, "--display-mode=SUPERVISED".to_string()))
+        );
+    }
+
+    #[test]
+    fn requested_display_flag_falls_back_to_the_headed_boolean() {
+        assert_eq!(
+            requested_display_flag(&json!({ "headed": true })),
+            Some((true, "--headed".to_string()))
+        );
+        assert_eq!(
+            requested_display_flag(&json!({ "headed": false })),
+            Some((false, "--headless".to_string()))
+        );
+    }
+
+    #[test]
+    fn requested_display_flag_is_none_without_a_display_flag() {
+        // No flag at all: the reconnect path must stay silent.
+        assert_eq!(requested_display_flag(&json!({})), None);
+        assert_eq!(requested_display_flag(&json!({ "displayMode": "  " })), None);
+        assert_eq!(requested_display_flag(&json!({ "displayMode": 3 })), None);
+    }
 
     #[test]
     fn normalize_display_mode_label_maps_known_values() {
