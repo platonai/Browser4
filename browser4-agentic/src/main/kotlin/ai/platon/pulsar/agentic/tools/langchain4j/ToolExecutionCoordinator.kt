@@ -41,7 +41,7 @@ class ToolExecutionCoordinator(
             }
             // Record inner-loop executions for the finish-report guard (they
             // don't create outer AgentStates).
-            toolManager.notifyToolExecuted(tc.domain, tc.method)
+            toolManager.notifyToolExecuted(tc.domain, tc.method, result.evaluate.value?.toString())
             // Bounded ToolOutcome envelope instead of raw output — native
             // tool-calling results feed back into the conversation, so
             // unbounded Maven/read outputs blow up the context (observed

@@ -5714,13 +5714,16 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "type", description: "Validation type: 'plugin' | 'skill' | 'js' | 'script' | 'repo-consistency'", optional: false },
                 ArgDef { name: "path", description: "Path to plugin dir or file (not needed for repo-consistency)", optional: true },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "json", description: "Return the validation result as machine-readable JSON", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_validate".to_string(),
             tool_params_fn: |args| {
                 let vtype = get_str(args, "type").unwrap_or_default();
                 let mut p = json!({ "type": vtype });
                 if let Some(path) = get_opt_str(args, "path") { p["path"] = json!(path); }
+                if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
                 p
             },
         },
@@ -5737,6 +5740,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "goals", description: "Maven goals (default: 'compile')", is_bool: false, short: None },
                 OptionDef { name: "skip-tests", description: "Skip tests (default: true)", is_bool: true, short: None },
                 OptionDef { name: "timeout", description: "Timeout in seconds (default: 300)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Return the build result as machine-readable JSON", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_mvnBuild".to_string(),
@@ -5748,6 +5752,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(t) = get_opt_str(args, "timeout") {
                     if let Ok(n) = t.parse::<i64>() { p["timeoutSeconds"] = json!(n); }
                 }
+                if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
                 p
             },
         },
@@ -5791,6 +5796,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "verify", description: "Run validation after task", is_bool: true, short: None },
                 OptionDef { name: "run-tests", description: "Run tests after task", is_bool: true, short: None },
                 OptionDef { name: "execute", description: "Execute the generated dev-task plan steps (writes files and runs builds/tests)", is_bool: true, short: None },
+                OptionDef { name: "json", description: "Return the verification verdict as machine-readable JSON", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_devTask".to_string(),
@@ -5800,6 +5806,58 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if get_bool(args, "verify").unwrap_or(false) { p["verify"] = json!(true); }
                 if get_bool(args, "run-tests").unwrap_or(false) { p["runTests"] = json!(true); }
                 if get_bool(args, "execute").unwrap_or(false) { p["execute"] = json!(true); }
+                if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-resume",
+            description: "Resume a crashed or failed `code devtask --execute` run from its checkpoint \
+                          (completed steps are skipped). The checkpoint id is printed by every execute run.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "task_id", description: "Checkpoint id printed by the interrupted run (e.g. dt-20261021190300123)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded, // needs a real workspace + backend
+            tool_name_fn: |_| "coding_resumeDevTask".to_string(),
+            tool_params_fn: |args| {
+                let task_id = get_str(args, "task_id").unwrap_or_default();
+                json!({ "taskId": task_id })
+            },
+        },
+        CommandDef {
+            name: "code-verify",
+            description: "Run the deterministic verification gate for a dev task and return a structured verdict \
+                          (compile / test / repo-consistency / trapCheck). Exits non-zero when the verdict fails.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "module", description: "Maven module (or 'browser4-cli' for the Rust crate)", is_bool: false, short: None },
+                OptionDef { name: "checks", description: "Comma-separated subset: compile,test,repo-consistency,trapCheck", is_bool: false, short: None },
+                OptionDef { name: "run-tests", description: "Also run the module's test suite", is_bool: true, short: None },
+                OptionDef { name: "test", description: "Test-class filter (-Dtest=...)", is_bool: false, short: None },
+                OptionDef { name: "file", description: "Browser-driver file to trap-check (repeatable, comma-separated)", is_bool: false, short: None },
+                OptionDef { name: "timeout", description: "Per-check timeout in seconds (default: 300)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Print the verdict as pure JSON", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded, // needs a real backend (compile/test)
+            tool_name_fn: |_| "coding_verify".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(module) = get_opt_str(args, "module") { p["module"] = json!(module); }
+                if let Some(checks) = get_opt_str(args, "checks") { p["checks"] = json!(checks); }
+                if get_bool(args, "run-tests").unwrap_or(false) { p["runTests"] = json!(true); }
+                if let Some(test) = get_opt_str(args, "test") { p["testClasses"] = json!(test); }
+                if let Some(file) = get_opt_str(args, "file") { p["files"] = json!(file); }
+                if let Some(t) = get_opt_str(args, "timeout") {
+                    if let Ok(n) = t.parse::<i64>() { p["timeoutSeconds"] = json!(n); }
+                }
+                if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
                 p
             },
         },

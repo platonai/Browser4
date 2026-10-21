@@ -87,14 +87,33 @@ open class BasicBrowserAgent constructor(
     val innerToolExecutionCount: Int get() = innerToolExecutions.size
     val innerToolExecutionNames: Set<String> get() = innerToolExecutions.toSet()
 
+    /**
+     * The `VERDICT_JSON` of the last `coding.verify` executed inside the native
+     * tool loop.
+     *
+     * The completion report may be produced in the SAME turn as the verify call,
+     * so the per-turn verdict recorder ([RobustBrowserAgent.lastVerificationVerdict]
+     * equivalent) has not seen it yet. Capturing it here, at execution time,
+     * gives the finish gate the actual verdict to compare a cited one against.
+     */
+    @Volatile
+    var lastInnerVerdictJson: String? = null
+        private set
+
     /** Record one inner-loop tool execution (called from [AgentToolManager.notifyToolExecuted]). */
-    fun recordInnerToolExecution(domain: String, method: String) {
+    fun recordInnerToolExecution(domain: String, method: String, resultText: String? = null) {
         innerToolExecutions.add("$domain.$method")
+        if (resultText == null) return
+        if (method != "verify" && !resultText.contains("VERDICT_JSON:")) return
+        ai.platon.pulsar.coding.VerificationReport.parseFromText(resultText)?.let {
+            lastInnerVerdictJson = it.toJson()
+        }
     }
 
     /** Reset the inner execution registry; invoked at the start of each run. */
     fun resetInnerToolExecutions() {
         innerToolExecutions.clear()
+        lastInnerVerdictJson = null
     }
 
     val activeDriver get() = session.getOrCreateBoundDriver()

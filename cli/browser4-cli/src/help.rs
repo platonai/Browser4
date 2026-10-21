@@ -136,6 +136,8 @@ pub fn public_command_name(name: &str) -> &str {
         "code-mvn" => "code mvn",
         "code-run" => "code run",
         "code-devtask" => "code devtask",
+        "code-verify" => "code verify",
+        "code-resume" => "code resume",
         "code-impact" => "code impact",
         "code-workspace" => "code workspace",
         "code-javap" => "code javap",

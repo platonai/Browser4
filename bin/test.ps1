@@ -555,6 +555,8 @@ function Print-Usage {
     Write-Host "  skills      Run skills-focused agentic tests + skills/ document conformance"
     Write-Host "  mcp         Run MCP-focused agentic tests"
     Write-Host "  mcp-contract  Contract gate: tool matrix, docs, lint, validators (agentic + rest)"
+    Write-Host "  verify      Run the code devtask plan-quality evaluation (needs the dev backend)"
+    Write-Host "              forwards -Fast (default), -Strict, -NoBuild, -Json, -Probe=<id,...>"
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
     Write-Host "              (+ skills/ document conformance, methodology M1-M8)"
     Write-Host "  rws         Run real-world scenario tests (requires a mode)"
@@ -643,7 +645,7 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, ps, rws, resume, session."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, verify, ps, rws, resume, session."
     exit 1
 }
 
@@ -4788,6 +4790,60 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
     }
 }
 
+# ---------------------------------------------------------------------------
+# verify — the verification-authority gate (plan P3.3)
+# ---------------------------------------------------------------------------
+#
+# Runs the `code devtask` plan-quality evaluation (bin/eval-devtask.ps1), which
+# is the end-to-end contract of the verification layer: plan shape, signal
+# binding, the CLI argument contract, `--verify` semantics, determinism and the
+# read-only guarantee. It needs a live backend (the dev wrapper builds/starts
+# it) and it measures latency, so it runs alone.
+function Invoke-VerifyGate([string[]]$additionalArgs) {
+    $evalScript = Join-Path $repoRoot 'bin' 'eval-devtask.ps1'
+    Write-CommandBanner -Label 'Running code devtask plan-quality evaluation...'
+
+    if (-not (Test-Path -LiteralPath $evalScript -PathType Leaf)) {
+        Write-Error "Evaluation script not found at $evalScript"
+        exit 1
+    }
+
+    # Forward the evaluation harness's own switches; default to the fast run so
+    # the local loop stays ~1 minute.
+    $evalArgs = @()
+    foreach ($arg in $additionalArgs) {
+        switch -Regex ($arg) {
+            '^-Fast$'   { $evalArgs += '-Fast' }
+            '^-Strict$' { $evalArgs += '-Strict' }
+            '^-NoBuild$' { $evalArgs += '-NoBuild' }
+            '^-Json$'   { $evalArgs += '-Json' }
+            '^-Probe=(.+)$' { $evalArgs += @('-Probe', $Matches[1]) }
+            default {
+                Write-Error "Unknown argument '$arg' for the verify scope. Supported: -Fast, -Strict, -NoBuild, -Json, -Probe=<id,...>"
+                exit 1
+            }
+        }
+    }
+    if ($evalArgs.Count -eq 0) { $evalArgs = @('-Fast') }
+
+    if ($script:Show) {
+        Write-CommandBanner -Label '[SHOW] Would execute:' -Subtitle "  pwsh $evalScript $($evalArgs -join ' ')"
+        return
+    }
+    if ($script:DryRun) {
+        Write-CommandBanner -Label '[DRY RUN] Executing:' -Subtitle "  pwsh $evalScript $($evalArgs -join ' ')"
+        return
+    }
+
+    & pwsh -NoProfile -File $evalScript @evalArgs
+    $evalExit = $LASTEXITCODE
+    if ($evalExit -ne 0) {
+        Write-CommandBanner -Label "Evaluation failed (exit $evalExit)" -Icon '[FAIL]'
+        exit $evalExit
+    }
+    Write-CommandBanner -Label 'Evaluation passed' -Icon '[PASS]'
+}
+
 # ===================================================================
 # Argument parsing
 # ===================================================================
@@ -4802,6 +4858,7 @@ $testTypeMap = @{
     'skills'        = 'maven'
     'mcp'           = 'maven'
     'mcp-contract'  = 'maven'
+    'verify'        = 'verify'
     'main'          = 'maven-expand'
     'cli'           = 'cli'
     'browser4-cli'  = 'cli'
@@ -4964,6 +5021,7 @@ $cliTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'cli' })
 $rwsTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'rws' })
 $psTests     = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'ps' })
 $launchTargets = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'server' })
+$verifyTests = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'verify' })
 
 # Expand 'main' into its constituent test types (only for maven bucket)
 $expandedMaven = @()
@@ -4980,9 +5038,10 @@ $cliTests = $cliTests | Select-Object -Unique
 $rwsTests = $rwsTests | Select-Object -Unique
 $psTests  = $psTests | Select-Object -Unique
 $launchTargets = $launchTargets | Select-Object -Unique
+$verifyTests = $verifyTests | Select-Object -Unique
 
 # Validate: server must be run by itself
-if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($psTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
+if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($psTests.Count -gt 0) -or ($verifyTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
     Write-Error "mock-site (or server) must be run by itself. Pass any Maven properties after it, for example: test.ps1 mock-site -Dmock.site.port=18080"
     exit 1
 }
@@ -5027,6 +5086,10 @@ if ($psTests.Count -gt 0) {
     $psIsSoleTarget = ($mavenTests.Count -eq 0 -and $cliTests.Count -eq 0 -and
                        $rwsTests.Count -eq 0 -and $launchTargets.Count -eq 0)
     Invoke-PowerShellTests -additionalArgs $additionalArgs -StrictArgs:$psIsSoleTarget
+}
+
+if ($verifyTests.Count -gt 0) {
+    Invoke-VerifyGate -additionalArgs $additionalArgs
 }
 
 if ($launchTargets.Count -gt 0) {

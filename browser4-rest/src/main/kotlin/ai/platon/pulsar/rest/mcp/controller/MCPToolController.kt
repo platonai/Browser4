@@ -459,6 +459,8 @@ class MCPToolController(
             workspaceRoot = CodingWorkspace.workspaceRoot,
             allowExternalAccess = CodingWorkspace.allowExternalAccess,
             allowDestructive = CodingWorkspace.allowDestructive,
+            // P2.3: snapshots survive a backend restart (revert/diff after a crash).
+            persistSnapshots = true,
         )
     }
     private val standaloneCodingTarget: CodingToolExecutor.Target by lazy {
@@ -713,13 +715,28 @@ class MCPToolController(
      * The CLI fetches this endpoint at startup to render declared plugin
      * commands as first-class named commands (argument parsing, help) with no
      * CLI code change — the plugin manifest/spec is the single source of truth.
+     *
+     * @param includeExamples also return built-in specs that declare usage
+     *   examples (`ToolSpec.examples`) but no [ToolSpec.cliName]. The CLI's
+     *   `--help --examples` path asks for them, so a built-in command can source
+     *   its examples from the tool spec instead of a hand-written list. Default
+     *   false keeps the startup discovery payload (plugin-declared commands only)
+     *   unchanged.
      */
     @GetMapping("/tools/specs")
-    fun listCliToolSpecs(): ResponseEntity<Any> {
-        val specs = CustomToolRegistry.instance.getAllExecutors()
-            .flatMap { executor -> executor.getToolSpecs().values }
-            .filter { !it.cliName.isNullOrBlank() }
-            .sortedBy { it.cliName }
+    fun listCliToolSpecs(
+        @RequestParam(defaultValue = "false") includeExamples: Boolean,
+    ): ResponseEntity<Any> {
+        // The registry holds plugin/mounted executors; the builtin `coding`
+        // domain is served by the standalone executor, and its specs are what
+        // `code devtask`/`code verify` example lookups resolve against.
+        val specs = (
+            CustomToolRegistry.instance.getAllExecutors().flatMap { executor -> executor.getToolSpecs().values } +
+                standaloneCodingExecutor.getToolSpecs().values
+            )
+            .distinctBy { "${it.domain}.${it.method}" }
+            .filter { !it.cliName.isNullOrBlank() || (includeExamples && it.examples.isNotEmpty()) }
+            .sortedWith(compareBy({ it.cliName ?: "" }, { it.domain }, { it.method }))
         return ResponseEntity.ok(mapOf("tools" to specs))
     }
 

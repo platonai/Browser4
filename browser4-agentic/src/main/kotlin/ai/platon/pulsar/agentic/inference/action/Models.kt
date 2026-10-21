@@ -55,13 +55,22 @@ data class ModelObserveResponseComplete(
     val filesChanged: List<String>? = null,
 
     /**
+     * Files DELETED during the task. Kept separate from [filesChanged] so the
+     * completion gate can check the claim against the run's recorded deletions:
+     * a deleted file is absent from git's changed-file list, so "delete" claims
+     * were previously unverifiable (and an untracked file deletion was invisible
+     * altogether).
+     */
+    val deletedFiles: List<String>? = null,
+
+    /**
      * Open problems the task did not resolve.
      */
     val problems: List<String>? = null,
 )
 
 const val OBSERVE_RESPONSE_COMPLETE_SCHEMA = """
-{"taskComplete":bool,"success":bool,"errorCause":string?,"summary":string,"keyFindings":[string],"nextSuggestions":[string],"gates":[{"name":string,"ran":bool,"exitCode":int?,"ok":bool?,"detail":string?}],"filesChanged":[string],"problems":[string]}
+{"taskComplete":bool,"success":bool,"errorCause":string?,"summary":string,"keyFindings":[string],"nextSuggestions":[string],"gates":[{"name":string,"ran":bool,"exitCode":int?,"ok":bool?,"detail":string?}],"filesChanged":[string],"deletedFiles":[string],"problems":[string]}
 """
 
 /**

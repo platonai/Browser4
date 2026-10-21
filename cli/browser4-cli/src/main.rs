@@ -544,6 +544,8 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "code-mvn",
         "code-run",
         "code-devtask",
+        "code-verify",
+        "code-resume",
         "code-impact",
         "code-workspace",
         "code-javap",
@@ -23150,12 +23152,131 @@ async fn handle_code_command(
 
     // --- Call the server directly (no session required) ---
     let result = http::call_tool(client, base_url, tool_name, tool_params.clone()).await?;
+
+    // In --json mode `cli_println!` is suppressed, so expose the tool reply as
+    // an envelope field instead — otherwise `--json` would emit an empty
+    // `output` object for every code command.
+    if json_active() {
+        json_field("result", json_text_or_value(&result));
+    }
+
     if result.trim().is_empty() {
         cli_println!("(no output)");
     } else {
         cli_println!("{}", result);
     }
+
+    // --- Verdict → exit code (plan P0.3) ---
+    // A build/validation/verification that FAILED must not exit 0, otherwise a
+    // CI gate reading only the exit code reports green on a red build (eval
+    // K5). The check is conservative: output without a machine-checkable
+    // verdict (e.g. a mock server) keeps the historical exit-0 behaviour.
+    if let Some(reason) = code_command_failure(command, &result) {
+        return Err(format!("{command} failed — {reason}"));
+    }
     Ok(())
+}
+
+/// Machine-checkable failure signal of a `code ...` command, if any.
+///
+/// Never guesses: each branch keys off text this codebase itself generates
+/// (`mvn -pl ... → exit N`, the `VERDICT_JSON:` line, `✗ Validation failed`),
+/// so an arbitrary tool reply cannot accidentally turn into a failure.
+fn code_command_failure(command: &str, output: &str) -> Option<String> {
+    match command {
+        "code-verify" | "code-devtask" => verification_failure(output),
+        "code-mvn" => maven_failure(output),
+        "code-validate" => validation_failure(output),
+        _ => None,
+    }
+}
+
+/// Prefix of the machine-readable verdict line emitted by `coding.verify`.
+const VERDICT_JSON_PREFIX: &str = "VERDICT_JSON: ";
+
+fn verification_failure(output: &str) -> Option<String> {
+    // Human mode: the verdict is the last VERDICT_JSON line.
+    if let Some(line) = output
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with(VERDICT_JSON_PREFIX))
+    {
+        let json_text = line.trim_start().trim_start_matches(VERDICT_JSON_PREFIX);
+        if let Ok(verdict) = serde_json::from_str::<Value>(json_text) {
+            if verdict.get("passed").and_then(Value::as_bool) == Some(false) {
+                return Some(verdict_failure_reason(&verdict));
+            }
+        }
+    }
+    // `--json` mode: the tool reply IS the verdict object.
+    if let Ok(verdict) = serde_json::from_str::<Value>(output.trim()) {
+        if verdict.get("checks").is_some()
+            && verdict.get("passed").and_then(Value::as_bool) == Some(false)
+        {
+            return Some(verdict_failure_reason(&verdict));
+        }
+    }
+    // `code devtask --execute` stops at the first failing plan step.
+    if output.contains("Stopped at first failure.") {
+        return Some("dev-task plan execution stopped at the first failing step".to_string());
+    }
+    None
+}
+
+fn verdict_failure_reason(verdict: &Value) -> String {
+    verdict
+        .get("failureReason")
+        .and_then(Value::as_str)
+        .filter(|r| !r.is_empty())
+        .unwrap_or("verification verdict is not passed")
+        .to_string()
+}
+
+fn maven_failure(output: &str) -> Option<String> {
+    // Human mode: `mvn -pl <module> -am <goals> → exit <code>`.
+    for line in output.lines() {
+        if let Some(idx) = line.find("→ exit ") {
+            let digits: String = line[idx + "→ exit ".len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '-')
+                .collect();
+            if let Ok(code) = digits.parse::<i32>() {
+                if code != 0 {
+                    return Some(format!("maven build failed with exit {code}"));
+                }
+            }
+        }
+    }
+    // `--json` mode: {"exitCode": N, "timedOut": bool, ...}
+    if let Ok(build) = serde_json::from_str::<Value>(output.trim()) {
+        if build.get("timedOut").and_then(Value::as_bool) == Some(true) {
+            return Some("maven build timed out".to_string());
+        }
+        if let Some(code) = build.get("exitCode").and_then(Value::as_i64) {
+            if code != 0 {
+                return Some(format!("maven build failed with exit {code}"));
+            }
+        }
+    }
+    None
+}
+
+fn validation_failure(output: &str) -> Option<String> {
+    // Human mode: ValidationResult.format() marks failures with `✗ Validation failed`.
+    if output.contains("✗ Validation failed") {
+        return Some("validation failed".to_string());
+    }
+    // `--json` mode: {"valid": false, "errorCount": N, ...}
+    if let Ok(result) = serde_json::from_str::<Value>(output.trim()) {
+        if result.get("valid").and_then(Value::as_bool) == Some(false) {
+            let errors = result
+                .get("errorCount")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            return Some(format!("validation failed with {errors} error(s)"));
+        }
+    }
+    None
 }
 
 /// `profile-import` — import browser personal data via the
@@ -23933,7 +24054,31 @@ impl ToolSpecFetch {
 
 /// Fetch the tool specs from `GET /mcp/tools/specs` with an explicit budget.
 async fn probe_tool_specs_within(base_url: &str, budget: std::time::Duration) -> ToolSpecFetch {
-    let url = format!("{}/mcp/tools/specs", base_url.trim_end_matches('/'));
+    probe_tool_specs_at(base_url, budget, false).await
+}
+
+/// Same probe, also asking for built-in specs that declare usage examples
+/// (`?includeExamples=true`). The `--help --examples` path needs those: the
+/// default payload advertises plugin-declared CLI commands only, so a built-in
+/// command like `code devtask` had no examples to show (eval K7).
+async fn probe_tool_specs_with_examples_within(
+    base_url: &str,
+    budget: std::time::Duration,
+) -> ToolSpecFetch {
+    probe_tool_specs_at(base_url, budget, true).await
+}
+
+async fn probe_tool_specs_at(
+    base_url: &str,
+    budget: std::time::Duration,
+    include_examples: bool,
+) -> ToolSpecFetch {
+    let base = base_url.trim_end_matches('/');
+    let url = if include_examples {
+        format!("{base}/mcp/tools/specs?includeExamples=true")
+    } else {
+        format!("{base}/mcp/tools/specs")
+    };
     let Ok(client) = reqwest::Client::builder().timeout(budget).build() else {
         return ToolSpecFetch::Failed(format!("could not build an HTTP client for {url}"));
     };
@@ -24286,7 +24431,7 @@ fn no_tool_level_examples_reason() -> String {
 /// `Err` carries the reason as a phrase the caller drops into its own message,
 /// so both the one-line report and the built-in fallback can explain themselves.
 async fn build_tool_examples(base_url: &str, tool: &str) -> Result<String, String> {
-    let values = match probe_tool_specs_within(base_url, std::time::Duration::from_secs(2)).await {
+    let values = match probe_tool_specs_with_examples_within(base_url, std::time::Duration::from_secs(2)).await {
         // The request failed (unreachable, timeout, HTTP error, malformed body):
         // only here is "is the backend running?" the honest diagnosis.
         ToolSpecFetch::Failed(reason) => {
@@ -29042,6 +29187,8 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "code-mvn" => Some("code mvn"),
         "code-run" => Some("code run"),
         "code-devtask" => Some("code devtask"),
+        "code-verify" => Some("code verify"),
+        "code-resume" => Some("code resume"),
         "code-impact" => Some("code impact"),
         "code-workspace" => Some("code workspace"),
         "code-javap" => Some("code javap"),
@@ -30911,16 +31058,22 @@ async fn run(
         build_command_args(&raw_parsed, &arg_names, COMMAND_ARG_ALIASES).map_err(|e| e.to_string())?
     };
 
-    // Validate required positional arguments (fast-fail for malformed commands).
-    validate_required_args(cmd_def, &parsed)?;
-    validate_command_semantics(&command, &parsed)?;
     // Reject options the command does not declare: a misplaced or misspelled
     // flag used to be dropped silently (e.g. `htmlsnapshot get --bogus`, or
     // `--limit` on a single-element `get`, which then returned only the first
     // match as if all had been asked for).
+    //
+    // Runs BEFORE the required-positional check on purpose: an unknown option
+    // placed before the task text is parsed as `--opt <value>`, which swallows
+    // the task and surfaces as a confusing "Missing required argument" (eval K6).
+    // Naming the unknown option is the actionable diagnosis.
     args::validate_command_options(&command, &parsed).map_err(|message| {
         CliError(ExitCode::Usage, message)
     })?;
+
+    // Validate required positional arguments (fast-fail for malformed commands).
+    validate_required_args(cmd_def, &parsed)?;
+    validate_command_semantics(&command, &parsed)?;
 
     // Support --json after the command name (e.g. "tab-list --json").  When
     // --json appears before the command it is captured by parse_global_flags;
@@ -32557,6 +32710,8 @@ async fn run(
         | "code-stat" | "code-glob" | "code-grep" | "code-mkdir"
         | "code-diff" | "code-changes" | "code-shell" | "code-scaffold"
         | "code-validate" | "code-mvn" | "code-run" | "code-devtask"
+        | "code-verify"
+        | "code-resume"
         | "code-impact" | "code-workspace" | "code-javap" => {
             handle_code_command(
                 &client,

@@ -70,6 +70,8 @@ class AgentToolManager constructor(
         // workspace root and VCS directories regardless of this flag.
         allowExternalAccess = CodingWorkspace.allowExternalAccess,
         allowDestructive = CodingWorkspace.allowDestructive,
+        // P2.3: snapshots survive a backend restart (revert/diff after a crash).
+        persistSnapshots = true,
     )
     /** Composite target for the coding domain */
     val codingTarget: CodingToolExecutor.Target by lazy {
@@ -153,11 +155,11 @@ class AgentToolManager constructor(
      * to count inner-loop executions for the finish-report false-completion
      * guard (design §3.2).
      */
-    var toolExecutionRecorder: ((domain: String, method: String) -> Unit)? = null
+    var toolExecutionRecorder: ((domain: String, method: String, resultText: String?) -> Unit)? = null
 
     /** Notify the recorder (if wired) about one executed tool call. */
-    fun notifyToolExecuted(domain: String, method: String) {
-        toolExecutionRecorder?.invoke(domain, method)
+    fun notifyToolExecuted(domain: String, method: String, resultText: String? = null) {
+        toolExecutionRecorder?.invoke(domain, method, resultText)
     }
 
     /** Cancel all tracked CLI background jobs (agent close). */
@@ -166,6 +168,14 @@ class AgentToolManager constructor(
     }
 
     init {
+        // Self-development runs (coding mode in the CLI tool loop) execute
+        // repository-relative paths inside this agent's scratch workspace. Mirror
+        // the checkout's reactor there ONCE, before the first tool call, so
+        // Maven resolves modules and the agent never has to repair workspace
+        // topology itself (observed: an agent ran `mklink /J` for every module
+        // and deleted/re-created a junction mid-run).
+        provisionCodingWorkspaceMirror()
+
         // Register coding and b4 (browser4-cli) tool specs so they appear in the LLM prompt.
         // The ToolCallSpecificationRenderer merges these dynamically-registered
         // specs alongside the hardcoded ToolSpecification.TOOL_CALL_SPECIFICATION.
@@ -177,6 +187,28 @@ class AgentToolManager constructor(
             "b4",
             b4CliExecutor.getToolSpecs().values.toList()
         )
+    }
+
+    /**
+     * Link the checkout's reactor modules into this agent's scratch workspace
+     * when the agent runs in coding mode (self-development).
+     *
+     * A workspace that is already a checkout (the default coding root) and a
+     * workspace with no detectable source checkout are left untouched, so
+     * ordinary browser sessions pay nothing.
+     */
+    private fun provisionCodingWorkspaceMirror() {
+        if (!agent.codingMode) return
+        val root = workspaceRoot.toAbsolutePath().normalize()
+        if (root == ai.platon.pulsar.coding.CodingWorkspace.workspaceRoot.toAbsolutePath().normalize()) return
+        runCatching {
+            val report = ai.platon.pulsar.coding.WorkspaceMirror.ensure(root)
+            if (report.sourceRepo != null) {
+                logger.info("+ Coding workspace mirror: {}", report.summary())
+            }
+        }.onFailure { e ->
+            logger.warn("Could not provision the coding workspace mirror for {}: {}", root, e.message)
+        }
     }
 
     /**

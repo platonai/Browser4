@@ -5,12 +5,15 @@ package ai.platon.pulsar.coding
  *
  * `coding.devTask("<task description>")` turns a natural-language task into an
  * executable plan following the AGENTS.md development flow: locate the affected
- * code → impact analysis → compile check → smallest-scope test → CDP trap check
- * (browser-driver code) → repo-governance validation → commit guidance.
+ * code → impact analysis → implement (agent contract) → compile check →
+ * smallest-scope test → CDP trap check (browser-driver code) → repo-governance
+ * validation → deterministic verification.
  *
  * The planner is PURE (no I/O): it parses the task text for module mentions,
  * file paths, and tool references, then emits ordered [PlanStep]s the executor
- * can either render (verify=false) or execute (verify=true).
+ * can render or execute. Bare filenames are resolved through the
+ * [plan] `fileIndex` the caller builds from the live workspace — the planner
+ * never walks the tree itself.
  */
 object DevTaskPlanner {
 
@@ -34,6 +37,12 @@ object DevTaskPlanner {
         /** `browser4-plugins/<name>` mentions that are NOT in the known module list — new modules to scaffold. */
         val newPluginModules: List<String>,
         val steps: List<PlanStep>,
+        /**
+         * Human/machine acceptance checklist the plan must satisfy before the
+         * task counts as done (plan P1.2). Rendered as one `Acceptance: [...]`
+         * line so a supervisor and the agent read the same contract.
+         */
+        val acceptance: List<String> = emptyList(),
     )
 
     // Extension alternatives sorted longest-first so `json` wins over `js`; the
@@ -44,6 +53,9 @@ object DevTaskPlanner {
     // FooTest / FooTests (uppercase start; bare "Test" in prose does not match).
     private val TEST_CLASS_PATTERN = Regex("""\b([A-Z][A-Za-z0-9]*(?:Test|Tests))\b""")
 
+    /** Pseudo-tool of the "implement this, agent" contract step (never dispatched by the executor). */
+    const val IMPLEMENT_TOOL = "coding.implement"
+
     /**
      * Parse a task description into a dev plan.
      *
@@ -53,18 +65,49 @@ object DevTaskPlanner {
      *   to the static [ModuleMap.MODULES] snapshot; callers with workspace
      *   access should pass the LIVE module list from [ModuleGraph] so mentions
      *   resolve against the real pom topology.
+     * @param fileIndex bare filename → workspace-relative path, built by the
+     *   caller from the live workspace. A bare filename (`PulsarWebDriver.kt`)
+     *   is otherwise unresolvable from the repo root, which used to bind the
+     *   plan to no module at all (eval K1). Empty = leave bare names untouched.
      * @return the plan; [DevPlan.modules]/[DevPlan.files] are the signals found,
      *   [DevPlan.steps] the ordered execution plan
      */
-    fun plan(task: String, knownModules: List<String> = ModuleMap.MODULES): DevPlan {
+    fun plan(
+        task: String,
+        knownModules: List<String> = ModuleMap.MODULES,
+        fileIndex: Map<String, String> = emptyMap(),
+    ): DevPlan {
         val files = FILE_PATTERN.findAll(task).map { it.value.replace('\\', '/') }
+            .map { raw -> if (raw.contains('/')) raw else fileIndex[raw] ?: raw }
             .distinct().toList()
-        val modules = inferModules(task, files, knownModules)
         val newPluginModules = inferNewPluginModules(task, knownModules)
-        val driverFiles = files.filter { it.contains("/browser4-browser/") || it.endsWith("PulsarWebDriver.kt") }
+        // Explicit task mentions and file-derived modules are tracked separately:
+        // the build targets the deepest affected module (a driver file pulls in
+        // browser4-core/browser4-browser), while a named test class still binds
+        // to the module the task EXPLICITLY names (eval K1 must not move
+        // FillCursorTest out of browser4-rest).
+        val explicitModules = dropAncestorSignals(inferExplicitModules(task, knownModules), newPluginModules)
+        val fileModules = inferFileModules(files)
+        val cliCrate = ModuleMap.CLI_CRATE in explicitModules ||
+            files.any { it.contains("/cli/") || it.endsWith(".rs") } ||
+            task.contains("cargo") || task.contains("cli command")
+        val allSignals = (explicitModules + fileModules +
+            if (cliCrate) listOf(ModuleMap.CLI_CRATE) else emptyList()).distinct()
+        val modules = dropAncestorSignals(allSignals, newPluginModules)
+        val driverFiles = files.filter {
+            it.contains("/browser4-browser/") ||
+                it.endsWith("PulsarWebDriver.kt") ||
+                it.endsWith("Browser4WebDriver.kt")
+        }
         val testClasses = TEST_CLASS_PATTERN.findAll(task).map { it.groupValues[1] }
             .filter { it != "Test" }.distinct().toList()
-        val steps = buildSteps(task, modules, files, driverFiles, testClasses, newPluginModules, knownModules)
+        val targetModule = selectTargetModule(modules, newPluginModules)
+        val acceptance = buildAcceptance(targetModule, cliCrate, testClasses, driverFiles.firstOrNull())
+        val steps = buildSteps(
+            task, modules, explicitModules, files, driverFiles, testClasses, newPluginModules,
+            knownModules, targetModule, acceptance, hasSignal = files.isNotEmpty() ||
+            modules.isNotEmpty() || newPluginModules.isNotEmpty(),
+        )
 
         return DevPlan(
             summary = summarize(task, modules, files, driverFiles, testClasses, newPluginModules),
@@ -74,35 +117,61 @@ object DevTaskPlanner {
             testClasses = testClasses,
             newPluginModules = newPluginModules,
             steps = steps,
+            acceptance = acceptance,
         )
     }
 
+    /** Bare filenames (no directory part) mentioned in [task] — the caller resolves them. */
+    fun bareFileNames(task: String): List<String> =
+        FILE_PATTERN.findAll(task)
+            .map { it.value.replace('\\', '/') }
+            .filter { !it.contains('/') }
+            .distinct()
+            .toList()
+
     // ==================== parsing ====================
 
-    /** Module names: explicit `browser4-*` mentions normalized against [knownModules]. */
-    private fun inferModules(task: String, files: List<String>, knownModules: List<String>): List<String> {
+    /** Modules the task text names explicitly (`browser4-*` tokens normalized against [knownModules]). */
+    private fun inferExplicitModules(task: String, knownModules: List<String>): List<String> {
         val found = linkedSetOf<String>()
-
         // Normalize direct module mentions: "browser4-browser" → "browser4-core/browser4-browser".
-        val mentions = Regex("""browser4-[\w-]+(?=/[\w-]+)?""").findAll(task)
+        Regex("""browser4-[\w-]+(?=/[\w-]+)?""").findAll(task)
             .map { it.value }.distinct().toList()
-        mentions.forEach { mention ->
-            val hit = knownModules.firstOrNull { it.endsWith(mention) || it == mention }
-            if (hit != null) found.add(hit)
-        }
-
-        // Infer from file paths (workspace-relative).
-        files.forEach { file ->
-            inferModuleFromPath(file)?.let { found.add(it) }
-        }
-
-        // CLI crate signals.
-        if (files.any { it.contains("/cli/") || it.endsWith(".rs") } || "cli" in mentions) {
-            found.add(ModuleMap.CLI_CRATE)
-        }
-
+            .forEach { mention ->
+                val hit = knownModules.firstOrNull { it.endsWith(mention) || it == mention }
+                if (hit != null) found.add(hit)
+            }
         return found.toList()
     }
+
+    /** Modules implied by the workspace-relative file paths in the task. */
+    private fun inferFileModules(files: List<String>): List<String> =
+        files.mapNotNull { inferModuleFromPath(it) }.distinct()
+
+    /**
+     * Drop aggregator signals: when both `browser4-plugins` and a module inside
+     * it are mentioned, only the leaf is a real signal. Counting the aggregator
+     * as a module made `impact` point at the parent and disabled test-class
+     * binding (eval K3).
+     */
+    private fun dropAncestorSignals(modules: List<String>, newPluginModules: List<String>): List<String> {
+        if (modules.isEmpty()) return modules
+        val scope = (modules + newPluginModules).distinct()
+        return modules.filter { module ->
+            scope.none { other -> other != module && other.startsWith("$module/") }
+        }
+    }
+
+    /**
+     * The module a build/test step should target: the deepest module path wins
+     * (a leaf like `browser4-plugins/browser4-seo` over its aggregator), and a
+     * freshly scaffolded new module wins a tie against same-depth DEPENDENTS-key
+     * mentions because it is listed first (eval K2).
+     */
+    private fun selectTargetModule(modules: List<String>, newPluginModules: List<String>): String? =
+        (newPluginModules + modules)
+            .filter { it != ModuleMap.CLI_CRATE }
+            .maxByOrNull { module -> module.count { it == '/' } }
 
     /** Lightweight module inference from a relative path (mirrors the executor's). */
     private fun inferModuleFromPath(file: String): String? {
@@ -166,14 +235,43 @@ object DevTaskPlanner {
         return if (newModule != null) "$newModule/$norm" else norm
     }
 
+    /**
+     * The acceptance checklist (plan P1.2). Derived from the same signals the
+     * steps are built from, so the two cannot drift.
+     */
+    private fun buildAcceptance(
+        targetModule: String?,
+        cliCrate: Boolean,
+        testClasses: List<String>,
+        trapFile: String?,
+    ): List<String> {
+        val items = mutableListOf<String>()
+        if (cliCrate) items += "cargo test --bin browser4-cli"
+        if (targetModule != null) items += "compile $targetModule"
+        if (targetModule != null && testClasses.isNotEmpty()) {
+            items += "test ${testClasses.joinToString(",")} in $targetModule"
+        }
+        items += "validate repo-consistency"
+        if (trapFile != null) items += "trapCheck $trapFile"
+        return items
+    }
+
+    /** Escape a value for the single-line `tool(arg="…")` rendering. */
+    private fun escapeArg(value: String): String =
+        value.replace("\\", "\\\\").replace("\"", "\\\"").replace(Regex("[\\r\\n]+"), " ").trim()
+
     private fun buildSteps(
         task: String,
         modules: List<String>,
+        explicitModules: List<String>,
         files: List<String>,
         driverFiles: List<String>,
         testClasses: List<String>,
         newPluginModules: List<String>,
         knownModules: List<String>,
+        targetModule: String?,
+        acceptance: List<String>,
+        hasSignal: Boolean,
     ): List<PlanStep> {
         val steps = mutableListOf<PlanStep>()
         var order = 1
@@ -201,7 +299,7 @@ object DevTaskPlanner {
                     "Read the file(s) the task touches to ground the change in real code",
                     "coding.read(path=\"$readPath\")", mapOf("path" to readPath))
             } else {
-                val locateDir = newPluginModules.firstOrNull() ?: modules.firstOrNull()
+                val locateDir = newPluginModules.firstOrNull() ?: targetModule
                 if (locateDir != null) {
                     steps += PlanStep(order++, "coding.listDir",
                         "Locate the file(s) the task touches inside $locateDir (bare filename given, no workspace-relative path)",
@@ -212,12 +310,15 @@ object DevTaskPlanner {
         }
 
         // 2. Impact analysis — which module owns the change and who depends on it.
+        //    Same "deepest module" rule as the build step (eval K2): the
+        //    aggregator must never be the impact target while the build targets
+        //    the leaf.
         val resolvedImpactFile = files.firstOrNull()
             ?.let { resolvePlannedPath(it, knownModules, newPluginModules) }
-        val impactPath = if (newPluginModules.isNotEmpty() && resolvedImpactFile?.contains('/') != true) {
-            newPluginModules.first()
-        } else {
-            resolvedImpactFile ?: modules.firstOrNull() ?: newPluginModules.firstOrNull()
+        val impactPath = when {
+            resolvedImpactFile?.contains('/') == true -> resolvedImpactFile
+            newPluginModules.isNotEmpty() -> newPluginModules.first()
+            else -> targetModule
         }
         if (impactPath != null) {
             steps += PlanStep(order++, "coding.impact",
@@ -225,20 +326,27 @@ object DevTaskPlanner {
                 "coding.impact(path=\"$impactPath\")", mapOf("path" to impactPath))
         }
 
-        // 3. Compile check of the affected module (or cargo for the CLI crate).
-        //    Prefer the most specific (deepest-path) module so the build targets
-        //    the leaf (e.g. browser4-plugins/browser4-seo) over its aggregator.
-        //    newPluginModules come FIRST so a freshly scaffolded plugin module
-        //    wins the tie-break against same-depth DEPENDENTS-key mentions
-        //    (browser4-core/browser4-protocol etc. — maxByOrNull returns the
-        //    first maximum), which previously bound build/test to the wrong module.
-        val mavenModule = (newPluginModules + modules).filter { it != ModuleMap.CLI_CRATE }
-            .maxByOrNull { it.count { c -> c == '/' } }
-        if (mavenModule != null) {
+        // 3. Implementation contract (plan P1.1). Not mechanically executable:
+        //    it names the target files and the acceptance checklist so the agent
+        //    (or `agent run`) has an explicit "what to change, when is it done".
+        if (hasSignal) {
+            val implementTargets = files.filter { it.contains('/') }.joinToString(",")
+            steps += PlanStep(order++, IMPLEMENT_TOOL,
+                "Implement the change in ${implementTargets.ifBlank { targetModule ?: "the affected module" }} " +
+                    "— agent step, not mechanically executable",
+                "coding.implement(task=\"${escapeArg(task)}\", " +
+                    "files=\"${escapeArg(implementTargets)}\", " +
+                    "acceptance=\"${escapeArg(acceptance.joinToString("; "))}\")",
+                mapOf("task" to task, "files" to implementTargets,
+                    "acceptance" to acceptance.joinToString("; ")))
+        }
+
+        // 4. Compile check of the affected module (or cargo for the CLI crate).
+        if (targetModule != null) {
             steps += PlanStep(order++, "coding.mvnBuild",
                 "Compile the affected module to catch Kotlin/Java errors before tests",
-                "coding.mvnBuild(module=\"$mavenModule\", goals=\"compile\")",
-                mapOf("module" to mavenModule, "goals" to "compile"))
+                "coding.mvnBuild(module=\"$targetModule\", goals=\"compile\")",
+                mapOf("module" to targetModule, "goals" to "compile"))
         }
         if (ModuleMap.CLI_CRATE in modules || task.contains("cargo") || task.contains("cli command")) {
             steps += PlanStep(order++, "coding.shell",
@@ -247,14 +355,17 @@ object DevTaskPlanner {
                 mapOf("command" to ModuleMap.cargoTestCommand()))
         }
 
-        // 4. Smallest-scope test for the affected module. When the task names a
+        // 5. Smallest-scope test for the affected module. When the task names a
         //    test class (FooTest), scope with -Dtest=... instead of the whole suite.
-        //    Name-based module binding runs ONLY when the task carries no explicit
-        //    module signal — an explicit module mention (e.g. "in browser4-agentic/src/test")
-        //    is the ground truth and must win over guesswork from the class name.
+        //    Binding priority: the module a class name implies (only when the task
+        //    names no module) → the module the task EXPLICITLY names → the deepest
+        //    affected module. Without the explicit-module step, a driver file
+        //    being edited alongside a test would move the test to the driver's
+        //    module.
         val bindingCandidates = if (modules.isEmpty()) knownModules else emptyList()
         val testClassBound = testClasses.firstNotNullOfOrNull { inferModuleForTestClass(it, bindingCandidates) }
-        val testTarget = testClassBound ?: mavenModule
+        val mentionedTarget = selectTargetModule(explicitModules, newPluginModules)
+        val testTarget = testClassBound ?: mentionedTarget ?: targetModule
         if (testTarget != null) {
             val testClassArg = testClasses.joinToString(",")
             val command = ModuleMap.mavenTestCommand(testTarget, testClassArg.ifBlank { null })
@@ -265,18 +376,36 @@ object DevTaskPlanner {
                 mapOf("command" to command))
         }
 
-        // 5. CDP trap awareness for browser-driver code.
+        // 6. CDP trap awareness for browser-driver code.
         driverFiles.take(1).forEach { file ->
             steps += PlanStep(order++, "coding.trapCheck",
                 "Browser-driver code — check for the documented CDP pitfalls before editing",
                 "coding.trapCheck(path=\"$file\")", mapOf("path" to file))
         }
 
-        // 6. Repo governance: versions, module registration AND ModuleMap sync stay consistent.
+        // 7. Repo governance: versions, module registration AND ModuleMap sync stay consistent.
         steps += PlanStep(order++, "coding.validate",
             "Verify repo governance (VERSION vs root pom vs BOM vs module registration vs ModuleMap snapshot)",
             "coding.validate(type=\"repo-consistency\")",
             mapOf("type" to "repo-consistency"))
+
+        // 8. Deterministic verification gate (plan P0/P1.1): the verdict is the
+        //    authority on completion, not the agent's own narrative.
+        if (hasSignal) {
+            val verifyModule = targetModule ?: ModuleMap.CLI_CRATE.takeIf { ModuleMap.CLI_CRATE in modules }
+            if (verifyModule != null) {
+                val trapArg = driverFiles.take(1).joinToString(",")
+                steps += PlanStep(order++, "coding.verify",
+                    "Deterministic verification gate — the VERDICT_JSON verdict decides whether the task is done",
+                    "coding.verify(module=\"$verifyModule\", checks=\"compile,repo-consistency,trapCheck\"" +
+                        (if (trapArg.isBlank()) "" else ", files=\"$trapArg\"") + ")",
+                    buildMap {
+                        put("module", verifyModule)
+                        put("checks", "compile,repo-consistency,trapCheck")
+                        if (trapArg.isNotBlank()) put("files", trapArg)
+                    })
+            }
+        }
 
         // NOTE: no git-commit step here. Agents must not auto-commit; the
         // supervising caller decides when a change is ready to land.
