@@ -110,6 +110,36 @@ data class AgentConfig(
     val finishGateCheck: String =
         System.getProperty("browser4.agent.finishGateCheck", "strict"),
     /**
+     * Gates that must be present AND passing in the completion report for a
+     * `success` claim to be accepted (plan P0.5). Comma-separated method names,
+     * matched as a suffix of the reported gate name (e.g. `mvnBuild` matches
+     * `coding.mvnBuild`). Empty = only the gates the model reported are checked.
+     * Configurable via `-Dbrowser4.agent.finish.requiredGates=mvnBuild,validate`.
+     */
+    val finishRequiredGates: List<String> =
+        System.getProperty("browser4.agent.finish.requiredGates", "")
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() },
+    /**
+     * Workspace root used to cross-check the reported `filesChanged` list
+     * against `git status --porcelain` (plan P0.5). Empty = auto-detect the
+     * enclosing git work tree from the process working directory. A reported
+     * file that git does not show as changed is a fabricated change and fails
+     * the completion under [finishGateCheck]=strict.
+     */
+    val finishWorkspace: String =
+        System.getProperty("browser4.agent.finish.workspace", ""),
+    /**
+     * Repair-round budget (plan P1.3): when the latest `coding.verify` verdict
+     * failed, the engine feeds the structured diagnostics back and lets the
+     * model repair, up to this many rounds, then fails the task with the
+     * verdict as evidence. `0` disables the loop (pre-P1.3 behaviour).
+     * Configurable via `-Dbrowser4.agent.repair.maxRounds=<n>`.
+     */
+    val repairMaxRounds: Int =
+        System.getProperty("browser4.agent.repair.maxRounds", "3").toInt().coerceAtLeast(0),
+    /**
      * Max model↔tool round-trips inside one native tool-calling loop turn.
      * Configurable via `-Dbrowser4.agent.toolLoop.maxIterations=<n>`.
      */

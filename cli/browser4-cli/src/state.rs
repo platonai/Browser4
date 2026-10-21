@@ -146,6 +146,15 @@ pub struct CliState {
     /// recorded by older CLI versions and for attached sessions.
     #[serde(rename = "displayMode", default, skip_serializing_if = "Option::is_none")]
     pub display_mode: Option<String>,
+    /// Whether `stop` marked this record stale (see [`mark_all_sessions_stale`]).
+    ///
+    /// `stop` shuts the backend down, which drops every session it knew about;
+    /// the records are kept so `list` can show the documented Stale/Refresh rows
+    /// instead of the sessions vanishing.  The marker records that the session
+    /// outlived its server: the next write clears it, because a write means the
+    /// session was just validated against a (new) backend.
+    #[serde(rename = "stale", default, skip_serializing_if = "is_false")]
+    pub stale: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -189,6 +198,7 @@ impl Default for CliState {
             created_at: None,
             last_accessed_at: None,
             display_mode: None,
+            stale: false,
         }
     }
 }
@@ -526,6 +536,10 @@ fn write_state_to_dir(
     let mut state = state.clone();
     state.is_attached = state.kind.is_attached();
     state.attach_type = state.kind.attach_type_str().map(|s| s.to_string());
+    // Writing a record means the session was just created, opened or refreshed
+    // against the backend, so a staleness marker left by an earlier `stop` (see
+    // `mark_all_sessions_stale`) no longer describes it.
+    state.stale = false;
 
     let json = serde_json::to_string_pretty(&state).expect("state serialization should not fail");
     atomic_write(&path, json.as_bytes())
@@ -565,6 +579,72 @@ pub fn clear_state(state_dir: Option<&Path>, session_name: Option<&str>) {
     if is_implicit_default_dir(state_dir) {
         let _ = fs::remove_file(state_file(&fallback_state_dir(), session_name));
     }
+}
+
+/// A session name whose `close` discarded the browser profile that went with
+/// it.
+///
+/// `close` deletes the name's state record, so on the next `open -s <name>` the
+/// CLI cannot tell "a name that was never used" from "a name whose profile was
+/// just thrown away" — and that difference decides whether the user gets a
+/// restored profile or a brand-new one (133022#1).  The note is written by
+/// `close` and consumed by `open`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosedSessionNote {
+    /// Session id whose profile directory was discarded.
+    pub session_id: String,
+    /// RFC 3339 timestamp of the close, for humans.
+    pub closed_at: String,
+}
+
+/// File holding the [`ClosedSessionNote`] map.
+///
+/// It sits in the state-dir root (next to `cli-state.json`), never under
+/// `sessions/`, so neither `list` nor `close-all` can mistake it for a session
+/// record.
+fn closed_sessions_file(dir: &Path) -> PathBuf {
+    dir.join("closed-sessions.json")
+}
+
+/// Read the note map, treating an unreadable or corrupt file as empty.
+fn read_closed_sessions(dir: &Path) -> std::collections::BTreeMap<String, ClosedSessionNote> {
+    fs::read_to_string(closed_sessions_file(dir))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Record that `close` discarded the profile of the session called [name].
+///
+/// Best-effort: a failure only costs the `open` warning, so it never fails the
+/// close itself.
+pub fn remember_closed_session_in(dir: &Path, name: &str, session_id: &str) {
+    let mut notes = read_closed_sessions(dir);
+    notes.insert(
+        name.to_string(),
+        ClosedSessionNote {
+            session_id: session_id.to_string(),
+            closed_at: chrono::Utc::now().to_rfc3339(),
+        },
+    );
+    let Ok(json) = serde_json::to_string_pretty(&notes) else {
+        return;
+    };
+    if fs::create_dir_all(dir).is_ok() {
+        let _ = atomic_write(&closed_sessions_file(dir), json.as_bytes());
+    }
+}
+
+/// Take (and clear) the note for [name], if `close` discarded its profile.
+pub fn take_closed_session_note_in(dir: &Path, name: &str) -> Option<ClosedSessionNote> {
+    let mut notes = read_closed_sessions(dir);
+    let note = notes.remove(name)?;
+    if let Ok(json) = serde_json::to_string_pretty(&notes) {
+        if fs::create_dir_all(dir).is_ok() {
+            let _ = atomic_write(&closed_sessions_file(dir), json.as_bytes());
+        }
+    }
+    Some(note)
 }
 
 /// Clear the default CLI state plus all named session state files.
@@ -614,6 +694,89 @@ fn clear_session_files_in_dir(dir: &Path) {
     }
 }
 
+/// Mark the default record and every named session record as stale instead of
+/// deleting them (the `stop` path).
+///
+/// `stop` shuts the backend down, so every session it knew about is gone — but
+/// the *records* must survive.  `clear_all_state` used to run here as well, so
+/// `sessions/*.json` vanished and the next `list` printed
+/// "No active browser sessions." — sessions the user named disappeared instead
+/// of showing the documented `Stale` / `Refresh` row (the same row `close-all`
+/// counts), and it looked as though the sessions and their stored profile state
+/// had been destroyed.
+///
+/// Deletion stays reserved for `close`, `close-all` and `kill-all`, which go
+/// through [`clear_all_state`].
+///
+/// Each surviving record keeps every field it had (the session id included, so
+/// a later `goto -s <name>` can revive it) and gains `"stale": true`.  Files
+/// that do not parse as JSON objects are left untouched rather than
+/// overwritten, so this can never destroy state written by another version.
+///
+/// Returns the number of records marked.
+pub fn mark_all_sessions_stale(state_dir: Option<&Path>) -> usize {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+
+    // Mirror `clear_all_state`: legacy fallback copies in the CWD-relative
+    // directory are marked too when the implicit default dir is in use.
+    if is_implicit_default_dir(state_dir) {
+        mark_sessions_stale_in_dir(&dir) + mark_sessions_stale_in_dir(&fallback_state_dir())
+    } else {
+        mark_sessions_stale_in_dir(&dir)
+    }
+}
+
+/// Mark the default record (`cli-state.json`) plus every `{dir}/sessions/*.json`
+/// file stale.  Best-effort: an unreadable directory marks nothing.
+fn mark_sessions_stale_in_dir(dir: &Path) -> usize {
+    let mut marked = 0;
+
+    if mark_state_file_stale(&state_file(dir, None)) {
+        marked += 1;
+    }
+
+    let sessions_dir = dir.join("sessions");
+    if let Ok(entries) = fs::read_dir(sessions_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "json")
+                && mark_state_file_stale(&path)
+            {
+                marked += 1;
+            }
+        }
+    }
+
+    marked
+}
+
+/// Set `"stale": true` in one persisted state file, preserving every other
+/// field as written (including fields this CLI version does not know about).
+///
+/// Returns `false` when the file does not exist or is not a JSON object.
+fn mark_state_file_stale(path: &Path) -> bool {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return false;
+    };
+    if object.get("stale").and_then(|v| v.as_bool()) == Some(true) {
+        return true;
+    }
+    object.insert("stale".to_string(), serde_json::Value::Bool(true));
+
+    let Ok(json) = serde_json::to_string_pretty(&value) else {
+        return false;
+    };
+    atomic_write(path, json.as_bytes()).is_ok()
+}
+
 // ---------------------------------------------------------------------------
 // Loop state persistence
 // ---------------------------------------------------------------------------
@@ -646,6 +809,14 @@ pub struct LoopState {
     pub updated_at: String,
     /// Loop status: "running" or "stopped".
     pub status: String,
+    /// PID of the worker process that owns this loop, when one is known.
+    ///
+    /// Recorded at every persist so a control command can tell "a worker is
+    /// still running this loop" from "only the state file is left".  Without it
+    /// `--resume` spawned a second worker for a loop whose paused worker was
+    /// still resident, and both then ran every iteration (issue 122234#1).
+    #[serde(rename = "workerPid", default, skip_serializing_if = "Option::is_none")]
+    pub worker_pid: Option<u32>,
 }
 
 fn loop_state_file(state_dir: &Path, name: Option<&str>) -> PathBuf {
@@ -664,10 +835,117 @@ fn loop_state_file(state_dir: &Path, name: Option<&str>) -> PathBuf {
     }
 }
 
+/// Path of the stop sentinel for [name].
+///
+/// Derived from the state file name (so the same name sanitizing applies):
+/// `loops/x.json` gets `loops/x.stop`.
+fn loop_stop_file(state_dir: &Path, name: Option<&str>) -> PathBuf {
+    loop_state_file(state_dir, name).with_extension("stop")
+}
+
+/// Request a stop for [name] by creating its sentinel, returning the path.
+///
+/// The sentinel is deliberately separate from the progress file: the previous
+/// stop signal *was* the state file's `status`, and deleting that file is what
+/// let a worker which woke up mid-sleep recreate itself as "running" and revive
+/// the loop after `--stop-all` had already reported success (issue 122234#3).
+/// Only a control command — or the worker that honoured it — removes it.
+pub fn request_loop_stop(
+    state_dir: Option<&Path>,
+    name: Option<&str>,
+    requested_by: &str,
+) -> std::io::Result<PathBuf> {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    let path = loop_stop_file(&dir, name);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let body = serde_json::json!({
+        "requestedAt": chrono::Utc::now().to_rfc3339(),
+        "requestedBy": requested_by,
+        "workerPid": read_loop_state(state_dir, name).and_then(|ls| ls.worker_pid),
+    })
+    .to_string();
+    atomic_write(&path, body.as_bytes())?;
+    Ok(path)
+}
+
+/// True when a stop has been requested for [name] and not yet cleared.
+pub fn loop_stop_requested(state_dir: Option<&Path>, name: Option<&str>) -> bool {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    if loop_stop_file(&dir, name).exists() {
+        return true;
+    }
+    is_implicit_default_dir(state_dir) && loop_stop_file(&fallback_state_dir(), name).exists()
+}
+
+/// Clear the stop sentinel for [name] (the worker exied, or `--resume` un-stopped it).
+pub fn clear_loop_stop_request(state_dir: Option<&Path>, name: Option<&str>) {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    let _ = fs::remove_file(loop_stop_file(&dir, name));
+    if is_implicit_default_dir(state_dir) {
+        let _ = fs::remove_file(loop_stop_file(&fallback_state_dir(), name));
+    }
+}
+
+/// True when a process with [pid] is currently running.
+///
+/// Used to tell a live loop worker from a stale state file, so `--resume` can
+/// never start a second worker for the same loop.
+pub fn is_process_alive(pid: u32) -> bool {
+    // PID 0 is never a user process and must never look alive: on Unix
+    // `kill(0, sig)` targets the caller's *process group*, so the signal-0
+    // probe reports success and a state file carrying `"workerPid": 0` (a
+    // truncated or hand-edited file) would pin the loop as owned forever —
+    // `--resume` would then refuse to start a replacement worker.
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        // Signal 0 performs error checking but sends no signal: 0 while the
+        // process exists, -1 with ESRCH once it is gone.
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        unsafe { kill(pid as i32, 0) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        extern "system" {
+            fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> isize;
+            fn CloseHandle(hObject: isize) -> i32;
+        }
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle == 0 {
+                return false;
+            }
+            CloseHandle(handle);
+            true
+        }
+    }
+}
+
+/// The PID of the live worker that owns [name], when the state records one.
+///
+/// The current process counts too: a loop re-executed by its own worker (or a
+/// control command run inside the worker) must not be mistaken for "no worker".
+pub fn live_loop_worker_pid(state_dir: Option<&Path>, name: Option<&str>) -> Option<u32> {
+    let pid = read_loop_state(state_dir, name)?.worker_pid?;
+    is_process_alive(pid).then_some(pid)
+}
+
 /// Read the persisted loop state, if any.
 /// When the implicit default dir is used, also checks the fallback directory.
-pub fn read_loop_state(state_dir: Option<&Path>, name: Option<&str>) -> Option<LoopState> {
-    let dir = state_dir
+pub fn read_loop_state(state_dir: Option<&Path>, name: Option<&str>) -> Option<LoopState> {    let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
     let path = loop_state_file(&dir, name);
@@ -1161,6 +1439,21 @@ pub fn format_duration_ms(ms: i64) -> String {
     format!("{}h{:02}m", hours, minutes % 60)
 }
 
+/// Wall-clock time from submission to completion in milliseconds — the
+/// time-to-result the DURATION column does not show.
+///
+/// DURATION is the backend's `startedAt → completedAt` window, and the backend
+/// can stamp `startedAt` so late (microseconds before completion) that a task
+/// which waited a minute in the queue reports single-digit milliseconds.  This
+/// value is derived from `submittedAt`, which the CLI records when it submits
+/// the task, so it stays meaningful even when `startedAt` is absent or wrong.
+/// `None` while the task has not finished (no completion timestamp yet).
+pub fn task_elapsed_ms(entry: &AsyncTaskEntry) -> Option<i64> {
+    let finished = entry.completed_at.as_deref().and_then(parse_timestamp)?;
+    let submitted = parse_timestamp(&entry.submitted_at)?;
+    Some((finished - submitted).num_milliseconds().max(0))
+}
+
 /// Persisted list of tracked async tasks.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AsyncTaskList {
@@ -1257,7 +1550,7 @@ pub fn track_async_task_in_batch(
     write_async_tasks(&list, state_dir)
 }
 
-/// Remove completed/failed tasks from the tracked list.
+/// Remove completed/failed/cancelled tasks from the tracked list.
 #[allow(dead_code)]
 pub fn prune_async_tasks(state_dir: Option<&std::path::Path>) -> std::io::Result<usize> {
     let mut list = read_async_tasks(state_dir);
@@ -1267,14 +1560,25 @@ pub fn prune_async_tasks(state_dir: Option<&std::path::Path>) -> std::io::Result
         if s.is_empty() {
             return true; // keep — not yet polled
         }
-        // Standard lifecycle labels from friendly_agent_status / friendly_crawl_status
-        s != "completed" && !s.starts_with("failed")
+        // Standard lifecycle labels from friendly_agent_status / friendly_crawl_status,
+        // including the shared envelope's `cancelled` terminal state.
+        !is_terminal_async_status(s)
     });
     let removed = before - list.tasks.len();
     if removed > 0 {
         write_async_tasks(&list, state_dir)?;
     }
     Ok(removed)
+}
+
+/// Whether a local task label means the task can no longer change state.
+///
+/// Every lifecycle consumer (`prune`, `completed_at`, `agent list --clear`) shares
+/// this predicate: `cancelled` is terminal in the shared task envelope
+/// (`TaskEnvelopes.TERMINAL_STATUSES`), so treating it as in-flight kept cancelled
+/// work in the list forever.
+pub fn is_terminal_async_status(status: &str) -> bool {
+    status == "completed" || status == "cancelled" || status.starts_with("failed")
 }
 
 /// Update the last_status field for a tracked async task.
@@ -1289,8 +1593,7 @@ pub fn update_async_task_status(
         entry.last_status = status.to_string();
         // Set completed_at when transitioning to a terminal state, but only
         // if it hasn't been set yet (keep the first completion timestamp).
-        let is_terminal = status == "completed" || status.starts_with("failed");
-        if is_terminal && entry.completed_at.is_none() {
+        if is_terminal_async_status(status) && entry.completed_at.is_none() {
             entry.completed_at = Some(chrono::Utc::now().to_rfc3339());
         }
         write_async_tasks(&list, state_dir)?;
@@ -1396,25 +1699,33 @@ pub fn format_async_task_list_opts(
         .max()
         .unwrap_or(8)
         .max(8);
+    let elapsed_w = page
+        .iter()
+        .map(|t| task_elapsed_ms(t).map(format_duration_ms).map(|s| s.len()).unwrap_or(1))
+        .max()
+        .unwrap_or(7)
+        .max(7);
 
     out.push(format!(
-        "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<dur_w$}  {:<status_w$}",
-        "TASK ID", "COMMAND", "DESCRIPTION", "STARTED", "FINISHED", "DURATION", "STATUS",
+        "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<dur_w$}  {:<elapsed_w$}  {:<status_w$}",
+        "TASK ID", "COMMAND", "DESCRIPTION", "STARTED", "FINISHED", "DURATION", "ELAPSED", "STATUS",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
         time_w = time_w,
         dur_w = dur_w,
+        elapsed_w = elapsed_w,
         status_w = status_w,
     ));
     out.push(format!(
-        "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {:-<time_w$}  {:-<time_w$}  {:-<dur_w$}  {:-<status_w$}",
-        "", "", "", "", "", "", "",
+        "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {:-<time_w$}  {:-<time_w$}  {:-<dur_w$}  {:-<elapsed_w$}  {:-<status_w$}",
+        "", "", "", "", "", "", "", "",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
         time_w = time_w,
         dur_w = dur_w,
+        elapsed_w = elapsed_w,
         status_w = status_w,
     ));
 
@@ -1449,6 +1760,11 @@ pub fn format_async_task_list_opts(
         let duration = task_duration_ms(entry)
             .map(format_duration_ms)
             .unwrap_or_else(|| "-".to_string());
+        // ELAPSED is submission → completion: the time-to-result the backend's
+        // DURATION window misses while it stamps `startedAt` at completion.
+        let elapsed = task_elapsed_ms(entry)
+            .map(format_duration_ms)
+            .unwrap_or_else(|| "-".to_string());
         // Rust's width specifier pads but never truncates, so an id longer than
         // id_w would print in full and shift every following column out of the
         // header grid. Cap the cell (ellipsis) — standard 36-char UUIDs fit.
@@ -1458,19 +1774,21 @@ pub fn format_async_task_list_opts(
             entry.task_id.clone()
         };
         out.push(format!(
-            "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<dur_w$}  {:<status_w$}",
+            "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<dur_w$}  {:<elapsed_w$}  {:<status_w$}",
             id_cell,
             entry.command,
             desc,
             started,
             finished,
             duration,
+            elapsed,
             status,
             id_w = id_w,
             cmd_w = cmd_w,
             desc_w = desc_w,
             time_w = time_w,
             dur_w = dur_w,
+            elapsed_w = elapsed_w,
             status_w = status_w,
         ));
     }
@@ -1801,6 +2119,32 @@ mod tests {
     }
 
     #[test]
+    fn closed_session_notes_are_consumed_once() {
+        // 133022#1: `close` leaves a note so the next `open -s <name>` can warn
+        // that it starts a fresh profile; the note is taken once.
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+
+        assert_eq!(take_closed_session_note_in(dir, "research"), None);
+
+        remember_closed_session_in(dir, "research", "743ea2cf-1");
+        let note = take_closed_session_note_in(dir, "research").expect("note is stored");
+        assert_eq!(note.session_id, "743ea2cf-1");
+        assert!(!note.closed_at.is_empty());
+
+        // Consumed: the warning is not repeated on every later open.
+        assert_eq!(take_closed_session_note_in(dir, "research"), None);
+        // Another name is unaffected.
+        remember_closed_session_in(dir, "other", "abc");
+        assert_eq!(take_closed_session_note_in(dir, "research"), None);
+        assert!(take_closed_session_note_in(dir, "other").is_some());
+        // The note file never lands under `sessions/`, so `list` cannot mistake
+        // it for a session record.
+        assert!(dir.join("closed-sessions.json").is_file());
+        assert!(!dir.join("sessions").join("closed-sessions.json").exists());
+    }
+
+    #[test]
     fn test_resolve_ref_e_notation() {
         assert_eq!(resolve_ref("e15"), "backend:15");
         assert_eq!(resolve_ref("E42"), "backend:42");
@@ -2094,6 +2438,88 @@ mod tests {
         assert!(!state_file(tmp.path(), None).exists());
         assert!(!state_file(tmp.path(), Some("named")).exists());
         assert!(tmp.path().join("sessions").join("notes.txt").exists());
+    }
+
+    /// `stop` must keep the session records (so `list` can show the documented
+    /// Stale/Refresh rows) while `clear_all_state` — the close/close-all/kill-all
+    /// path — still deletes them.
+    #[test]
+    fn test_mark_all_sessions_stale_keeps_default_and_named_records() {
+        let tmp = test_temp_dir();
+        let default_state = CliState {
+            session_id: Some("default123".to_string()),
+            ..CliState::default()
+        };
+        let named_state = CliState {
+            session_id: Some("named123".to_string()),
+            session_name: Some("named".to_string()),
+            display_mode: Some("headless".to_string()),
+            ..CliState::default()
+        };
+
+        write_state(&default_state, Some(tmp.path()), None).unwrap();
+        write_state(&named_state, Some(tmp.path()), Some("named")).unwrap();
+        fs::write(tmp.path().join("sessions").join("notes.txt"), "keep").unwrap();
+
+        let marked = mark_all_sessions_stale(Some(tmp.path()));
+        assert_eq!(marked, 2, "the default and the named record must be marked");
+
+        // Both records survive, with every field intact.
+        let default_read = read_state(Some(tmp.path()), None);
+        let named_read = read_state(Some(tmp.path()), Some("named"));
+        assert_eq!(default_read.session_id.as_deref(), Some("default123"));
+        assert_eq!(named_read.session_id.as_deref(), Some("named123"));
+        assert_eq!(named_read.display_mode.as_deref(), Some("headless"));
+        assert!(default_read.stale);
+        assert!(named_read.stale);
+        assert!(tmp.path().join("sessions").join("notes.txt").exists());
+
+        // Marking is idempotent and reports the same count.
+        assert_eq!(mark_all_sessions_stale(Some(tmp.path())), 2);
+        assert!(read_state(Some(tmp.path()), Some("named")).stale);
+
+        // Any later write clears the marker: the session was just revalidated.
+        write_state(&named_read, Some(tmp.path()), Some("named")).unwrap();
+        assert!(!read_state(Some(tmp.path()), Some("named")).stale);
+
+        // The delete path (close / close-all / kill-all) still removes them.
+        mark_all_sessions_stale(Some(tmp.path()));
+        clear_all_state(Some(tmp.path()));
+        assert!(!state_file(tmp.path(), None).exists());
+        assert!(!state_file(tmp.path(), Some("named")).exists());
+    }
+
+    /// Marking must never lose data: unknown fields written by another CLI
+    /// version stay, and a file that is not a JSON object is left alone.
+    #[test]
+    fn test_mark_state_file_stale_preserves_unknown_fields() {
+        let tmp = test_temp_dir();
+        let sessions = tmp.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+
+        let future = sessions.join("future.json");
+        // A record written by a newer CLI version: a complete, readable state
+        // object plus a field this version does not know about.
+        fs::write(
+            &future,
+            r#"{"sessionId":"s1","baseUrl":"http://localhost:18182","unknownFieldFromNewerCli":{"a":1}}"#,
+        )
+        .unwrap();
+        assert!(mark_state_file_stale(&future));
+        let raw = fs::read_to_string(&future).unwrap();
+        assert!(raw.contains("unknownFieldFromNewerCli"), "raw:\n{raw}");
+        assert!(raw.contains("\"stale\": true"), "raw:\n{raw}");
+        assert_eq!(
+            read_state(Some(tmp.path()), Some("future")).session_id.as_deref(),
+            Some("s1")
+        );
+
+        // Not JSON / not an object / missing: nothing is rewritten.
+        let broken = sessions.join("broken.json");
+        fs::write(&broken, "not json").unwrap();
+        assert!(!mark_state_file_stale(&broken));
+        assert_eq!(fs::read_to_string(&broken).unwrap(), "not json");
+        assert!(!mark_state_file_stale(&sessions.join("missing.json")));
     }
 
     // -------------------------------------------------------------------
@@ -2670,6 +3096,64 @@ mod tests {
         assert_eq!(format_duration_ms(-5), "0ms");
     }
 
+    /// The backend can stamp `startedAt` microseconds before completion while
+    /// the task waited in the queue, so DURATION reads ~0ms although the result
+    /// took a minute.  ELAPSED (submitted → completed) stays truthful.
+    #[test]
+    fn task_elapsed_ms_uses_submission_time_not_the_backend_start() {
+        let mut waited = entry("swarm-submit", "completed");
+        waited.submitted_at = "2026-07-22T00:00:00Z".to_string();
+        waited.started_at = Some("2026-07-22T00:00:59.999Z".to_string());
+        waited.completed_at = Some("2026-07-22T00:01:00Z".to_string());
+        waited.duration_ms = Some(1);
+        assert_eq!(task_duration_ms(&waited), Some(1));
+        assert_eq!(task_elapsed_ms(&waited), Some(60_000));
+
+        // Unfinished tasks have no time-to-result yet.
+        let mut running = entry("swarm-submit", "processing");
+        running.submitted_at = "2026-07-22T00:00:00Z".to_string();
+        assert_eq!(task_elapsed_ms(&running), None);
+
+        // Without a parseable submission timestamp there is nothing to derive.
+        let mut unparsable = entry("swarm-submit", "completed");
+        unparsable.submitted_at = String::new();
+        unparsable.completed_at = Some("2026-07-22T00:01:00Z".to_string());
+        assert_eq!(task_elapsed_ms(&unparsable), None);
+    }
+
+    /// `swarm list` / `crawl list` must show time-to-result without `--json`.
+    #[test]
+    fn format_async_task_list_renders_elapsed_column() {
+        let list = AsyncTaskList {
+            tasks: vec![AsyncTaskEntry {
+                task_id: "waited".to_string(),
+                command: "swarm-submit".to_string(),
+                description: "https://a.com".to_string(),
+                submitted_at: "2026-07-22T14:00:00Z".to_string(),
+                last_status: "completed".to_string(),
+                started_at: Some("2026-07-22T14:05:30Z".to_string()),
+                completed_at: Some("2026-07-22T14:05:30.010Z".to_string()),
+                duration_ms: Some(10),
+                ..Default::default()
+            }],
+        };
+        let output = format_async_task_list(&list, None, None);
+        let header = output
+            .lines()
+            .find(|l| l.contains("TASK ID"))
+            .unwrap_or_else(|| panic!("missing header:\n{output}"));
+        assert!(header.contains("ELAPSED"), "header:\n{header}");
+        let row = output
+            .lines()
+            .find(|l| l.contains("waited"))
+            .unwrap_or_else(|| panic!("missing row:\n{output}"));
+        assert!(row.contains("10ms"), "DURATION cell missing: {row}");
+        assert!(
+            row.contains("5m30s"),
+            "ELAPSED cell (submitted -> completed) missing: {row}"
+        );
+    }
+
     #[test]
     fn legacy_tracker_json_without_batch_fields_still_loads() {
         // A tracker file written by an older CLI must keep working.
@@ -2791,6 +3275,7 @@ mod tests {
             started_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:10Z".to_string(),
             status: "running".to_string(),
+            worker_pid: Some(std::process::id()),
         }
     }
 
@@ -2818,9 +3303,92 @@ mod tests {
         assert_eq!(entries[1].task, "goto https://example.com");
     }
 
+    // -------------------------------------------------------------------
+    // Loop worker ownership and the stop sentinel (issues 122234#1/#3)
+    // -------------------------------------------------------------------
+
     #[test]
-    fn test_loop_state_path_points_at_existing_named_file() {
+    fn worker_pid_round_trips_and_survives_older_state_files() {
         let tmp = test_temp_dir();
+        let mut state = loop_state_sample(vec!["eval".to_string()]);
+        state.worker_pid = Some(4242);
+        write_loop_state(&state, Some(tmp.path()), Some("owned")).unwrap();
+        assert_eq!(
+            read_loop_state(Some(tmp.path()), Some("owned"))
+                .expect("state")
+                .worker_pid,
+            Some(4242)
+        );
+
+        // A state file written before the field existed still parses.
+        let legacy = tmp.path().join("loops").join("legacy.json");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(
+            &legacy,
+            r#"{"taskTokens":["eval","1+1"],"mode":"subcommand","intervalSecs":10,
+                "iterationsCompleted":1,"startedAt":"2026-01-01T00:00:00Z",
+                "updatedAt":"2026-01-01T00:00:10Z","status":"running"}"#,
+        )
+        .unwrap();
+        let parsed = read_loop_state(Some(tmp.path()), Some("legacy")).expect("legacy state");
+        assert_eq!(parsed.worker_pid, None);
+        assert_eq!(parsed.status, "running");
+    }
+
+    #[test]
+    fn live_loop_worker_pid_distinguishes_a_live_pid_from_a_stale_one() {
+        let tmp = test_temp_dir();
+        // The test process itself is alive.
+        let mut state = loop_state_sample(vec!["eval".to_string()]);
+        state.worker_pid = Some(std::process::id());
+        write_loop_state(&state, Some(tmp.path()), Some("live")).unwrap();
+        assert_eq!(
+            live_loop_worker_pid(Some(tmp.path()), Some("live")),
+            Some(std::process::id())
+        );
+
+        // A PID that cannot exist (0 is never a user process) is not live, so
+        // `--resume` may spawn a worker for that loop.
+        let mut stale = loop_state_sample(vec!["eval".to_string()]);
+        stale.worker_pid = Some(0);
+        write_loop_state(&stale, Some(tmp.path()), Some("stale")).unwrap();
+        assert_eq!(live_loop_worker_pid(Some(tmp.path()), Some("stale")), None);
+        assert!(!is_process_alive(0));
+        assert!(is_process_alive(std::process::id()));
+    }
+
+    #[test]
+    fn stop_sentinel_is_independent_of_the_state_file() {
+        let tmp = test_temp_dir();
+        write_loop_state(
+            &loop_state_sample(vec!["eval".to_string()]),
+            Some(tmp.path()),
+            Some("guarded"),
+        )
+        .unwrap();
+        assert!(!loop_stop_requested(Some(tmp.path()), Some("guarded")));
+
+        let sentinel = request_loop_stop(Some(tmp.path()), Some("guarded"), "stop").unwrap();
+        assert!(sentinel.ends_with("guarded.stop"), "{}", sentinel.display());
+        assert!(loop_stop_requested(Some(tmp.path()), Some("guarded")));
+        // The stop signal must survive the progress file being cleared, which is
+        // what let a mid-sleep worker revive a stopped loop before.
+        clear_loop_state(Some(tmp.path()), Some("guarded"));
+        assert!(loop_stop_requested(Some(tmp.path()), Some("guarded")));
+
+        clear_loop_stop_request(Some(tmp.path()), Some("guarded"));
+        assert!(!loop_stop_requested(Some(tmp.path()), Some("guarded")));
+
+        // The default loop gets its own sentinel next to loop-state.json.
+        request_loop_stop(Some(tmp.path()), None, "stop-all").unwrap();
+        assert!(loop_stop_requested(Some(tmp.path()), None));
+        assert!(tmp.path().join("loop-state.stop").exists());
+        clear_loop_stop_request(Some(tmp.path()), None);
+        assert!(!loop_stop_requested(Some(tmp.path()), None));
+    }
+
+    #[test]
+    fn test_loop_state_path_points_at_existing_named_file() {        let tmp = test_temp_dir();
         write_loop_state(
             &loop_state_sample(vec!["eval".to_string()]),
             Some(tmp.path()),

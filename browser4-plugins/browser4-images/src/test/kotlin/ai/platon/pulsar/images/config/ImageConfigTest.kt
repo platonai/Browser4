@@ -37,7 +37,7 @@ class ImageConfigTest {
         assertEquals(ImageConfig.defaultDownloadDir(), config.downloadDir)
         assertTrue(Path.of(config.downloadDir).isAbsolute)
         assertEquals(50 * 1024 * 1024L, config.maxDownloadSize)
-        assertEquals(60, config.downloadTimeoutSeconds)
+        assertEquals(ImageConfig.DEFAULT_DOWNLOAD_TIMEOUT_SECONDS, config.downloadTimeoutSeconds)
         assertFalse(config.autoDetectEnabled)
         assertFalse(config.autoDownloadEnabled)
         assertEquals(5, config.concurrentDownloads)
@@ -163,5 +163,27 @@ class ImageConfigTest {
         assertEquals(config1, config2)
         assertNotEquals(config1, config3)
         assertEquals(config1.hashCode(), config2.hashCode())
+    }
+
+    @Test
+    @DisplayName("the default per-download budget stays below the CLI's 30s tool-call timeout")
+    fun testDefaultTimeoutFitsInsideTheCliToolCallTimeout() {
+        // cli/browser4-cli/src/http.rs defaults a tool call to 30s; the plugin must
+        // fail first so its own actionable error (cause, budget, proxy) is shown
+        // instead of a bare client-side timeout.
+        assertTrue(
+            ImageConfig().downloadTimeoutSeconds < 30,
+            "default download timeout must stay below the CLI's 30s tool-call timeout"
+        )
+    }
+
+    @Test
+    @DisplayName("connect timeout is bounded so an unreachable host fails fast")
+    fun testConnectTimeoutIsBounded() {
+        assertEquals(ImageConfig.MAX_CONNECT_TIMEOUT_SECONDS, ImageConfig(downloadTimeoutSeconds = 300).connectTimeoutSeconds)
+        assertEquals(ImageConfig.MAX_CONNECT_TIMEOUT_SECONDS, ImageConfig().connectTimeoutSeconds)
+        assertEquals(2, ImageConfig(downloadTimeoutSeconds = 2).connectTimeoutSeconds)
+        // never zero/negative, which would mean "no timeout" to OkHttp
+        assertEquals(1, ImageConfig(downloadTimeoutSeconds = 0).connectTimeoutSeconds)
     }
 }

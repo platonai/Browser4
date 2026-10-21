@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
@@ -1133,6 +1134,46 @@ class CrawlSupportTest {
     }
 
     // ------------------------------------------------------------------
+    // buildHttpErrorNote
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a crawl whose pages were all served successfully has no HTTP error note")
+    fun testNoHttpErrorsProduceNoNote() {
+        val pages = listOf(
+            CrawlPageResult(url = "https://example.com/1.html", httpStatus = 200),
+            CrawlPageResult(url = "https://example.com/2.html", httpStatus = 304)
+        )
+
+        assertNull(buildHttpErrorNote(pages))
+    }
+
+    @Test
+    @DisplayName("an HTTP error page is reported instead of counting as a successful page")
+    fun testHttpErrorPagesAreReported() {
+        val pages = listOf(
+            CrawlPageResult(url = "https://example.com/ok.html", httpStatus = 200),
+            CrawlPageResult(url = "https://example.com/missing.html", httpStatus = 404)
+        )
+
+        val note = requireNotNull(buildHttpErrorNote(pages))
+
+        assertTrue(note.contains("1 of 2 page(s) were served with an HTTP error status"), note)
+        assertTrue(note.contains("404: 1"), note)
+        assertTrue(note.contains("https://example.com/missing.html (404)"), note)
+    }
+
+    @Test
+    @DisplayName("a store-served row is not an HTTP error even when its status looks like one")
+    fun testStoreServedRowsAreExempt() {
+        val pages = listOf(
+            CrawlPageResult(url = "https://example.com/old.html", httpStatus = 404, servedFromStore = true)
+        )
+
+        assertNull(buildHttpErrorNote(pages))
+    }
+
+    // ------------------------------------------------------------------
     // buildLossNote
     // ------------------------------------------------------------------
 
@@ -1233,6 +1274,46 @@ class CrawlSupportTest {
         }
         val emptyMessage = buildZeroByteDiagnostic(emptyPage)
         assertTrue(emptyMessage.contains("no content"), emptyMessage)
+    }
+
+    // ------------------------------------------------------------------
+    // requireStandardSeeds
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a standard seed, a seed list and trailing LoadOptions are all accepted")
+    fun testRequireStandardSeedsAcceptsFetchableSeeds() {
+        requireStandardSeeds("https://example.com", null)
+        requireStandardSeeds("https://example.com -expires 1d", null)
+        requireStandardSeeds("file:///tmp/local.html", null)
+        requireStandardSeeds("", listOf("https://example.com/a", "http://localhost:18080/b"))
+    }
+
+    @Test
+    @DisplayName("a blank seed carries no url, so it is not the one refused")
+    fun testRequireStandardSeedsIgnoresBlanks() {
+        requireStandardSeeds("", listOf("", "   ", "https://example.com"))
+    }
+
+    @Test
+    @DisplayName("the first seed that is not a URL is refused by name, before anything is submitted")
+    fun testRequireStandardSeedsRefusesAMalformedSeed() {
+        val fromUrl = assertThrows<IllegalArgumentException> {
+            requireStandardSeeds("formats", null)
+        }
+        assertEquals("Malformed url: <formats>", fromUrl.message)
+
+        // The list is checked as well: the CLI's seed file arrives as `urls`.
+        val fromList = assertThrows<IllegalArgumentException> {
+            requireStandardSeeds("", listOf("https://example.com/a", "not-a-url", "htps://exmple.com"))
+        }
+        assertEquals("Malformed url: <not-a-url>", fromList.message)
+
+        // A misspelled scheme parses, so it has to be refused by the scheme check.
+        val misspelledScheme = assertThrows<IllegalArgumentException> {
+            requireStandardSeeds("htps://exmple.com -expires 1d", null)
+        }
+        assertEquals("Malformed url: <htps://exmple.com>", misspelledScheme.message)
     }
 
     private companion object {

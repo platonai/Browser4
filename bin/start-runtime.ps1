@@ -23,6 +23,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Emit UTF-8 through a redirected stream — see Set-Utf8ConsoleEncoding in
+# bin/common/Util.ps1 (under CP936 "·" becomes "??" and "═" becomes "?T").
+. (Join-Path $PSScriptRoot 'common/Util.ps1')
+
 # Resolve project root (2 levels up from this script's location)
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Resolve-Path "$ScriptDir\.."

@@ -22,6 +22,7 @@
 .PARAMETER Test
     One or more test names or categories to run.  Valid categories:
       smoke   — fast smoke tests (cli-basics)
+      local   — server-free local command surface (no browser, no backend)
       agent   — agent task tests
       swarm   — swarm/scrape lifecycle tests
       stress  — stress / load tests
@@ -95,6 +96,7 @@ if ($env:BROWSER4_SKIP_PRESTART -eq '1') {
 # Each entry:  Name (script basename without .ps1), Category, Description
 $Tests = @(
     [PSCustomObject]@{ Name = 'cli-basics';                     Category = 'smoke';   Description = 'Basic CLI functionality (version, help, open, close)' },
+    [PSCustomObject]@{ Name = 'local-commands';                 Category = 'local';   Description = 'Server-free local command surface (config, skills, snapshot, spaced-form contract)' },
     [PSCustomObject]@{ Name = 'agent-run-free-command';         Category = 'agent';   Description = 'Agent free-command task lifecycle' },
     [PSCustomObject]@{ Name = 'agent-run-page-visit';           Category = 'agent';   Description = 'Agent page-visit task lifecycle' },
     [PSCustomObject]@{ Name = 'agent-run-page-visit-interact';  Category = 'agent';   Description = 'Agent page-visit + interaction task lifecycle' },
@@ -113,6 +115,7 @@ $Tests = @(
 # Map category name → list of test names
 $Categories = @{
     smoke    = @('cli-basics')
+    local    = @('local-commands')
     agent    = @('agent-run-free-command', 'agent-run-page-visit', 'agent-run-page-visit-interact')
     swarm    = @('swarm-agents', 'stress-swarm-agents')
     stress   = @('stress-swarm-agents', 'stress-session', 'stress-install')

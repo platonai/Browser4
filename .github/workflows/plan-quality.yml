@@ -1,0 +1,94 @@
+name: Plan Quality (advisory)
+
+# Advisory gate for the Browser4 self-development planner (`browser4-cli code devtask`).
+#
+# Runs the plan-quality evaluation (bin/eval-devtask.ps1) against the REAL dev
+# wrapper, the REAL backend and the live pom graph. It grades plan shape, signal
+# binding (module / file / test class), the CLI argument contract, `--verify`
+# semantics, the structured verification verdict, the K9/K10 safety probes,
+# determinism and the read-only guarantee — 65 gates at the 4.14.2 baseline.
+#
+# Deliberately NOT a merge gate: it downloads/builds the runtime bundle and
+# starts a backend, so it is scheduled + manually dispatchable and never blocks a
+# pull request. `bin/test.sh verify` runs the same gate locally.
+
+on:
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: 'Treat every gate as a hard failure (-Strict)'
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    # Daily, after nightly (00:00 UTC) and nightly-cli (03:00 UTC) so the three
+    # jobs do not compete for the same runner minutes.
+    - cron: '30 4 * * *'
+
+concurrency:
+  group: plan-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  JAVA_VERSION: '25'
+  MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
+
+jobs:
+  plan-quality:
+    runs-on: ubuntu-latest
+    # Cold runner: Maven bundle build (~10 min) + Rust CLI build + 9 probes and
+    # the --verify run (~2 min). 75 minutes leaves room for a slow mirror.
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-environment
+        with:
+          java_version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli/browser4-cli
+
+      - name: Warm up the wrapper (build bundle, start backend)
+        shell: pwsh
+        run: |
+          # The FIRST wrapper invocation builds the runtime bundle and starts the
+          # backend (minutes on a cold runner). Doing it here keeps the
+          # evaluation's per-invocation timeout measuring planning, not Maven.
+          pwsh ./b4w.ps1 cli code workspace
+          if ($LASTEXITCODE -ne 0) {
+            throw "b4w warm-up failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Run plan-quality evaluation (strict)
+        if: github.event_name == 'schedule' || inputs.strict
+        shell: pwsh
+        run: |
+          pwsh ./bin/eval-devtask.ps1 -Strict -JsonPath "$env:RUNNER_TEMP/devtask-eval.json"
+
+      - name: Run plan-quality evaluation (fast)
+        if: github.event_name == 'workflow_dispatch' && !inputs.strict
+        shell: pwsh
+        run: |
+          pwsh ./bin/eval-devtask.ps1 -Fast -JsonPath "$env:RUNNER_TEMP/devtask-eval.json"
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: devtask-eval-report
+          path: ${{ runner.temp }}/devtask-eval.json
+          if-no-files-found: ignore
+          retention-days: 14

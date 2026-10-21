@@ -33,6 +33,22 @@ if (Test-Path $agentUtilsPath) {
     $script:AgentUtilsAvailable = $true
 }
 
+# ── Console encoding: always UTF-8 ──────────────────────────────────────────
+# Every script in this suite imports this module before its first write, and the
+# suite's output is captured to files that are read back as UTF-8 (see
+# Invoke-PwshScriptWithTimeout in bin/test-production.ps1).  A redirected stream
+# otherwise starts on the Windows OEM code page: under CP936 the decoration
+# becomes "??" and "═" becomes "?T" (CP936 A8 54 — the 0x54 is a literal 'T').
+# Inline rather than dot-sourced from bin/common so the suite still works when
+# it is copied out of the repository.
+try {
+    if ([Console]::OutputEncoding.CodePage -ne 65001) {
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    }
+} catch {
+    # A host without a usable console must not fail the tests.
+}
+
 # ============================================================================
 # Module-level state (script-scoped so it won't leak between tests)
 # ============================================================================
@@ -84,6 +100,7 @@ function Get-AiAnalyzer {
     }
 
     $knownAnalyzers = @(
+        @{ Bin = 'dsh';     Name = 'DSH'      },
         @{ Bin = 'claude';  Name = 'Claude'   },
         @{ Bin = 'copilot'; Name = 'Copilot'  }
     )
@@ -872,37 +889,43 @@ function Invoke-CopilotAnalysis {
 
     # Invoke the best available AI CLI.  When agent-utils is available (repo
     # layout preserved), delegate to it for full feature support.  Otherwise
-    # use the inline fallback that probes claude/copilot on PATH directly.
+    # use the inline fallback that probes dsh/claude/copilot on PATH directly.
     if ($script:AgentUtilsAvailable) {
         $analysisText = Invoke-AgentAiAnalysis -Prompt $fullPrompt -Quiet
     } else {
         $analyzer = Get-AiAnalyzer
         if (-not $analyzer) {
-            Write-Host '  ℹ No AI CLI found on PATH (checked: claude, copilot, dsh) — skipping analysis' -ForegroundColor DarkGray
+            Write-Host '  ℹ No AI CLI found on PATH (checked: dsh, claude, copilot) — skipping analysis' -ForegroundColor DarkGray
             return $null
         }
         Write-Host "`n🤖 Running AI analysis with $analyzer ..." -ForegroundColor Magenta
         try {
-            # Write the prompt to a temp file and pipe it via stdin instead of
-            # passing it as a CLI argument.  This avoids "Argument list too long"
-            # (E2BIG) on Linux when the combined log content + analysis prompt
-            # exceeds the OS execve() argv limit.  Pattern follows the coworker
-            # agent.ps1 Start-AgentProcess stdin-redirect path.
+            # Write the prompt to a temp file and hand the CLI only a short
+            # pointer to it.  This avoids "Argument list too long" (E2BIG) on
+            # Linux when the combined log content + analysis prompt exceeds the
+            # OS execve() argv limit, and it works for every backend: dsh has no
+            # prompt flag and rejects stdin, so its task must stay on argv.
             $promptFile = [System.IO.Path]::GetTempFileName()
-            $stdOutFile = [System.IO.Path]::GetTempFileName()
-            $stdErrFile = [System.IO.Path]::GetTempFileName()
+            $outputFile = [System.IO.Path]::GetTempFileName()
             try {
                 Set-Content -Path $promptFile -Value $fullPrompt -Encoding UTF8 -NoNewline
-                $null = Start-Process -FilePath $analyzer -ArgumentList '-p' `
-                    -RedirectStandardInput $promptFile `
-                    -RedirectStandardOutput $stdOutFile `
-                    -RedirectStandardError $stdErrFile `
-                    -NoNewWindow -Wait
-                $stdOut = if (Test-Path $stdOutFile) { Get-Content -Path $stdOutFile -Raw -Encoding UTF8 } else { '' }
-                $stdErr = if (Test-Path $stdErrFile) { Get-Content -Path $stdErrFile -Raw -Encoding UTF8 } else { '' }
-                $analysisText = (@($stdOut, $stdErr) -join "`n").Trim()
+                $shortPrompt = "Please read the instructions in the file '$promptFile' and follow them exactly. Do not summarise the file — execute every instruction it contains."
+                $promptDir = Split-Path $promptFile -Parent
+                # Per-backend non-interactive grammar.
+                $analyzerArgs = switch ($analyzer) {
+                    'dsh' { @('--profile', 'headless', $shortPrompt) }
+                    'claude' { @('-p', $shortPrompt, '--add-dir', $promptDir) }
+                    default { @('-p', $shortPrompt) }
+                }
+                # Array splatting keeps one argv element per item, so the prompt's
+                # spaces survive; Start-Process -ArgumentList would re-split them.
+                & $analyzer @analyzerArgs *> $outputFile
+                $analysisText = if (Test-Path $outputFile) {
+                    (Get-Content -Path $outputFile -Raw -Encoding UTF8).Trim()
+                }
+                else { '' }
             } finally {
-                Remove-Item $promptFile, $stdOutFile, $stdErrFile -ErrorAction SilentlyContinue
+                Remove-Item $promptFile, $outputFile -ErrorAction SilentlyContinue
             }
         } catch {
             Write-Warning "Invoke-CopilotAnalysis: $analyzer invocation failed: $($_.Exception.Message)"

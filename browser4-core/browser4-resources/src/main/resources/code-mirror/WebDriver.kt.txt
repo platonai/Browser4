@@ -1896,6 +1896,47 @@ interface WebDriver : Closeable {
     suspend fun evaluateValueDetail(expression: String, awaitPromise: Boolean): JsEvaluation?
 
     /**
+     * Returns detailed evaluation metadata for a script evaluated in a chosen JavaScript world.
+     *
+     * The world-less overloads prefer the driver's isolated world, which is the right
+     * default for driver-internal helpers (they rely on the injected runtime and must
+     * not be reachable from page script) but the wrong one for a caller whose script
+     * reads the page's own state: `window.myApp` reads `undefined` in the isolated
+     * world even though the page defines it.  Use [JsWorld.MAIN] to evaluate against
+     * the page's globals.
+     *
+     * @param expression The JavaScript expression to evaluate.
+     * @param world The world to evaluate in; see [JsWorld].
+     * @return A [JsEvaluation] object containing the result value and metadata.
+     * */
+    @Throws(WebDriverException::class)
+    suspend fun evaluateDetail(expression: String, world: JsWorld): JsEvaluation? =
+        evaluateDetail(expression)
+
+    /**
+     * Returns detailed value evaluation metadata for a script evaluated in a chosen JavaScript world.
+     *
+     * @param expression The JavaScript expression to evaluate.
+     * @param awaitPromise Whether to wait for the evaluated expression's Promise to resolve.
+     * @param world The world to evaluate in; see [JsWorld].
+     * @return A [JsEvaluation] object containing the result value and metadata.
+     * */
+    @Throws(WebDriverException::class)
+    suspend fun evaluateValueDetail(expression: String, awaitPromise: Boolean, world: JsWorld): JsEvaluation? =
+        evaluateValueDetail(expression, awaitPromise)
+
+    /**
+     * Evaluates a script in a chosen JavaScript world and returns the value.
+     *
+     * @param expression The JavaScript expression to evaluate.
+     * @param world The world to evaluate in; see [JsWorld].
+     * @return The result as a JSON-compatible object (Map, List, String, Number, Boolean, or null).
+     * */
+    @Throws(WebDriverException::class)
+    suspend fun evaluateValue(expression: String, world: JsWorld): Any? =
+        evaluateValueDetail(expression, awaitPromise = false, world = world)?.value
+
+    /**
      * Executes JavaScript for the element located by [selector] and returns the result as a JSON-serializable value. @mcp
      *
      * @param selector The selector of the element, multiple formats supported.

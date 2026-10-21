@@ -29,6 +29,17 @@ object MediaUtils {
     /** Known audio file extensions */
     private val AUDIO_EXTENSIONS = setOf("mp3", "aac", "ogg", "wav", "flac", "m4a", "opus", "wma")
 
+    /**
+     * Longest `data:` URI echoed verbatim, in characters.
+     *
+     * The injected detection probe uses the same limit, so the two ends agree on which
+     * payloads stay intact.
+     */
+    const val DATA_URI_VERBATIM_LIMIT = 200
+
+    /** An already summarised data URI, e.g. `data:video/mp4;base64,<856 B>`. */
+    private val SUMMARIZED_DATA_URI = Regex("""^data:[^,]*,\s*<\d+\s*B>$""", RegexOption.IGNORE_CASE)
+
     /** Common video MIME types */
     private val VIDEO_MIME_TYPES = setOf(
         "video/mp4", "video/webm", "video/x-matroska", "video/quicktime",
@@ -67,6 +78,49 @@ object MediaUtils {
         val path = url.lowercase().substringBefore('?').substringBefore('#')
         val ext = path.substringAfterLast('.', "").lowercase()
         return ext in VIDEO_EXTENSIONS
+    }
+
+    /**
+     * Check whether a URL is an opaque Media Source Extensions handle (`blob:` or
+     * `mediasource:`) that only the page's own player can resolve.
+     *
+     * Such a URL cannot be downloaded and carries no stream information; detection
+     * reports the underlying manifest next to it instead.
+     */
+    fun isOpaqueMediaUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        return url.startsWith("blob:", ignoreCase = true) || url.startsWith("mediasource:", ignoreCase = true)
+    }
+
+    /**
+     * Replace the payload of a long `data:` URI with its byte size.
+     *
+     * Inline payloads are useless for downloading (downloads only accept http/https) yet can
+     * be megabytes long, so output echoes `data:video/mp4;base64,<856 B>` instead of the
+     * base64 blob. Payloads of at most [DATA_URI_VERBATIM_LIMIT] characters are kept intact so
+     * a caller can still decode them, an already summarised value is returned unchanged, and
+     * non-`data:` values are never touched.
+     */
+    fun summarizeDataUri(value: String): String {
+        if (value.length <= DATA_URI_VERBATIM_LIMIT) return value
+        if (!value.startsWith("data:", ignoreCase = true)) return value
+        if (SUMMARIZED_DATA_URI.matches(value)) return value
+        val comma = value.indexOf(',')
+        if (comma <= 0) return value
+        val meta = value.substring(0, comma)
+        val payload = value.substring(comma + 1)
+        val size = if (meta.contains(";base64", ignoreCase = true)) {
+            decodedBase64Size(payload)
+        } else {
+            payload.length.toLong()
+        }
+        return "$meta,<$size B>"
+    }
+
+    /** Decoded size of a base64 payload, from its character count and padding. */
+    private fun decodedBase64Size(payload: String): Long {
+        val padding = payload.takeLast(2).count { it == '=' }
+        return (payload.length.toLong() * 3 / 4 - padding).coerceAtLeast(0)
     }
 
     /**

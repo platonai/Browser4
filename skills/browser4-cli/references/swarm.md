@@ -60,7 +60,7 @@ browser4-cli swarm create [--profile-mode SEQUENTIAL|TEMPORARY] [--max-open-tabs
 | `--max-open-tabs` | `8` | Max open tabs per browser context |
 | `--max-browser-contexts` | `2` | Number of isolated browser instances |
 | `--display-mode` | `HEADLESS` | `GUI`, `HEADLESS`, or `SUPERVISED` (headless-first convention: only an explicit `GUI` opens visible windows) |
-| `--clear-stale` | (flag) | Automatically clear stale tasks from prior sessions before creating |
+| `--clear-stale` | (flag) | Clear the **still-pending** swarm tasks left by prior sessions before creating (finished tasks of prior sessions are pruned automatically, without this flag) |
 
 The session persists until `browser4-cli swarm close` or `close`.
 
@@ -297,7 +297,20 @@ browser4-cli swarm list --clear   # remove all tracked swarm tasks
 
 > **Note:** `swarm list` queries the backend for live status of each tracked task on every invocation. It shows a status summary (N total, X completed, Y queued, Z failed) followed by the task table. The STATUS column uses task-oriented labels: `queued` (waiting for worker), `processing`, `completed`, or `failed (<reason>)`. The COMMAND column distinguishes `swarm-submit` from `swarm-query`. Use `--clear` to clean up stale entries between sessions.
 
-> **Tip:** `swarm create` warns if stale tasks from prior sessions are still tracked, since old completed tasks can interfere with the worker pool. In interactive mode (TTY), it prompts `Clear them now? [Y/n]` — press Enter or type `y` to clear. Use `swarm create --clear-stale` for non-interactive/scripted use, or `swarm list --clear` to remove stale entries manually.
+> **Tip:** `swarm create` cleans up task history for you, in two different ways:
+> **finished tasks are pruned automatically** — every `swarm create` drops the tracked
+> `completed`/`failed` swarm tasks of prior sessions with no prompt and prints the ids it removed
+> (`Auto-cleaned N completed swarm task(s) from prior sessions …: <ids>`; `--json` adds
+> `auto_cleaned_tasks` and `auto_cleaned_task_ids`, so a script can tell "nothing was tracked" from
+> "your history was pruned"). **Still-pending tasks** — the ones that can actually block the worker
+> pool — are never pruned silently: a TTY prompts `Clear them now? [Y/n]`, a non-TTY (pipe, CI)
+> prints a warning and keeps them, and `swarm create --clear-stale` clears them in one step. Run
+> `swarm list` *before* `swarm create` if you need the finished history, or `swarm list --clear`
+> afterwards.
+>
+> **Note:** there is no `--keep` opt-out for the automatic pruning yet, and the pruned ids are
+> announced only on stdout (plus the JSON fields above) — a job that must retain the history has to
+> read `swarm list` first.
 
 ### 6. Close the Swarm Session
 
@@ -312,7 +325,7 @@ Also accessible via: `close`, `close-all`, or `kill-all`. The swarm session is i
 | Flag | Applies to | Description |
 |------|-----------|-------------|
 | `--display-mode <mode>` | `swarm create` | Browser display mode for the session (e.g. `HEADLESS`) |
-| `--clear-stale` | `swarm create` | Clear stale tasks from previous sessions |
+| `--clear-stale` | `swarm create` | Clear the still-pending tasks left by previous sessions (finished ones are pruned automatically) |
 | `--sql <query>` | `swarm query` | X-SQL query template; `@file` reads from file |
 | `--seed-file <file>` | `swarm query` / `swarm submit` | Read target URLs from a file |
 | `--refresh` | `swarm query` | Re-fetch pages instead of reusing the cache |

@@ -34,7 +34,10 @@ import kotlin.io.path.*
  * Summary of a site crawl operation.
  */
 data class CrawlSummary(
-    /** Total pages crawled (including the starting page) */
+    /** Number of pages attempted: [pagesCrawled] + [pagesFailed] */
+    val pagesAttempted: Int,
+
+    /** Number of pages successfully converted and saved */
     val pagesCrawled: Int,
 
     /** Number of pages that failed to convert or save */
@@ -49,8 +52,14 @@ data class CrawlSummary(
     /** Total duration in milliseconds */
     val durationMs: Long,
 
-    /** Per-page results (for successful conversions) */
+    /** Per-page results, successful and failed, in crawl order */
     val pageResults: List<CrawlPageResult>,
+
+    /** URL the session's active tab was on before the crawl (restored afterwards) */
+    val entryUrl: String = "",
+
+    /** Whether the session's active tab was navigated back to [entryUrl] */
+    val tabRestored: Boolean = false,
 )
 
 /**
@@ -63,11 +72,17 @@ data class CrawlPageResult(
     /** Page title */
     val title: String,
 
-    /** Path to the saved markdown file */
+    /** Path to the saved markdown file (empty when the page failed) */
     val filePath: String,
 
-    /** Number of internal links discovered on this page */
-    val linkCount: Int,
+    /** Number of markdown links in the saved file (0 when nothing was saved) */
+    val linkCount: Int = 0,
+
+    /** Number of internal (same-domain) links discovered on the page */
+    val internalLinkCount: Int = 0,
+
+    /** Number of characters in the saved markdown file */
+    val charCount: Int = 0,
 
     /** Whether conversion succeeded */
     val success: Boolean,
@@ -99,6 +114,11 @@ open class SiteCrawler(
      * Uses [WebDriver] navigation for full JS-rendered content extraction.
      * This is the primary crawl method for browser-based crawling.
      *
+     * The crawl drives the session's active tab page by page, then navigates
+     * that tab back to the page it was on when the crawl started, so the
+     * caller's page (and its element refs) survives the crawl. The entry URL
+     * and whether the tab could be restored are reported in the summary.
+     *
      * @param driver the WebDriver connected to the browser (must be on or navigate to the start page)
      * @param startUrl optional override URL to navigate to first; defaults to the current page URL
      * @param outputDir optional override output directory
@@ -108,6 +128,54 @@ open class SiteCrawler(
         driver: WebDriver,
         startUrl: String? = null,
         outputDir: Path? = null,
+    ): CrawlSummary {
+        val entryUrl = driver.currentUrl()
+        var tabRestored = false
+
+        val summary = try {
+            crawlPages(driver, startUrl, outputDir, entryUrl)
+        } finally {
+            tabRestored = restoreEntryPage(driver, entryUrl)
+        }
+
+        return summary.copy(entryUrl = entryUrl, tabRestored = tabRestored)
+    }
+
+    /**
+     * Navigate the session's active tab back to [entryUrl].
+     *
+     * @param driver the WebDriver whose tab was navigated by the crawl
+     * @param entryUrl the URL to restore; blank when the entry page is unknown
+     * @return true when the tab is on the entry page again
+     */
+    private suspend fun restoreEntryPage(driver: WebDriver, entryUrl: String): Boolean {
+        if (entryUrl.isBlank()) return false
+
+        return try {
+            if (driver.currentUrl() == entryUrl) {
+                true
+            } else {
+                logger.info("Restoring the session tab to {} after the crawl", entryUrl)
+                driver.navigate(entryUrl)
+                true
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to restore the session tab to {}: {}", entryUrl, e.message)
+            false
+        }
+    }
+
+    /**
+     * Run the BFS crawl loop, saving every crawled page as markdown under [outputDir].
+     *
+     * @param entryUrl the URL the session tab was on before the crawl; used as the
+     *   starting point when [startUrl] is blank
+     */
+    private suspend fun crawlPages(
+        driver: WebDriver,
+        startUrl: String?,
+        outputDir: Path?,
+        entryUrl: String,
     ): CrawlSummary {
         val startTime = System.currentTimeMillis()
         val dir = outputDir ?: Path.of(config.outputDir)
@@ -119,7 +187,7 @@ open class SiteCrawler(
             driver.navigate(startUrl)
             driver.currentUrl()
         } else {
-            driver.currentUrl()
+            entryUrl
         }
 
         logger.info("Starting site crawl from: $url (maxDepth=${config.maxDepth}, maxPages=${config.maxPages})")
@@ -152,7 +220,6 @@ open class SiteCrawler(
                             url = currentUrl,
                             title = "",
                             filePath = "",
-                            linkCount = 0,
                             success = false,
                             error = "Navigation failed: ${e.message}",
                         )
@@ -173,7 +240,6 @@ open class SiteCrawler(
                         url = currentUrl,
                         title = "",
                         filePath = "",
-                        linkCount = 0,
                         success = false,
                         error = "Conversion failed: ${e.message}",
                     )
@@ -189,7 +255,7 @@ open class SiteCrawler(
                         url = currentUrl,
                         title = result.title,
                         filePath = "",
-                        linkCount = result.internalLinkCount,
+                        internalLinkCount = result.internalLinkCount,
                         success = false,
                         error = "No content extracted",
                     )
@@ -226,7 +292,9 @@ open class SiteCrawler(
                         url = currentUrl,
                         title = result.title,
                         filePath = uniquePath.toAbsolutePath().toString(),
-                        linkCount = result.internalLinkCount,
+                        linkCount = result.markdownLinkCount,
+                        internalLinkCount = result.internalLinkCount,
+                        charCount = result.markdown.length,
                         success = true,
                     )
                 )
@@ -237,7 +305,7 @@ open class SiteCrawler(
                         url = currentUrl,
                         title = result.title,
                         filePath = "",
-                        linkCount = result.internalLinkCount,
+                        internalLinkCount = result.internalLinkCount,
                         success = false,
                         error = "Save failed: ${e.message}",
                     )
@@ -273,13 +341,15 @@ open class SiteCrawler(
         }
 
         val durationMs = System.currentTimeMillis() - startTime
+        val pagesCrawled = results.count { it.success }
         logger.info(
-            "Crawl complete: {} pages crawled, {} failed, {} links discovered, {} images, {}ms",
-            results.size, failed, totalLinksDiscovered, totalImages, durationMs
+            "Crawl complete: {} pages attempted, {} succeeded, {} failed, {} links discovered, {} images, {}ms",
+            results.size, pagesCrawled, failed, totalLinksDiscovered, totalImages, durationMs
         )
 
         return CrawlSummary(
-            pagesCrawled = results.size,
+            pagesAttempted = results.size,
+            pagesCrawled = pagesCrawled,
             pagesFailed = failed,
             totalLinksDiscovered = totalLinksDiscovered,
             totalImages = totalImages,
@@ -307,8 +377,7 @@ open class SiteCrawler(
             MarkdownUtils.validateUrl(url)
         } catch (e: IllegalArgumentException) {
             return CrawlPageResult(
-                url = url, title = "", filePath = "",
-                linkCount = 0, success = false, error = e.message,
+                url = url, title = "", filePath = "", success = false, error = e.message,
             )
         }
 
@@ -326,8 +395,7 @@ open class SiteCrawler(
             if (!response.isSuccessful) {
                 response.close()
                 return CrawlPageResult(
-                    url = validatedUrl, title = "", filePath = "",
-                    linkCount = 0, success = false,
+                    url = validatedUrl, title = "", filePath = "", success = false,
                     error = "HTTP ${response.code}: ${response.message}",
                 )
             }
@@ -337,13 +405,14 @@ open class SiteCrawler(
 
             if (html.isBlank()) {
                 return CrawlPageResult(
-                    url = validatedUrl, title = "", filePath = "",
-                    linkCount = 0, success = false, error = "Empty response body",
+                    url = validatedUrl, title = "", filePath = "", success = false,
+                    error = "Empty response body",
                 )
             }
 
             val markdown = htmlToMarkdown(html, validatedUrl)
-            val title = Jsoup.parse(html).title().trim()
+            val title = resolveDocumentTitle(Jsoup.parse(html, validatedUrl))
+            val linkCount = converter.countMarkdownLinks(markdown)
 
             val filename = MarkdownUtils.generateFilename(
                 title.ifBlank { validatedUrl.removePrefix("https://").removePrefix("http://") },
@@ -365,14 +434,14 @@ open class SiteCrawler(
                 url = validatedUrl,
                 title = title,
                 filePath = uniquePath.toAbsolutePath().toString(),
-                linkCount = 0,
+                linkCount = linkCount,
+                charCount = markdown.length,
                 success = true,
             )
         } catch (e: Exception) {
             logger.warn("HTTP fetch failed for {}: {}", validatedUrl, e.message)
             CrawlPageResult(
-                url = validatedUrl, title = "", filePath = "",
-                linkCount = 0, success = false, error = e.message,
+                url = validatedUrl, title = "", filePath = "", success = false, error = e.message,
             )
         }
     }
@@ -383,13 +452,23 @@ open class SiteCrawler(
      * This is a simplified converter for static HTML. For full JS-rendered content,
      * use [MarkdownConverter.convert] with a WebDriver instead.
      */
-    open fun htmlToMarkdown(html: String, pageUrl: String): String {
-        val doc = Jsoup.parse(html, pageUrl)
+    open fun htmlToMarkdown(html: String, pageUrl: String): String =
+        htmlToMarkdown(Jsoup.parse(html, pageUrl), pageUrl)
+
+    /**
+     * Convert an already parsed document to Markdown: front matter, the document
+     * title as H1, then the body.
+     */
+    private fun htmlToMarkdown(doc: Document, pageUrl: String): String {
         val sb = StringBuilder()
+
+        // The title comes from <title>, the first <h1>, or og:title, so pages
+        // without a <title> (httpbin.org/html) still get front matter and a
+        // filename derived from their heading.
+        val title = resolveDocumentTitle(doc)
 
         // Front matter
         if (config.includeFrontMatter) {
-            val title = doc.title().trim()
             if (title.isNotBlank()) {
                 sb.appendLine("---")
                 sb.appendLine("title: \"${title.replace("\"", "\\\"")}\"")
@@ -408,7 +487,6 @@ open class SiteCrawler(
         }
 
         // Title
-        val title = doc.title().trim()
         if (title.isNotBlank()) {
             sb.appendLine("# $title")
             sb.appendLine()
@@ -424,12 +502,31 @@ open class SiteCrawler(
     }
 
     /**
+     * Resolve the document title: `<title>`, then the first `<h1>`, then
+     * `og:title`. Jsoup's `title()` is blank for pages without a `<title>`,
+     * which used to drop both the front matter and the reported title.
+     */
+    private fun resolveDocumentTitle(doc: Document): String {
+        val htmlTitle = doc.title().trim()
+        if (htmlTitle.isNotBlank()) return htmlTitle
+
+        val heading = doc.selectFirst("h1")?.text()?.trim()
+        if (!heading.isNullOrBlank()) return heading
+
+        return doc.selectFirst("meta[property=og:title]")?.attr("content")?.trim() ?: ""
+    }
+
+    /**
      * Recursively convert a Jsoup element and its children to markdown.
      */
     private fun convertElement(element: org.jsoup.nodes.Element, sb: StringBuilder, baseUrl: String) {
         for (child in element.children()) {
             when (child.tagName().lowercase()) {
-                "h1", "h2", "h3", "h4", "h5", "h6" -> {
+                "h1" -> {
+                    // Skipped: [htmlToMarkdown] already emits the resolved document
+                    // title as the H1 (same rule as the CDP converter).
+                }
+                "h2", "h3", "h4", "h5", "h6" -> {
                     val level = child.tagName()[1].digitToInt()
                     val text = child.wholeText().trim().replace(Regex("\\s+"), " ")
                     if (text.isNotBlank()) {

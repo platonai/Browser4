@@ -103,6 +103,10 @@ $script:PassCount = 0
 $script:FailCount = 0
 $script:Failures = [System.Collections.Generic.List[string]]::new()
 
+# Emit UTF-8 through a redirected stream — see Set-Utf8ConsoleEncoding in
+# bin/common/Util.ps1 (under CP936 "·" becomes "??" and "═" becomes "?T").
+. (Join-Path $PSScriptRoot 'common/Util.ps1')
+
 # ── 工具函数 ────────────────────────────────────────────────────────────────
 
 function Write-Section([string]$Title) {

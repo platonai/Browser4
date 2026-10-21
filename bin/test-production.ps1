@@ -128,6 +128,21 @@ if ($PSBoundParameters.Count -eq 0 -or $Help) {
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+# ── Console encoding: always UTF-8 ────────────────────────────────────────────
+# A redirected stream starts on the Windows OEM code page (CP936 on a Chinese
+# host) while CI logs and the acceptance transcript are read as UTF-8.  Under
+# CP936 the decoration turns into line noise: "·" and "─" become "??" (A1 A4 /
+# A1 A5 read as UTF-8) and "═" becomes "?T" (A8 54 — the 0x54 is a literal 'T').
+# Same pin as bin/test.ps1; the pwsh children this runner starts inherit their
+# own console, so the pin here keeps this runner's own output readable.
+try {
+    if ([Console]::OutputEncoding.CodePage -ne 65001) {
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    }
+} catch {
+    # A host without a usable console must not fail the run over an encoding.
+}
+
 # Resolve the repo root for informational purposes only — do NOT require it.
 # This script is designed to run from any location with a globally-installed
 # browser4-cli.  Sibling scripts are resolved relative to $ScriptDir, and

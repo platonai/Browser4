@@ -306,7 +306,7 @@ browser4-cli htmlsnapshot export --file "compliance-$(date +%Y%m%d)-savings.html
 
 **Problem:** After every frontend deploy, the QA pipeline must capture the DOM state of 10 critical pages and compare them against known-good baselines. The accessibility-tree `snapshot` won't work here — we need the actual DOM structure.
 
-**Why HTML Snapshot:** `htmlsnapshot` captures raw HTML — the source of truth for DOM structure. `export` with `--file` writes it to disk for `diff`. Runs in CI without a display.
+**Why HTML Snapshot:** `htmlsnapshot` captures the DOM as an annotated serialization — the source of truth for DOM structure, plus capture annotations (`vi` boxes and synthetic `normalizedURI`/`href` head links; two runs of the same page diff identically, so those annotations stay stable). `export` with `--file` writes it to disk for `diff`. Runs in CI without a display.
 
 ### 9a. Capture and diff in CI
 

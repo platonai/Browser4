@@ -22,7 +22,11 @@ class MavenBuildSupportTest {
         val diags = MavenBuildSupport.parseDiagnostics(output)
         assertEquals(1, diags.size, "expected exactly one diagnostic, got $diags")
         val d = diags[0]
-        assertEquals("CodingToolExecutor.kt", d.file)
+        // The full path is kept (plan P1.4): a bare basename cannot be opened.
+        assertTrue(
+            d.file.endsWith("ai/platon/pulsar/agentic/tools/builtin/CodingToolExecutor.kt"),
+            "file: ${d.file}"
+        )
         assertEquals(73, d.line)
         assertEquals(58, d.column)
         assertEquals("error", d.severity)
@@ -37,7 +41,7 @@ class MavenBuildSupportTest {
         """.trimIndent()
         val diags = MavenBuildSupport.parseDiagnostics(output)
         assertEquals(1, diags.size)
-        assertEquals("ArtifactScaffolds.kt", diags[0].file)
+        assertTrue(diags[0].file.endsWith("ArtifactScaffolds.kt"), "file: ${diags[0].file}")
         assertEquals(271, diags[0].line)
         assertTrue(diags[0].message.contains("Unresolved reference 'path'"))
     }
@@ -50,9 +54,53 @@ class MavenBuildSupportTest {
         """.trimIndent()
         val diags = MavenBuildSupport.parseDiagnostics(output)
         assertEquals(1, diags.size)
-        assertEquals("Foo.kt", diags[0].file)
+        assertTrue(diags[0].file.endsWith("Foo.kt"), "file: ${diags[0].file}")
         assertEquals(12, diags[0].line)
         assertEquals(5, diags[0].column)
+    }
+
+    @Test
+    @DisplayName("parseDiagnostics parses the javac bracket form (path:[line,col])")
+    fun parseJavacBracketFormat() {
+        val output = """
+            [ERROR] /home/dev/Browser4/browser4-core/src/main/java/ai/platon/pulsar/Foo.java:[34,2] cannot find symbol
+        """.trimIndent()
+        val diags = MavenBuildSupport.parseDiagnostics(output)
+        assertEquals(1, diags.size, "diags: $diags")
+        assertEquals(34, diags[0].line)
+        assertEquals(2, diags[0].column)
+        assertEquals("error", diags[0].severity)
+        assertEquals("cannot find symbol", diags[0].message)
+    }
+
+    @Test
+    @DisplayName("parseDiagnostics distinguishes e: errors from w: warnings")
+    fun parseKotlinSeverityPrefixes() {
+        val output = """
+            e: file:///D:/repo/A.kt:1:1 Unresolved reference 'x'.
+            w: file:///D:/repo/A.kt:2:1 Parameter 'y' is never used.
+        """.trimIndent()
+        val diags = MavenBuildSupport.parseDiagnostics(output)
+        assertEquals(2, diags.size, "diags: $diags")
+        assertEquals("error", diags[0].severity)
+        assertEquals("warning", diags[1].severity)
+    }
+
+    @Test
+    @DisplayName("parseDiagnostics makes paths workspace-relative when a root is given")
+    fun parseWorkspaceRelativePaths() {
+        val root = java.nio.file.Files.createTempDirectory("b4-diag")
+        try {
+            val file = root.resolve("browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/Foo.kt")
+            java.nio.file.Files.createDirectories(file.parent)
+            java.nio.file.Files.writeString(file, "class Foo")
+            val output = "[ERROR] $file:12:5: error: Unresolved reference 'bar'"
+            val diags = MavenBuildSupport.parseDiagnostics(output, root)
+            assertEquals(1, diags.size, "diags: $diags")
+            assertEquals("browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/Foo.kt", diags[0].file)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
     }
 
     @Test
@@ -72,7 +120,11 @@ class MavenBuildSupportTest {
         """.trimIndent()
         val diags = MavenBuildSupport.parseDiagnostics(output)
         assertEquals(3, diags.size)
-        assertEquals(listOf("A.kt", "B.kt", "C.kt"), diags.map { it.file })
+        // Full paths are kept (plan P1.4) — a bare basename cannot be opened.
+        assertEquals(
+            listOf("D:/a/A.kt", "D:/a/B.kt", "D:/a/C.kt"),
+            diags.map { it.file },
+        )
         assertEquals("warning", diags[2].severity)
     }
 
@@ -115,6 +167,71 @@ class MavenBuildSupportTest {
         val formatted = MavenBuildSupport().format(result)
         assertTrue(formatted.contains("no parseable diagnostics"))
         assertTrue(formatted.contains("some opaque error output"))
+    }
+
+    // ==================== module selector fallback ====================
+
+    @Test
+    @DisplayName("Maven's path-selector diagnostic is recognized")
+    fun selectorFailureDetected() {
+        val failure = """
+            [ERROR] Could not find the selected project in the reactor: browser4-coding @
+            [ERROR] -> [Help 1]
+        """.trimIndent()
+        assertTrue(isMavenModuleSelectorFailure(failure))
+        assertTrue(isMavenModuleSelectorFailure("could not find the selected project in the reactor: x"))
+        assertFalse(isMavenModuleSelectorFailure("[ERROR] Unresolved reference 'x'"))
+        assertFalse(isMavenModuleSelectorFailure("BUILD SUCCESS"))
+    }
+
+    @Test
+    @DisplayName("command shapes stay stable (goal first for test, artifact-id fallback selectable)")
+    fun commandShapes() {
+        // The goal comes first for tests — every log/document/test assumes it.
+        assertEquals(
+            "mvn test -pl browser4-rest -am -Dtest=XControllerTest -DskipTests=false -Dsurefire.failIfNoSpecifiedTests=false -q",
+            mavenTestCommand("mvn", "browser4-rest", listOf("XControllerTest")),
+        )
+        assertEquals(
+            "mvn test -pl browser4-rest -am -DskipTests=false -q",
+            mavenTestCommand("mvn", "browser4-rest", emptyList()),
+        )
+        // The fallback replaces the selector only.
+        assertEquals(
+            "mvnw -pl :browser4-coding -am compile -DskipTests -q",
+            mavenBuildCommand("mvnw", ":browser4-coding", "compile", skipTests = true),
+        )
+        assertEquals(
+            "mvnw -pl browser4-coding -am compile -q",
+            mavenBuildCommand("mvnw", "browser4-coding", "compile", skipTests = false),
+        )
+    }
+
+    @Test
+    @DisplayName("the module artifactId is read from its pom (parent excluded, ':' prefix tolerated)")
+    fun artifactIdResolvedFromPom() {
+        val root = java.nio.file.Files.createTempDirectory("b4-mvn-module")
+        try {
+            val moduleDir = java.nio.file.Files.createDirectories(root.resolve("browser4-demo"))
+            java.nio.file.Files.writeString(
+                moduleDir.resolve("pom.xml"),
+                """
+                <project>
+                  <parent>
+                    <artifactId>browser4</artifactId>
+                    <version>4.14.2-SNAPSHOT</version>
+                  </parent>
+                  <artifactId>browser4-demo</artifactId>
+                </project>
+                """.trimIndent()
+            )
+            val shell = CodingAgentShell(baseDir = root)
+            assertEquals("browser4-demo", resolveModuleArtifactId(shell, "browser4-demo", root.toString()))
+            assertEquals("browser4-demo", resolveModuleArtifactId(shell, ":browser4-demo", root.toString()))
+            assertNull(resolveModuleArtifactId(shell, "no-such-module", root.toString()))
+        } finally {
+            root.toFile().deleteRecursively()
+        }
     }
 }
 

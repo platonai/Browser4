@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
+import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PGInstructResult
@@ -42,7 +43,20 @@ data class AgentTaskStatus(
     var eventTrace: String? = null,
 
     var request: PageVisitRequest? = null,
-    var instructResults: MutableList<PGInstructResult> = mutableListOf()
+    var instructResults: MutableList<PGInstructResult> = mutableListOf(),
+
+    /**
+     * The HTTP status of the page this task ended on, as
+     * [DocumentHttpStatus] observed it, or [PAGE_STATUS_UNKNOWN] when no page
+     * status was observed (a coding task, a task that never loaded a page, a
+     * browser that does not report navigation timing).
+     *
+     * It describes the PAGE, not the task, so it must never default to a
+     * task-lifecycle code: this field's absence used to surface as
+     * `201 / SC_CREATED` — "created" — in every agent and loop record, while the
+     * same record's message said the page had loaded with HTTP 200.
+     */
+    var pageStatusCode: Int = PAGE_STATUS_UNKNOWN,
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
 
@@ -106,6 +120,15 @@ data class AgentTaskStatus(
      * The reason for failure when the agent task does not complete successfully.
      */
     var failureReason: String? = null
+
+    /**
+     * The directory this task's tools wrote into (the agent's isolated workspace).
+     *
+     * Recorded when the task starts so a finished task can hand its caller the place
+     * its deliverables actually live — the extracted data of a "return X" task is
+     * often a file, not a field of the summary.
+     */
+    var workspace: String? = null
 
     companion object {
         fun notFound(id: String) = AgentTaskStatus(id, ResourceStatus.SC_NOT_FOUND, processState = "done")

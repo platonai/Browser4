@@ -64,7 +64,7 @@ open class RecaptchaDetector(val conf: ImmutableConfig) : CaptchaDetector {
                 action = action,
                 selector = ".g-recaptcha",
                 confidence = 0.95f,
-                metadata = mapOf("widgetCount" to widgetCount.toString())
+                widgetCount = widgetCount
             )
         } catch (e: Exception) {
             logger.trace("reCAPTCHA detection error: {}", e.message)

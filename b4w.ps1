@@ -90,10 +90,176 @@ for ($i = 0; $i -lt $args.Count; $i++) {
 # 'C:/Program Files/Git/').  The original token is lost before this
 # script runs — a mangled argument would be forwarded to the CLI and
 # silently produce wrong results (e.g. a snapshot grep pattern reporting
-# '0 matches found').  Detect the rewritten form and fail fast with
-# guidance; the conversion-free route from Git Bash is ./b4w.sh, which
-# exports MSYS2_ARG_CONV_EXCL='*'.  Legit '/d/...'-style conversions to
-# other drives are never under the Git root, so they pass through.
+# '0 matches found', or '--path /' arriving as a path on C:).  Detect the
+# rewritten form and fail fast with guidance that includes the de-converted
+# command to re-run; the conversion-free route from Git Bash is ./b4w.sh,
+# which exports MSYS2_ARG_CONV_EXCL='*'.  Legit '/d/...'-style conversions
+# to other drives are never under the Git root, so they pass through.
+#
+# MSYS rewrites only the part *after* '=' in a name=value token, and — as
+# observed with Git for Windows' MSYS2 — the rewritten value is then split
+# into two argv tokens, because the drive path it builds is not re-quoted:
+#   '--path=/'    arrives as '[--path=C]' + '[/Program Files/Git/]'
+#   '-olp=/x'     arrives as '[-olp=C]'   + '[/Program Files/Git/x]'
+#   '--path=/c/f' arrives as '[--path=C]' + '[/f]'
+# Four spellings are therefore checked:
+#   1. whole token      '/ec/dp/'      → 'C:/Program Files/Git/ec/dp/'
+#   2. value after '='  '--path=/'     → '--path=C:/Program Files/Git/'
+#      (when the value survives as one token)
+#   3. split value      '--path=C' + '/…' — the name=value form as it really
+#      arrives; the pair is re-joined into '--path=/…'
+#   4. drive signature  any '--name=<drive>:/' token under MSYSTEM, which
+#      also catches rewritten values when the Git root cannot be resolved
+#      (git.exe not on PATH): MSYS maps a '/c/…' value to 'C:/…'.
+
+function Format-B4wBashArgument {
+    <#
+    .SYNOPSIS
+        Quote one argv token for a copy-pasteable Git Bash command line.
+    .PARAMETER Value
+        The token to render.
+    .OUTPUTS
+        String — the token, single-quoted when it needs shell quoting.
+    #>
+    param([string]$Value = '')
+
+    if ([string]::IsNullOrEmpty($Value)) { return "''" }
+    if ($Value -match "^[A-Za-z0-9_@%+=:,./\\-]+$") { return $Value }
+    return "'" + ($Value -replace "'", "'\''") + "'"
+}
+
+function Get-B4wMsysMangledArgument {
+    <#
+    .SYNOPSIS
+        Find the first argv token that MSYS path conversion rewrote, and
+        rebuild the command line the user probably typed.
+
+    .DESCRIPTION
+        A token is mangled when the whole token, the part after the first '='
+        (the name=value form), or the re-joined split form of that value
+        ('--path=C' followed by '/…') equals the Git/MSYS root or lives under
+        it — or, regardless of the Git root, when a name=value token carries
+        the drive-path signature of a converted value ('--name=C:/…').
+
+    .PARAMETER Argv
+        The argv as received by this script ($args).
+
+    .PARAMETER RootFwd
+        Normalized MSYS root (forward slashes, no trailing slash), or '' when
+        it could not be resolved.
+
+    .OUTPUTS
+        $null when nothing was rewritten; otherwise a hashtable with Raw,
+        Probable, Kind ('whole' | 'equals' | 'equals-split' | 'signature')
+        and DeconvertedArgv (the argv with every mangled token replaced by
+        its probable original; a split pair collapses back into one token).
+    #>
+    param(
+        [string[]]$Argv = @(),
+        [string]$RootFwd = ''
+    )
+
+    $boundary = if ($RootFwd) { $RootFwd + '/' } else { '' }
+    # POSIX spelling of the Git root ('C:/Program Files/Git' → '/Program Files/Git').
+    # The second half of a split pair is '/'-rooted and can start with the
+    # Git root's path part, which is how '--path=/' and '-olp=/x' are detected.
+    $rootPosix = ''
+    if ($RootFwd -match '^[A-Za-z]:(/.*)$') { $rootPosix = $Matches[1].TrimEnd('/') }
+
+    $deconverted = New-Object System.Collections.Generic.List[string]
+    $finding = $null
+
+    for ($index = 0; $index -lt $Argv.Count; $index++) {
+        $arg = $Argv[$index]
+        # Normalize separators so 'C:\Program Files\Git\x' and
+        # 'C:/Program Files/Git/x' compare equal.
+        $forward = $arg -replace '\\', '/'
+        $name = ''
+        $separator = ''
+        $value = $forward
+        $eqIndex = $forward.IndexOf('=')
+        if ($eqIndex -gt 0) {
+            $name = $forward.Substring(0, $eqIndex)
+            $separator = '='
+            $value = $forward.Substring($eqIndex + 1)
+        }
+
+        $probableValue = $null
+        $kind = ''
+        $consumedNext = $false
+
+        if ($RootFwd) {
+            # A bare '/' argument is rewritten to the Git root ITSELF
+            # ('C:/Program Files/Git' with or without a trailing slash), so
+            # the comparison must catch equality, not just a longer prefix.
+            # Sub-paths must clear the '/' boundary so sibling directories
+            # (e.g. 'C:/Program Files/GitHub/...') are never mistaken for
+            # the Git root.
+            $valueIsRoot = $value.TrimEnd('/').Equals($RootFwd, [StringComparison]::OrdinalIgnoreCase)
+            $valueUnderRoot = $value.Length -gt $boundary.Length -and
+                $value.StartsWith($boundary, [StringComparison]::OrdinalIgnoreCase)
+            if ($valueIsRoot) {
+                $probableValue = '/'
+            } elseif ($valueUnderRoot) {
+                $probableValue = '/' + $value.Substring($boundary.Length).TrimStart('/')
+            }
+            if ($null -ne $probableValue) {
+                $kind = if ($separator) { 'equals' } else { 'whole' }
+            }
+        }
+
+        # The split form: '--path=/' arrives as '--path=<drive>' followed by a
+        # '/'-rooted remainder.  The pair is one mangled argument; the value is
+        # rebuilt so the printed command can be re-run as typed.
+        if (-not $kind -and $separator -and $value -match '^[A-Za-z]$' -and ($index + 1) -lt $Argv.Count) {
+            $nextToken = $Argv[$index + 1]
+            if ($nextToken.StartsWith('/')) {
+                $nextFwd = $nextToken -replace '\\', '/'
+                if ($rootPosix -and $nextFwd.TrimEnd('/').Equals($rootPosix, [StringComparison]::OrdinalIgnoreCase)) {
+                    # '/Program Files/Git/' is the Git root's own POSIX path: the
+                    # value was the bare '/'.
+                    $probableValue = '/'
+                } elseif ($rootPosix -and $nextFwd.StartsWith($rootPosix + '/', [StringComparison]::OrdinalIgnoreCase)) {
+                    $probableValue = '/' + $nextFwd.Substring($rootPosix.Length + 1).TrimStart('/')
+                } else {
+                    # Not under the Git root: MSYS resolved a POSIX path
+                    # ('/c/foo', '/tmp') onto a drive.  The drive-mapped
+                    # spelling below names the same Windows location, so the
+                    # recovery command still works even when it is not the
+                    # exact original text.
+                    $probableValue = '/' + $value.ToLowerInvariant() + '/' + $nextFwd.TrimStart('/')
+                }
+                $kind = 'equals-split'
+                $consumedNext = $true
+            }
+        }
+
+        # Backstop for a converted value whose Git root is unknown: MSYS maps
+        # POSIX '/c/…' onto the Windows drive path 'C:/…', so a '--name=' token
+        # whose value starts with a drive path is the signature of a rewrite.
+        if (-not $kind -and $forward -match '^--?[A-Za-z][A-Za-z0-9-]*=([A-Za-z]):/(.*)$') {
+            $probableValue = '/' + $Matches[1].ToLowerInvariant() + '/' + $Matches[2]
+            $kind = 'signature'
+        }
+
+        if ($kind) {
+            $probableArg = if ($separator) { $name + $separator + $probableValue } else { $probableValue }
+            $deconverted.Add($probableArg)
+            if ($consumedNext) { $index++ }
+            if (-not $finding) {
+                $finding = @{ Raw = $arg; Probable = $probableArg; Kind = $kind }
+            }
+        } else {
+            $deconverted.Add($arg)
+        }
+    }
+
+    if (-not $finding) { return $null }
+
+    $finding['DeconvertedArgv'] = $deconverted.ToArray()
+    return $finding
+}
+
 if ($env:MSYSTEM) {
     $MsysRoot = $null
     $MsysGit = Get-Command git.exe -ErrorAction SilentlyContinue
@@ -113,33 +279,36 @@ if ($env:MSYSTEM) {
         }
     }
 
-    if ($MsysRoot) {
-        # Normalize the root to a trailing-slash-free form on both sides of
-        # the comparison: a bare '/' argument is rewritten to the Git root
-        # ITSELF ('C:/Program Files/Git' with or without a trailing slash),
-        # so the rewritten value can be exactly as long as the root — the
-        # check must catch equality, not just a longer-than-root prefix.
-        $RootFwd = ($MsysRoot -replace '\\', '/').TrimEnd('/')
-        foreach ($MangledArg in $RemainingArgs) {
-            $ArgFwd = $MangledArg -replace '\\', '/'
-            $ArgIsRoot = $ArgFwd.TrimEnd('/').Equals($RootFwd, [StringComparison]::OrdinalIgnoreCase)
-            # Sub-paths must clear the '/' boundary so sibling directories
-            # (e.g. 'C:/Program Files/GitHub/...') are never mistaken for
-            # the Git root.
-            $Boundary = $RootFwd + '/'
-            $ArgUnderRoot = $ArgFwd.Length -gt $Boundary.Length -and $ArgFwd.StartsWith($Boundary, [StringComparison]::OrdinalIgnoreCase)
-            if ($ArgIsRoot -or $ArgUnderRoot) {
-                $ProbableOriginal = if ($ArgIsRoot) { '/' } else { '/' + $ArgFwd.Substring($Boundary.Length).TrimStart('/') }
-                Write-Host "Error: argument '$MangledArg' (probably typed as '$ProbableOriginal') was rewritten by" -ForegroundColor Red
-                Write-Host "Git Bash's MSYS path conversion before PowerShell started.  The original value" -ForegroundColor Red
-                Write-Host 'is unrecoverable, and using the rewritten path would silently produce wrong' -ForegroundColor Red
-                Write-Host "results (e.g. a snapshot grep pattern reporting '0 matches found')." -ForegroundColor Red
-                Write-Host ''
-                Write-Host "Run this command via ./b4w.sh instead (it disables the conversion)." -ForegroundColor Cyan
-                Write-Host "Or export MSYS2_ARG_CONV_EXCL='*' and re-run:  MSYS2_ARG_CONV_EXCL='*' ./b4w.ps1 ..." -ForegroundColor Cyan
-                exit 1
-            }
+    $RootFwd = if ($MsysRoot) { ($MsysRoot -replace '\\', '/').TrimEnd('/') } else { '' }
+    $MsysMangled = Get-B4wMsysMangledArgument -Argv $args -RootFwd $RootFwd
+
+    if ($MsysMangled) {
+        # Rebuild the exact command to re-run: every mangled token replaced by
+        # its probable original, quoted for Git Bash, with the conversion
+        # disabled for the child process.
+        $RecoveryCommand = "MSYS2_ARG_CONV_EXCL='*' ./b4w.ps1"
+        foreach ($RecoveryArg in $MsysMangled.DeconvertedArgv) {
+            $RecoveryCommand += ' ' + (Format-B4wBashArgument -Value $RecoveryArg)
         }
+
+        Write-Host "Error: argument '$($MsysMangled.Raw)' (probably typed as '$($MsysMangled.Probable)') was rewritten by" -ForegroundColor Red
+        Write-Host "Git Bash's MSYS path conversion before PowerShell started.  The original value" -ForegroundColor Red
+        Write-Host 'is unrecoverable, and using the rewritten path would silently produce wrong' -ForegroundColor Red
+        Write-Host "results (e.g. a snapshot grep pattern reporting '0 matches found')." -ForegroundColor Red
+        if ($MsysMangled.Kind -eq 'signature') {
+            Write-Host "A '--name=<drive>:/…' value is the signature of that rewrite (MSYS maps the" -ForegroundColor Red
+            Write-Host "POSIX form '/c/…' onto 'C:/…').  If you really meant a Windows path, disable" -ForegroundColor Red
+            Write-Host 'the conversion with the prefix shown below.' -ForegroundColor Red
+        } elseif ($MsysMangled.Kind -ne 'whole') {
+            Write-Host "The value after '=' was converted and split off into its own argument; the" -ForegroundColor Red
+            Write-Host 'command below restores it.' -ForegroundColor Red
+        }
+        Write-Host ''
+        Write-Host 'Re-run with the conversion disabled (de-converted command):' -ForegroundColor Cyan
+        Write-Host "  $RecoveryCommand" -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host "Or run this command via ./b4w.sh instead (it disables the conversion)." -ForegroundColor Cyan
+        exit 1
     }
 }
 

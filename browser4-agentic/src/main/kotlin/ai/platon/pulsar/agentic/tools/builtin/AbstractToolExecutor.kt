@@ -91,8 +91,15 @@ abstract class AbstractToolExecutor : ToolExecutor {
             }
         }
 
-        // Authored help adds caveats the KDoc does not repeat.
-        val extra = spec.help?.takeIf { it.isNotBlank() && it != spec.description }
+        // Authored help adds caveats the KDoc does not repeat. It conventionally
+        // opens by repeating the callable signature, which this function has just
+        // rendered — emitting it twice is how every plugin's usage-error help
+        // ("Get media file metadata … help: media.getInfo(filePath: String) /
+        // media.getInfo(filePath: String) / Returns …") ended up duplicated.
+        val extra = spec.help
+            ?.takeIf { it.isNotBlank() && it != spec.description }
+            ?.let { stripAlreadyRenderedHeader(it, spec.expression, spec.description) }
+            ?.takeIf { it.isNotBlank() }
         if (extra != null) {
             appendLine()
             append(extra)
@@ -276,4 +283,38 @@ abstract class AbstractToolExecutor : ToolExecutor {
         return v.toString().toDoubleOrNull()
             ?: throw IllegalArgumentException("Parameter '$name' must be Double for $functionName | actual='${v}'")
     }
+}
+
+/**
+ * Drop an authored help block's leading line when the framework already rendered
+ * that exact line above it.
+ *
+ * A `ToolSpec.help` is written by hand and conventionally restates the callable
+ * signature as its first line (`media.getInfo(filePath: String)`) — the same line
+ * [AbstractToolExecutor.renderHelp] emits from `spec.expression`. Rendering both
+ * printed the signature twice in every usage-error help block of every plugin,
+ * because the block travels into the exception's `help` and from there into the
+ * client-facing error text.
+ *
+ * Only an *identical* first line is removed, and blank leading lines are skipped
+ * when looking for it: a different opening line is real documentation
+ * (`media.compress` documents both of its overloads while only the advertised one
+ * is rendered above), so it is kept verbatim.
+ *
+ * @param help the authored help block
+ * @param alreadyRendered lines the caller has already emitted
+ * @return [help] with the duplicated opening line (and nothing else) removed
+ */
+internal fun stripAlreadyRenderedHeader(help: String, vararg alreadyRendered: String?): String {
+    val lines = help.lines()
+    val firstIdx = lines.indexOfFirst { it.isNotBlank() }
+    if (firstIdx < 0) {
+        return help
+    }
+    val first = lines[firstIdx].trim()
+    val duplicated = alreadyRendered.any { it != null && it.isNotBlank() && it.trim() == first }
+    if (!duplicated) {
+        return help
+    }
+    return lines.drop(firstIdx + 1).joinToString("\n").trim()
 }

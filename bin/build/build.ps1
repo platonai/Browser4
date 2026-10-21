@@ -9,6 +9,12 @@
 
 $ErrorActionPreference = "Stop"
 
+# Emit UTF-8 through a redirected stream — see Set-Utf8ConsoleEncoding in
+# bin/common/Util.ps1 (under CP936 "·" becomes "??" and "═" becomes "?T").
+# The ./build.ps1 wrapper and bin/test.ps1 call this script, and their captures
+# read UTF-8.
+. (Join-Path $PSScriptRoot '../common/Util.ps1')
+
 # PS 5.1 compatibility: $IsWindows/$IsLinux/$IsMacOS were introduced in PS 6.
 # On PS 5.1 (Windows-only), all three are $null, so we fall back to env:OS.
 $IsWin = ($IsWindows -or $env:OS -eq 'Windows_NT')

@@ -64,6 +64,14 @@ pub const CONSOLE_PROBE_PATH: &str = "/console-probe";
 
 pub const CONSOLE_PROBE_TITLE: &str = "Browser4 CLI Console Probe Fixture";
 
+/// The device-metrics probe page: it declares `width=device-width`, so an emulation
+/// override with `mobile: true` resolves the layout viewport to the emulated width
+/// instead of Chrome's 980px mobile default, and `b4Metrics.read()` reports
+/// `<innerWidth>x<innerHeight>@<dpr>` for whatever override is active.
+pub const EMULATION_PATH: &str = "/emulation";
+
+pub const EMULATION_TITLE: &str = "Browser4 CLI Emulation Fixture";
+
 pub const INTERACTIVE_TITLE: &str = "Browser4 CLI Interactive Fixture";
 
 pub const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
@@ -117,6 +125,8 @@ pub const FRAME_NESTED_FIXTURE_FILE: &str = "frame-nested.html";
 pub const FRAME_INNER_FIXTURE_FILE: &str = "frame-inner.html";
 
 pub const CONSOLE_PROBE_FIXTURE_FILE: &str = "console-probe-fixture.html";
+
+pub const EMULATION_FIXTURE_FILE: &str = "emulation-fixture.html";
 
 /// Fixture for the `formats` layer: a page with a real article body, navigation
 /// noise, a table, three repeated cards carrying `data-*` attributes, an image

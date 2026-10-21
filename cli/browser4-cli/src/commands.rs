@@ -100,7 +100,41 @@ impl OptionDef {
     pub fn key(&self) -> &'static str {
         self.name.split(' ').next().unwrap_or(self.name)
     }
+
+    /// Whether this option's value may itself start with `-`
+    /// (`allow_hyphen_values`).
+    ///
+    /// Parsing normally reads a hyphen-leading token as the next flag, which is
+    /// right for almost every option — but `-a/--args` carries a raw
+    /// LoadOptions string (`-nMaxRetry 5 -lazyFlush`) that always starts with
+    /// `-`, so the space-separated form could never bind and the value was
+    /// mistaken for a positional seed URL.
+    #[allow(dead_code)] // consulted through HYPHEN_VALUE_OPTION_KEYS by args.rs
+    pub fn allows_hyphen_values(&self) -> bool {
+        HYPHEN_VALUE_OPTION_KEYS.contains(&self.key())
+    }
 }
+
+/// Option keys whose value may start with `-`; see
+/// [`OptionDef::allows_hyphen_values`]. `args::parse_raw_args` consumes the
+/// next token for these options even when it looks like a flag.
+pub const HYPHEN_VALUE_OPTION_KEYS: &[&str] = &["args"];
+
+/// Shared `--fail-on-false` definition for the assertion commands.
+///
+/// The exit-code contract these commands were missing: by default `is visible`
+/// prints `true`/`false` and exits 0 either way, so a false assertion is
+/// scriptable only through the printed value. With `--fail-on-false` the
+/// command exits 1 when the result is false or null, which is what a script
+/// gate wants. It is a CLI-side switch: it must be read from the parsed
+/// arguments, never sent as a tool argument (the backend validates the
+/// assertion tools' arguments strictly and only `selector` is allowed).
+const ASSERTION_EXIT_CODE_OPTION: OptionDef = OptionDef {
+    name: "fail-on-false",
+    description: "Exit 1 when the assertion is false or null (opt-in). Without it the command prints true/false and exits 0 either way.",
+    is_bool: true,
+    short: None,
+};
 
 /// A single CLI command definition.
 #[derive(Debug, Clone)]
@@ -147,15 +181,45 @@ fn normalize_cookie_domain(domain: &str) -> Option<String> {
     }
 }
 
+/// True for a Windows drive-qualified path (`C:\x`, `C:/x`, `C:x`) on *any*
+/// host.
+///
+/// `std::path::Path::is_absolute()` only answers for the host platform: on
+/// Linux and macOS `C:/tmp/dl` parses as a relative path whose first component
+/// merely looks like a drive, so joining it onto the CWD fabricates
+/// `<cwd>/C:/tmp/dl` — a directory that cannot exist on either machine.  Keep
+/// the drive form verbatim: the backend (and the Chrome it drives) may live on
+/// a different OS than the CLI, which is exactly the case `download --dir` and
+/// `webdb export --output-dir` are used for.
+///
+/// Drive-*relative* forms (`C:tmp`, bare `C:`) are kept verbatim too.  They
+/// mean "the current directory on drive C", which the CLI cannot resolve for
+/// another host, and `Path::join` is host-dependent here (it truncates on
+/// Windows and prepends the CWD on POSIX), so resolving them client-side would
+/// produce a different — and always wrong — directory per platform.
+fn has_windows_drive_prefix(dir: &str) -> bool {
+    let mut chars = dir.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some(drive), Some(':')) if drive.is_ascii_alphabetic()
+    )
+}
+
 /// Resolve a user-supplied output directory to an absolute path against the
 /// CLI's current working directory.  Paths that are already absolute (native
-/// drive/UNC forms, or rooted with `/` or `\` like the POSIX-style `/tmp/x`
-/// the tests and docs use) are returned unchanged.  Relative paths are joined
-/// onto `std::env::current_dir()` so the backend writes exports where the
-/// caller expects instead of resolving them against the backend's own CWD.
+/// drive/UNC forms, a Windows `C:\`/`C:/` path even when the CLI runs on
+/// POSIX, or rooted with `/` or `\` like the POSIX-style `/tmp/x` the tests and
+/// docs use) are returned unchanged, as is any other drive-qualified form.  A
+/// path with no drive or root is joined onto `std::env::current_dir()` so the
+/// backend writes exports where the caller expects instead of resolving them
+/// against the backend's own CWD.
 fn absolutize_local_dir(dir: &str) -> String {
     let path = std::path::Path::new(dir);
-    if path.is_absolute() || dir.starts_with('/') || dir.starts_with('\\') {
+    if path.is_absolute()
+        || dir.starts_with('/')
+        || dir.starts_with('\\')
+        || has_windows_drive_prefix(dir)
+    {
         return dir.to_string();
     }
     match std::env::current_dir() {
@@ -304,6 +368,230 @@ pub fn load_strategy_js(load: &str) -> Result<String, String> {
     }
 }
 
+/// Convert a `crawl --timeout` budget into milliseconds.
+///
+/// A plain integer means seconds (the same reading the LoadOptions use) and the
+/// `ms`/`s`/`m`/`h`/`d` suffixes are honoured; `None` when the value is not a
+/// duration at all, so a caller can refuse it instead of silently falling back
+/// to the server default.
+///
+/// This is the canonical implementation of the `--timeout` reading.  `main.rs`
+/// keeps a private copy (`crawl_timeout_to_millis`, used by
+/// `build_crawl_server_params`/`validate_crawl_timeout`); it should delegate
+/// here so the flag is validated and translated by one implementation.
+#[allow(dead_code)] // used by the crawl `--timeout` tests; see the doc note above
+pub fn crawl_timeout_to_millis(value: &str) -> Option<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let (number, factor) = if let Some(number) = value.strip_suffix("ms") {
+        (number, 1_i64)
+    } else if let Some(number) = value.strip_suffix('s') {
+        (number, 1_000)
+    } else if let Some(number) = value.strip_suffix('m') {
+        (number, 60_000)
+    } else if let Some(number) = value.strip_suffix('h') {
+        (number, 3_600_000)
+    } else if let Some(number) = value.strip_suffix('d') {
+        (number, 86_400_000)
+    } else {
+        (value, 1_000)
+    };
+    if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    number.parse::<i64>().ok().map(|n| n * factor)
+}
+
+/// Key a `tool_params_fn` uses to report a CLI-side argument error instead of
+/// emitting a tool call the backend can only reject with an internal message.
+///
+/// A params builder cannot return `Result`, so the failure travels as this
+/// sentinel and the dispatch layer turns it into a usage error (exit 2) before
+/// anything is sent — the same contract as the existing `_invalid_domain`
+/// sentinel.  `set` uses it for an unknown mode, a malformed `--json` header
+/// payload, and missing coordinates/dimensions, all of which used to reach the
+/// backend as a meaningless CDP call.
+///
+/// `main.rs` must check it next to `_invalid_domain`:
+/// `if let Some(message) = tool_params.get(commands::CLI_ERROR_SENTINEL)
+/// .and_then(|v| v.as_str()) { return Err(CliError(ExitCode::Usage,
+/// message.to_string())); }`
+pub const CLI_ERROR_SENTINEL: &str = "_cli_error";
+
+/// Build a [`CLI_ERROR_SENTINEL`] payload carrying a user-facing message.
+///
+/// The payload deliberately carries no `method`, so even before the dispatch
+/// layer learns to translate it, the call cannot perform a partial or
+/// destructive CDP action.
+fn cli_error(message: impl Into<String>) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert(
+        CLI_ERROR_SENTINEL.to_string(),
+        Value::String(message.into()),
+    );
+    Value::Object(map)
+}
+
+/// The closest candidate to `input` (Levenshtein distance ≤ 2, or a candidate
+/// that starts with it), used for "did you mean" hints on typos.
+pub fn closest_match<'a>(input: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    let input = input.trim().to_ascii_lowercase();
+    if input.is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, &'a str)> = None;
+    for candidate in candidates {
+        let distance = levenshtein_distance(&input, candidate);
+        let acceptable = distance <= 2 || input.starts_with(candidate) || candidate.starts_with(&input);
+        if acceptable && best.is_none_or(|(best_distance, _)| distance < best_distance) {
+            best = Some((distance, candidate));
+        }
+    }
+    best.map(|(_, candidate)| candidate)
+}
+
+/// Levenshtein edit distance between two strings.
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    let mut current = vec![0usize; b.len() + 1];
+    for (i, a_char) in a.iter().enumerate() {
+        current[0] = i + 1;
+        for (j, b_char) in b.iter().enumerate() {
+            let cost = usize::from(a_char != b_char);
+            current[j + 1] = (previous[j + 1] + 1)
+                .min(current[j] + 1)
+                .min(previous[j] + cost);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[b.len()]
+}
+
+/// Read a required decimal option, naming the flag in the error.
+///
+/// `set <mode>` used `unwrap_or(default)` for these, so a missing flag silently
+/// applied a value nobody asked for (`set geo` pinned the position to 0,0 and
+/// `set device` shrank the viewport to 390x844).
+fn require_number(args: &HashMap<String, Value>, key: &str, mode: &str) -> Result<f64, String> {
+    let pair = match key {
+        "lat" => "lon",
+        "lon" => "lat",
+        _ => "",
+    };
+    let together = if pair.is_empty() {
+        String::new()
+    } else {
+        format!(" Give --{key} together with --{pair}.")
+    };
+    match get_opt_str(args, key) {
+        None => Err(format!(
+            "set {mode} requires --{key} <number> (missing --{key}).{together}"
+        )),
+        Some(raw) => raw.trim().parse::<f64>().map_err(|_| {
+            format!("--{key} must be a number, got '{raw}' (set {mode}).{together}")
+        }),
+    }
+}
+
+/// Read a required integer option, naming the flag in the error.
+fn require_integer(args: &HashMap<String, Value>, key: &str, mode: &str) -> Result<i64, String> {
+    let pair = match key {
+        "width" => "height",
+        "height" => "width",
+        _ => "",
+    };
+    let together = if pair.is_empty() {
+        String::new()
+    } else {
+        format!(" Give --{key} together with --{pair}.")
+    };
+    match get_opt_str(args, key) {
+        None => Err(format!(
+            "set {mode} requires --{key} <px> (missing --{key}).{together}"
+        )),
+        Some(raw) => raw.trim().parse::<i64>().map_err(|_| {
+            format!("--{key} must be a whole number of pixels, got '{raw}' (set {mode}).{together}")
+        }),
+    }
+}
+
+/// Options that belong to one `set <mode>`, excluding the ones every mode
+/// shares (`--json` selects the JSON output envelope, `state` is the offline
+/// switch, `mode` is the positional).
+fn set_mode_options(mode: &str) -> &'static [&'static str] {
+    match mode {
+        "geo" => &["lat", "lon", "accuracy"],
+        "headers" => &["json"],
+        "media" => &["color-scheme"],
+        "device" => &["width", "height", "dpr", "mobile"],
+        _ => &[],
+    }
+}
+
+/// Reject an option that belongs to a different `set` mode.
+fn set_mode_option_error(mode: &str, args: &HashMap<String, Value>) -> Option<String> {
+    let allowed = set_mode_options(mode);
+    for (key, value) in args {
+        if matches!(key.as_str(), "_" | "_.dd" | "mode" | "state" | "json") {
+            continue;
+        }
+        if !SET_OPTION_KEYS.contains(&key.as_str()) {
+            // Not a `set` option at all — the command-level unknown-option
+            // check owns that report, so this one stays silent.
+            continue;
+        }
+        // A boolean flag the user did not pass is absent from the map; a value
+        // option is present with its value.
+        if value.is_null() || allowed.contains(&key.as_str()) {
+            continue;
+        }
+        let listed: Vec<String> = allowed.iter().map(|name| format!("--{name}")).collect();
+        let for_mode = if listed.is_empty() {
+            format!("`set {mode}` takes no mode-specific options.")
+        } else {
+            format!("`set {mode}` accepts {}.", listed.join(", "))
+        };
+        return Some(format!(
+            "--{key} does not apply to `set {mode}`: it was ignored. {for_mode}"
+        ));
+    }
+    None
+}
+
+/// Every option the `set` command declares.  Kept next to the mode table so a
+/// new option cannot be added without deciding which mode owns it.
+const SET_OPTION_KEYS: &[&str] = &[
+    "lat",
+    "lon",
+    "accuracy",
+    "json",
+    "color-scheme",
+    "width",
+    "height",
+    "dpr",
+    "mobile",
+];
+
+/// CDP payload that grants the geolocation permission for one origin.
+///
+/// `set geo` issues `Emulation.setGeolocationOverride`, but Chrome gates
+/// `navigator.geolocation.getCurrentPosition()` on the geolocation
+/// *permission*: without this call the emulated position is invisible to page
+/// script and the promise never settles.  The origin is the current page's, so
+/// the dispatch layer (which can read the session's URL) issues it — a params
+/// builder has no session access.
+#[allow(dead_code)] // wired by the dispatch layer (main.rs), pinned by a unit test here
+pub fn geolocation_grant_params(origin: &str) -> Value {
+    json!({
+        "method": "Browser.grantPermissions",
+        "params": { "permissions": ["geolocation"], "origin": origin },
+    })
+}
+
 /// Marker that [NETWORK_IDLE_JS] installs on the page to hold the tracker
 /// state.  The CLI also uses it to recognise a `networkidle` wait when it
 /// formats the result (the strategy name is not part of the tool call), so the
@@ -392,6 +680,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "profile", description: "Path to browser profile directory", is_bool: false, short: None },
                 OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false, short: None },
                 OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false, short: None },
+                OptionDef { name: "display-mode <mode>", description: "Display mode of the new session: GUI, HEADLESS (the default), or SUPERVISED. Fixed at session creation; it replaces --headed/--headless, so pass one of them, not both", is_bool: false, short: None },
+                OptionDef { name: "max-open-tabs <n>", description: "Maximum number of open tabs in the session's browser context (backend default when omitted)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| {
@@ -429,6 +719,17 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(interact_level) = get_opt_str(args, "interact-level") {
                     params["interactLevel"] = json!(interact_level);
+                }
+                // `--display-mode` is the backend's own spelling of the display
+                // axis (the same capability `swarm create --display-mode` sets),
+                // so it is forwarded verbatim and normalized to the backend's
+                // upper-case enum.  `--max-open-tabs` caps the tab count of the
+                // session's browser context.
+                if let Some(display_mode) = get_opt_str(args, "display-mode") {
+                    params["displayMode"] = json!(display_mode.trim().to_ascii_uppercase());
+                }
+                if let Some(max_open_tabs) = get_opt_str(args, "max-open-tabs") {
+                    params["maxOpenTabs"] = json!(max_open_tabs.trim());
                 }
                 params
             },
@@ -517,6 +818,22 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Close the browser",
             category: Category::Browsers,
             hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        // Hidden alias: the dispatcher has accepted `"close" | "disconnect"`
+        // for a long time and attach.md promises the spelling in several
+        // places, but without a registry entry the command lookup failed first
+        // with "Unknown command: 'disconnect'" (114038#2).
+        CommandDef {
+            name: "disconnect",
+            description: "Alias of close — close the browser session (attached sessions detach; the external browser keeps running)",
+            category: Category::Browsers,
+            hidden: true,
             batch_supported: false,
             args: &[],
             options: &[],
@@ -1338,10 +1655,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false },
-                ArgDef { name: "button", description: "Button to click, defaults to left", optional: true },
+                ArgDef { name: "button", description: "Button to click: left (default), right, or middle", optional: true },
             ],
             options: &[
-                OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
+                OptionDef { name: "count <n>", description: "Click this many times (2 = double click, 3 = triple click). Each press carries an increasing clickCount, which is what turns a triple click into a text selection; combines with --button but not with --modifiers", is_bool: false, short: None },
+                OptionDef { name: "modifiers", description: "Modifier key held during the click: Control, Shift, Alt, or Meta (one key; use `keydown`/`keyup` to hold a key across commands)", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
                 OptionDef { name: "auto-dismiss-dialogs", description: "Auto-accept any native JavaScript dialog (alert/confirm/prompt) triggered by the click", is_bool: true, short: None },
@@ -1351,6 +1669,17 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({ "ref": get_str(args, "ref").unwrap_or_default() });
                 if let Some(b) = get_opt_str(args, "button") { p["button"] = json!(b); }
+                // `tab.click(selector, count)` drives CDP clickCount, so the CLI
+                // forwards an integer.  An unparsable value is forwarded as-is:
+                // the backend then rejects it loudly ("Parameter 'count' must
+                // be Int") instead of the CLI silently clicking once.
+                if let Some(raw) = get_opt_str(args, "count") {
+                    let raw = raw.trim();
+                    match raw.parse::<i64>() {
+                        Ok(count) => p["count"] = json!(count),
+                        Err(_) => p["count"] = json!(raw),
+                    }
+                }
                 if let Some(m) = args.get("modifiers") { p["modifiers"] = m.clone(); }
                 if args.contains_key("auto-dismiss-dialogs") { p["autoDismissDialogs"] = json!(true); }
                 p
@@ -1364,10 +1693,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false },
-                ArgDef { name: "button", description: "Button to click, defaults to left", optional: true },
+                ArgDef { name: "button", description: "Button to click: left (default), right, or middle", optional: true },
             ],
             options: &[
-                OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
+                OptionDef { name: "modifiers", description: "Modifier key held during the double click: Control, Shift, Alt, or Meta (one key)", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
                 OptionDef { name: "auto-dismiss-dialogs", description: "Auto-accept any native JavaScript dialog (alert/confirm/prompt) triggered by the double-click", is_bool: true, short: None },
@@ -1553,7 +1882,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "text", description: "Wait until this text appears on the page", is_bool: false, short: None },
-                OptionDef { name: "url", description: "Wait until the URL matches this glob pattern", is_bool: false, short: None },
+                OptionDef { name: "url", description: "Wait until the URL matches this glob pattern (e.g. **/checkout*, */login)", is_bool: false, short: None },
                 OptionDef { name: "load", description: "Wait for page load state: networkidle, domcontentloaded, or load (networkidle only settles the network — poll `wait <result-selector>` for late-rendered results)", is_bool: false, short: None },
                 OptionDef { name: "fn", description: "Wait until this JavaScript expression returns true", is_bool: false, short: None },
                 OptionDef { name: "download", description: "Wait until a download in the given directory completes (polls for .crdownload files)", is_bool: true, short: None },
@@ -1662,19 +1991,19 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[
-                OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false, short: None },
+                OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response — a bare name is written to the snapshot directory with a .yml extension", is_bool: false, short: None },
                 OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height] (enabled by default)", is_bool: true, short: None },
                 OptionDef { name: "no-boxes", description: "Disable bounding boxes in snapshot output", is_bool: true, short: None },
-                OptionDef { name: "interactive", description: "Interactive-oriented rendering: merge inner text into element names so ref lines read as self-contained targets (not a strict interactive-only filter). Combine with --stdout to see refs inline.", is_bool: true, short: Some("i") },
+                OptionDef { name: "interactive", description: "Interactive-only rendering: keeps the interactive nodes (pointer/role) and merges their inner text into the names, so each ref line reads as a self-contained target; non-interactive nodes (li[draggable] wrappers, tooltip spans) are dropped. Combine with -v <n> (e.g. -i -v 0) to bound a long page, and with --stdout to see the refs inline.", is_bool: true, short: Some("i") },
                 OptionDef { name: "urls", description: "Include href URLs for link elements", is_bool: true, short: Some("u") },
                 OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
                 OptionDef { name: "no-compact", description: "Disable compact mode; include all structural nodes", is_bool: true, short: None },
-                OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
+                OptionDef { name: "depth", description: "Limit tree depth to n levels (default: unlimited)", is_bool: false, short: Some("d") },
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector (use --selector; -s is reserved for --session globally). Note: root-to-leaf ancestor elements outside the matched scope are included for tree-path context.", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file. Large trees are paginated (default 2000 lines/page) — when truncated, a hint is appended to stdout (and the full footer goes to stderr). Use --all or --page-size 0 to print the complete tree.", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture specific screen-height page chunks (viewports). Each chunk = one screen height (~viewport height px). Indices are scroll-relative: 0 = current visible screen, 1 = one below, -1 = one above. Formats: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7). Example: -v 1-3 captures the 2nd through 4th screen-heights.", is_bool: false, short: Some("v") },
-                OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture. Note: after page navigation (goto/open), all elements appear as changed because the entire DOM is new.", is_bool: true, short: None },
+                OptionDef { name: "auto-diff", description: "Capture, then append a diff appendix against the previous deliberate snapshot: `### Diff` with `## Removed` / `## Modified` / `## Added` sections, each line `+|-|~ role \"name\" [ref=…] [box=…]`. The full current tree is printed first — this is not a filtered view, so read the appendix (or redirect and grep it, or use `snapshot grep --diff`). The report is also persisted next to the capture as <capture>.diff.txt. Note: after page navigation (goto/open), all elements appear as changed because the entire DOM is new.", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000; 0 = unlimited)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
@@ -1727,12 +2056,14 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
                 OptionDef { name: "context", short: Some("C"), is_bool: false, description: "Show N lines before and after each match" },
                 OptionDef { name: "invert-match", short: Some("v"), is_bool: true, description: "Select non-matching lines" },
-                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching lines" },
+                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching LINES — a minified one-line page counts once, however many times the pattern occurs. For the number of OCCURRENCES use -o <pattern> and count its output lines (`... grep -o '[$][0-9.]+' | wc -l`)" },
                 OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist" },
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
+                OptionDef { name: "only-matching", short: Some("o"), is_bool: true, description: "Print only the matched parts of each line (grep -o), one match per line — the way to harvest a value such as [$][0-9.]+ from the surrounding markup, and to count OCCURRENCES (`| wc -l`) where -c counts matching lines" },
                 OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
+                OptionDef { name: "diff", short: None, is_bool: true, description: "Search the auto-diff report persisted by the last `snapshot --auto-diff` (next to its capture as <capture>.diff.txt) instead of a freshly captured tree — the only way to find its `## Added` / `## Removed` / `+ ` / `- ` lines, which never appear in a live tree" },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
@@ -1761,7 +2092,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all snapshots including archived ones" },
             ],
             e2e_coverage: E2eCoverage::Excluded, // filesystem-only, no backend
-            tool_name_fn: |_| "snapshot_list".to_string(),
+            tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 for (k, v) in args {
@@ -1783,7 +2114,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "dry-run", short: None, is_bool: true, description: "Show what would be deleted without actually deleting" },
             ],
             e2e_coverage: E2eCoverage::Excluded, // filesystem-only, no backend
-            tool_name_fn: |_| "snapshot_clean".to_string(),
+            tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 for (k, v) in args {
@@ -1833,6 +2164,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "await", description: "Wait for the evaluated expression's Promise to resolve before returning the result", is_bool: true, short: None },
                 OptionDef { name: "wait-selector", description: "Wait for a CSS selector to appear in the DOM before evaluating (use for async-rendered content like React/SPA pages)", is_bool: false, short: None },
                 OptionDef { name: "wait-timeout", description: "Max time in ms to wait for --wait-selector (default: 30000)", is_bool: false, short: None },
+                OptionDef { name: "world", description: "JavaScript world to evaluate in: main (default) = the page's own world, where page-defined globals like window.myApp resolve; isolated = the driver's runtime world (__browser4_runtime__), which page scripts cannot see or modify", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
@@ -1850,6 +2182,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if get_bool(args, "await").unwrap_or(false) { p["awaitPromise"] = json!(true); }
                 if let Some(sel) = get_opt_str(args, "wait-selector") { p["waitSelector"] = json!(sel); }
                 if let Some(t) = get_opt_str(args, "wait-timeout") { p["waitTimeout"] = json!(t); }
+                // Which JavaScript world the script sees.  Passed through verbatim:
+                // the backend validates the value (main|isolated) so a typo is
+                // refused instead of silently evaluating in the other world.
+                if let Some(w) = get_opt_str(args, "world") { p["world"] = json!(w); }
                 p
             },
         },
@@ -1965,19 +2301,24 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "download",
-            description: "Configure the browser to allow downloads into a directory (CDP Browser.setDownloadBehavior). Downloads then land in the given folder instead of the browser default.",
+            description: "Configure the browser to allow downloads into a directory (CDP Browser.setDownloadBehavior). Downloads then land in the given folder instead of the browser default. Relative --dir values are resolved against the CLI's working directory, so `download` and `wait --download` always watch the same folder.",
             category: Category::Network,
             hidden: false,
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "dir", description: "Download directory (default: ./downloads)", is_bool: false, short: None },
+                OptionDef { name: "dir", description: "Download directory — a relative path (including the default: downloads) is resolved against the CLI's current directory and sent as an absolute path", is_bool: false, short: None },
                 OptionDef { name: "behavior", description: "Download behavior: allow (default) or deny", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested, // real download flow via download fixture
             tool_name_fn: |_| "execute_cdp_command".to_string(),
             tool_params_fn: |args| {
-                let dir = get_opt_str(args, "dir").unwrap_or("downloads");
+                // Resolve client-side: Chrome resolves `downloadPath` against the
+                // *browser* process's working directory, while `wait --download`
+                // resolves the same spelling against the CLI's — so a relative
+                // default made the two watch different folders, and the
+                // eventual file landed somewhere nobody was looking.
+                let dir = absolutize_local_dir(get_opt_str(args, "dir").unwrap_or("downloads"));
                 let behavior = get_opt_str(args, "behavior").unwrap_or("allow");
                 json!({
                     "method": "Browser.setDownloadBehavior",
@@ -1987,7 +2328,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "network-requests",
-            description: "List network requests tracked for the current tab, with optional filters (URL substring, resource type, HTTP method, status). Network tracking is enabled on first use; requests are kept in a bounded in-memory buffer.",
+            description: "List network requests tracked for the current tab, with optional filters (URL substring, resource type, HTTP method, status). Network tracking is enabled on first use; requests are kept in a bounded in-memory buffer. The default output is a compact table (method, status, type, URL); --json prints the raw envelope.",
             category: Category::Network,
             hidden: false,
             batch_supported: false,
@@ -1997,11 +2338,16 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "type", description: "Comma-separated resource types, e.g. xhr,fetch", is_bool: false, short: None },
                 OptionDef { name: "method", description: "HTTP method, e.g. POST", is_bool: false, short: None },
                 OptionDef { name: "status", description: "Status filter: 200, 2xx, or a range like 400-499", is_bool: false, short: None },
+                OptionDef { name: "limit <n>", description: "Print only the newest <n> requests (default: the whole tracked buffer). Applied by the CLI's table renderer; the header reports the total and the buffer window.", is_bool: false, short: None },
                 OptionDef { name: "clear", description: "Drop all tracked requests first", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_network_requests".to_string(),
             tool_params_fn: |args| {
+                // Only the filters the backend declares are sent: its
+                // `networkRequests` arguments are validated strictly, so a
+                // CLI-side key such as `limit` must stay in the parsed map for
+                // the printer to read rather than travelling to the tool.
                 let mut p = json!({});
                 if let Some(f) = get_opt_str(args, "filter") { p["filter"] = json!(f); }
                 if let Some(t) = get_opt_str(args, "type") { p["type"] = json!(t); }
@@ -2076,6 +2422,18 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "network-routes",
+            description: "List the request routes currently registered on the tab, in registration order (pattern, action, mock content type, resource types). Read-only: inspecting the active routes no longer means removing them first.",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_network_routes".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
             name: "har-start",
             description: "Start a HAR recording session on the current tab. Response bodies are captured per --content mode once recording is active; stop with `network har stop [path]`.",
             category: Category::Network,
@@ -2115,7 +2473,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "tool-call",
-            description: "Invoke any MCP tool by name (generic passthrough) and print the JSON result. Use this for plugin-provided agent tools that have no dedicated CLI command, e.g. `tool call captcha_detect`, `tool call captcha_get_balance`. Tool names use snake_case (captcha.detect -> captcha_detect); list available tools with `plugin list` or GET /mcp/tools. Arguments can be passed as a JSON object via --json.",
+            description: "Invoke any MCP tool by name (generic passthrough) and print the JSON result. Use this for plugin-provided agent tools that have no dedicated CLI command, e.g. `tool call captcha_detect`, `tool call captcha_get_balance`. Tool names use snake_case (captcha.detect -> captcha_detect); list them with `tool list` (or GET /mcp/tools), and see a plugin domain's methods with `plugin <domain> --help`. Arguments can be passed as a JSON object via --json.",
             category: Category::DevTools,
             hidden: false,
             batch_supported: false,
@@ -2124,12 +2482,32 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "json", description: "Tool arguments as a JSON object string, e.g. '{\"type\": \"RECAPTCHA_V2\", \"siteKey\": \"...\"}'", is_bool: false, short: None },
+                OptionDef { name: "fail-on-error", description: "Exit non-zero when the tool reports a failure in its payload (success:false or a non-empty error field), so shell scripts can branch on the exit code", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| get_str(args, "name").unwrap_or_default().to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "name": get_str(args, "name").unwrap_or_default() });
                 if let Some(js) = get_opt_str(args, "json") { p["json"] = json!(js); }
+                if let Some(true) = get_bool(args, "fail-on-error") { p["failOnError"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "tool-list",
+            description: "List the MCP tool names the running backend advertises (GET /mcp/tools), one per line. Use --filter to narrow the list, and `tool call <name>` to invoke one. `plugin list` lists installed plugin JARs; this lists the callable tools they contribute.",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "filter", description: "Only print tool names containing this substring (case-insensitive), e.g. --filter captcha", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(f) = get_opt_str(args, "filter") { p["filter"] = json!(f); }
                 p
             },
         },
@@ -2196,7 +2574,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[
                 ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #search)", optional: false },
             ],
-            options: &[],
+            options: &[ASSERTION_EXIT_CODE_OPTION],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_is_visible".to_string(),
             tool_params_fn: |args| json!({ "selector": get_str(args, "selector").unwrap_or_default() }),
@@ -2210,7 +2588,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[
                 ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #submit)", optional: false },
             ],
-            options: &[],
+            options: &[ASSERTION_EXIT_CODE_OPTION],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_is_enabled".to_string(),
             tool_params_fn: |args| json!({ "selector": get_str(args, "selector").unwrap_or_default() }),
@@ -2224,7 +2602,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[
                 ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #agree)", optional: false },
             ],
-            options: &[],
+            options: &[ASSERTION_EXIT_CODE_OPTION],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_is_checked".to_string(),
             tool_params_fn: |args| json!({ "selector": get_str(args, "selector").unwrap_or_default() }),
@@ -2271,7 +2649,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "highlight",
-            description: "Visually highlight the element matched by a selector with an outline overlay and scroll it into view",
+            description: "Visually highlight the element matched by a selector with an outline overlay and scroll it into view. The previous highlight is cleared first, so only one element carries the marker at a time.",
             category: Category::Core,
             hidden: false,
             batch_supported: false,
@@ -2283,8 +2661,24 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 let selector = get_str(args, "selector").unwrap_or_default();
+                // The outline is an inline style on the page's own element, so it
+                // survives until it is taken back off. Each call therefore clears
+                // the previous marker (tagged with data-b4-highlight) before
+                // applying the new one: outlines used to accumulate on every
+                // element ever highlighted, and nothing could remove them.
                 json!({
-                    "expression": "element => { element.scrollIntoView({ behavior: 'smooth', block: 'center' }); element.style.outline = '3px solid #ff5722'; element.style.outlineOffset = '2px'; return 'highlighted'; }",
+                    "expression": r#"element => {
+                        for (const previous of document.querySelectorAll('[data-b4-highlight]')) {
+                            previous.style.outline = '';
+                            previous.style.outlineOffset = '';
+                            previous.removeAttribute('data-b4-highlight');
+                        }
+                        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        element.style.outline = '3px solid #ff5722';
+                        element.style.outlineOffset = '2px';
+                        element.setAttribute('data-b4-highlight', '1');
+                        return 'highlighted';
+                    }"#,
                     "ref": selector,
                 })
             },
@@ -2325,7 +2719,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "set",
-            description: "Emulate browser capabilities via Chrome DevTools Protocol: `set geo`, `set offline`, `set headers`, `set media`, or `set device`",
+            description: "Emulate geo, offline, headers, media, or device (Chrome DevTools Protocol). Values apply to the current tab and stay in effect until changed or the session closes.",
             category: Category::DevTools,
             hidden: false,
             batch_supported: false,
@@ -2334,25 +2728,50 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "state", description: "For offline: on or off (default: on)", optional: true },
             ],
             options: &[
-                OptionDef { name: "lat", description: "Latitude (geo)", is_bool: false, short: None },
-                OptionDef { name: "lon", description: "Longitude (geo)", is_bool: false, short: None },
+                OptionDef { name: "lat", description: "Latitude in degrees, -90 to 90 (geo, required; give --lat together with --lon)", is_bool: false, short: None },
+                OptionDef { name: "lon", description: "Longitude in degrees, -180 to 180 (geo, required; give --lon together with --lat)", is_bool: false, short: None },
                 OptionDef { name: "accuracy", description: "Position accuracy in meters (geo, default: 1)", is_bool: false, short: None },
-                OptionDef { name: "json", description: "Headers as a JSON object string, e.g. '{\"X-Api-Key\": \"abc\"}' (headers)", is_bool: false, short: None },
-                OptionDef { name: "color-scheme", description: "Emulated prefers-color-scheme: light, dark, or no-preference (media)", is_bool: false, short: None },
-                OptionDef { name: "width", description: "Viewport width in px (device)", is_bool: false, short: None },
-                OptionDef { name: "height", description: "Viewport height in px (device)", is_bool: false, short: None },
+                OptionDef { name: "json <headers>", description: "Headers as a JSON object string, e.g. '{\"X-Api-Key\": \"abc\"}' (headers, required). A malformed payload is refused instead of clearing the active headers.", is_bool: false, short: None },
+                OptionDef { name: "color-scheme", description: "Emulated prefers-color-scheme: light, dark, or no-preference (media; no-preference resets it)", is_bool: false, short: None },
+                OptionDef { name: "width", description: "Viewport width in px (device, required; give --width together with --height)", is_bool: false, short: None },
+                OptionDef { name: "height", description: "Viewport height in px (device, required; give --height together with --width)", is_bool: false, short: None },
                 OptionDef { name: "dpr", description: "Device scale factor (device, default: 1)", is_bool: false, short: None },
-                OptionDef { name: "mobile", description: "Enable mobile (touch) emulation (device)", is_bool: true, short: None },
+                OptionDef { name: "mobile", description: "Enable mobile (touch) emulation (device). Touch metrics only — the user agent is left unchanged.", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "execute_cdp_command".to_string(),
             tool_params_fn: |args| {
                 let mode = get_str(args, "mode").unwrap_or_default().to_ascii_lowercase();
+                // Reject a mode-specific option that does not belong to this
+                // mode (e.g. `set geo --dpr 2`) instead of applying the mode and
+                // silently dropping half of what the user asked for.
+                if let Some(err) = set_mode_option_error(&mode, args) {
+                    return cli_error(err);
+                }
                 match mode.as_str() {
                     "geo" => {
-                        let lat = get_opt_str(args, "lat").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
-                        let lon = get_opt_str(args, "lon").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
-                        let accuracy = get_opt_str(args, "accuracy").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
+                        let (lat, lon) = match (require_number(args, "lat", "geo"), require_number(args, "lon", "geo")) {
+                            (Ok(lat), Ok(lon)) => (lat, lon),
+                            (Err(err), _) | (_, Err(err)) => return cli_error(err),
+                        };
+                        let accuracy = match get_opt_str(args, "accuracy") {
+                            Some(raw) => match raw.trim().parse::<f64>() {
+                                Ok(value) => value,
+                                Err(_) => {
+                                    return cli_error(format!(
+                                        "--accuracy must be a number of meters, got '{raw}'."
+                                    ))
+                                }
+                            },
+                            None => 1.0,
+                        };
+                        // The override is only observable to the page once the
+                        // geolocation permission has been granted for its
+                        // origin; without it `getCurrentPosition()` never
+                        // settles. The origin lives with the session (see
+                        // `geolocation_grant_params`), so the dispatch layer
+                        // issues that call — the CLI cannot read the current URL
+                        // from a pure params builder.
                         json!({
                             "method": "Emulation.setGeolocationOverride",
                             "params": { "latitude": lat, "longitude": lon, "accuracy": accuracy },
@@ -2368,9 +2787,27 @@ pub fn all_commands() -> Vec<CommandDef> {
                     }
                     "headers" => {
                         let headers_json = get_opt_str(args, "json").unwrap_or("{}");
-                        let headers = serde_json::from_str::<Value>(headers_json)
-                            .map(|v| v)
-                            .unwrap_or_else(|_| json!({}));
+                        // A malformed payload must NOT be replaced by `{}`:
+                        // Network.setExtraHTTPHeaders replaces the whole header
+                        // set, so swallowing the parse error both reports
+                        // success and destroys the headers already configured.
+                        let headers = match serde_json::from_str::<Value>(headers_json) {
+                            Ok(Value::Object(map)) => Value::Object(map),
+                            Ok(_) => {
+                                return cli_error(format!(
+                                    "set headers --json must be a JSON object of header names to \
+                                     values, got '{headers_json}'. Example: --json \
+                                     '{{\"X-Api-Key\":\"abc\"}}'. Nothing was changed."
+                                ))
+                            }
+                            Err(err) => {
+                                return cli_error(format!(
+                                    "set headers --json is not valid JSON ({err}). Nothing was \
+                                     changed — pass an object such as \
+                                     '{{\"X-Api-Key\":\"abc\"}}'."
+                                ))
+                            }
+                        };
                         json!({
                             "method": "Network.setExtraHTTPHeaders",
                             "params": { "headers": headers },
@@ -2384,9 +2821,24 @@ pub fn all_commands() -> Vec<CommandDef> {
                         })
                     }
                     "device" => {
-                        let width = get_opt_str(args, "width").and_then(|v| v.parse::<i64>().ok()).unwrap_or(390);
-                        let height = get_opt_str(args, "height").and_then(|v| v.parse::<i64>().ok()).unwrap_or(844);
-                        let dpr = get_opt_str(args, "dpr").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
+                        let (width, height) = match (
+                            require_integer(args, "width", "device"),
+                            require_integer(args, "height", "device"),
+                        ) {
+                            (Ok(width), Ok(height)) => (width, height),
+                            (Err(err), _) | (_, Err(err)) => return cli_error(err),
+                        };
+                        let dpr = match get_opt_str(args, "dpr") {
+                            Some(raw) => match raw.trim().parse::<f64>() {
+                                Ok(value) => value,
+                                Err(_) => {
+                                    return cli_error(format!(
+                                        "--dpr must be a device scale factor such as 2, got '{raw}'."
+                                    ))
+                                }
+                            },
+                            None => 1.0,
+                        };
                         let mobile = get_bool(args, "mobile").unwrap_or(false);
                         json!({
                             "method": "Emulation.setDeviceMetricsOverride",
@@ -2394,8 +2846,14 @@ pub fn all_commands() -> Vec<CommandDef> {
                         })
                     }
                     other => {
-                        // Unknown mode — emit an unusable call so the CLI errors early.
-                        json!({ "method": "", "params": { "mode": other } })
+                        let suggestion = closest_match(other, &["geo", "offline", "headers", "media", "device"])
+                            .map(|name| format!(" Did you mean '{name}'?"))
+                            .unwrap_or_default();
+                        cli_error(format!(
+                            "Unknown set mode '{other}'. Valid modes: geo, offline, headers, media, \
+                             device.{suggestion} Run `browser4-cli --help set` for each mode's \
+                             options."
+                        ))
                     }
                 }
             },
@@ -2483,8 +2941,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "domain", description: "Only include cookies with the exact domain", is_bool: false, short: None },
-                OptionDef { name: "path", description: "Only include cookies with the exact path", is_bool: false, short: None },
+                OptionDef { name: "domain", description: "Only include cookies with the exact domain (e.g. example.com — a subdomain is a different cookie)", is_bool: false, short: None },
+                OptionDef { name: "path", description: "Only include cookies with the exact path (must start with '/', e.g. /checkout)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_save_storage_state".to_string(),
@@ -2547,7 +3005,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "domain", description: "Cookie domain (defaults to current page domain if omitted)", is_bool: false, short: None },
-                OptionDef { name: "path", description: "Cookie path", is_bool: false, short: None },
+                OptionDef { name: "path", description: "Cookie path — must start with '/' (default: '/', i.e. the whole site)", is_bool: false, short: None },
                 OptionDef { name: "expires", description: "Cookie expiry: Unix timestamp, relative duration (e.g. 7d, 1w, 30m — s/m/h/d/w), or RFC 3339 datetime", is_bool: false, short: None },
                 OptionDef { name: "httpOnly", description: "Mark the cookie as HttpOnly", is_bool: true, short: None },
                 OptionDef { name: "secure", description: "Mark the cookie as Secure", is_bool: true, short: None },
@@ -2597,7 +3055,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             }],
             options: &[
                 OptionDef { name: "domain", description: "Cookie domain (defaults to current page domain if omitted)", is_bool: false, short: None },
-                OptionDef { name: "path", description: "Cookie path override", is_bool: false, short: None },
+                OptionDef { name: "path", description: "Delete only the cookie stored at this exact path — must start with '/' (omit to match the cookie by name regardless of path)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "delete_cookies".to_string(),
@@ -3009,11 +3467,11 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "window-new",
-            description: "Create a new browser window (equivalent to opening a new tab)",
+            description: "Create an additional tab (a new browser target) and make it the active one, then navigate it to <url>. Managed and headless sessions model every target as a tab, so this is what `tab-new` does plus the selection; `tab-list`/`tab-select` switch between tabs, and popups opened by the page (window.open / target=_blank) appear in the same tab list.",
             category: Category::Tabs,
             hidden: false,
             batch_supported: true,
-            args: &[ArgDef { name: "url", description: "The URL to navigate to in the new window", optional: true }],
+            args: &[ArgDef { name: "url", description: "The URL to navigate to in the new tab (default: about:blank)", optional: true }],
             options: &[],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
@@ -3130,12 +3588,25 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "all", description: "List all browser sessions across all workspaces", is_bool: true, short: None },
+                OptionDef { name: "all", description: "Also list the sessions persisted by every other workspace on this machine (adds a Workspace column)", is_bool: true, short: None },
                 OptionDef { name: "verbose", description: "Show full page URLs and session IDs without column width truncation", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
-            tool_params_fn: |_| json!({}),
+            // `list` is handled entirely CLI-side (no MCP tool call), so these
+            // parameters only carry the two flags into the handler — without
+            // them the dispatcher's `tool_params.get(...)` lookups always miss
+            // and both flags would silently do nothing.
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(true) = get_bool(args, "all") {
+                    params["all"] = json!(true);
+                }
+                if let Some(true) = get_bool(args, "verbose") {
+                    params["verbose"] = json!(true);
+                }
+                params
+            },
         },
         CommandDef {
             name: "profiles-list",
@@ -3470,7 +3941,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[ArgDef { name: "instruction", description: "What data to extract, e.g. 'product name, price, ratings'", optional: false }],
             options: &[
                 OptionDef { name: "schema", description: "JSON Schema or {fields:[...]} format to constrain extracted data.  Supports @file.json to avoid shell quoting.", is_bool: false, short: None },
-                OptionDef { name: "filename", description: "Save extracted content to a file instead of printing to stdout", is_bool: false, short: None },
+                OptionDef { name: "filename", description: "Write the extracted content to this path instead of the timestamped default file (relative to the working directory; default: .browser4-cli/snapshot/). Use --stdout/--raw to print instead of saving", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Print extracted content directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print extracted content directly to stdout", is_bool: true, short: None },
             ],
@@ -3494,7 +3965,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[ArgDef { name: "instruction", description: "Summarization instruction, e.g. 'summarize the product reviews'", optional: true }],
             options: &[
                 OptionDef { name: "selector", description: "CSS selector to limit the scope of summarization", is_bool: false, short: None },
-                OptionDef { name: "filename", description: "Save summary to a file instead of printing to stdout", is_bool: false, short: None },
+                OptionDef { name: "filename", description: "Write the summary to this path instead of the timestamped default file (relative to the working directory; default: .browser4-cli/snapshot/). Use --stdout/--raw to print instead of saving", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Print summary directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print summary directly to stdout", is_bool: true, short: None },
             ],
@@ -3591,7 +4062,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
-            options: &[],
+            options: &[
+                OptionDef { name: "json", description: "Wrap the shared status envelope (taskId, status, statusCode, message, processed, error) in a JSON result instead of printing it alone", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_status".to_string(),
             tool_params_fn: |args| {
@@ -3605,7 +4078,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
-            options: &[],
+            options: &[
+                OptionDef { name: "json", description: "Emit the envelope and its payload as one JSON object instead of printing them as text", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {
@@ -3620,10 +4095,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "clear", description: "Remove terminal (completed/failed) tracked agent tasks; in-flight tasks are kept unless --all is given", is_bool: true, short: None },
-                OptionDef { name: "all", description: "With --clear, also remove in-flight (queued/processing) tasks, which keep running server-side", is_bool: true, short: None },
+                OptionDef { name: "clear", description: "Remove terminal (completed/failed/cancelled) tracked agent tasks; unfinished tasks are kept unless --all is given", is_bool: true, short: None },
+                OptionDef { name: "all", description: "With --clear, also remove unfinished tasks, which keep running server-side", is_bool: true, short: None },
                 OptionDef { name: "limit", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
                 OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Emit the cleared/kept counts as a JSON object (with --clear) instead of the human summary", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
@@ -3727,7 +4203,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "sql <query>", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
-                OptionDef { name: "sql-base64 <base64>", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
+                OptionDef { name: "sql-base64 <base64>", description: "Base64-encoded X-SQL query (avoids shell quoting issues on Windows). Both shapes work: `--sql-base64 <base64>` supplies the query itself, and a bare `--sql-base64` (a flag, no value) decodes the --sql/stdin value.", is_bool: false, short: None },
                 OptionDef { name: "seed-file <file>", description: "File containing URLs to submit, one per line (direct path, no @ prefix). When provided, the URL positional arg can be omitted", is_bool: false, short: None },
                 OptionDef { name: "deadline <iso>", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
                 OptionDef { name: "expires <dur>", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
@@ -3832,21 +4308,21 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef {
                 name: "url",
-                description: "The starting URL for the crawl (omit if using --seed-file)",
+                description: "The starting URL for the crawl — an absolute http(s) URL (omit if using --seed-file)",
                 optional: true,
             }],
             options: &[
                 OptionDef { name: "depth <n>", description: "Maximum crawl depth (default: 1). Use 0 to fetch pages without link discovery.", is_bool: false, short: Some("d") },
-                OptionDef { name: "seed-file <file>", description: "File containing URLs to crawl, one per line (lines starting with # are ignored)", is_bool: false, short: None },
+                OptionDef { name: "seed-file <file>", description: "File containing URLs to crawl, one per line — each line must be an absolute http(s) URL (lines starting with # are ignored)", is_bool: false, short: None },
                 OptionDef { name: "sql <query>", description: "X-SQL query to extract structured data from each crawled page. Use @url as the page URL placeholder. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
-                OptionDef { name: "sql-base64 <base64>", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
-                OptionDef { name: "format <fmt>", description: "Output format for X-SQL extracted data (requires --sql): json, csv, or table (default: table). Has no effect without --sql.", is_bool: false, short: None },
+                OptionDef { name: "sql-base64 <base64>", description: "Base64-encoded X-SQL query (avoids shell quoting issues on Windows). Both shapes work: `--sql-base64 <base64>` supplies the query itself, and a bare `--sql-base64` (a flag, no value) decodes the --sql/stdin value.", is_bool: false, short: None },
+                OptionDef { name: "format <fmt>", description: "Output format for X-SQL extracted data (requires --sql): json, csv, or table (default: table). Without --sql it only warns on stdout, but combined with --output the CLI refuses (exit 1, writes nothing) because the file would carry the plain-text listing under a csv/json name. For a JSON page listing of a plain crawl use the global --json flag BEFORE the command — it needs no --sql.", is_bool: false, short: None },
                 OptionDef { name: "output <file>", description: "Write results to a file instead of stdout", is_bool: false, short: Some("o") },
                 OptionDef { name: "out-link-selector <css>", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
-                OptionDef { name: "out-link-pattern <regex>", description: "Regex pattern to filter extracted links (default: .+)", is_bool: false, short: Some("olp") },
+                OptionDef { name: "out-link-pattern <regex>", description: "Regex pattern to filter extracted links (default: .+). Git Bash/MSYS: a value starting with '/' is rewritten into a Windows path before the CLI starts — run `./b4w.sh` (or export MSYS2_ARG_CONV_EXCL='*'), or drop the leading slash (write -olp \"product/\")", is_bool: false, short: Some("olp") },
                 OptionDef { name: "top-links <n>", description: "Maximum links to extract per page (default: 20)", is_bool: false, short: Some("tl") },
-                OptionDef { name: "args <json>", description: "Additional LoadOptions passthrough. Prefix with @ to read from file (e.g. -a @loadopts.txt). Use --args-stdin to pipe from stdin.", is_bool: false, short: Some("a") },
+                OptionDef { name: "args <opts>", description: "Additional LoadOptions passed through verbatim — a raw whitespace-separated option string, not JSON (e.g. -a \"-nMaxRetry 5 -lazyFlush\"). Quote it so it stays one value; a leading '-' is accepted for this option. Prefix with @ to read from a file (e.g. -a @loadopts.txt). Use --args-stdin to pipe from stdin.", is_bool: false, short: Some("a") },
                 OptionDef { name: "args-stdin", description: "Read LoadOptions args from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse each page immediately after fetching", is_bool: true, short: None },
@@ -3856,7 +4332,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "ignore-url-query", description: "Remove query parameters from discovered out-link hrefs before loading (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
                 OptionDef { name: "no-norm", description: "Disable URL normalization of discovered out-link hrefs (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
                 OptionDef { name: "readonly", description: "Non-destructive mode: loads may be served from the page store and are never written back; wins over --refresh", is_bool: true, short: None },
-                OptionDef { name: "parallel <n>", description: "Collect up to <n> pages/tabs at the same time (default: 4, 1 = sequential). Each parallel unit needs its own browser tab", is_bool: false, short: None },
+                OptionDef { name: "parallel <n>", description: "Run up to <n> crawl units at the same time (default: 4, 1 = sequential). A unit is one seed URL's fetch-and-extract round, and each unit in flight uses its own browser tab; links discovered inside a unit are fetched from the shared tab pool. A single-seed crawl therefore peaks at 1 unit by design — the completion report's 'peak N unit(s) in flight' counts those units, not pages", is_bool: false, short: None },
                 OptionDef { name: "timeout <dur>", description: "Maximum time the crawl may run before the server cancels it: seconds, or a duration such as 30s, 10m, 1h (default: 10m; max 1h). A crawl that runs out of budget reports the pages it never started instead of being cut off silently", is_bool: false, short: None },
                 OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
                 OptionDef { name: "verbose", description: "Show per-URL processing status in crawl results", is_bool: true, short: None },
@@ -3968,6 +4444,25 @@ pub fn all_commands() -> Vec<CommandDef> {
                     p["parallel"] = json!(v);
                 }
 
+                // Task budget: how long the whole crawl may run.  Sent as the
+                // duration the user typed (`30m`, `900`); main.rs validates it
+                // (validate_crawl_timeout) and translates it into the backend's
+                // `taskTimeoutMillis` (build_crawl_server_params).  Keeping the
+                // raw string here is what makes `--timeout` reach either of
+                // them: without it the flag was declared, documented, and
+                // silently dropped, so every crawl ran on the server default.
+                if let Some(v) = get_opt_str(args, "timeout") {
+                    p["timeout"] = json!(v);
+                }
+
+                // Per-page processing status is printed by the completion
+                // report in main.rs, which reads this CLI-side flag back out of
+                // the params.  Like `out-link-selector`/`out-link-pattern` it is
+                // carried in the map it was read from.
+                if let Some(true) = get_bool(args, "verbose") {
+                    p["verbose"] = json!(true);
+                }
+
                 p
             },
         },
@@ -3980,12 +4475,15 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[
                 ArgDef { name: "id", description: "Task ID", optional: false },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "json", description: "Emit a JSON envelope with the task record under \"record\" instead of the human summary (the record alone already goes to stdout; the summary moves to stderr when this flag is set)", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                if let Some(true) = get_bool(args, "json") { p["json"] = json!(true); }
                 p
             },
         },
@@ -4000,6 +4498,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "verbose", description: "Also print each page with its provenance (fetched by this run vs restored from a checkpoint)", is_bool: true, short: None },
+                OptionDef { name: "json", description: "Emit a JSON envelope with the task record under \"record\" instead of the human summary (the record alone already goes to stdout; the summary moves to stderr when this flag is set)", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
@@ -4007,6 +4506,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
                 if let Some(true) = get_bool(args, "verbose") { p["verbose"] = json!(true); }
+                if let Some(true) = get_bool(args, "json") { p["json"] = json!(true); }
                 p
             },
         },
@@ -4040,7 +4540,15 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
-            tool_params_fn: |_| json!({}),
+            tool_params_fn: |args| {
+                // `handle_crawl_clear` reads this back out of the params, so an
+                // unwired flag would make `crawl clear --all` a plain clear.
+                let mut p = json!({});
+                if let Some(true) = get_bool(args, "all") {
+                    p["all"] = json!(true);
+                }
+                p
+            },
         },
         CommandDef {
             name: "crawl-list",
@@ -4110,7 +4618,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-capture",
-            description: "Capture: serialize the page the active tab is showing, store it in Browser4's page store, and return page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Every htmlsnapshot command works on a fresh snapshot of the active page: this one returns the snapshot's metadata, while the reads (`get`, `get all`, `inspect`, `summary`, `grep`, `export`, `query`, `readability`) capture the active page first and then operate on that snapshot — so a read already sees the tab as it is now (form results, SPA updates, `eval` mutations). The capture is always keyed by the active tab's own normalized URL, so a read aimed at another URL never captures it.",
+            description: "Capture: serialize the page the active tab is showing and return its metadata — the long form of `htmlsnapshot`, which runs the very same capture. Run `browser4-cli --help htmlsnapshot` for the full description.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -4122,12 +4630,12 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get",
-            description: "Extract elements from a FRESH snapshot of the active tab's page (text, textcontent, html, attr). The live tab is captured first, then read, so changes that exist only in the tab (forms, SPA updates, `eval`) are visible without a separate capture. Use --expires <dur> to serve the snapshot already in the store instead when it is younger than <dur>, which reads the previous snapshot version without touching the tab. Supports batch mode for multi-step workflows.",
+            description: "Extract elements from a FRESH snapshot of the active tab's page (text, textcontent, html, outerhtml, attr). The live tab is captured first, then read, so changes that exist only in the tab (forms, SPA updates, `eval`) are visible without a separate capture. Use --expires <dur> to serve the snapshot already in the store instead when it is younger than <dur>, which reads the previous snapshot version without touching the tab. Supports batch mode for multi-step workflows.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text = whitespace-normalized inner text; textcontent = the raw textContent (whitespace and newlines kept). Neither is a rendered-text read, so CSS overflow does not clip them, and neither recovers text already truncated in the page's own HTML — use attr (e.g. the title attribute) for that", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, outerhtml, or attr. text = whitespace-normalized inner text; textcontent = the raw textContent (whitespace and newlines kept); html = the element's INNER markup; outerhtml = the element ITSELF (`<article class=\"product_pod\">…</article>`). Neither text field is a rendered-text read, so CSS overflow does not clip them, and neither recovers text already truncated in the page's own HTML — use attr (e.g. the title attribute) for that", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -4157,7 +4665,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text = whitespace-normalized inner text; textcontent = the raw textContent (whitespace and newlines kept). Neither is a rendered-text read, so CSS overflow does not clip them, and neither recovers text already truncated in the page's own HTML — use attr (e.g. the title attribute) for that", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, outerhtml, or attr. text = whitespace-normalized inner text; textcontent = the raw textContent (whitespace and newlines kept); html = the element's INNER markup; outerhtml = the element ITSELF (`<article class=\"product_pod\">…</article>`). Neither text field is a rendered-text read, so CSS overflow does not clip them, and neither recovers text already truncated in the page's own HTML — use attr (e.g. the title attribute) for that", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -4255,17 +4763,17 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-export",
-            description: "Export a FRESH snapshot of the active tab's page to a local file: the live tab is captured first, so the export is the page as it is right now. The file path can be passed as a positional argument or via --file.",
+            description: "Export a FRESH snapshot of the active tab's page to a local file: the live tab is captured first, so the export is the page as it is right now. The file path can be passed as a positional argument or via --file. The artifact is an ANNOTATED serialization, not the page's View-Source: every element carries vi=\"x y w h\" (plus tv0/tv1 text-node rects) and <head> gains synthetic <link rel=\"normalizedURI\">/<link rel=\"href\"> elements that exist only in the serialized output — filter link[rel=\"normalizedURI\"], link[rel=\"href\"] when the head must be pristine.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "file", description: "Path to save the HTML file (or use --file)", optional: true },
+                ArgDef { name: "file", description: "Path to save the HTML file (or use --file); without either, a timestamped .html file is written to the snapshot directory", optional: true },
             ],
             options: &[
                 OptionDef {
                     name: "file <file>",
-                    description: "Path to save the HTML file",
+                    description: "Path to save the HTML file (default: a timestamped .html file in the snapshot directory)",
                     is_bool: false,
                     short: None,
                 },
@@ -4277,7 +4785,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "clean",
-                    description: "Strip <script>, <style>, comments, and non-standard attributes (keeps 'vi', aria-*, data-*, role, and standard HTML5 attrs)",
+                    description: "Strip <script>, <style>, comments and non-standard attributes (keeps 'vi', aria-*, data-*, role, and standard HTML5 attrs). The injected <link rel=\"normalizedURI\">/<link rel=\"href\"> head elements stay: they are standard markup, not non-standard attributes",
                     is_bool: true,
                     short: None,
                 },
@@ -4341,7 +4849,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-grep",
-            description: "Search a FRESH snapshot of the active tab's page using regex patterns with grep-style output. The live tab is captured first, so the search sees the page as it is right now.",
+            description: "Search a FRESH snapshot of the active tab's page using regex patterns with grep-style output. The live tab is captured first, so the search sees the page as it is right now. It searches the captured HTML text — an annotated serialization (vi=\"…\" boxes, synthetic head links), not the page's View-Source — so a pattern can match tool-generated markup as well; script/style content is skipped unless --raw-html is given.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -4357,17 +4865,18 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "before-context <n>", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
                 OptionDef { name: "context <n>", short: Some("C"), is_bool: false, description: "Show N lines before and after each match" },
                 OptionDef { name: "invert-match", short: Some("v"), is_bool: true, description: "Select non-matching lines" },
-                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching lines" },
+                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching LINES — a minified one-line page counts once, however many times the pattern occurs. For the number of OCCURRENCES use -o <pattern> and count its output lines (`... grep -o '[$][0-9.]+' | wc -l`)" },
                 OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist" },
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
+                OptionDef { name: "only-matching", short: Some("o"), is_bool: true, description: "Print only the matched parts of each line (grep -o), one match per line — the way to harvest a value such as [$][0-9.]+ from the surrounding markup, and to count OCCURRENCES (`| wc -l`) where -c counts matching lines" },
                 OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
-                OptionDef { name: "selector <css>", short: None, is_bool: false, description: "CSS selector to scope the search to (querySelector semantics: first match only). Use --selector-all to search across all matching elements." },
+                OptionDef { name: "selector <css>", short: None, is_bool: false, description: "CSS selector to scope the search to (querySelector semantics: first match only). Use --selector-all to search across all matching elements. Searches the captured (annotated) HTML, so patterns can match the injected vi boxes and head links." },
                 OptionDef { name: "selector-all <css>", short: None, is_bool: false, description: "CSS selector to scope the search to all matching elements (querySelectorAll semantics). Each element's inner HTML is searched independently, and results are annotated with the element index." },
                 OptionDef { name: "page <n>", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
                 OptionDef { name: "page-size <n>", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
-                OptionDef { name: "raw-html", short: None, is_bool: true, description: "Search the raw HTML including <script> and <style> content. By default, script/style tags are stripped to avoid false positives from JavaScript code." },
+                OptionDef { name: "raw-html", short: None, is_bool: true, description: "Also search the <script> and <style> CONTENT of the captured HTML. By default script/style tags are stripped to avoid false positives from JavaScript code. This widens what is searched — it does not switch to the site's View-Source." },
                 OptionDef { name: "expires <dur>", short: Some("expires"), is_bool: false, description: "Max age of the stored snapshot a read may serve (e.g. 0s, 30s, 10m, 2h, 1d): 0s (default) searches the live page, a positive value searches the stored snapshot while it is younger than the window, without touching the tab" },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -4469,7 +4978,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Plugins ----
         CommandDef {
             name: "plugin-list",
-            description: "List all installed Browser4 plugins in the server's plugins directory",
+            description: "List all installed Browser4 plugins in the server's plugins directory. This lists plugin JARs, not the tools they expose — run `tool list` (or GET /mcp/tools) for the callable MCP tool names.",
             category: Category::Plugins,
             hidden: false,
             batch_supported: false,
@@ -4481,12 +4990,12 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "plugin-info",
-            description: "Show details for a single installed plugin (manifest name or JAR file name)",
+            description: "Show details for a single installed plugin. Accepts the manifest name, the JAR file name, or the plugin's short name (e.g. 'captcha' for browser4-captcha-<version>.jar); an unknown name reports the installed plugins instead of a bare 404.",
             category: Category::Plugins,
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "name", description: "Plugin name (manifest name or JAR file name)", optional: false },
+                ArgDef { name: "name", description: "Plugin name (manifest name, JAR file name, or short name such as 'captcha')", optional: false },
             ],
             options: &[],
             e2e_coverage: E2eCoverage::Excluded,
@@ -4497,12 +5006,12 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "plugin-install",
-            description: "Install a Browser4 plugin from a local JAR file (requires server restart to activate)",
+            description: "Install a Browser4 plugin from a local JAR file (requires server restart to activate). Pass exactly one JAR; a shell wildcard that expands to several files is rejected with the candidate list, and a literal wildcard is expanded by the CLI.",
             category: Category::Plugins,
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "file", description: "Path to the plugin JAR file", optional: false },
+                ArgDef { name: "file", description: "Path to the plugin JAR file (exactly one, e.g. browser4-plugins/browser4-captcha/target/browser4-captcha-4.14.1-SNAPSHOT.jar); wildcards are supported", optional: false },
             ],
             options: &[
                 OptionDef { name: "replace", description: "Overwrite an existing plugin with the same name", is_bool: true, short: None },
@@ -5205,13 +5714,16 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "type", description: "Validation type: 'plugin' | 'skill' | 'js' | 'script' | 'repo-consistency'", optional: false },
                 ArgDef { name: "path", description: "Path to plugin dir or file (not needed for repo-consistency)", optional: true },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "json", description: "Return the validation result as machine-readable JSON", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_validate".to_string(),
             tool_params_fn: |args| {
                 let vtype = get_str(args, "type").unwrap_or_default();
                 let mut p = json!({ "type": vtype });
                 if let Some(path) = get_opt_str(args, "path") { p["path"] = json!(path); }
+                if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
                 p
             },
         },
@@ -5228,6 +5740,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "goals", description: "Maven goals (default: 'compile')", is_bool: false, short: None },
                 OptionDef { name: "skip-tests", description: "Skip tests (default: true)", is_bool: true, short: None },
                 OptionDef { name: "timeout", description: "Timeout in seconds (default: 300)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Return the build result as machine-readable JSON", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_mvnBuild".to_string(),
@@ -5239,6 +5752,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(t) = get_opt_str(args, "timeout") {
                     if let Ok(n) = t.parse::<i64>() { p["timeoutSeconds"] = json!(n); }
                 }
+                if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
                 p
             },
         },
@@ -5282,6 +5796,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "verify", description: "Run validation after task", is_bool: true, short: None },
                 OptionDef { name: "run-tests", description: "Run tests after task", is_bool: true, short: None },
                 OptionDef { name: "execute", description: "Execute the generated dev-task plan steps (writes files and runs builds/tests)", is_bool: true, short: None },
+                OptionDef { name: "json", description: "Return the verification verdict as machine-readable JSON", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_devTask".to_string(),
@@ -5291,6 +5806,58 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if get_bool(args, "verify").unwrap_or(false) { p["verify"] = json!(true); }
                 if get_bool(args, "run-tests").unwrap_or(false) { p["runTests"] = json!(true); }
                 if get_bool(args, "execute").unwrap_or(false) { p["execute"] = json!(true); }
+                if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-resume",
+            description: "Resume a crashed or failed `code devtask --execute` run from its checkpoint \
+                          (completed steps are skipped). The checkpoint id is printed by every execute run.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "task_id", description: "Checkpoint id printed by the interrupted run (e.g. dt-20261021190300123)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded, // needs a real workspace + backend
+            tool_name_fn: |_| "coding_resumeDevTask".to_string(),
+            tool_params_fn: |args| {
+                let task_id = get_str(args, "task_id").unwrap_or_default();
+                json!({ "taskId": task_id })
+            },
+        },
+        CommandDef {
+            name: "code-verify",
+            description: "Run the deterministic verification gate for a dev task and return a structured verdict \
+                          (compile / test / repo-consistency / trapCheck). Exits non-zero when the verdict fails.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "module", description: "Maven module (or 'browser4-cli' for the Rust crate)", is_bool: false, short: None },
+                OptionDef { name: "checks", description: "Comma-separated subset: compile,test,repo-consistency,trapCheck", is_bool: false, short: None },
+                OptionDef { name: "run-tests", description: "Also run the module's test suite", is_bool: true, short: None },
+                OptionDef { name: "test", description: "Test-class filter (-Dtest=...)", is_bool: false, short: None },
+                OptionDef { name: "file", description: "Browser-driver file to trap-check (repeatable, comma-separated)", is_bool: false, short: None },
+                OptionDef { name: "timeout", description: "Per-check timeout in seconds (default: 300)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Print the verdict as pure JSON", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded, // needs a real backend (compile/test)
+            tool_name_fn: |_| "coding_verify".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(module) = get_opt_str(args, "module") { p["module"] = json!(module); }
+                if let Some(checks) = get_opt_str(args, "checks") { p["checks"] = json!(checks); }
+                if get_bool(args, "run-tests").unwrap_or(false) { p["runTests"] = json!(true); }
+                if let Some(test) = get_opt_str(args, "test") { p["testClasses"] = json!(test); }
+                if let Some(file) = get_opt_str(args, "file") { p["files"] = json!(file); }
+                if let Some(t) = get_opt_str(args, "timeout") {
+                    if let Ok(n) = t.parse::<i64>() { p["timeoutSeconds"] = json!(n); }
+                }
+                if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
                 p
             },
         },
@@ -5400,6 +5967,25 @@ mod tests {
                 cmd.name
             );
         }
+    }
+
+    #[test]
+    fn disconnect_is_a_registered_alias_of_close() {
+        // The dispatcher accepts `"close" | "disconnect"` (and attach.md
+        // documents the spelling in several places), so the registry must know
+        // the name too — otherwise the lookup fails first with
+        // "Unknown command: 'disconnect'" (114038#2).
+        let map = commands_map();
+        let close = map.get("close").expect("close is registered");
+        let disconnect = map.get("disconnect").expect("disconnect alias is registered");
+
+        assert!(disconnect.hidden, "the alias stays out of `help` listings");
+        assert_eq!(disconnect.category, close.category);
+        let no_args: HashMap<String, Value> = HashMap::new();
+        assert_eq!(
+            (disconnect.tool_name_fn)(&no_args),
+            (close.tool_name_fn)(&no_args)
+        );
     }
 
     #[test]
@@ -5868,6 +6454,178 @@ mod tests {
         assert_eq!(params["params"]["mobile"], true);
     }
 
+    /// A set-mode error must travel as the CLI sentinel, never as a CDP call:
+    /// the sentinel payload carries no `method`, so nothing can be applied
+    /// while the dispatch layer turns it into a usage error.
+    fn set_error(params: &Value) -> &str {
+        assert!(
+            params.get("method").is_none(),
+            "an invalid `set` invocation must not build a CDP call: {params}"
+        );
+        params
+            .get(CLI_ERROR_SENTINEL)
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("expected a {CLI_ERROR_SENTINEL} payload, got {params}"))
+    }
+
+    #[test]
+    fn test_set_unknown_mode_lists_the_valid_modes() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("bogus"));
+        let params = (cmd.tool_params_fn)(&args);
+        let message = set_error(&params);
+        assert!(
+            message.starts_with("Unknown set mode 'bogus'. Valid modes: geo, offline, headers, media, device."),
+            "unexpected message: {message}"
+        );
+        assert!(message.contains("--help set"), "message needs a help pointer: {message}");
+        // The old payload leaked a protocol error ("Message must have string
+        // 'method' property") that never named the modes.
+        assert!(!message.contains("method"));
+    }
+
+    #[test]
+    fn test_set_unknown_mode_suggests_the_closest_mode() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("geoo"));
+        let message = set_error(&(cmd.tool_params_fn)(&args)).to_string();
+        assert!(message.contains("Did you mean 'geo'?"), "got: {message}");
+    }
+
+    #[test]
+    fn test_set_headers_rejects_malformed_json_instead_of_clearing_headers() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("headers"));
+        args.insert("json".to_string(), json!("not-json-at-all"));
+        let params = (cmd.tool_params_fn)(&args);
+        let message = set_error(&params);
+        assert!(message.contains("not valid JSON"), "got: {message}");
+        assert!(message.contains("Nothing was changed"), "got: {message}");
+        // The destructive reading was `Network.setExtraHTTPHeaders` with `{}` —
+        // a full replacement that wiped every configured header.
+        assert!(params.get("params").is_none());
+    }
+
+    #[test]
+    fn test_set_headers_rejects_a_non_object_payload() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("headers"));
+        args.insert("json".to_string(), json!("[\"X-Api-Key\"]"));
+        let message = set_error(&(cmd.tool_params_fn)(&args)).to_string();
+        assert!(message.contains("must be a JSON object"), "got: {message}");
+    }
+
+    #[test]
+    fn test_set_headers_accepts_an_empty_object_to_clear_headers() {
+        // Clearing headers stays possible — it just has to be asked for.
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("headers"));
+        args.insert("json".to_string(), json!("{}"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], "Network.setExtraHTTPHeaders");
+        assert_eq!(params["params"]["headers"], json!({}));
+    }
+
+    #[test]
+    fn test_set_geo_requires_both_coordinates() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+
+        let mut missing_lat = HashMap::new();
+        missing_lat.insert("mode".to_string(), json!("geo"));
+        missing_lat.insert("lon".to_string(), json!("2.2945"));
+        let message = set_error(&(cmd.tool_params_fn)(&missing_lat)).to_string();
+        assert!(message.contains("missing --lat"), "got: {message}");
+        assert!(message.contains("--lon"), "the pairing must be spelled out: {message}");
+
+        let mut missing_lon = HashMap::new();
+        missing_lon.insert("mode".to_string(), json!("geo"));
+        missing_lon.insert("lat".to_string(), json!("48.8584"));
+        let message = set_error(&(cmd.tool_params_fn)(&missing_lon)).to_string();
+        assert!(message.contains("missing --lon"), "got: {message}");
+
+        let mut nonsense = HashMap::new();
+        nonsense.insert("mode".to_string(), json!("geo"));
+        nonsense.insert("lat".to_string(), json!("north"));
+        nonsense.insert("lon".to_string(), json!("2.2945"));
+        let message = set_error(&(cmd.tool_params_fn)(&nonsense)).to_string();
+        assert!(message.contains("--lat must be a number"), "got: {message}");
+    }
+
+    #[test]
+    fn test_set_device_requires_both_dimensions() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+
+        let mut missing_width = HashMap::new();
+        missing_width.insert("mode".to_string(), json!("device"));
+        missing_width.insert("height".to_string(), json!("844"));
+        let message = set_error(&(cmd.tool_params_fn)(&missing_width)).to_string();
+        assert!(message.contains("missing --width"), "got: {message}");
+
+        let mut missing_height = HashMap::new();
+        missing_height.insert("mode".to_string(), json!("device"));
+        missing_height.insert("width".to_string(), json!("390"));
+        let message = set_error(&(cmd.tool_params_fn)(&missing_height)).to_string();
+        assert!(message.contains("missing --height"), "got: {message}");
+    }
+
+    #[test]
+    fn test_set_rejects_an_option_from_another_mode() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("geo"));
+        args.insert("lat".to_string(), json!("48.8584"));
+        args.insert("lon".to_string(), json!("2.2945"));
+        args.insert("dpr".to_string(), json!("2"));
+        let message = set_error(&(cmd.tool_params_fn)(&args)).to_string();
+        assert!(message.contains("--dpr does not apply to `set geo`"), "got: {message}");
+        assert!(message.contains("--lat, --lon, --accuracy"), "got: {message}");
+    }
+
+    #[test]
+    fn test_set_accepts_the_global_json_output_flag_in_every_mode() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("media"));
+        args.insert("color-scheme".to_string(), json!("dark"));
+        args.insert("json".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], "Emulation.setEmulatedMedia");
+    }
+
+    #[test]
+    fn test_geolocation_grant_payload_shape() {
+        // Chrome gates getCurrentPosition on the geolocation permission, so the
+        // override alone is invisible to page script.
+        let grant = geolocation_grant_params("http://localhost:18080");
+        assert_eq!(grant["method"], "Browser.grantPermissions");
+        assert_eq!(grant["params"]["permissions"], json!(["geolocation"]));
+        assert_eq!(grant["params"]["origin"], "http://localhost:18080");
+    }
+
+    #[test]
+    fn test_closest_match_suggests_typo_corrections() {
+        let modes = ["geo", "offline", "headers", "media", "device"];
+        assert_eq!(closest_match("geoo", &modes), Some("geo"));
+        assert_eq!(closest_match("offlin", &modes), Some("offline"));
+        assert_eq!(closest_match("medi", &modes), Some("media"));
+        assert_eq!(closest_match("completely-different", &modes), None);
+        assert_eq!(closest_match("", &modes), None);
+    }
+
     #[test]
     fn test_window_new_mirrors_tab_new() {
         let map = commands_map();
@@ -5903,10 +6661,74 @@ mod tests {
     }
 
     #[test]
+    fn test_absolutize_local_dir_keeps_foreign_absolute_forms() {
+        // A Windows path stays untouched even when the CLI itself runs on
+        // POSIX: `Path::is_absolute()` is host-relative, so a Linux runner used
+        // to prepend its own CWD and hand Chrome `<cwd>/C:/tmp/dl`.  This is
+        // the nightly Linux regression.
+        for dir in [
+            "C:/tmp/dl",
+            "C:\\tmp\\dl",
+            "c:/tmp/dl",
+            "Z:\\",
+            "C:tmp",
+            "/tmp/dl",
+            "/tmp/dl/",
+            "\\server\\share\\dl",
+            "//server/share/dl",
+        ] {
+            assert_eq!(
+                absolutize_local_dir(dir),
+                dir,
+                "must be kept verbatim: {dir}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_absolutize_local_dir_resolves_relative_forms() {
+        // A path with no drive qualifier is still resolved against the CWD.
+        for dir in ["downloads", "./downloads", "export/out", "..\\out"] {
+            let resolved = absolutize_local_dir(dir);
+            assert_ne!(resolved, dir, "must be resolved against the CWD: {dir}");
+            assert!(
+                std::path::Path::new(&resolved).is_absolute(),
+                "expected an absolute path for {dir}, got: {resolved}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_has_windows_drive_prefix() {
+        assert!(has_windows_drive_prefix("C:/tmp"));
+        assert!(has_windows_drive_prefix("C:\\tmp"));
+        assert!(has_windows_drive_prefix("c:\\"));
+        // Drive-qualified but relative: kept verbatim, never resolved here.
+        assert!(has_windows_drive_prefix("C:"));
+        assert!(has_windows_drive_prefix("C:tmp"));
+        assert!(!has_windows_drive_prefix("/tmp"));
+        assert!(!has_windows_drive_prefix("downloads"));
+        // Two letters plus a colon is not a drive.
+        assert!(!has_windows_drive_prefix("CD:/tmp"));
+        assert!(!has_windows_drive_prefix("1:/tmp"));
+    }
+
+    #[test]
     fn test_local_only_commands_have_empty_tool_name() {
         let map = commands_map();
         let args = HashMap::new();
-        for name in ["diff-snapshot", "profiles-list", "profiler-start"] {
+        // Commands handled entirely in main.rs must not advertise an MCP tool:
+        // a non-empty name makes `--examples` ask the backend for a tool that
+        // does not exist, and it misleads any audit that derives "needs a
+        // backend" from this field.  Keep this list in sync with the local
+        // dispatch arms in main.rs.
+        for name in [
+            "diff-snapshot",
+            "profiles-list",
+            "profiler-start",
+            "snapshot-list",
+            "snapshot-clean",
+        ] {
             let cmd = map.get(name).unwrap();
             assert!(
                 (cmd.tool_name_fn)(&args).is_empty(),
@@ -6373,6 +7195,93 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
 
         assert_eq!(params["profileMode"], "TEMPORARY");
+    }
+
+    #[test]
+    fn test_open_params_with_display_mode() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("display-mode".to_string(), json!("headless"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        // The capability travels in the backend's own upper-case enum spelling.
+        assert_eq!(params["displayMode"], "HEADLESS");
+        // `headed` stays absent: the reconnect path treats a `headed` key as an
+        // explicit --headed/--headless flag, and display-mode is reported
+        // separately.
+        assert!(params.get("headed").is_none());
+    }
+
+    #[test]
+    fn test_open_params_with_max_open_tabs() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("max-open-tabs".to_string(), json!(" 4 "));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["maxOpenTabs"], "4");
+    }
+
+    #[test]
+    fn test_open_params_omit_new_capabilities_when_not_requested() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let args = HashMap::new();
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert!(params.get("displayMode").is_none());
+        assert!(params.get("maxOpenTabs").is_none());
+    }
+
+    #[test]
+    fn test_click_params_with_count() {
+        let map = commands_map();
+        let cmd = map.get("click").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#click-count-target"));
+        args.insert("count".to_string(), json!("3"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        // The backend spec declares `count` as Int ("Click this many times"), and
+        // CDP clickCount is the whole point of the option — send a number.
+        assert_eq!(params["count"], 3);
+        assert_eq!(params["ref"], "#click-count-target");
+    }
+
+    #[test]
+    fn test_click_params_forwards_unparsable_count_verbatim() {
+        let map = commands_map();
+        let cmd = map.get("click").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#click-count-target"));
+        args.insert("count".to_string(), json!("abc"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        // Not silently dropped: the backend rejects it loudly ("Parameter
+        // 'count' must be Int"), which keeps a typo from clicking once.
+        assert_eq!(params["count"], "abc");
+    }
+
+    #[test]
+    fn test_click_params_count_with_button() {
+        let map = commands_map();
+        let cmd = map.get("click").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#click-count-target"));
+        args.insert("count".to_string(), json!("2"));
+        args.insert("button".to_string(), json!("right"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["count"], 2);
+        assert_eq!(params["button"], "right");
     }
 
     #[test]
@@ -7198,6 +8107,32 @@ mod tests {
         assert!(cmd.options[0].is_bool);
         assert_eq!(cmd.options[1].name, "verbose");
         assert!(cmd.options[1].is_bool);
+    }
+
+    /// `list` is handled CLI-side, and the handler reads both flags from the
+    /// tool parameters — so the mapping is what makes `--all` / `--verbose`
+    /// anything other than silent no-ops.
+    #[test]
+    fn test_list_command_forwards_all_and_verbose_flags() {
+        let map = commands_map();
+        let cmd = map.get("list").expect("list command must exist");
+
+        let params = (cmd.tool_params_fn)(&HashMap::new());
+        assert!(params.get("all").is_none(), "an absent flag must stay absent");
+        assert!(params.get("verbose").is_none());
+
+        let mut args = HashMap::new();
+        args.insert("all".to_string(), json!(true));
+        args.insert("verbose".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["all"], json!(true));
+        assert_eq!(params["verbose"], json!(true));
+
+        // An explicit false (e.g. --verbose=false) must not enable the flag.
+        let mut args = HashMap::new();
+        args.insert("all".to_string(), json!(false));
+        args.insert("verbose".to_string(), json!(false));
+        assert_eq!((cmd.tool_params_fn)(&args), json!({}));
     }
 
     // -----------------------------------------------------------------------
@@ -8593,6 +9528,155 @@ mod tests {
         assert!(params.get("parallel").is_none());
     }
 
+    /// `--timeout` was declared (and documented) but never copied into the
+    /// params map, so `main.rs`'s `validate_crawl_timeout` and
+    /// `build_crawl_server_params` both saw an absent value: the flag was
+    /// accepted, validated against nothing, and every crawl ran on the
+    /// server's 10-minute default.
+    ///
+    /// The test drives the *real* `tool_params_fn`: the previous coverage built
+    /// the params map by hand, which is exactly the mistake that hid the gap.
+    #[test]
+    fn test_crawl_params_carry_the_declared_timeout_budget() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let timeout = cmd
+            .options
+            .iter()
+            .find(|o| o.key() == "timeout")
+            .expect("crawl must expose a --timeout option");
+        assert!(!timeout.is_bool, "--timeout takes a duration, not a flag");
+
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("timeout".to_string(), json!("30m"));
+        let params = (cmd.tool_params_fn)(&args);
+
+        // The raw duration travels to main.rs, which converts it into the
+        // backend's `taskTimeoutMillis`.
+        assert_eq!(params["timeout"].as_str().unwrap(), "30m");
+        assert_eq!(
+            crawl_timeout_to_millis(params["timeout"].as_str().unwrap()),
+            Some(1_800_000),
+            "30m must become a 1 800 000 ms task budget"
+        );
+    }
+
+    #[test]
+    fn test_crawl_params_timeout_absent_by_default() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        let params = (cmd.tool_params_fn)(&args);
+        // Absent = server default (10m). Sending a budget the user never asked
+        // for would silently extend or shorten the crawl.
+        assert!(params.get("timeout").is_none());
+    }
+
+    #[test]
+    fn test_crawl_timeout_duration_readings() {
+        // The documented readings: seconds as a bare number, and the
+        // ms/s/m/h/d suffixes.
+        assert_eq!(crawl_timeout_to_millis("900"), Some(900_000));
+        assert_eq!(crawl_timeout_to_millis("30s"), Some(30_000));
+        assert_eq!(crawl_timeout_to_millis("10m"), Some(600_000));
+        assert_eq!(crawl_timeout_to_millis("1h"), Some(3_600_000));
+        assert_eq!(crawl_timeout_to_millis("500ms"), Some(500));
+        // Values main.rs must refuse: not a duration at all.
+        assert_eq!(crawl_timeout_to_millis("soon"), None);
+        assert_eq!(crawl_timeout_to_millis("2h"), Some(7_200_000)); // above the 1h cap — main.rs refuses it
+        assert_eq!(crawl_timeout_to_millis(""), None);
+    }
+
+    /// `crawl --verbose` is read back out of the params by the completion
+    /// report (`handle_crawl_submit`), so the option is dead unless the params
+    /// builder carries it — the same defect class as `--timeout`.
+    #[test]
+    fn test_crawl_params_carry_verbose_for_the_completion_report() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("verbose".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["verbose"], json!(true));
+
+        let mut quiet = HashMap::new();
+        quiet.insert("url".to_string(), json!("https://example.com"));
+        assert!((cmd.tool_params_fn)(&quiet).get("verbose").is_none());
+    }
+
+    /// Every option a crawl/swarm command declares must be read by its
+    /// `tool_params_fn`/`tool_name_fn` (or forwarded wholesale by a generic
+    /// `for (k, v) in args` passthrough). `--timeout` and `crawl --verbose` were
+    /// declared, documented, and silently dropped; this guard catches the next
+    /// one at review time instead of at a user's expense.
+    #[test]
+    fn test_crawl_and_swarm_options_are_all_wired() {
+        let source = include_str!("commands.rs");
+        let mut checked = 0;
+        for block in command_def_blocks(source) {
+            let Some(name) = block_name(&block) else { continue };
+            if !name.starts_with("crawl") && !name.starts_with("swarm") {
+                continue;
+            }
+            let declared = declared_option_keys(&block);
+            if declared.is_empty() {
+                continue;
+            }
+            checked += 1;
+            // A generic passthrough forwards every parsed key verbatim.
+            if block.contains("for (k, v) in args") {
+                continue;
+            }
+            let body = block
+                .find("e2e_coverage")
+                .map(|idx| &block[idx..])
+                .unwrap_or(&block[..]);
+            for key in declared {
+                assert!(
+                    body.contains(&format!("\"{key}\"")),
+                    "'{name}' declares --{key} but its params builder never reads it"
+                );
+            }
+        }
+        assert!(
+            checked >= 8,
+            "the crawl/swarm audit matched only {checked} command definitions — \
+             the block parser stopped working"
+        );
+    }
+
+    /// Split the registry source into `CommandDef { … }` blocks.
+    fn command_def_blocks(source: &str) -> Vec<String> {
+        let mut blocks = Vec::new();
+        for part in source.split("\n        CommandDef {").skip(1) {
+            blocks.push(part.to_string());
+        }
+        blocks
+    }
+
+    /// The `name: "…"` of a registry block.
+    fn block_name(block: &str) -> Option<&str> {
+        let rest = block.split_once("name: \"")?.1;
+        rest.split_once('"').map(|(name, _)| name)
+    }
+
+    /// The machine keys of every `OptionDef` declared in a registry block.
+    fn declared_option_keys(block: &str) -> Vec<String> {
+        let mut keys = Vec::new();
+        let mut rest = block;
+        while let Some((_, after)) = rest.split_once("OptionDef { name: \"") {
+            let Some((name, tail)) = after.split_once('"') else { break };
+            if let Some(key) = name.split(' ').next() {
+                keys.push(key.to_string());
+            }
+            rest = tail;
+        }
+        keys
+    }
+
     #[test]
     fn test_crawl_params_expires_and_priority() {
         let map = commands_map();
@@ -8746,6 +9830,22 @@ mod tests {
         assert_eq!(cmd.category, Category::Swarm);
     }
 
+    /// `crawl clear --all` is read back out of the params by
+    /// `handle_crawl_clear`; an empty builder made the flag a no-op whose
+    /// "clear everything" promise silently degraded to "clear terminal tasks".
+    #[test]
+    fn test_crawl_clear_params_carry_the_all_flag() {
+        let map = commands_map();
+        let cmd = map.get("crawl-clear").unwrap();
+        let mut args = HashMap::new();
+        args.insert("all".to_string(), json!(true));
+        assert_eq!((cmd.tool_params_fn)(&args)["all"], json!(true));
+
+        let mut plain = HashMap::new();
+        plain.insert("all".to_string(), json!(false));
+        assert!((cmd.tool_params_fn)(&plain).get("all").is_none());
+    }
+
     #[test]
     fn test_crawl_list_command_exists() {
         let map = commands_map();
@@ -8809,6 +9909,34 @@ mod tests {
         args.insert("id".to_string(), json!("task-123"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["id"].as_str().unwrap(), "task-123");
+    }
+
+    /// `crawl status` / `crawl result` print a human summary on stderr and the
+    /// raw record on stdout; `--json` is the envelope scripts asked for, and it
+    /// only exists if the params builder carries the flag.
+    #[test]
+    fn test_crawl_status_and_result_carry_the_json_envelope_flag() {
+        let map = commands_map();
+        for name in ["crawl-status", "crawl-result"] {
+            let cmd = map.get(name).unwrap();
+            assert!(
+                cmd.options.iter().any(|option| option.key() == "json"),
+                "{name} must declare a --json option"
+            );
+            let mut args = HashMap::new();
+            args.insert("id".to_string(), json!("task-123"));
+            args.insert("json".to_string(), json!(true));
+            let params = (cmd.tool_params_fn)(&args);
+            assert_eq!(params["json"], json!(true), "{name} must carry --json");
+            assert_eq!(params["id"], json!("task-123"));
+
+            let mut plain = HashMap::new();
+            plain.insert("id".to_string(), json!("task-123"));
+            assert!(
+                (cmd.tool_params_fn)(&plain).get("json").is_none(),
+                "{name} must not request the envelope unless asked"
+            );
+        }
     }
 
     #[test]

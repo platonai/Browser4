@@ -13,7 +13,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-dependencies</artifactId>
-    <version>4.14.0-rc.8</version>
+    <version>4.14.2-SNAPSHOT</version>
     <name>Browser4 Dependencies</name>
 
     <packaging>pom</packaging>
@@ -560,8 +560,13 @@
         <!-- The Browser4 base library (pulsar-common, pulsar-browser, pulsar-ql, ...), imported as
              pulsar-bom below.  This property is the *only* definition that is read: the same name
              used to be declared in the root pom as well, where nothing consumed it, so bumping the
-             root copy silently changed nothing. -->
-        <browser4-base.version>4.11.24</browser4-base.version>
+             root copy silently changed nothing.
+
+             The 4.11.25 release carries the eval-world (JsWorld), device-emulation and frame-scope
+             fixes; 4.11.24 does not.  This tree imports `ai.platon.pulsar.api.JsWorld`, so the pin
+             has to stay on the release that ships it — 4.11.25 was published to Maven Central on
+             2026-10-15. -->
+        <browser4-base.version>4.11.25</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
 
         <!-- Agent memory system: SQLite FTS derived index (design: docs-dev/copilot/robust-browser-agent-memory-system-design.md) -->

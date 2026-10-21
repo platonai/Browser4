@@ -1,0 +1,87 @@
+# T2 — behavioural coverage: the scenario requires the capability, but never
+# names the command, so the agent has to discover the name itself.
+#
+# This list is a judgement call and is therefore curated by hand; keep every
+# entry justified by a scenario file (see the plan, §3.2).
+#
+# Storage family: tasks/mock-site/storage-state-management.md exercises the full
+# behaviour (domain/path/httpOnly/secure/sameSite/expires, localStorage,
+# sessionStorage, save/load) without naming a single command.
+cookie-list
+cookie-get
+cookie-set
+cookie-delete
+cookie-clear
+localstorage-list
+localstorage-get
+localstorage-set
+localstorage-delete
+localstorage-clear
+sessionstorage-list
+sessionstorage-get
+sessionstorage-set
+sessionstorage-delete
+sessionstorage-clear
+state-save
+state-load
+
+# "Take a snapshot with a CSS selector scope / limited depth" style wording.
+htmlsnapshot-capture
+
+# "List all swarm tasks" / "Close the swarm session" in
+# tasks/mock-site/swarm-parallel-scraping.md.
+swarm-list
+swarm-close
+
+# Verb-only wording in tasks/mock-site/form-filling.md ("Select an option...",
+# tasks/real-world/generic/visual-screenshot-controls.md ("Scroll down...",
+# "Wait for the page to reach the network idle state") and
+# tasks/mock-site/advanced-mouse-interaction.md ("Double-click the ... zone").
+select
+scroll
+mousewheel
+wait
+dblclick
+
+# ── Prose-only but unambiguous command intents ────────────────────────────────
+# The scenario describes the capability in words instead of naming the command.
+# Each entry names the task file that requires it.
+
+# tasks/real-world/generic/navigation-basics.md
+#   "go back to the Web scraping article, then go forward again" / "Reload ..."
+go-back
+go-forward
+reload
+
+# tasks/mock-site/form-filling.md step 6: "Press Enter or click the submit button"
+press
+
+# tasks/mock-site/advanced-mouse-interaction.md steps 3-5, 8
+#   "Hover over the underlined tooltip terms", "Use drag to reorder ...",
+#   "Use generate-locator on one of the dialog trigger buttons"
+hover
+drag
+generate-locator
+
+# tasks/real-world/generic/visual-screenshot-controls.md steps 4, 7, 10
+#   "Take a default screenshot", "Take a full-page screenshot", "Save ... as a PDF"
+screenshot
+pdf
+
+# tasks/real-world/browser4/session-management.md step 8:
+#   "Close all remaining sessions to finish."
+close-all
+
+# tasks/real-world/browser4/dom-snapshot-extraction.md steps 8-10 and
+# tasks/real-world/browser4/htmlsnapshot-inspect-discovery.md steps 3-7
+#   "Export the captured HTML snapshot", "Generate a summary of the page",
+#   "Use htmlsnapshot grep ...", "Run htmlsnapshot inspect ..."
+htmlsnapshot-inspect
+htmlsnapshot-grep
+htmlsnapshot-summary
+
+# tasks/mock-site/crawl-advanced-extraction.md step 9 and
+# tasks/real-world/browser4/crawl-link-discovery.md step 9
+#   "Check the crawl list", "List any active or completed crawl tasks"
+crawl-list
+

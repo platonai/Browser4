@@ -47,6 +47,27 @@ class McpToolNamesTest {
     }
 
     @Test
+    @DisplayName("dispatcher-only aliases are browser_* names the shared table does not claim")
+    fun dispatcherOnlyAliasesAreDisjointFromSharedOnes() {
+        // The dispatcher resolves a few session-scoped names that have no
+        // (domain, method) tool behind them (`browser_window_state`). They are
+        // declared once, here, so both parity guards can compare key sets exactly
+        // instead of tolerating an unexplained difference.
+        for (name in McpToolNames.dispatcherOnlyAliasNames) {
+            assertTrue(name.startsWith("browser_"), "Dispatcher-only alias '$name' must use the browser_ prefix")
+            assertTrue(
+                name !in McpToolNames.frontendAliasNames,
+                "Alias '$name' is both shared and dispatcher-only — pick one"
+            )
+        }
+        assertEquals(
+            McpToolNames.frontendAliasNames + McpToolNames.dispatcherOnlyAliasNames,
+            McpToolNames.dispatcherAliasNames,
+            "dispatcherAliasNames must be exactly the union of both sets"
+        )
+    }
+
+    @Test
     @DisplayName("aliases resolve to the canonical spelling an agent expects")
     fun aliasesResolveToCanonicalSpellings() {
         fun canonical(frontend: String): String? =
@@ -57,5 +78,6 @@ class McpToolNamesTest {
         assertEquals("aria_snapshot", canonical("browser_snapshot"))
         assertEquals("evaluate_value", canonical("browser_evaluate"))
         assertEquals("network_request_detail", canonical("browser_network_request"))
+        assertEquals("network_routes", canonical("browser_network_routes"))
     }
 }

@@ -19,6 +19,37 @@ class CrawlServicePersistenceTest {
     private val objectMapper = pulsarObjectMapper()
 
     // -----------------------------------------------------------------
+    // createdAt stability
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `createdAt survives the terminal record of a rejected crawl`(@TempDir tempDir: Path) {
+        val service = TestableCrawlService(tempDir)
+
+        // A crawl with no seeds is rejected immediately: the CREATED record is
+        // published first, then the terminal error record replaces it.  Both must
+        // report the SAME submission instant — the response builder must not fall
+        // back to the data-class default, which would stamp createdAt at
+        // finalization and make a finished task look like it started when it ended.
+        val taskId = service.submit(CrawlRequest(url = "", depth = 0))
+
+        val records = Files.readAllLines(tempDir.resolve("crawl-tasks.jsonl"))
+            .filter { it.isNotBlank() }
+            .map { objectMapper.readValue(it, CrawlResponse::class.java) }
+            .filter { it.taskId == taskId }
+
+        assertTrue(records.size >= 2, "expected a CREATED record and a terminal record, got $records")
+        val created = records.first { it.status == CrawlStatus.CREATED }
+        val terminal = records.last()
+
+        assertEquals(
+            created.createdAt,
+            terminal.createdAt,
+            "createdAt must be carried from the CREATED record into the terminal record"
+        )
+    }
+
+    // -----------------------------------------------------------------
     // Persistence restore
     // -----------------------------------------------------------------
 

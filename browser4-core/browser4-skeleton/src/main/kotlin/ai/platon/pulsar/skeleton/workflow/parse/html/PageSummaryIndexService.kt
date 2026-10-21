@@ -157,7 +157,7 @@ object PageSummaryIndexService {
         val stats = computeStats(indexedNodes)
 
         // Build YAML
-        val pageType = inferPageType(indexedNodes, pageUrl)
+        val pageType = inferPageType(indexedNodes, pageUrl, linkGroups)
         return buildYamlSummary(
             pageUrl = pageUrl,
             title = title,
@@ -278,6 +278,21 @@ object PageSummaryIndexService {
     private const val MAX_GAP_PX = 100.0
     private const val TOP_GROUPS = 5
     private const val MAX_SAMPLES = 3
+
+    /**
+     * A link group with at least this many items in more than one column is the page's listing
+     * grid: the "20 product cards in a 4-column grid" shape a catalogue or a search result page has.
+     */
+    private const val LISTING_GRID_MIN_ITEMS = 8
+
+    /** Page type of a repeated card grid that carries no price signal (a news index, a directory). */
+    private const val LISTING_GRID_TYPE = "Listing / Grid"
+
+    /**
+     * Sibling `<article>` elements that make the tag a repeating card container rather than the page
+     * being one article: books.toscrape.com's product grid, a blog index, a comment list.
+     */
+    private const val MIN_REPEATED_ARTICLE_SIBLINGS = 3
 
     // =========================================================================
     // Phase implementations
@@ -420,11 +435,20 @@ object PageSummaryIndexService {
         }
     }
 
-    /** CSS selector hint from id (preferred) or class. */
+    /**
+     * CSS selector hint from id (preferred) or class.
+     *
+     * A multi-class element is **one** element carrying several classes, so its selector is the
+     * compound `.class1.class2` — never `.class1 class2`, which is a *descendant* selector and
+     * matches something else entirely (`.col-sm-8 col-md-9` finds a `col-md-9` element nested in a
+     * `col-sm-8` one: the real `<div class="col-sm-8 col-md-9">` is never matched).  The
+     * space-joined form used to leak into every selector the summary prints — landmarks, key
+     * content nodes, list parents, link-group containers — and from there into the "copy-paste
+     * ready" suggested commands, one of which returned nothing.
+     */
     private fun buildSelectorHint(className: String, id: String): String {
         if (id.isNotBlank()) return "#$id"
-        if (className.isNotBlank()) return ".$className"
-        return ""
+        return formatClassList(className)
     }
 
     /**
@@ -488,12 +512,25 @@ object PageSummaryIndexService {
     // Page type inference
     // =========================================================================
 
-    /** Heuristic page-type detection from DOM text, tags, and URL. */
-    private fun inferPageType(nodes: List<SummaryIndexedNode>, pageUrl: String): String {
+    /**
+     * Heuristic page-type detection from DOM text, tags, URL and the detected [linkGroups].
+     *
+     * [linkGroups] is what tells a *listing* apart from an *article*: a catalogue page whose main
+     * content is a grid of repeated cards is neither "one article" nor "one product", even though
+     * each card may be an `<article>` element (books.toscrape.com marks its 20 product cards up that
+     * way) and may carry its own add-to-cart control (an Amazon search results page repeats a buy
+     * box per card).  Repetition is the signal the DOM text cannot provide.
+     */
+    private fun inferPageType(
+        nodes: List<SummaryIndexedNode>,
+        pageUrl: String,
+        linkGroups: List<SummaryLinkGroup> = emptyList(),
+    ): String {
         val text = nodes.joinToString(" ") { it.text }.lowercase()
         val tags = nodes.map { it.tag }.toSet()
 
         val hasPrice = text.contains("$") || text.contains("¥") || text.contains("€") ||
+                text.contains("£") ||
                 Regex("""\$\d+""").containsMatchIn(text) ||
                 Regex("""\d+\.\d{2}""").containsMatchIn(text)
         val hasAddToCart = text.contains("add to cart") || text.contains("buy now") ||
@@ -504,9 +541,14 @@ object PageSummaryIndexService {
         // Use element.text() (all descendant text) rather than ownText() because
         // headlines often nest text inside child elements: <h1><a>headline</a></h1>.
         // ownText() would be empty for such headings, causing false negatives.
-        val hasArticle = tags.contains("article") || nodes.any {
-            it.tag in listOf("h1", "h2") && it.element.text().trim().length > 30
-        }
+        //
+        // `<article>` alone is not an article: a page that repeats the element as its card
+        // container is a listing, so a run of sibling `<article>` cards says nothing about prose.
+        // books.toscrape.com's 20 `<article class="product_pod">` cards used to make the whole
+        // catalogue an "Article / Content".
+        val hasRepeatedArticleCards = anyRepeatedArticleCards(nodes)
+        val hasArticle = (tags.contains("article") && !hasRepeatedArticleCards) ||
+                nodes.any { it.tag in listOf("h1", "h2") && it.element.text().trim().length > 30 }
         // Content richness: count content-bearing elements (headings, paragraphs)
         // with substantial text. A news portal with dozens of headlines should not
         // be classified as "Login / Auth" just because a login link exists.
@@ -516,6 +558,12 @@ object PageSummaryIndexService {
         val isContentRich = contentNodeCount >= 5
         val hasForm = tags.contains("form") && (text.contains("submit") || text.contains("提交"))
         val hasVideo = tags.contains("video") || text.contains("video") || text.contains("视频")
+
+        // A repeated multi-column card grid is the page's listing structure; the
+        // `grid(N cols)` annotation the summary already prints for it is the same data.
+        val listingGrid = linkGroups.firstOrNull {
+            it.count >= LISTING_GRID_MIN_ITEMS && it.columnCount > 1
+        }
 
         // URL-based signals
         val urlLower = pageUrl.lowercase()
@@ -531,8 +579,13 @@ object PageSummaryIndexService {
                 Regex("""[?&](s|q|k|query|search|keyword)=""").containsMatchIn(urlLower)
 
         return when {
-            // Strong content signals take priority over URL hints
+            // A single buy box still wins: a product page that also shows a "customers
+            // also viewed" rail keeps its Product Detail type.
             hasAddToCart -> "Product Detail"
+            // Repeated cards are a listing, whatever each card is made of.  The URL
+            // decides which *kind* of listing when it can.
+            listingGrid != null && (isSearchUrl || (hasSearch && hasPrice)) -> "Search Results"
+            listingGrid != null -> if (hasPrice) "Product Listing" else LISTING_GRID_TYPE
             hasSearch && hasPrice -> "Search Results"
             hasArticle -> "Article / Content"
             // Only classify as Login/Auth when login signal is present AND the page
@@ -560,6 +613,20 @@ object PageSummaryIndexService {
             else -> "General Page"
         }
     }
+
+    /**
+     * True when the page repeats `<article>` elements as sibling cards — a listing whose card
+     * container happens to be an `<article>`, not a page that *is* an article.
+     *
+     * Counted on the sibling run rather than on the element count, so a story page that carries a
+     * couple of unrelated `<article>` blocks (a comment, a sidebar teaser) keeps its article type.
+     */
+    private fun anyRepeatedArticleCards(nodes: List<SummaryIndexedNode>): Boolean =
+        nodes.any { node ->
+            node.tag == "article" && (node.element.parent()?.children()?.count { child ->
+                child.tagName().lowercase() == "article"
+            } ?: 0) >= MIN_REPEATED_ARTICLE_SIBLINGS
+        }
 
     // =========================================================================
     // List detection

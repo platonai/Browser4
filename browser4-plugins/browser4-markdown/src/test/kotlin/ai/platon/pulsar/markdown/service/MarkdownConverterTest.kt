@@ -16,6 +16,8 @@
 package ai.platon.pulsar.markdown.service
 
 import ai.platon.pulsar.markdown.config.MarkdownConfig
+import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.*
 
@@ -116,6 +118,37 @@ class MarkdownConverterTest {
             script.contains("node.closest('p,li,td,th,blockquote,figcaption,figure')"),
             "IMG branch should skip images handled by an ancestor container"
         )
+    }
+
+    @Test
+    @DisplayName("countMarkdownLinks counts markdown links but not images")
+    fun countMarkdownLinksIgnoresImages() {
+        val markdown = "[a](https://example.com/a) and ![i](i.png) and [b](/b)"
+
+        assertEquals(2, converter.countMarkdownLinks(markdown))
+        assertEquals(0, converter.countMarkdownLinks("![only](i.png)"))
+        assertEquals(0, converter.countMarkdownLinks(""))
+        assertEquals(0, converter.countMarkdownLinks("   "))
+    }
+
+    @Test
+    @DisplayName("convert separates links written to the file from internal links on the page")
+    fun convertReportsFileLinkCountAndPageLinkCount() = runBlocking {
+        val pageUrl = "https://example.com/"
+        val driver = FakeWebDriver(pageUrl)
+        driver.addPage(
+            pageUrl,
+            title = "Example",
+            markdown = "# Example\n\n[a](https://example.com/a) and ![i](https://example.com/i.png)\n",
+            linksJson = "[{\"href\":\"/a\",\"text\":\"A\",\"resolvedUrl\":\"https://example.com/a\",\"isInternal\":true}," +
+                "{\"href\":\"https://other.com\",\"text\":\"B\",\"resolvedUrl\":\"https://other.com\",\"isInternal\":false}]",
+        )
+
+        val result = converter.convert(driver.driver)
+
+        assertEquals(1, result.internalLinkCount)
+        assertEquals(1, result.markdownLinkCount)
+        assertEquals(1, result.imageCount)
     }
 }
 

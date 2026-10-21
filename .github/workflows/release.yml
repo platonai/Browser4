@@ -616,7 +616,11 @@ jobs:
       - name: Run browser4-cli E2E Tests
         id: e2e-cli
         if: success() && needs.prepare.outputs.skip_tests != 'true'
-        timeout-minutes: 15
+        # 30 minutes, not 15: nightly.yml and nightly-cli.yml give this identical
+        # --level=EXTENDED --enable-all command 30, and v4.14.0 showed 15 is not
+        # enough — the 214-scenario suite needs ~14 minutes of scenario time plus
+        # the Rust compile, so the step was killed after every scenario had passed.
+        timeout-minutes: 30
         shell: bash
         env:
           BROWSER4_E2E_SERVICE_URL: http://localhost:18182

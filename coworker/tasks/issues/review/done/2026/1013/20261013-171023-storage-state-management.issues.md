@@ -1,0 +1,241 @@
+# Issues: storage-state-management
+
+> **Source:** `20261013-171023-storage-state-management.issues.json` | **Date:** 20261013-171023 | **Mode:** dev
+
+## Scenario Background
+
+### Task
+
+All 17 requested steps were completed successfully against a live session on `http://localhost:18080/generated/interactive-1.html`.
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Navigate to the MockSite interactive page | ✅ `goto` — daemon + backend auto-started, title "Interactive Single Page" |
+| 2 | `session_id=abc123`, `--domain localhost --path / --httpOnly --secure` | ✅ (first attempt rejected by Git Bash; succeeded with documented workaround) |
+| 3 | `theme=dark`, `--sameSite Lax`, `--expires` +1 week | ✅ set with RFC 3339 datetime, resolved to Unix ts `1792515873` |
+| 4 | List all cookies | ✅ both present with exactly the requested attributes |
+| 5 | Filter by `--domain localhost` | ✅ *and* independently verified the filter genuinely excludes other domains |
+| 6 | Get `theme` | ✅ returned `dark` |
+| 7–8 | Delete `session_id`, re-list | ✅ removed, `theme` remained |
+| 9 | Clear all cookies | ✅ `[]` |
+| 10–11 | localStorage `user_prefs` = `{"lang":"en","tz":"UTC"}`: set, list, get | ✅ exact JSON round-trip |
+| 12 | Delete key, then clear localStorage | ✅ `[]` |
+| 13 | sessionStorage `visit_count=1`: set/list/get/delete/clear | ✅ full cycle |
+| 14 | Set test cookie, `state-save browser_state.json` | ✅ file written with cookies + origin-scoped localStorage |
+| 15 | Clear cookies + localStorage | ✅ both `[]` |
+| 16 | `state-load` and verify restore | ✅ cookie **and** localStorage restored; verified live via `document.cookie` |
+| 17 | Delete `browser_state.json` | ✅ file gone |
+
+I went beyond "the CLI printed it" on the load-bearing steps: `cookie-set` was confirmed to create a **real browser cookie** (`document.cookie` → `test_cookie=test_value`), `--httpOnly` was confirmed genuinely honored (present in the jar, **invisible** to `document.cookie` → `""`), the `--domain` filter was confirmed to actually filter (a cookie set on `example.com` was excluded from a `--domain localhost` listing), and `--expires 1w` was confirmed to resolve to exactly now+604800s.
+
+### Execution Context
+
+**Key Commands:**
+
+`goto` · `cookie-set` ×7 · `cookie-list` ×8 · `cookie-get` · `cookie-delete` ×3 · `cookie-clear` ×4 · `localstorage-set/list/get/delete/clear` · `sessionstorage-set/list/get/delete/clear` · `state-save` · `state-load` · `eval` ×3
+
+**Key decisions and workarounds:**
+
+- **Named session.** The docs warn the unnamed default session is a singleton shared by every invocation; the scratch directory showed a concurrent run in progress, so I isolated with `-s eval-cookies`. This worked cleanly and required no extra setup.
+- **The Git Bash `--path /` wall (the one real friction point).** `./b4w.ps1 cookie-set session_id abc123 --domain localhost --path /` failed immediately: Git Bash's MSYS path conversion rewrites a bare `/` argument to `C:/Program Files/Git/` *before* PowerShell starts. The CLI detected the rewrite and failed fast with an actionable message naming two fixes. I used the suggested `MSYS2_ARG_CONV_EXCL='*' ./b4w.ps1 ...` prefix to stay on the required invocation; I also independently confirmed `./b4w.sh` works for the same command.
+- **Timestamp.** Rather than the `7d`/`1w` shorthand, I passed a computed RFC 3339 datetime (`2026-10-20T17:04:33Z`) to exercise the documented absolute-timestamp path; the confirmation line echoed `expires=1792515873`, exactly one week out.
+- **State file location.** `browser_state.json` was written into the run's scratch directory (`.test-sessions/20261013T0154334271610Z/`) via a relative path, satisfying the temp-file rule while keeping the requested filename.
+- **Extra state on the round-trip.** For step 14 I also set a localStorage marker, because `state-save` persists cookies *and* localStorage — restoring only a cookie would not have proven the round-trip. Both came back.
+- **Cleanup.** Probe cookies (`eq_form_ok`, `via_sh`, `rel_week`, `other_site_cookie`, `sec_other`, `ho_check`) were cleared; the session, localStorage, and sessionStorage were left empty.
+
+**What the CLI did notably well:** the whole 17-step flow needed **no manual server setup** (daemon + backend auto-started on first `goto`); help is genuinely task-oriented — `--help localstorage-set` contained the literal `'{"lang":"en","tz":"UTC"}'` example the task called for, and `--help cookie-set`'s example matched step 2 verbatim; error messages are consistently specific and name the fix (invalid `sameSite` says "case-sensitive; got 'lax'"; invalid `--expires` enumerates all three accepted formats); and `cookie-get --full` (discovered while checking whether the bare-value output was an inconsistency) turned out to be a documented escape hatch.
+
+**Outcome:** 17/17 steps completed. One command required a retry (~94% first-attempt success, 100% final), and no step was blocked.
+
+---
+
+## Issues Found (3 issues)
+
+### Issue 1: Cookie path '/' is unusable via the documented ./b4w.ps1 invocation from Git Bash
+
+**Severity:** Medium
+**Category:** UX
+
+#### Reproduction
+
+./b4w.ps1 -s eval-cookies cookie-set session_id abc123 --domain localhost --path / --httpOnly --secure
+(also: ./b4w.ps1 cookie-list --path /)
+
+#### Expected Behavior
+
+The cookie is stored with Path=/, matching the example in the tool's own help text. The documented, primary entry point for this repo (./b4w.ps1) should be able to express a documented flag value.
+
+#### Actual Behavior
+
+Exit 1 with: "Error: argument 'C:/Program Files/Git/' (probably typed as '/') was rewritten by Git Bash's MSYS path conversion before PowerShell started. The original value is unrecoverable..." The command only works if prefixed with MSYS2_ARG_CONV_EXCL='*' or run through a second wrapper, ./b4w.sh.
+
+#### Root Cause Analysis
+
+Git Bash's MSYS path conversion rewrites '/'-leading argv tokens when it spawns the native pwsh process, so the value is destroyed before either b4w.ps1 or the CLI runs; neither can recover it. b4w.ps1:86-144 correctly detects the mangled form and fails fast rather than proceeding with a wrong value, and the message names two working fixes — so the defect is not silent corruption but discoverability: the repo's prescribed invocation is the one that fails, and the 354-line top-level `help` output never mentions Git Bash or MSYS (verified by grep), nor does it mention ./b4w.sh. A bash user following `help` learns of the caveat only by hitting the wall; it appears solely in per-command help (cookie-set/cookie-delete) and in references/storage-state.md.
+
+#### Code Pointer
+
+`cli/browser4-cli/src/help.rs (top-level help text); b4w.ps1:86-144 (guard, correct as-is); cli/browser4-cli/src/commands.rs:2550,2487,2600 (option docs)`
+
+#### AI Suggested Improvement
+
+- Add a one-line 'Git Bash / MSYS users: invoke via ./b4w.sh' note to the top-level `help` output (cli/browser4-cli/src/help.rs), which currently mentions neither Git Bash nor MSYS.
+- Document the zero-workaround path in the same note: --path defaults to '/', so bash users can simply omit the flag (`cookie-set session_id abc123 --domain localhost --httpOnly --secure`).
+- Where repo/agent instructions prescribe ./b4w.ps1 for bash shells, prescribe ./b4w.sh instead (CLAUDE.md already documents both, but the distinction is buried).
+- Keep the existing guard and message unchanged — they are exemplary; only the surfaces that lead the user to it need to change.
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 2: Equals-form --path=/ bypasses the MSYS guard and yields a misleading error naming a value the user never typed
+
+**Severity:** Medium
+**Category:** Product
+
+#### Reproduction
+
+./b4w.ps1 -s eval-cookies cookie-set eq_form v1 --domain localhost --path=/
+Then confirm the same command succeeds with conversion disabled:
+MSYS2_ARG_CONV_EXCL='*' ./b4w.ps1 -s eval-cookies cookie-set eq_form_ok v1 --domain localhost --path=/
+
+#### Expected Behavior
+
+Either the cookie is set with Path=/, or the user gets the same clear MSYS-rewrite guidance that the bare `--path /` spelling produces.
+
+#### Actual Behavior
+
+Exit 1 with: "Error: option '--path' was rejected: 'C' is not a valid cookie path (must start with '/')". The message names the value 'C' — a string the user never typed — and gives no indication that Git Bash rewrote the argument. The `--option=` spelling is exactly what a user tries after learning that a bare `/` is unsafe, so this is the likely second encounter.
+
+#### Root Cause Analysis
+
+MSYS rewrites the portion after '=' , so '--path=/' arrives as '--path=C:/Program Files/Git/'. The guard in b4w.ps1:123-131 compares each whole argv token against the MSYS root: $ArgIsRoot tests equality with the root and $ArgUnderRoot tests a StartsWith($RootFwd + '/') prefix. A token retaining its '--path=' prefix matches neither, so it is forwarded; the mangled string is subsequently split (on the space in 'C:/Program Files/Git/' and/or the ':' separator) somewhere between pwsh and the CLI, leaving handle_cookie_set's validation (main.rs:6202) to receive the literal 'C'. The guard's comment explicitly reasons about equality vs. prefix for the standalone-'/' case but does not consider embedded name=value forms. (The exact point at which the mangled token is truncated to 'C' was not isolated; the guard's non-firing for this spelling is directly proven by the absence of its message.)
+
+#### Code Pointer
+
+`b4w.ps1:123-131 (guard loop, $ArgIsRoot / $ArgUnderRoot); cli/browser4-cli/src/main.rs:6202 (handle_cookie_set path validation)`
+
+#### AI Suggested Improvement
+
+- In the guard loop, when a token fails the as-is comparison, retry the root comparison against the substring after the first '=' — this covers `--path=`, and also `--selector=`, `--sql=`, `--domain=`, and every other `--name=value` flag.
+- Generalize the detection to the signature of a mangled value: a token matching `^--?[A-Za-z][A-Za-z-]*=<drive>:/` caught under $env:MSYSTEM should emit the same friendly guidance.
+- As a backstop, have path-rooted option-validation errors append the Git Bash hint when $env:MSYSTEM is set, so any future spelling that slips the guard still explains itself.
+- Add a regression test for the `--path=/` spelling next to the existing bare-`/` case in the b4w.ps1 guard tests.
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 3: cookie-list and state-save omit absent cookie attributes instead of emitting nulls
+
+**Severity:** Low
+**Category:** Product
+
+#### Reproduction
+
+./b4w.ps1 -s eval-cookies cookie-set session_id abc123 --domain localhost --path / --httpOnly --secure
+./b4w.ps1 -s eval-cookies cookie-set theme dark --sameSite Lax --expires 7d
+./b4w.ps1 -s eval-cookies cookie-list
+
+#### Expected Behavior
+
+A stable schema per cookie object, with every attribute present (null where absent) — as the cookie example in references/storage-state.md suggests, showing name/value/domain/path/expires/httpOnly/secure/sameSite together.
+
+#### Actual Behavior
+
+The session_id object contains no `expires` and no `sameSite` key at all, while the theme object contains both; httpOnly/secure are always present. Consumers must branch on key presence, and `cookie.expires` reads as undefined rather than null. The same omission appears in the state-save file (test_cookie was written without expires/sameSite), so the two JSON surfaces at least agree with each other.
+
+#### Root Cause Analysis
+
+The cookie-to-JSON mapping skips fields that the underlying cookie struct reports as absent (session cookies have no expiry; unspecified SameSite has no value) rather than normalizing them to null. This is faithful to CDP's cookie representation but makes the CLI's own JSON an optional-key schema. Impact is confined to typed/schema-validated consumers — jq and similar tools are unaffected.
+
+#### Code Pointer
+
+`cli/browser4-cli/src/main.rs (cookie-to-JSON mapping shared by handle_cookie_list and the state-save writer)`
+
+#### AI Suggested Improvement
+
+- Emit a fixed key set per cookie (name, value, domain, path, expires, httpOnly, secure, sameSite) with null for absent values, so the schema is stable and self-describing.
+- If the omission is deliberate CDP fidelity, state it explicitly in `--help cookie-list` and in the state-save file-format section of references/storage-state.md — the current help says only 'Output is always JSON (an array of cookie objects)'.
+- Low priority: no task step was impeded, and exit codes and values were correct throughout.
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+## Overall Assessment
+
+**Completion Status:** Successful - all 17 steps completed and independently verified at the browser level (real cookie jar, httpOnly honored, domain filter genuinely filtering, localStorage/sessionStorage cycles, and a full state-save/clear/state-load round-trip).
+
+**Success Rate:** 100% of steps completed; ~94% succeeded on the first attempt (step 2's first attempt was rejected by Git Bash, then succeeded with the CLI's own documented workaround).
+
+**Issues Found:** 3
+
+**Major Blockers:** None. The only first-attempt failure was the Git Bash / MSYS argv rewrite of the bare '--path /' argument. It was detected, never silently misapplied, and the CLI's error message supplied two working fixes; the task continued without loss.
+
+**Most Confusing Aspects:** The shell-integration seam is the only genuinely confusing area, and it is a Windows/Git-Bash artifact rather than a CLI design flaw. Two things compound it: (1) the top-level `help` never mentions Git Bash, MSYS, or the ./b4w.sh escape hatch, so a bash user meets the caveat only by colliding with it; and (2) the most natural workaround a user reaches for, the equals form --path=/, fails with a misleading error naming a value ('C') they never typed — strictly worse feedback than the bare-/ spelling it was meant to avoid. Everything else was unusually clear: the storage command family, the flag names (--domain/--path/--httpOnly/--secure/--sameSite/--expires), and the state-save/state-load split all behaved exactly as the help described.
+
+**Most Valuable Improvements:** 1) Surface the Git Bash caveat and the ./b4w.sh route in the top-level help output (cli/browser4-cli/src/help.rs), and note that --path defaults to '/' so the flag can simply be omitted from bash. 2) Extend the MSYS guard in b4w.ps1 to test the substring after the first '=' so the --name=value spelling gets the good error message instead of a misleading one. 3) Normalize the cookie JSON schema to a fixed key set (or document the optional keys) so automation can rely on it. All three are small, localized changes.
+
+**Usability Rating:** 8/10
+
+---
+
+## How to Reproduce
+
+### Common Setup
+
+1. Clone the repository and `cd` to the repo root.
+2. The CLI is invoked via `./b4w.ps1` (PowerShell) or `./b4w.sh` (Bash / Git Bash), which auto-build from source when needed.
+3. The backend server starts automatically in dev mode.
+4. All commands from repo root:
+
+   - **PowerShell:** `./b4w.ps1 <command>`
+   - **Bash / Git Bash:** `./b4w.sh <command>`
+   - **Direct:** `browser4-cli <command>` (if installed globally)
+
+   > **Note:** `$(./b4w.ps1)` is command substitution in bash — do NOT use it.
+
+### Per-Issue Reproduction Steps
+
+#### Issue 1: Cookie path '/' is unusable via the documented ./b4w.ps1 invocation from Git Bash
+
+./b4w.ps1 -s eval-cookies cookie-set session_id abc123 --domain localhost --path / --httpOnly --secure
+(also: ./b4w.ps1 cookie-list --path /)
+
+#### Issue 2: Equals-form --path=/ bypasses the MSYS guard and yields a misleading error naming a value the user never typed
+
+./b4w.ps1 -s eval-cookies cookie-set eq_form v1 --domain localhost --path=/
+Then confirm the same command succeeds with conversion disabled:
+MSYS2_ARG_CONV_EXCL='*' ./b4w.ps1 -s eval-cookies cookie-set eq_form_ok v1 --domain localhost --path=/
+
+#### Issue 3: cookie-list and state-save omit absent cookie attributes instead of emitting nulls
+
+./b4w.ps1 -s eval-cookies cookie-set session_id abc123 --domain localhost --path / --httpOnly --secure
+./b4w.ps1 -s eval-cookies cookie-set theme dark --sameSite Lax --expires 7d
+./b4w.ps1 -s eval-cookies cookie-list
+

@@ -88,6 +88,11 @@ object McpToolNames {
         McpToolAlias("browser_network_request", "tab", "networkRequestDetail"),
         McpToolAlias("browser_network_route", "tab", "networkRoute"),
         McpToolAlias("browser_network_unroute", "tab", "networkUnroute"),
+        // The read-only counterpart of networkRoute/networkUnroute: inspecting the
+        // active routes must not require removing them first. The dispatcher had it
+        // from the start; without it here the standard MCP server and the agent CLI
+        // runner could not spell it at all.
+        McpToolAlias("browser_network_routes", "tab", "networkRoutes"),
         McpToolAlias("browser_har_start", "tab", "harStart"),
         McpToolAlias("browser_har_stop", "tab", "harStop"),
         McpToolAlias("browser_frame_list", "tab", "frameList"),
@@ -97,6 +102,30 @@ object McpToolNames {
 
     /** Alias names indexed by their frontend spelling. */
     val frontendAliasNames: Set<String> = frontendAliases.mapTo(linkedSetOf()) { it.frontendName }
+
+    /**
+     * `browser_*` names only the private MCP dispatcher resolves.
+     *
+     * `browser_window_state` answers about the session's OWN browser — its pid,
+     * its launch flags, whether its window is visible. That is a session-level
+     * question with no `(domain, method)` tool behind it (the dispatcher handles
+     * the call itself), so it cannot be expressed as a [McpToolAlias]: the
+     * standard MCP server registers aliases as second spellings of a real tool and
+     * has nothing to register here. Listing it explicitly is what lets the tables
+     * still be compared exactly — a name that is neither shared nor listed here is
+     * drift, and that is what the `McpToolAliasParityTest` on both channels
+     * asserts.
+     */
+    val dispatcherOnlyAliasNames: Set<String> = linkedSetOf("browser_window_state")
+
+    /**
+     * Every `browser_*` name the private MCP dispatcher resolves: the shared
+     * aliases plus the [dispatcherOnlyAliasNames].
+     */
+    val dispatcherAliasNames: Set<String> = linkedSetOf<String>().apply {
+        addAll(frontendAliasNames)
+        addAll(dispatcherOnlyAliasNames)
+    }
 }
 
 /**

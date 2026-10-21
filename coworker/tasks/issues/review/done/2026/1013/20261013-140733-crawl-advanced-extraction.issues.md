@@ -1,0 +1,398 @@
+# Issues: crawl-advanced-extraction
+
+> **Source:** `20261013-140733-crawl-advanced-extraction.issues.json` | **Date:** 20261013-140733 | **Mode:** dev
+
+## Scenario Background
+
+### Task
+
+All 9 task steps completed. The core crawl workflow — seed file + X-SQL file + `crawl --seed-file ... --depth 0 --sql @file` — worked on the first attempt with exactly the documented selector pattern (`#productTitle`, `#product-price` from the MockSite recipe).
+
+**Extracted data (title + price per product, verified in foreground, background, and readonly runs):**
+
+| URL | Title | Price |
+|---|---|---|
+| `http://localhost:18080/ec/dp/B0E000001` | 4K OLED TV 55 | $899.99 |
+| `http://localhost:18080/ec/dp/B0E000002` | Wireless Noise-Cancelling Headphones | $199.99 |
+| `http://localhost:18080/ec/dp/B0E000003` | Portable Bluetooth Speaker | $49.99 |
+
+**Per-step outcome:**
+1. ✅ Seed file created (`.test-sessions/20261013T0154334271610Z/seed-products.txt`)
+2. ✅ X-SQL query file created (`extract-title-price.sql` — `DOM_BASE_URI` + `DOM_FIRST_TEXT(dom,'#productTitle')` + `DOM_FIRST_TEXT(dom,'#product-price')` via `DOM_LOAD_AND_SELECT(@url,'body')`)
+3. ✅ Full-option crawl (`--refresh --parse --expires 1h --priority 1 --page-load-timeout 30s`): 3 pages, 3 rows, ~8s total
+4. ✅ Background crawl submitted → task `56bdb2e7-94bf-405d-bb58-b903726818f9`; completed OK (6.3s)
+5. ✅ `crawl list` during execution showed the task as `processing` alongside the completed task
+6. ⚠️ `--ignore-url-query` at depth 0: accepted, zero effect (documented). Demonstrated the real effect via depth-1 comparison: `/ec/b?node=1292115012` (Category: Electronics) → `/ec/b` (**Error 400**)
+7. ⚠️ `--no-norm`: accepted, zero observable effect at depth 0 *and* depth 1 on MockSite
+8. ✅ `--readonly`: `3/3 page(s) served from the page store (stored content up to 55s old); nothing was written to the page store`; also verified `--readonly` wins over `--refresh` as documented
+9. ✅ Final `crawl list`: 14 tracked tasks, all `completed`; status filters (`--status running`/`queued`) return friendly empty messages
+
+**Extra verification performed (not in the step list, but part of the reliability evaluation):**
+- Validation probes: `--expires 1x` → clean refusal (exit 1); `--parallel 0` → refusal with hint (exit 1); 2 malformed seeds → named with file+line, `did you mean` hint, exit 2 — all excellent
+- **`--timeout` is silently ignored**: `--timeout 500ms`, `2h`, `30m`, `=30m` all ran normally; every task record reports `taskTimeoutMillis: 600000` (server default), never the requested budget — docs promise refusal for out-of-range values and a reported applied budget. Root cause traced to source (below).
+- **`-a "-flag value"` cannot bind**: the documented LoadOptions passthrough example fails with a misleading `Invalid crawl URL '-timeout 30m' (command argument)` error; `--args="..."` and `-a @file` work.
+- HTTP 400 error page crawled as a normal successful page with no status field and task status `OK`.
+
+### Execution Context
+
+**Key Commands:**
+
+```
+./b4w.ps1 help                                   # confirm CLI alive (backend already running; MockSite verified via curl → HTTP 200)
+./b4w.ps1 crawl --seed-file .../seed-products.txt --depth 0 --sql "@.../extract-title-price.sql" \
+    --refresh --parse --expires 1h --priority 1 --page-load-timeout 30s        # steps 1–3 ✓ 7.8s
+... --background                                                               # step 4 → 56bdb2e7-…
+./b4w.ps1 crawl list / crawl status 56bdb2e7…                                  # step 5 ✓ (processing → OK)
+... --ignore-url-query (+ depth-1 comparison)                                  # step 6
+... --no-norm (+ depth-1 comparison)                                           # step 7
+... --readonly / --readonly --refresh                                          # step 8
+./b4w.ps1 crawl list; crawl list --status running|queued; crawl result 56bdb2e7…  # step 9
+./b4w.ps1 help crawl / --help crawl status                                     # discoverability check
+# probes: --timeout 500ms|30m|2h|=30m; --expires 1x; --parallel 0; bad-seeds.txt; -a "-timeout 30m"; \
+#         --args="-expires 1x"; -a @loadopts.txt; crawl status/result <ids>
+```
+**Major decisions / workarounds:**
+- Docs disclosed `--ignore-url-query`/`--no-norm` are no-ops for depth-0 seed fetches; to fulfil "observe the difference" I added a single-seed depth-1 link-discovery A/B comparison (this also exposed the 400-page accounting gap).
+- For `-a` hyphen values, discovered and verified two working alternatives: `--args="…"` (equals form) and `-a @loadopts.txt`.
+- `--timeout` ineffectiveness was confirmed against the crawl task record (`taskTimeoutMillis`) and then traced to source: `commands.rs` crawl `tool_params_fn` never copies the `timeout` option, while `main.rs` validation/translation read it from those tool params; unit tests construct the map manually so they pass.
+- All evidence files written under `.test-sessions/20261013T0154334271610Z/` (seed/SQL files, help dump, A/B crawl outputs, lists, JSON records).
+
+
+
+**Notes for the human reviewer:** MockSite was already running (verified with `curl` before `./bin/test.ps1 mock-site` was needed). All temporary artifacts live in `.test-sessions/20261013T0154334271610Z/` (seed files, SQL file, A/B crawl outputs, help dumps, task-record JSON). The `--timeout` findings were additionally verified against source (`commands.rs` crawl `tool_params_fn` vs `main.rs` `validate_crawl_timeout`/`build_crawl_server_params`), so the code pointer and fix are concrete rather than speculative.
+
+---
+
+## Issues Found (6 issues)
+
+### Issue 1: --timeout is declared and documented but silently ignored by crawl (no validation, no budget applied)
+
+**Severity:** High
+**Category:** Product
+
+#### Reproduction
+
+./b4w.ps1 crawl --seed-file .test-sessions/20261013T0154334271610Z/seed-products.txt --depth 0 --timeout 30m --background  → then ./b4w.ps1 crawl status <task-id> shows "taskTimeoutMillis": 600000 (the 10m server default), not 1800000.
+Repeated with --timeout=30m (same), --timeout 2h (runs normally — docs say values above 1h are refused before submission), --timeout 500ms (runs normally — docs say the floor is 1s and it must exit non-zero). Every crawl in the session recorded 600000 regardless of the flag.
+
+#### Expected Behavior
+
+The task record reports the budget the crawl ran under (1800000 for 30m); --timeout 500ms and --timeout 2h are refused before submission with "Invalid --timeout value '...'." (as documented in crawl.md and its error-handling table).
+
+#### Actual Behavior
+
+The flag is accepted without validation and has no effect: all crawls ran with the server default 600000ms budget; no error for 500ms or 2h; the record's taskTimeoutMillis never reflects the request.
+
+#### Root Cause Analysis
+
+The crawl CommandDef declares the option (commands.rs line 3873) but its tool_params_fn (lines 3879–3984) never reads it — unlike parallel/format/expires which are copied or validated. main.rs then reads tool_params.get("timeout") in validate_crawl_timeout() (~line 17341) and build_crawl_server_params() (~line 16698, m.remove("timeout") → taskTimeoutMillis), both of which see nothing, so validation passes ("absent" is legal) and the server applies its default. The unit tests (validate_crawl_timeout_*, build_crawl_server_params_translates_timeout_to_task_timeout_millis) construct the tool_params map by hand, so they pass despite the missing wiring.
+
+#### Code Pointer
+
+`cli/browser4-cli/src/commands.rs: crawl tool_params_fn (add the copy next to the `parallel` handling at ~line 3980); consumed by cli/browser4-cli/src/main.rs:build_crawl_server_params (~16698) and validate_crawl_timeout (~17341)`
+
+#### AI Suggested Improvement
+
+- Add `if let Some(v) = get_opt_str(args, "timeout") { p["timeout"] = json!(v); }` to the crawl tool_params_fn (same pattern as `parallel`).
+- Add a regression test that runs the real tool_params_fn with args {"timeout":"30m"} and asserts the server params contain taskTimeoutMillis=1800000, plus rejection tests for 500ms/2h through that same path.
+- Audit all declared OptionDefs against get_opt_str usage in each tool_params_fn to catch other declared-but-unwired options.
+- The docs' claim that out-of-range values are refused was also false in practice; after the fix, verify 500ms/2h do exit non-zero as documented.
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 2: Crawl counts an HTTP 400 error page as a successful page and records no HTTP status anywhere
+
+**Severity:** Medium
+**Category:** Reliability
+
+#### Reproduction
+
+./b4w.ps1 crawl --seed-file .test-sessions/20261013T0154334271610Z/seed-one.txt --depth 1 --out-link-selector "a[href]" --top-links 10 --ignore-url-query --refresh
+Output lists: depth=1 | http://localhost:18080/ec/b | Error 400, and reports "Crawl completed. 6 pages found."; ./b4w.ps1 crawl status 493bd7ce-bbb0-4ea6-a489-d2312a02ce09 reports "OK — 6 page(s) found" with no failedPages and exit 0. (curl http://localhost:18080/ec/b → HTTP 400 "Missing category parameter".)
+
+#### Expected Behavior
+
+A page whose fetch returned HTTP 400/404/5xx is surfaced as such — at minimum an httpStatus field on the page row and a warning/summary note, ideally counted toward failed/flagged pages so data pipelines can tell it apart from a real page.
+
+#### Actual Behavior
+
+The error response body is recorded as a normal page row (title "Error 400"); the record schema has no status field at all; the task reports OK and exits 0; X-SQL over such a page would silently yield degenerate rows.
+
+#### Root Cause Analysis
+
+The load layer treats any response body as a loaded document, and CrawlPageResult (CrawlModels.kt:281) has no field to carry the HTTP status; failure accounting only covers fetch failures, no-content loads, and budget losses — not HTTP error responses. The row construction sites are in CrawlRoundRunner.kt (~152–230).
+
+#### Code Pointer
+
+`browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/crawl/CrawlModels.kt:CrawlPageResult (+ row construction in CrawlRoundRunner.kt; CLI listing in cli/browser4-cli/src/main.rs)`
+
+#### AI Suggested Improvement
+
+- Capture the response status in the fetch result and add `httpStatus` (or `errorStatus`) to CrawlPageResult so every row carries it.
+- Count 4xx/5xx pages as flagged/failed (or add a distinct `pagesWithHttpErrors` counter) and surface them in the completion summary and CLI warning path.
+- Emit a stderr advisory in the CLI page listing when a fetched page's status is >= 400 (the title alone — "Error 400" — is too implicit).
+- Consider a strict mode (`--fail-on-http-error`) that exits 6 like the existing partial-failure path.
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 3: Documented `-a "-flag value"` LoadOptions passthrough does not bind — the value is mistaken for a positional seed URL
+
+**Severity:** Medium
+**Category:** Documentation
+
+#### Reproduction
+
+./b4w.ps1 crawl --seed-file .test-sessions/20261013T0154334271610Z/seed-products.txt --depth 0 -a "-timeout 30m" --background
+→ Error: Invalid crawl URL '-timeout 30m' (command argument): expected an absolute http(s) URL such as https://example.com/page. (exit 2).
+This is exactly the pattern shown in skills/browser4-cli/references/crawl.md lines 72–73: crawl "https://example.com" -ol "a[href]" --refresh -a "-requireSize 100000 -scrollCount 5".
+
+#### Expected Behavior
+
+The quoted string is bound as the value of -a/--args and appended to the LoadOptions string.
+
+#### Actual Behavior
+
+`-a` binds as a boolean true, and the LoadOptions string is parsed as a positional argument — here it aborts as an invalid seed URL. Equivalent verified workarounds: `--args="-expires 1x"` (equals form) and `-a @loadopts.txt` (file form) both reach the LoadOptions token validation.
+
+#### Root Cause Analysis
+
+args.rs parse_raw_args only consumes the next token as an option value when it does not start with '-' unless it looks like a negative number (looks_like_negative_value, lines 294–320). LoadOptions strings always start with '-', so the space-separated form can never bind for -a/--args; the doc examples were never runnable.
+
+#### Code Pointer
+
+`cli/browser4-cli/src/args.rs:parse_raw_args (value-binding branch ~294–320); doc examples: skills/browser4-cli/references/crawl.md:72–73`
+
+#### AI Suggested Improvement
+
+- Update the crawl.md examples to the verified forms: `--args="-nMaxRetry 5 -lazyFlush"` or `-a @loadopts.txt`.
+- Allow hyphen-leading values per-option (e.g. an allow_hyphen_values flag on OptionDef) for -a/--args, since its value must start with '-' by construction.
+- When a stray positional is exactly the token following `-a`, add the hint "did you mean --args=\"...\"?" to the Invalid crawl URL error, instead of a bare seed-URL complaint.
+- Document the equals-form rule in shell-quoting.md, which currently covers @-splatting and MSYS path conversion but not this trap.
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 4: --ignore-url-query and --no-norm are accepted silently where they cannot apply (depth-0 seed fetch)
+
+**Severity:** Low
+**Category:** UX
+
+#### Reproduction
+
+./b4w.ps1 crawl --seed-file .test-sessions/20261013T0154334271610Z/seed-products.txt --depth 0 --sql "@.../extract-title-price.sql" --ignore-url-query --refresh --parse --expires 1h --priority 1 --page-load-timeout 30s
+Output is byte-identical to the same crawl without the flag; same for --no-norm at depth 0, and --no-norm also produced no observable difference at depth 1 on MockSite (discovered hrefs already normalized).
+
+#### Expected Behavior
+
+Either a one-line advisory that the flag has no effect in this mode (the CLI already warns when --depth >= 1 is given without --out-link-selector), or a doc example that shows a case where the flag changes the outcome.
+
+#### Actual Behavior
+
+Flags are silently accepted and do nothing; a user following a checklist like this scenario sees identical outputs and cannot tell whether the flag was applied.
+
+#### Root Cause Analysis
+
+Both flags map to LoadOptions consumed only during out-link discovery; there is no advisory path for the seed-only/depth-0 case, although the analogous missing --out-link-selector case already warns.
+
+#### Code Pointer
+
+`cli/browser4-cli/src/main.rs (crawl submission warnings — mirror the existing "no --out-link-selector" advisory)`
+
+#### AI Suggested Improvement
+
+- Print a short stderr note when --ignore-url-query or --no-norm is set on a depth-0/seed-only crawl: "note: --ignore-url-query only affects discovered out-links; seed URLs are fetched verbatim."
+- Add a docs example where --no-norm visibly changes discovered URLs (e.g. an href with a fragment or trailing slash), since the reference currently shows nothing observable.
+- The docs' scope note is accurate but buried in the URL-deduplication section; surface it in the LoadOptions flag table (already partially done) and in the quick-start.
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 5: Seed-refusal 'did you mean' hint ends with '?.' (double punctuation)
+
+**Severity:** Low
+**Category:** Product
+
+#### Reproduction
+
+Seed file containing `not-a-url.example.com`, then: ./b4w.ps1 crawl --seed-file .test-sessions/20261013T0154334271610Z/bad-seeds.txt --depth 0
+→ Invalid crawl URL 'not-a-url.example.com' (…bad-seeds.txt line 4): did you mean 'https://not-a-url.example.com'?.
+
+#### Expected Behavior
+
+The message ends with a single terminator: …did you mean 'https://not-a-url.example.com'?
+
+#### Actual Behavior
+
+Trailing '?.' — the sentence gets a '?' from the hint and a '.' appended unconditionally.
+
+#### Root Cause Analysis
+
+crawl_seed_refusal formats "Invalid crawl URL '{seed}' ({origin}): {problem}." unconditionally; when problem is the hint from crawl_seed_problem ("did you mean '{url}'?"), the appended '.' produces '?.'.
+
+#### Code Pointer
+
+`cli/browser4-cli/src/main.rs:crawl_seed_refusal (line 17055–17058) with crawl_seed_problem (~17003)`
+
+#### AI Suggested Improvement
+
+- Omit the trailing '.' when the problem already ends with terminal punctuation (or drop the '?' from the hint and keep the '.').
+- Add a unit test asserting no '?.' substring for the host-without-scheme case.
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+### Issue 6: crawl status / crawl result always mix a human summary line with pretty-printed JSON on stdout, with no --json option
+
+**Severity:** Low
+**Category:** UX
+
+#### Reproduction
+
+./b4w.ps1 crawl status <task-id> (or crawl result <task-id>) — stdout begins with 'Crawl <id>: OK — 3 page(s) found' followed by multi-line pretty-printed JSON. Piping stdout into a JSON parser fails on the leading line; `--help crawl status` lists no options, so there is no --json/--quiet alternative.
+
+#### Expected Behavior
+
+A machine-readable mode consistent with the rest of the CLI (single-line --json envelope), or JSON-only output when stdout is not a terminal (the crawl --sql path already does exactly this via crawl_set_structured_stdout).
+
+#### Actual Behavior
+
+Both subcommands unconditionally print the human line and the raw multi-line record; consumers must strip the first line, and `jq`/`json.load` on the raw stream fails.
+
+#### Root Cause Analysis
+
+handle_crawl_status (~16115) formats a summary line and then prints the record with pretty-printing regardless of TTY or flags; no --json OptionDef exists for these subcommands.
+
+#### Code Pointer
+
+`cli/browser4-cli/src/main.rs:handle_crawl_status (~16115) and the crawl-result handler`
+
+#### AI Suggested Improvement
+
+- Add a --json flag emitting a single-line JSON envelope (record under a stable key), consistent with tab-list/htmlsnapshot get.
+- When stdout is not a TTY, suppress the summary line (or send it to stderr) and print JSON only — reuse the crawl_set_structured_stdout mechanism.
+- Optionally add --quiet to print just the one-line summary (useful for polling loops).
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+
+---
+
+## Overall Assessment
+
+**Completion Status:** Successful — all 9 scenario steps executed and produced results; the documented seed-file + X-SQL extraction flow worked first try (3/3 products extracted with correct titles and prices in foreground, background, and readonly runs). Caveat: --timeout had no effect and two flags are no-ops in the prescribed depth-0 flow.
+
+**Success Rate:** 95% — every step completed; the only substantive functional defect found (--timeout ignored) did not block the task because MongoSite pages load in seconds, far under the default 10m budget.
+
+**Issues Found:** 6
+
+**Major Blockers:** None blocked the task. Most serious defect: --timeout is accepted but entirely non-functional (no validation, no budget applied), contradicting both the help text and crawl.md.
+
+**Most Confusing Aspects:** 1) --timeout: accepted with no error yet silently ignored (a user's long crawl would be cut at the 10m default). 2) -a "-flag value": the docs' own LoadOptions passthrough example fails, with a misleading 'Invalid crawl URL' error blaming the flag string. 3) --ignore-url-query/--no-norm accepted silently at depth 0 where the step list asks you to 'observe the difference' — nothing changes, and even at depth 1 --no-norm shows no observable effect. 4) An HTTP 400 page ('Error 400') counted as a successfully crawled page with task status OK and no status field anywhere.
+
+**Most Valuable Improvements:** 1) Wire --timeout into crawl tool_params so validation and taskTimeoutMillis work as documented (plus an end-to-end regression test). 2) Surface per-page HTTP status in CrawlPageResult and warn/count on 4xx/5xx so pipelines can trust crawl output. 3) Fix the -a/--args hyphen-value binding (or update the doc examples to --args="…"/@file and add a targeted error hint). 4) Add advisory notes for flags that cannot apply (depth-0 URL-query/norm flags) and a --json mode for crawl status/result.
+
+**Usability Rating:** 7/10
+
+---
+
+## How to Reproduce
+
+### Common Setup
+
+1. Clone the repository and `cd` to the repo root.
+2. The CLI is invoked via `./b4w.ps1` (PowerShell) or `./b4w.sh` (Bash / Git Bash), which auto-build from source when needed.
+3. The backend server starts automatically in dev mode.
+4. All commands from repo root:
+
+   - **PowerShell:** `./b4w.ps1 <command>`
+   - **Bash / Git Bash:** `./b4w.sh <command>`
+   - **Direct:** `browser4-cli <command>` (if installed globally)
+
+   > **Note:** `$(./b4w.ps1)` is command substitution in bash — do NOT use it.
+
+### Per-Issue Reproduction Steps
+
+#### Issue 1: --timeout is declared and documented but silently ignored by crawl (no validation, no budget applied)
+
+./b4w.ps1 crawl --seed-file .test-sessions/20261013T0154334271610Z/seed-products.txt --depth 0 --timeout 30m --background  → then ./b4w.ps1 crawl status <task-id> shows "taskTimeoutMillis": 600000 (the 10m server default), not 1800000.
+Repeated with --timeout=30m (same), --timeout 2h (runs normally — docs say values above 1h are refused before submission), --timeout 500ms (runs normally — docs say the floor is 1s and it must exit non-zero). Every crawl in the session recorded 600000 regardless of the flag.
+
+#### Issue 2: Crawl counts an HTTP 400 error page as a successful page and records no HTTP status anywhere
+
+./b4w.ps1 crawl --seed-file .test-sessions/20261013T0154334271610Z/seed-one.txt --depth 1 --out-link-selector "a[href]" --top-links 10 --ignore-url-query --refresh
+Output lists: depth=1 | http://localhost:18080/ec/b | Error 400, and reports "Crawl completed. 6 pages found."; ./b4w.ps1 crawl status 493bd7ce-bbb0-4ea6-a489-d2312a02ce09 reports "OK — 6 page(s) found" with no failedPages and exit 0. (curl http://localhost:18080/ec/b → HTTP 400 "Missing category parameter".)
+
+#### Issue 3: Documented `-a "-flag value"` LoadOptions passthrough does not bind — the value is mistaken for a positional seed URL
+
+./b4w.ps1 crawl --seed-file .test-sessions/20261013T0154334271610Z/seed-products.txt --depth 0 -a "-timeout 30m" --background
+→ Error: Invalid crawl URL '-timeout 30m' (command argument): expected an absolute http(s) URL such as https://example.com/page. (exit 2).
+This is exactly the pattern shown in skills/browser4-cli/references/crawl.md lines 72–73: crawl "https://example.com" -ol "a[href]" --refresh -a "-requireSize 100000 -scrollCount 5".
+
+#### Issue 4: --ignore-url-query and --no-norm are accepted silently where they cannot apply (depth-0 seed fetch)
+
+./b4w.ps1 crawl --seed-file .test-sessions/20261013T0154334271610Z/seed-products.txt --depth 0 --sql "@.../extract-title-price.sql" --ignore-url-query --refresh --parse --expires 1h --priority 1 --page-load-timeout 30s
+Output is byte-identical to the same crawl without the flag; same for --no-norm at depth 0, and --no-norm also produced no observable difference at depth 1 on MockSite (discovered hrefs already normalized).
+
+#### Issue 5: Seed-refusal 'did you mean' hint ends with '?.' (double punctuation)
+
+Seed file containing `not-a-url.example.com`, then: ./b4w.ps1 crawl --seed-file .test-sessions/20261013T0154334271610Z/bad-seeds.txt --depth 0
+→ Invalid crawl URL 'not-a-url.example.com' (…bad-seeds.txt line 4): did you mean 'https://not-a-url.example.com'?.
+
+#### Issue 6: crawl status / crawl result always mix a human summary line with pretty-printed JSON on stdout, with no --json option
+
+./b4w.ps1 crawl status <task-id> (or crawl result <task-id>) — stdout begins with 'Crawl <id>: OK — 3 page(s) found' followed by multi-line pretty-printed JSON. Piping stdout into a JSON parser fails on the leading line; `--help crawl status` lists no options, so there is no --json/--quiet alternative.
+

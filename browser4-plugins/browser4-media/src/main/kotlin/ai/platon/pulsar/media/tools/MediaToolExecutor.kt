@@ -54,14 +54,29 @@ open class MediaToolExecutor(
         toolSpec["detectVideos"] = ToolSpec(
             domain = domain,
             method = "detectVideos",
-            arguments = emptyList(),
+            arguments = listOf(
+                ToolSpec.Arg(
+                    "includeIframes", "Boolean?", "true",
+                    "Include videos found inside same-origin iframes (video-ad creatives, embedded players). " +
+                        "Set to false to see only the top-level document.",
+                ),
+            ),
             returnType = "List<VideoSource>",
             description = "Detect all video elements on the current page, including <video> tags, <source> children, embedded iframes (YouTube, Vimeo), and direct links to media files.",
             help = """
                 media.detectVideos()
+                media.detectVideos(includeIframes: Boolean? = true)
 
                 Scans the current page DOM for video sources. Returns a list of detected video sources
                 with metadata (URL, type, dimensions, etc.). Does NOT download any videos.
+
+                Each entry is attributed to the document it was found in: frameUrl is null for the
+                top-level document and holds the frame URL for a same-origin iframe (frameDepth=1),
+                so ad-unit videos are distinguishable from page videos. includeIframes=false drops
+                every nested-frame entry. elementCount is how many DOM elements the entry collapsed
+                (a <video> and its matching <source> share one entry). Sources playing through
+                Media Source Extensions report an unusable blob: URL (isOpaqueSource=true) plus the
+                underlying manifestUrl (isHls/isDash=true).
             """.trimIndent()
         )
 
@@ -80,8 +95,10 @@ open class MediaToolExecutor(
                 media.download(url: String, outputPath: String?)
                 media.download(url: String, outputPath: String?, filename: String?)
 
-                Downloads a media file to the configured download directory (default: downloads/media/)
-                or a custom outputPath. Returns DownloadResult with filePath, bytesDownloaded, etc.
+                Downloads a media file to the configured download directory
+                (default: ~/.browser4/downloads/media, configurable with media.download.dir)
+                or a custom outputPath. Returns DownloadResult with the absolute filePath,
+                bytesDownloaded, etc.
             """.trimIndent()
         )
 
@@ -190,14 +207,16 @@ open class MediaToolExecutor(
         return when (functionName) {
             "detectVideos" -> {
                 requireNotNull(driver) { "detectVideos requires a WebDriver receiver (current page context)" }
-                videoDetector.detect(driver)
+                val includeIframes =
+                    paramBool(args, "includeIframes", functionName, required = false, default = true) ?: true
+                videoDetector.detect(driver, includeIframes)
             }
 
             "download" -> {
                 val url = paramString(args, "url", functionName)!!
                 val outputPath = paramString(args, "outputPath", functionName, required = false)
                 val filename = paramString(args, "filename", functionName, required = false)
-                val dir = if (!outputPath.isNullOrBlank()) Path.of(outputPath) else Path.of(config.downloadDir)
+                val dir = if (!outputPath.isNullOrBlank()) Path.of(outputPath) else config.downloadDirPath()
                 mediaDownloader.download(url, dir, filename)
             }
 

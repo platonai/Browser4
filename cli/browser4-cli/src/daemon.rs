@@ -11,7 +11,7 @@
 use std::env;
 use std::fs;
 use std::io;
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -1126,6 +1126,29 @@ async fn running_server_version(client: &Client, base_url: &str, port: u16) -> O
     probe_server_version(client, base_url).await
 }
 
+/// Notice for `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1` when a server is already
+/// running, or `None` when the flag is unset.
+///
+/// The forced rebuild lives on the server-start path only
+/// ([`try_build_local_runtime_bundle`] is reached from
+/// [`resolve_server_launch_spec`]), so a healthy managed server makes the flag a
+/// no-op.  Saying so beats the silent skip: a user who set the flag believes a
+/// rebuild happened, and then diagnoses a "stale" bundle that was never rebuilt
+/// (this cost a full diagnostic cycle during the plugin fix).
+///
+/// Deliberately a notice rather than an auto stop/rebuild/restart: silently
+/// killing a running server would throw away live browser sessions.
+fn force_rebuild_ignored_message(port: u16) -> Option<String> {
+    if !should_force_rebuild_bundle() {
+        return None;
+    }
+    Some(format!(
+        "\u{26A0}  ignoring {FORCE_REBUILD_BUNDLE_ENV}=1: a Browser4 server is already running on port {port}.\n\
+         \x20  The runtime bundle is only rebuilt when the CLI starts the server.\n\
+         \x20  To rebuild it now:  browser4-cli stop   (then re-run this command)"
+    ))
+}
+
 /// Decide what to do with an existing, ready server: check for plugin
 /// fingerprint changes, then (when enforcement is active) check that the
 /// running backend matches the version this CLI would launch and restart it
@@ -1136,6 +1159,12 @@ async fn on_existing_server_ready(
     port: u16,
     enforce_version: bool,
 ) -> Result<(), String> {
+    // Explain the no-op before any early return: a forced rebuild cannot happen
+    // while this server keeps the port.
+    if let Some(notice) = force_rebuild_ignored_message(port) {
+        eprintln!("{notice}");
+    }
+
     if plugins_changed_since_server_start(port) {
         return restart_server_for_plugin_change(base_url, port).await;
     }
@@ -1384,6 +1413,32 @@ fn is_dev_port(port: u16) -> bool {
     (DEV_SERVER_PORT_START..DEV_SERVER_PORT_START + DEV_SERVER_PORT_SCAN_LIMIT).contains(&port)
 }
 
+/// True when [port] is a privileged port (below 1024).
+///
+/// A development backend can never own one: on Unix binding it needs root, and
+/// the allocator only ever hands out [`DEV_SERVER_PORT_START`]-and-up.  A
+/// recorded loopback URL on such a port is therefore corrupt state — it was
+/// never produced by this CLI and must not be honoured forever (a workspace
+/// whose state file recorded `http://127.0.0.1:1` kept starting its backend on
+/// port 1 and reporting that as its server URL).
+fn is_privileged_port(port: u16) -> bool {
+    port < 1024
+}
+
+/// Why [`decide_dev_base_url`] returned the URL it did — so `status` can show
+/// where the resolved URL came from instead of leaving a stale value
+/// undiagnosable without reading the source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DevBaseUrlDecision {
+    /// The recorded URL was reused: a dev port still free/ours, or an explicit
+    /// server (remote host, non-dev port) that is always honoured.
+    ReusedRecorded,
+    /// The recorded URL was rejected as stale and a free dev port was allocated.
+    Allocated,
+    /// The whole dev range is taken; the recorded URL is the only remaining option.
+    FellBackToRecorded,
+}
+
 /// Decide which backend URL a development checkout should talk to.
 ///
 /// * No state recorded yet (`has_state == false`) → allocate the first free
@@ -1393,40 +1448,45 @@ fn is_dev_port(port: u16) -> bool {
 /// * A previously recorded dev port → reuse it while it is free or still held
 ///   by this checkout's own server (sticky across restarts); re-allocate when
 ///   another workspace has taken it over.
-/// * Anything else (a remote host, an explicit `--server`, a non-dev loopback
-///   port such as the production 18182) → honoured untouched.
-fn dev_base_url_for_workspace(recorded: &str, has_state: bool) -> String {
-    decide_dev_base_url(
-        recorded,
-        has_state,
-        &dev_port_is_usable,
-        &first_available_dev_port,
-    )
-}
-
-/// Pure core of [`dev_base_url_for_workspace`]; the port probes are injected so
-/// the decision table can be unit-tested without touching real ports.
+/// * A recorded loopback URL on a privileged port (below 1024) → stale beyond
+///   repair: a dev backend cannot own such a port, so re-allocate rather than
+///   staying stuck on the bad value forever.
+/// * Anything else (a remote host, an explicit `--server`, a non-privileged
+///   loopback port such as the production 18182) → honoured untouched.
+/// Core of the development-mode URL decision; the port probes are injected so
+/// the decision table can be unit-tested without touching real ports.  Returns
+/// the URL plus *why* it was chosen.
 fn decide_dev_base_url(
     recorded: &str,
     has_state: bool,
     is_usable: &dyn Fn(u16) -> bool,
     first_available: &dyn Fn() -> Option<u16>,
-) -> String {
+) -> (String, DevBaseUrlDecision) {
     let recorded = recorded.trim().trim_end_matches('/');
 
     // A state file exists, so its URL is a recorded choice.  Everything except
-    // a dev-range port that somebody else has taken over since is honoured.
+    // a dev-range port that somebody else has taken over since — and a
+    // privileged port no dev backend could ever own — is honoured.
     if has_state {
         if let Ok(parsed) = reqwest::Url::parse(recorded) {
-            let port = parsed.port().unwrap_or(18182);
-            if !is_loopback_base_url(&parsed) || !is_dev_port(port) || is_usable(port) {
-                return recorded.to_string();
+            // `port_or_known_default` (not `port`) so `http://127.0.0.1:80` and
+            // a bare `http://127.0.0.1` both resolve to their effective port
+            // instead of silently falling back to the production default.
+            let port = parsed.port_or_known_default().unwrap_or(18182);
+            let privileged_loopback = is_loopback_base_url(&parsed) && is_privileged_port(port);
+            if !privileged_loopback
+                && (!is_loopback_base_url(&parsed) || !is_dev_port(port) || is_usable(port))
+            {
+                return (recorded.to_string(), DevBaseUrlDecision::ReusedRecorded);
             }
         }
     }
 
     match first_available() {
-        Some(port) => format!("http://127.0.0.1:{port}"),
+        Some(port) => (
+            format!("http://127.0.0.1:{port}"),
+            DevBaseUrlDecision::Allocated,
+        ),
         None => {
             // 32 checkouts with live backends — implausible, but say so loudly
             // rather than silently falling back to a port that belongs to
@@ -1436,7 +1496,10 @@ fn decide_dev_base_url(
                  falling back to {recorded}",
                 DEV_SERVER_PORT_START + DEV_SERVER_PORT_SCAN_LIMIT - 1
             );
-            recorded.to_string()
+            (
+                recorded.to_string(),
+                DevBaseUrlDecision::FellBackToRecorded,
+            )
         }
     }
 }
@@ -5689,117 +5752,6 @@ fn probe_cdp_port(port: u16) -> bool {
     probe_cdp_candidate(CdpCandidate::new(port, CdpCandidateSource::DefaultPort)).http_discovery
 }
 
-/// Window-state snapshot of Browser4-managed Chrome processes.
-///
-/// Unlike a generic "any chrome has a window" check, this only looks at
-/// chrome processes that Browser4 actually launched: command lines carrying
-/// `--remote-debugging-port` AND the `PULSAR_CHROME` user-data-dir marker.
-/// The user's own everyday Chrome/Edge is never counted, so a missing headed
-/// window is not masked by unrelated browser windows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Browser4WindowState {
-    /// At least one Browser4-managed chrome process is alive.
-    pub found_browser: bool,
-    /// At least one Browser4-managed chrome process runs WITHOUT `--headless`.
-    /// A headed session whose launch regressed to headless (the
-    /// createBoundDriver display-mode bug) shows up as found_browser=true,
-    /// headed_browser=false.
-    pub headed_browser: bool,
-    /// A headed Browser4 chrome process owns a visible main window.
-    pub headed_window_visible: bool,
-}
-
-/// Detect the window state of Browser4-managed Chrome processes.
-///
-/// Returns `(found_browser, headed_browser, headed_window_visible)` semantics
-/// via [Browser4WindowState]:
-/// - `found_browser=false` — nothing to diagnose; callers stay silent.
-/// - `found_browser=true, headed_browser=false` — the browser runs headless
-///   even though the session asked for headed mode (launch-mode regression).
-/// - `headed_browser=true, headed_window_visible=false` — the classic silent
-///   no-window failure: process alive, navigation works, window never appeared.
-///
-/// ## Scope: machine-wide, not per-session
-///
-/// The check enumerates EVERY `chrome.exe` carrying a
-/// `--remote-debugging-port` argument and a `PULSAR_CHROME` profile marker on
-/// the machine. There is no mapping back to the CLI session that triggered
-/// the launch: the session→browser association lives inside the backend
-/// (`browser4-browser`), and the CLI only knows the session id, not the
-/// browser PID or its debug port. Consequences:
-/// - A *visible* result is reliable for the warning's purpose (a headed
-///   Browser4 window really exists), but a *negative* result can be skewed by
-///   OTHER concurrent Browser4 sessions (e.g. a headless session running
-///   alongside the headed one just launched). User messages must state this
-///   limitation rather than asserting the fault belongs to this session.
-/// - On Unix (`#[cfg(not(target_os = "windows"))]`) no portable
-///   window-visibility check exists; the stub reports a state that can never
-///   trigger the warning, so CI/Linux/macOS never see these diagnostics.
-pub fn browser4_window_state() -> Browser4WindowState {
-    #[cfg(target_os = "windows")]
-    {
-        // Enumerate Browser4-managed chrome processes only (debug port +
-        // PULSAR_CHROME profile marker), and for each report:
-        //   PID|headless(0|1)|hasVisibleMainWindow(0|1)
-        //
-        // In development mode the match is narrowed to *this* checkout: every
-        // workspace runs its own backend with its own app data root, and a
-        // neighbouring workspace's headed window must not be mistaken for ours
-        // (nor mask a silent no-window failure of ours).
-        const PS_TEMPLATE: &str = r#"Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
-            Where-Object { $_.CommandLine -notmatch '--type=' -and $_.CommandLine -match '--remote-debugging-port' -and $_.CommandLine -match 'PULSAR_CHROME'__WORKSPACE_FILTER__ } |
-            ForEach-Object {
-                $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
-                $headless = if ($_.CommandLine -match '--headless') { '1' } else { '0' }
-                $hwnd = if ($p -and $p.MainWindowHandle -ne 0) { '1' } else { '0' }
-                "$($_.ProcessId)|$headless|$hwnd"
-            }"#;
-        let workspace_filter = workspace_match_token()
-            .map(|token| format!(" -and $_.CommandLine -match '{token}'"))
-            .unwrap_or_default();
-        let ps = PS_TEMPLATE.replace("__WORKSPACE_FILTER__", &workspace_filter);
-        let out = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", ps.as_str()])
-            .output();
-
-        let mut state = Browser4WindowState {
-            found_browser: false,
-            headed_browser: false,
-            headed_window_visible: false,
-        };
-        if let Ok(o) = out {
-            if o.status.success() {
-                for line in String::from_utf8_lossy(&o.stdout).lines() {
-                    let mut parts = line.trim().split('|');
-                    let (Some(_pid), Some(headless), Some(hwnd)) =
-                        (parts.next(), parts.next(), parts.next())
-                    else {
-                        continue;
-                    };
-                    state.found_browser = true;
-                    if headless != "1" {
-                        state.headed_browser = true;
-                        if hwnd == "1" {
-                            state.headed_window_visible = true;
-                        }
-                    }
-                }
-            }
-        }
-        state
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        // No portable window-visibility check on Unix; report "unknown" in a
-        // way that never triggers the headed-window warning.
-        Browser4WindowState {
-            found_browser: false,
-            headed_browser: false,
-            headed_window_visible: true,
-        }
-    }
-}
-
 /// Search for an executable in the system PATH.
 fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
     let path_var = env::var_os("PATH")?;
@@ -7846,6 +7798,9 @@ async fn try_build_local_runtime_bundle(
             "Local Browser4 runtime bundle built successfully at {}.",
             paths.runtime_bundle_dir.display()
         );
+        if let Some(warning) = local_bundle_plugin_warning(root, &paths.work_dir) {
+            eprintln!("{warning}");
+        }
         return Ok(Some(runtime));
     }
 
@@ -7869,6 +7824,159 @@ fn resolve_maven_program(root: &Path) -> PathBuf {
     } else {
         PathBuf::from("mvn")
     }
+}
+
+/// Plugins the bundle build ships by default (`$defaultBundledPlugins` in
+/// `build-runtime-bundle.ps1`).  The optional ones (captcha, pptx,
+/// profile-import, summary-demo) are deliberately absent and must not be
+/// reported as missing.
+const DEFAULT_BUNDLED_PLUGIN_MODULES: &[&str] = &[
+    "browser4-swarm",
+    "browser4-images",
+    "browser4-markdown",
+    "browser4-media",
+    "browser4-seo",
+];
+
+/// Parse the bundle's `runtime-bundle.json`, or `None` when it is absent or
+/// unreadable (an installed release bundle carries no build manifest).
+fn read_bundle_manifest_json(work_dir: &Path) -> Option<serde_json::Value> {
+    let manifest = work_dir.join(BROWSER4_BUNDLE_MANIFEST_FILE_NAME);
+    let raw = fs::read_to_string(manifest).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// JAR file names the bundle ships: the manifest's `plugins` array when the
+/// manifest has one, otherwise whatever sits in the bundle's `plugins/`
+/// directory (pre-manifest bundles).
+fn bundle_plugin_jar_names(
+    manifest: Option<&serde_json::Value>,
+    plugins_dir: &Path,
+) -> Vec<String> {
+    if let Some(names) = manifest
+        .and_then(|m| m.get("plugins"))
+        .and_then(|value| value.as_array())
+    {
+        let listed: Vec<String> = names
+            .iter()
+            .filter_map(|value| value.as_str())
+            .map(String::from)
+            .collect();
+        if !listed.is_empty() {
+            return listed;
+        }
+    }
+    let mut scanned: Vec<String> = fs::read_dir(plugins_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+                .filter(|name| name.ends_with(".jar"))
+                .collect()
+        })
+        .unwrap_or_default();
+    scanned.sort();
+    scanned
+}
+
+/// True when the JAR file name [jar] belongs to the plugin module [module].
+fn jar_belongs_to_plugin_module(jar: &str, module: &str) -> bool {
+    jar == format!("{module}.jar") || jar.starts_with(&format!("{module}-"))
+}
+
+/// Describe a freshly built local runtime bundle whose default plugin set is
+/// incomplete or version-skewed, or `None` when the bundle matches the checkout.
+///
+/// The bundle build script resolves Maven's *real* local repository and selects
+/// each plugin JAR by project version, but its own output is discarded on a
+/// successful build ([`run_bundle_build_script`] prints stdout/stderr only when
+/// the build fails).  Without this re-check a plugin-less bundle stayed silent
+/// until the first swarm command answered `503 Swarm backend is not installed`,
+/// and a bundle that shipped only swarm said nothing at all about images,
+/// markdown, media and seo — whose tools simply did not exist.
+///
+/// The bundle manifest (`runtime-bundle.json`) is the source of truth:
+/// `plugins` lists the JARs the bundle ships, `availablePlugins` the in-repo
+/// plugins it does not (with the exact install command for each).  A
+/// manifest-less bundle falls back to scanning `plugins/`.
+fn local_bundle_plugin_warning(root: &Path, work_dir: &Path) -> Option<String> {
+    let plugins_dir = work_dir.join(BROWSER4_PLUGINS_DIR_NAME);
+    let manifest = read_bundle_manifest_json(work_dir);
+    let bundled = bundle_plugin_jar_names(manifest.as_ref(), &plugins_dir);
+
+    let checked_out = checked_out_project_version(root);
+    let expected = checked_out.clone().unwrap_or_else(|| "(unknown)".to_string());
+
+    let missing: Vec<&str> = DEFAULT_BUNDLED_PLUGIN_MODULES
+        .iter()
+        .copied()
+        .filter(|module| !bundled.iter().any(|jar| jar_belongs_to_plugin_module(jar, module)))
+        .collect();
+
+    let swarm_versions: Vec<String> = bundled
+        .iter()
+        .filter_map(|jar| {
+            jar.strip_prefix("browser4-swarm-")
+                .and_then(|rest| rest.strip_suffix(".jar"))
+                .map(String::from)
+        })
+        .collect();
+    let swarm_matches_checkout = match checked_out.as_deref() {
+        Some(version) => swarm_versions
+            .iter()
+            .any(|bundled| bundled.eq_ignore_ascii_case(version)),
+        None => !swarm_versions.is_empty(),
+    };
+
+    if missing.is_empty() && swarm_matches_checkout {
+        return None;
+    }
+
+    let rebuild = runtime_bundle_rebuild_command(root);
+    let mut sections: Vec<String> = Vec::new();
+
+    if !missing.is_empty() {
+        let example = missing[0];
+        sections.push(format!(
+            "\n\u{26A0}  The runtime bundle does not ship every default plugin: {} missing from {}.\n\
+             \x20  Their tools answer \"unknown tool\" until the plugin is installed and the backend restarted.\n\
+             \x20  Build and install one for the checked-out version ({expected}):\n\
+             \x20    mvn install -pl browser4-plugins/{example} -DskipTests\n\
+             \x20    {rebuild}\n\
+             \x20    browser4-cli plugin install \"browser4-plugins/{example}/target/{example}-{expected}.jar\"\n\
+             \x20  Or install an already built JAR: browser4-cli plugin install \"<path-to-plugin.jar>\", \
+             then browser4-cli stop.\n\
+             \x20  The in-repo plugins this bundle never ships (captcha, pptx, …) are listed in the bundle's \
+             runtime-bundle.json (availablePlugins), each with its install command.",
+            missing.join(", "),
+            plugins_dir.display()
+        ));
+    }
+
+    if !swarm_matches_checkout && !missing.contains(&"browser4-swarm") {
+        let reason = if swarm_versions.is_empty() {
+            format!(
+                "it ships no browser4-swarm plugin at all ({})",
+                plugins_dir.display()
+            )
+        } else {
+            format!(
+                "it ships browser4-swarm-{}.jar, a different release train than the checkout's {}",
+                swarm_versions.join(".jar, browser4-swarm-"),
+                expected
+            )
+        };
+        sections.push(format!(
+            "\n\u{26A0}  The runtime bundle will not serve swarm requests: {reason}.\n\
+             \x20  Every /api/swarm/** endpoint will answer 503 \"Swarm backend is not installed\".\n\
+             \x20  Install the plugin for the checked-out version ({expected}) and rebuild the bundle:\n\
+             \x20    mvn install -pl browser4-plugins/browser4-swarm -DskipTests\n\
+             \x20    {rebuild}\n\
+             \x20  The bundle build also records this in the bundle's runtime-bundle.json (pluginWarnings)."
+        ));
+    }
+
+    Some(sections.join(""))
 }
 
 /// Run the bundle build script and wait for it to finish.
@@ -8200,9 +8308,13 @@ async fn start_server(
         format!("Browser4 reported ready at {base_url}; managed pid {managed_pid}"),
     );
     let elapsed = server_start.elapsed().as_secs_f64();
-    // Clear the spinner line and print a clean ready message.
+    // Clear the spinner line and print a clean ready message.  The erase
+    // sequence only makes sense on a terminal — a pipe would receive the raw
+    // escape bytes.
     // Log path is only shown on failure (via format_server_startup_failure_message).
-    eprint!("\r\x1b[K");
+    if io::stderr().is_terminal() {
+        eprint!("\r\x1b[K");
+    }
     eprintln!("Server ready in {:.1}s", elapsed);
     Ok(())
 }
@@ -8507,27 +8619,111 @@ if ($ids.Count -gt 0) {{ $ids[-1] }}
         .find_map(|line| line.trim().parse::<u32>().ok())
 }
 
+/// Where a resolved backend URL came from.
+///
+/// Exposed by `status` so a surprising value (a stale port, a leftover
+/// `--server`) is diagnosable from the CLI instead of requiring source reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseUrlSource {
+    /// `--server <url>` on the command line.
+    ServerFlag,
+    /// `config set server <url>`.
+    Config,
+    /// Allocated (or re-allocated) from this checkout's development port range.
+    DevAllocation,
+    /// The URL recorded in CLI state, reused untouched.
+    RecordedState,
+    /// Development allocation was impossible; the recorded URL is a last resort.
+    DevFallback,
+}
+
+impl BaseUrlSource {
+    /// Short machine-readable label (also used in `status --json`).
+    pub fn label(self) -> &'static str {
+        match self {
+            BaseUrlSource::ServerFlag => "--server flag",
+            BaseUrlSource::Config => "config (config set server)",
+            BaseUrlSource::DevAllocation => "development port allocation",
+            BaseUrlSource::RecordedState => "recorded CLI state",
+            BaseUrlSource::DevFallback => "recorded CLI state (no free development port)",
+        }
+    }
+}
+
+/// A resolved backend URL together with its provenance.
+#[derive(Debug, Clone)]
+pub struct ResolvedBaseUrl {
+    /// The URL the CLI will talk to.
+    pub url: String,
+    /// Where [url] came from.
+    pub source: BaseUrlSource,
+    /// The recorded URL the resolver rejected as stale — a persisted value on a
+    /// port this checkout cannot use (e.g. a corrupt privileged port), so
+    /// `status` can name the value that was discarded instead of leaving the
+    /// re-allocation unexplained.  `None` when nothing recorded was rejected.
+    pub rejected_recorded: Option<String>,
+}
+
+/// Resolve the backend URL *and* report where it came from.
+///
+/// Same precedence as [`resolve_base_url`]: `--server` → `config set server` →
+/// the checkout's own development port (source checkouts only) → the URL
+/// recorded in CLI state.
+pub fn resolve_base_url_with_origin(
+    override_url: Option<&str>,
+    session_name: Option<&str>,
+) -> ResolvedBaseUrl {
+    let state = read_state(None, session_name);
+    let recorded = state.base_url.trim_end_matches('/').to_string();
+    // "A state file recorded a choice" is different from "the state struct has
+    // a default": only a persisted record can be rejected as stale.
+    let has_state = crate::state::has_persisted_state(session_name);
+
+    let (url, source) = if let Some(flag_url) = override_url.filter(|u| !u.trim().is_empty()) {
+        (flag_url.trim_end_matches('/').to_string(), BaseUrlSource::ServerFlag)
+    } else if let Some(configured) = crate::config::read_config()
+        .server
+        .as_deref()
+        .filter(|u| !u.trim().is_empty())
+    {
+        (configured.trim_end_matches('/').to_string(), BaseUrlSource::Config)
+    } else if is_dev_mode() {
+        let (url, decision) = decide_dev_base_url(
+            &recorded,
+            has_state,
+            &dev_port_is_usable,
+            &first_available_dev_port,
+        );
+        let source = match decision {
+            DevBaseUrlDecision::Allocated => BaseUrlSource::DevAllocation,
+            DevBaseUrlDecision::ReusedRecorded => BaseUrlSource::RecordedState,
+            DevBaseUrlDecision::FellBackToRecorded => BaseUrlSource::DevFallback,
+        };
+        (url, source)
+    } else {
+        (recorded.clone(), BaseUrlSource::RecordedState)
+    };
+
+    let rejected_recorded = (has_state
+        && source == BaseUrlSource::DevAllocation
+        && recorded != url
+        && !recorded.is_empty())
+    .then_some(recorded);
+
+    ResolvedBaseUrl {
+        url: url.trim_end_matches('/').to_string(),
+        source,
+        rejected_recorded,
+    }
+}
+
 /// Resolve the base URL from CLI state + optional server override arg.
 ///
 /// Precedence: `--server` → `config set server` → the checkout's own
-/// development port (source checkouts only, see
-/// [`dev_base_url_for_workspace`]) → the URL recorded in CLI state.
+/// development port (source checkouts only, see [`decide_dev_base_url`]) → the
+/// URL recorded in CLI state.
 pub fn resolve_base_url(override_url: Option<&str>, session_name: Option<&str>) -> String {
-    let state = read_state(None, session_name);
-    let base = override_url
-        .map(|s| s.to_string())
-        .or_else(|| crate::config::read_config().server.clone())
-        .unwrap_or_else(|| {
-            if is_dev_mode() {
-                dev_base_url_for_workspace(
-                    &state.base_url,
-                    crate::state::has_persisted_state(session_name),
-                )
-            } else {
-                state.base_url.clone()
-            }
-        });
-    base.trim_end_matches('/').to_string()
+    resolve_base_url_with_origin(override_url, session_name).url
 }
 
 enum ServerState {
@@ -8587,9 +8783,16 @@ async fn wait_for_server_ready(
     // Spinner frames for cold-start progress indication.
     const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
     let is_cold_start = startup_log_path.is_some();
+    // Non-interactive stderr (a pipe, a redirected file, a CI log, an agent
+    // harness capturing the CLI) must not receive animation frames: the `\r`
+    // and `\x1b[K` escape sequences plus dozens of "Starting server..." lines
+    // bury the real messages and pollute captured output.  Degrade to a single
+    // start line here plus the caller's final "Server ready in Ns" line.
+    let progress_mode = startup_progress_mode(io::stderr().is_terminal(), is_cold_start);
+    let animate_progress = progress_mode == StartupProgressMode::Animated;
 
     if !initial_quiet_wait.is_zero() {
-        if is_cold_start {
+        if animate_progress {
             let mut frame = 0usize;
             let start_sleep = Instant::now();
             while start_sleep.elapsed() < initial_quiet_wait {
@@ -8607,6 +8810,12 @@ async fn wait_for_server_ready(
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         } else {
+            if progress_mode == StartupProgressMode::SingleLine {
+                eprintln!(
+                    "  Starting server... (JVM loading, waiting for the TCP port; \
+                     progress is not animated on non-interactive output)"
+                );
+            }
             tokio::time::sleep(initial_quiet_wait).await;
         }
         if start.elapsed() >= timeout {
@@ -8652,7 +8861,7 @@ async fn wait_for_server_ready(
             }
         };
 
-        if is_cold_start {
+        if progress_mode == StartupProgressMode::Animated {
             let elapsed = start.elapsed().as_secs();
             let remaining = timeout.as_secs().saturating_sub(elapsed);
             // Include the stage-level progress so users can see what phase
@@ -8666,6 +8875,10 @@ async fn wait_for_server_ready(
                 progress_status
             );
             spinner_frame += 1;
+        } else if progress_mode == StartupProgressMode::SingleLine {
+            // Non-interactive cold start: no frames, and no per-second lines
+            // either — the earlier single "Starting server..." line plus the
+            // caller's final "Server ready in Ns" line are the whole story.
         } else if last_progress_log_at.elapsed() >= Duration::from_secs(10) {
             let elapsed = start.elapsed().as_secs();
             let remaining = timeout.as_secs().saturating_sub(elapsed);
@@ -8690,6 +8903,29 @@ async fn wait_for_server_ready(
 
 fn initial_server_ready_quiet_wait(timeout: Duration) -> Duration {
     SERVER_READY_INITIAL_QUIET_WAIT.min(timeout)
+}
+
+/// How the readiness wait renders its progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupProgressMode {
+    /// Interactive terminal on a cold start: animate the spinner in place.
+    Animated,
+    /// Non-interactive output (a pipe, a redirect, a CI log, an agent harness
+    /// capturing stdout/stderr) on a cold start: print one static
+    /// "Starting server..." line and stay quiet until the ready line.  Writing
+    /// `\r` / `\x1b[K` frames into a pipe buried the real messages in noise.
+    SingleLine,
+    /// Warm start: a backend is expected to be up, so no progress line at all.
+    Silent,
+}
+
+/// Pick the startup-progress rendering mode for one readiness wait.
+fn startup_progress_mode(interactive: bool, is_cold_start: bool) -> StartupProgressMode {
+    match (interactive, is_cold_start) {
+        (true, true) => StartupProgressMode::Animated,
+        (false, true) => StartupProgressMode::SingleLine,
+        (_, false) => StartupProgressMode::Silent,
+    }
 }
 
 fn format_server_wait_progress(state: &ServerState) -> String {
@@ -9975,6 +10211,168 @@ mod tests {
         assert_eq!(resolve_runtime_bundle_root(tmp.path()).unwrap(), tmp.path());
     }
 
+    /// The bundle build prints its stdout only when it fails, so a bundle that
+    /// ships no default plugin used to stay silent until the first swarm command
+    /// answered 503 — and a bundle carrying only swarm said nothing about the
+    /// images/markdown/media/seo plugins it is supposed to ship.  The build path
+    /// must report both.
+    #[test]
+    fn test_local_bundle_plugin_warning_reports_missing_plugins() {
+        let tmp = test_temp_dir();
+        let root = tmp.path().join("checkout");
+        let work_dir = tmp.path().join("work");
+        fs::create_dir_all(&root).unwrap();
+        write_root_pom_with_version(&root, "4.14.1-SNAPSHOT");
+        fs::create_dir_all(work_dir.join(BROWSER4_PLUGINS_DIR_NAME)).unwrap();
+
+        let warning = local_bundle_plugin_warning(&root, &work_dir)
+            .expect("a plugin-less bundle must be reported");
+        assert!(
+            warning.contains("does not ship every default plugin"),
+            "warning must name the condition: {warning}"
+        );
+        for module in DEFAULT_BUNDLED_PLUGIN_MODULES {
+            assert!(
+                warning.contains(module),
+                "warning must name the missing plugin {module}: {warning}"
+            );
+        }
+        assert!(
+            warning.contains("4.14.1-SNAPSHOT")
+                && warning.contains("browser4-plugins/browser4-swarm"),
+            "warning must name the expected version and an install recipe: {warning}"
+        );
+        assert!(
+            warning.contains("browser4-cli plugin install"),
+            "warning must name the CLI install command: {warning}"
+        );
+        assert!(
+            warning.contains("availablePlugins"),
+            "warning must point at the manifest's optional-plugin list: {warning}"
+        );
+    }
+
+    /// A bundle that ships swarm but not the other default plugins still has to
+    /// be reported: their tools answer "unknown tool" with no other signal.
+    #[test]
+    fn test_local_bundle_plugin_warning_reports_partial_default_plugin_set() {
+        let tmp = test_temp_dir();
+        let root = tmp.path().join("checkout");
+        let work_dir = tmp.path().join("work");
+        let plugins_dir = work_dir.join(BROWSER4_PLUGINS_DIR_NAME);
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&plugins_dir).unwrap();
+        write_root_pom_with_version(&root, "4.14.1-SNAPSHOT");
+        write(
+            plugins_dir.join("browser4-swarm-4.14.1-SNAPSHOT.jar"),
+            "jar",
+        )
+        .unwrap();
+
+        let warning = local_bundle_plugin_warning(&root, &work_dir)
+            .expect("a swarm-only bundle must be reported");
+        assert!(warning.contains("browser4-images"), "{warning}");
+        assert!(warning.contains("browser4-markdown"), "{warning}");
+        assert!(warning.contains("browser4-media"), "{warning}");
+        assert!(warning.contains("browser4-seo"), "{warning}");
+        assert!(
+            !warning.contains("browser4-swarm,"),
+            "swarm is present, so it must not be listed as missing: {warning}"
+        );
+        // No swarm 503 paragraph: swarm is bundled and version-matched.
+        assert!(!warning.contains("503"), "{warning}");
+    }
+
+    /// The manifest is the source of truth for what the bundle ships, including
+    /// the optional plugins it deliberately leaves out.
+    #[test]
+    fn test_local_bundle_plugin_warning_reads_the_bundle_manifest() {
+        let tmp = test_temp_dir();
+        let root = tmp.path().join("checkout");
+        let work_dir = tmp.path().join("work");
+        let plugins_dir = work_dir.join(BROWSER4_PLUGINS_DIR_NAME);
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&plugins_dir).unwrap();
+        write_root_pom_with_version(&root, "4.14.1-SNAPSHOT");
+        // Every default plugin is bundled, so the warning stays silent — the
+        // manifest says so even though these JAR files are not on disk.
+        write(
+            work_dir.join(BROWSER4_BUNDLE_MANIFEST_FILE_NAME),
+            r#"{"plugins":["browser4-swarm-4.14.1-SNAPSHOT.jar","browser4-images-4.14.1-SNAPSHOT.jar",
+                "browser4-markdown-4.14.1-SNAPSHOT.jar","browser4-media-4.14.1-SNAPSHOT.jar",
+                "browser4-seo-4.14.1-SNAPSHOT.jar"],
+                "availablePlugins":["browser4-captcha — needs an external CAPTCHA-solving service; install: browser4-cli plugin install \"x.jar\""]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(local_bundle_plugin_warning(&root, &work_dir), None);
+
+        // A manifest that omits one default plugin names exactly that one.
+        write(
+            work_dir.join(BROWSER4_BUNDLE_MANIFEST_FILE_NAME),
+            r#"{"plugins":["browser4-swarm-4.14.1-SNAPSHOT.jar","browser4-images-4.14.1-SNAPSHOT.jar"],
+                "availablePlugins":[]}"#,
+        )
+        .unwrap();
+        let warning = local_bundle_plugin_warning(&root, &work_dir)
+            .expect("a partial default plugin set must be reported");
+        assert!(warning.contains("browser4-markdown"), "{warning}");
+        assert!(!warning.contains("browser4-swarm,"), "{warning}");
+        assert!(!warning.contains("browser4-images,"), "{warning}");
+    }
+
+    /// A plugin from another release train is the rc.8-into-rc.10 defect: it
+    /// loads, so nothing fails, but the backend is not running the checked-out
+    /// code.
+    #[test]
+    fn test_local_bundle_plugin_warning_reports_version_skew() {
+        let tmp = test_temp_dir();
+        let root = tmp.path().join("checkout");
+        let work_dir = tmp.path().join("work");
+        let plugins_dir = work_dir.join(BROWSER4_PLUGINS_DIR_NAME);
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&plugins_dir).unwrap();
+        write_root_pom_with_version(&root, "4.14.0-rc.10");
+        write(
+            plugins_dir.join("browser4-swarm-4.14.0-rc.8.jar"),
+            "jar",
+        )
+        .unwrap();
+
+        let warning = local_bundle_plugin_warning(&root, &work_dir)
+            .expect("a version-skewed plugin must be reported");
+        assert!(
+            warning.contains("browser4-swarm-4.14.0-rc.8.jar")
+                && warning.contains("4.14.0-rc.10"),
+            "warning must name both the bundled and the checked-out version: {warning}"
+        );
+    }
+
+    /// The matching plugin set is the happy path and must stay silent — the
+    /// warning would otherwise be noise after every dev-mode bundle build.
+    #[test]
+    fn test_local_bundle_plugin_warning_silent_for_matching_plugin() {
+        let tmp = test_temp_dir();
+        let root = tmp.path().join("checkout");
+        let work_dir = tmp.path().join("work");
+        let plugins_dir = work_dir.join(BROWSER4_PLUGINS_DIR_NAME);
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&plugins_dir).unwrap();
+        write_root_pom_with_version(&root, "4.14.1-SNAPSHOT");
+        // Every default-bundled plugin, at the checked-out version.
+        for module in DEFAULT_BUNDLED_PLUGIN_MODULES {
+            write(
+                plugins_dir.join(format!("{module}-4.14.1-SNAPSHOT.jar")),
+                "jar",
+            )
+            .unwrap();
+        }
+        // An unrelated optional plugin must not affect the verdict.
+        write(plugins_dir.join("browser4-captcha-4.14.1-SNAPSHOT.jar"), "jar").unwrap();
+
+        assert_eq!(local_bundle_plugin_warning(&root, &work_dir), None);
+    }
+
     /// Regression test for the v4.14.0-rc.7 packaging defect: the installer
     /// copied only `runtime/`, `lib/` and `bin/` out of the archive and
     /// silently dropped `plugins/`.  The published rc.7 bundle ships
@@ -10800,31 +11198,64 @@ mod tests {
     fn fresh_workspace_allocates_from_the_scanner() {
         // No state file: whatever the allocator returns is used, so a second
         // checkout on an occupied 8282 lands on 8283.
-        let url = decide_dev_base_url("http://localhost:8182", false, &|_| true, &|| Some(8283));
+        let (url, decision) = decide_dev_base_url("http://localhost:8182", false, &|_| true, &|| Some(8283));
         assert_eq!(url, "http://127.0.0.1:8283");
+        assert_eq!(decision, DevBaseUrlDecision::Allocated);
     }
 
     #[test]
     fn fresh_workspace_takes_8282_when_free() {
-        let url = decide_dev_base_url("http://localhost:8182", false, &|_| true, &|| {
+        let (url, decision) = decide_dev_base_url("http://localhost:8182", false, &|_| true, &|| {
             Some(DEV_SERVER_PORT_START)
         });
         assert_eq!(url, "http://127.0.0.1:8282");
+        assert_eq!(decision, DevBaseUrlDecision::Allocated);
     }
 
     #[test]
     fn recorded_dev_port_is_reused_when_free_or_ours() {
         for recorded in ["http://127.0.0.1:8283", "http://localhost:8283/"] {
-            let url = decide_dev_base_url(recorded, true, &|_| true, &|| Some(8282));
+            let (url, decision) = decide_dev_base_url(recorded, true, &|_| true, &|| Some(8282));
             assert_eq!(url, recorded.trim_end_matches('/'));
+            assert_eq!(decision, DevBaseUrlDecision::ReusedRecorded);
         }
     }
 
     #[test]
     fn recorded_dev_port_taken_over_by_another_workspace_is_reallocated() {
         // 8283 is listening but is NOT this workspace's server (is_usable false).
-        let url = decide_dev_base_url("http://127.0.0.1:8283", true, &|_| false, &|| Some(8282));
+        let (url, decision) = decide_dev_base_url("http://127.0.0.1:8283", true, &|_| false, &|| Some(8282));
         assert_eq!(url, "http://127.0.0.1:8282");
+        assert_eq!(decision, DevBaseUrlDecision::Allocated);
+    }
+
+    #[test]
+    fn recorded_privileged_loopback_port_is_reallocated_not_sticky() {
+        // Regression: a workspace whose state recorded `http://127.0.0.1:1`
+        // started its backend on port 1 and reported that as the server URL
+        // forever.  A dev backend can never own a privileged port, so the
+        // recorded value is stale state, not a choice to honour.
+        for recorded in [
+            "http://127.0.0.1:1",
+            "http://localhost:1",
+            "http://127.0.0.1:80",
+            "http://127.0.0.1:0",
+        ] {
+            let (url, decision) =
+                decide_dev_base_url(recorded, true, &|_| true, &|| Some(DEV_SERVER_PORT_START));
+            assert_eq!(url, "http://127.0.0.1:8282", "recorded {recorded}");
+            assert_eq!(decision, DevBaseUrlDecision::Allocated, "recorded {recorded}");
+        }
+    }
+
+    #[test]
+    fn privileged_port_detection_starts_at_1024() {
+        for port in [0u16, 1, 80, 1023] {
+            assert!(is_privileged_port(port), "{port} is privileged");
+        }
+        for port in [1024u16, 8282, 18182] {
+            assert!(!is_privileged_port(port), "{port} is not privileged");
+        }
     }
 
     #[test]
@@ -10838,15 +11269,49 @@ mod tests {
             "http://browser4-server:8182",
             "https://browser4.example.com",
         ] {
-            let url = decide_dev_base_url(recorded, true, &|_| false, &|| Some(8282));
+            let (url, decision) = decide_dev_base_url(recorded, true, &|_| false, &|| Some(8282));
             assert_eq!(url, recorded, "recorded URL {recorded} must be honoured");
+            assert_eq!(decision, DevBaseUrlDecision::ReusedRecorded);
         }
     }
 
     #[test]
     fn dev_allocation_falls_back_to_recorded_url_when_range_is_exhausted() {
-        let url = decide_dev_base_url("http://localhost:8182", false, &|_| false, &|| None);
+        let (url, decision) = decide_dev_base_url("http://localhost:8182", false, &|_| false, &|| None);
         assert_eq!(url, "http://localhost:8182");
+        assert_eq!(decision, DevBaseUrlDecision::FellBackToRecorded);
+    }
+
+    #[test]
+    fn base_url_source_labels_name_the_origin() {
+        assert_eq!(BaseUrlSource::ServerFlag.label(), "--server flag");
+        assert!(BaseUrlSource::DevAllocation.label().contains("allocation"));
+        assert!(BaseUrlSource::RecordedState.label().contains("recorded"));
+        assert!(BaseUrlSource::Config.label().contains("config"));
+        assert!(BaseUrlSource::DevFallback.label().contains("no free"));
+    }
+
+    #[test]
+    fn cold_start_progress_degrades_to_a_single_line_when_not_a_terminal() {
+        // Regression: piping (or capturing) the CLI used to receive dozens of
+        // `\r\x1b[K⠋ Starting server...` animation frames.
+        assert_eq!(
+            startup_progress_mode(false, true),
+            StartupProgressMode::SingleLine
+        );
+        assert_eq!(
+            startup_progress_mode(true, true),
+            StartupProgressMode::Animated
+        );
+        // A warm start says nothing either way: no spinner, no start line.
+        assert_eq!(
+            startup_progress_mode(true, false),
+            StartupProgressMode::Silent
+        );
+        assert_eq!(
+            startup_progress_mode(false, false),
+            StartupProgressMode::Silent
+        );
     }
 
     #[test]
@@ -13354,6 +13819,42 @@ mod tests {
         // Unset and typos must not silently change the bundle policy.
         for value in [None, Some(""), Some("0"), Some("True"), Some("no"), Some("off")] {
             assert!(!env_flag_is_on(value), "{value:?} should be off");
+        }
+    }
+
+    /// `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1` is a no-op while a server is
+    /// already running; the already-running branch must say so instead of
+    /// letting the user believe a rebuild happened.
+    #[test]
+    fn force_rebuild_flag_announces_the_no_op_on_a_running_server() {
+        let _lock = lock_env_mutex();
+
+        let previous = env::var(FORCE_REBUILD_BUNDLE_ENV).ok();
+        unsafe { env::remove_var(FORCE_REBUILD_BUNDLE_ENV) };
+        assert_eq!(
+            force_rebuild_ignored_message(8283),
+            None,
+            "an unset flag must not print a notice"
+        );
+
+        unsafe { env::set_var(FORCE_REBUILD_BUNDLE_ENV, "1") };
+        let message = force_rebuild_ignored_message(8283).expect("the flag must be reported");
+        assert!(
+            message.contains("ignoring") && message.contains(FORCE_REBUILD_BUNDLE_ENV),
+            "notice must name the ignored flag: {message}"
+        );
+        assert!(
+            message.contains("8283"),
+            "notice must name the port holding the running server: {message}"
+        );
+        assert!(
+            message.contains("browser4-cli stop"),
+            "notice must name the way to make the flag take effect: {message}"
+        );
+
+        match previous {
+            Some(value) => unsafe { env::set_var(FORCE_REBUILD_BUNDLE_ENV, value) },
+            None => unsafe { env::remove_var(FORCE_REBUILD_BUNDLE_ENV) },
         }
     }
 

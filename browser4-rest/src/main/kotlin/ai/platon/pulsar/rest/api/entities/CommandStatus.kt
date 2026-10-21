@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.entities
 
+import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
@@ -18,7 +19,9 @@ import java.util.*
  * @property statusCode The HTTP status code representing the command status.
  * @property event The last event associated with the command status.
  * @property isDone Indicates whether the command has been completed.
- * @property pageStatusCode The HTTP status code representing the page status.
+ * @property pageStatusCode The HTTP status of the page the command ended on, or
+ *   `B4Constants.PAGE_STATUS_UNKNOWN` (`0`) when no page status was observed — it
+ *   is never a task-lifecycle code such as `201 / SC_CREATED`.
  * @property pageContentBytes The size of the page content in bytes.
  * @property message An optional message providing additional information about the command status.
  * @property request The original command request associated with this status.
@@ -43,7 +46,19 @@ data class CommandStatus(
      * */
     var processState: String = "created", // created, in_progress, done
 
-    var pageStatusCode: Int = ProtocolStatusCodes.SC_CREATED,
+    /**
+     * The HTTP status of the PAGE this command ended on, or
+     * [PAGE_STATUS_UNKNOWN] when no page status was observed.
+     *
+     * It describes the page, not the task, so it must never default to a
+     * task-lifecycle code: `201 / SC_CREATED` ("created") was exactly that
+     * mistake — a command that never observed a page reported
+     * `"pageStatusCode": 201` next to a message saying the page had loaded with
+     * HTTP 200. Producers set it from an observation (`DocumentHttpStatus`,
+     * `StatefulPageVisitor`); the default means "not observed", and a real `201`
+     * from a page stays distinguishable from it.
+     */
+    var pageStatusCode: Int = PAGE_STATUS_UNKNOWN,
     var pageContentBytes: Int = 0,
 
     var message: String? = null, // human-readable status description
@@ -54,6 +69,13 @@ data class CommandStatus(
     var request: CommandRequest? = null,
     var commandResult: CommandResult? = null,
     var instructResults: MutableList<InstructResult> = mutableListOf(),
+
+    /**
+     * The directory the agent's tools wrote into (agent-backed tasks only, see
+     * [AgentTaskStatus.workspace]). Surfaced through [commandResult] so a caller can
+     * reach a deliverable the agent left on disk.
+     */
+    var workspace: String? = null,
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
     var lastModifiedTime: Instant? = null
@@ -97,7 +119,20 @@ data class CommandStatus(
     var serverSideEventHandlers: ServerSideEventHandlers? = null
 
     companion object {
-        fun notFound(id: String) = CommandStatus(id, ResourceStatus.SC_NOT_FOUND, processState = "done")
+        /**
+         * The status of a task id the backend has no record of.
+         *
+         * The message is not decoration: the shared envelope drops a blank error, so
+         * without it an unknown id was indistinguishable from a genuine task failure
+         * (`status=failed` with no reason) and the CLI's friendly not-found message
+         * could never fire.
+         */
+        fun notFound(id: String) = CommandStatus(
+            id,
+            ResourceStatus.SC_NOT_FOUND,
+            processState = "done",
+            message = "No task found with id '$id'. It may have expired, been cleared, or the backend may have restarted.",
+        )
 
         fun failed(id: String) = CommandStatus(id, ResourceStatus.SC_EXPECTATION_FAILED, processState = "done")
 
@@ -207,6 +242,11 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     status.eventTrace = this.eventTrace
     status.lastModifiedTime = this.lastModifiedTime
     status.finishTime = this.finishTime
+    status.workspace = this.workspace
+    // The page this task ended on. AgentTaskStatus now carries it (observed from
+    // the live page, see DocumentHttpStatus); before that the conversion dropped
+    // it and every agent/loop record shipped the model's 201/"created" default.
+    status.pageStatusCode = this.pageStatusCode
 
     // Transfer agent-specific data
     status.agentHistory = this.agentHistory?.toCommandAgentHistory()
@@ -238,6 +278,16 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
         status.ensureCommandResult().summary =
             "Task finished with status: ${ResourceStatus.getStatusText(this.statusCode)}"
     }
+
+    // The rest of the agent's own completion report. `agent result` used to return a
+    // one-sentence summary for a task whose whole point was returning data, leaving
+    // the deliverable discoverable only by searching the backend's app-data tree.
+    val lastState = status.agentState
+    val result = status.ensureCommandResult()
+    result.keyFindings = lastState?.keyFindings?.takeIf { it.isNotEmpty() }
+    result.filesChanged = lastState?.filesChanged?.takeIf { it.isNotEmpty() }
+    result.problems = lastState?.problems?.takeIf { it.isNotEmpty() }
+    result.workspace = this.workspace
 
     if (status.agentState == null) {
         status.agentState = createFallbackAgentState(status)

@@ -1,0 +1,169 @@
+{
+  "meta": {
+    "source": "20261013-171959-swarm-parallel-scraping.issues.json",
+    "date": "20261013-171959",
+    "scenario": "swarm-parallel-scraping",
+    "mode": "dev"
+  },
+  "background": {
+    "executionContext": "**Preparation** — `pwd` confirmed repo root; ran `./b4w.ps1 help`, read `SKILL.md` fully plus `references/swarm.md`, `x-sql-dom-load-select.md`, `x-sql-dom-select-functions.md` for exact function signatures. Confirmed all 10 target URLs return 200 via curl (MockSite was already serving on :18080, so `./bin/test.ps1 mock-site` was not needed).\n\n**Commands used (in order):**\n```\n./b4w.ps1 help                                       # overview + category map\n./b4w.ps1 help swarm / --help swarm create / --help swarm query\n./b4w.ps1 swarm list                                 # found 3 stale tasks from prior session\n./b4w.ps1 swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4\n./b4w.ps1 \"swarm\" \"query\" \"--sql\" \"@…/swarm-product-query.sql\" \"--seed-file\" \"…/swarm-seeds.txt\" \"--refresh\"\n./b4w.ps1 swarm submit \"http://localhost:18080/ec/dp/B0E000001\" --refresh\n./b4w.ps1 swarm status <batch-id> / <task-id>        # repeated polling\n./b4w.ps1 swarm result <task-id>                     # ×11, saved to files\n./b4w.ps1 swarm list / --batch <id> / --json         # task history\n./b4w.ps1 swarm close\n```\n\n**Decisions & notes:**\n- Per the swarm reference's Git Bash guidance, arguments with `--`/`@` were individually quoted in the `swarm query` invocation; the plain unquoted form also worked in this environment for `create`/`submit`/`list`.\n- Did not use `--wait` (the scenario explicitly required manual status polling); polled the batch, sampled individual tasks mid-run, then re-polled all 11 after close.\n- X-SQL used `DOM_BASE_URI`, `DOM_FIRST_TEXT`, and `DOM_FIRST_ATTR(…, 'abs:src')` so image URLs come back absolute.\n- **Workarounds required: none** for failures (none occurred). Root-caused two display anomalies directly in the CLI source (`main.rs`, `state.rs`).\n\n**Artifacts** (all in `.test-sessions/20261013T0154334271610Z/`): `swarm-seeds.txt`, `swarm-product-query.sql`, `swarm-task-ids.txt`, `swarm-result-*.json` (11), `swarm-list.json`, `swarm-product-sample.html`, `swarm-evidence.md`.\n\n---",
+    "workarounds": "",
+    "task": "All 9 scenario steps completed successfully against the local dev-mode backend and MockSite:\n\n1. **Swarm session created** — `swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4` → session `SWARM (display=HEADLESS, contexts=2, max-tabs=4)`. The 3 completed tasks left over from a prior session were auto-cleaned.\n2. **Seed file** created with the 10 required MockSite product URLs (6 Electronics `B0E000001–6`, 4 Home `B0H000001–4`); all 10 verified reachable (HTTP 200) before starting.\n3. **X-SQL query file** written to extract `url`, `title`, `price`, `image` (validated selectors against a fetched copy of a product page: `#productTitle`, `#product-price`, `#product-image`).\n4. **10 extraction jobs submitted** via `swarm query --sql @file --seed-file <file> --refresh` → all 10 accepted, batch ID `879773d4-c6bf-47e5-a6eb-11272a77d3b0` returned.\n5. **Plain scrape job submitted** via `swarm submit <url> --refresh` → task `5ec81984-…`; its result confirmed the documented difference: `resultSet` contains only the URL marker (no columns), with `pageContentBytes` proving the fetch.\n6. **Polled to completion** — batch status went 3/7 → 9/1 → 11/11; after `swarm close`, every one of the 11 jobs was individually re-polled and reported `isDone: true, statusCode: 200, lifecycleState: completed`.\n7. **Results reviewed** — all 10 X-SQL rows contain correct, distinct data (e.g. `4K OLED TV 55 | $899.99 | picsum…/1250857624`, `Vacuum Cleaner Smart | $159.99`, `LED Desk Lamp | $35.99 | …`), 11.6–15.3 KB page content each.\n8. **Task history listed** — `swarm list` showed all 11 tasks (10 `swarm-query` + 1 `swarm-submit`) with per-task durations and a batch window.\n9. **Session closed** — `swarm close` reported browser terminated, results retained.\n\nOverall: the swarm workflow worked first-try exactly as documented. The issues found are reporting/consistency defects, not blockers.",
+    "commands": "```\n./b4w.ps1 help                                       # overview + category map\n./b4w.ps1 help swarm / --help swarm create / --help swarm query\n./b4w.ps1 swarm list                                 # found 3 stale tasks from prior session\n./b4w.ps1 swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4\n./b4w.ps1 \"swarm\" \"query\" \"--sql\" \"@…/swarm-product-query.sql\" \"--seed-file\" \"…/swarm-seeds.txt\" \"--refresh\"\n./b4w.ps1 swarm submit \"http://localhost:18080/ec/dp/B0E000001\" --refresh\n./b4w.ps1 swarm status <batch-id> / <task-id>        # repeated polling\n./b4w.ps1 swarm result <task-id>                     # ×11, saved to files\n./b4w.ps1 swarm list / --batch <id> / --json         # task history\n./b4w.ps1 swarm close\n```\n\n**Decisions & notes:**\n- Per the swarm reference's Git Bash guidance, arguments with `--`/`@` were individually quoted in the `swarm query` invocation; the plain unquoted form also worked in this environment for `create`/`submit`/`list`.\n- Did not use `--wait` (the scenario explicitly required manual status polling); polled the batch, sampled individual tasks mid-run, then re-polled all 11 after close.\n- X-SQL used `DOM_BASE_URI`, `DOM_FIRST_TEXT`, and `DOM_FIRST_ATTR(…, 'abs:src')` so image URLs come back absolute.\n- **Workarounds required: none** for failures (none occurred). Root-caused two display anomalies directly in the CLI source (`main.rs`, `state.rs`).\n\n**Artifacts** (all in `.test-sessions/20261013T0154334271610Z/`): `swarm-seeds.txt`, `swarm-product-query.sql`, `swarm-task-ids.txt`, `swarm-result-*.json` (11), `swarm-list.json`, `swarm-product-sample.html`, `swarm-evidence.md`.\n\n---"
+  },
+  "assessment": {
+    "completionStatus": "Successful — all 9 scenario steps completed end-to-end: swarm session created with the requested HEADLESS/2-context/4-tab options, 10-URL seed file and X-SQL query file written, 10 extraction jobs submitted with --sql @file --seed-file --refresh and all polled to completion, one plain scrape job submitted via swarm submit for comparison, all results retrieved and verified (10/10 rows contain correct distinct title/price/absolute image URL), full task history listed, session closed. No step failed and no retry was needed.",
+    "successRate": "100%",
+    "issuesFound": 4,
+    "majorBlockers": "",
+    "mostConfusingAspects": "The batch-window header and the task rows in the same `swarm list` output use different time bases (UTC vs local, 8 hours apart here), which makes the output look internally inconsistent at first glance. The 'Batch <id>: 10 of 11 tracked swarm task(s)' header reads like a selection/failure count. DURATION values of 5-38 ms for page-scraping tasks contradict the ~1-minute wall clock of the batch, leaving users unsure what the column measures. There is also no visible queue-time metric despite the documented ~30-60 s cold start of a fresh swarm session.",
+    "mostValuableImprovements": "1) Make all timestamps in swarm list (and across swarm status) use one consistent, zone-labeled time base. 2) Surface queue wait / time-to-result per task (a WAITED or ELAPSED column) so DURATION is not misread. 3) Clarify batch/status filter header wording. 4) Document the non-TTY swarm create auto-clean behavior. Everything else — command discovery via help, seed-file comment handling, batch ids, status/result polling, and resource cleanup — worked exactly as documented and needed no improvement.",
+    "usabilityRating": 8
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "swarm list prints the batch window in UTC while task rows are local time — 8-hour offset within a single output",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 swarm list   (on any machine whose timezone is not UTC; here UTC+8)\nCompare the 'Batch window:' header with the STARTED/FINISHED columns of the table rows.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Every timestamp in one command's output uses the same time base (ideally local time with a date/zone suffix), so the window and the rows can be compared directly.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The header shows 'Batch window: 17:12:05 -> 17:13:09' while the same tasks' rows show '2026-10-14 01:12:05' / '01:13:09' — the same instants rendered 8 hours apart. `swarm list --json` confirms the mapping: started_at 2026-10-13T17:12:06.729Z corresponds to the 01:12:06 row. `swarm status` additionally prints UTC ISO strings (lastModifiedTime ...Z), so the command family mixes two conventions.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Two formatting paths that never agree outside UTC: the batch window is formatted straight from chrono::DateTime<Utc> with .format(\"%H:%M:%S\") (cli/browser4-cli/src/main.rs, batch-summary block around lines 15155-15163), while per-task rows are converted with .with_timezone(&chrono::Local) inside summarize_async_tasks (cli/browser4-cli/src/state.rs:1548 and :1566). On a whole-hour offset the minute/second values still look self-consistent, which makes the mismatch easy to miss and easy to misread as a window from a different day/batch.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:15155-15163 (batch window formatting in the swarm list handler); compare cli/browser4-cli/src/state.rs:1497 summarize_async_tasks (rows, uses chrono::Local)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Convert the batch-window instants with .with_timezone(&chrono::Local) before formatting, or route both the header and rows through one shared timestamp formatter\n- Include the date and an explicit zone marker in the header (e.g. 'Batch window (local): 2026-10-14 01:12:05 -> 01:13:09')\n- Add a regression test that asserts the header and the first/last row render the same clock time under a non-UTC TZ\n- Decide the convention for `swarm status` too (it emits UTC 'Z' timestamps) and document it, so users correlating with external logs are not surprised",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "DURATION column understates task time-to-result by ~3 orders of magnitude — queue wait is invisible",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "1. Submit a batch: ./b4w.ps1 swarm query --sql @q.sql --seed-file seeds.txt\n2. Poll until done, then compare `./b4w.ps1 swarm list` with `./b4w.ps1 swarm list --json`.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The DURATION column either reflects how long each job actually took (submit to result), or the output makes it explicit that only worker-processing time is counted.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Task 71eb6240 was submitted at 17:11:51.862Z and completed at 17:12:06.740Z (~15 s to result), but the table shows DURATION 10ms; the whole 10-URL batch spanned 1m03s while row durations are 5-38ms. A page-scraping job completing in 10 ms is implausible if a browser context loaded the page, so either the metric timestamps only a late pipeline phase or a non-browser fetch path served the pages; the table gives no way to tell queue time from work time.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "duration_ms is computed strictly as started_at -> completed_at (as documented in swarm.md), excluding queue wait; the table has no column for submitted->completed elapsed even though --json carries submitted_at. Whether started_at is stamped when real processing begins (vs just before completion) requires backend instrumentation in the browser4-swarm task runner to confirm.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/state.rs:1497 summarize_async_tasks (DURATION column); backend timing lives in the browser4-swarm plugin task runner",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a WAITED/QUEUED column (submitted_at to started_at) or an ELAPSED column (submitted_at to completed_at) so time-to-result is visible without --json\n- If the processing window is intentionally only the fetch/parse phase, label the column accordingly (e.g. PROCESS) and state in `--help swarm list` that queue time is excluded\n- Verify server-side what started_at actually marks; if it is stamped immediately before completion, fix the instrumentation so the metric reflects real processing duration",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "swarm list --batch header reads as a mismatch: 'Batch <id>: 10 of 11 tracked swarm task(s)'",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 swarm list --batch 879773d4-c6bf-47e5-a6eb-11272a77d3b0   (with at least one other tracked task, e.g. a swarm-submit job, present)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The header states plainly how many tasks the batch contains and how many exist overall, e.g. 'Batch <id>: 10 task(s) (11 tracked in total)'.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "It prints 'Batch 879773d4-...: 10 of 11 tracked swarm task(s)', which reads like 10 of 11 selected/failed; the 11th row actually belongs to a different batch (the plain scrape job). The same 'N of M tracked' pattern appears on the lifecycle-filter line. Additionally, the unfiltered list still labels its summary 'Batch window' even when the visible tasks span several batches, where 'Batch' is ambiguous.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The label is built as '{filtered.len()} of {before} tracked swarm task(s)', where `before` is the count of ALL tracked tasks captured before the batch filter is applied — cli/browser4-cli/src/main.rs:15098 (same pattern at 15116 for the status filter); the window label is at 15158.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:15098 (batch filter header), :15116 (status filter header), :15158 (batch window label)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Reword to 'Batch <id>: N task(s) (M tracked in total)'\n- Print the batch header only when --batch is given; when listing everything, label the summary 'Tracked window' or 'Submission window'\n- Apply the same wording fix to the lifecycle-filter line",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "swarm create silently auto-cleans completed tasks from prior sessions in non-TTY runs; the documented prompt/--clear-stale model doesn't cover it",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "1. Have completed swarm tasks tracked from a prior session (visible in ./b4w.ps1 swarm list).\n2. From a non-TTY context (script, CI, piped shell), run: ./b4w.ps1 swarm create --display-mode HEADLESS\n3. Observe 'Auto-cleaned 3 completed swarm task(s) from prior sessions.' and the prior tasks disappearing from swarm list.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Per skills/browser4-cli/references/swarm.md, swarm create warns/prompts in a TTY and --clear-stale is the mechanism 'for non-interactive/scripted use'; the non-TTY behavior (auto-clean without the flag) should be documented so scripts relying on retained tracking are not surprised.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Without --clear-stale and with stdin not a TTY, the CLI removed the prior completed tasks' tracking entries automatically (one informational line, no prompt, exit 0). The docs describe only the interactive prompt, implying non-interactive runs without --clear-stale keep the old tasks.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The non-TTY code path of swarm create auto-clears completed tasks instead of prompting or skipping; swarm.md's 'List Tracked Tasks' tip (and the --help swarm create notes) were not updated for this behavior. Which lifecycle states are eligible (completed only, or failed/queued too) was not determined in this run.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs (swarm create handling / stale-task clearing); skills/browser4-cli/references/swarm.md ('List Tracked Tasks' tip) and --help swarm create notes (cli/browser4-cli/src/help.rs)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Document the non-TTY auto-clean behavior in swarm.md and in the swarm create notes\n- State exactly which tasks are auto-cleaned (completed only vs failed/queued as well)\n- If retention matters for scripts, offer a --keep/--no-clean flag or print the cleaned task ids so they can be reviewed",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

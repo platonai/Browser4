@@ -36,7 +36,9 @@ const fs = require('fs');
  * Each provider defines:
  *   - binary: default executable name
  *   - promptFlag: CLI flag for the prompt text (e.g., '-p')
- *   - promptPosition: 'flag' (binary flag prompt) | 'stdin' | 'last'
+ *   - promptPosition: 'flag' (binary flag prompt) | 'stdin' | 'last' |
+ *                     'positional' (bare trailing argument, no flag — the
+ *                     prompt must stay on argv; stdin is not accepted)
  *   - baseArgs: default base arguments (overridden by config/env)
  *   - envVars: environment variables needed by this provider
  */
@@ -79,9 +81,9 @@ const PROVIDER_DEFS = {
   },
   dsh: {
     binary: 'dsh',
-    promptFlag: 'run',
-    promptPosition: 'last',    // dsh run <prompt>
-    baseArgs: [],
+    promptFlag: '',
+    promptPosition: 'positional', // dsh --profile headless "<prompt>"
+    baseArgs: ['--profile', 'headless'],
     envVars: [],
   },
   custom: {
@@ -114,8 +116,9 @@ const HEALTH_CACHE_MS = 10000;
 
 /**
  * Parse a PowerShell .psd1 config file to detect the active AI provider.
- * Follows the same logic as config.ps1: if CLAUDE key exists → 'claude',
- * otherwise → 'copilot'. Extracts the array values for base arguments.
+ * Follows the same priority as Get-AgentBackend in config.ps1:
+ * DSH > CLAUDE > KIMI > CODEX > COPILOT. Extracts the array values for base
+ * arguments.
  *
  * Returns: { type, binary, baseArgs } or null if file not found
  */
@@ -123,6 +126,15 @@ function _parsePsd1Config(configPath) {
   try {
     if (!fs.existsSync(configPath)) return null;
     const content = fs.readFileSync(configPath, 'utf-8');
+
+    // Check for active DSH block (uncommented) — the preferred external harness
+    const dshMatch = content.match(/^\s*DSH\s*=\s*@\(([\s\S]*?)\)/m);
+    if (dshMatch) {
+      const args = _parsePsd1Array(dshMatch[1]);
+      const binary = args.length > 0 ? args[0] : 'dsh';
+      const baseArgs = args.slice(1);
+      return { type: 'dsh', binary, baseArgs };
+    }
 
     // Check for active CLAUDE block (uncommented)
     const claudeMatch = content.match(/^\s*CLAUDE\s*=\s*@\(([\s\S]*?)\)/m);
@@ -149,15 +161,6 @@ function _parsePsd1Config(configPath) {
       const binary = args.length > 0 ? args[0] : 'codex';
       const baseArgs = args.slice(1);
       return { type: 'codex', binary, baseArgs };
-    }
-
-    // Check for active DSH block (uncommented)
-    const dshMatch = content.match(/^\s*DSH\s*=\s*@\(([\s\S]*?)\)/m);
-    if (dshMatch) {
-      const args = _parsePsd1Array(dshMatch[1]);
-      const binary = args.length > 0 ? args[0] : 'dsh';
-      const baseArgs = args.slice(1);
-      return { type: 'dsh', binary, baseArgs };
     }
 
     // Check for active COPILOT block (uncommented)
@@ -234,14 +237,17 @@ function _execFileOpts(overrides) {
  * Provider detection order:
  *   1. opts.provider — explicit provider name
  *   2. opts.binary — explicit binary path
- *   3. LLM_PROVIDER env var — explicit provider name
- *   4. LLM_PATH env var — explicit binary path
- *   5. LLM_ARGS env var — space-separated base arguments
- *   6. config.psd1 file — same file the PowerShell scripts read
- *   7. Default: 'claude'
+ *   3. opts.baseArgs — explicit base arguments
+ *   4. BROWSER4_AGENT env var — global agent setting (shared with the PowerShell scripts)
+ *   5. LLM_PROVIDER env var — explicit provider name
+ *   6. LLM_PATH env var — explicit binary path
+ *   7. LLM_ARGS env var — space-separated base arguments
+ *   8. CLAUDE_PATH env var — legacy binary override
+ *   9. config.psd1 file — same file the PowerShell scripts read (DSH first)
+ *  10. Default: 'dsh' (the preferred external harness)
  *
  * @param {object} opts
- * @param {string} [opts.provider]   - provider type: 'claude'|'copilot'|'openai'|'custom'
+ * @param {string} [opts.provider]   - provider type: 'dsh'|'claude'|'kimi'|'codex'|'copilot'|'openai'|'custom'
  * @param {string} [opts.binary]     - path to LLM binary (overrides provider default)
  * @param {string[]} [opts.baseArgs] - additional base arguments
  * @param {string} [opts.tasksRoot]  - path to coworker/tasks/ (for finding config.psd1)
@@ -325,8 +331,9 @@ function init(opts) {
     }
   }
 
-  // 10. Default fallback
-  if (!providerType) providerType = 'claude';
+  // 10. Default fallback — dsh is the preferred external harness (matches
+  //     Get-AgentBackend in config.ps1 and the scenario auto-detection).
+  if (!providerType) providerType = 'dsh';
 
   // Build provider config — use provider definition defaults for
   // binary/baseArgs when not explicitly overridden
@@ -339,6 +346,13 @@ function init(opts) {
     baseArgs: baseArgs !== null ? baseArgs : [...def.baseArgs],
     envVars: def.envVars,
   };
+
+  // dsh boots a profile explicitly and has no default one.  Keep a profile the
+  // user pinned in config.psd1/env, otherwise add the headless profile so a
+  // bare `DSH = @('dsh')` entry still produces a runnable command line.
+  if (_provider.type === 'dsh' && !_provider.baseArgs.includes('--profile')) {
+    _provider.baseArgs = [..._provider.baseArgs, '--profile', 'headless'];
+  }
 
   console.error(`[llm] Provider: ${_provider.type} → ${_provider.binary} ${_provider.baseArgs.join(' ')}`);
 }
@@ -492,6 +506,13 @@ function _buildArgs(prompt) {
   _ensureProvider();
   const p = _provider;
 
+  // Positional backends (dsh): the prompt is a bare trailing argument with no
+  // flag, and these CLIs reject stdin — so a missing prompt leaves the args
+  // alone rather than appending an empty value.
+  if (p.promptPosition === 'positional') {
+    return prompt ? [...p.baseArgs, prompt] : [...p.baseArgs];
+  }
+
   // No prompt → return base args + print flag only (prompt will come via stdin)
   if (!prompt) {
     return [...p.baseArgs, p.promptFlag];
@@ -551,31 +572,40 @@ function _writePromptFile(prompt) {
 
 function _invoke(prompt, timeout) {
   _ensureProvider();
-  const args = _buildArgs(null);  // No positional prompt arg — prompt via stdin
-  const promptFile = _writePromptFile(prompt);
 
-  console.error(`[llm] Invoking: ${_provider.binary} ${args.join(' ')} (${_provider.type}, prompt via stdin ${promptFile})`);
+  // Positional backends (dsh) take the prompt on argv and reject stdin, so the
+  // temp prompt file + stdin redirect only apply to the flag/stdin styles.
+  const positional = _provider.promptPosition === 'positional';
+  const args = positional ? _buildArgs(prompt) : _buildArgs(null);  // null = prompt via stdin
+  const promptFile = positional ? null : _writePromptFile(prompt);
+
+  console.error(`[llm] Invoking: ${_provider.binary} ${args.join(' ')} (${_provider.type}, `
+    + (positional ? 'prompt via argv' : `prompt via stdin ${promptFile}`) + ')');
 
   return new Promise((resolve, reject) => {
-    let stdinFd;
-    try {
-      stdinFd = fs.openSync(promptFile, 'r');
-    } catch (e) {
-      try { fs.unlinkSync(promptFile); } catch (_) {}
-      reject(new Error(`Failed to open prompt file: ${e.message}`));
-      return;
+    let stdinFd = null;
+    if (promptFile) {
+      try {
+        stdinFd = fs.openSync(promptFile, 'r');
+      } catch (e) {
+        try { fs.unlinkSync(promptFile); } catch (_) {}
+        reject(new Error(`Failed to open prompt file: ${e.message}`));
+        return;
+      }
     }
 
     const opts = _execFileOpts({
       timeout: timeout,
       maxBuffer: 2 * 1024 * 1024,
     });
-    opts.stdio = [stdinFd, 'pipe', 'pipe'];  // stdin from prompt file
+    if (stdinFd !== null) {
+      opts.stdio = [stdinFd, 'pipe', 'pipe'];  // stdin from prompt file
+    }
 
     const child = execFile(_provider.binary, args, opts, (err, stdout, stderr) => {
       // Always clean up temp resources
-      try { fs.closeSync(stdinFd); } catch (_) {}
-      try { fs.unlinkSync(promptFile); } catch (_) {}
+      if (stdinFd !== null) { try { fs.closeSync(stdinFd); } catch (_) {} }
+      if (promptFile) { try { fs.unlinkSync(promptFile); } catch (_) {} }
 
       if (err) {
         if (err.killed) {
@@ -721,4 +751,5 @@ module.exports = {
   // Exported for testing
   _buildArgs,
   _writePromptFile,
+  _parsePsd1Config,
 };

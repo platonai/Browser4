@@ -3,20 +3,35 @@
 # b4w.sh — Git Bash / Linux / macOS wrapper for browser4-cli.
 #
 # This script is the recommended way to run browser4-cli from Git Bash on
-# Windows.  Running `./b4w.ps1` directly from Git Bash may cause the shell
-# working directory to reset to the user home directory after each command
-# (a side-effect of how PowerShell inherits and reports CWD from bash).
-# This wrapper avoids that by using `exec pwsh -File`, passing the original
-# arguments through verbatim ("$@").
+# Windows, for one concrete reason: it exports MSYS2_ARG_CONV_EXCL='*' before
+# spawning pwsh, so argument values that begin with '/' (e.g. -olp "/product/",
+# --path /, --selector "/div") reach the CLI verbatim instead of being
+# rewritten into Windows paths by MSYS path conversion.
+#
+# ./b4w.ps1 works from Git Bash too — it inherits the invoking shell's working
+# directory, and relative file arguments (--seed-file, --sql @file, -o) resolve
+# against it.  Any '/'-leading value, however, needs the conversion disabled
+# first; b4w.ps1 detects the rewritten form and prints a de-converted command
+# to re-run (or use this wrapper, which never needs the workaround).
 #
 # Usage: ./b4w.sh [args...]          (same as ./b4w.ps1 [args...])
 #
 # Shell selection guide:
-#   b4w.sh   — Git Bash / Linux / macOS (auto-quotes args for pwsh safety)
-#   b4w.ps1  — PowerShell (direct, now uses manual arg parsing to avoid
-#              -o/-i/-v interception; preferred on Windows where pwsh is the
-#              primary shell)
+#   b4w.sh   — Git Bash / Linux / macOS (the Git Bash default: disables MSYS
+#              path conversion and forwards args verbatim for pwsh)
+#   b4w.ps1  — any shell, and the primary entry point on Windows PowerShell
+#              (uses manual arg parsing to avoid -o/-i/-v interception)
 #   b4w.bat  — cmd.exe (uses --% stop-parsing to avoid flag interception)
+#
+# Historical note (retired): an earlier version of this header warned that
+# invoking ./b4w.ps1 directly from Git Bash "may cause the shell working
+# directory to reset to the user home directory after each command".  That no
+# longer reproduces: b4w.ps1 captures its own CWD and restores it on exit, and
+# a child process cannot change its parent shell's directory anyway.  Verified
+# on Git Bash (Git for Windows) + PowerShell 7 by comparing `pwd` before and
+# after `./b4w.ps1 <command>` and by resolving a relative path afterwards.
+# Keep only the conversion caveat above; if a CWD reset is ever seen again,
+# record the exact Git Bash + PowerShell versions with the report.
 
 . "$(dirname "$0")/bin/tools/install-powershell.sh"
 

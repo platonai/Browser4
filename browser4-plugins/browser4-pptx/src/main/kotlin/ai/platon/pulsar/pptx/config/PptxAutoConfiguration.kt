@@ -88,8 +88,8 @@ open class PptxAutoConfiguration(
     open fun pptxDownloadClient(pptxConfig: PptxConfig): OkHttpClient {
         // The per-download timeout applies to both connect and read phases so a
         // slow/blocked image host cannot stall the whole PPTX generation past
-        // the server's async request budget. Defaults are well below the 5 min
-        // server async timeout.
+        // the server's async request budget; the download phase as a whole is
+        // additionally bounded by pptx.download.total-timeout.seconds.
         val timeoutSeconds = pptxConfig.downloadTimeoutSeconds.coerceAtLeast(1)
         val builder = OkHttpClient.Builder()
             .followRedirects(true)
@@ -97,41 +97,25 @@ open class PptxAutoConfiguration(
             .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .readTimeout(timeoutSeconds * 2, TimeUnit.SECONDS)
 
-        resolveProxy(pptxConfig)?.let { builder.proxySelector(java.net.ProxySelector.of(it)) }
-        return builder.build()
-    }
-
-    /**
-     * Resolve the proxy address for PPTX image downloads.
-     *
-     * Chrome uses the OS system proxy (e.g. WinINET on Windows) while the JVM's
-     * DefaultProxySelector usually returns NO_PROXY (java.net.useSystemProxies=false
-     * in the shipped net.properties), so image downloads silently bypass the proxy
-     * and fail with connection errors on machines where direct egress is blocked.
-     * Honored, in order: the `pptx.download.proxy` config key, then the
-     * HTTPS_PROXY / HTTP_PROXY environment variables.
-     */
-    private fun resolveProxy(config: PptxConfig): java.net.InetSocketAddress? {
-        val proxySpec = config.proxy
-            ?: System.getenv("HTTPS_PROXY") ?: System.getenv("https_proxy")
-            ?: System.getenv("HTTP_PROXY") ?: System.getenv("http_proxy")
-            ?: return null
-
-        return try {
-            val trimmed = proxySpec.trim()
-            val uri = if (trimmed.contains("://")) java.net.URI(trimmed) else java.net.URI("http://$trimmed")
-            val host = uri.host
-            if (host.isNullOrBlank()) {
-                logger.warn("Invalid PPTX image download proxy spec '{}': no host", proxySpec)
-                return null
-            }
-            val port = if (uri.port > 0) uri.port else 80
-            logger.info("PPTX image download proxy enabled: {}:{}", host, port)
-            java.net.InetSocketAddress(host, port)
-        } catch (e: Exception) {
-            logger.warn("Invalid PPTX image download proxy spec '{}': {}", proxySpec, e.message)
-            null
+        // Chrome reaches the image hosts through the OS system proxy (WinINET on
+        // Windows); the JVM does not inherit it. PptxProxyResolver looks at every
+        // configuration a user can reach (plugin key, env vars, JVM properties, OS
+        // settings) so image downloads use the same egress path as the browser.
+        // When nothing is configured, OkHttp's own default ProxySelector applies.
+        val resolution = PptxProxyResolver.resolve(pptxConfig)
+        if (resolution != null) {
+            builder.proxySelector(PptxProxySelector(resolution.address, resolution.bypassPatterns))
+            logger.info(
+                "PPTX image download proxy enabled: {} (from {})",
+                resolution.endpoint, resolution.source
+            )
+        } else {
+            logger.info(
+                "PPTX image downloads: no proxy configured for the plugin; using the JVM default proxy selector"
+            )
         }
+
+        return builder.build()
     }
 
     @Bean(name = ["pageContentExtractor"])

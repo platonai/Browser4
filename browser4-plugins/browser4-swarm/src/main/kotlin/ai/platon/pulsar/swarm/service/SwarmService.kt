@@ -394,7 +394,13 @@ open class SwarmService(
                 "createdTime" to r.createdTime?.toString(),
                 "startedTime" to r.startedTime?.toString(),
                 "finishTime" to r.finishTime?.toString(),
+                // Processing time only.  `durationMillis` alone made a task that
+                // waited minutes for a tab and then ran for 200ms look like a 200ms
+                // task, and the queue wait was invisible; the split says which of the
+                // two (pool pressure or slow work) the number is about.
                 "durationMillis" to r.durationMillis,
+                "queuedMillis" to r.queuedMillis,
+                "elapsedMillis" to r.elapsedMillis,
             )
         }
 
@@ -404,6 +410,11 @@ open class SwarmService(
             "completed" to completed,
             "failed" to failed,
             "pending" to pending,
+            // The submission window (earliest submit -> latest finish).  Kept next to
+            // `startedAt` because the two are not the same instant: `startedAt` is the
+            // first worker pickup, so a batch that waited for a tab has a submission
+            // window that begins strictly earlier.
+            "submittedAt" to tasks.mapNotNull { it.createdTime }.minOrNull()?.toString(),
             "startedAt" to startedAt?.toString(),
             "finishedAt" to finishedAt?.toString(),
             "durationMillis" to durationMillis,

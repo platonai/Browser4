@@ -110,9 +110,9 @@ checks and previews the tag and release notes; it never creates or pushes anythi
   sections (Features, Fixes, Performance, ...; chore/ci/style/revert/build and
   version-bump commits are skipped). Pass `-Agent auto` to opt in: the AI
   agent then generates ONLY the "What's New" highlights section on top of
-  those sections (backend auto-resolved: claude/codex/kimi/dsh/gh copilot),
-  or `-Agent <name>` to pin a specific backend (claude, kimi, codex, dsh,
-  copilot). The What's New is user-facing (English, 3-5 bullets, release scale
+  those sections (backend auto-resolved: dsh/claude/kimi/codex/gh copilot,
+  dsh preferred), or `-Agent <name>` to pin a specific backend (dsh, claude,
+  kimi, codex, copilot). The What's New is user-facing (English, 3-5 bullets, release scale
   stats) and the combined notes are used as the annotated tag message (unless
   `-message` is given). Falls back to commit-derived sections only if no agent
   is available. The tag message (What's New + curated sections) is also

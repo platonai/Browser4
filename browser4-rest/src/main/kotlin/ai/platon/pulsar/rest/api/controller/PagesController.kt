@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.pulsar.agentic.tools.builtin.TabActivity
 import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
@@ -200,13 +201,9 @@ class PagesController(
         }
         // The front driver is only set after bringToFront(); fall back to the
         // first driver so a freshly opened single-tab session still reports
-        // its active page.
-        val frontGuid = try {
-            (browser.frontDriver as? AbstractWebDriver)?.guid
-        } catch (e: Exception) {
-            null
-        }
-        val activeGuid = frontGuid ?: drivers.firstOrNull()?.guid
+        // its active page. TabActivity owns the rule (and the "front driver must
+        // be one of these tabs" guard) for every tab listing.
+        val activeGuid = TabActivity.resolveActiveGuid(drivers, browser.frontDriver)
         return drivers.mapIndexed { index, wd ->
             val (title, url) = withTimeoutOrNull(PAGE_QUERY_TIMEOUT_MS) {
                 try {

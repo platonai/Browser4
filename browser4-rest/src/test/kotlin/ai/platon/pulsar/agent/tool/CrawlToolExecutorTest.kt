@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito
 import org.mockito.Mockito.`when`
 import org.mockito.kotlin.any
@@ -224,5 +225,57 @@ class CrawlToolExecutorTest {
         assertTrue(submitArgs.contains("taskTimeoutMillis"), "submit should advertise taskTimeoutMillis: $submitArgs")
         assertNotNull(specs["status"])
         assertNotNull(specs["result"])
+    }
+
+    @Test
+    @DisplayName("submit refuses a seed that is not a URL, before any task exists")
+    fun submitRefusesAMalformedSeed() {
+        runBlocking {
+            val service = Mockito.mock(CrawlService::class.java)
+
+            // `crawl formats` used to create a task, report 0 pages found and exit 0 (issue #616).
+            val failure = assertThrows<IllegalArgumentException> {
+                executor(service).callFunctionOn("crawl", "submit", mapOf("url" to "formats"), service)
+            }
+
+            assertEquals("Malformed url: <formats>", failure.message)
+            Mockito.verify(service, Mockito.never()).submit(any<CrawlRequest>())
+        }
+    }
+
+    @Test
+    @DisplayName("submit refuses a malformed entry inside the seed list too")
+    fun submitRefusesAMalformedSeedInTheList() {
+        runBlocking {
+            val service = Mockito.mock(CrawlService::class.java)
+
+            val failure = assertThrows<IllegalArgumentException> {
+                executor(service).callFunctionOn(
+                    "crawl",
+                    "submit",
+                    mapOf("urls" to listOf("https://example.com/a", "not-a-url")),
+                    service
+                )
+            }
+
+            assertEquals("Malformed url: <not-a-url>", failure.message)
+            Mockito.verify(service, Mockito.never()).submit(any<CrawlRequest>())
+        }
+    }
+
+    @Test
+    @DisplayName("a seed may carry trailing LoadOptions, exactly as the REST entry point allows")
+    fun submitAcceptsASeedWithLoadOptions() = runBlocking {
+        val service = Mockito.mock(CrawlService::class.java)
+        Mockito.`when`(service.submit(any<CrawlRequest>())).thenReturn("task-1")
+
+        val taskId = executor(service).callFunctionOn(
+            "crawl",
+            "submit",
+            mapOf("url" to "https://example.com -expires 1d"),
+            service
+        )
+
+        assertEquals("task-1", taskId)
     }
 }

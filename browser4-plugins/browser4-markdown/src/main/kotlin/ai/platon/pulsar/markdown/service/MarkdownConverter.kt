@@ -43,6 +43,9 @@ data class MarkdownResult(
 
     /** Number of images referenced in the markdown */
     val imageCount: Int,
+
+    /** Number of markdown links `[text](url)` in the generated markdown */
+    val markdownLinkCount: Int,
 )
 
 /**
@@ -103,6 +106,7 @@ open class MarkdownConverter(
                 internalLinkCount = 0,
                 internalLinks = emptyList(),
                 imageCount = 0,
+                markdownLinkCount = 0,
             )
         }
 
@@ -146,6 +150,10 @@ open class MarkdownConverter(
             appendLine()
         }
 
+        // 6. Count the links actually written to the file, so a result named
+        // linkCount describes the produced document and not the page.
+        val markdownLinkCount = countMarkdownLinks(finalMarkdown)
+
         return MarkdownResult(
             markdown = finalMarkdown,
             title = title,
@@ -153,6 +161,7 @@ open class MarkdownConverter(
             internalLinkCount = internalUrls.size,
             internalLinks = internalUrls,
             imageCount = imageCount,
+            markdownLinkCount = markdownLinkCount,
         )
     }
 
@@ -176,9 +185,22 @@ open class MarkdownConverter(
         return MARKDOWN_IMAGE_REGEX.findAll(markdown).count()
     }
 
+    /**
+     * Count markdown links (`[text](url)`) present in generated markdown.
+     *
+     * Images (`![alt](src)`) are not links and are counted by [countMarkdownImages].
+     */
+    internal fun countMarkdownLinks(markdown: String): Int {
+        if (markdown.isBlank()) return 0
+        return MARKDOWN_LINK_REGEX.findAll(markdown).count()
+    }
+
     companion object {
         /** Matches markdown image references: `![alt](src)` */
         private val MARKDOWN_IMAGE_REGEX = Regex("""!\[[^]]*]\([^)]*\)""")
+
+        /** Matches markdown links: `[text](url)`, excluding images `![alt](src)` */
+        private val MARKDOWN_LINK_REGEX = Regex("""(?<!!)\[[^]]*]\([^)]*\)""")
 
         /**
          * JavaScript probe that converts the current page DOM to Markdown.
@@ -490,12 +512,18 @@ open class MarkdownConverter(
          *
          * Extracts `<a href>` elements, resolves relative URLs, and flags
          * internal same-host links for crawling.
+         *
+         * Fragment-only anchors (`#section`) navigate inside the current
+         * document and the page's own URL is not a discovery, so neither is
+         * reported — otherwise every in-page anchor collapses onto the page URL
+         * and the page lists itself as one of its own internal links.
          */
         val LINK_DISCOVERY_SCRIPT = """
 (function() {
     var links = [];
     var seen = {};
     var pageHost = window.location.hostname;
+    var pageUrl = window.location.href.split('#')[0];
 
     var anchors = document.querySelectorAll('a[href]');
     for (var i = 0; i < anchors.length; i++) {
@@ -503,11 +531,11 @@ open class MarkdownConverter(
         var href = a.getAttribute('href') || '';
         var text = (a.textContent || '').trim().substring(0, 200);
 
-        // Skip empty, javascript:, mailto:, tel:, # only anchors
+        // Skip empty, javascript:, mailto:, tel:, and fragment-only anchors
         if (!href) continue;
         href = href.trim();
         if (href.startsWith('javascript:') || href.startsWith('mailto:') ||
-            href.startsWith('tel:') || href === '#') continue;
+            href.startsWith('tel:') || href.startsWith('#')) continue;
 
         // Resolve URL
         var resolvedUrl;
@@ -522,6 +550,10 @@ open class MarkdownConverter(
 
         // Remove fragment for deduplication
         var cleanUrl = resolvedUrl.split('#')[0];
+
+        // Skip the page's own URL: it is already open, not worth crawling
+        if (cleanUrl === pageUrl) continue;
+
         if (seen[cleanUrl]) continue;
         seen[cleanUrl] = true;
 

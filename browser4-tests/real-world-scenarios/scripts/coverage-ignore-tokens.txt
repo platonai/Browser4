@@ -1,0 +1,7 @@
+# Tokens that look like CLI commands but are not — with the reason they stay.
+#
+# Used by coverage.ps1 check E.  Prefer FIXING the scenario token (a spaced form
+# the CLI does not accept sends the agent down a dead end); only add an entry
+# here when the token is genuinely not a command reference.
+#
+# One token per line, exact match against the backticked span.

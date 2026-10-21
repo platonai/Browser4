@@ -875,8 +875,16 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     }
 
     @Test
+    @Tag("RequiresAI")
     @DisplayName("agent-run agent-status and agent-result aliases work through MCP command tools")
     fun testAgentRunStatusAndResultTools() {
+        // `command_run` hands the command to the agentic layer, which needs a model to
+        // interpret it: without one the task fails with "No LLM configured" and this test
+        // only waits out its 180 s timeout. Tagged and guarded like the sibling above —
+        // nightly's JVM stage excludes `RequiresAI` (no key a cron can supply), and a
+        // local run without a key skips instead of failing.
+        Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
+
         val commandRun = callTool(
             "command_run",
             mapOf("command" to fixtureServer.interactiveUrl(), "async" to true)

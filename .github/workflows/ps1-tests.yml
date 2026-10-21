@@ -20,6 +20,12 @@ name: PowerShell Tests
 # past the 500-line M6 cap — never triggered this workflow at all, and only the
 # nightly cron saw it: the gate was red from 2026-09-24 until the document was
 # trimmed back under the cap.
+#
+# The command registry and the real-world scenario tasks are in the filters for
+# the same reason: scripts/coverage.tests.ps1 audits them against each other
+# (every browser4-cli command needs a scenario or a documented exclusion), and
+# without those two paths the audit would only run on unrelated PowerShell edits
+# plus the nightly cron — i.e. never on the change that creates the gap.
 
 on:
   # Any release line that touches PowerShell code, or the skill documents the
@@ -34,6 +40,8 @@ on:
       - '**/*.psm1'
       - '**/*.psd1'
       - 'skills/**/*.md'
+      - 'cli/browser4-cli/src/commands.rs'
+      - 'browser4-tests/real-world-scenarios/tasks/**'
       - '.github/workflows/ps1-tests.yml'
   # Every PR touching PowerShell code, whatever branch it targets (pr.yml only
   # guards PRs whose base is main/master, so X.Y.x PRs had no PS coverage).
@@ -43,6 +51,8 @@ on:
       - '**/*.psm1'
       - '**/*.psd1'
       - 'skills/**/*.md'
+      - 'cli/browser4-cli/src/commands.rs'
+      - 'browser4-tests/real-world-scenarios/tasks/**'
       - '.github/workflows/ps1-tests.yml'
   # On demand. GitHub only exposes workflow_dispatch once the file is on the
   # default branch, so this becomes usable after the next merge into main.

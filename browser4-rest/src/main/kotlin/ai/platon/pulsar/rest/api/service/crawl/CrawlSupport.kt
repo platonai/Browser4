@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service.crawl
 
+import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
@@ -56,6 +57,36 @@ internal const val MAX_REQUEST_TASK_TIMEOUT_MS = 3_600_000L
 internal fun resolveRequestTaskTimeout(requested: Long?, serverDefault: Long): Long {
     if (requested == null || requested <= 0L) return serverDefault
     return requested.coerceIn(MIN_REQUEST_TASK_TIMEOUT_MS, MAX_REQUEST_TASK_TIMEOUT_MS)
+}
+
+/**
+ * Refuse a crawl whose seeds could never be fetched, naming the first one that cannot.
+ *
+ * Nothing downstream checks a seed: a crawl accepts any string, spends its budget, and then either
+ * records a NIL page or fetches the fetcher's *default search-engine url* for the page that was
+ * asked for (`AbstractPulsarContext.normalize` substitutes `SEARCH_ENGINE_URL` when its input is
+ * neither a url nor base64), reporting rows under a URL nobody requested.  Every entry point has to
+ * refuse it while the caller can still fix it.
+ *
+ * It lives here — instead of in any single entry point — because a crawl has two of them, and the
+ * REST controller's check alone left the MCP tool (`crawl_submit`, what the CLI calls) able to
+ * submit `crawl formats`: the task was created, reported 0 pages found, and exited 0.
+ *
+ * @param url the single seed, blank when the request carries only [urls]
+ * @param urls the seed list, or null; a seed may carry trailing LoadOptions, like the scrape
+ *     payloads do, so only the url part is checked
+ * @throws IllegalArgumentException with `Malformed url: <...>` for the first seed that is not a
+ *     standard url — what `CrawlController`'s handler turns into a 400
+ */
+internal fun requireStandardSeeds(url: String, urls: List<String>?) {
+    (listOf(url) + urls.orEmpty())
+        .filter { it.isNotBlank() }
+        .forEach { seed ->
+            val seedUrl = URLUtils.splitUrlArgs(seed).first
+            if (!URLUtils.isStandard(seedUrl)) {
+                throw IllegalArgumentException("Malformed url: <$seedUrl>")
+            }
+        }
 }
 
 /**
@@ -924,6 +955,31 @@ private fun formatAge(totalSeconds: Long): String {
         m > 0 -> "${m}m ${s}s"
         else -> "${s}s"
     }
+}
+
+/**
+ * The terminal note that makes an HTTP error page visible.
+ *
+ * A 4xx/5xx response still carries a body, so the crawl parses it into a document
+ * and records a page — indistinguishable, before `httpStatus`, from a page the site
+ * actually serves.  The per-row status is what lets a consumer tell the two apart;
+ * this note is what stops the *summary* from calling such a crawl a plain success.
+ *
+ * Store-served rows are excluded on purpose: their status describes the copy the
+ * page store kept, not this crawl's fetch (see [CrawlPageResult.servedFromStore]).
+ */
+internal fun buildHttpErrorNote(pages: List<CrawlPageResult>): String? {
+    val errorPages = pages.filter { !it.servedFromStore && (it.httpStatus ?: 0) >= 400 }
+    if (errorPages.isEmpty()) return null
+    val byStatus = errorPages.groupingBy { it.httpStatus ?: 0 }.eachCount()
+        .entries.sortedByDescending { it.value }
+        .joinToString(", ") { "${it.key}: ${it.value}" }
+    val shown = errorPages.take(MAX_REPORTED_FAILED_PAGES).joinToString("; ") { "${it.url} (${it.httpStatus})" }
+    val more = if (errorPages.size > MAX_REPORTED_FAILED_PAGES) {
+        " (+${errorPages.size - MAX_REPORTED_FAILED_PAGES} more)"
+    } else ""
+    return "${errorPages.size} of ${pages.size} page(s) were served with an HTTP error status " +
+        "($byStatus): $shown$more"
 }
 
 /**

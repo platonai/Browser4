@@ -67,7 +67,12 @@ Write-TestHeader -Name 'stress-session'
 $global:TestPassed       = 0
 $global:TestFailed       = 0
 $global:FailureMessages  = [System.Collections.ArrayList]::new()
+$global:SkippedChecks    = [System.Collections.ArrayList]::new()
 $global:LastCliSucceeded = $true    # set by Invoke-Cli; assertions may skip on $false
+
+# Set by Invoke-CliToleratingExit: the next command's non-zero exit is an
+# expected outcome of the scenario (not a failure).
+$script:__TolerateExitCode = $false
 
 # -------------------------------------------------------------------
 # CLI helper — invokes browser4-cli with real-time output streaming
@@ -249,6 +254,7 @@ function Invoke-Cli {
 
     $exitCode = $procExitCode
     $label = "cli $desc"
+    $toleratedExit = $script:__TolerateExitCode -and -not $timeoutOccurred -and $exitCode -ne 0
 
     if ($timeoutOccurred) {
         $msg = "CLI command timed out after ${timeoutSecs}s: $desc"
@@ -265,9 +271,14 @@ function Invoke-Cli {
     }
 
     $null = Register-CliResult -Label $label -ExitCode $exitCode -OutputLines ($out.ToArray()) `
-        -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timeoutOccurred) { -1 } else { 0 })
+        -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timeoutOccurred) { -1 } elseif ($toleratedExit) { $exitCode } else { 0 })
 
-    if ($exitCode -ne 0) {
+    if ($toleratedExit) {
+        # Registered against its own exit code, so test-utils does not count it
+        # as a failure; the caller asserts the expected outcome itself.
+        Write-Host "       (exit=$exitCode tolerated — expected outcome of this scenario)" -ForegroundColor DarkYellow
+        $global:LastCliSucceeded = $true
+    } elseif ($exitCode -ne 0) {
         $msg = "CLI command failed (exit=$exitCode): $desc"
         Write-Host "       FAIL: $msg" -ForegroundColor Red
         $null = $global:FailureMessages.Add("       FAIL: $msg`nOutput:`n$($out -join "`n")")
@@ -280,6 +291,21 @@ function Invoke-Cli {
         Write-Host "       took $([math]::Round($sw.Elapsed.TotalSeconds, 1))s" -ForegroundColor DarkGray
     }
     $out
+}
+
+# Invoke a CLI command whose non-zero exit is an expected outcome of the
+# scenario, so it is not counted as a failure.  Used by Phase C for
+# `go-forward`: a runtime that reports "no forward entry" (instead of silently
+# doing nothing) exits non-zero, and that is a browser-level condition the
+# caller asserts itself.
+function Invoke-CliToleratingExit {
+    param([Parameter(ValueFromRemainingArguments = $true)] [object[]] $CliArgs)
+    $script:__TolerateExitCode = $true
+    try {
+        Invoke-Cli @CliArgs
+    } finally {
+        $script:__TolerateExitCode = $false
+    }
 }
 
 # -------------------------------------------------------------------
@@ -444,6 +470,63 @@ function Assert-SnapshotContains {
         $global:TestFailed++
         return $false
     }
+}
+
+# Record a check that could not be evaluated because of a browser-level
+# condition — never a product defect, never a silent pass: it is printed,
+# collected in $global:SkippedChecks and repeated in the final summary.
+function Skip-Check {
+    param([string]$Label, [string]$Reason)
+    Write-Host "    ⏭ SKIP: $Label" -ForegroundColor DarkYellow
+    Write-Host "         reason: $Reason" -ForegroundColor DarkGray
+    $null = $global:SkippedChecks.Add("$Label — $Reason")
+    return $false
+}
+
+# Current page URL as reported by the page itself (`eval`, not a cached driver
+# field).  Returns $null when the evaluation failed, so callers can tell
+# "no session / stale context" apart from "the URL did not change".
+#
+# `eval` prints the evaluated value itself and has no `--result-only` option
+# (that one belongs to `htmlsnapshot query`); passing it made the CLI exit 2
+# with "unknown option", so this helper returned $null for every page.
+function Get-CurrentHref {
+    $out = @(Invoke-Cli eval "location.href")
+    if (-not $global:LastCliSucceeded) { return $null }
+    # The value is a plain stdout line; stderr diagnostics are collected with a
+    # "[stderr] " prefix and must not be mistaken for the URL.  Prefer a line
+    # that actually looks like a URL (a page href always carries a scheme —
+    # http:, https:, file:, about:, data:, …) and fall back to the last plain
+    # line, so an unexpected placeholder line cannot win.
+    $fallback = $null
+    for ($i = $out.Count - 1; $i -ge 0; $i--) {
+        $line = "$($out[$i])".Trim()
+        if (-not $line) { continue }
+        if ($line.StartsWith('[stderr]')) { continue }
+        if ($line -match '^[A-Za-z][A-Za-z0-9+.\-]*:') { return $line }
+        if ($null -eq $fallback) { $fallback = $line }
+    }
+    return $fallback
+}
+
+# Probe whether the browser still has an entry to traverse forward to.
+#
+# The only reliable way to ask is to drive the traversal from the page itself:
+# `history.forward()` is the same history API the browser's own Forward button
+# uses, so a URL that does not move proves there is no forward entry left.
+# This separates a browser-level condition (the page replaced its history entry
+# and Chrome pruned everything after it — observed with live pages that are
+# reloaded instead of restored during a history traversal) from a CLI that
+# reported success without navigating although the browser could have.
+function Test-BrowserCanGoForward {
+    $before = Get-CurrentHref
+    $null = Invoke-Cli eval "history.forward(); 'probe'"
+    Start-Sleep -Seconds 2
+    $after = Get-CurrentHref
+    if ($null -eq $before -or $null -eq $after) {
+        return [PSCustomObject]@{ Known = $false; Moved = $false; Url = $after }
+    }
+    return [PSCustomObject]@{ Known = $true; Moved = ($after -ne $before); Url = $after }
 }
 
 # -------------------------------------------------------------------
@@ -620,14 +703,82 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Assert-SessionCount -Expected 1 -Context "after go-back (2)"
 
     Write-Host "  C6. go-forward → should return to $($c2.name)" -ForegroundColor White
-    Invoke-Cli go-forward
-    Start-Sleep -Seconds 2
-    Assert-SnapshotContains -Keyword $c2.keyword -Context "after go-forward ($($c2.name))"
+    # A second traversal is not always available: when the browser reloads
+    # (instead of restores) the document of the entry it traverses to, Chrome
+    # replaces that entry and prunes every entry after it, so after two
+    # go-backs a live page can legitimately leave nothing to go forward to
+    # (observed with the zh page set: c1 = www.163.com).  The strong contract
+    # — go-forward returns to c2 — is therefore asserted while a forward entry
+    # exists, verified by asking the page's own history API; a browser that
+    # kept no forward entry is reported as a skip, while a CLI that stayed put
+    # although the browser *could* go forward is a real failure.
+    $c6Status = 'unknown'      # 'forwarded' | 'no-entry' | 'cli-error' | 'cli-noop'
+    $hrefBefore = Get-CurrentHref
+    if ($null -eq $hrefBefore) {
+        $c6Status = 'cli-error'
+        $msg = "FAIL: go-forward could not be evaluated — no page URL before the command (see the CLI failure above)"
+        Write-Host "    ❌ $msg" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("    $msg")
+        $global:TestFailed++
+    } else {
+        # A runtime that reports the condition exits non-zero; tolerate that
+        # exit (the check reports it explicitly below) instead of failing the run.
+        $fwdOut = Invoke-CliToleratingExit go-forward
+        Start-Sleep -Seconds 2
+        $fwdText = $fwdOut | join-output
+        $hrefAfter = Get-CurrentHref
+
+        if ($fwdText -match 'no (next|forward|such)[\w -]*entry') {
+            $c6Status = 'no-entry'
+            $null = Skip-Check "go-forward returns to $($c2.name)" `
+                "the browser kept no forward entry after two go-backs (go-forward reported: no next entry)"
+        } elseif ($null -eq $hrefAfter) {
+            $c6Status = 'cli-error'
+            $msg = "FAIL: go-forward could not be evaluated — no page URL after the command (see the CLI failure above)"
+            Write-Host "    ❌ $msg" -ForegroundColor Red
+            $null = $global:FailureMessages.Add("    $msg")
+            $global:TestFailed++
+        } elseif ($hrefAfter -ne $hrefBefore) {
+            $c6Status = 'forwarded'
+            $null = Assert-SnapshotContains -Keyword $c2.keyword -Context "after go-forward ($($c2.name))"
+        } else {
+            $probe = Test-BrowserCanGoForward
+            if (-not $probe.Known) {
+                $c6Status = 'cli-error'
+                $msg = "FAIL: go-forward left the page on $hrefBefore and the browser could not be probed"
+                Write-Host "    ❌ $msg" -ForegroundColor Red
+                $null = $global:FailureMessages.Add("    $msg")
+                $global:TestFailed++
+            } elseif ($probe.Moved) {
+                $c6Status = 'cli-noop'
+                $msg = "FAIL: go-forward reported success without navigating although the browser still had a forward entry (landed on $($probe.Url))"
+                Write-Host "    ❌ $msg" -ForegroundColor Red
+                $null = $global:FailureMessages.Add("    $msg")
+                $global:TestFailed++
+            } else {
+                $c6Status = 'no-entry'
+                $null = Skip-Check "go-forward returns to $($c2.name)" `
+                    "the page pruned the forward history: neither the CLI nor the page's own history.forward() could move off $hrefBefore"
+            }
+        }
+    }
 
     Write-Host "  C7. reload" -ForegroundColor White
     Invoke-Cli reload
     Start-Sleep -Seconds 2
-    Assert-SnapshotContains -Keyword $c2.keyword -Context "after reload ($($c2.name))"
+    # Reload must keep whichever page C6 landed on — c1 when the browser had
+    # nothing to go forward to.  When C6 could not be evaluated at all, its
+    # expectation is unknown, so only the reload itself is exercised.
+    $reloadKeyword = switch ($c6Status) {
+        'forwarded' { $c2.keyword }
+        'no-entry'  { $c1.keyword }
+        default     { $null }
+    }
+    if ($reloadKeyword) {
+        Assert-SnapshotContains -Keyword $reloadKeyword -Context "after reload"
+    } else {
+        Write-Host "    ⏭ reload snapshot check SKIPPED (C6 outcome unknown)" -ForegroundColor DarkYellow
+    }
 
     Write-Host "  C8. close" -ForegroundColor DarkGray
     Invoke-Cli close
@@ -775,14 +926,23 @@ if ($totalFailed -gt 0) {
     }
 }
 
+# Checks a browser-level condition made unevaluable (never a product defect).
+if ($global:SkippedChecks.Count -gt 0) {
+    Write-Host "`n  ── SKIPPED CHECKS ($($global:SkippedChecks.Count)) ──" -ForegroundColor DarkYellow
+    foreach ($s in $global:SkippedChecks) {
+        Write-Host "    ⏭ $s" -ForegroundColor DarkYellow
+    }
+}
+
 # Check if any CLI commands failed (tracked by test-utils)
 $cliFailures = Get-FailureCount
 if ($totalFailed -gt 0 -or $cliFailures -gt 0) {
     Write-Host "`n⚠ $totalFailed assertion(s) failed, $cliFailures CLI command(s) failed — see logs above" -ForegroundColor Red
-    $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI stress-session test. Iterations: $Iterations. Seed: $Seed. Total checks: $totalChecks."
+    $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI stress-session test. Iterations: $Iterations. Seed: $Seed. Total checks: $totalChecks. Skipped: $($global:SkippedChecks.Count) ($($global:SkippedChecks -join '; '))."
     exit $(if ($code -eq 0) { 1 } else { $code })
 } else {
-    Write-Host "`n✅ ALL $totalChecks CHECKS PASSED" -ForegroundColor Green
+    $skippedNote = if ($global:SkippedChecks.Count -gt 0) { " ($($global:SkippedChecks.Count) browser-level check(s) skipped — see SKIPPED CHECKS above)" } else { '' }
+    Write-Host "`n✅ ALL $totalChecks CHECKS PASSED$skippedNote" -ForegroundColor Green
     $code = Finish-TestSession
     exit $code
 }

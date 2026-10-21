@@ -19,15 +19,25 @@ resolve against, so iframe-heavy flows work without hand-written
 
 ```bash
 browser4-cli goto "https://example.com/checkout"
-browser4-cli frames                      # find the payment iframe
-# frame 0 (main) url=...
-#   frame 1 name=payframe url=.../pay
+browser4-cli frames                      # find the payment iframe (backend JSON, one line)
+# [{"id":"8F2…","url":"https://example.com/checkout","depth":0,"active":true,
+#   "label":"main","isMainFrame":true},
+#  {"id":"A31…","url":"https://example.com/pay","depth":1,"active":false,
+#   "label":"payframe","isMainFrame":false}]
 browser4-cli frame "#pay-frame"          # switch into the iframe (CSS selector)
 browser4-cli fill "#card-number" "4111 1111 1111 1111"
 browser4-cli click "#pay-submit"
 browser4-cli is visible "#pay-error"     # assertions also resolve in-frame
 browser4-cli frame main                  # back to the main document
+browser4-cli frames                      # confirm: "active":true is the main frame again
 ```
+
+> **Note:** `frames`, `frame <target>` and `frame main` print the backend's **raw JSON** — this
+> CLI has no tree renderer, so the one-line records above (fields `id`, `url`, `depth`, `active`,
+> `label`, `isMainFrame`) are the real output, and `frame main` may print an empty payload with no
+> confirmation. An indented, human-readable tree with an active-frame marker is the expected
+> output (`frame main` should confirm the cleared scope); until it lands, verify with `frames`
+> after every switch.
 
 ## When to Use
 
@@ -46,8 +56,9 @@ browser4-cli frame main                  # back to the main document
   `focus`, `check`, `uncheck`, `select`, `scroll-to`, `is visible|enabled|checked`,
   `exists`, `wait`, `text`, `attr`/`get`, element-scoped `eval --ref`) then
   resolves against the selected frame's document instead of the main document.
-- `frames` lists the page's **frame tree** (depth-first, main frame first):
-  frame name, url, depth, parent, and which frame is currently active.
+- `frames` lists the page's **frame tree** (depth-first, main frame first) as backend JSON
+  objects: `id`, `url`, `depth`, `label` (frame name when it has one), `isMainFrame`, and
+  `active` on the frame currently selected by `frame`.
 - **Navigation resets the scope** — `goto`/`open`/`reload`/back/forward
   replace the whole frame tree; re-run `frame` after navigating.
 - **`eval` always runs in the main document** (same as agent-browser). To read

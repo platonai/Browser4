@@ -28,11 +28,16 @@ object ToolResultTextRenderer {
      *
      * @param value the evaluated value of the tool call
      * @param className the JS class name reported by the evaluation, used to
-     *   tell JS `null` (rendered as the literal `"null"`) apart from JS
-     *   `undefined` and Kotlin `Unit` (both rendered as an empty string)
+     *   tell JS `null`/`undefined` (both rendered as the literal `"null"`) apart
+     *   from Kotlin `Unit` (rendered as an empty string)
      */
     fun render(value: Any?, className: String? = null): String = when (value) {
-        null -> if (className == "null") "null" else ""
+        // JS `undefined` is transported as a null value carrying the class name
+        // "undefined". Rendering it as "" made it indistinguishable from an
+        // empty string, while `help eval` and references/eval.md promise `null`
+        // for both JS null and undefined — and the CLI's null-aware branch keys
+        // on the literal "null".
+        null -> if (className == "null" || className == "undefined") "null" else ""
         is String -> value
         is Number, is Boolean -> value.toString()
         is ExtractResult -> renderExtractResult(value)
@@ -48,8 +53,8 @@ object ToolResultTextRenderer {
     }
 
     /**
-     * Render the result of an evaluation envelope, preserving the null/undefined
-     * distinction described in [render].
+     * Render the result of an evaluation envelope, preserving the
+     * null/undefined-versus-Unit distinction described in [render].
      */
     fun render(evaluate: TcEvaluate): String = render(evaluate.value, evaluate.className)
 

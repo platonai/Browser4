@@ -33,6 +33,13 @@ This prevents test state from leaking between test groups.
 
 $ErrorActionPreference = 'Stop'
 
+# The harness trusts the workspace and declares the agent client's context
+# window before it launches the agent.  Unit tests must never touch a
+# developer's real Claude Code configuration, so the opt-out is set for the
+# whole test process; the environment tests (group 28) pass -Force and their own
+# temp paths to exercise the logic.
+$env:BROWSER4_SKIP_AGENT_ENV_SETUP = '1'
+
 # Trap any terminating error so the failure details are visible in CI/test-runner
 # output.  Without this, an unhandled error silently kills the script with exit
 # code 1 and the runner only sees "(exit 1)" with no clue about what happened.
@@ -458,14 +465,17 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Assert-True 'dsh was invoked' ($null -ne $script:CapturedArgs)
     Assert-NotContains 'dsh: no --dangerously-skip-permissions' ($script:CapturedArgs -join ' ') `
         '--dangerously-skip-permissions'
-    Assert-Equal 'dsh: first arg is run' 'run' $script:CapturedArgs[0]
+    Assert-Equal 'dsh: first arg is --profile' '--profile' $script:CapturedArgs[0]
+    Assert-Equal 'dsh: second arg selects the headless profile' 'headless' $script:CapturedArgs[1]
     Assert-True 'dsh: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'dsh test')
+    Assert-True 'dsh: no stale `run` subcommand' (-not ($script:CapturedArgs -contains 'run'))
 
     Write-TestGroup 'dsh backend with -Silent flag'
     $script:CapturedArgs = $null
     Invoke-Agent -Prompt 'dsh silent' -Silent
     Assert-NotContains 'dsh: --silent is never passed' ($script:CapturedArgs -join ' ') '--silent'
-    Assert-Equal 'dsh silent: first arg is run' 'run' $script:CapturedArgs[0]
+    Assert-Equal 'dsh silent: first arg is --profile' '--profile' $script:CapturedArgs[0]
+    Assert-Equal 'dsh silent: second arg selects the headless profile' 'headless' $script:CapturedArgs[1]
     Assert-True 'dsh silent: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'dsh silent')
 
     # Clean up the mocks so they do not leak.
@@ -524,6 +534,26 @@ Write-Host '━━━ Get-ScenarioAgent: Backend Detection (opencode, codex, dsh
         ($commonContent -match 'Get-Command codex.*return.*codex')
     Assert-True 'Auto-detection includes dsh' `
         ($commonContent -match 'Get-Command dsh.*return.*dsh')
+
+    # dsh (DeepSeek Harness) is the preferred external harness: it must be the
+    # FIRST probe in Get-ScenarioAgent, and the no-agent fallback must be dsh.
+    $scenarioAgentMatch = [regex]::Match($commonContent, 'function Get-ScenarioAgent \{[\s\S]*?\n\}')
+    $scenarioAgentBody = $scenarioAgentMatch.Value
+    $dshProbe = $scenarioAgentBody.IndexOf("Get-Command dsh -ErrorAction SilentlyContinue")
+    $claudeProbe = $scenarioAgentBody.IndexOf("Get-Command claude -ErrorAction SilentlyContinue")
+    Assert-True 'Get-ScenarioAgent found' ($scenarioAgentBody.Length -gt 0)
+    Assert-True 'Auto-detection probes dsh first' `
+        ($dshProbe -ge 0 -and $claudeProbe -ge 0 -and $dshProbe -lt $claudeProbe)
+    Assert-True "Auto-detection falls back to dsh" `
+        ($scenarioAgentBody -match "#\s*4\.\s*Fallback\s+return 'dsh'")
+
+    # Regression: dsh has no `run` subcommand — its headless app takes the task
+    # as a positional argument, so the branch must build `--profile headless`.
+    Assert-True 'dsh invocation selects the headless profile' `
+        ($commonContent -match "'dsh'\s*\{[\s\S]{0,400}?return @\('--profile', 'headless'")
+    # opencode legitimately uses `run`; only the dsh branch must not.
+    Assert-True 'dsh invocation has no stale run subcommand' `
+        ($commonContent -notmatch "'dsh'\s*\{[^}]*'run'")
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1493,30 +1523,37 @@ Write-Host '━━━ Start-NativeCommand: WaitForExit Fix ━━━' -Foregroun
     Write-TestGroup 'Start-NativeCommand function exists'
     Assert-True 'Function is defined' ($null -ne (Get-Command Start-NativeCommand -ErrorAction SilentlyContinue))
 
-    # Static analysis: verify the parameterless WaitForExit() call exists
-    # after the heartbeat loop and before CancelOutputRead()
+    # Static analysis: the drain must wait for stream EOF — with a deadline —
+    # after the heartbeat loop and before CancelOutputRead().
     $commonPath = Join-Path $PSScriptRoot 'common.ps1'
     $commonContent = Get-Content -LiteralPath $commonPath -Raw -Encoding UTF8
 
-    Write-TestGroup 'Parameterless WaitForExit() is called before CancelOutputRead'
+    Write-TestGroup 'Output drain waits for EOF with a deadline'
     # Extract the drain section between the heartbeat loop and the timeout check
     $drainSection = ''
     if ($commonContent -match '(?s)# ── Drain final output.+?# ── Timeout:') {
         $drainSection = $Matches[0]
     }
-    $hasWaitForExit = $drainSection -match '\$proc\.WaitForExit\(\)'
-    Assert-True 'WaitForExit() (parameterless) is called in drain section' $hasWaitForExit
+    Assert-True 'Drain section found' ($drainSection.Length -gt 0)
+    Assert-True 'Drain calls the bounded EOF wait' ($drainSection -match 'Wait-NativeCommandOutputDrain')
+    Assert-True 'Wait-NativeCommandOutputDrain is bounded by a deadline' `
+        ($commonContent -match 'AddSeconds\(\$TimeoutSec\)')
+    Assert-True 'Handler counts stream EOF' ($commonContent -match 'public int EofCount')
 
-    Write-TestGroup 'WaitForExit() is called BEFORE CancelOutputRead (code calls)'
+    Write-TestGroup 'Output drain does NOT call the unbounded WaitForExit()'
+    # Regression guard: the parameterless overload also waits for the async
+    # readers to reach EOF, which never happens while a descendant that
+    # inherited the pipes (JVM, headless Chrome) is alive — that parked the
+    # runner with no way to interrupt it.
+    Assert-True 'No unbounded $proc.WaitForExit() in the drain section' `
+        (-not ($drainSection -match '\$proc\.WaitForExit\(\)'))
+
+    Write-TestGroup 'EOF wait happens BEFORE CancelOutputRead (code calls)'
     # Use $proc. prefix to avoid matching comment text like
     # "CancelOutputRead() may discard data that hasn't been delivered"
-    $waitPos = $drainSection.IndexOf('$proc.WaitForExit()')
+    $waitPos = $drainSection.IndexOf('Wait-NativeCommandOutputDrain')
     $cancelPos = $drainSection.IndexOf('$proc.CancelOutputRead()')
-    Assert-True 'WaitForExit() appears before CancelOutputRead()' ($waitPos -ge 0 -and $cancelPos -ge 0 -and $waitPos -lt $cancelPos)
-
-    Write-TestGroup 'WaitForExit() is wrapped in try-catch'
-    $hasTryCatch = $drainSection -match '(?s)try\s*\{\s*\$proc\.WaitForExit\(\)'
-    Assert-True 'WaitForExit() is wrapped in try-catch' $hasTryCatch
+    Assert-True 'EOF wait appears before CancelOutputRead()' ($waitPos -ge 0 -and $cancelPos -ge 0 -and $waitPos -lt $cancelPos)
 
     Write-TestGroup 'Heartbeat loop polls HasExited before the drain section'
     $hasHeartbeatLoop = $commonContent -match 'while\s*\(-not\s*\$proc\.HasExited\)'
@@ -1524,6 +1561,38 @@ Write-Host '━━━ Start-NativeCommand: WaitForExit Fix ━━━' -Foregroun
 
     Write-TestGroup 'C# handler has try-catch for File.AppendAllText'
     Assert-True 'Handler has try-catch' ($commonContent -match '(?s)try\s*\{.*File\.AppendAllText')
+
+    Write-TestGroup 'Start-NativeCommand returns while a grandchild holds the pipes'
+    # Behavioural guard: the command's grandchild inherits the redirected
+    # stdout/stderr, so the pipes stay open after the command exits.  The call
+    # must still come back, bounded by -DrainTimeoutSec.
+    $holderDir = Join-Path ([System.IO.Path]::GetTempPath()) ("b4-native-holder-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $null = New-Item -ItemType Directory -Path $holderDir -Force
+    $holderChild = Join-Path $holderDir 'holder-child.ps1'
+    @'
+Write-Output 'native-holder-line-one'
+$exe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+$null = Start-Process -FilePath $exe -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 15') -NoNewWindow -PassThru
+Write-Output 'native-holder-line-two'
+'@ | Set-Content -LiteralPath $holderChild -Encoding utf8
+
+    $holderCapture = Join-Path $holderDir 'holder.log'
+    $holderExe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $holderWatch = [Diagnostics.Stopwatch]::StartNew()
+    $holderOutput = Start-NativeCommand -FilePath $holderExe `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $holderChild) `
+        -CaptureFile $holderCapture -HeartbeatIntervalSec 0 -DrainTimeoutSec 3 -PassThru
+    $holderWatch.Stop()
+
+    Assert-True 'Start-NativeCommand returned in bounded time (< 12s)' ($holderWatch.Elapsed.TotalSeconds -lt 12)
+    $holderText = "$holderOutput"
+    Assert-True 'Captured output contains both command lines' `
+        ($holderText.Contains('native-holder-line-one') -and $holderText.Contains('native-holder-line-two'))
+    # The "pipes are still held open" note goes to the console (not to the
+    # capture file, which must stay parseable output), so pin the message itself.
+    Assert-True 'Runner explains that the pipes are still held open' `
+        ($commonContent -match 'output pipes are still held open')
+    Remove-Item -LiteralPath $holderDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2365,6 +2434,343 @@ Write-Host '━━━ $generalPrompt / JSON Format Section ━━━' -Foregroun
 
     Write-TestGroup 'Prompt still contains D. Overall Assessment section'
     Assert-True 'Contains D. Overall Assessment' $generalPrompt.Contains('### D. Overall Assessment')
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 28: Agent client environment & client-side diagnostics
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Regression cover for the two Claude Code diagnostics that used to open every
+# captured artifact of a fresh workspace:
+#
+#   Ignoring 13 permissions.allow entries from .claude/settings.json: this
+#   workspace has not been trusted. …
+#   [claude-code:unrecognized_model] {"model":"deepseek-v4-flash[1m]",…}
+#
+# The fixtures below are the real lines from such a run.
+
+Write-Host ''
+Write-Host '━━━ Agent Client Environment & Diagnostics ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4cli-agent-env-$(Get-Random)"
+    $wsDir = Join-Path $tempDir 'ws'
+    $wsPlainDir = Join-Path $tempDir 'ws-plain'
+    $configPath = Join-Path $tempDir '.claude.json'
+    $settingsPath = Join-Path $tempDir 'settings.json'
+    New-Item -ItemType Directory -Path (Join-Path $wsDir '.claude') -Force | Out-Null
+    New-Item -ItemType Directory -Path $wsPlainDir -Force | Out-Null
+
+    # ── Project key ─────────────────────────────────────────────────────────
+    Write-TestGroup 'Get-ClaudeProjectKey — Claude Code project key format'
+    $expectedKey = [System.IO.Path]::GetFullPath($wsDir).Replace('\', '/')
+    Assert-Equal 'Absolute path, forward slashes, no trailing separator' `
+        $expectedKey (Get-ClaudeProjectKey -WorkspaceRoot $wsDir)
+    Assert-True 'No backslashes in the key' ((Get-ClaudeProjectKey -WorkspaceRoot $wsDir) -notmatch '\\')
+    Assert-True 'No trailing slash in the key' (-not (Get-ClaudeProjectKey -WorkspaceRoot $wsDir).EndsWith('/'))
+
+    # ── Context window from the model name ──────────────────────────────────
+    Write-TestGroup 'Get-ClaudeContextTokens — declared context window'
+    Assert-Equal '[1m] → 1M' 1000000 (Get-ClaudeContextTokens -Model 'deepseek-v4-flash[1m]')
+    Assert-Equal '[1M] → 1M' 1000000 (Get-ClaudeContextTokens -Model 'deepseek-v4-flash[1M]')
+    Assert-Equal '[200k] → 200k' 200000 (Get-ClaudeContextTokens -Model 'some-model[200k]')
+    Assert-Equal '[1.5m] → 1.5M' 1500000 (Get-ClaudeContextTokens -Model 'some-model[1.5m]')
+    Assert-Equal 'No suffix → 0 (never invented)' 0 (Get-ClaudeContextTokens -Model 'deepseek-v4-flash')
+    Assert-Equal 'Empty → 0' 0 (Get-ClaudeContextTokens -Model '')
+    Assert-Equal 'Non-numeric suffix → 0' 0 (Get-ClaudeContextTokens -Model 'some-model[big]')
+
+    # ── Trust state ─────────────────────────────────────────────────────────
+    Write-TestGroup 'Test-ClaudeWorkspaceTrusted — missing / untrusted / trusted'
+    Assert-True 'Missing config file → not trusted' `
+        (-not (Test-ClaudeWorkspaceTrusted -ConfigPath $configPath -WorkspaceRoot $wsDir))
+
+    [System.IO.File]::WriteAllText($configPath, '{"projects":{"D:/other":{"hasTrustDialogAccepted":true}}}')
+    Assert-True 'Only another project trusted → not trusted' `
+        (-not (Test-ClaudeWorkspaceTrusted -ConfigPath $configPath -WorkspaceRoot $wsDir))
+
+    [System.IO.File]::WriteAllText($configPath, '{"projects":{"D:/other":{"hasTrustDialogAccepted":true}}}')
+    $null = Set-ClaudeWorkspaceTrusted -ConfigPath $configPath -WorkspaceRoot $wsDir
+    Assert-True 'Flag written → trusted' `
+        (Test-ClaudeWorkspaceTrusted -ConfigPath $configPath -WorkspaceRoot $wsDir)
+
+    [System.IO.File]::WriteAllText($configPath, '{"projects":{"' + $expectedKey + '":{"hasTrustDialogAccepted":false}}}')
+    Assert-True 'Explicit false → not trusted' `
+        (-not (Test-ClaudeWorkspaceTrusted -ConfigPath $configPath -WorkspaceRoot $wsDir))
+
+    [System.IO.File]::WriteAllText($configPath, '{ this is not json')
+    Assert-True 'Malformed config → not trusted, no throw' `
+        (-not (Test-ClaudeWorkspaceTrusted -ConfigPath $configPath -WorkspaceRoot $wsDir))
+
+    # ── Trust write ─────────────────────────────────────────────────────────
+    Write-TestGroup 'Set-ClaudeWorkspaceTrusted — writes the flag, preserves the file'
+    [System.IO.File]::WriteAllText($configPath,
+        '{"userID":"abc","projects":{"D:/other":{"hasTrustDialogAccepted":true,"history":[1,2,3]}}}')
+    Assert-True 'First write reports a change' `
+        (Set-ClaudeWorkspaceTrusted -ConfigPath $configPath -WorkspaceRoot $wsDir)
+    Assert-True 'Second write is a no-op' `
+        (-not (Set-ClaudeWorkspaceTrusted -ConfigPath $configPath -WorkspaceRoot $wsDir))
+
+    $written = [System.IO.File]::ReadAllText($configPath) | ConvertFrom-Json
+    Assert-True 'Unrelated top-level key preserved' ($written.userID -eq 'abc')
+    Assert-True 'Other project entry preserved' ($written.projects.'D:/other'.hasTrustDialogAccepted -eq $true)
+    Assert-Equal 'Deep nested value survives the round-trip' '1,2,3' ($written.projects.'D:/other'.history -join ',')
+    Assert-True 'This project is now trusted' ($written.projects.$expectedKey.hasTrustDialogAccepted -eq $true)
+
+    $badConfig = Join-Path $tempDir 'bad.json'
+    [System.IO.File]::WriteAllText($badConfig, '{ this is not json')
+    # 6>$null: the helper is expected to report the unreadable config; the
+    # assertion below is about its return value, not about that report.
+    Assert-True 'Malformed config cannot be trusted' `
+        (-not (Set-ClaudeWorkspaceTrusted -ConfigPath $badConfig -WorkspaceRoot $wsDir 6>$null))
+    Assert-Equal 'Malformed config is left untouched' '{ this is not json' `
+        ([System.IO.File]::ReadAllText($badConfig))
+    Assert-True 'Missing config file cannot be trusted' `
+        (-not (Set-ClaudeWorkspaceTrusted -ConfigPath (Join-Path $tempDir 'nope.json') -WorkspaceRoot $wsDir))
+
+    # ── Initialize-AgentEnvironment ─────────────────────────────────────────
+    Write-TestGroup 'Initialize-AgentEnvironment — scoped, opt-out aware'
+    Remove-Item -LiteralPath $configPath -Force -ErrorAction SilentlyContinue
+    [System.IO.File]::WriteAllText($configPath, '{"projects":{}}')
+
+    $noop = Initialize-AgentEnvironment -Agent kimi -WorkspaceRoot $wsDir -ConfigPath $configPath `
+        -SettingsPath $settingsPath -Force -Silent
+    Assert-True 'Non-claude agent is a no-op' `
+        ((-not $noop.Trusted) -and ($noop.ContextTokens -eq 0) -and (-not $noop.Skipped))
+
+    $skipped = Initialize-AgentEnvironment -Agent claude -WorkspaceRoot $wsDir -ConfigPath $configPath `
+        -SettingsPath $settingsPath -Silent
+    Assert-True 'BROWSER4_SKIP_AGENT_ENV_SETUP=1 skips everything' `
+        ($skipped.Skipped -and (-not $skipped.Trusted) -and ($skipped.ContextTokens -eq 0))
+
+    $plain = Initialize-AgentEnvironment -Agent claude -WorkspaceRoot $wsPlainDir -ConfigPath $configPath `
+        -SettingsPath $settingsPath -Force -Silent
+    Assert-True 'Workspace without .claude/settings.json is not written' (-not $plain.Trusted)
+    Assert-True 'And its config is untouched' `
+        ((([System.IO.File]::ReadAllText($configPath) | ConvertFrom-Json).projects.PSObject.Properties |
+            Measure-Object).Count -eq 0)
+
+    # settings.local.json is gated by the same trust flag, so it must count too.
+    New-Item -ItemType Directory -Path (Join-Path $wsPlainDir '.claude') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $wsPlainDir '.claude/settings.local.json'), '{"permissions":{"allow":["WebSearch"]}}')
+    $localOnly = Initialize-AgentEnvironment -Agent claude -WorkspaceRoot $wsPlainDir -ConfigPath $configPath `
+        -SettingsPath $settingsPath -Force -Silent
+    Assert-True 'settings.local.json alone is enough to trust the workspace' $localOnly.Trusted
+    Remove-Item -Recurse -Force (Join-Path $wsPlainDir '.claude') -ErrorAction SilentlyContinue
+    [System.IO.File]::WriteAllText($configPath, '{"projects":{}}')
+
+    [System.IO.File]::WriteAllText((Join-Path $wsDir '.claude/settings.json'),
+        '{"permissions":{"allow":["Bash(git *)"]}}')
+    [System.IO.File]::WriteAllText($settingsPath, '{"model":"deepseek-v4-flash","env":{"ANTHROPIC_MODEL":"deepseek-v4-flash[1M]"}}')
+    $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = ''
+    $applied = Initialize-AgentEnvironment -Agent claude -WorkspaceRoot $wsDir -ConfigPath $configPath `
+        -SettingsPath $settingsPath -Force -Silent
+    Assert-True 'Workspace with project permissions is trusted' $applied.Trusted
+    Assert-Equal 'Declared [1M] window is applied' 1000000 $applied.ContextTokens
+    Assert-Equal 'Context window reaches the child environment' '1000000' $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS
+
+    $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = '424242'
+    $preserved = Initialize-AgentEnvironment -Agent claude -WorkspaceRoot $wsDir -ConfigPath $configPath `
+        -SettingsPath $settingsPath -Force -Silent
+    Assert-Equal 'An explicit value is never overridden' '424242' $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS
+    Assert-Equal 'And is not reported as applied' 0 $preserved.ContextTokens
+    $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = ''
+
+    # ── User-level path resolution ──────────────────────────────────────────
+    # Regression: Get-ClaudeUserPaths resolves the home directory itself in its
+    # default branch, and its local variable must never be named `$home` —
+    # names are case-insensitive, so `$home = …` IS the read-only automatic
+    # $HOME, and the assignment throws "Cannot overwrite variable HOME because
+    # it is read-only or constant".  Under $ErrorActionPreference='Stop' that is
+    # terminating: every claude scenario run died in under a second, while
+    # kimi/dsh runs stayed green because Initialize-AgentEnvironment returns
+    # early for them.  Every test in the group above passes -ConfigPath, which
+    # short-circuits the branch — hence the coverage gap this group closes.
+    Write-TestGroup 'Get-ClaudeUserPaths — explicit dir, env var, default home'
+    $explicitPaths = Get-ClaudeUserPaths -ConfigDir $tempDir
+    Assert-Equal 'Explicit -ConfigDir wins' `
+        (Join-Path $tempDir '.claude.json') $explicitPaths.ConfigFile
+    Assert-Equal 'Explicit -ConfigDir settings path' `
+        (Join-Path $tempDir 'settings.json') $explicitPaths.SettingsFile
+
+    $savedConfigDir = $env:CLAUDE_CONFIG_DIR
+    $savedAnthropicModel = $env:ANTHROPIC_MODEL
+    $savedContextTokens = $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS
+    try {
+        $env:CLAUDE_CONFIG_DIR = $tempDir
+        $fromEnvPaths = Get-ClaudeUserPaths
+        Assert-Equal '$env:CLAUDE_CONFIG_DIR is honoured' `
+            (Join-Path $tempDir '.claude.json') $fromEnvPaths.ConfigFile
+
+        # The default branch — the one that used to throw.
+        $env:CLAUDE_CONFIG_DIR = ''
+        $resolvedHome = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { '' }
+        $defaultPaths = Get-ClaudeUserPaths
+        if ($resolvedHome) {
+            Assert-Equal 'Default home resolves .claude.json' `
+                (Join-Path $resolvedHome '.claude.json') $defaultPaths.ConfigFile
+            Assert-Equal 'Default home resolves .claude/settings.json' `
+                (Join-Path (Join-Path $resolvedHome '.claude') 'settings.json') $defaultPaths.SettingsFile
+        } else {
+            Assert-Equal 'No home resolvable → empty paths' '' $defaultPaths.ConfigFile
+        }
+
+        # The exact production call (Invoke-Agent → Initialize-AgentEnvironment
+        # with no explicit paths) must survive that branch too.
+        Assert-True 'Precondition: wsPlainDir declares no project permissions' `
+            (-not (Test-Path -LiteralPath (Join-Path $wsPlainDir '.claude')))
+        [System.IO.File]::WriteAllText($settingsPath, '{"model":"no-window-declared"}')
+        $env:ANTHROPIC_MODEL = ''
+        $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = ''
+        $probe = Initialize-AgentEnvironment -Agent claude -WorkspaceRoot $wsPlainDir `
+            -SettingsPath $settingsPath -Force -Silent
+        Assert-True 'Default-path Initialize-AgentEnvironment does not throw' ($null -ne $probe)
+        Assert-True 'Workspace without project permissions is not trusted' (-not $probe.Trusted)
+        Assert-Equal 'No context window invented' 0 $probe.ContextTokens
+    } finally {
+        $env:CLAUDE_CONFIG_DIR = $savedConfigDir
+        $env:ANTHROPIC_MODEL = $savedAnthropicModel
+        $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = $savedContextTokens
+    }
+
+    # ── Read-only automatic variables ───────────────────────────────────────
+    # A branch-only mistake like the one above is invisible to tests that always
+    # pass an override, so scan the production scripts themselves: $HOME/$PSHOME/
+    # $PID/$Host/$Error/… are read-only (or constant) PowerShell automatic
+    # variables, and assigning a case-variant of one throws at runtime.
+    Write-TestGroup 'Production scripts — no assignments to read-only automatic variables'
+    $readOnlyNames = 'home|pshome|pid|host|error|psedition|psversiontable|shellid|psculture|' +
+        'psuiculture|iscoreclr|iswindows|islinux|ismacos|executioncontext|enabledexperimentalfeatures|true|false'
+    $scannedScripts = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File |
+        Where-Object { $_.Name -notlike '*.tests.ps1' })
+    Assert-True 'Production scripts were found to scan' ($scannedScripts.Count -gt 0)
+    foreach ($scannedScript in $scannedScripts) {
+        $scannedSource = [System.IO.File]::ReadAllText($scannedScript.FullName)
+        $readOnlyHit = [regex]::Match($scannedSource, "(?im)^[ \t]*\`$($readOnlyNames)[ \t]*=[^=]")
+        Assert-True "$($scannedScript.Name): no read-only automatic variable assignment" `
+            (-not $readOnlyHit.Success)
+    }
+
+    # ── Client diagnostics ──────────────────────────────────────────────────
+    Write-TestGroup 'Get-AgentClientDiagnostics — host noise vs agent output'
+    $captured = @'
+Ignoring 13 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["D:/workspace/Browser4/Browser4-4.14"].hasTrustDialogAccepted: true in C:\Users\pereg\.claude.json.
+[claude-code:unrecognized_model] {"model":"deepseek-v4-flash[1m]","query_source":"sdk"}
+## A. Task Result
+
+All 9 task steps completed successfully.
+'@
+    $diags = @(Get-AgentClientDiagnostics -Content $captured)
+    Assert-Equal 'Both client diagnostics are found' 2 $diags.Count
+    Assert-True 'Trust warning is classified' ($diags[0] -match 'has not been trusted')
+    Assert-True 'Unknown-model report is classified' ($diags[1] -match 'unrecognized_model')
+    Assert-Equal 'Clean agent output yields nothing' 0 `
+        (@(Get-AgentClientDiagnostics -Content $captured.Split("`n")[2..5] -join "`n")).Count
+    Assert-Equal 'Empty content yields nothing' 0 (@(Get-AgentClientDiagnostics -Content '')).Count
+    Assert-Equal 'Long-form model warning is classified' 1 (@(Get-AgentClientDiagnostics -Content `
+        ('"deepseek-v4-flash" isn''t described by this version''s model catalog; update Claude Code.')).Count)
+
+    # ── Wiring: Invoke-Agent reports what the client complained about ───────
+    Write-TestGroup 'Invoke-Agent — reports client diagnostics from the capture'
+    $captureFile = Join-Path $tempDir 'capture.raw.md'
+    [System.IO.File]::WriteAllText($captureFile, $captured)
+
+    function Start-NativeCommand {
+        param(
+            [string]$FilePath,
+            [string[]]$ArgumentList,
+            [string]$CaptureFile,
+            [int]$TimeoutSeconds,
+            [string]$CheckpointDir,
+            [string]$CheckpointScenario
+        )
+        # The capture was written up front — nothing to run for real.
+        return 0
+    }
+    function Get-ScenarioAgent { return 'claude' }
+
+    $output = Invoke-Agent -Prompt 'diagnostic wiring probe' -OutputFile $captureFile 6>&1 | Out-String
+    Assert-Contains 'Client diagnostics are surfaced' $output 'agent-client diagnostic line(s) captured'
+    Assert-Contains 'The report points at the documentation' $output 'README.md'
+    Assert-Contains 'The trust warning is echoed, not buried' $output 'has not been trusted'
+    Assert-Contains 'The unknown-model report is echoed' $output 'unrecognized_model'
+
+    Remove-Item function:Start-NativeCommand -ErrorAction SilentlyContinue
+    Remove-Item function:Get-ScenarioAgent -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 29: Console encoding — the harness must emit UTF-8
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Regression cover for the mojibake that turned a scenario log into line noise:
+# a pwsh child on a CP936 host writes the OEM code page (· → A1 A4, ═ → A8 54)
+# while bin/test.ps1's relay decodes children as UTF-8, so "══ last 10 lines ══"
+# was captured as "?T?T last 10 lines ?T?T" and "·" / "—" / "│" as "??".
+# Dot-sourcing common.ps1 must pin the process to UTF-8, and the bytes that
+# reach a capture file must be intact.
+
+Write-Host ''
+Write-Host '━━━ Console Encoding: UTF-8 Output ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4cli-encoding-$(Get-Random)"
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+    $commonPs1 = (Join-Path $PSScriptRoot 'common.ps1').Replace("'", "''")
+
+    # ── Dot-sourcing the module pins the console encoding ───────────────────
+    Write-TestGroup 'common.ps1 pins [Console]::OutputEncoding to UTF-8'
+    $probeScript = Join-Path $tempDir 'encoding-pin-probe.ps1'
+    $probeBody = @'
+if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+    try { [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(936) } catch { }
+}
+$before = [Console]::OutputEncoding.CodePage
+. '__COMMON__'
+"PROBE before=$before after=$([Console]::OutputEncoding.CodePage) name=$([Console]::OutputEncoding.WebName)"
+'@.Replace('__COMMON__', $commonPs1)
+    [System.IO.File]::WriteAllText($probeScript, $probeBody, [System.Text.UTF8Encoding]::new($false))
+
+    $probeOutput = & pwsh -NoProfile -File $probeScript 2>&1 | Out-String
+    Assert-Contains 'Module load forces code page 65001' $probeOutput 'after=65001'
+    Assert-Contains 'Module load reports utf-8' $probeOutput 'name=utf-8'
+
+    # ── The bytes that reach a capture file survive the relay ───────────────
+    Write-TestGroup 'Start-NativeCommand captures UTF-8 decoration intact'
+    $childScript = Join-Path $tempDir 'encoding-child.ps1'
+    $childBody = @'
+. '__COMMON__'
+[Console]::WriteLine('  ══ last 10 lines ══')
+[Console]::WriteLine('  · claude — running (0m 30s elapsed, heartbeat #1)')
+[Console]::WriteLine('  │ [claude-code:unrecognized_model] {"model":"deepseek-v4-flash[1m]"}')
+[Console]::WriteLine('  ══════════════════')
+'@.Replace('__COMMON__', $commonPs1)
+    [System.IO.File]::WriteAllText($childScript, $childBody, [System.Text.UTF8Encoding]::new($false))
+
+    $capture = Join-Path $tempDir 'encoding.raw.txt'
+    $exitCode = Start-NativeCommand -FilePath 'pwsh' `
+        -ArgumentList @('-NoProfile', '-File', $childScript) `
+        -CaptureFile $capture -HeartbeatIntervalSec 0
+    $captured = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($capture))
+
+    Assert-Equal 'Encoding child exited cleanly' 0 $exitCode
+    Assert-Contains 'Box-drawing rule survives' $captured '══ last 10 lines ══'
+    Assert-Contains 'Middot and em dash survive' $captured '· claude — running'
+    Assert-Contains 'Tail bar survives' $captured '│ [claude-code:unrecognized_model]'
+    Assert-True 'No replacement characters in the capture' (-not $captured.Contains([char]0xFFFD))
+    # CP936 encodes ═ as A8 54, so a UTF-8 reader sees U+FFFD followed by a bare
+    # 'T' — the "?T?T" in the reported log.  Assert the exact signature.
+    $boxArtifact = [string][char]0xFFFD + 'T'
+    Assert-True 'No CP936 box-drawing artifact (U+FFFD + T)' (-not $captured.Contains($boxArtifact))
+
+    Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

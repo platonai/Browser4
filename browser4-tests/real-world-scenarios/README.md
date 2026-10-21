@@ -14,9 +14,66 @@ documentation, and reliability from a first-time user's perspective.
 
 Each task file describes the scenario in plain markdown. `run-task.ps1` reads the
 file, combines it with the shared evaluation template (`common.ps1`), and invokes
-the configured agent CLI (`claude`, `kimi`, `opencode`, `codex`, or `dsh`, auto-detected
-in that order). Set `$env:BROWSER4_AGENT` globally or `$script:scenarioAgentCli`
+the configured agent CLI (`dsh`, `claude`, `kimi`, `opencode`, or `codex`, auto-detected
+in that order — `dsh` (DeepSeek Harness) is the preferred harness). Set
+`$env:BROWSER4_AGENT` globally or `$script:scenarioAgentCli`
 per-script to force a specific backend. The `-Agent` CLI parameter overrides both.
+
+## Agent client diagnostics (Claude Code)
+
+The runner puts the agent client's host environment right **before** it launches
+the agent, because two Claude Code diagnostics otherwise open every captured
+artifact (`target/<timestamp>-<scenario>.raw.md`) and dominate the heartbeat
+tail. A workspace that has never been opened interactively produces exactly these
+two lines on every run:
+
+```
+Ignoring 13 permissions.allow entries from .claude/settings.json: this workspace
+has not been trusted. Run Claude Code interactively here once and accept the
+trust dialog, or set projects["D:/…"].hasTrustDialogAccepted: true in
+C:\Users\pereg\.claude.json.
+[claude-code:unrecognized_model] {"model":"deepseek-v4-flash[1m]","query_source":"sdk"}
+```
+
+Both describe the host machine, not the scenario, and both silently degrade a run:
+
+| Diagnostic | Why it matters | What the harness does |
+|---|---|---|
+| Workspace not trusted | Claude Code discards the permission allowlist in `.claude/settings.json`, so the agent and its sub-agents run under a different permission set than the project configures. Every fresh clone or git worktree starts in this state. | Writes `projects["<repo root>"].hasTrustDialogAccepted = true` into `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`) before launching `claude` — exactly what the warning instructs. The write is atomic, preserves every other key, and is skipped entirely when the project declares no `.claude/settings.json` / `settings.local.json`, or is already trusted. |
+| Model missing from Claude Code's catalog | Claude Code cannot find the model and falls back to a 200k context window, so auto-compact can fire in the middle of a 20–40 minute evaluation and quietly drop the context it depends on. | Exports `CLAUDE_CODE_MAX_CONTEXT_TOKENS` derived from the window declared in the model name (`…[1M]` → `1000000`, `…[200k]` → `200000`) unless the variable is already set. The harness reads the model name; it never chooses the model. |
+
+Set `BROWSER4_SKIP_AGENT_ENV_SETUP=1` to keep the harness out of the Claude Code
+configuration completely — CI, or a developer who manages trust by hand. The unit
+suite sets it for the same reason.
+
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` removes the 200k auto-compact window but **not**
+the `[claude-code:unrecognized_model]` line itself; that one is only silenced by
+mapping the model in your own Claude Code settings (a `modelOverrides` /
+`behavesAs` entry, or appending `[1m]` to the model name). Whichever way it is
+configured, the runner reports what the client complained about at the end of a
+run — `N agent-client diagnostic line(s) captured — host environment, not agent
+findings:` — so client noise can never pass for agent output or a Browser4
+finding.
+
+## Console encoding (UTF-8)
+
+Every script here pins `[Console]::OutputEncoding` to UTF-8 as it loads
+(`common.ps1` for the whole module, `bin/test.ps1` for its own process). A
+redirected stream otherwise starts on the Windows OEM code page: a pwsh child on
+a CP936 host writes `·` as `A1 A4` and `═` as `A8 54`, and a UTF-8 reader — the
+relay's `StandardOutputEncoding`, a CI log, the DeepSeek harness capture —
+renders those as `??` and `?T`. That is how a heartbeat/tail block degrades into
+
+```
+  ?T?T last 10 lines ?T?T
+  ?? claude --dangerously-skip-permissions ?? running (0m 30s elapsed, heartbeat #1)
+```
+
+The relay decodes children as UTF-8, so the child is the side that has to
+agree — `common.ps1` pins it for every script that dot-sources the module, and
+all of them do so before their first write. `common.tests.ps1` group 29 asserts
+both halves: that loading the module forces code page 65001, and that the exact
+decoration bytes survive a real capture (no `U+FFFD`, no `U+FFFD + T`).
 
 ## Anatomy of a task file
 
@@ -88,11 +145,11 @@ Valid categories: `generic`, `browser4`, `real-world`, `mock-site`, `all` (defau
 
 ## Available tasks
 
-32 task files covering all browser4-cli commands documented in the SKILL reference plus the 5 built-in Browser4 plugins.
+47 task files covering all browser4-cli commands documented in the SKILL reference plus the 5 built-in Browser4 plugins.
 
 ### Real-World — Generic (`tasks/real-world/generic/`)
 
-7 scenarios requiring no browser4-specific knowledge. These can also be used to
+10 scenarios requiring no browser4-specific knowledge. These can also be used to
 evaluate other browser automation agents (Playwright, Puppeteer, Selenium, etc.).
 
 | Task file | Target | Scenario |
@@ -101,25 +158,30 @@ evaluate other browser automation agents (Playwright, Puppeteer, Selenium, etc.)
 | `visual-screenshot-controls.md` | Wikipedia | Resize viewport, scroll, wait, screenshot (full-page), PDF export |
 | `search-summary.md` | Baidu | Search for 武汉龙虾节, summarize findings |
 | `amazon.md` | Amazon | Search for whiteboard pens, compare top 4 |
-| `hacker-news.md` | Hacker News | Navigate HN, open and summarize top 3 posts |
 | `amazon-calabi-yau.md` | Amazon | Search for Calabi-Yau gift, shortlist 10, pick best |
 | `amazon-laser-engraved-crystal.md` | Amazon | Search for laser-engraved crystal gift, pick best |
+| `amazon-cell-phone-60-pages.md` | Amazon | Collect 60 pages of search results in parallel, export the HTML |
+| `hacker-news.md` | Hacker News | Navigate HN, open and summarize top 3 posts |
+| `bot-stealth-check-md.md` | Bot-detection services | Run 5 online detection services, report whether Browser4 looks human |
+| `qunar.md` | Qunar | 查询后天北京到上海的机票，找出最便宜的 3 个航班（无 `# heading`，中文提示词） |
 
 ### Real-World — Browser4 Specific (`tasks/real-world/browser4/`)
 
-10 scenarios exercising browser4-unique features (X-SQL, crawl, agent, loop,
-htmlsnapshot, attach, named sessions, auto-diff).
+18 scenarios (13 feature scenarios plus the 5 plugin scenarios listed below)
+exercising browser4-unique features (X-SQL, crawl, agent, loop, htmlsnapshot,
+attach, named sessions, auto-diff).
 
 | Task file | Target | Scenario |
 |-----------|--------|----------|
 | `session-management.md` | Wikipedia, HN | Open named sessions, switch between them, list/close all |
 | `snapshot-mastery.md` | Wikipedia | Full/interactive/scoped/depth-limited snapshots, auto-diff, grep with all flags |
 | `headed-window-visibility.md` | example.com | Headed session: the visible window must show the requested page (CDP target != about:blank), never a separate headless instance; headless must stay windowless; CLI warns only when a headed process lacks a window |
-| `html-snapshot-extraction.md` | books.toscrape.com | Capture HTML snapshot, get single/all values, export, summary, grep |
+| `dom-snapshot-extraction.md` | books.toscrape.com | Capture HTML snapshot, get single/all values, export, summary, grep |
 | `x-sql-query-methods.md` | books.toscrape.com | X-SQL via inline, @file, stdin, and base64; inspect for selector discovery |
 | `htmlsnapshot-inspect-discovery.md` | books.toscrape.com | HTML snapshot inspection and selector discovery workflow |
 | `tab-management.md` | Wikipedia, HN | Open, list, switch, and close multiple tabs across different sites |
 | `agent-extraction.md` | Wikipedia | extract with schema, summarize with --selector, agent run/status/result |
+| `agent-status-result-tracking.md` | Wikipedia | Full `agent run` → `status` → `result` → `list` lifecycle, terminal labels, `list --clear` |
 | `crawl-link-discovery.md` | books.toscrape.com | Crawl with link discovery, seed files, format/output options |
 | `loop-monitoring.md` | httpbin.org | Loop in plain-text/shell/subcommand modes, named loops, pause/resume/stop |
 | `attach-remote-debug.md` | Chrome/Edge CDP | Attach to running Chrome/Edge via CDP, capture state |
@@ -139,7 +201,7 @@ htmlsnapshot, attach, named sessions, auto-diff).
 
 ### Mock Site (`tasks/mock-site/`)
 
-13 scenarios requiring the local MockSite server (`./bin/test.ps1 mock-site`).
+19 scenarios requiring the local MockSite server (`./bin/test.ps1 mock-site`).
 
 | Task file | Scenario |
 |-----------|----------|
@@ -153,6 +215,12 @@ htmlsnapshot, attach, named sessions, auto-diff).
 | `swarm-parallel-scraping.md` | Swarm session, parallel X-SQL extraction, headless mode |
 | `storage-state-management.md` | Cookies (set with all flags), localStorage, sessionStorage, state-save/load |
 | `comprehensive-ecommerce-workflow.md` | End-to-end e-commerce research: 18 steps combining 15+ commands |
+| `network-observability.md` | `network requests/request/route/unroute`, HAR recording (`network har start/stop`) against the network fixture |
+| `console-errors-and-cdp.md` | `console`, `errors`, `dialog status`, raw `cdp` calls, and generic `tool call` passthrough |
+| `iframes-and-popups.md` | `frames` / `frame` scoping (including nested frames) and `window new` targets |
+| `file-upload-and-download.md` | `upload` (single + multi-file, error paths), `download --dir`, `wait --download` |
+| `device-and-network-emulation.md` | `set geo/offline/headers/media/device`, `delete data`, `resize` |
+| `element-assertions-and-focus.md` | `is visible/enabled/checked`, `check`/`uncheck`, `focus`, `scrollintoview`, `highlight`, `pushstate` |
 | `decision-tree/extraction-method-routing.md` | Decision-tree coverage for extraction choices: interact-first, get, get all, query, eval, extract, crawl |
 | `decision-tree/bulk-scale-routing.md` | Decision-tree coverage for bulk-routing choices: single page, crawl, swarm, loop, and few-URL shell loops |
 | `decision-tree/webminer-structuring-routing.md` | Decision-tree coverage for WebMiner routing: single-page export, crawl/swarm acquisition, free vs commercial tiers |

@@ -49,7 +49,7 @@ browser4-cli htmlsnapshot get all text "<css-selector>"   # all matches
 | Purpose | Command |
 |---|---|
 | Navigation / sessions | `open --headless <url>` / `goto <url>` / `close` / `reload`; multiple sessions with `-s <name>` |
-| Read page + get refs | `snapshot -v 0` (current screen) / `-v all` (full page) / `-i` (interactive only) / `snapshot grep <pattern>` |
+| Read page + get refs | `snapshot -v 0` (current screen) / `-v all` (full page) / `-i` (interactive-only: buttons/links/inputs/`cursor:pointer` — draggable and hover-only targets lose their refs, so fall back to `-v 0`) / `snapshot grep <pattern>` |
 | Interact | `click` / `dblclick` / `hover` / `drag` / `fill` / `type` / `press` / `select` / `check` / `focus` / `key` |
 | Extract | `htmlsnapshot get text\|attr\|html "<css>"` (first match) / `get all ... "<css>"` (all matches); `query --sql @f.sql` (X-SQL multi-field); `eval --json` (live DOM); `extract` (natural language, needs LLM key) |
 | Bulk / structured | `crawl <url> --depth N --sql @f.sql`; `swarm create/query` (parallel); `loop` (scheduled repeats) |
@@ -75,6 +75,9 @@ refs are temporary handles: any interaction (click/fill/type/press/select/check/
 
 - **Selectors go stale**: they break when sites change their HTML. Discover selectors with `htmlsnapshot inspect` / `summary` before extracting; scenario docs are patterns, not recipes.
 - **Shell quoting (Windows)**: for complex JS/SQL use `--sql @file.sql`, `--sql-stdin`, `eval --file` / `--stdin` / `--base64`; quote `@file` paths in PowerShell (`--sql "@q.sql"`). Never inline double-quoted CSS selectors.
+- **Git Bash / MSYS**: arguments starting with `/` are path-converted before PowerShell starts, so invoke `./b4w.sh <command>` or prefix `MSYS2_ARG_CONV_EXCL='*'`; prefer the slash-free spelling (`-olp "product/"`), and remember `cookie-set --path` already defaults to `/`.
+- **`eval` runs in the page's own JavaScript world** (page-defined globals resolve; `--world isolated` switches to the driver's `__browser4_runtime__` world, where page scripts cannot see what you write and page globals read as `null`). JS `undefined` is transported as an empty string, so `undefined` and `''` both print `""` — return an explicit sentinel when the difference matters.
+- **Verdicts vs exit codes**: `is visible|enabled|checked` print the value and exit 0 even when false — read the value or use `--json`, or pass `--fail-on-false` to make a false/null assertion exit 1. A `wait` whose condition never became true exits non-zero, and `wait --download` counts any pre-existing file in the directory as a finished download.
 - **Paginated output**: read `snapshot -v 0` per screen; locate with `snapshot grep`; `get html` / `grep` and `snapshot --stdout` paginate at 2K lines by default (`--page N` to page; `--all` or `--page-size 0` for the full tree — a `# … output truncated …` hint is appended to stdout when piped). **Don't cat snapshot files** (they can exceed 256KB).
 - **eval --ref must be an arrow function**: `element => element.textContent`; writing `element.textContent` returns null — the most common mistake.
 - **Dialogs**: clicking something that triggers `alert`/`confirm`/`prompt` times out; handle with `dialog-accept` / `dialog-dismiss` (or `click --auto-dismiss-dialogs <ref>`).
@@ -93,7 +96,7 @@ Extracting data?
 └─ Many pages → crawl / swarm --sql
 ```
 
-X-SQL essentials: CSS selectors use **single quotes** (`'h2'`); `@url` is unquoted; FROM is always `DOM_LOAD_AND_SELECT(@url, '...')`; no JOIN/CTE/subqueries; discover selectors with `inspect` before writing SQL.
+X-SQL essentials: CSS selectors use **single quotes** (`'h2'`); `@url` is unquoted; FROM is always `DOM_LOAD_AND_SELECT(@url, '...')`; a **JOIN of two `DOM_LOAD_AND_SELECT` sources executes** (each source loads the page again), while CTEs (`WITH`) and FROM-clause subqueries are not supported; numeric-returning functions (`DOM_FIRST_FLOAT`, `STR_FIRST_FLOAT`) come back as JSON strings unless you `CAST(... AS DOUBLE)`; discover selectors with `inspect` before writing SQL.
 
 ## Context Discipline
 

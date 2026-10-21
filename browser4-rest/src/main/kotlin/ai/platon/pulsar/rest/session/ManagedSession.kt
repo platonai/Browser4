@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.session
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -29,6 +30,14 @@ data class ManagedSession(
     var attachChannel: String? = null,
     /** Identity of the browser that ACTUALLY connected (extension relay / CDP). */
     var browserIdentity: BrowserIdentity? = null,
+    /**
+     * What the CDP attach actually observed: the verified endpoint, the page
+     * targets that were there, and whether the endpoint already belonged to
+     * another session. Recorded so the attach response (and `list`) can report
+     * which browser the session drives instead of leaving the caller to guess
+     * from the port it asked for.
+     */
+    var attachEvidence: AttachEvidence? = null,
 ) {
     val mutex: Mutex = Mutex()
 
@@ -44,6 +53,58 @@ data class ManagedSession(
         }
     }
 }
+
+/**
+ * What a CDP attach observed at the endpoint it bound.
+ *
+ * `attach --cdp chrome` resolves a channel name to the first endpoint that
+ * answers, which can be a browser another session opened (or a leftover from an
+ * earlier run) rather than the one the caller just created. The backend cannot
+ * change that choice — the client owns channel resolution — but it can state
+ * exactly what it verified, so the client never has to present a wrong-browser
+ * bind as if it were the intended one.
+ *
+ * @property endpoint the normalized endpoint that was probed and bound
+ * @property port the CDP port that was probed and bound
+ * @property verifiedBrowser the `Browser` product `/json/version` reported
+ * @property pageTargetCount how many `page` targets the endpoint advertised
+ * @property pageTargetUrls their addresses, in discovery order
+ * @property ownedBySessionId the live session that already drove this port, when
+ *   there is one — the observed conflict, not a guess
+ * @property reboundFromPort the port this session was bound to before this
+ *   attach, when the attach moved it
+ */
+data class AttachEvidence(
+    val endpoint: String,
+    val port: Int,
+    val verifiedBrowser: String? = null,
+    val pageTargetCount: Int = 0,
+    val pageTargetUrls: List<String> = emptyList(),
+    val ownedBySessionId: String? = null,
+    val reboundFromPort: Int? = null,
+)
+
+/**
+ * Why a tool call against a CDP-attached session cannot proceed, and which
+ * stable [ToolErrorCode] says so.
+ *
+ * The two ways an attached session becomes undrivable look alike in prose and
+ * are nothing alike in fact: the browser process is gone (only re-attaching to
+ * a new endpoint helps), or the browser is fine and only the tab/driver link
+ * died (the user should pick another tab, and their browser was never at risk).
+ * Reporting both as "the browser was closed or crashed" sent users hunting for a
+ * crash that never happened (attach-remote-debug#4), so the code travels beside
+ * the message and a client never has to infer the condition from wording.
+ *
+ * @property message the user-facing explanation and recovery
+ * @property code [ToolErrorCode.ENDPOINT_UNREACHABLE] when the browser itself is
+ *   gone, [ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS] when it is alive but the
+ *   session's page is not
+ */
+data class AttachLivenessFailure(
+    val message: String,
+    val code: ToolErrorCode,
+)
 
 /**
  * Identity of the real browser behind an attached session.

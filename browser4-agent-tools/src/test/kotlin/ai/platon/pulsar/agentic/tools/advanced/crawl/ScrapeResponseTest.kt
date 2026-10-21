@@ -12,6 +12,57 @@ class ScrapeResponseTest {
     private val objectMapper = pulsarObjectMapper()
 
     // -----------------------------------------------------------------
+    // Timing: pickup vs queue wait
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `the first event stamps startedTime at pickup`() {
+        val response = ScrapeResponse(id = "t-timing", statusCode = ResourceStatus.SC_CREATED)
+
+        // A task that sat in the queue: submitted, then picked up later.
+        val submitted = Instant.now().minusSeconds(30)
+        response.createdTime = submitted
+        assertNull(response.startedTime, "a queued task has not started")
+
+        response.emitEvent("onWillLoad")
+
+        assertNotNull(response.startedTime, "the first event marks the pickup instant")
+        assertTrue(
+            response.startedTime!!.isAfter(submitted),
+            "pickup must be later than submission, got startedTime=${response.startedTime}"
+        )
+        assertTrue(response.queuedMillis!! >= 29_000, "the queue wait must be visible: ${response.queuedMillis}")
+    }
+
+    @Test
+    fun `durationMillis measures processing, not queue wait`() {
+        val response = ScrapeResponse(id = "t-duration", statusCode = ResourceStatus.SC_OK)
+        response.createdTime = Instant.now().minusSeconds(60)
+        response.startedTime = Instant.now().minusSeconds(2)
+        response.finishTime = Instant.now()
+
+        val duration = response.durationMillis!!
+        assertTrue(duration in 1_500..3_000, "processing time should be ~2s, got $duration")
+        val queued = response.queuedMillis!!
+        assertTrue(queued >= 57_000, "queue wait should be ~58s, got $queued")
+        val elapsed = response.elapsedMillis!!
+        assertTrue(elapsed >= 59_000, "total time to result should be ~60s, got $elapsed")
+        assertTrue(elapsed >= duration + queued - 10, "elapsed must cover queue + processing")
+    }
+
+    @Test
+    fun `emitEvent does not move an already stamped startedTime`() {
+        val response = ScrapeResponse(id = "t-stable", statusCode = ResourceStatus.SC_OK)
+        val pickup = Instant.now().minusSeconds(10)
+        response.startedTime = pickup
+
+        response.emitEvent("onLoaded")
+        response.emitEvent("extract")
+
+        assertEquals(pickup, response.startedTime, "later events must not re-stamp the pickup instant")
+    }
+
+    // -----------------------------------------------------------------
     // isDone serialization
     // -----------------------------------------------------------------
 

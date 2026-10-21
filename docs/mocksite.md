@@ -20,6 +20,12 @@ pwsh -File ./bin/test.ps1 mock-site -Dmock.site.port=18080
 ./bin/test.sh mock-site -Dmock.site.port=18080
 ```
 
+> **First run on a cold Maven cache takes 10–15 minutes** (observed ~13 min) with no terminal
+> output in between: the wrapper runs two `-q` Maven installs (`browser4-dependencies`, then
+> `browser4-rest` plus its ~25 modules) and only prints a `[PASS]` banner once each phase
+> completes. Results are cached afterwards, so later starts are fast. Don't kill the process
+> (and don't start a second, concurrent Maven build) while the preflight is running.
+
 Or run directly via Maven:
 
 ```shell

@@ -87,8 +87,13 @@ Need to process multiple pages?
 Have HTML files and want structured data — without tokens?
 ├─ < 1,000 pages (small to medium)? → WebMiner Free (SMILE ML engine)
 │  browser4-cli webminer install
-│  browser4-cli webminer all ./html-pages/
+│  browser4-cli webminer all ./html-pages/ --max-files <n>   # default 40 — raise it for
 │  → Interactive HTML report + Excel spreadsheets — everything local, zero cost
+│  ⚠ The corpus is truncated at --max-files (default 40) and the run still ends with
+│    "PIPELINE COMPLETE" — a 900-page corpus would process 40 files.
+│  ⚠ The interactive report and encoded dataset are written under the OS temp dir
+│    (%TEMP%/webminer-pereg/… or $TMPDIR/webminer-pereg/…), not under --output, which
+│    receives the clustering results; `webminer views <result-dir>` rebuilds the views.
 ├─ > 1,000 pages (production scale)? → WebMiner Commercial (Apache Spark ML)
 │  Same encode → cluster → views pipeline, distributed across machines
 │  → Scales to 100K+ pages/day
@@ -116,7 +121,7 @@ Have HTML files and want structured data — without tokens?
 
 **Pipeline:** `encode` (HTML → feature vectors → CSV) → `cluster` (KMeans, auto-detected K) → `views` (interactive HTML report + Excel spreadsheets)
 
-- **Free tier (SMILE):** Single-machine ML via the [SMILE](https://haifengl.github.io/) library. Handles small-to-medium datasets (< 1,000 pages). Ideal for ad-hoc analysis, prototyping, and one-off extraction tasks.
+- **Free tier (SMILE):** Single-machine ML via the [SMILE](https://haifengl.github.io/) library. Handles small-to-medium datasets (< 1,000 pages). Ideal for ad-hoc analysis, prototyping, and one-off extraction tasks. **`webminer all` processes at most `--max-files` documents per run and the default is 40** — the pipeline still reports `PIPELINE COMPLETE` after truncating, so always pass `--max-files <n>` when the corpus is larger than 40 files.
 - **Commercial tier (Apache Spark ML):** Distributed clustering for production workloads. Scales to 100K+ pages/day. Same pipeline, enterprise throughput.
 
 **CLI usage (no backend, no PowerShell needed):**
@@ -129,7 +134,7 @@ Have HTML files and want structured data — without tokens?
 | `webminer version` | Show installed and latest versions |
 | `webminer uninstall` | Remove the installed release |
 | `webminer run-example` | Download the sample dataset and run the full pipeline (needs 7-Zip) |
-| `webminer all <html-dir>` | Full pipeline: encode → cluster → views (`--max-files`, `--output`, `--resume`) |
+| `webminer all <html-dir>` | Full pipeline: encode → cluster → views (`--max-files` default **40** — raise it or the corpus is silently truncated, `--output` for the clustering results, `--resume`) |
 | `webminer views <result-dir>` | Rebuild the interactive views from an existing run |
 
 Requires JDK 17+ (auto-detected: JAVA_HOME → Browser4 runtime bundle JRE → common paths → PATH). Any other command is forwarded verbatim to scent-miner.jar (e.g. webminer encode <dir>).

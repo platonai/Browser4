@@ -183,6 +183,18 @@ pub fn build_short_option_map(
     (map, bool_opts)
 }
 
+/// True when the option's value may itself start with `-` (`allow_hyphen_values`).
+///
+/// `crawl -a "-nMaxRetry 5 -lazyFlush"` passes a raw LoadOptions string, which
+/// by construction begins with `-`. Without this, the generic rule ("a
+/// hyphen-leading token is the next flag, not a value") made the space-separated
+/// form unbindable: `-a` became boolean `true` and the options string was read
+/// as a positional seed URL. The allow-list lives on the option definitions
+/// (`commands::HYPHEN_VALUE_OPTION_KEYS`), so no parser signature changes.
+fn option_allows_hyphen_value(key: &str) -> bool {
+    crate::commands::HYPHEN_VALUE_OPTION_KEYS.contains(&key)
+}
+
 /// Insert a key-value pair into the result map, collecting repeated non-boolean
 /// options into a JSON array so that repeatable flags like `-e PAT1 -e PAT2`
 /// accumulate instead of the second overwriting the first.
@@ -261,6 +273,9 @@ pub fn parse_raw_args(
                 let is_bool = bool_opts.map_or(false, |b| b.contains(rest));
                 // Look ahead: if the next argument does NOT start with `--`,
                 // treat it as this option's value rather than a positional.
+                // The long form already binds `--args "-nMaxRetry 5"` (a
+                // single-dash token); the short form needed the
+                // `allow_hyphen_values` exception applied below.
                 if !is_bool && i + 1 < raw_args.len() && !raw_args[i + 1].starts_with("--") {
                     let key = rest.to_string();
                     let val = &raw_args[i + 1];
@@ -299,13 +314,20 @@ pub fn parse_raw_args(
                     // value. Single-dash tokens that look like numbers are values too
                     // (e.g. `snapshot -v -1` for a negative, scroll-relative viewport),
                     // while `--`-prefixed tokens and other single-dash flags are not
-                    // consumed (e.g. `-d -i` keeps `-i` as a flag).
+                    // consumed (e.g. `-d -i` keeps `-i` as a flag). An
+                    // `allow_hyphen_values` option (`-a "-nMaxRetry 5"`) consumes a
+                    // hyphen-leading value as well — its value always starts with `-`;
+                    // the bare `--` end-of-options marker is still never consumed.
                     let next_is_numeric_value = raw_args
                         .get(i + 1)
                         .map_or(false, |n| looks_like_negative_value(n));
+                    let takes_any_value = option_allows_hyphen_value(long);
                     if !is_bool
                         && i + 1 < raw_args.len()
-                        && (!raw_args[i + 1].starts_with('-') || next_is_numeric_value)
+                        && raw_args[i + 1] != "--"
+                        && (!raw_args[i + 1].starts_with('-')
+                            || next_is_numeric_value
+                            || takes_any_value)
                     {
                         let val = &raw_args[i + 1];
                         let value = match val.as_str() {
@@ -352,10 +374,16 @@ fn looks_like_negative_value(token: &str) -> bool {
 /// A token that is a known global flag mistakenly placed after the command
 /// name (e.g. `htmlsnapshot -q`).  Used to produce a targeted error hint
 /// instead of a bare "unexpected positional arguments" rejection.
+///
+/// `-s` / `--session` belongs here even though it takes a value: it is the
+/// global session selector, no command declares it as its own option, and
+/// `open -s research <url>` / `goto <url> -s research` is the mistake a
+/// first-time user makes most often — it must name the placement rule.
 fn is_global_flag_token(token: &str) -> bool {
     matches!(
         token,
         "-q" | "--quiet"
+            | "-s" | "--session"
             | "--json"
             | "--pretty"
             | "--show-tip"
@@ -363,17 +391,238 @@ fn is_global_flag_token(token: &str) -> bool {
             | "--help-json"
             | "--timeout"
     ) || token.starts_with("--timeout=")
+        || token.starts_with("--session=")
+}
+
+/// True when [token] is the global session selector (`-s` / `--session[…=]`).
+fn is_session_flag_token(token: &str) -> bool {
+    matches!(token, "-s" | "--session") || token.starts_with("--session=")
+}
+
+/// Global flags the CLI also accepts *after* the command name, so a
+/// command-level option check must not reject them (see `GLOBAL_OPTIONS`:
+/// `-q/--quiet` "also accepted after the command", `--json` selects the JSON
+/// envelope, `--timeout` unless the command declares its own).
+#[allow(dead_code)] // consumed by validate_command_options, which the dispatcher calls
+const LATE_GLOBAL_FLAG_KEYS: &[&str] = &["q", "quiet", "json", "pretty", "show-tip", "tip", "timeout"];
+
+/// Commands that legitimately forward option keys the CLI does not declare.
+///
+/// These are passthrough surfaces by design — `cdp` hands its arguments to an
+/// arbitrary CDP method, `tool call` to an arbitrary MCP tool, and `loop`
+/// re-parses its trailing command string — so their keys cannot be validated
+/// against a fixed option list. They are allow-listed explicitly rather than
+/// being exempt by accident; every other command must declare what it accepts.
+#[allow(dead_code)] // consumed by validate_command_options, which the dispatcher calls
+const PASSTHROUGH_COMMANDS: &[&str] = &["cdp", "tool-call", "loop"];
+
+/// Reject option keys the invoked command never declared.
+///
+/// Call this at the dispatch boundary, right after `parse_raw_args` and before
+/// `tool_params_fn` runs:
+///
+/// ```ignore
+/// let parsed = parse_raw_args(&global.args, Some(&short_to_long), Some(&bool_opts));
+/// validate_command_options(&command, &parsed).map_err(|e| CliError(ExitCode::Usage, e))?;
+/// ```
+///
+/// Without it a typo (`--no-snapshott`, `--headlesss`) is dropped on the floor:
+/// the command runs with the default and exits 0, so the user cannot tell the
+/// flag did nothing. Positional slots (filled by [`build_command_args`]) and
+/// internal parser keys are not option keys and are ignored here.
+#[allow(dead_code)] // called by the dispatch boundary in main.rs (see the doc example)
+pub fn validate_command_options(
+    command: &str,
+    parsed: &HashMap<String, Value>,
+) -> Result<(), String> {
+    let commands = crate::commands::commands_map();
+    // An unknown command is reported by the dispatcher, with its own
+    // "did you mean" list; this check has nothing to add.
+    let Some(def) = commands.get(command) else {
+        return Ok(());
+    };
+    if PASSTHROUGH_COMMANDS.contains(&command) {
+        return Ok(());
+    }
+
+    let mut allowed: HashSet<&str> = HashSet::new();
+    allowed.insert("_");
+    allowed.insert("_.dd");
+    // Parser-internal key the upload builder derives (see UPLOAD_PATHS_KEY).
+    allowed.insert(UPLOAD_PATHS_KEY);
+    for opt in def.options {
+        allowed.insert(opt.key());
+        if let Some(short) = opt.short {
+            allowed.insert(short);
+        }
+    }
+    // Positional slots are part of the command's declared surface: the dispatcher
+    // fills them through `build_command_args`, so a populated slot (`open <url>` →
+    // the `url` key) is the command's own argument, not an option the user
+    // mistyped.  Leaving them out rejected every command that takes a positional
+    // (`open`, `goto`, `new-tab`, `crawl`, …) with a bogus "unknown option --url".
+    for arg in def.args {
+        allowed.insert(arg.name);
+    }
+    for (canonical, aliases) in COMMAND_ARG_ALIASES {
+        if def.args.iter().any(|arg| arg.name == *canonical) {
+            allowed.extend(aliases.iter().copied());
+        }
+    }
+    allowed.extend(LATE_GLOBAL_FLAG_KEYS.iter().copied());
+
+    let mut unknown: Vec<&str> = parsed
+        .keys()
+        .map(String::as_str)
+        .filter(|key| !allowed.contains(key))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+
+    let display = crate::help::public_command_name(command);
+    let rendered: Vec<String> = unknown.iter().map(|key| format!("--{key}")).collect();
+    let supported: Vec<String> = def
+        .options
+        .iter()
+        .map(|opt| match opt.short {
+            Some(short) => format!("--{} (-{short})", opt.key()),
+            None => format!("--{}", opt.key()),
+        })
+        .collect();
+
+    let suggestion = unknown
+        .iter()
+        .find_map(|key| {
+            crate::commands::closest_match(
+                key,
+                &def.options.iter().map(|opt| opt.key()).collect::<Vec<_>>(),
+            )
+            .map(|closest| format!(" --{key} → did you mean --{closest}?"))
+        })
+        .unwrap_or_default();
+
+    let mut message = format!(
+        "error: unknown option{} {} for '{}'.{}",
+        if rendered.len() == 1 { "" } else { "s" },
+        rendered.join(", "),
+        display,
+        suggestion
+    );
+    // A misplaced `-s`/`--session` is the global session selector, not a typo:
+    // say where it belongs instead of leaving the user to dig the rule out of
+    // the docs.
+    if unknown.iter().any(|key| *key == "s" || *key == "session") {
+        message.push_str(SESSION_FLAG_POSITION_HINT);
+    }
+    if supported.is_empty() {
+        message.push_str("\nThis command accepts no options.");
+    } else {
+        message.push_str(&format!("\nSupported options: {}", supported.join(", ")));
+    }
+    message.push('\n');
+    message.push_str(&crate::help::help_hint(command));
+    Err(message)
 }
 
 /// Build the hint appended to "unexpected positional arguments" errors when
 /// any offending token is a global flag.
+///
+/// The session flag gets its own wording: `-s <name>` takes a value, so the
+/// generic "global flags must appear before the command" hint would not show
+/// where the value goes.
 fn global_flag_hint(tokens: &[&String]) -> String {
-    if tokens.iter().any(|t| is_global_flag_token(t)) {
-        " (global flags must appear before the command, e.g. 'browser4-cli -q htmlsnapshot')"
-            .to_string()
-    } else {
-        String::new()
+    if tokens.iter().any(|t| is_session_flag_token(t)) {
+        return SESSION_FLAG_POSITION_HINT.to_string();
     }
+    if tokens.iter().any(|t| is_global_flag_token(t)) {
+        return " (global flags must appear before the command, e.g. 'browser4-cli -q htmlsnapshot')"
+            .to_string();
+    }
+    String::new()
+}
+
+/// Placement rule for the global `-s`/`--session` flag, spelled with the
+/// example a user needs (`-s research open <url>`).
+const SESSION_FLAG_POSITION_HINT: &str = "\n'-s/--session' is a GLOBAL flag — its position is part of the syntax: \
+     place it before the command, e.g. 'browser4-cli -s research open <url>' \
+     (not 'browser4-cli open -s research <url>').";
+
+/// Map a command's own option table to the `--long (-s)` spellings a usage
+/// error should list, or `None` when the command is unknown or a passthrough.
+fn supported_option_list(command: &str) -> Option<(String, Vec<String>)> {
+    let commands = crate::commands::commands_map();
+    let def = commands.get(command)?;
+    if PASSTHROUGH_COMMANDS.contains(&command) {
+        return None;
+    }
+    let display = crate::help::public_command_name(def.name).to_string();
+    let supported = def
+        .options
+        .iter()
+        .map(|opt| match opt.short {
+            Some(short) => format!("--{} (-{short})", opt.key()),
+            None => format!("--{}", opt.key()),
+        })
+        .collect();
+    Some((display, supported))
+}
+
+/// Turn a flag-like positional into an actionable `unknown option` error.
+///
+/// `browser4-cli htmlsnapshot grep -o 'price'` used to answer
+/// `error: unexpected positional arguments (this command accepts 1): ["-o"]` —
+/// the flag it refused was not named as a flag, the supported ones were not
+/// listed, and there was no pointer to the help page. Returns `None` when the
+/// command is unknown (the dispatcher's own message is better there) so the
+/// caller can keep its generic wording.
+fn unknown_option_error(
+    raw: &HashMap<String, Value>,
+    offending: &[String],
+    accepts_positionals: usize,
+) -> Option<String> {
+    let command = raw
+        .get("_")
+        .and_then(|value| value.as_array())
+        .and_then(|positionals| positionals.first())
+        .and_then(|value| value.as_str())?;
+    let (display, supported) = supported_option_list(command)?;
+
+    let listed = offending.join(", ");
+    let suggestion = offending
+        .iter()
+        .find_map(|token| {
+            let key = token.trim_start_matches('-');
+            let keys: Vec<&str> = supported
+                .iter()
+                .map(|spelling| spelling.trim_start_matches("--").split(' ').next().unwrap_or(""))
+                .collect();
+            crate::commands::closest_match(key, &keys)
+                .map(|closest| format!(" Did you mean --{closest}?"))
+        })
+        .unwrap_or_default();
+
+    let mut message = format!(
+        "error: unknown option {listed} for '{display}'{}",
+        if offending.len() == 1 { "" } else { "s" }
+    );
+    if accepts_positionals > 0 {
+        message.push_str(&format!(
+            " (the command takes {accepts_positionals} positional argument{})",
+            if accepts_positionals == 1 { "" } else { "s" }
+        ));
+    }
+    message.push('.');
+    message.push_str(&suggestion);
+    if supported.is_empty() {
+        message.push_str(" This command accepts no options.");
+    } else {
+        message.push_str(&format!(" Supported options: {}.", supported.join(", ")));
+    }
+    message.push('\n');
+    message.push_str(&crate::help::help_hint(command));
+    Some(message)
 }
 
 /// Build the argument map for the `upload` command.
@@ -389,6 +638,15 @@ fn global_flag_hint(tokens: &[&String]) -> String {
 /// - `paths` = JSON array of ALL file paths (used by `upload`'s
 ///   tool_params_fn),
 /// - named options (e.g. `--no-snapshot`) are preserved untouched.
+/// Key [`build_upload_args`] derives for the multi-file tool call: every file
+/// positional as a JSON array.
+///
+/// `upload` declares only two positional slots (`ref`, `file`), so this key is
+/// neither a slot nor an option — it is parser-internal, and
+/// [`validate_command_options`] has to know it or `upload e5 a.txt` is rejected
+/// as "unknown option --paths".
+pub const UPLOAD_PATHS_KEY: &str = "paths";
+
 pub fn build_upload_args(raw: &HashMap<String, Value>) -> Result<HashMap<String, Value>, String> {
     let mut result = raw.clone();
 
@@ -402,16 +660,22 @@ pub fn build_upload_args(raw: &HashMap<String, Value>) -> Result<HashMap<String,
     };
 
     if positional.is_empty() {
-        return Err("error: upload requires a target ref and at least one file path (usage: upload <ref> <file> [file...])".to_string());
+        return Err(format!(
+            "Missing required argument: <ref> and at least one <file>.\nUsage: browser4-cli upload <ref> <file> [file...]\n{}",
+            crate::help::help_hint("upload")
+        ));
     }
     if positional.len() < 2 {
-        return Err("error: upload requires a file path after the target ref (usage: upload <ref> <file> [file...])".to_string());
+        return Err(format!(
+            "Missing required argument: <file>.\nUsage: browser4-cli upload <ref> <file> [file...]\n{}",
+            crate::help::help_hint("upload")
+        ));
     }
 
     result.insert("ref".to_string(), json!(positional[0]));
     result.insert("file".to_string(), json!(positional[1]));
     result.insert(
-        "paths".to_string(),
+        UPLOAD_PATHS_KEY.to_string(),
         Value::Array(positional[1..].iter().map(|p| json!(p)).collect()),
     );
 
@@ -497,6 +761,16 @@ pub fn build_command_args(
                     .collect();
                 if !offending.is_empty() {
                     let hint = global_flag_hint(&offending);
+                    // A flag-like token that reached the positional array is an
+                    // unknown option: name it as one and, when the command is
+                    // known, list the flags it does accept (the old wording —
+                    // "unexpected positional arguments" plus a Debug-printed
+                    // array — named neither the flag nor an alternative).
+                    let rendered: Vec<String> =
+                        offending.iter().map(|token| (*token).clone()).collect();
+                    if let Some(error) = unknown_option_error(raw, &rendered, arg_names.len()) {
+                        return Err(format!("{error}{hint}"));
+                    }
                     return Err(format!(
                         "error: unexpected positional arguments (this command accepts {}): {:?}{}",
                         arg_names.len(),
@@ -1036,6 +1310,207 @@ mod tests {
         assert_eq!(map.get("interactive"), Some(&json!(true)));
     }
 
+    /// `allow_hyphen_values` for `-a/--args`: the documented LoadOptions
+    /// passthrough always starts with `-` (`-nMaxRetry 5 -lazyFlush`), so the
+    /// generic "a hyphen-leading token is the next flag" rule made the
+    /// space-separated form unbindable — `-a` became `true` and the options
+    /// string was read as a positional seed URL.
+    #[test]
+    fn test_parse_raw_args_hyphen_value_option_binds_the_short_form() {
+        let (short_to_long, bool_opts) = crawl_short_option_maps();
+        let raw = vec![
+            "crawl".to_string(),
+            "--seed-file".to_string(),
+            "urls.txt".to_string(),
+            "-a".to_string(),
+            "-nMaxRetry 5 -lazyFlush".to_string(),
+        ];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(map.get("args"), Some(&json!("-nMaxRetry 5 -lazyFlush")));
+        // The value is no longer mistaken for a positional.
+        let positionals = map["_"].as_array().unwrap();
+        assert_eq!(positionals.len(), 1, "positionals: {positionals:?}");
+    }
+
+    #[test]
+    fn test_parse_raw_args_hyphen_value_option_binds_the_long_form() {
+        let (short_to_long, bool_opts) = crawl_short_option_maps();
+        let raw = vec![
+            "crawl".to_string(),
+            "https://example.com".to_string(),
+            "--args".to_string(),
+            "-requireSize 100000".to_string(),
+        ];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(map.get("args"), Some(&json!("-requireSize 100000")));
+    }
+
+    /// The exception stays narrow: options that are not allow-listed keep
+    /// treating a hyphen-leading token as the next flag.
+    #[test]
+    fn test_parse_raw_args_hyphen_value_exception_is_option_specific() {
+        let (short_to_long, bool_opts) = crawl_short_option_maps();
+        let raw = vec![
+            "crawl".to_string(),
+            "-d".to_string(),
+            "-a".to_string(),
+            "-x 1".to_string(),
+        ];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        // -d (depth) does not consume -a; -a consumes the LoadOptions string.
+        assert_eq!(map.get("depth"), Some(&json!(true)));
+        assert_eq!(map.get("args"), Some(&json!("-x 1")));
+    }
+
+    #[test]
+    fn test_parse_raw_args_hyphen_value_option_never_eats_the_end_of_options_marker() {
+        let (short_to_long, bool_opts) = crawl_short_option_maps();
+        let raw = vec![
+            "crawl".to_string(),
+            "-a".to_string(),
+            "--".to_string(),
+            "https://example.com".to_string(),
+        ];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(map.get("args"), Some(&json!(true)));
+        let positionals = map["_"].as_array().unwrap();
+        assert!(positionals.iter().any(|v| v == &json!("https://example.com")));
+    }
+
+    /// The `-a/--args` option of `crawl`, resolved the way the dispatcher does.
+    fn crawl_short_option_maps() -> (HashMap<String, String>, HashSet<String>) {
+        let commands = crate::commands::commands_map();
+        let crawl = commands.get("crawl").expect("crawl command");
+        build_short_option_map(crawl.options)
+    }
+
+    #[test]
+    fn test_unknown_option_is_rejected_with_a_suggestion() {
+        // `browser4-cli check "#x" --no-snapshott` used to run with the snapshot
+        // still taken and exit 0.
+        let parsed = HashMap::from([
+            ("_".to_string(), json!(["check", "#check-target"])),
+            ("no-snapshott".to_string(), json!(true)),
+        ]);
+        let error = validate_command_options("check", &parsed).unwrap_err();
+        assert!(error.contains("unknown option --no-snapshott"), "got: {error}");
+        assert!(
+            error.contains("did you mean --no-snapshot?"),
+            "a typo must name the intended option: {error}"
+        );
+        assert!(error.contains("--help check"), "got: {error}");
+    }
+
+    #[test]
+    fn test_unknown_option_lists_the_supported_options() {
+        let parsed = HashMap::from([
+            ("_".to_string(), json!(["snapshot-grep", "price"])),
+            ("bogus".to_string(), json!("1")),
+        ]);
+        let error = validate_command_options("snapshot-grep", &parsed).unwrap_err();
+        assert!(error.contains("unknown option --bogus"), "got: {error}");
+        assert!(
+            error.contains("Supported options: --ignore-case (-i)"),
+            "the supported set must be listed: {error}"
+        );
+    }
+
+    #[test]
+    fn test_populated_positional_is_not_an_unknown_option() {
+        // `open <url>` fills the command's `url` slot via `build_command_args`.
+        // Validation that only knew the option table rejected it as
+        // "unknown option --url for 'open'", which broke every command with a
+        // positional argument.
+        let parsed = HashMap::from([
+            ("_".to_string(), json!(["open", "https://example.com"])),
+            ("url".to_string(), json!("https://example.com")),
+        ]);
+        assert_eq!(validate_command_options("open", &parsed), Ok(()));
+
+        // The alias spelling (`--filename` for the `file` slot) is a slot too.
+        let aliased = HashMap::from([
+            ("_".to_string(), json!(["htmlsnapshot", "export", "a.html"])),
+            ("file".to_string(), json!("a.html")),
+            ("filename".to_string(), json!("b.html")),
+        ]);
+        assert_eq!(validate_command_options("htmlsnapshot-export", &aliased), Ok(()));
+    }
+
+    #[test]
+    fn test_upload_derived_paths_key_is_not_an_unknown_option() {
+        // `build_upload_args` derives `paths` from the file positionals and
+        // `upload` declares no such slot, so validation has to ignore it — the
+        // same false positive that rejected `open <url>`.
+        let raw = HashMap::from([(
+            "_".to_string(),
+            json!(["upload", "e5", "a.txt", "b.txt"]),
+        )]);
+        let parsed = build_upload_args(&raw).expect("upload args");
+        assert!(parsed.contains_key(UPLOAD_PATHS_KEY), "parsed: {parsed:?}");
+        assert_eq!(validate_command_options("upload", &parsed), Ok(()));
+    }
+
+    /// Every command must accept the arguments it declares itself.
+    ///
+    /// The regression this pins was invisible to the unit tests because they all
+    /// built their parsed map by hand and left the positional keys out, so a
+    /// validator that ignored positional slots passed them and failed in the
+    /// dispatcher instead (`open <url>` → "unknown option --url").
+    #[test]
+    fn test_every_command_accepts_its_own_declared_arguments() {
+        let commands = crate::commands::commands_map();
+        let mut rejected: Vec<String> = Vec::new();
+        for (name, def) in &commands {
+            let mut parsed: HashMap<String, Value> = HashMap::new();
+            parsed.insert("_".to_string(), json!([name]));
+            for arg in def.args {
+                parsed.insert(arg.name.to_string(), json!("value"));
+            }
+            for opt in def.options {
+                parsed.insert(opt.key().to_string(), json!("value"));
+            }
+            if let Err(error) = validate_command_options(name, &parsed) {
+                rejected.push(format!("{name}: {error}"));
+            }
+        }
+        assert!(
+            rejected.is_empty(),
+            "commands rejected with their own declared arguments:\n{}",
+            rejected.join("\n")
+        );
+    }
+
+    #[test]
+    fn test_declared_options_and_late_global_flags_pass_validation() {
+        let parsed = HashMap::from([
+            ("_".to_string(), json!(["crawl", "https://example.com"])),
+            ("timeout".to_string(), json!("30m")),
+            ("parallel".to_string(), json!("4")),
+            ("json".to_string(), json!(true)),
+            ("quiet".to_string(), json!(true)),
+        ]);
+        assert!(validate_command_options("crawl", &parsed).is_ok());
+    }
+
+    #[test]
+    fn test_passthrough_commands_are_exempt_from_option_validation() {
+        // `cdp`/`tool call` forward arguments to an arbitrary CDP method or MCP
+        // tool, and `loop` re-parses its trailing command string.
+        for command in ["cdp", "tool-call", "loop"] {
+            let parsed = HashMap::from([("anything-goes".to_string(), json!("1"))]);
+            assert!(
+                validate_command_options(command, &parsed).is_ok(),
+                "{command} must stay a passthrough"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unknown_command_is_left_to_the_dispatcher() {
+        let parsed = HashMap::from([("whatever".to_string(), json!(true))]);
+        assert!(validate_command_options("no-such-command", &parsed).is_ok());
+    }
+
     #[test]
     fn test_build_command_args_joins_extra_positionals_into_last_arg() {
         // When positional args outnumber named slots (e.g. `loop -- subcmd arg1
@@ -1078,6 +1553,57 @@ mod tests {
         assert!(result
             .unwrap_err()
             .contains("unexpected positional arguments"));
+    }
+
+    #[test]
+    fn test_misplaced_session_flag_names_the_placement_rule() {
+        // `open -s research <url>` is the mistake a first-time user makes most
+        // often; `-s` is the global session selector and its position is part
+        // of the syntax, so the error must spell out where it goes.
+        let mut raw = HashMap::new();
+        raw.insert(
+            "_".to_string(),
+            json!(["open", "-s", "research", "https://example.com"]),
+        );
+        raw.insert("s".to_string(), json!(true));
+        let err = build_command_args(&raw, &["url"], &[]).unwrap_err();
+        assert!(err.contains("-s/--session"), "got: {err}");
+        assert!(
+            err.contains("browser4-cli -s research open <url>"),
+            "the hint must show the corrected form: {err}"
+        );
+
+        // `goto <url> -s test` takes the option-validation path instead.
+        let parsed = HashMap::from([
+            ("_".to_string(), json!(["goto", "https://example.com", "-s", "test"])),
+            ("s".to_string(), json!(true)),
+        ]);
+        let validated = validate_command_options("goto", &parsed).unwrap_err();
+        assert!(validated.contains("unknown option --s"), "got: {validated}");
+        assert!(
+            validated.contains("browser4-cli -s research open <url>"),
+            "validation errors must carry the same hint: {validated}"
+        );
+
+        // A stray token that merely contains "s" must not attract the hint.
+        let mut unrelated = HashMap::new();
+        unrelated.insert("_".to_string(), json!(["htmlsnapshot", "extra"]));
+        assert!(!build_command_args(&unrelated, &[], &[])
+            .unwrap_err()
+            .contains("-s/--session"));
+    }
+
+    #[test]
+    fn test_session_flag_token_detection() {
+        for token in ["-s", "--session", "--session=research"] {
+            assert!(is_global_flag_token(token), "{token} is a global flag");
+            assert!(is_session_flag_token(token), "{token} is the session flag");
+        }
+        for token in ["-q", "--json", "--pretty", "--timeout"] {
+            assert!(is_global_flag_token(token), "{token} is a global flag");
+            assert!(!is_session_flag_token(token), "{token} is not -s/--session");
+        }
+        assert!(!is_global_flag_token("--selector"));
     }
 
     #[test]

@@ -27,6 +27,29 @@ Every scenario script follows the same pattern:
 
 $ErrorActionPreference = "Stop"
 
+# ── Console encoding: always UTF-8 ────────────────────────────────────────────
+# A redirected stream starts on the Windows OEM code page (CP936 on a Chinese
+# host) and PowerShell only switches to UTF-8 when the parent already did.  Every
+# consumer of this harness reads UTF-8 — the relay in bin/test.ps1
+# (StandardOutputEncoding), the per-run logs, CI, and the capture used for issue
+# tracking — so under CP936 the box-drawing decoration turns into line noise:
+#
+#   ·  —  │  →  "??"        (CP936 A1 A4 / A1 AA / A9 A6 read as UTF-8)
+#   ═        →  "?T"        (CP936 A8 54 — the 0x54 is a literal 'T')
+#
+# which is exactly how a heartbeat/tail block degrades into "?T?T last 10 lines
+# ?T?T".  Verified byte-for-byte: a pwsh child spawned by the relay reports
+# `console=gb2312 cp=936` and emits A8 54 for ═.  Pinning the encoding here
+# covers every script that dot-sources this module (all of them do so before
+# their first write) and every child Start-NativeCommand runs.
+try {
+    if ([Console]::OutputEncoding.CodePage -ne 65001) {
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    }
+} catch {
+    # A host without a usable console must not fail the run over an encoding.
+}
+
 # ── Windows command-line argument escaping ────────────────────────────────────
 # Adapted from coworker/scripts/workers/agent.ps1.
 # Windows CreateProcess receives a single lpCommandLine string; the child parses
@@ -359,6 +382,7 @@ public class NativeCommandOutputHandler
     private int _ringIndex;
     private int _ringCount;
     private readonly object _lock;
+    private int _eofCount;
 
     // ── Checkpoint support ──────────────────────────────────────────────
     private readonly string _checkpointDir;
@@ -402,7 +426,16 @@ public class NativeCommandOutputHandler
 
     public void OnOutputReceived(object sender, System.Diagnostics.DataReceivedEventArgs e)
     {
-        if (e.Data == null) return;
+        // A null Data (or a null event args) marks EOF for this stream.  EOF is
+        // what tells Start-NativeCommand the pipes can no longer deliver output,
+        // so it is counted instead of being dropped: waiting for it is how the
+        // drain knows the async handlers are done (see
+        // Wait-NativeCommandOutputDrain).
+        if (e == null || e.Data == null)
+        {
+            lock (_lock) { _eofCount++; }
+            return;
+        }
 
         Console.WriteLine(e.Data);
         try
@@ -600,6 +633,16 @@ public class NativeCommandOutputHandler
             }
             return sb.ToString();
         }
+    }
+
+    /// <summary>
+    /// Returns the number of streams that reached EOF (0, 1 or 2).
+    /// Wait-NativeCommandOutputDrain waits for 2 — the point at which the
+    /// async handlers have delivered everything the pipes can deliver.
+    /// </summary>
+    public int EofCount
+    {
+        get { lock (_lock) { return _eofCount; } }
     }
 
     /// <summary>
@@ -1991,6 +2034,60 @@ function Write-IssuesToDraft {
     }
 }
 
+function Wait-NativeCommandOutputDrain {
+    <#
+    .SYNOPSIS
+        Wait for a command's stdout/stderr pipes to reach EOF, but never forever.
+
+    .DESCRIPTION
+        Start-NativeCommand redirects the child's stdout/stderr into anonymous
+        pipes, and EOF on those pipes is the only signal that the async
+        DataReceived handlers have delivered everything.  Every write end must be
+        closed for EOF to happen, and descendants that inherited them outlive the
+        child by design: the Browser4 JVM, headless Chrome, an MCP server an
+        agent left running.  The old drain called Process.WaitForExit()
+        (parameterless) — which also waits for the async readers to reach EOF —
+        so a task runner could park there for as long as any leftover descendant
+        lived, and Ctrl+C cannot break a thread blocked in that native wait.
+
+        This helper returns as soon as both streams reported EOF or the deadline
+        expires, whichever comes first, so the caller always gets control back.
+
+    .PARAMETER Handler
+        The NativeCommandOutputHandler instance wired to the process.  It counts
+        EOF per stream via EofCount.
+
+    .PARAMETER TimeoutSec
+        Maximum seconds to wait for EOF.  0 returns immediately.
+
+    .OUTPUTS
+        Boolean — $true when the deadline expired before both streams hit EOF.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] $Handler,
+        [double] $TimeoutSec = 10
+    )
+
+    # A session that survived a git checkout can still hold the handler type from
+    # before EofCount existed (see the type check above) — degrade to the old
+    # short grace period instead of waiting for a counter that never moves.
+    if ($null -eq $Handler.PSObject.Properties['EofCount']) {
+        Start-Sleep -Milliseconds 300
+        return $true
+    }
+
+    if ($TimeoutSec -le 0) {
+        return ($Handler.EofCount -lt 2)
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+    while ($Handler.EofCount -lt 2 -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 50
+    }
+
+    return ($Handler.EofCount -lt 2)
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Safe native-command invocation
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2017,6 +2114,10 @@ function Write-IssuesToDraft {
 # it impossible to print "still running" messages while the child process was
 # alive but not emitting output.  The polling loop in WaitForExit(timeout)
 # gives us a natural heartbeat cadence.
+#
+# The trailing drain is bounded (Wait-NativeCommandOutputDrain): the
+# parameterless WaitForExit() also waits for stream EOF, which never arrives
+# while a descendant that inherited the pipes (JVM, headless Chrome) is alive.
 
 function Start-NativeCommand {
     <#
@@ -2032,6 +2133,10 @@ function Start-NativeCommand {
         Replaces the old pipeline-based approach (& cmd 2>&1 | ForEach-Object)
         which blocked the PowerShell thread and offered no way to report progress
         while the child process was running but not yet emitting output.
+
+        Returns as soon as the command exited: the trailing drain of the output
+        pipes is bounded (Wait-NativeCommandOutputDrain), because descendants that
+        inherited them can keep them open indefinitely.
 
     .PARAMETER FilePath
         Path to the native executable.
@@ -2049,6 +2154,15 @@ function Start-NativeCommand {
     .PARAMETER HeartbeatIntervalSec
         Seconds between "still running" messages when no output is produced
         (default 10).  Set to 0 to disable heartbeats.
+
+    .PARAMETER DrainTimeoutSec
+        Maximum seconds to wait for the output pipes to reach EOF after the
+        command exited (default 10).
+
+    .PARAMETER NoStdinRedirect
+        Keep an oversized prompt on the command line.  Needed by backends whose
+        CLI refuses stdin (dsh), where redirecting the prompt would strip the
+        only task argument and fail the run.
 
     .EXAMPLE
         Start-NativeCommand -FilePath 'claude' -ArgumentList @('-p', $prompt) `
@@ -2074,6 +2188,17 @@ function Start-NativeCommand {
         # 0 (default) means no timeout.  Exit code 124 is returned on timeout
         # (matching the Unix `timeout` command convention).
         [int] $TimeoutSeconds = 0,
+
+        # Maximum seconds to wait for the command's output pipes to reach EOF
+        # after it exited.  Descendants that inherited those pipes (JVM, headless
+        # Chrome) can hold them open long after the command is gone, so the drain
+        # is bounded.  See Wait-NativeCommandOutputDrain.
+        [double] $DrainTimeoutSec = 10,
+
+        # Keep a large prompt on the command line instead of redirecting it to
+        # stdin.  Backends whose CLI rejects stdin (dsh: its headless profile
+        # reads one positional task and fails on a missing task) must set this.
+        [switch] $NoStdinRedirect,
 
         # ── Checkpoint support ──────────────────────────────────────────
         # When both parameters are provided the output handler writes a
@@ -2195,10 +2320,13 @@ function Start-NativeCommand {
     # Two prompt styles are supported:
     #   - `-p <prompt>` style (claude, kimi): the argument following -p.
     #   - trailing positional prompt (codex `exec ... <prompt>`, opencode
-    #     `run <prompt>`, dsh `run <prompt>`): the final argument when it is
-    #     large.  codex/opencode/dsh read the prompt from stdin when it is
-    #     piped and no prompt argument is present.
-    if ($isWindowsPlatform) {
+    #     `run <prompt>`): the final argument when it is large.  codex and
+    #     opencode read the prompt from stdin when it is piped and no prompt
+    #     argument is present.
+    # dsh is NOT in that list — `dsh --profile headless <task>` takes the task
+    # as a positional argument and fails on a missing task, so callers pass
+    # -NoStdinRedirect and keep its prompt on the command line.
+    if ($isWindowsPlatform -and -not $NoStdinRedirect) {
         $promptValue = $null
         $promptIsPositional = $false
         $foundP = $false
@@ -2242,6 +2370,10 @@ function Start-NativeCommand {
         } else {
             foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
         }
+    } elseif ($isWindowsPlatform) {
+        # -NoStdinRedirect: the prompt must stay on argv (dsh's headless app
+        # rejects a missing task), so pass every argument and let .NET escape it.
+        foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
     } else {
         # Unix: no command-line length concerns — pass all arguments directly.
         foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
@@ -2373,11 +2505,19 @@ function Start-NativeCommand {
 
         # ── Drain final output ─────────────────────────────────────────────
         # The process has exited but async reads may still have data in flight.
-        # WaitForExit() (parameterless) blocks until all OutputDataReceived /
-        # ErrorDataReceived event handlers have finished processing — without
-        # this, CancelOutputRead() may discard data that hasn't been delivered
-        # yet, losing most of the captured output.
-        try { $proc.WaitForExit() } catch { }
+        # Waiting for stream EOF means every OutputDataReceived / ErrorDataReceived
+        # handler has finished processing — without this, CancelOutputRead() may
+        # discard data that hasn't been delivered yet, losing most of the captured
+        # output.
+        #
+        # The wait is bounded on purpose: EOF requires every write end of the
+        # pipes to be closed, including the copies inherited by descendants that
+        # outlive the command (JVM, headless Chrome, a leftover MCP server).  See
+        # Wait-NativeCommandOutputDrain.
+        $drainTimedOut = Wait-NativeCommandOutputDrain -Handler $nativeHandler -TimeoutSec $DrainTimeoutSec
+        if ($drainTimedOut) {
+            [Console]::WriteLine("  · note: the command exited, but its output pipes are still held open after ${DrainTimeoutSec}s (a leftover descendant inherited them) — continuing without them.")
+        }
 
         # Cancel the async readers, then drain synchronously to capture
         # everything that remains.
@@ -2717,6 +2857,438 @@ function Write-WorkflowBanner {
     Write-Host ''
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Agent client environment & client-side diagnostics
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Agent CLIs print their own client-side diagnostics to stderr.  Those lines are
+# neither agent output nor a browser4 finding, yet they are the first thing in
+# every captured artifact and they dominate the heartbeat tail.  A workspace
+# that has never been opened interactively produces exactly these two:
+#
+#   Ignoring 13 permissions.allow entries from .claude/settings.json: this
+#   workspace has not been trusted. Run Claude Code interactively here once and
+#   accept the trust dialog, or set projects["D:/…"].hasTrustDialogAccepted:
+#   true in C:\Users\pereg\.claude.json.
+#   [claude-code:unrecognized_model] {"model":"deepseek-v4-flash[1m]",…}
+#
+# Both are truthful complaints about the HOST environment, and both silently
+# degrade a scenario run:
+#
+#   * Untrusted workspace — Claude Code discards the permission allowlist from
+#     .claude/settings.json, so the agent and its sub-agents run under a
+#     different permission set than the project configures.
+#   * Unknown model — Claude Code cannot find the model in its catalog, so it
+#     assumes a 200k context window; auto-compact can then fire in the middle of
+#     a 20–40 minute evaluation and quietly drop the context it depends on.
+#
+# Initialize-AgentEnvironment repairs what the harness can repair before the
+# agent starts (claude only; opt out with BROWSER4_SKIP_AGENT_ENV_SETUP=1), and
+# Get-AgentClientDiagnostics re-checks the captured output afterwards, so a
+# client that still complains is reported instead of being baked silently into
+# an artifact.
+#
+# Verified against Claude Code 2.1.289 on Windows:
+#   * Writing projects["<absolute path, forward slashes>"].hasTrustDialogAccepted
+#     = true into .claude.json removes the trust warning completely (probe:
+#     327 bytes of stderr → 0 bytes).
+#   * CLAUDE_CODE_MAX_CONTEXT_TOKENS does NOT remove the unrecognized_model
+#     line; it removes the consequence (the 200k auto-compact window), which is
+#     the part that harms a scenario run.  Silencing the line itself needs the
+#     model mapped in the user's Claude Code settings — see the README.
+
+# Client-diagnostic lines that must never be mistaken for agent output.
+$script:AgentClientDiagnosticPatterns = @(
+    'Ignoring \d+ permissions?\.allow entr(?:y|ies) from \.claude[/\\]settings\.json',
+    '\[claude-code:[A-Za-z0-9_]+\]',
+    "isn't described by this version's model catalog",
+    'is not a model this version of Claude Code recognizes'
+)
+
+function Get-ClaudeUserPaths {
+    <#
+    .SYNOPSIS
+        Resolve Claude Code's user-level config and settings file paths.
+    .DESCRIPTION
+        CLAUDE_CONFIG_DIR relocates the whole user-level configuration
+        (settings.json and .claude.json) — the documented way to run Claude Code
+        with an isolated profile.  $env:HOME is checked before USERPROFILE
+        because it is the cross-platform variable; Windows usually sets only the
+        latter.
+    .PARAMETER ConfigDir
+        Explicit config directory.  Defaults to $env:CLAUDE_CONFIG_DIR, then the
+        conventional per-user location.
+    .OUTPUTS
+        Hashtable — @{ ConfigFile = <path>; SettingsFile = <path> }; both empty
+        when no home directory can be resolved.
+    #>
+    param(
+        [string] $ConfigDir = ''
+    )
+
+    if (-not $ConfigDir) { $ConfigDir = $env:CLAUDE_CONFIG_DIR }
+    if ($ConfigDir) {
+        return @{
+            ConfigFile   = Join-Path $ConfigDir '.claude.json'
+            SettingsFile = Join-Path $ConfigDir 'settings.json'
+        }
+    }
+
+    # NOTE: never name this `$home` — PowerShell variable names are
+    # case-insensitive, so `$home` IS the read-only automatic variable $HOME and
+    # the assignment below throws "Cannot overwrite variable HOME because it is
+    # read-only or constant" (same trap as $PSHOME/$PID/$Host).
+    $userHome = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { '' }
+    if (-not $userHome) {
+        return @{ ConfigFile = ''; SettingsFile = '' }
+    }
+
+    return @{
+        ConfigFile   = Join-Path $userHome '.claude.json'
+        SettingsFile = Join-Path (Join-Path $userHome '.claude') 'settings.json'
+    }
+}
+
+function Get-ClaudeProjectKey {
+    <#
+    .SYNOPSIS
+        Build the key Claude Code uses for a project in its `projects` map.
+    .DESCRIPTION
+        Claude Code keys projects by the absolute path with forward slashes and
+        no trailing separator (verified against a live ~/.claude.json on
+        Windows: "D:/workspace/Browser4/Browser4-4.14-feat").
+    .PARAMETER WorkspaceRoot
+        Absolute or relative path of the workspace.
+    .OUTPUTS
+        String — the project key.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $WorkspaceRoot
+    )
+
+    $full = [System.IO.Path]::GetFullPath($WorkspaceRoot)
+    $key = $full.Replace('\', '/')
+    if ($key.Length -gt 1) { $key = $key.TrimEnd('/') }
+    return $key
+}
+
+function Test-ClaudeWorkspaceTrusted {
+    <#
+    .SYNOPSIS
+        Report whether Claude Code considers a workspace trusted.
+    .DESCRIPTION
+        Unreadable, missing or malformed configuration all count as "not
+        trusted" — the same condition Claude Code reports as "this workspace has
+        not been trusted".  Never throws.
+    .PARAMETER ConfigPath
+        Path to the user-level .claude.json.
+    .PARAMETER WorkspaceRoot
+        Workspace to look up.
+    .OUTPUTS
+        Boolean.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $ConfigPath,
+
+        [Parameter(Mandatory = $true)]
+        [string] $WorkspaceRoot
+    )
+
+    if (-not $ConfigPath -or -not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { return $false }
+
+    try {
+        $cfg = [System.IO.File]::ReadAllText([System.IO.Path]::GetFullPath($ConfigPath)) |
+            ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return $false
+    }
+
+    if (-not $cfg -or -not $cfg.PSObject.Properties['projects'] -or -not $cfg.projects) { return $false }
+
+    $entry = $cfg.projects.PSObject.Properties[(Get-ClaudeProjectKey -WorkspaceRoot $WorkspaceRoot)]
+    if (-not $entry -or -not $entry.Value) { return $false }
+
+    return [bool]$entry.Value.hasTrustDialogAccepted
+}
+
+function Set-ClaudeWorkspaceTrusted {
+    <#
+    .SYNOPSIS
+        Mark a workspace as trusted for Claude Code.
+    .DESCRIPTION
+        Claude Code honours .claude/settings.json permissions only when the
+        workspace is trusted, and stores that flag per project in the user-level
+        .claude.json.  The harness writes the flag the way the CLI's own warning
+        instructs ("or set projects[\"<path>\"].hasTrustDialogAccepted: true").
+
+        The rewrite is a JSON round-trip of the whole file, so it is only done
+        when the flag actually changes and it is written atomically (temp file +
+        move).  Failures are returned, never thrown: trust is a convenience for
+        the scenario, a hard failure would be worse than a stale warning.
+    .PARAMETER ConfigPath
+        Path to the user-level .claude.json.
+    .PARAMETER WorkspaceRoot
+        Workspace to trust.
+    .OUTPUTS
+        Boolean — $true when the file was rewritten.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $ConfigPath,
+
+        [Parameter(Mandatory = $true)]
+        [string] $WorkspaceRoot
+    )
+
+    if (-not $ConfigPath -or -not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { return $false }
+    if (Test-ClaudeWorkspaceTrusted -ConfigPath $ConfigPath -WorkspaceRoot $WorkspaceRoot) { return $false }
+
+    try {
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        $absolute = [System.IO.Path]::GetFullPath($ConfigPath)
+        $cfg = [System.IO.File]::ReadAllText($absolute, $utf8NoBom) | ConvertFrom-Json -ErrorAction Stop
+        if (-not $cfg) { return $false }
+
+        $key = Get-ClaudeProjectKey -WorkspaceRoot $WorkspaceRoot
+        if (-not $cfg.PSObject.Properties['projects'] -or -not $cfg.projects) {
+            $cfg | Add-Member -NotePropertyName 'projects' -NotePropertyValue ([pscustomobject]@{}) -Force
+        }
+
+        $existing = $cfg.projects.PSObject.Properties[$key]
+        if ($existing -and $existing.Value) {
+            $existing.Value |
+                Add-Member -NotePropertyName 'hasTrustDialogAccepted' -NotePropertyValue $true -Force
+        } else {
+            $cfg.projects |
+                Add-Member -NotePropertyName $key -NotePropertyValue ([pscustomobject]@{ hasTrustDialogAccepted = $true })
+        }
+
+        # -Depth must be generous: .claude.json nests per-project history deeply
+        # and ConvertTo-Json silently truncates everything beyond the limit.
+        $json = $cfg | ConvertTo-Json -Depth 100
+        $temp = "$absolute.b4-tmp"
+        [System.IO.File]::WriteAllText($temp, $json, $utf8NoBom)
+        Move-Item -LiteralPath $temp -Destination $absolute -Force
+        return $true
+    } catch {
+        Write-Host "  WARNING: could not trust the workspace for Claude Code: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+function Get-ClaudeDeclaredModel {
+    <#
+    .SYNOPSIS
+        Read the model name Claude Code is configured to use.
+    .DESCRIPTION
+        Resolution order mirrors Claude Code's own: the ANTHROPIC_MODEL
+        environment variable, then the settings' env block, then the top-level
+        "model" key.  The harness only reads this to derive the real context
+        window — it never picks the model.
+    .PARAMETER SettingsPath
+        Path to the user-level settings.json.
+    .OUTPUTS
+        String — the declared model, or '' when nothing declares one.
+    #>
+    param(
+        [string] $SettingsPath = ''
+    )
+
+    if ($env:ANTHROPIC_MODEL) { return $env:ANTHROPIC_MODEL.Trim() }
+    if (-not $SettingsPath -or -not (Test-Path -LiteralPath $SettingsPath -PathType Leaf)) { return '' }
+
+    try {
+        $cfg = [System.IO.File]::ReadAllText([System.IO.Path]::GetFullPath($SettingsPath)) |
+            ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return ''
+    }
+
+    if (-not $cfg) { return '' }
+    if ($cfg.env -and $cfg.env.ANTHROPIC_MODEL) { return "$($cfg.env.ANTHROPIC_MODEL)".Trim() }
+    if ($cfg.model) { return "$($cfg.model)".Trim() }
+    return ''
+}
+
+function Get-ClaudeContextTokens {
+    <#
+    .SYNOPSIS
+        Derive the token window declared by a model-name suffix.
+    .DESCRIPTION
+        Claude Code's model-name convention encodes the window: `[1m]` = 1M,
+        `[200k]` = 200k.  A model missing from its catalog gets a 200k
+        assumption instead, and exporting CLAUDE_CODE_MAX_CONTEXT_TOKENS is the
+        remedy Claude Code itself documents.  Returns 0 when the name declares
+        nothing, so the harness never invents a window.
+    .PARAMETER Model
+        Model name, e.g. "deepseek-v4-flash[1M]".
+    .OUTPUTS
+        Integer — token count, or 0 when unknown.
+    #>
+    param(
+        [string] $Model = ''
+    )
+
+    if (-not $Model) { return 0 }
+
+    $match = [regex]::Match($Model, '\[(\d+(?:\.\d+)?)\s*([mMkK])\]$')
+    if (-not $match.Success) { return 0 }
+
+    $value = [double]$match.Groups[1].Value
+    switch ($match.Groups[2].Value.ToLowerInvariant()) {
+        'm' { $value = $value * 1000000 }
+        'k' { $value = $value * 1000 }
+    }
+
+    if ($value -le 0 -or $value -gt [int]::MaxValue) { return 0 }
+    return [int]$value
+}
+
+function Initialize-AgentEnvironment {
+    <#
+    .SYNOPSIS
+        Put the agent client's host environment right before a scenario starts.
+    .DESCRIPTION
+        Only Claude Code needs anything today, and only two things:
+
+          1. Trust the workspace.  Without the flag Claude Code ignores the
+             project's .claude/settings.json (and settings.local.json)
+             permissions and prints the "this workspace has not been trusted"
+             warning on every run.  The flag is written exactly where that
+             warning says it lives, and only when the project actually declares
+             permissions (nothing else is affected).
+
+          2. Declare the context window of a model Claude Code does not know
+             (e.g. `deepseek-v4-flash[1M]`) through
+             CLAUDE_CODE_MAX_CONTEXT_TOKENS, so a long scenario is not
+             auto-compacted at 200k tokens.  An existing value is never
+             overridden.
+
+        Set BROWSER4_SKIP_AGENT_ENV_SETUP=1 to opt out (CI that must not touch a
+        developer's Claude Code configuration).  Every step is best-effort: a
+        failure is reported and the scenario continues.
+    .PARAMETER Agent
+        Agent backend name, as returned by Get-ScenarioAgent.
+    .PARAMETER WorkspaceRoot
+        Workspace to trust.  Defaults to $script:RepoRoot.
+    .PARAMETER ConfigPath
+        Override for the user-level .claude.json (tests, isolated profiles).
+    .PARAMETER SettingsPath
+        Override for the user-level settings.json (tests, isolated profiles).
+    .PARAMETER Silent
+        Suppress the informational lines describing what was changed.
+    .PARAMETER Force
+        Ignore BROWSER4_SKIP_AGENT_ENV_SETUP (used by tests).
+    .OUTPUTS
+        Hashtable — @{ Trusted = <bool>; ContextTokens = <int>; Skipped = <bool> }.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Agent,
+
+        [string] $WorkspaceRoot = '',
+
+        [string] $ConfigPath = '',
+
+        [string] $SettingsPath = '',
+
+        [switch] $Silent,
+
+        [switch] $Force
+    )
+
+    $result = @{ Trusted = $false; ContextTokens = 0; Skipped = $false }
+
+    if ($Agent -ne 'claude') { return $result }
+    if (-not $Force -and $env:BROWSER4_SKIP_AGENT_ENV_SETUP) {
+        $result.Skipped = $true
+        return $result
+    }
+
+    if (-not $WorkspaceRoot) { $WorkspaceRoot = $script:RepoRoot }
+    if (-not $ConfigPath -or -not $SettingsPath) {
+        $userPaths = Get-ClaudeUserPaths
+        if (-not $ConfigPath) { $ConfigPath = $userPaths.ConfigFile }
+        if (-not $SettingsPath) { $SettingsPath = $userPaths.SettingsFile }
+    }
+
+    # ── 1. Workspace trust ──────────────────────────────────────────────────
+    # Only worth writing when the project actually declares permissions: those
+    # files are what Claude Code warns about, and they are the only thing trust
+    # unlocks.  A workspace without them produces no warning to fix.
+    if ($WorkspaceRoot) {
+        $claudeDir = Join-Path $WorkspaceRoot '.claude'
+        $declaresPermissions =
+            (Test-Path -LiteralPath (Join-Path $claudeDir 'settings.json') -PathType Leaf) -or
+            (Test-Path -LiteralPath (Join-Path $claudeDir 'settings.local.json') -PathType Leaf)
+
+        if ($declaresPermissions) {
+            if (Set-ClaudeWorkspaceTrusted -ConfigPath $ConfigPath -WorkspaceRoot $WorkspaceRoot) {
+                $result.Trusted = $true
+                if (-not $Silent) {
+                    Write-Host "  Trusted workspace for Claude Code (project permissions were being ignored): $WorkspaceRoot" `
+                        -ForegroundColor DarkGray
+                }
+            }
+        }
+    }
+
+    # ── 2. Context window of a model Claude Code does not know ──────────────
+    if (-not $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS) {
+        $model = Get-ClaudeDeclaredModel -SettingsPath $SettingsPath
+        $tokens = Get-ClaudeContextTokens -Model $model
+        if ($tokens -gt 0) {
+            $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = "$tokens"
+            $result.ContextTokens = $tokens
+            if (-not $Silent) {
+                Write-Host "  Declared a ${tokens}-token context window for '$model' (CLAUDE_CODE_MAX_CONTEXT_TOKENS)" `
+                    -ForegroundColor DarkGray
+            }
+        }
+    }
+
+    return $result
+}
+
+function Get-AgentClientDiagnostics {
+    <#
+    .SYNOPSIS
+        Find agent-CLI client diagnostics in captured agent output.
+    .DESCRIPTION
+        Agent CLIs write their own warnings to stderr, which the capture merges
+        with stdout.  Those lines are not agent output: they describe the host
+        environment (untrusted workspace, model missing from the client's
+        catalog, …).  Returning them lets Invoke-Agent report them as
+        harness-level diagnostics instead of letting them pass for findings.
+    .PARAMETER Content
+        Captured agent output.
+    .OUTPUTS
+        String[] — matching lines, trimmed, in file order.
+    #>
+    param(
+        [string] $Content = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Content)) { return @() }
+
+    $patterns = if ($script:AgentClientDiagnosticPatterns) { $script:AgentClientDiagnosticPatterns } else { @() }
+    if ($patterns.Count -eq 0) { return @() }
+
+    $found = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in ($Content -split "`r?`n")) {
+        if (-not $line.Trim()) { continue }
+        foreach ($pattern in $patterns) {
+            if ($line -match $pattern) {
+                $found.Add($line.Trim())
+                break
+            }
+        }
+    }
+    return $found.ToArray()
+}
+
 # ── Agent invocation ────────────────────────────────────────────────────────
 
 function Get-ScenarioAgentArgs {
@@ -2729,13 +3301,13 @@ function Get-ScenarioAgentArgs {
           kimi:     -p <prompt>
           opencode: run <prompt>
           codex:    exec --dangerously-bypass-approvals-and-sandbox --ephemeral <prompt>
-          dsh:      run <prompt>
+          dsh:      --profile headless <prompt>
 
         This is the single source of truth for agent CLI argument building.
         All scenario scripts and the test runner use this function instead of
         duplicating the backend switch block.
     .PARAMETER Agent
-        The agent backend name (claude, kimi, opencode, codex, or dsh).
+        The agent backend name (dsh, claude, kimi, opencode, or codex).
     .PARAMETER Prompt
         The task prompt text.
     .PARAMETER Silent
@@ -2770,8 +3342,10 @@ function Get-ScenarioAgentArgs {
             return @('exec', '--dangerously-bypass-approvals-and-sandbox', '--ephemeral', $Prompt)
         }
         'dsh' {
-            # dsh run <task> runs non-interactively through a headless profile.
-            return @('run', $Prompt)
+            # dsh boots a profile explicitly; the headless profile answers one task,
+            # prints the final assistant message, and exits.  The task is a
+            # positional argument — dsh has no `run` subcommand.
+            return @('--profile', 'headless', $Prompt)
         }
         default {
             # Unknown agent — assume -p mode (claude-compatible)
@@ -2783,17 +3357,21 @@ function Get-ScenarioAgentArgs {
 function Get-ScenarioAgent {
     <#
     .SYNOPSIS
-        Resolve which agent CLI (claude, kimi, opencode, codex, or dsh) scenario
+        Resolve which agent CLI (dsh, claude, kimi, opencode, or codex) scenario
         scripts should invoke.
     .DESCRIPTION
         Priority (highest to lowest):
           1. $script:scenarioAgentCli — explicit script-level override
           2. $env:BROWSER4_AGENT — global machine/user override
-          3. Auto-detection from PATH: claude > kimi > opencode > codex > dsh
-          4. Fallback: 'claude'
+          3. Auto-detection from PATH: dsh > claude > kimi > opencode > codex
+          4. Fallback: 'dsh'
 
-        Callers may force a backend by setting $script:scenarioAgentCli = 'kimi'
-        (or 'claude', 'opencode', 'codex', 'dsh') after dot-sourcing this module.
+        dsh (DeepSeek Harness) is the preferred external harness: it wins both
+        the auto-detection order and the fallback, matching Get-AgentBackend in
+        coworker/scripts/config.ps1.
+
+        Callers may force a backend by setting $script:scenarioAgentCli = 'claude'
+        (or 'dsh', 'kimi', 'opencode', 'codex') after dot-sourcing this module.
         Set BROWSER4_AGENT in the environment to configure globally.
     #>
 
@@ -2810,21 +3388,22 @@ function Get-ScenarioAgent {
         Write-Host "  Known values: claude, kimi, opencode, codex, dsh" -ForegroundColor DarkGray
     }
 
-    # 3. Auto-detection from PATH
+    # 3. Auto-detection from PATH — dsh (DeepSeek Harness) is the preferred
+    #    external harness and is probed first.
+    if (Get-Command dsh -ErrorAction SilentlyContinue) { return 'dsh' }
     if (Get-Command claude -ErrorAction SilentlyContinue) { return 'claude' }
     if (Get-Command kimi -ErrorAction SilentlyContinue) { return 'kimi' }
     if (Get-Command opencode -ErrorAction SilentlyContinue) { return 'opencode' }
     if (Get-Command codex -ErrorAction SilentlyContinue) { return 'codex' }
-    if (Get-Command dsh -ErrorAction SilentlyContinue) { return 'dsh' }
 
     # 4. Fallback
-    return 'claude'
+    return 'dsh'
 }
 
 function Invoke-Agent {
     <#
     .SYNOPSIS
-        Invoke the configured agent CLI (claude, kimi, opencode, codex, or dsh) to run
+        Invoke the configured agent CLI (dsh, claude, kimi, opencode, or codex) to run
         a scenario and evaluate browser4-cli usability.
     .DESCRIPTION
         Runs the agent CLI resolved by Get-ScenarioAgent with the given prompt.
@@ -2841,7 +3420,7 @@ function Invoke-Agent {
           - kimi:   -p <prompt>; auto-approves tool calls via -p mode.
           - opencode: run <prompt>; no permission or --silent flags.
           - codex:  exec --dangerously-bypass-approvals-and-sandbox <prompt>.
-          - dsh:    run <prompt>; runs non-interactively through a headless profile.
+          - dsh:    --profile headless <prompt>; one task, then exit.
     .PARAMETER Prompt
         The full prompt including the general evaluation instructions and
         task-specific instructions.
@@ -2882,6 +3461,13 @@ function Invoke-Agent {
             Write-Host "  Scenario: $ScenarioName" -ForegroundColor DarkGray
         }
     }
+
+    # ── Put the agent client's host environment right ────────────────────────
+    # Fixes the two Claude Code diagnostics that otherwise open every captured
+    # artifact — an untrusted workspace (project permissions silently ignored)
+    # and an unknown model (silent 200k auto-compact).  Best-effort: the
+    # scenario still runs when the client config cannot be adjusted.
+    $null = Initialize-AgentEnvironment -Agent $agent -Silent:$Silent
 
     # ── Build agent arguments ───────────────────────────────────────────────
     # Delegates to Get-ScenarioAgentArgs — the single source of truth for
@@ -2934,6 +3520,11 @@ function Invoke-Agent {
         FilePath     = $agent
         ArgumentList = $agentArgs
     }
+    # dsh reads its task from a positional argument and rejects stdin, so its
+    # prompt must stay on the command line even when it is long.
+    if ($agent -eq 'dsh') {
+        $startParams['NoStdinRedirect'] = $true
+    }
     if ($captureFile) {
         $startParams['CaptureFile'] = $captureFile
     }
@@ -2967,6 +3558,26 @@ function Invoke-Agent {
     if ([string]::IsNullOrWhiteSpace($capturedOutput)) {
         Write-Host "  WARNING: No output captured from agent (file: $captureFile)" -ForegroundColor Yellow
         return
+    }
+
+    # ── Client-side diagnostics: host environment, not agent findings ────────
+    # Anything the agent CLI complains about is reported here so it can never be
+    # mistaken for evaluation output or a browser4 finding.  The capture itself
+    # stays raw — this is a report, not a filter.
+    $clientDiagnostics = Get-AgentClientDiagnostics -Content $capturedOutput
+    if ($clientDiagnostics.Count -gt 0) {
+        Write-Host ''
+        Write-Host "  NOTE: $($clientDiagnostics.Count) agent-client diagnostic line(s) captured — host environment, not agent findings:" `
+            -ForegroundColor Yellow
+        foreach ($line in ($clientDiagnostics | Select-Object -First 4)) {
+            $shown = if ($line.Length -gt 160) { $line.Substring(0, 160) + [char]0x2026 } else { $line }
+            Write-Host "    $shown" -ForegroundColor DarkGray
+        }
+        if ($clientDiagnostics.Count -gt 4) {
+            Write-Host "    (+$($clientDiagnostics.Count - 4) more)" -ForegroundColor DarkGray
+        }
+        Write-Host '    See "Agent client diagnostics" in browser4-tests/real-world-scenarios/README.md.' `
+            -ForegroundColor DarkGray
     }
 
     # ── Checkpoint summary ──────────────────────────────────────────────────

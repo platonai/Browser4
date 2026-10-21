@@ -30,8 +30,14 @@ data class ImageConfig(
     /** Maximum allowed download size in bytes (default: 50 MB) */
     val maxDownloadSize: Long = 50 * 1024 * 1024L,
 
-    /** Per-download timeout in seconds */
-    val downloadTimeoutSeconds: Long = 60,
+    /**
+     * Per-download HTTP budget in seconds: the whole call, and each of the
+     * connect/read/write phases. The default stays below the CLI's 30 s
+     * default tool-call timeout so a blocked or unreachable origin produces
+     * the plugin's own actionable error instead of a bare CLI timeout.
+     * Raise it for unusually large images (and raise the CLI `--timeout` too).
+     */
+    val downloadTimeoutSeconds: Long = DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
 
     /** Whether to auto-detect images on onDocumentSteady */
     val autoDetectEnabled: Boolean = false,
@@ -55,12 +61,33 @@ data class ImageConfig(
     val skipDataUris: Boolean = true,
 
     /** HTTP proxy for image downloads, e.g. "127.0.0.1:10808" or "http://127.0.0.1:10808".
-     * Null means no explicit proxy (the download client also falls back to the
-     * HTTPS_PROXY / HTTP_PROXY environment variables). */
+     * Null means no explicit proxy: the download client then falls back to the
+     * HTTPS_PROXY / HTTP_PROXY environment variables, the standard JVM proxy
+     * properties, and the operating-system proxy (WinINET on Windows); see
+     * [ImageProxyResolver]. */
     val proxy: String? = null,
 ) {
+    /**
+     * Connect timeout in seconds: bounded so a host that cannot be reached
+     * (no route, blocked direct egress, wrong proxy) fails fast — and with the
+     * plugin's actionable proxy hint — instead of hanging until the caller's
+     * HTTP timeout fires first.
+     */
+    val connectTimeoutSeconds: Long
+        get() = downloadTimeoutSeconds.coerceIn(1L, MAX_CONNECT_TIMEOUT_SECONDS)
+
     companion object {
         private const val PREFIX = "image."
+
+        /**
+         * Default per-download HTTP budget, deliberately below the CLI's 30 s
+         * default tool-call timeout (cli/browser4-cli/src/http.rs) so the
+         * plugin's actionable error is what the user sees.
+         */
+        const val DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 25L
+
+        /** Upper bound for the connect phase — a reachable host connects far sooner. */
+        const val MAX_CONNECT_TIMEOUT_SECONDS = 10L
 
         /**
          * Default download directory, anchored at the user's Browser4 state dir
@@ -78,7 +105,9 @@ data class ImageConfig(
             return ImageConfig(
                 downloadDir = conf.get("${PREFIX}download.dir", defaultDownloadDir()),
                 maxDownloadSize = conf.getLong("${PREFIX}download.max-size", 50 * 1024 * 1024L),
-                downloadTimeoutSeconds = conf.getLong("${PREFIX}download.timeout.seconds", 60),
+                downloadTimeoutSeconds = conf.getLong(
+                    "${PREFIX}download.timeout.seconds", DEFAULT_DOWNLOAD_TIMEOUT_SECONDS
+                ),
                 autoDetectEnabled = conf.getBoolean("${PREFIX}auto-detect.enabled", false),
                 autoDownloadEnabled = conf.getBoolean("${PREFIX}auto-download.enabled", false),
                 concurrentDownloads = conf.getInt("${PREFIX}download.concurrent", 5),

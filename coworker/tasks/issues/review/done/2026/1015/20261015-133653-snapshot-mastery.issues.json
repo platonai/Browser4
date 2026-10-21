@@ -1,0 +1,385 @@
+{
+  "meta": {
+    "scenario": "snapshot-mastery",
+    "date": "20261015-133653",
+    "mode": "dev",
+    "source": "20261015-133653-snapshot-mastery.issues.json"
+  },
+  "background": {
+    "task": "I completed the 10-step snapshot workflow against `https://en.wikipedia.org/wiki/Christopher_Alexander` using `./b4w.ps1` exclusively. **9 of 10 steps succeeded; step 4 (scoped snapshot) is blocked by a genuine product bug.**\n\n**Key outcome:** The documented CSS-scoping flags — `snapshot --selector <css>` and `snapshot grep --selector <css>` — are **completely non-functional**. They fail for every realistic CSS selector (`#id`, `.class`, bare element names), producing either a raw JavaScript `SyntaxError` surfaced as `[INTERNAL]` or a false \"matched no element on the page\". I traced this to a one-line defect in the backend and identified the exact fix. The same CSS selectors work correctly in every other command (`is visible \"#mw-content-text\"` → `true`, `get text \"#firstHeading\"` → `A Pattern Language`), so the failure is isolated to the AX-snapshot path.\n\n**One premise in the task description is wrong:** `-v 0` is *not* a full-page snapshot. On this article it returned 428 lines and explicitly reported `viewportsTotal: 10`, `hiddenBottomHeight: 9571px` — it is a single screen-height chunk. The true full-page capture is `-v all` (612 lines, 499 refs). The help text documents this correctly, but the CLI's own output header actively reinforces the wrong mental model (Issue 3).\n\n**Two steps could only be partially satisfied as literally specified:** step 4 via a workaround (`htmlsnapshot get text \"#mw-content-text\"`, 34 KB of scoped article text), and step 9's requirement to \"grep the auto-diff output\" — `snapshot grep` always re-captures the live page and can never see diff markers (verified: 0 matches for `## Added` / `+ button`). I completed it with an external `grep` on the saved capture.",
+    "workarounds": "",
+    "commands": "| Step | Command | Result |\n|---|---|---|\n| 1 | `./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Christopher_Alexander\"` | ✅ 10.5 s, auto-created session, page + title correct |\n| 2 | `./b4w.ps1 snapshot -v 0 --stdout --all` | ⚠️ Worked, but 428 lines = **1 of 10 viewports**. Also ran `-v all` (612 lines) for the real full page |\n| 3 | `./b4w.ps1 snapshot -i --stdout --all` | ✅ 347 lines, whole-page, interactive-only |\n| 4 | `./b4w.ps1 snapshot --selector \"#mw-content-text\"` | ❌ **FAILED** — `[INTERNAL] SyntaxError`. Workaround: `htmlsnapshot get text \"#mw-content-text\"` |\n| 5 | `./b4w.ps1 snapshot -d 3 --stdout --all` | ✅ 26 lines + clear stderr truncation warning |\n| 6 | `./b4w.ps1 snapshot -u --stdout --all` | ✅ 130 `/url:` lines (vs 0 without `-u`) |\n| 7 | `./b4w.ps1 click e550 --no-snapshot` | ✅ Navigated to *A Pattern Language - Wikipedia* |\n| 8 | `./b4w.ps1 snapshot -v 0 --auto-diff --stdout --all` | ✅ 524 lines: full tree + `### Diff` / `## Removed` (151) / `## Added` (43) |\n| 9 | `snapshot grep` variants | ✅ `-i`, `-C 3`, `-v`, `-c`, `-F`, `-w` all verified (with controls); ❌ `--selector` same bug; ⚠️ diff-grep impossible |\n| 10 | `./b4w.ps1 snapshot -v 0 --stdout` / `--page-size 100` | ✅ Footer + pagination hint on stderr, truncation hint on stdout |\n\n**Decisions and workarounds:**\n- Established a *deliberate* baseline (`snapshot -v 0`, which saves a file) and used `click <ref> --no-snapshot` so the auto-diff had a clean pre-click baseline.\n- Checked `-F` with a positive control (`-F 'Sara Ishikawa'` → 3) after `-F '[show]'` returned 0, to avoid falsely reporting `-F` as broken.\n- Checked `-w` with a control: `-i \"structure\"` → 20 vs `-i -w \"structure\"` → 18 — the flag genuinely works; my first test was simply inconclusive.\n- Verified `-v` inverted (52 link lines vs 383 non-link) and confirmed the diff-grep limitation by asserting 0 matches for `## Added`.\n\n**Root-cause investigation.** Located the defect in the Kotlin backend, confirmed it by reading three sibling call sites that do it correctly, and verified with a byte-level check that the `-v 0` / footer issues are real.\n\n---",
+    "executionContext": "**Preparation.** Verified cwd (`D:/workspace/Browser4/Browser4-4.14`), ran `./b4w.ps1 help` (26 KB of output, rich and well-organized), read `skills/browser4-cli/SKILL.md` in full plus `references/snapshot.md`, and consulted `AGENTS.md` after hitting the selector bug.\n\n**Commands used and what happened:**\n\n| Step | Command | Result |\n|---|---|---|\n| 1 | `./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Christopher_Alexander\"` | ✅ 10.5 s, auto-created session, page + title correct |\n| 2 | `./b4w.ps1 snapshot -v 0 --stdout --all` | ⚠️ Worked, but 428 lines = **1 of 10 viewports**. Also ran `-v all` (612 lines) for the real full page |\n| 3 | `./b4w.ps1 snapshot -i --stdout --all` | ✅ 347 lines, whole-page, interactive-only |\n| 4 | `./b4w.ps1 snapshot --selector \"#mw-content-text\"` | ❌ **FAILED** — `[INTERNAL] SyntaxError`. Workaround: `htmlsnapshot get text \"#mw-content-text\"` |\n| 5 | `./b4w.ps1 snapshot -d 3 --stdout --all` | ✅ 26 lines + clear stderr truncation warning |\n| 6 | `./b4w.ps1 snapshot -u --stdout --all` | ✅ 130 `/url:` lines (vs 0 without `-u`) |\n| 7 | `./b4w.ps1 click e550 --no-snapshot` | ✅ Navigated to *A Pattern Language - Wikipedia* |\n| 8 | `./b4w.ps1 snapshot -v 0 --auto-diff --stdout --all` | ✅ 524 lines: full tree + `### Diff` / `## Removed` (151) / `## Added` (43) |\n| 9 | `snapshot grep` variants | ✅ `-i`, `-C 3`, `-v`, `-c`, `-F`, `-w` all verified (with controls); ❌ `--selector` same bug; ⚠️ diff-grep impossible |\n| 10 | `./b4w.ps1 snapshot -v 0 --stdout` / `--page-size 100` | ✅ Footer + pagination hint on stderr, truncation hint on stdout |\n\n**Decisions and workarounds:**\n- Established a *deliberate* baseline (`snapshot -v 0`, which saves a file) and used `click <ref> --no-snapshot` so the auto-diff had a clean pre-click baseline.\n- Checked `-F` with a positive control (`-F 'Sara Ishikawa'` → 3) after `-F '[show]'` returned 0, to avoid falsely reporting `-F` as broken.\n- Checked `-w` with a control: `-i \"structure\"` → 20 vs `-i -w \"structure\"` → 18 — the flag genuinely works; my first test was simply inconclusive.\n- Verified `-v` inverted (52 link lines vs 383 non-link) and confirmed the diff-grep limitation by asserting 0 matches for `## Added`.\n\n**Root-cause investigation.** Located the defect in the Kotlin backend, confirmed it by reading three sibling call sites that do it correctly, and verified with a byte-level check that the `-v 0` / footer issues are real.\n\n---"
+  },
+  "assessment": {
+    "completionStatus": "Partially Successful — 9 of 10 task steps completed end-to-end. Step 4 (CSS-scoped snapshot) could not be completed as documented because both documented entry points (`snapshot --selector` and `snapshot grep --selector`) are non-functional; it was satisfied only via the unrelated `htmlsnapshot get text \"#mw-content-text\"` path. Step 9 was completed for all six grep flags with verified controls, but its `--selector` filter failed with the same defect and its premise (grep the auto-diff output) is unsupported by the tool and required an external-grep workaround. Step 2 also required clarification: `-v 0` is one viewport of ten, not the full page.",
+    "successRate": "80% — all navigation, interaction, capture, diff and grep-flag work succeeded; the two selector-scoped requirements and the literal auto-diff-grep requirement did not.",
+    "issuesFound": 10,
+    "majorBlockers": "`snapshot --selector <css>` and `snapshot grep --selector <css>` fail for every realistic CSS selector (a missing pair of quotes around the selector in the JavaScript probe at BrowserTabToolExecutor.kt:1906), making the documented snapshot-scoping feature unreachable and blocking task step 4. The second-order blocker is diagnostic quality: the same defect reports either a raw `[INTERNAL] SyntaxError` or a false 'CSS selector matched no element on the page', which actively misdirects debugging.",
+    "mostConfusingAspects": "1) `-v 0` looks like 'full snapshot' but is one viewport — and every capture, including whole-page ones, prints a header insisting 'You are viewing viewport 0', so the output itself teaches the wrong mental model. 2) The same short flags mean different things in `snapshot` and `snapshot grep` (-v is viewport vs invert-match), so a just-learned flag silently changes meaning one subcommand later. 3) `--auto-diff` announces 'show only what changed' but prints the entire current tree plus an appendix in a different line format. 4) `snapshot grep` cannot search the auto-diff output, and only the deep reference doc says so. 5) `-i` output, advertised as the concise interactive view, is dominated by concatenated internal CSS class names ('p-lang-btn-sticky-header 23 languages').",
+    "mostValuableImprovements": "Fix the one-line selector-interpolation bug (Critical) and add a regression test with a '#'/'.' selector; make the selector probe surface the real JavaScript error instead of coercing to 'matched no element'; correct the viewport header/footer so a whole-page capture never claims to be viewport 0; align the --auto-diff help text with what it actually prints and give diff lines unambiguous, ref-bearing syntax; give `snapshot grep` a --diff mode (or persist diff output) and mention the limitation in --help; trim the noisy -i merged names; and emit the trailing footer on its own line.",
+    "usabilityRating": 6
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "snapshot --selector and snapshot grep --selector are completely broken (CSS selector interpolated unquoted into JavaScript)",
+      "severity": "Critical",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "cd D:/workspace/Browser4/Browser4-4.14\n./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Christopher_Alexander\"\n./b4w.ps1 snapshot --selector \"#mw-content-text\"\n./b4w.ps1 snapshot grep --selector \"#mw-content-text\" -c \"pattern\"\n\nVariants tested (all fail):\n  --selector \"#mw-content-text\"      -> SyntaxError (Private field '#mw' ...)\n  --selector \".mw-parser-output\"     -> SyntaxError (Unexpected token '.')\n  --selector \"main\"                  -> ReferenceError: main is not defined\n  --selector \"div#mw-content-text\"   -> SyntaxError (missing ) after argument list)\n  --selector \"[id=\\\"mw-content-text\\\"]\" -> misleading 'matched no element on the page'\nControl proving the selectors are valid:\n  ./b4w.ps1 eval \"JSON.stringify({mw: !!document.querySelector('#mw-content-text'), po: !!document.querySelector('.mw-parser-output'), main: !!document.querySelector('main')})\" -> {\"mw\":true,\"po\":true,\"main\":true}"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The accessibility tree scoped to the elements matching the CSS selector (with ancestor path context, as `snapshot --help` documents), and a CSS-scoped search for `snapshot grep --selector`."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every realistic CSS selector fails with exit code 1. Representative output:\n  Error: [INTERNAL] browser_snapshot failed: SyntaxError: Private field '#mw' must be declared in an enclosing class\t>>>!!document.querySelector(#mw-content-text)<<<\n  Error: [INTERNAL] browser_snapshot failed: SyntaxError: Unexpected token '.'\t>>>!!document.querySelector(.mw-parser-output)<<<\n  Error: [INTERNAL] browser_snapshot failed: ReferenceError: main is not defined\n  [INVALID_ARGUMENT] browser_snapshot failed: ariaSnapshot: CSS selector '[id=\"mw-content-text\"]' matched no element on the page\n\nThe literal JS in the first error message (document.querySelector(#mw-content-text), unquoted) is the smoking gun. The same selectors succeed in every other command (is visible \"#mw-content-text\" -> true; get text \"#firstHeading\" -> 'A Pattern Language'; htmlsnapshot get text \"#mw-content-text\" -> 34 KB of scoped text), so only the AX-snapshot path is affected. The documented step-4 workflow has no working form; quoting the selector (--selector \"'#mw-content-text'\") also fails because escapeJsSelector escapes the quotes into \\'."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The probe that validates the selector builds a JavaScript expression without wrapping the selector in a string literal. BrowserTabToolExecutor.kt:1906 reads:\n    \"!!document.querySelector(${Browser4WebDriver.escapeJsSelector(selector)})\"\nBut escapeJsSelector is documented (and unit-tested) as escaping content to sit INSIDE a single-quoted literal: its KDoc says 'Escape [selector] for embedding inside a single-quoted JavaScript string literal (e.g. document.querySelector('<selector>'))', and Browser4WebDriverTest asserts assertEquals(\"#input\", escapeJsSelector(\"#input\")) — i.e. it returns the selector unchanged and the caller must supply the quotes. The three other call sites all do so correctly (Browser4WebDriver.kt:473, Browser4WebDriver.kt:2206, BrowserTabToolExecutor.kt:1588 — all of the form document.querySelector('${escapeJsSelector(selector)}')). Only line 1906 omits them, so the raw selector text is parsed as JavaScript: '#id' and '.class' are syntax errors, a bare tag like 'main' is an undefined identifier, and '[id=\"x\"]' silently evaluates a bogus expression. Consequently the selector never even reaches the server-side AX renderer, so the documented scoping feature is entirely unreachable. Because `snapshot grep` shares this code path, `--selector` and `--selector-all` are broken there too."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/BrowserTabToolExecutor.kt:1906 (in `callFunctionOn`, the `\"ariaSnapshot\" ->` branch, line 1884); helper at browser4-core/browser4-browser/src/main/kotlin/ai/platon/pulsar/chrome/Browser4WebDriver.kt:245 (`escapeJsSelector`)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add the missing quotes at line 1906 so it matches its three sibling call sites: \"!!document.querySelector('${Browser4WebDriver.escapeJsSelector(selector)}')\"\n- Add a regression test that uses a selector containing '#' and '.' (the existing scoped-snapshot coverage evidently never exercised one, or this would have failed); prefer an e2e scenario against a real fixture page over a mock\n- Verify `snapshot grep --selector` and `--selector-all` in the same test, since they share this probe\n- Consider renaming escapeJsSelector to escapeJsStringInSingleQuotes (or having it emit the quotes) so the contract cannot be misread again"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "Misleading 'matched no element on the page' error swallows the real JavaScript exception",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Christopher_Alexander\"\n./b4w.ps1 snapshot --selector '[id=\"mw-content-text\"]'\n# contrast:\n./b4w.ps1 is visible \"#mw-content-text\"   # -> true"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Either a correct scoped snapshot, or an error that names the real cause (the evaluation threw / the selector was mis-quoted)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "[INVALID_ARGUMENT] browser_snapshot failed: ariaSnapshot: CSS selector '[id=\"mw-content-text\"]' matched no element on the page — while the element demonstrably exists (is visible returns true). The message sends the user hunting for a selector problem that does not exist and hides the actual bug."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "At BrowserTabToolExecutor.kt:1905-1910 the evaluation result is coerced with `as? Boolean ?: false`. When the injected JavaScript throws a RUNTIME exception (as '[id=\"x\"]' does: it evaluates to an array, whose stringification is an invalid selector, so querySelector throws a DOMException), evaluateValue does not return a Boolean, so the coercion turns the failure into `false`, and the subsequent require(found) reports a match failure that never happened. Compile-time SyntaxErrors take a different path and surface as [INTERNAL] with the raw JS, which is why the same defect presents as two unrelated-looking errors. This violates the repository's own review gate in AGENTS.md ('No silent failures ... Error messages must surface the real cause to the CLI/user instead of being swallowed')."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/BrowserTabToolExecutor.kt:1905-1910"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Distinguish 'the probe threw' from 'the probe returned false': inspect the evaluation's exceptionDetails and rethrow with the JS error text instead of coercing to false\n- Replace `as? Boolean ?: false` with an explicit when(result) that fails loudly on an unexpected result type\n- Include the generated JS expression in the error message so a mis-quoted selector is self-evident\n- Once the quoting bug above is fixed, add a test asserting that an intentionally invalid selector reports a syntax/selector error, not 'matched no element'"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Snapshot header claims 'You are viewing viewport 0' even for whole-page captures",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Christopher_Alexander\"\n./b4w.ps1 snapshot -i --stdout --all | head -7\n./b4w.ps1 snapshot -i --stdout --all | tail -8\n./b4w.ps1 snapshot -d 3 --stdout --all | head -7"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A capture with no --viewport flag should be labelled as whole-page, or carry no viewport metadata at all."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every capture — including plain `snapshot`, `-i`, and `-d 3`, none of which were given -v — prints:\n  # Viewport State\n  # - processingViewport: 0\n  # - viewportHeight: 1080px\n  # - viewportsTotal: 10\n  # - hiddenTopHeight: 0px\n  # - hiddenBottomHeight: 9571px\nand closes with 'This page has 10 viewports ... You are currently viewing viewport 0 (absolute).' Yet the body contains elements at box y=9858, i.e. the whole page. The header is therefore factually wrong and directly caused the incorrect premise in this evaluation task ('full-page snapshot (-v 0)')."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The Viewport State header/footer block appears to be emitted with a hardcoded viewport index 0 whenever viewport metadata is attached to the response, rather than reflecting whether a --viewport filter was actually applied. With no -v passed, the AX tree is unfiltered (whole page) while the metadata still describes 'viewport 0'. The hiddenBottomHeight value (9571px) additionally suggests the height was computed against an unfiltered capture, producing metadata that mixes two different scopes."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "Snapshot rendering/reporting path for the 'Viewport State' block — likely in the CLI's snapshot output formatting (cli/browser4-cli/src/) or the backend's ariaSnapshot response builder in browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/BrowserTabToolExecutor.kt (the `\"ariaSnapshot\" ->` branch)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Omit processingViewport/hiddenTopHeight/hiddenBottomHeight and the 'You are viewing viewport N' footer when the request carried no viewport filter\n- When viewport filtering IS active, state it explicitly ('scoped to viewport 0 of 10') and keep the total honest\n- Have the default (unfiltered) capture print one line saying the whole page is included, so `-v 0` vs no flag is unambiguous"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "--auto-diff help says 'show only what changed' but the output is the full tree plus a diff appendix, in an inconsistent line format",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Christopher_Alexander\"\n./b4w.ps1 snapshot -v 0                    # deliberate baseline\n./b4w.ps1 snapshot grep \"Pattern Language\"  # locate link ref e550\n./b4w.ps1 click e550 --no-snapshot          # navigate to A Pattern Language\n./b4w.ps1 snapshot -v 0 --auto-diff --stdout --all\n\nGrep for the diff markers:\n  grep -n '^##' <output>              # -> ### Diff (322), ## Removed (326), ## Added (479)\n  grep -c '^+ ' <output>              # -> 43 added\n  grep -c '^- ' <output>              # -> 151 removed\n  grep -c '^~ ' <output>              # -> 0 modified"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Per `browser4-cli snapshot --help`: 'Diff against the previous snapshot — show only what changed since the last capture' (the reference doc likewise says 'show only what changed')."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "524 lines: roughly the first 321 lines are the complete current-page tree with no diff marking whatsoever (including chrome that did not change, e.g. the search box), followed by the `### Diff` section. The diff lines also use a different, non-YAML shape — `+ button e7078 \"Toggle Structure subsection\"` — with no [ref=] and no [box=], and the leading '+'/'-' collides visually with YAML list markers ('- link e550 \"A Pattern Language\"' appears under ## Removed where '-' is easy to misread as a YAML item). Some added lines render oddly, e.g. `+ \"table e7305 \"\"` and `+ \"generic e7306 \"\"`."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The auto-diff response is the full snapshot document with two appended sections (Removed/Added) rendered by a different formatter than the tree, rather than a filtered diff view. Because refs are CDP backend-node IDs, a navigation reassigns every ref, so a naive element-identity diff would indeed mark the whole page as changed — the implementation appears to sidestep that by emitting the full tree plus name-based deltas, which is why the counts (151/43) do not correspond to the tree size (499 refs). The help text was not updated to match the actual output contract."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "Auto-diff rendering in the snapshot output path (backend ariaSnapshot/diff response builder and the CLI's snapshot printer); see skills/browser4-cli/references/snapshot.md 'Auto-Diff' section for the documented contract that needs correcting"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Fix the help text and reference doc to state exactly what is printed (full current tree + '### Diff' with '## Removed'/'## Added' name-delta sections), or make the output match the current wording by printing only the diff\n- Give diff lines an unambiguous, machine-readable marker (e.g. a '## Added' section with real YAML list items, or a '+ ' prefix reserved for diffs and never emitted inside tree lines)\n- Emit [ref=] on diff lines so changed elements can be acted on directly\n- Investigate the malformed `+ \"table e7305 \"\"` rendering"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "snapshot grep cannot search the auto-diff output, and --help does not say so",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "# The documented/task-expected workflow:\n./b4w.ps1 snapshot -v 0 --auto-diff --stdout --all > diff.txt\n./b4w.ps1 snapshot grep -c -F \"## Added\"     # -> 0\n./b4w.ps1 snapshot grep -c -F \"+ button\"     # -> 0\n\n# Workaround that works:\ngrep -i -C 3 \"pattern language\" diff.txt"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A way to run grep-style searches (with -i/-C/-v/-c/-F/-w) over the changed elements produced by --auto-diff."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "`snapshot grep` always captures a fresh full-page AX tree from the live page; it never reads the last saved snapshot file and can never see diff markers (+/-/~), which exist only in the --auto-diff response text. Both probe searches return 0 matches with exit 1. The only way to search the diff is to redirect --auto-diff --stdout to a file and use an external grep."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "By design: snapshot grep is implemented as a server-side search over a freshly captured tree, not as a search over persisted snapshot artifacts, and the diff is a computed view rather than a stored document. The limitation is documented only in skills/browser4-cli/references/snapshot.md ('it cannot see auto-diff markers ... because those exist only in the --auto-diff response text, never in a persisted file'); `browser4-cli snapshot --help` describes grep as searching 'snapshot YAML content' without mentioning that the auto-diff output is out of scope, so the gap is invisible to anyone working from --help alone."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ snapshot grep implementation (help text and dispatch) — see the `snapshot grep` subcommand help in the snapshot command definition"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a --diff flag to `snapshot grep` that searches the current auto-diff response instead of the live tree\n- Alternatively persist the --auto-diff output as a snapshot file so existing tools (snapshot grep, diff snapshot) can read it\n- State the limitation in `snapshot --help` itself, next to the grep options, not only in the deep reference doc\n- Point users at the workaround in the help text: 'redirect --auto-diff --stdout to a file and grep it'"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "snapshot -i merged accessible names are extremely noisy, concatenating internal ids, classes and paths",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Christopher_Alexander\"\n./b4w.ps1 snapshot -i --stdout --all | head -25"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Interactive elements with readable, self-contained labels (the documented promise: 'inner text merged into their names so each surviving ref line reads as a self-contained target')."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Names are flooded with internal identifiers and fragments, e.g.:\n  search \"p-search search Search Wikipedia [alt-f] /wiki/Special:Search Search searchform /w/index.php simpleSearch Search Wikipedia [alt-f] search searchInput Search Wikipedia Search Wikipedia hidden title Special:Search Search\"\n  button \"p-lang-btn-sticky-header 23 languages\"\n  generic \"ca-talk-sticky-header # ca-subject-sticky-header # ca-history-sticky-header # ca-watchstar-sticky-header # ca-edit-sticky-header # ca-ve-edit-sticky-header # ca-viewsource-sticky-header # p-lang-btn-sticky-header 23 languages ca-addsection-sticky-header # Add topic\"\nThe genuinely useful text ('Search Wikipedia', '23 languages') is buried in noise, making -i harder to read than the plain tree it is meant to simplify."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The interactive-only renderer concatenates the accessible name with every descendant text node (and, apparently, id/class attributes surfaced by the extraction path) without any length cap, deduplication, or filtering of internal tokens. On a modern skin like Wikipedia Vector 2022 this produces very long names."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "Interactive-only snapshot rendering (`-i` merge logic) in the backend AX rendering path used by the ariaSnapshot branch, BrowserTabToolExecutor.kt:1884+"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Cap merged names at a sane length (e.g. ~120 chars) and elide the remainder\n- Drop tokens that look like internal identifiers (kebab-case prefixed ids/classes such as vector-*, mw-*, ca-*, toc-*; '#', '/w/index.php' fragments; bare hash strings) before merging\n- De-duplicate repeated fragments within a single merged name\n- Consider emitting the merged text as a child `text:` node instead of inlining it, so the role line stays scannable"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Snapshot footer is appended to the last element line without a newline, corrupting the final YAML node",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 snapshot -v 0 --stdout > out.txt\ntail -8 out.txt\ngrep -n '1897,1072,0,0' out.txt"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The trailing '# ---' footer block starts on its own line after the last YAML node."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The last tree line and the footer share one line:\n      - list [ref=e8185] [box=1897,1072,0,0]# ---\nso the final node is unparseable by any line-based reader. Reproduced in every --stdout capture tested (plain, -i, -v 0). Byte-level check confirms no newline before the '# ---' marker."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The footer is concatenated to the rendered snapshot string without first ensuring the body ends with a line terminator (the tree body evidently has no trailing newline when it ends with a leaf node)."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "CLI snapshot stdout/footer assembly (cli/browser4-cli/src/ snapshot output path) — the same string that emits the '# ---' / 'This page has N viewports' block"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Emit '\\n' before the footer block when the body does not already end with one\n- Add a small unit test asserting the last body line and the first footer line are distinct lines (and that the captured output ends with exactly one newline)"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "Element names containing a double quote are serialized in a different, quoted-scalar YAML shape",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Christopher_Alexander\"\n./b4w.ps1 snapshot -v all --stdout --all | grep -n '\\\\\"' | head -3\n# 22 occurrences on this page; also 8 (-i), 22 (-u), 5 (plain -v 0) across separate captures"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Every node line follows the same shape as all the others: - role \"name\" [ref=…] [box=…]."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Any element whose accessible name contains a double quote is emitted as a quoted YAML scalar with backslash escapes for the whole node line:\n  - \"generic \\\"A Pattern Language: Towns, Buildings, Construction\\\" [ref=e7306] [box=1116,216,309,49]\"\nThe output is valid YAML but structurally inconsistent with the surrounding lines (roughly 15-20% of nodes on this page switch shape)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The YAML serializer escapes the name and, when the escaping introduces a quote character, falls back to quoting the entire line as a scalar rather than quoting only the name value. Line-based consumers and humans skimming for '- role \"...\" [ref=' therefore see a differently shaped node."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "Accessibility-tree YAML serialization (name escaping / scalar style selection) in the snapshot rendering path"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Keep the node shape uniform: always emit - <role> \"<escaped-name>\" [ref=…] [box=…], quoting only the name\n- Prefer single-quoted names (YAML escapes ' by doubling) when the name contains a double quote, avoiding backslashes entirely\n- Add a serialization test with names containing \", ', :, #, and leading/trailing spaces"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 9,
+      "title": "Short flags collide between snapshot and snapshot grep (-i, -v, -c mean different things in the same command family)",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "# In `snapshot`:           -i = interactive, -v <n> = viewport index, -c = compact\n./b4w.ps1 help snapshot\n# In `snapshot grep`:      -i = case-insensitive, -v = invert match, -c = count\n./b4w.ps1 snapshot grep -i \"pattern\"\n./b4w.ps1 snapshot grep -c -v \"link\""
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Flags with the same letter should mean compatible things, or the divergence should be called out where the subcommand is introduced."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The same letters carry unrelated meanings depending on whether you are in the `snapshot` command or its `grep` subcommand. The sharpest trap is -v: `snapshot -v 0` selects a viewport, while `snapshot grep -v \"link\"` inverts the match — a user who just learned -v as 'viewport' will silently get an inverted search instead of an error. `-c` similarly flips from 'compact' to 'count'."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The grep subcommand adopts GNU grep conventions (-i/-v/-c) while the parent snapshot command uses -i for interactive-only rendering, -v for viewport, and -c for compact mode. Both are individually defensible, but they are documented in separate help sections with no cross-reference, so the collision is only discoverable by reading both."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ snapshot command + snapshot grep subcommand flag definitions and their help text"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a short note in the `snapshot grep` help stating that its flags follow grep semantics and deliberately differ from `snapshot`'s -i/-v/-c\n- Consider accepting long forms (--invert-match, --count, --ignore-case) as the primary spellings in the grep subcommand\n- If feasible, reject the ambiguous short forms in the grep subcommand with a hint pointing at the long form"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 10,
+      "title": "Snapshot captures accumulate in the working directory with no capture-time warning",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 snapshot list\nls .browser4-cli/snapshot/ | wc -l ; du -sh .browser4-cli/snapshot/"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Some signal at capture time (count/size threshold plus a hint) or a retention policy, so a new user does not silently grow the working directory."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "After one session: 'Snapshots in .browser4-cli\\snapshot (showing 20 of 100 total)', with 115 files / 9.3 MB on disk. Every goto/click/snapshot writes a new timestamped file into the current working directory, and the help for `snapshot list` would only be found by a user already looking for it. The growth is disk-visible but never surfaced during normal use."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Captures are written unconditionally to <cwd>/.browser4-cli/snapshot/ with no size/count accounting at write time and no automatic pruning. The behavior is documented in references/snapshot.md (including `snapshot clean`) but the CLI prints only the file path, never a retention hint."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "CLI snapshot file writer (cli/browser4-cli/src/ snapshot capture path) and the snapshot list/clean implementation"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Print a one-line hint on stderr when the snapshot directory exceeds a threshold (e.g. 'snapshot dir holds 115 files / 9.3 MB — run snapshot clean to prune')\n- Add a config key for retention (max age / max count) and apply it automatically\n- Consider pruning on `close`/`stop`, or at least report the total on every capture"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

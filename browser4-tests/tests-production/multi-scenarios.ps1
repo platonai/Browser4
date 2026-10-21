@@ -406,6 +406,12 @@ $TotalPasses = 0
 $TotalFailures = 0
 $IterationTimings = [System.Collections.ArrayList]::new()
 
+# Log files of the runs that actually failed, in run order.  The summary used
+# to glob every *.log in the log directory, which listed passing scenarios
+# (and stale logs from earlier suites) as "FAILURE LOGS" and fed them to the
+# AI analysis.
+$FailureLogFiles = [System.Collections.ArrayList]::new()
+
 # Per-scenario log directory.
 $LogDir = Join-Path $ScriptDir 'logs'
 $null = New-Item -Path $LogDir -ItemType Directory -Force -ErrorAction SilentlyContinue
@@ -507,6 +513,7 @@ $serverLog
             # Print server log tail to console on failure.
             if ($serverLog) { Write-Host "`n  ── SERVER LOG TAIL ──" -ForegroundColor Red; Write-Host $serverLog -ForegroundColor DarkYellow }
             Write-Host "  📄 $logName.log" -ForegroundColor DarkGray
+            $null = $FailureLogFiles.Add($logFile)
             $iterFailures++
             continue
         }
@@ -554,6 +561,7 @@ $serverLog
 "@ | Set-Content -Path $logFile
             if ($serverLog) { Write-Host "`n  ── SERVER LOG TAIL ──" -ForegroundColor Red; Write-Host $serverLog -ForegroundColor DarkYellow }
             Write-Host ("❌  exit=$($proc.ExitCode)  {0:F1}s  📄 {1}.log" -f $sw.Elapsed.TotalSeconds, $logName) -ForegroundColor Red
+            $null = $FailureLogFiles.Add($logFile)
             $iterFailures++
         }
     }
@@ -605,7 +613,13 @@ if ($failedIters) {
 if ($TotalFailures -gt 0) {
     Write-Host "`n  Logs directory: $LogDir" -ForegroundColor DarkGray
     Write-Host "  -- FAILURE LOGS --" -ForegroundColor Red
-    $failureLogs = @(Get-ChildItem -Path $LogDir -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    $failureLogs = @($FailureLogFiles)
+    if ($failureLogs.Count -eq 0) {
+        # Defensive: a failure that produced no per-scenario log file.
+        $failureLogs = @(Get-ChildItem -Path $LogDir -Filter "*.log" -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -ge $SuiteStartedAt } |
+            ForEach-Object { $_.FullName })
+    }
     foreach ($log in $failureLogs) {
         Write-Host "    📄 $log" -ForegroundColor DarkGray
     }

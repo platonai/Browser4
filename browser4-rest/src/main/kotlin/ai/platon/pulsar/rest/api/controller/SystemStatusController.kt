@@ -3,6 +3,7 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.skills.DefinitionBackedSkill
 import ai.platon.pulsar.agentic.skills.SkillRegistry
+import ai.platon.pulsar.agentic.tools.builtin.TabActivity
 import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.boot.plugin.PluginCompatibility
 import ai.platon.pulsar.boot.plugin.PluginService
@@ -313,18 +314,31 @@ class SystemStatusController(
     private suspend fun sessionTabs(s: ManagedSession): Map<String, Any?>? {
         val browser = s.agenticSession.boundBrowser ?: return null
         return withTimeoutOrNull(TABS_QUERY_TIMEOUT_MS) {
-            val frontGuid = (browser.frontDriver as? AbstractWebDriver)?.guid
             val tabs = mutableListOf<Map<String, Any?>>()
             try {
-                val drivers = browser.listDrivers().filterIsInstance<AbstractWebDriver>()
+                // Stable creation order, the same one browser.listTabs numbers: the
+                // `index` published here is the position switchTab/closeTab resolve,
+                // so it does not change between two reads over the same tab set.
+                val drivers = TabActivity.orderedTabDrivers(browser)
+                // The front driver is only set by bringToFront(). A freshly opened
+                // (managed, single-tab) session therefore has no front driver at
+                // all, and every tab compared unequal — `active` came back false
+                // for all of them, which silently broke `.pages[] | select(.active)`
+                // on the CLI side. TabActivity holds the rule once, so this
+                // endpoint, PagesController and browser.listTabs (the path
+                // page-info/tab-list actually take) can never disagree.
+                val activeGuid = TabActivity.resolveActiveGuid(drivers, browser.frontDriver)
                 for ((index, wd) in drivers.withIndex()) {
                     try {
                         tabs += mapOf(
                             "index" to index,
                             "guid" to wd.guid,
                             "title" to wd.title(),
+                            // The live, post-redirect address: currentUrl() reads
+                            // document.URL from the tab itself, so a navigation that
+                            // redirected reports where the tab actually is.
                             "url" to wd.currentUrl(),
-                            "active" to (wd.guid == frontGuid),
+                            "active" to (wd.guid == activeGuid),
                         )
                     } catch (e: Exception) {
                         tabs += mapOf(
@@ -332,7 +346,10 @@ class SystemStatusController(
                             "guid" to wd.guid,
                             "title" to "<unavailable>",
                             "url" to "",
-                            "active" to false,
+                            // A tab whose metadata query failed is still the tab the
+                            // session is on; the failure to read a title must not make
+                            // the active flag disagree with the per-tab `error` field.
+                            "active" to (wd.guid == activeGuid),
                             "error" to (e.message ?: "query failed"),
                         )
                     }

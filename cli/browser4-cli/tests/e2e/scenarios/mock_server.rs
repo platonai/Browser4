@@ -71,10 +71,10 @@ pub(super) fn test_profile_import_command(ctx: &mut E2ECtx) {
         dynamic.stdout
     );
 
-    // Bare `plugin` is intentionally rejected with a subcommand hint (see
-    // preferred_prefixed_group_form); server-driven listing lives behind
-    // `plugin list` and `plugin-<domain>` invocations. The dynamic path above
-    // already proves server-side discovery works end to end.
+    // Bare `plugin` lists the plugin tool domains the backend advertises
+    // (`test_e2e_plugin_tool_surface` pins that surface, together with
+    // `tool list` and `plugin <domain> --help`). The dynamic path above already
+    // proves server-side discovery works end to end.
 
     // Plugin-declared CLI command: the plugin manifest (ToolSpec.cliName)
     // declares `profile import`; the CLI discovers it from /mcp/tools/specs
@@ -198,6 +198,43 @@ pub(super) fn test_close_active_session(ctx: &mut E2ECtx) {
     assert!(
         !state_file_path(&ctx.state_dir, None).exists(),
         "Expected state file to be removed after close"
+    );
+
+    // `disconnect` is the documented alias of `close` (attach.md spells it in
+    // several places) and must resolve through the same dispatcher arm. The
+    // registry entry alone is not coverage: the harness self-check requires
+    // every command marked E2eCoverage::Tested to be exercised here.
+    fs::write(state_file_path(&ctx.state_dir, None), state.to_string())
+        .expect("write state fixture");
+    let alias_result = run_command(ctx, &["disconnect"]);
+    assert_eq!(
+        alias_result.exit_code, 0,
+        "expected disconnect to succeed, stderr:\n{}",
+        alias_result.stderr
+    );
+    assert!(
+        alias_result.stdout.contains("Session closed."),
+        "Expected disconnect to report the same outcome as close, got:\n{}",
+        alias_result.stdout
+    );
+    assert!(
+        !alias_result.stderr.contains("Unknown command"),
+        "disconnect must not fall through to the unknown-command path:\n{}",
+        alias_result.stderr
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.close_session_calls,
+        vec![
+            "swarm-session-1".to_string(),
+            "swarm-session-1".to_string()
+        ],
+        "disconnect must call close_session exactly like close does"
+    );
+    assert!(
+        !state_file_path(&ctx.state_dir, None).exists(),
+        "Expected state file to be removed after disconnect"
     );
 }
 
@@ -881,6 +918,142 @@ pub(super) fn test_list_multiple_named_sessions(ctx: &mut E2ECtx) {
     );
 }
 
+/// `list` reports the current workspace only; `list --all` adds the sessions
+/// persisted by sibling workspaces (each checkout keeps its own state
+/// namespace), and `--verbose` lifts the URL column cap.
+pub(super) fn test_list_all_workspaces(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // The current namespace holds a default session whose URL is longer than
+    // the 48-character table cap, so `--verbose` is observable.
+    fs::write(
+        state_file_path(&ctx.state_dir, None),
+        serde_json::json!({
+            "sessionId": "swarm-session-current",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write current state fixture");
+
+    let long_url = format!(
+        "https://mock.browser4.local/{}",
+        "long-path-segment/".repeat(4)
+    );
+    let mut current = MockListedSession::active("swarm-session-current");
+    current.url = long_url.clone();
+    mock_server.set_listed_sessions(vec![current]);
+
+    // A sibling workspace namespace, exactly where `--all` looks for it.
+    let sibling_state = ctx.state_dir.join("workspaces").join("other-checkout-7f3a");
+    let sibling_session = state_file_path(&sibling_state, Some("scrape"));
+    fs::create_dir_all(sibling_session.parent().unwrap()).expect("create sibling sessions dir");
+    fs::write(
+        &sibling_session,
+        serde_json::json!({
+            "sessionId": "foreign-session-1",
+            "baseUrl": "http://127.0.0.1:9",
+        })
+        .to_string(),
+    )
+    .expect("write sibling workspace state");
+
+    // ---- plain `list` stays scoped to the current workspace ----
+    let plain = run_command(ctx, &["list"]);
+    assert_eq!(plain.exit_code, 0, "expected list to succeed");
+    assert!(
+        plain.stdout.contains("swarm-session-current") && plain.stdout.contains("Active"),
+        "expected the current session to be Active:\n{}",
+        plain.stdout
+    );
+    assert!(
+        !plain.stdout.contains("Workspace") && !plain.stdout.contains("other-checkout-7f3a"),
+        "plain list must stay scoped to the current workspace:\n{}",
+        plain.stdout
+    );
+    assert!(
+        !plain.stdout.contains(&long_url),
+        "the URL column is capped unless --verbose is given:\n{}",
+        plain.stdout
+    );
+
+    // ---- `list --all` adds the sibling workspace ----
+    let all = run_command(ctx, &["list", "--all"]);
+    assert_eq!(all.exit_code, 0, "expected list --all to succeed");
+    let output = &all.stdout;
+    assert!(
+        output.contains("Workspace"),
+        "expected a Workspace column with --all:\n{output}"
+    );
+    assert!(
+        output.contains("other-checkout-7f3a") && output.contains("foreign-session-1"),
+        "expected the sibling workspace row:\n{output}"
+    );
+    // This backend cannot verify another workspace's session, so the row
+    // degrades to Unknown instead of claiming a status it cannot know.
+    assert!(
+        output.contains("Unknown"),
+        "expected Unknown for an unverifiable sibling row:\n{output}"
+    );
+    assert!(
+        output.contains("scanned"),
+        "expected the --all scan summary:\n{output}"
+    );
+    assert!(
+        output.contains("* = current workspace"),
+        "expected the current-workspace marker legend:\n{output}"
+    );
+    assert!(
+        !output.contains(&long_url),
+        "--all alone must not lift the URL cap:\n{output}"
+    );
+
+    // ---- `--all --verbose` lifts the cap ----
+    let verbose = run_command(ctx, &["list", "--all", "--verbose"]);
+    assert_eq!(
+        verbose.exit_code, 0,
+        "expected list --all --verbose to succeed"
+    );
+    assert!(
+        verbose.stdout.contains(&long_url),
+        "--verbose must print the untruncated URL:\n{}",
+        verbose.stdout
+    );
+
+    // ---- JSON: the workspace fields appear only with --all ----
+    let all_json = run_command(ctx, &["list", "--all", "--json"]);
+    let parsed = parse_json_output(&all_json.stdout, "list --all");
+    let sessions = parsed["output"]["sessions"]
+        .as_array()
+        .expect("sessions array in --all JSON");
+    let foreign = sessions
+        .iter()
+        .find(|session| session["session_id"] == "foreign-session-1")
+        .expect("sibling session in --all JSON");
+    assert_eq!(foreign["workspace"], "other-checkout-7f3a");
+    assert_eq!(foreign["workspace_current"], false);
+    let own = sessions
+        .iter()
+        .find(|session| session["session_id"] == "swarm-session-current")
+        .expect("current session in --all JSON");
+    assert_eq!(own["workspace_current"], true);
+
+    let plain_json = run_command(ctx, &["list", "--json"]);
+    let parsed = parse_json_output(&plain_json.stdout, "list");
+    let sessions = parsed["output"]["sessions"]
+        .as_array()
+        .expect("sessions array in list JSON");
+    assert!(
+        sessions
+            .iter()
+            .all(|session| session.get("workspace").is_none()),
+        "the default JSON shape must stay unchanged: {sessions:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // status
 // ---------------------------------------------------------------------------
@@ -1081,7 +1254,13 @@ pub(super) fn test_stop_no_running_server(ctx: &mut E2ECtx) {
     );
 }
 
-pub(super) fn test_stop_clears_state(ctx: &mut E2ECtx) {
+/// `stop` stops the backend but KEEPS the session records, marked stale.
+///
+/// Deleting them made sessions vanish from `list` (they could not be revived by a
+/// later `open`/`goto`), so `stop` only sets `"stale": true`; `close`,
+/// `close-all` and `kill-all` are the commands that delete records — `kill-all`
+/// is covered by `test_e2e_kill_all_clears_state_and_registry`.
+pub(super) fn test_stop_marks_state_stale(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let mock_server = MockBrowser4Server::start();
@@ -1092,11 +1271,8 @@ pub(super) fn test_stop_clears_state(ctx: &mut E2ECtx) {
         "sessionId": "swarm-session-1",
         "baseUrl": mock_server.base_url(),
     });
-    fs::write(
-        state_file_path(&ctx.state_dir, None),
-        default_state.to_string(),
-    )
-    .expect("write default state");
+    let default_path = state_file_path(&ctx.state_dir, None);
+    fs::write(&default_path, default_state.to_string()).expect("write default state");
 
     let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
     fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
@@ -1113,15 +1289,31 @@ pub(super) fn test_stop_clears_state(ctx: &mut E2ECtx) {
     let result = run_command(ctx, &["stop"]);
     assert_eq!(result.exit_code, 0);
 
-    // stop must clear all state.
-    assert!(
-        !state_file_path(&ctx.state_dir, None).exists(),
-        "Expected default state to be removed after stop"
-    );
-    assert!(
-        !auth_path.exists(),
-        "Expected named state to be removed after stop"
-    );
+    // Both records survive and carry the staleness marker.
+    for (label, path) in [("default", &default_path), ("named", &auth_path)] {
+        assert!(
+            path.exists(),
+            "stop must keep the {label} session record so `list` can show it as stale"
+        );
+        let record: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(path).unwrap_or_else(|e| panic!("read {label} state: {e}")),
+        )
+        .unwrap_or_else(|e| panic!("parse {label} state: {e}"));
+        assert_eq!(
+            record["stale"],
+            serde_json::json!(true),
+            "stop must mark the {label} session record stale, got: {record}"
+        );
+        assert_eq!(
+            record["sessionId"],
+            if label == "default" {
+                serde_json::json!("swarm-session-1")
+            } else {
+                serde_json::json!("swarm-session-auth")
+            },
+            "stop must preserve the record's session id, got: {record}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2722,10 +2914,20 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
     );
 
     // ── 10. pushstate (synthesizes browser_evaluate) ──────────────────
-    let pushstate = run_command(ctx, &["pushstate", "/new-path"]);
-    assert_eq!(
-        strip_snapshot_output(&pushstate.stdout),
-        "mock evaluation result"
+    // `pushstate` now verifies that the URL actually changed, and this mock answers
+    // `current_url` with the same canned text before and after the push — so the
+    // correct outcome against a static mock is the loud failure, not a silent exit 0.
+    // The happy path (URL really changes) is covered live by
+    // `test_agent_browser_command_gaps_live`.
+    let pushstate = run_command_expecting_failure(
+        ctx,
+        &["pushstate", "/new-path"],
+        "history.pushState did not change the page URL",
+    );
+    assert!(
+        pushstate.stderr.contains("mock response for current_url"),
+        "the failure must name the URL it saw, got:\n{}",
+        pushstate.stderr
     );
 
     // ── 11. highlight (synthesizes browser_evaluate) ──────────────────
@@ -2736,20 +2938,31 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
     );
 
     // ── 12. set (CDP emulation) ───────────────────────────────────────
+    // `set` reports what it applied instead of echoing the raw CDP payload (it used to
+    // print the empty result object), so the recorded tool call is what proves the right
+    // CDP method reached the backend.
     let set_geo = run_command(
         ctx,
         &["set", "geo", "--lat=37.7749", "--lon=-122.4194"],
     );
     assert!(
-        set_geo.stdout.contains("Emulation.setGeolocationOverride"),
-        "set geo should call Emulation.setGeolocationOverride, got:\n{}",
+        set_geo
+            .stdout
+            .contains("Geolocation emulated: latitude=37.7749, longitude=-122.4194"),
+        "set geo should report the position it applied, got:\n{}",
         set_geo.stdout
     );
-    assert!(
-        set_geo.stdout.contains("mock-cdp-result"),
-        "set geo output should contain mock-cdp-result, got:\n{}",
-        set_geo.stdout
-    );
+    let geo_call = mock_server
+        .snapshot()
+        .tool_calls
+        .into_iter()
+        .find(|call| {
+            call.tool == "execute_cdp_command"
+                && call.arguments["method"] == "Emulation.setGeolocationOverride"
+        })
+        .unwrap_or_else(|| panic!("set geo should call Emulation.setGeolocationOverride"));
+    assert_eq!(geo_call.arguments["params"]["latitude"], 37.7749);
+    assert_eq!(geo_call.arguments["params"]["longitude"], -122.4194);
 
     // ── 13. window-new (browser_tabs "new" action) ────────────────────
     let window_new = run_command(
@@ -4578,6 +4791,73 @@ pub(super) fn test_crawl_command_help_and_validation(ctx: &mut E2ECtx) {
     );
 }
 
+/// A crawl seed that is not a URL must be refused before a task exists (issue #616).
+///
+/// `crawl formats` used to be submitted like any other seed: the task was created, the run
+/// reported "0 pages found" and the CLI exited 0 — a typo indistinguishable from an empty site.
+pub(super) fn test_crawl_refuses_malformed_seeds(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // 1. A bare word as the positional URL — the shortest form of the bug.
+    let bare_word = run_command_expecting_failure(ctx, &["crawl", "formats"], "Invalid crawl URL");
+    let bare_word_output = format!("{}\n{}", bare_word.stdout, bare_word.stderr);
+    assert!(
+        bare_word_output.contains("Invalid crawl URL 'formats' (command argument)"),
+        "Expected the refused seed to be named in:\n{}",
+        bare_word_output
+    );
+    assert!(
+        bare_word_output.contains("expected an absolute http(s) URL"),
+        "Expected the accepted form to be spelled out in:\n{}",
+        bare_word_output
+    );
+    assert_eq!(2, bare_word.exit_code, "a bad URL is a usage error (USAGE = 2)");
+
+    // 2. A host without its scheme — the hint is what makes this actionable.
+    let schemeless =
+        run_command_expecting_failure(ctx, &["crawl", "example.com"], "did you mean 'https://example.com'?");
+    assert_eq!(2, schemeless.exit_code, "a schemeless seed is a usage error (USAGE = 2)");
+
+    // 3. A malformed line inside a seed file — reported with its file and line number, and it
+    //    exits like the argument form does.
+    let seed_file = ctx.workspace_dir.join("crawl-seed-malformed.txt");
+    fs::write(&seed_file, b"# seeds\nhttps://example.com/ok\nformats\n")
+        .expect("write malformed seed file failed");
+    let seed_file_arg = format!("--seed-file={}", seed_file.to_string_lossy());
+    let seed_file_failure =
+        run_command_expecting_failure(ctx, &["crawl", &seed_file_arg], "crawl-seed-malformed.txt line 3");
+    let seed_file_output = format!("{}\n{}", seed_file_failure.stdout, seed_file_failure.stderr);
+    assert!(
+        seed_file_output.contains("'formats' (")
+            && seed_file_output.contains("crawl-seed-malformed.txt line 3"),
+        "Expected the refused seed file line to be named in:\n{}",
+        seed_file_output
+    );
+    assert_eq!(
+        2, seed_file_failure.exit_code,
+        "a bad seed-file line exits like a bad argument, not as an internal error (1)"
+    );
+
+    // Nothing was submitted, and no tool was called: the refusals happen before a task is created
+    // (the seed file is refused before the server is even asked to start).
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot.crawl_submissions.is_empty(),
+        "A refused seed must not reach the backend, got {:?}",
+        snapshot.crawl_submissions
+    );
+    assert!(
+        snapshot.crawl_cancel_calls.is_empty() && snapshot.crawl_resume_calls.is_empty(),
+        "A refused seed must not touch any other crawl endpoint"
+    );
+    assert!(
+        snapshot.tool_calls.is_empty() && snapshot.plain_commands.is_empty(),
+        "A refused seed must not reach the backend at all, got tool calls {:?}",
+        snapshot.tool_calls
+    );
+}
+
 pub(super) fn test_crawl_with_seed_file(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let mock_server = start_mock_crawl_session(ctx);
@@ -5071,6 +5351,29 @@ pub(super) fn test_crawl_with_output_file(ctx: &mut E2ECtx) {
         file_content.contains("Mock Crawled Page") || file_content.contains("pages found"),
         "Expected page info in output file, got:\n{}",
         file_content
+    );
+
+    // `--json` with `--output` (and no --sql) used to write the human-readable
+    // listing into the file while the envelope went to stdout, so a `.json`
+    // output held prose.  It is refused now, like the --format csv/json sibling.
+    let json_output_path = ctx.workspace_dir.join("crawl-json-output.json");
+    let json_output_arg = format!("--output={}", json_output_path.to_string_lossy());
+    let refused = run_command_expecting_failure(
+        ctx,
+        &[
+            "--json",
+            "crawl",
+            "https://example.com/json-output-test",
+            "--depth=0",
+            &json_output_arg,
+        ],
+        "would not be JSON",
+    );
+    assert_ne!(refused.exit_code, 0);
+    assert!(
+        !json_output_path.exists(),
+        "--json with --output must not create a non-JSON file at {}",
+        json_output_path.display()
     );
 }
 
@@ -6618,6 +6921,46 @@ pub(super) fn test_htmlsnapshot_query(ctx: &mut E2ECtx) {
         result.stderr
     );
 
+    // Regression (x-sql report #1): the inline-`--sql` tip was written to
+    // stdout, so `htmlsnapshot query --sql "…" > out.json` picked up three tip
+    // lines after the envelope and no longer parsed as JSON.  The default
+    // `--format json` is machine-readable stdout, so the tip belongs on stderr.
+    assert!(
+        serde_json::from_str::<serde_json::Value>(result.stdout.trim()).is_ok(),
+        "stdout must carry exactly the JSON envelope, got:\n{}",
+        result.stdout
+    );
+    assert!(
+        !result.stdout.contains("Tip:"),
+        "stdout must stay free of tips, got:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stderr.contains("Tip: Use --sql @file.sql"),
+        "the inline-SQL tip must go to stderr, got:\n{}",
+        result.stderr
+    );
+
+    // The human `--format table` view keeps its tips on stdout: nothing there
+    // is parsed by a machine.
+    let table = run_command(
+        ctx,
+        &[
+            "htmlsnapshot",
+            "query",
+            "--sql",
+            "SELECT h1 FROM page",
+            "--format",
+            "table",
+        ],
+    );
+    assert_eq!(table.exit_code, 0, "expected --format table to succeed:\n{}", table.stderr);
+    assert!(
+        table.stdout.contains("Tip: Use --sql @file.sql"),
+        "the human table view keeps tips on stdout, got:\n{}",
+        table.stdout
+    );
+
     let tool_calls = mock_server.snapshot().tool_calls;
     let query_call = tool_calls
         .iter()
@@ -7219,6 +7562,248 @@ pub(super) fn test_plugin_markdown_read(ctx: &mut E2ECtx) {
     );
 }
 
+/// The plugin/tool discovery surface: `tool list` prints tool names, bare
+/// `plugin` groups them by domain with their methods, `plugin <domain> --help`
+/// answers with that domain's methods, and a tool-reported failure is not
+/// silently a success.
+pub(super) fn test_plugin_tool_surface(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // `tool list` used to print the entire general command reference (exit 0),
+    // so a user reasonably concluded it had worked.
+    let listed = run_command(ctx, &["tool", "list"]);
+    assert_eq!(
+        listed.exit_code, 0,
+        "expected tool list to succeed:\n{}",
+        listed.stderr
+    );
+    assert!(
+        listed.stdout.contains("markdown_read") && listed.stdout.contains("profile_import_import"),
+        "expected advertised tool names in:\n{}",
+        listed.stdout
+    );
+    assert!(
+        !listed.stdout.contains("Quick Start"),
+        "tool list must not print the general reference:\n{}",
+        listed.stdout
+    );
+
+    let filtered = run_command(ctx, &["tool", "list", "--filter", "markdown"]);
+    assert_eq!(filtered.exit_code, 0, "{}", filtered.stderr);
+    assert!(
+        filtered.stdout.contains("markdown_read") && filtered.stdout.contains("markdown_fetch"),
+        "expected only markdown tools in:\n{}",
+        filtered.stdout
+    );
+    assert!(
+        !filtered.stdout.contains("profile_import_import"),
+        "--filter must drop non-matching names:\n{}",
+        filtered.stdout
+    );
+
+    // Bare `plugin` lists domains with their methods. The old listing split
+    // names at the last underscore and advertised `markdown_discover` /
+    // `profile_import_list` — domains that do not exist.
+    let domains = run_command(ctx, &["plugin"]);
+    assert_eq!(
+        domains.exit_code, 0,
+        "expected bare plugin to succeed:\n{}",
+        domains.stderr
+    );
+    assert!(
+        domains.stdout.contains("markdown") && domains.stdout.contains("fetch, read"),
+        "expected markdown methods (fetch, read) in:\n{}",
+        domains.stdout
+    );
+    assert!(
+        domains.stdout.contains("import_list_sources"),
+        "expected the full method name in:\n{}",
+        domains.stdout
+    );
+    assert!(
+        !domains.stdout.contains("markdown_discover") && !domains.stdout.contains("profile_import_list"),
+        "invented domains must not be advertised:\n{}",
+        domains.stdout
+    );
+    assert!(
+        !domains.stdout.contains("browser_navigate")
+            && !domains.stdout.contains("crawl_submit")
+            && !domains.stdout.contains("list_sessions"),
+        "built-in tools must not be listed as plugin tools:\n{}",
+        domains.stdout
+    );
+
+    // `--help plugin-<domain>` and `plugin <domain> --help` answer with the
+    // domain's methods instead of "Unknown command" plus the whole reference.
+    for args in [
+        vec!["help", "plugin-markdown"],
+        vec!["plugin", "markdown", "--help"],
+    ] {
+        let domain_help = run_command(ctx, &args);
+        assert_eq!(
+            domain_help.exit_code, 0,
+            "expected domain help to succeed for {args:?}:\n{}",
+            domain_help.stderr
+        );
+        assert!(
+            domain_help.stdout.contains("Plugin tool domain 'markdown'"),
+            "expected the domain help for {args:?} in:\n{}",
+            domain_help.stdout
+        );
+        assert!(
+            domain_help.stdout.contains("read") && domain_help.stdout.contains("fetch"),
+            "expected the domain's methods for {args:?} in:\n{}",
+            domain_help.stdout
+        );
+        assert!(
+            !domain_help.stdout.contains("Unknown command")
+                && !domain_help.stdout.contains("Quick Start"),
+            "the general reference must not be dumped for {args:?}:\n{}",
+            domain_help.stdout
+        );
+    }
+
+    // `plugin --help` / `tool --help` document the surfaces themselves.
+    let plugin_help = run_command(ctx, &["plugin", "--help"]);
+    assert_eq!(plugin_help.exit_code, 0, "{}", plugin_help.stderr);
+    assert!(
+        plugin_help.stdout.contains("browser4-cli plugin"),
+        "expected the plugin surface help in:\n{}",
+        plugin_help.stdout
+    );
+    let tool_help = run_command(ctx, &["tool", "--help"]);
+    assert_eq!(tool_help.exit_code, 0, "{}", tool_help.stderr);
+    assert!(
+        tool_help.stdout.contains("tool list") && tool_help.stdout.contains("tool call"),
+        "expected the tool surface help in:\n{}",
+        tool_help.stdout
+    );
+
+    // A missing/unknown `tool` subcommand is a usage error, not a help dump.
+    let bare_tool = run_command_allowing_failure(ctx, &["tool"]);
+    assert_ne!(bare_tool.exit_code, 0, "bare tool must fail");
+    assert!(
+        bare_tool.stderr.contains("needs a subcommand"),
+        "expected a focused usage error in:\n{}",
+        bare_tool.stderr
+    );
+    let bogus_tool = run_command_allowing_failure(ctx, &["tool", "bogus"]);
+    assert_ne!(bogus_tool.exit_code, 0, "tool bogus must fail");
+    assert!(
+        bogus_tool.stderr.contains("Unknown subcommand 'bogus'"),
+        "expected a focused usage error in:\n{}",
+        bogus_tool.stderr
+    );
+
+    // `tool call --help --examples` ships runnable examples in the binary.
+    let examples = run_command(ctx, &["tool", "call", "--help", "--examples"]);
+    assert_eq!(examples.exit_code, 0, "{}", examples.stderr);
+    assert!(
+        !examples.stdout.contains("No examples available"),
+        "tool call must advertise examples:\n{}",
+        examples.stdout
+    );
+    assert!(
+        examples.stdout.contains("tool list") && examples.stdout.contains("captcha_detect"),
+        "expected the static tool examples in:\n{}",
+        examples.stdout
+    );
+
+    // `plugin list` keeps its JAR contract but points at the tool listing, and
+    // `plugin info` accepts the short name the CLI advertises elsewhere.
+    let plugins = run_command(ctx, &["plugin", "list"]);
+    assert_eq!(plugins.exit_code, 0, "expected plugin list to succeed:\n{}", plugins.stderr);
+    assert!(
+        plugins.stdout.contains("browser4-swarm-4.14.1-SNAPSHOT.jar")
+            && plugins.stdout.contains("browser4-captcha-4.14.1-SNAPSHOT.jar"),
+        "expected the installed plugin JARs in:\n{}",
+        plugins.stdout
+    );
+    assert!(
+        plugins.stdout.contains("tool list"),
+        "plugin list must point at `tool list` for tool names:\n{}",
+        plugins.stdout
+    );
+
+    // `plugin info captcha` used to answer a bare 404 with an empty body while
+    // `plugin` itself advertised `captcha` as a domain.
+    let info = run_command(ctx, &["plugin", "info", "captcha"]);
+    assert_eq!(info.exit_code, 0, "expected plugin info to succeed:\n{}", info.stderr);
+    assert!(
+        info.stdout.contains("browser4-captcha-4.14.1-SNAPSHOT.jar"),
+        "expected the resolved plugin in:\n{}",
+        info.stdout
+    );
+    assert!(
+        info.stderr.contains("resolved plugin 'captcha'"),
+        "the substitution must be reported:\n{}",
+        info.stderr
+    );
+
+    let unknown = run_command_allowing_failure(ctx, &["plugin", "info", "nope"]);
+    assert_ne!(unknown.exit_code, 0, "an unknown plugin must fail");
+    assert!(
+        unknown.stderr.contains("Unknown plugin 'nope'")
+            && unknown.stderr.contains("browser4-swarm-4.14.1-SNAPSHOT.jar"),
+        "the error must list the installed plugins:\n{}",
+        unknown.stderr
+    );
+
+    // A tool that reports success:false is surfaced on stderr; only
+    // --fail-on-error turns it into a non-zero exit.
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+    let failed = run_command(
+        ctx,
+        &[
+            "tool",
+            "call",
+            "markdown_fetch",
+            "--json",
+            "{\"url\": \"https://example.com/404\"}",
+        ],
+    );
+    assert_eq!(
+        failed.exit_code, 0,
+        "without --fail-on-error the exit stays 0:\n{}",
+        failed.stderr
+    );
+    assert!(
+        failed.stderr.contains("markdown_fetch reported a failure"),
+        "expected a failure warning on stderr:\n{}",
+        failed.stderr
+    );
+    assert!(
+        failed.stdout.contains("\"success\":false"),
+        "the payload must stay on stdout:\n{}",
+        failed.stdout
+    );
+
+    let strict = run_command_allowing_failure(
+        ctx,
+        &[
+            "tool",
+            "call",
+            "markdown_fetch",
+            "--json",
+            "{\"url\": \"https://example.com/404\"}",
+            "--fail-on-error",
+        ],
+    );
+    assert_ne!(
+        strict.exit_code, 0,
+        "--fail-on-error must exit non-zero:\n{}",
+        strict.stdout
+    );
+    assert!(
+        strict.stderr.contains("markdown_fetch reported a failure"),
+        "expected the failure reason on stderr:\n{}",
+        strict.stderr
+    );
+}
+
 /// When the server returns an error for html_snapshot_capture, the CLI propagates it.
 pub(super) fn test_htmlsnapshot_error_propagation(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
@@ -7739,9 +8324,37 @@ pub(super) fn test_snapshot_diff_command(ctx: &mut E2ECtx) {
         diff.stdout
     );
     assert!(
-        diff.stdout.contains("- link e4 \"Old\"") && diff.stdout.contains("+ link e3 \"New\""),
-        "Expected removed/added link entries in:\n{}",
+        diff.stdout.contains("- link \"Old\" [box=10,100,100,30] [ref=e4]")
+            && diff.stdout.contains("+ link \"New\" [box=10,140,100,30] [ref=e3]"),
+        "Expected removed/added link entries carrying their refs and boxes in:\n{}",
         diff.stdout
+    );
+
+    // A node the backend emitted as one whole-line quoted scalar (its name holds
+    // ": ") must be read as a node and re-emitted in the canonical shape, never
+    // as the malformed `+ "generic e7306 ""` line (snapshot-mastery #8).
+    let quoted = snap_dir.join("quoted.yml");
+    std::fs::write(
+        &quoted,
+        "- \"generic \\\"A Pattern Language: Towns, Buildings, Construction\\\" [ref=e7306] [box=1116,216,309,49]\"\n",
+    )
+    .expect("write whole-line-quoted snapshot");
+
+    let quoted_diff = run_command(
+        ctx,
+        &[
+            "diff",
+            "snapshot",
+            before.to_str().expect("before path"),
+            quoted.to_str().expect("quoted path"),
+        ],
+    );
+    assert!(
+        quoted_diff.stdout.contains(
+            "+ generic \"A Pattern Language: Towns, Buildings, Construction\" [ref=e7306] [box=1116,216,309,49]"
+        ),
+        "Expected the whole-line-quoted node in the canonical shape in:\n{}",
+        quoted_diff.stdout
     );
 
     // Missing files produce a readable error instead of a panic.
@@ -7754,6 +8367,163 @@ pub(super) fn test_snapshot_diff_command(ctx: &mut E2ECtx) {
         bad.stdout.contains("Cannot read") || bad.exit_code != 0,
         "Expected a readable error for missing files, got:\n{}",
         bad.stdout
+    );
+}
+
+// ---------------------------------------------------------------------------
+// snapshot body normalization: whole-page scope header/footer, glued footer,
+// whole-line-quoted node (snapshot-mastery #3/#7/#8)
+// ---------------------------------------------------------------------------
+
+/// A whole-page backend body carrying all three rendering defects: a
+/// `# Viewport State` block claiming viewport 0, the `# ---` navigation footer
+/// glued onto the last node line, and a node whose name contains `": "` emitted
+/// as one whole-line quoted scalar.
+const RAW_WHOLE_PAGE_BODY: &str = "# Viewport State\n\
+# - processingViewport: 0\n\
+# - viewportHeight: 1080px\n\
+# - viewportsTotal: 10\n\
+# - hiddenTopHeight: 0px\n\
+# - hiddenBottomHeight: 9571px\n\
+#\n\
+- generic [ref=e8184]:\n\
+\x20\x20- heading \"Christopher Alexander\" [ref=e8185] [box=10,10,300,40]\n\
+\x20\x20- \"generic \\\"A Pattern Language: Towns, Buildings, Construction\\\" [ref=e7306] [box=1116,216,309,49]\"\n\
+\x20\x20- list [ref=e8185] [box=1897,1072,0,0]# ---\n\
+# This page has 10 viewports (page chunks split by viewport height). You are currently viewing viewport 0 (absolute).\n\
+#   snapshot -v 1          # scroll down one viewport\n\
+#\n";
+
+pub(super) fn test_snapshot_stdout_normalization(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_browser_snapshot_response(RAW_WHOLE_PAGE_BODY);
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // No -v: the capture holds the whole page, so the header says so and the
+    // backend's viewport-0 metadata and navigation footer are dropped.
+    let whole = run_command(ctx, &["snapshot", "--stdout", "--all"]);
+    assert!(
+        whole
+            .stdout
+            .contains("# - scope: whole page (all 10 viewports; no --viewport filter)"),
+        "Expected the whole-page scope line in:\n{}",
+        whole.stdout
+    );
+    assert!(
+        !whole.stdout.contains("processingViewport")
+            && !whole.stdout.contains("hiddenBottomHeight")
+            && !whole.stdout.contains("You are currently viewing viewport"),
+        "Misleading single-viewport metadata survived (#3):\n{}",
+        whole.stdout
+    );
+    // #7: the footer starts on its own line instead of being concatenated onto
+    // the last node, so that node stays parseable.
+    assert!(
+        whole
+            .stdout
+            .lines()
+            .any(|line| line == "  - list [ref=e8185] [box=1897,1072,0,0]"),
+        "Expected the last node on its own line in:\n{}",
+        whole.stdout
+    );
+    // #8: the quoted node is re-flowed into the canonical node shape.
+    assert!(
+        whole.stdout.contains(
+            "  - generic \"A Pattern Language: Towns, Buildings, Construction\" [ref=e7306] [box=1116,216,309,49]"
+        ),
+        "Expected the whole-line-quoted node in the canonical shape in:\n{}",
+        whole.stdout
+    );
+    assert!(
+        !whole.stdout.contains("\\\""),
+        "No node line may keep the whole-line-quoted scalar escaping (#8):\n{}",
+        whole.stdout
+    );
+
+    // With -v the backend header and footer describe what was asked for, so they
+    // stay; only the glued line and the quoted node are repaired.
+    let scoped = run_command(ctx, &["snapshot", "-v", "0", "--stdout", "--all"]);
+    assert!(
+        scoped.stdout.contains("# - processingViewport: 0"),
+        "A viewport capture keeps its (true) viewport metadata:\n{}",
+        scoped.stdout
+    );
+    assert!(
+        scoped
+            .stdout
+            .contains("You are currently viewing viewport 0 (absolute)"),
+        "A viewport capture keeps its navigation footer:\n{}",
+        scoped.stdout
+    );
+    assert!(
+        scoped
+            .stdout
+            .lines()
+            .any(|line| line == "  - list [ref=e8185] [box=1897,1072,0,0]"),
+        "The glued footer line is repaired for viewport captures too:\n{}",
+        scoped.stdout
+    );
+}
+
+// ---------------------------------------------------------------------------
+// snapshot grep --diff (searches the persisted auto-diff report) — #5
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_grep_diff_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let before = "- button \"Search\" [box=10,20,100,30] [ref=e1]:\n\
+                  \x20 - link \"Old\" [box=10,100,100,30] [ref=e4]\n";
+    let after = "- button \"Search\" [box=10,20,100,30] [ref=e1]:\n\
+                 \x20 - link \"New\" [box=10,140,100,30] [ref=e3]\n";
+
+    mock_server.set_browser_snapshot_response(before);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+    // A deliberate capture is the baseline the diff compares against.
+    run_command(ctx, &["snapshot"]);
+
+    mock_server.set_browser_snapshot_response(after);
+    let diff = run_command(ctx, &["snapshot", "--auto-diff", "--stdout", "--all"]);
+    assert!(
+        diff.stdout.contains("### Diff"),
+        "Expected the diff appendix in:\n{}",
+        diff.stdout
+    );
+    assert!(
+        diff.stdout
+            .contains("+ link \"New\" [box=10,140,100,30] [ref=e3]"),
+        "Expected the added link in the canonical diff shape in:\n{}",
+        diff.stdout
+    );
+
+    // The appendix is persisted next to the capture, so grep can search it —
+    // a freshly captured tree can never contain these markers.
+    let counted = run_command(
+        ctx,
+        &["snapshot", "grep", "--diff", "-c", "-F", "## Added"],
+    );
+    assert_eq!(
+        counted.stdout.trim(),
+        "1",
+        "Expected exactly one `## Added` section in the persisted report:\nstdout:>>>\n{}\n<<<\nstderr:>>>\n{}\n<<<",
+        counted.stdout,
+        counted.stderr
+    );
+
+    let added = run_command(ctx, &["snapshot", "grep", "--diff", "-F", "+ link \"New\""]);
+    assert!(
+        added
+            .stdout
+            .contains("+ link \"New\" [box=10,140,100,30] [ref=e3]"),
+        "Expected the added entry to be greppable in the persisted report:\n{}",
+        added.stdout
     );
 }
 

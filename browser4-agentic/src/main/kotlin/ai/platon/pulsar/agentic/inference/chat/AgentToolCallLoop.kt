@@ -7,6 +7,9 @@ import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeout
 import dev.langchain4j.agent.tool.ToolExecutionRequest
 import dev.langchain4j.agent.tool.ToolSpecification as LangChain4jToolSpec
@@ -17,6 +20,18 @@ import dev.langchain4j.data.message.ToolExecutionResultMessage
 import dev.langchain4j.data.message.UserMessage
 import dev.langchain4j.model.chat.request.ChatRequest
 import dev.langchain4j.model.chat.response.ChatResponse
+
+/**
+ * A single LLM inference call exceeded the per-call timeout
+ * ([AgentToolCallLoop.inferenceTimeoutMs]). Deliberately NOT a
+ * [kotlinx.coroutines.CancellationException]: callers must be able to tell an
+ * inference timeout (a task failure worth reporting as such) apart from an
+ * outer cancellation (overall resolve timeout or user interrupt).
+ */
+class LlmInferenceTimeoutException(
+    val timeoutMs: Long,
+    cause: Throwable? = null,
+) : Exception("LLM inference timed out after $timeoutMs ms", cause)
 
 /**
  * Manages multi-turn tool-calling via LangChain4j's native function-calling
@@ -230,6 +245,17 @@ class AgentToolCallLoop(
                 } else {
                     chat()
                 }
+            } catch (e: TimeoutCancellationException) {
+                // Distinguish THIS loop's per-call deadline from an outer
+                // cancellation (overall resolve timeout / user interrupt):
+                // when the surrounding coroutine is still active, our own
+                // inference deadline fired — surface a dedicated,
+                // non-cancellation error so callers never misreport an
+                // inference timeout as a cancellation (or vice versa).
+                if (currentCoroutineContext().isActive) {
+                    throw LlmInferenceTimeoutException(inferenceTimeoutMs, e)
+                }
+                throw e
             } catch (e: Exception) {
                 // Provider-confirmed context-window overflow: recover by
                 // pruning + compacting, then retry the SAME request. Any other

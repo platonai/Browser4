@@ -24,7 +24,7 @@ struct Tip {
 
 const TIPS_SNAPSHOT: &[Tip] = &[
     Tip {
-        text: "Use `snapshot --auto-diff` after interactions to see only what changed — the fastest way to verify actions",
+        text: "Use `snapshot --auto-diff` after interactions to capture and diff against the previous snapshot — the appendix lists the added/removed elements with their refs",
     },
     Tip {
         text: "Use `snapshot -v 0` for the current visible screen — avoids large snapshots exceeding context limits",
@@ -439,7 +439,7 @@ const TIPS_GENERAL: &[Tip] = &[
         text: "Use `--server <url>` to target a remote Browser4 server for distributed scraping",
     },
     Tip {
-        text: "Use `list` to see all active sessions and their current page URLs at a glance",
+        text: "Use `list` to see all active sessions and their current page URLs at a glance — add `--all` to include the sessions persisted by other checkouts (Workspace column)",
     },
     Tip {
         text: "Use `doctor` to diagnose Chrome, Java, and network issues when things aren't working",
@@ -508,6 +508,7 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         | "webminer-views" => TIPS_WEBMINER,
         "attach" => TIPS_ATTACH,
         "network-requests" | "network-request" | "network-route" | "network-unroute"
+        | "network-routes"
         | "har-start" | "har-stop" => TIPS_NETWORK,
         "cookie-list" | "cookie-get" | "cookie-set" | "cookie-delete" | "cookie-clear" => {
             TIPS_COOKIE

@@ -26,6 +26,24 @@ $script:NoSession = $NoSession
 $script:BuildBackend = $BuildBackend
 $script:SessionPath = $SessionPath
 
+# ── Console encoding: always UTF-8 ────────────────────────────────────────────
+# A redirected stream starts on the Windows OEM code page (CP936 on a Chinese
+# host), while everything downstream — the relayed child output, this runner's
+# own banners and heartbeats, CI logs, the DeepSeek harness capture — reads
+# UTF-8.  Under CP936 the decoration turns into line noise: "·" and "—" become
+# "??" (A1 A4 / A1 AA read as UTF-8) and "═" becomes "?T" (A8 54 — the 0x54 is a
+# literal 'T'), which is how a tail block degrades into "?T?T last 10 lines
+# ?T?T".  The `ps` subcommand already does this for its children and restores
+# the old value afterwards; doing it once here keeps parent and child on the
+# same encoding for every subcommand.
+try {
+    if ([Console]::OutputEncoding.CodePage -ne 65001) {
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    }
+} catch {
+    # A host without a usable console must not fail the run over an encoding.
+}
+
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
 
@@ -142,6 +160,189 @@ function Invoke-CommandAndReport {
     return $exitCode
 }
 
+# ── Maven preflight helpers ──────────────────────────────────────────────
+# The mock-site preflight installs browser4-dependencies and browser4-rest
+# into the local Maven repository before booting the site.  Two facts drive
+# the helpers below:
+#   * `~/.m2/repository` is only Maven's *default* — a settings.xml that
+#     declares <localRepository> (common on Windows, where a redirected D:
+#     repository keeps C: free) moves every artifact Maven installs, so a scan
+#     of the default path reports "not cached" (or "no plugin JARs") for a
+#     repository that is in fact fully populated.
+#   * The first (cold) run takes 10-15 minutes; the cached run is seconds.
+#     Progress output must therefore be gated on the cache state, not printed
+#     unconditionally.
+
+function Get-MavenLocalRepositoryPath {
+    <#
+    .SYNOPSIS
+        Resolve Maven's effective local repository without starting a JVM.
+
+    .DESCRIPTION
+        Resolution order mirrors what Maven itself would use here:
+        MAVEN_REPO_LOCAL (the override this repo's scripts document) >
+        settings.xml <localRepository> (user settings, then the global
+        settings of MAVEN_HOME / M2_HOME) > ~/.m2/repository.
+
+        The settings.xml scan is a regex over the raw file rather than an XML
+        parse: it stays valid under PowerShell's ConstrainedLanguage mode and
+        does not care about namespaces or a BOM.
+
+    .PARAMETER RepoRoot
+        Repository root.  Unused today; kept so callers can pass project
+        context without changing the signature.
+
+    .OUTPUTS
+        String — the local repository path ('' when no home directory can be
+        resolved and no override is set).
+    #>
+    param([string]$RepoRoot = $repoRoot)
+
+    if ($env:MAVEN_REPO_LOCAL) { return $env:MAVEN_REPO_LOCAL }
+
+    $homeDir = if ($env:HOME) { $env:HOME }
+               elseif ($env:USERPROFILE) { $env:USERPROFILE }
+               else { '' }
+
+    $settingsCandidates = @()
+    if ($env:MAVEN_USER_HOME) { $settingsCandidates += (Join-Path $env:MAVEN_USER_HOME 'settings.xml') }
+    if ($homeDir) { $settingsCandidates += (Join-Path $homeDir (Join-Path '.m2' 'settings.xml')) }
+    foreach ($mavenHome in @($env:MAVEN_HOME, $env:M2_HOME)) {
+        if ($mavenHome) { $settingsCandidates += (Join-Path $mavenHome (Join-Path 'conf' 'settings.xml')) }
+    }
+
+    foreach ($settingsPath in $settingsCandidates) {
+        if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { continue }
+        try {
+            $raw = Get-Content -LiteralPath $settingsPath -Raw -ErrorAction Stop
+        } catch {
+            continue
+        }
+        if ($raw -match '(?s)<localRepository>\s*([^<]+?)\s*</localRepository>') {
+            $declared = $Matches[1].Trim()
+            if ($declared.StartsWith('~') -and $homeDir) {
+                $declared = Join-Path $homeDir $declared.Substring(1).TrimStart('/', '\')
+            }
+            if ($declared) { return $declared }
+        }
+    }
+
+    if ($homeDir) { return (Join-Path $homeDir (Join-Path '.m2' 'repository')) }
+    return ''
+}
+
+function Test-MavenPreflightCacheState {
+    <#
+    .SYNOPSIS
+        Decide whether the mock-site preflight artifacts are already installed
+        locally (warm) or still have to be built (cold).
+
+    .DESCRIPTION
+        Decides only how loud the preflight is: the phases always run, so a
+        changed source tree is still recompiled and reinstalled — a warm cache
+        just runs them quietly and fast.
+
+    .PARAMETER LocalRepo
+        Maven local repository (see Get-MavenLocalRepositoryPath).
+
+    .PARAMETER Version
+        Project version (VERSION file).  An empty/unknown version cannot be
+        verified and is treated as "not cached".
+
+    .OUTPUTS
+        Hashtable with BomCached, RestCached, BomPath and RestPath.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$LocalRepo,
+        [string]$Version = ''
+    )
+
+    $groupPath = Join-Path 'ai' (Join-Path 'platon' 'pulsar')
+    $bomPath = ''
+    $restPath = ''
+    if ($LocalRepo -and $Version) {
+        $bomPath = Join-Path $LocalRepo (Join-Path $groupPath (Join-Path 'browser4-dependencies' `
+            (Join-Path $Version "browser4-dependencies-$Version.pom")))
+        $restPath = Join-Path $LocalRepo (Join-Path $groupPath (Join-Path 'browser4-rest' `
+            (Join-Path $Version "browser4-rest-$Version.jar")))
+    }
+
+    return @{
+        BomCached  = [bool]($bomPath -and (Test-Path -LiteralPath $bomPath -PathType Leaf))
+        RestCached = [bool]($restPath -and (Test-Path -LiteralPath $restPath -PathType Leaf))
+        BomPath    = $bomPath
+        RestPath   = $restPath
+    }
+}
+
+function Invoke-MavenInstallPhase {
+    <#
+    .SYNOPSIS
+        Run one Maven preflight phase with live progress, a heartbeat and a
+        tail-able log file.
+
+    .DESCRIPTION
+        The mock-site preflight is the only 10-15 minute Maven run in this
+        script, and it used to be completely silent (Maven ran with -q and the
+        wrapper only printed one banner per finished phase).  This runner:
+          * streams Maven's output line by line, dropping -q when the caller
+            asks for verbose progress (cold cache),
+          * tees every line to -LogPath and prints that path before the run,
+          * prints an elapsed-time heartbeat while Maven is quiet,
+          * returns Maven's exit code, so Invoke-CommandAndReport keeps its
+            [PASS]/[FAIL] banners and the script's exit-code contract.
+
+        The child inherits the caller's working directory, so pair this with
+        Invoke-CommandAndReport -PreExecPath (or Push-Location) as before.
+
+    .PARAMETER Label
+        Phase label used in the progress lines (banner comes from the caller).
+
+    .PARAMETER MvnArgs
+        Arguments for the Maven wrapper invocation, including '-q' when quiet.
+        '-q' is stripped when -ShowMavenOutput is set.
+
+    .PARAMETER LogPath
+        File that receives every line (UTF-8, no BOM).  A temp file is used and
+        removed afterwards when omitted.
+
+    .PARAMETER ShowMavenOutput
+        Drop '-q' so Maven prints its real module-by-module progress.  Passed
+        for a cold cache (see Test-MavenPreflightCacheState).
+
+    .PARAMETER HeartbeatSeconds
+        Heartbeat interval while Maven is silent.  0 disables heartbeats.
+
+    .OUTPUTS
+        Int32 — Maven's exit code.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string[]]$MvnArgs,
+        [string]$LogPath = '',
+        [switch]$ShowMavenOutput,
+        [int]$HeartbeatSeconds = 20
+    )
+
+    $effectiveArgs = @($MvnArgs)
+    if ($ShowMavenOutput) {
+        $effectiveArgs = @($effectiveArgs | Where-Object { $_ -ne '-q' })
+    } elseif ($effectiveArgs -notcontains '-q') {
+        $effectiveArgs += '-q'
+    }
+
+    Write-Host "  $Label — mvn $($effectiveArgs -join ' ')" -ForegroundColor DarkGray
+    if ($LogPath) {
+        Write-Host "  $Label — log: $LogPath (tail -f it to follow this phase)" -ForegroundColor DarkGray
+    }
+
+    $run = Invoke-ChildProcessStreaming -FilePath $mvnwScript -ArgumentList $effectiveArgs `
+        -LogFile $LogPath -HeartbeatSeconds $HeartbeatSeconds
+
+    Write-Host "  $Label — finished in $($run.DurationSec)s (exit $($run.ExitCode))" -ForegroundColor DarkGray
+    return $run.ExitCode
+}
+
 # kotlin-maven-plugin (2.x) daemon failure markers.  The plugin connects to
 # a KotlinCompileDaemon; stale daemons left by crashed builds or a second
 # Maven build running concurrently surface as opaque daemon connection
@@ -200,20 +401,68 @@ function Invoke-KotlinCompileWithRetry {
         Optional directory to Push-Location into before execution.
     .PARAMETER MvnArgs
         Arguments for the Maven wrapper invocation.
+
+    .PARAMETER LogFile
+        Optional per-attempt log file.  When set, the invocation runs through
+        Invoke-ChildProcessStreaming (live output + heartbeat + tee) instead of
+        the in-process Tee-Object pipeline, so a long silent Maven phase still
+        shows it is alive and its output survives a lost terminal.  The retry
+        writes to '<name>-attempt2<ext>' so the failed attempt is not lost.
+
+    .PARAMETER ShowMavenOutput
+        Drop '-q' so Maven prints its real module-by-module progress.
+
+    .PARAMETER HeartbeatSeconds
+        Heartbeat interval for the streaming path while Maven is silent.
     #>
     param(
         [Parameter(Mandatory)][string]$Label,
         [string]$PreExecPath = '',
-        [Parameter(Mandatory)][string[]]$MvnArgs
+        [Parameter(Mandatory)][string[]]$MvnArgs,
+        [string]$LogFile = '',
+        [switch]$ShowMavenOutput,
+        [int]$HeartbeatSeconds = 20
     )
     for ($attempt = 1; $attempt -le 2; $attempt++) {
         $exitCode = 1
+        $outputText = ''
+
+        $effectiveArgs = @($MvnArgs)
+        if ($ShowMavenOutput) {
+            $effectiveArgs = @($effectiveArgs | Where-Object { $_ -ne '-q' })
+        }
+
+        # Per-attempt log: a daemon retry must not overwrite the evidence of
+        # the failed first attempt.
+        $attemptLog = ''
+        if ($LogFile) {
+            if ($attempt -eq 1) {
+                $attemptLog = $LogFile
+            } else {
+                $logDir = Split-Path -Parent $LogFile
+                $logLeaf = [System.IO.Path]::GetFileNameWithoutExtension($LogFile)
+                $logExt = [System.IO.Path]::GetExtension($LogFile)
+                $attemptLog = Join-Path $logDir "$logLeaf-attempt$attempt$logExt"
+            }
+        }
+
         try {
             if ($PreExecPath) { Push-Location $PreExecPath }
             $global:LASTEXITCODE = 0
-            $output = & $mvnwScript @MvnArgs 2>&1 | Tee-Object -Variable bootOutput | Out-Host
-            $exitCode = $LASTEXITCODE
-            $output = $bootOutput
+            if ($attemptLog) {
+                # Streaming path: live echo, log tee and heartbeat.  The tail of
+                # the output is what the daemon-failure matcher inspects.
+                $attemptLabel = if ($attempt -eq 1) { $Label } else { "$Label (attempt $attempt)" }
+                Write-Host "  $attemptLabel — log: $attemptLog (tail -f it to follow this phase)" -ForegroundColor DarkGray
+                $run = Invoke-ChildProcessStreaming -FilePath $mvnwScript -ArgumentList $effectiveArgs `
+                    -LogFile $attemptLog -HeartbeatSeconds $HeartbeatSeconds -TailSize 200
+                $exitCode = $run.ExitCode
+                $outputText = (@($run.TailLines) -join [Environment]::NewLine)
+            } else {
+                $output = & $mvnwScript @effectiveArgs 2>&1 | Tee-Object -Variable bootOutput | Out-Host
+                $exitCode = $LASTEXITCODE
+                $outputText = ($bootOutput | Out-String)
+            }
         }
         catch {
             Write-Error "Failed to execute $Label`: $_"
@@ -228,7 +477,7 @@ function Invoke-KotlinCompileWithRetry {
             return 0
         }
 
-        $isDaemonFailure = (($output | Out-String) -match $script:KotlinDaemonErrorPattern)
+        $isDaemonFailure = ($outputText -match $script:KotlinDaemonErrorPattern)
         if ($attempt -eq 1 -and $isDaemonFailure) {
             Write-CommandBanner -Label "$Label hit a Kotlin compiler daemon error (exit code $exitCode) — retrying once after 5s..." -Icon '[RETRY]'
             Start-Sleep -Seconds 5
@@ -306,6 +555,8 @@ function Print-Usage {
     Write-Host "  skills      Run skills-focused agentic tests + skills/ document conformance"
     Write-Host "  mcp         Run MCP-focused agentic tests"
     Write-Host "  mcp-contract  Contract gate: tool matrix, docs, lint, validators (agentic + rest)"
+    Write-Host "  verify      Run the code devtask plan-quality evaluation (needs the dev backend)"
+    Write-Host "              forwards -Fast (default), -Strict, -NoBuild, -Json, -Probe=<id,...>"
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
     Write-Host "              (+ skills/ document conformance, methodology M1-M8)"
     Write-Host "  rws         Run real-world scenario tests (requires a mode)"
@@ -334,7 +585,7 @@ function Print-Usage {
     Write-Host "    --silent                    Suppress agent output"
     Write-Host "    --skip-version-check        Skip browser4-cli version check"
     Write-Host "    --timeout <minutes>         Kill each scenario task after N minutes (default: no timeout)"
-    Write-Host "    --agent <name>              Use a specific agent CLI (claude, kimi, opencode, codex, or dsh)"
+    Write-Host "    --agent <name>              Use a specific agent CLI (dsh, claude, kimi, opencode, or codex)"
     Write-Host "    BROWSER4_AGENT=<name>        Env var to set agent globally (same values as --agent)"
     Write-Host "  resume      Resume from the last failed module (-rf)"
     Write-Host "  main    Run all Browser4 main tests (fast, rest, it, e2e)"
@@ -364,6 +615,8 @@ function Print-Usage {
     Write-Host "  test.ps1 mcp-contract               # Contract gate: matrix + docs + lint + validators"
     Write-Host "  test.ps1 ps                         # PowerShell tests + the skills/ conformance lint CI runs next"
     Write-Host "  test.ps1 ps -Quiet                  # Run PowerShell tests with -Quiet flag"
+    Write-Host "  test.ps1 -Show ps                   # List the discovered PowerShell test files"
+    Write-Host "                                      # (any other ps argument is rejected, not ignored)"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
     Write-Host "  test.ps1 rws                        # Show RWS help"
     Write-Host "  test.ps1 rws sc amazon              # Run a specific scenario task"
@@ -392,7 +645,7 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, ps, rws, resume, session."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, verify, ps, rws, resume, session."
     exit 1
 }
 
@@ -873,9 +1126,33 @@ To use a different port:
     # first to avoid "Non-resolvable import POM" and dependency resolution
     # errors when the mock-site module boots.
     #
-    # On a cold machine this step takes ~10-15 minutes.  Subsequent runs
-    # are near-instant (Maven reuses the cached artifacts).
+    # On a cold machine this step takes ~10-15 minutes; subsequent runs are
+    # near-instant (Maven reuses the cached artifacts).  That cold run used to
+    # be ~13 minutes of silence — Maven ran with -q and only a per-phase
+    # banner was printed — so the phases now decide their verbosity from the
+    # cache state: cold ⇒ Maven's own module output is streamed, a heartbeat
+    # proves the process is alive while Maven is quiet, and everything is
+    # tee'd to a log file whose path is printed; warm ⇒ quiet and fast, with
+    # the same banners and exit codes as before.
     if (-not $script:DryRun) {
+        $artifactVersion = ''
+        $versionFile = Join-Path $repoRoot 'VERSION'
+        if (Test-Path -LiteralPath $versionFile -PathType Leaf) {
+            $artifactVersion = ([string](Get-Content -LiteralPath $versionFile -TotalCount 1)).Trim()
+        }
+        $mavenLocalRepo = Get-MavenLocalRepositoryPath -RepoRoot $repoRoot
+        $preflightCache = Test-MavenPreflightCacheState -LocalRepo $mavenLocalRepo -Version $artifactVersion
+        $coldPreflight = -not ($preflightCache.BomCached -and $preflightCache.RestCached)
+
+        Write-Host ''
+        if ($coldPreflight) {
+            Write-Host 'Preflight: cold Maven cache — the first install can take 10-15 minutes; every later run takes seconds.' -ForegroundColor Yellow
+            Write-Host "  Local Maven repository: $mavenLocalRepo" -ForegroundColor DarkGray
+            Write-Host '  Maven output is streamed below, with a heartbeat while it is quiet, and tee''d to a log file per phase (path printed with the phase) — tail that file to follow progress.' -ForegroundColor DarkGray
+        } else {
+            Write-Host "Preflight: browser4-dependencies and browser4-rest already cached in $mavenLocalRepo — this should take seconds." -ForegroundColor DarkGray
+        }
+
         # Phase 1: dependency BOM (fast — POM only, no compilation)
         $preflightBomArgs = @(
             'install',
@@ -884,8 +1161,11 @@ To use a different port:
             '-DskipTests',
             '-q'
         )
-        Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @preflightBomArgs } `
-            -Label 'InstallDependencyBOM' -PreExecPath $repoRoot
+        $preflightBomLog = Join-Path $script:TestLogDir 'mock-site-preflight-install-dependencies.log'
+        Invoke-CommandAndReport -ScriptBlock {
+            $global:LASTEXITCODE = Invoke-MavenInstallPhase -Label 'InstallDependencyBOM' `
+                -MvnArgs $preflightBomArgs -LogPath $preflightBomLog -ShowMavenOutput:$coldPreflight
+        } -Label 'InstallDependencyBOM' -PreExecPath $repoRoot
 
         # Phase 2: browser4-rest + transitive deps (slow on first build —
         #          browser4-rest compiles ~25 modules; 10-15 min cold).
@@ -898,7 +1178,9 @@ To use a different port:
             '-DskipTests',
             '-q'
         )
-        Invoke-KotlinCompileWithRetry -Label 'InstallBrowser4Rest' -PreExecPath $repoRoot -MvnArgs $preflightRestArgs
+        $preflightRestLog = Join-Path $script:TestLogDir 'mock-site-preflight-install-rest.log'
+        Invoke-KotlinCompileWithRetry -Label 'InstallBrowser4Rest' -PreExecPath $repoRoot `
+            -MvnArgs $preflightRestArgs -LogFile $preflightRestLog -ShowMavenOutput:$coldPreflight
 
         # Phase 3: browser4-rest-tests also depends (test scope) on artifacts
         #          that are NOT in Maven Central and that "-pl browser4-rest -am"
@@ -2347,7 +2629,10 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
 #   * keeps the last lines in a ring buffer and prints a heartbeat with the
 #     elapsed time while the child is silent,
 #   * warns loudly when a child produced no output at all instead of printing
-#     an empty "child output" section.
+#     an empty "child output" section,
+#   * returns to the caller as soon as the child exited: the final drain of the
+#     output pipes is bounded (Wait-ChildOutputDrain), because descendants that
+#     inherited those pipes (JVM, headless Chrome) can hold them open forever.
 #
 # Why not `Start-Process -RedirectStandardOutput <tempfile>` + polling?
 #   That relay depends on PowerShell's own stdout pump copying the child's
@@ -2429,6 +2714,9 @@ public sealed class B4ChildOutputRelay
     private long _lines;
     private long _stderrLines;
     private long _chars;
+    private int _eofCount;
+    private long _consoleFailures;
+    private string _lastConsoleError = string.Empty;
     private DateTime _lastOutputUtc = DateTime.UtcNow;
     private string _lastLine = string.Empty;
 
@@ -2439,23 +2727,40 @@ public sealed class B4ChildOutputRelay
         _tail = new string[tailSize];
     }
 
+    // A null DataReceivedEventArgs means the stream reached EOF.  EOF is the
+    // only thing that tells the caller the child *and every process that
+    // inherited its stdout/stderr* are done with the pipe, so it is counted
+    // instead of being thrown away.
     public void OnStdout(object sender, DataReceivedEventArgs e)
     {
-        Emit(e == null ? null : e.Data, false);
+        if (e == null || e.Data == null) { lock (_sync) { _eofCount++; } return; }
+        Emit(e.Data, false);
     }
 
     public void OnStderr(object sender, DataReceivedEventArgs e)
     {
-        Emit(e == null ? null : e.Data, true);
+        if (e == null || e.Data == null) { lock (_sync) { _eofCount++; } return; }
+        Emit(e.Data, true);
     }
 
     private void Emit(string line, bool isStdErr)
     {
         if (line == null) { return; }
 
-        // Console first: the caller must see output as it arrives.
-        if (isStdErr) { Console.Error.WriteLine(line); }
-        else { Console.Out.WriteLine(line); }
+        // Console first: the caller must see output as it arrives.  A closed or
+        // broken console pipe (a run piped into `head -50`, a lost terminal)
+        // must never take this reader thread down: a dead reader stops
+        // delivering EOF, which is what parked the runner in its drain.  Fail
+        // loudly later instead of hanging (or crashing) now.
+        try
+        {
+            if (isStdErr) { Console.Error.WriteLine(line); }
+            else { Console.Out.WriteLine(line); }
+        }
+        catch (Exception ex)
+        {
+            lock (_sync) { _consoleFailures++; _lastConsoleError = ex.Message; }
+        }
 
         lock (_sync)
         {
@@ -2480,6 +2785,15 @@ public sealed class B4ChildOutputRelay
     public long StderrLines { get { lock (_sync) { return _stderrLines; } } }
     public long Chars { get { lock (_sync) { return _chars; } } }
     public string LastLine { get { lock (_sync) { return _lastLine; } } }
+
+    /// <summary>Number of streams that have reached EOF (0, 1 or 2).</summary>
+    public int EofCount { get { lock (_sync) { return _eofCount; } } }
+
+    /// <summary>Lines that could not be echoed to the console (broken stdout/stderr).</summary>
+    public long ConsoleWriteFailures { get { lock (_sync) { return _consoleFailures; } } }
+
+    /// <summary>Message of the last failed console write, for the caller's report.</summary>
+    public string LastConsoleError { get { lock (_sync) { return _lastConsoleError; } } }
 
     public double SecondsSinceLastOutput
     {
@@ -2563,6 +2877,114 @@ function Write-ChildHeartbeat {
     }
 }
 
+function Wait-ChildOutputDrain {
+    <#
+    .SYNOPSIS
+        Wait for the child's output pipes to reach EOF, but never forever.
+
+    .DESCRIPTION
+        A child's stdout/stderr are anonymous pipes; EOF happens only when
+        *every* write end is closed.  Grandchildren inherit those handles and
+        routinely outlive the child (the Browser4 / mock-site JVM, headless
+        Chrome, an agent CLI), so an unbounded wait for EOF parks the caller
+        for as long as any of them lives — and a thread blocked in that native
+        wait ignores Ctrl+C.
+
+        This helper returns as soon as both streams reported EOF or the
+        deadline expires, whichever comes first.  The caller can then continue
+        with the output it already has instead of hanging.
+
+    .PARAMETER Relay
+        The B4ChildOutputRelay instance collecting the child's output.
+
+    .PARAMETER TimeoutSec
+        Maximum seconds to wait for EOF.  0 returns immediately.
+
+    .OUTPUTS
+        Boolean — $true when the deadline expired before both streams hit EOF.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] $Relay,
+        [double] $TimeoutSec = 10
+    )
+
+    if ($TimeoutSec -le 0) {
+        return ($Relay.EofCount -lt 2)
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+    while ($Relay.EofCount -lt 2 -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 50
+    }
+
+    return ($Relay.EofCount -lt 2)
+}
+
+function Get-DescendantProcessSnapshot {
+    <#
+    .SYNOPSIS
+        Describe the still-running descendants of a (now exited) child process.
+
+    .DESCRIPTION
+        The processes that can keep a child's stdout/stderr pipes open are
+        exactly the child's surviving descendants: they inherited the write
+        ends through CreateProcess.  Naming them turns "the runner hung" into
+        an actionable message ("headless Chrome PID 1234 is still attached to
+        the run"), which is why the streaming runner lists them when the output
+        drain times out.
+
+        Windows-only: it uses Win32_Process.  Other platforms simply get an
+        empty list — pipe inheritance does not outlive the child there.
+
+    .PARAMETER RootPid
+        Process id of the child that already exited.
+
+    .OUTPUTS
+        Array of PSCustomObject (Id, Name, Started).  Empty when unavailable.
+    #>
+    param([int] $RootPid)
+
+    if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) { return @() }
+    if ($RootPid -le 0) { return @() }
+
+    try {
+        $all = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+    } catch {
+        return @()
+    }
+    if ($all.Count -eq 0) { return @() }
+
+    $byParent = @{}
+    foreach ($p in $all) {
+        $key = [int]$p.ParentProcessId
+        if (-not $byParent.ContainsKey($key)) { $byParent[$key] = [System.Collections.Generic.List[object]]::new() }
+        $byParent[$key].Add($p)
+    }
+
+    $found = [System.Collections.Generic.List[object]]::new()
+    $queue = [System.Collections.Generic.Queue[int]]::new()
+    $visited = @{}
+    $queue.Enqueue($RootPid)
+
+    while ($queue.Count -gt 0) {
+        $current = $queue.Dequeue()
+        if ($visited.ContainsKey($current)) { continue }
+        $visited[$current] = $true
+        if (-not $byParent.ContainsKey($current)) { continue }
+        foreach ($child in $byParent[$current]) {
+            $childPid = [int]$child.ProcessId
+            $found.Add([pscustomobject]@{
+                Id      = $childPid
+                Name    = $child.Name
+                Started = $child.CreationDate
+            })
+            $queue.Enqueue($childPid)
+        }
+    }
+
+    return $found.ToArray()
+}
+
 function Invoke-ChildProcessStreaming {
     <#
     .SYNOPSIS
@@ -2583,6 +3005,11 @@ function Invoke-ChildProcessStreaming {
         produces no output can never leave the caller staring at an empty
         section: the heartbeat keeps running and the caller warns afterwards.
 
+        The child's exit is what ends the call: the trailing drain of the output
+        pipes uses Wait-ChildOutputDrain, so a descendant that inherited them
+        (JVM, headless Chrome) delays the return by at most -DrainTimeoutSec
+        instead of blocking it forever.
+
     .PARAMETER FilePath
         Executable to run (see Get-PwshExecutable).
 
@@ -2600,16 +3027,30 @@ function Invoke-ChildProcessStreaming {
         Base heartbeat interval (progressive backoff is applied).  0 disables
         heartbeats.
 
+    .PARAMETER TailSize
+        Number of trailing output lines kept in memory.  Callers that inspect
+        the output for a marker (e.g. the Kotlin daemon retry) need a larger
+        tail than the default heartbeat-sized ring buffer.
+
+    .PARAMETER DrainTimeoutSec
+        Maximum seconds to wait for the child's stdout/stderr pipes to reach
+        EOF after the child exited.  Descendants that inherited those pipes
+        (JVM, headless Chrome) can keep them open long after the child is gone;
+        the wait is therefore bounded so the caller always gets control back.
+        See Wait-ChildOutputDrain.
+
     .OUTPUTS
         Hashtable with ExitCode, DurationSec, LogFile, OutputLines,
-        StderrLines, OutputChars and ChildPid.
+        StderrLines, OutputChars, ConsoleWriteFailures, ChildPid and TailLines.
     #>
     param(
         [Parameter(Mandatory = $true)] [string] $FilePath,
         [string[]] $ArgumentList = @(),
         [string] $WorkingDirectory = '',
         [string] $LogFile = '',
-        [int] $HeartbeatSeconds = 20
+        [int] $HeartbeatSeconds = 20,
+        [int] $TailSize = 10,
+        [double] $DrainTimeoutSec = 10
     )
 
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -2647,7 +3088,7 @@ function Invoke-ChildProcessStreaming {
     try {
         if ($relayAvailable) {
             # ── Primary path: capture through .NET pipes -------------------
-            $relay = [B4ChildOutputRelay]::new($logPath, 10)
+            $relay = [B4ChildOutputRelay]::new($logPath, $TailSize)
             $stdoutHandler = [Delegate]::CreateDelegate(
                 [System.Diagnostics.DataReceivedEventHandler], $relay, 'OnStdout')
             $stderrHandler = [Delegate]::CreateDelegate(
@@ -2691,9 +3132,52 @@ function Invoke-ChildProcessStreaming {
                 }
             }
 
-            # The parameterless overload also waits for the async readers to
-            # drain, so no output is lost between exit and this return.
-            $proc.WaitForExit()
+            # ── Drain the async readers, but not forever -------------------
+            # Process.WaitForExit() (parameterless) also waits for the async
+            # readers to reach EOF, and EOF requires *every* write end of the
+            # stdout/stderr pipes to be closed.  Grandchildren inherit those
+            # write ends and outlive the child by design — the Browser4 /
+            # mock-site JVM, headless Chrome, an agent CLI — so the
+            # parameterless overload parked this runner for as long as any of
+            # them lived.  Ctrl+C cannot break a thread blocked in that native
+            # wait, which is why a finished run could not be interrupted.
+            # Waiting with a deadline keeps the "no output is lost between exit
+            # and return" guarantee for every normal run and still returns when
+            # a leftover descendant holds the pipes open.
+            $drainTimedOut = Wait-ChildOutputDrain -Relay $relay -TimeoutSec $DrainTimeoutSec
+            if ($drainTimedOut) {
+                # Stop the readers so no late line from a leftover descendant
+                # can interleave with the caller's own output.
+                try { $proc.CancelOutputRead() } catch { }
+                try { $proc.CancelErrorRead() } catch { }
+
+                Write-Host "  Note: the child (PID $childPid) exited, but its output pipes are still held open after ${DrainTimeoutSec}s." -ForegroundColor DarkYellow
+                $survivors = @(Get-DescendantProcessSnapshot -RootPid $childPid)
+                if ($survivors.Count -gt 0) {
+                    Write-Host "  $($survivors.Count) descendant process(es) inherited the child's stdout/stderr and are still alive:" -ForegroundColor DarkYellow
+                    foreach ($survivor in ($survivors | Select-Object -First 8)) {
+                        Write-Host "    - $($survivor.Name) (PID $($survivor.Id), started $($survivor.Started))" -ForegroundColor DarkGray
+                    }
+                    if ($survivors.Count -gt 8) {
+                        Write-Host "    ... and $($survivors.Count - 8) more" -ForegroundColor DarkGray
+                    }
+                }
+                Write-Host '  Continuing without them — they no longer block this run.' -ForegroundColor DarkGray
+            } else {
+                # EOF on both streams: the parameterless overload would return
+                # immediately now, so nothing is left to wait for.
+                $proc.WaitForExit()
+            }
+
+            # A console that refused the child's output (piped into `head -50`,
+            # terminal gone) is reported here instead of vanishing silently —
+            # the run log still holds every line.
+            $consoleFailures = if ($relay) { $relay.ConsoleWriteFailures } else { 0 }
+            if ($consoleFailures -gt 0) {
+                try {
+                    Write-Host "  Note: $consoleFailures line(s) could not be echoed to the console ($($relay.LastConsoleError)) — the log has them." -ForegroundColor DarkYellow
+                } catch { }
+            }
         } else {
             # ── Fallback: inherited stdio (no capture, no log) -------------
             # Still better than capturing into a file nothing ever reads.
@@ -2720,6 +3204,8 @@ function Invoke-ChildProcessStreaming {
                     Write-Host "  · child (PID $childPid) still running — ${minutes}m ${seconds}s elapsed" -ForegroundColor DarkGray
                 }
             }
+            # No redirected streams in this path, so the parameterless
+            # WaitForExit() cannot wait for a pipe: it returns with the child.
             $proc.WaitForExit()
         }
     } finally {
@@ -2739,7 +3225,11 @@ function Invoke-ChildProcessStreaming {
         OutputLines = if ($relay) { $relay.Lines } else { 0 }
         StderrLines = if ($relay) { $relay.StderrLines } else { 0 }
         OutputChars = if ($relay) { $relay.Chars } else { 0 }
+        ConsoleWriteFailures = if ($relay) { $relay.ConsoleWriteFailures } else { 0 }
         ChildPid    = $childPid
+        # Trailing lines for callers that match a marker in the output (the
+        # Kotlin daemon retry); empty when the relay could not be compiled.
+        TailLines   = if ($relay) { @($relay.GetTail()) } else { @() }
     }
 
     if ($proc) { $proc.Dispose() }
@@ -3047,7 +3537,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  --silent                  Suppress agent output'
         Write-Host '  --skip-version-check      Skip browser4-cli version check'
         Write-Host '  --timeout <minutes>       Kill each scenario task after N minutes'
-        Write-Host '  --agent <name>            Use a specific agent CLI (claude, kimi, opencode, codex, or dsh)'
+        Write-Host '  --agent <name>            Use a specific agent CLI (dsh, claude, kimi, opencode, or codex)'
         Write-Host '  BROWSER4_AGENT=<name>     Env var to set agent globally (same values as --agent)'
         Write-Host ''
         Write-Host 'Examples:'
@@ -3644,7 +4134,7 @@ function Invoke-SkillDocConformance {
     return [int]$LASTEXITCODE
 }
 
-function Invoke-PowerShellTests([string[]]$additionalArgs) {
+function Invoke-PowerShellTests([string[]]$additionalArgs, [switch]$StrictArgs) {
     <#
     .SYNOPSIS
         Discover and run all *.tests.ps1 files in the repository.
@@ -3655,8 +4145,36 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         executed with `pwsh -NoProfile -ExecutionPolicy Bypass -File`.
 
         In DryRun/Show mode, lists the discovered files without executing.
-        Additional arguments are forwarded to every test script (e.g. -Quiet).
+        -Quiet is the one argument this target understands: it is forwarded to
+        every plain test script and switches the Pester path to `-Show None`.
+
+        Any other argument is rejected when `ps` is the only selected target.
+        One that nothing consumes used to be forwarded and silently dropped, so
+        `test.ps1 ps --list` ran the whole suite — long enough to look like a
+        hang — instead of listing anything.
+
+    .PARAMETER additionalArgs
+        Arguments to forward.  See the note above for what is accepted.
+
+    .PARAMETER StrictArgs
+        Reject arguments this target does not know.  The dispatcher sets it when
+        `ps` is the only selected target; in a combined run (e.g.
+        `test.ps1 ps fast -pl browser4-core`) the same tokens legitimately
+        belong to the other suites.
     #>
+    if ($StrictArgs) {
+        $knownArgs = @('-Quiet')
+        $unknownArgs = @($additionalArgs | Where-Object { $_ -and ($knownArgs -notcontains $_) })
+        if ($unknownArgs.Count -gt 0) {
+            Write-Host "ERROR: unrecognized argument(s) for 'ps': $($unknownArgs -join ' ')" -ForegroundColor Red
+            Write-Host '  ps runs every *.tests.ps1 in the repository (Pester or pwsh -File).' -ForegroundColor DarkGray
+            Write-Host "  Known arguments: $($knownArgs -join ', ')  (forwarded to the test scripts)" -ForegroundColor DarkGray
+            Write-Host '  To list the files instead of running them:  test.ps1 -Show ps' -ForegroundColor DarkGray
+            Write-Host '  The scenario runner keeps its own flags:    test.ps1 rws sc --list' -ForegroundColor DarkGray
+            exit 1
+        }
+    }
+
     Write-CommandBanner -Label 'Discovering PowerShell tests...'
 
     $testFiles = @(Get-ChildItem -Path $repoRoot -Recurse -Filter '*.tests.ps1' -File |
@@ -4329,6 +4847,60 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
     }
 }
 
+# ---------------------------------------------------------------------------
+# verify — the verification-authority gate (plan P3.3)
+# ---------------------------------------------------------------------------
+#
+# Runs the `code devtask` plan-quality evaluation (bin/eval-devtask.ps1), which
+# is the end-to-end contract of the verification layer: plan shape, signal
+# binding, the CLI argument contract, `--verify` semantics, determinism and the
+# read-only guarantee. It needs a live backend (the dev wrapper builds/starts
+# it) and it measures latency, so it runs alone.
+function Invoke-VerifyGate([string[]]$additionalArgs) {
+    $evalScript = Join-Path $repoRoot 'bin' 'eval-devtask.ps1'
+    Write-CommandBanner -Label 'Running code devtask plan-quality evaluation...'
+
+    if (-not (Test-Path -LiteralPath $evalScript -PathType Leaf)) {
+        Write-Error "Evaluation script not found at $evalScript"
+        exit 1
+    }
+
+    # Forward the evaluation harness's own switches; default to the fast run so
+    # the local loop stays ~1 minute.
+    $evalArgs = @()
+    foreach ($arg in $additionalArgs) {
+        switch -Regex ($arg) {
+            '^-Fast$'   { $evalArgs += '-Fast' }
+            '^-Strict$' { $evalArgs += '-Strict' }
+            '^-NoBuild$' { $evalArgs += '-NoBuild' }
+            '^-Json$'   { $evalArgs += '-Json' }
+            '^-Probe=(.+)$' { $evalArgs += @('-Probe', $Matches[1]) }
+            default {
+                Write-Error "Unknown argument '$arg' for the verify scope. Supported: -Fast, -Strict, -NoBuild, -Json, -Probe=<id,...>"
+                exit 1
+            }
+        }
+    }
+    if ($evalArgs.Count -eq 0) { $evalArgs = @('-Fast') }
+
+    if ($script:Show) {
+        Write-CommandBanner -Label '[SHOW] Would execute:' -Subtitle "  pwsh $evalScript $($evalArgs -join ' ')"
+        return
+    }
+    if ($script:DryRun) {
+        Write-CommandBanner -Label '[DRY RUN] Executing:' -Subtitle "  pwsh $evalScript $($evalArgs -join ' ')"
+        return
+    }
+
+    & pwsh -NoProfile -File $evalScript @evalArgs
+    $evalExit = $LASTEXITCODE
+    if ($evalExit -ne 0) {
+        Write-CommandBanner -Label "Evaluation failed (exit $evalExit)" -Icon '[FAIL]'
+        exit $evalExit
+    }
+    Write-CommandBanner -Label 'Evaluation passed' -Icon '[PASS]'
+}
+
 # ===================================================================
 # Argument parsing
 # ===================================================================
@@ -4343,6 +4915,7 @@ $testTypeMap = @{
     'skills'        = 'maven'
     'mcp'           = 'maven'
     'mcp-contract'  = 'maven'
+    'verify'        = 'verify'
     'main'          = 'maven-expand'
     'cli'           = 'cli'
     'browser4-cli'  = 'cli'
@@ -4505,6 +5078,7 @@ $cliTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'cli' })
 $rwsTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'rws' })
 $psTests     = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'ps' })
 $launchTargets = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'server' })
+$verifyTests = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'verify' })
 
 # Expand 'main' into its constituent test types (only for maven bucket)
 $expandedMaven = @()
@@ -4521,9 +5095,10 @@ $cliTests = $cliTests | Select-Object -Unique
 $rwsTests = $rwsTests | Select-Object -Unique
 $psTests  = $psTests | Select-Object -Unique
 $launchTargets = $launchTargets | Select-Object -Unique
+$verifyTests = $verifyTests | Select-Object -Unique
 
 # Validate: server must be run by itself
-if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($psTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
+if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($psTests.Count -gt 0) -or ($verifyTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
     Write-Error "mock-site (or server) must be run by itself. Pass any Maven properties after it, for example: test.ps1 mock-site -Dmock.site.port=18080"
     exit 1
 }
@@ -4562,11 +5137,22 @@ if ($rwsTests.Count -gt 0) {
 }
 
 if ($psTests.Count -gt 0) {
-    Invoke-PowerShellTests -additionalArgs $additionalArgs
+    # Strict only when nothing else can consume the arguments: `ps` is then the
+    # sole owner of the command line, so an unknown flag is a user error rather
+    # than a pass-through meant for another suite.
+    $psIsSoleTarget = ($mavenTests.Count -eq 0 -and $cliTests.Count -eq 0 -and
+                       $rwsTests.Count -eq 0 -and $launchTargets.Count -eq 0)
+    Invoke-PowerShellTests -additionalArgs $additionalArgs -StrictArgs:$psIsSoleTarget
+}
+
+if ($verifyTests.Count -gt 0) {
+    Invoke-VerifyGate -additionalArgs $additionalArgs
 }
 
 if ($launchTargets.Count -gt 0) {
-    Invoke-MockSiteBoot -additionalArgs $additionalArgs
+    # Discard the phase's exit code: every phase already reported [PASS]/[FAIL]
+    # and exited on failure, and a bare `0` on stdout is noise.
+    $null = Invoke-MockSiteBoot -additionalArgs $additionalArgs
 }
 
 # -- Report where this run's artifacts landed -------------------------

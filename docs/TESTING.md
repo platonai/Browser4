@@ -212,6 +212,10 @@ pwsh bin/skill-doc-lint.ps1   # 只跑合规检查（与 CI 那一步等价的�
 * `pr.yml` / `ci.yml` 仍各自显式跑 `./bin/skill-doc-lint.ps1`（步骤名
   `Skill document conformance (methodology M1-M8)`）；本地挂载不改变 CI 的判定。
 * 挂载本身的回归保护在 `bin/tests/test.ps1.tests.ps1`（退出码契约 + 三个组的 `-Show` 可达性）。
+* `ps` 只认 `-Quiet`（转发给每个测试脚本，Pester 分支转成 `-Show None`）；**其余参数一律报错**
+  （仅当 `ps` 是唯一目标时；`ps fast -pl x` 这类组合仍按原样透传）。此前未识别的参数会被静静转发、
+  再被测试脚本丢弃，所以 `ps --list` 不是列文件而是把整套测试跑了一遍——长到看起来像卡死。
+  要列文件用 `pwsh bin/test.ps1 -Show ps`。
 
 ---
 
@@ -293,17 +297,20 @@ runner 上证明稳定，把该 job 提到 `--level=BASIC` 只是一个词的改
 
 ### 已知覆盖缺口（尚未修，需要决策）
 
-* **`E2E`/`E2ETest`：nightly 现在跑其中的 5 个类（本轮起）。** 静态清点到 10 个类带这两个 tag，
-  实测进入 nightly 的是这 5 个 / **64 个方法 / 约 9 分钟 / 0 失败**
-  （`HtmlSnapshotScenariosE2ETest` 39 例 · 436 s、`CaptureIgnoreDomFeaturesE2ETest` 2 例 · 59 s、
-  `Browser4MCPServerE2ETest` 14 例 · 4.2 s、`StorageStateCookiePathE2ETest` 4 例 · 37.9 s、
-  `SwarmControllerE2ETest` 5 例 · 2.7 s）。`pr.yml` 与 `ci.yml` 仍排除这两个 tag —— 它们是合并/发布门禁，
-  而这几个类单个就是分钟级。
-  剩下 5 个类**依然不执行**，但原因是它们自己的 tag 而非 E2E：`AgentE2ETest` / `SkillInstallE2ETest` /
-  `CommandControllerE2ETest` 是 `ManualOnly`（taxonomy 的语义就是"必须人工触发"），
-  `MCPToolControllerE2ETest` / `SkillRegistrationAndInvocationE2ETest` 是 `RequiresAI`（需要 LLM key）。
-  整个 `browser4-tests/browser4-e2e-tests` 模块（3 个类 / 5 个方法）因此**仍是死代码** ——
-  要让它跑，要动的是 `ManualOnly`/`RequiresAI` 的语义，那是另一个决策，不是"放开 E2E"。
+* **`E2E`/`E2ETest`：nightly 是这两个 tag 唯一的执行地**（`pr.yml` 与 `ci.yml` 仍排除它们 —— 它们是
+  合并/发布门禁，而单个类就是分钟级）。最近一次实测（nightly run 38345418466，6 个类 / 72 个方法 /
+  约 7.5 分钟）：`HtmlSnapshotScenariosE2ETest` 39 例 · 138 s、`MCPToolControllerE2ETest` 18 例 · 252 s
+  （其中 1 例没有 LLM key，白等 180 s 超时 —— 见下）、`CommandControllerE2ETest` 4 例 · 31 s、
+  `StorageStateCookiePathE2ETest` 4 例 · 19 s、`CaptureIgnoreDomFeaturesE2ETest` 2 例 · 9 s、
+  `SwarmControllerE2ETest` 5 例 · 2.1 s。
+  **tag 落在方法上时类不会整体退出**：`CommandControllerE2ETest` 只排除 1 个 `ManualOnly` 方法、
+  `MCPToolControllerE2ETest` 只排除 2 个 `RequiresAI` 方法，其余用例照跑 —— 所以**新写的 AI 用例必须
+  自己带 `RequiresAI`**，否则会在没有 LLM key 的 nightly 上等满超时才失败（run 38345418466 的
+  `testAgentRunStatusAndResultTools` 就是如此）。
+  整类退出的只有 `browser4-tests/browser4-e2e-tests` 模块的 3 个类（`AgentE2ETest` / `SkillInstallE2ETest`
+  类级 `ManualOnly`，`SkillRegistrationAndInvocationE2ETest` 类级 `RequiresAI`，共 5 个方法），
+  该模块因此**仍是死代码** —— 要让它跑，要动的是 `ManualOnly`/`RequiresAI` 的语义，那是另一个决策，
+  不是"放开 E2E"。
   历史评估（含这类重测试的实测耗时与 flake 风险）见
   [E2E tag 稳定性评估](../docs-dev/copilot/e2e-tag-stability-assessment.md) 与
   [ci-stabilization §31.3/§31.4](../docs-dev/copilot/ci-stabilization-4.13.x.md)；nightly 不是合并门禁，

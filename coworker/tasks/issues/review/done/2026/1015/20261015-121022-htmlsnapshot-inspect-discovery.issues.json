@@ -1,0 +1,241 @@
+{
+  "meta": {
+    "mode": "dev",
+    "source": "20261015-121022-htmlsnapshot-inspect-discovery.issues.json",
+    "scenario": "htmlsnapshot-inspect-discovery",
+    "date": "20261015-121022"
+  },
+  "background": {
+    "task": "**Objective:** Use browser4-cli's `htmlsnapshot` family to reverse-engineer the structure of `http://books.toscrape.com/` (redirects to HTTPS), extract all book titles, then extract titles + prices with X-SQL.\n\n**Outcome: Successful.** All 9 task steps completed on the first attempt. 20 books were found on the page, and all 20 titles + prices were extracted with zero missing/empty fields.\n\n**Answer to \"what repeats on this page?\" (step 3):** the tool auto-discovered `article.product_pod` — 20 product cards in a 4-column grid (`ol.row`), plus secondary repeating groups: 51 sidebar `li` items (category list) and pagination. Suggested selectors for card children: `p.price_color`, `h3 a` (full title lives in the `a[title]` attribute — the visible text is clipped by the site itself), `p.instock.availability`, `button.btn.btn-primary`.\n\n**Extracted data (X-SQL, 20 correlated rows, all fields populated):**\n\n| # | Title | Price | Availability |\n|---|-------|-------|--------------|\n| 1 | A Light in the Attic | £51.77 | In stock |\n| 2 | Tipping the Velvet | £53.74 | In stock |\n| 3 | Soumission | £50.10 | In stock |\n| 4 | Sharp Objects | £47.82 | In stock |\n| 5 | Sapiens: A Brief History of Humankind | £54.23 | In stock |\n| 6 | The Requiem Red | £22.65 | In stock |\n| 7 | The Dirty Little Secrets of Getting Your Dream Job | £33.34 | In stock |\n| 8 | The Coming Woman: A Novel Based on the Life of the Infamous Feminist, Victoria Woodhull | £17.93 | In stock |\n| 9 | The Boys in the Boat: Nine Americans and Their Epic Quest for Gold at the 1936 Berlin Olympics | £22.60 | In stock |\n| 10 | The Black Maria | £52.15 | In stock |\n| 11 | Starving Hearts (Triangular Trade Trilogy, #1) | £13.99 | In stock |\n| 12 | Shakespeare's Sonnets | £20.66 | In stock |\n| 13 | Set Me Free | £17.46 | In stock |\n| 14 | Scott Pilgrim's Precious Little Life (Scott Pilgrim #1) | £52.29 | In stock |\n| 15 | Rip it Up and Start Again | £35.02 | In stock |\n| 16 | Our Band Could Be Your Life: Scenes from the American Indie Underground, 1981-1991 | £57.25 | In stock |\n| 17 | Olio | £23.88 | In stock |\n| 18 | Mesaerion: The Best Science Fiction Stories 1800-1849 | £37.59 | In stock |\n| 19 | Libertarianism for Beginners | £51.33 | In stock |\n| 20 | It's Only the Himalayas | £45.17 | In stock |\n\n**Artifacts** (all under `.test-sessions/20261015T0901431699046Z/`): `01-htmlsnapshot-capture.txt`, `02-inspect-autodiscover.txt`, `03-inspect-product_pod.txt`, `04-summary.txt`, `05-titles-h3a-title.txt`, `06-titles.json`, `07-grep-count.txt`, `08-books-query.sql`, `08-query-result.txt`, `08-query-result.json`, `08-books-titles-prices.csv`, `09-inspect-sidebar.txt`, `10-summary-suggested-selector.txt`, `11-depth1.txt`/`11-depth5.txt`, `12-cf-depth1.txt`/`12-cf-depth6.txt`, `page-export.html`, `make_csv.py`.\n\n---",
+    "workarounds": "",
+    "commands": "",
+    "executionContext": "**Preparation** — verified cwd `D:/workspace/Browser4/Browser4-4.14`, created the run scratch dir, ran `./b4w.ps1 help` (rich, well-organized, `★` marking high-frequency commands) and read `skills/browser4-cli/SKILL.md` plus `help htmlsnapshot`, `help htmlsnapshot inspect`, `help htmlsnapshot query`. Dev mode started the daemon/backend automatically; no manual setup was needed.\n\n**Commands run (in order):**\n1. `./b4w.ps1 -s books-eval open --headless \"http://books.toscrape.com/\"` → opened, redirected to `https://books.toscrape.com/`, \"All products | Books to Scrape - Sandbox\".\n2. `./b4w.ps1 -s books-eval htmlsnapshot` → capture metadata (62 KB, 20 images, 94 links, 100 interactive elements).\n3. `./b4w.ps1 -s books-eval htmlsnapshot inspect` → auto-discovery: `.product_pod` ×20; suggested `p.price_color`, `h3 a`, etc.\n4. `./b4w.ps1 -s books-eval htmlsnapshot inspect \".product_pod\" --max 5 --depth 3` → same suggestion quality on 5 samples; sample tree correctly showed direct children only (as documented).\n5. `./b4w.ps1 -s books-eval htmlsnapshot summary` → landmarks (`header.header`, `aside.sidebar`, `section`, 20× `article.product_pod`), 4 link groups, lists, stats.\n6. `./b4w.ps1 -s books-eval htmlsnapshot get all attr \"h3 a\" title` → `[\"A Light in the Attic\", …]` + **\"20 elements matched.\"** (JSON `match_count: 20`) — the `title` attribute was the right choice because the site clips visible link text (`get all text \"h3 a\"` returns `\"A Light in the ...\"`).\n7. `./b4w.ps1 -s books-eval htmlsnapshot grep -c \"In stock\" --selector \"ol.row\"` → `20` (line count). Confirmed line-semantics: `grep -c \"a\"` on the same scope returns `200`, so `-c` must not be used as an element count.\n8. Wrote `08-books-query.sql` (`DOM_LOAD_AND_SELECT(@url, 'article.product_pod')` + `DOM_FIRST_ATTR`/`DOM_FIRST_TEXT`) and ran `./b4w.ps1 -s books-eval htmlsnapshot query --sql \"@.test-sessions/.../08-books-query.sql\" --format table` → 20 rows, then `--result-only` → JSON → CSV.\n9. `./b4w.ps1 -s books-eval htmlsnapshot inspect \".sidebar\" --max 10` → re-targeted to `.sidebar li` (51 matches), but with a misleading narration (see Issue 1).\n\n**Verification / decisions:** `--depth` was validated as effective with a deep container (`.container-fluid`: depth 1 vs 6 produced different, deeper suggestions); the identical output for `.sidebar li` is the documented shallow-DOM case. Warm-command latency ≈1.3 s; no flakiness across ~25 invocations.\n\n**Workarounds required:** none blocking. Two outputs needed correction by hand: the summary's suggested `.col-sm-8 col-md-9 a` command (matches 0 elements; corrected to `.col-sm-8 a`), and the inspect narration naming the wrong element as \"repeating\".\n\n---"
+  },
+  "assessment": {
+    "completionStatus": "Successful — every step of the task completed on the first attempt: navigation, capture, bare and scoped inspect, summary, title extraction with the authoritative count (20 elements matched / match_count 20), selector-scoped grep, an X-SQL query returning 20 correlated title+price rows, and a sidebar inspection. No step had to be abandoned.",
+    "successRate": "100% of task steps; two tool outputs (a summary-suggested selector and the inspect narration) were wrong and had to be corrected by hand before they could be trusted, but they did not block progress.",
+    "issuesFound": 6,
+    "majorBlockers": "",
+    "mostConfusingAspects": "1) htmlsnapshot inspect's narration contradicts its own header when the selector matches 0 or 1 elements — the prose insists the user's selector 'repeats as a sibling group' while the header shows a different, auto-discovered selector. 2) The summary advertises 'Copy-paste ready' commands, one of which is an invalid selector that silently returns nothing. 3) Malformed CSS selectors and valid-but-absent selectors produce identical, reassuring 'the element is simply not there' output, so a typo looks like a page problem. 4) Deciding when grep -c is meaningful — it counts lines (grep -c \"a\" = 200 within a subtree of 20 cards), so it cannot validate a selector.",
+    "mostValuableImprovements": "1) Never assert that the user's selector repeats when the tool substituted another element set — report the 0-match/1-match case explicitly (Issue 1). 2) Fix buildSelectorHint so multi-class elements produce '.a.b' selectors and make every suggested command round-trip through an execution test (Issue 2). 3) Surface CSS parse errors distinctly from empty result sets, and align zero-result exit codes across the read commands (Issue 3). 4) De-duplicate suggested commands and prefer item selectors (Issue 4).",
+    "usabilityRating": 7
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "htmlsnapshot inspect silently analyzes a different element set and states that the user's non-matching selector repeats",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s books-eval htmlsnapshot inspect \".no-such-thing\"   (also reproduce with a selector matching exactly one element, e.g. \".sidebar\")"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The command should say that the selector matched 0 elements (or that it is a singleton container) and clearly mark the pattern it actually analyzed, e.g. 'no elements matched \"...\"; auto-discovered repeating pattern \"article.product_pod\" instead'. The header and every sentence should name the SAME selector."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Header prints '### Inspect: \".product_pod\" (20 matches, 20 analyzed)' while the body prints 'Auto-discovered repeating pattern from \".no-such-thing\" — The tool found that \".no-such-thing\" repeats as a sibling group (e.g. a product grid, search result list).' Exit code 0, no warning. A user/agent reading the prose concludes that a selector which matches nothing is a repeating group. The single-match variant (\".sidebar\") claims '.sidebar repeats as a sibling group' although it matched exactly one element (the real repeating unit was '.sidebar li', shown only in the header)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Backend inspectDocument() enters auto-discovery whenever the user's selector matches <=1 element (initialMatchCount <= 1). It replaces the effective selector (page-level structural/visual discovery when 0 matches; container-scoped discovery — effectiveSelector = \"$selector ${discovered.selector}\" — when exactly 1), and reports autoDiscovered=true with originalSelector=<user input>. The Rust renderer handle_html_snapshot_inspect() then prints prose that asserts the ORIGINAL selector repeats, using originalSelector in sentences written for the discovered selector. The CLI's explicit '- No elements matched' branch only runs when the backend returns matchCount == 0, which never happens because discovery substitutes a non-empty selector."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:handle_html_snapshot_inspect (auto-discovered block near the '🔍 Auto-discovered repeating pattern' println), with the substitution performed in browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:inspectDocument (initialMatchCount <= 1 branch)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- When the user-supplied selector matched 0 elements, print that fact FIRST and explicitly ('Your selector \".x\" matched 0 elements; showing the auto-discovered pattern below instead') and never assert the original selector repeats.\n- Pass the initial match count through to the renderer (e.g. a new initialMatchCount/originalMatchCount field in the JSON) and branch the wording on it: 0 matches -> 'matched nothing, fallback used'; 1 match -> 'matched one container, analysed its repeating children'.\n- Add an integration test asserting that inspect with a non-matching selector does not print the phrase 'repeats as a sibling group' about the user's selector."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "htmlsnapshot summary's 'Suggested Commands' emits an invalid CSS selector (space-joined classes) that matches 0 elements",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s books-eval htmlsnapshot summary   then run the printed command: ./b4w.ps1 -s books-eval htmlsnapshot get all text \".col-sm-8 col-md-9 a\" --limit 20"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Commands advertised as 'Copy-paste ready' should run and match elements."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The third suggested command is htmlsnapshot get all text \".col-sm-8 col-md-9 a\" --limit 20 and returns '[]' with 'No elements matched'. '.col-sm-8 col-md-9' is parsed as a descendant 'col-md-9' element inside .col-sm-8. The corrected selector '.col-sm-8 a' returns 42 elements. The same defect appears in the summary's own structure labels ('div.col-sm-8 col-md-9', 'div.container-fluid page')."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "buildSelectorHint() in the backend WPSI summarizer returns '.' + the element's FULL class attribute value, so a multi-class element yields '.cls1 cls2'. That string is serialized as the link group's 'selector:' field and re-used verbatim by the CLI to build the copy-paste command (format!(\"htmlsnapshot get all text \\\"{} a\\\" --limit 20\", sel))."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/workflow/parse/html/PageSummaryIndexService.kt:buildSelectorHint (line ~423) — and the command template at cli/browser4-cli/src/main.rs (Suggested Commands, `for sel in linkgroup_selectors.iter().take(3)`)."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- In buildSelectorHint, split className on whitespace and join with '.', i.e. '.col-sm-8.col-md-9' (or use only the first/most distinctive class when truncating).\n- Guard the emitters: any selector string containing a space that is not a valid descendant combination should be dropped or emitted as an attribute selector '[class=\"col-sm-8 col-md-9\"]'.\n- Add a summary-level test that every 'Suggested Commands' line round-trips through htmlsnapshot get all with a non-empty match count on the fixture page."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Malformed CSS selectors are reported as 'No elements matched' instead of a syntax error (exit 0)",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s books-eval htmlsnapshot get all text \"article[[\"   (same for \"div:not(\", \"p > >\", \">>>\")"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A parse error should be distinguishable from a valid selector that found nothing (e.g. an error naming the selector as invalid CSS), so a typo can be diagnosed."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every malformed selector returns '[]' plus 'No elements matched ... The read captured the page as the tab shows it now, so the element is simply not there — check the selector, the current URL, and that the page has finished loading.' with status 'ok', match_count 0 and exit code 0. The message asserts the selector is fine and the PAGE is at fault, which sends the user hunting for a missing element instead of a typo."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The all-elements path evaluates the selector with jsoup document.select(selector) inside extractSnapshotFields(); a CSS parse failure surfaces as an empty element list identical to a genuine zero-match. (Whether jsoup parses these leniently or a SelectorParseException is swallowed upstream was not conclusively established here — jsoup was not available locally — but the observable contract is that no error ever reaches the client.) Additionally, zero-result exit codes are inconsistent across the family: htmlsnapshot grep exits 1 on zero matches while htmlsnapshot get all exits 0."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/agent/tool/HTMLSnapshotToolExecutor.kt:extractSnapshotFields (document.select(selector))"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Wrap document.select() and map Selector.SelectorParseException to a distinct error result (e.g. status/invalidSelector + 400) instead of an empty list; verify with a unit test calling inspect/extract with 'article[['.\n- Have the CLI render 'invalid CSS selector' when that field is present, rather than the current 'the element is simply not there' text.\n- Align the zero-result contract: document it, and consider exiting non-zero (or a --fail-on-empty flag) for get/get all to match snapshot grep's exit 1."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "htmlsnapshot summary prints the same suggested command twice",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s books-eval htmlsnapshot summary  — the 'Suggested Commands' block lists 'htmlsnapshot get all text \".row a\" --limit 20' twice"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Each suggested command appears once (or duplicates are collapsed with a note)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The listing repeats the identical line. It happens because two link groups share the container selector '.row' (ol.row > article and ol.row > li) and the CLI iterates the collected selectors without de-duplication."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "linkgroup_selectors collects one entry per link group (from the 'selector:' lines of the summary YAML) and the Suggested Commands loop does iter().take(3) with no dedup; two groups collapsing to the same selector therefore print twice and consume two of the three suggestion slots."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:handle summary rendering — 'for sel in linkgroup_selectors.iter().take(3)' block (around the '### Suggested Commands' outline.push_str calls)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- De-duplicate linkgroup_selectors (e.g. sort + dedup, or a HashSet) before emitting suggestions.\n- Prefer the itemSelector of a group when it is more specific than the container selector (e.g. '.product_pod' instead of '.row') so the suggested command targets the cards rather than the row wrapper."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Serialized/exported HTML contains injected annotations (vi boxes, link rel=\"normalizedURI\") that the export and grep help do not mention",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s books-eval htmlsnapshot export --file page.html  then inspect page.html; also see the output of ./b4w.ps1 -s books-eval htmlsnapshot grep \"product_pod\" --selector \"ol.row\""
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Help for export/grep should state that the artifact is an annotated serialization (or the docs' 'raw HTML text' phrasing should be corrected)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The exported file carries vi=\"x y w h\" on every element (516 occurrences) and two <link rel=\"normalizedURI\" href=\"…\"> plus one <link rel=\"href\"> injected into <head>. The live DOM contains none of these (verified with eval: 0 occurrences). grep's --selector help says it searches 'raw HTML text', which can therefore match tool-generated attributes rather than the site's markup, and a downstream consumer of the export receives three synthetic link elements."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The driver injects visual-information (vi) attributes and the normalizedURI link while serializing HTML (documented in references/htmlsnapshot.md's release-notes section, and hinted at by export's --clean 'non-standard attributes'), but the per-command help text shown by `help htmlsnapshot`, `help htmlsnapshot export` and `help htmlsnapshot grep` does not surface this."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs / cli/browser4-cli/src/help.rs (htmlsnapshot help text for export and grep)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add one sentence to the export/grep help: 'The serialized HTML is annotated during capture: every element carries a vi=\"x y w h\" visual box and <head> gains a <link rel=\"normalizedURI\"> — use --clean to strip non-standard attributes.'\n- In grep help, replace 'raw HTML text' with 'captured HTML text (the annotated serialization, not the site's source)'. "
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Summary page-type classification labels the product listing page 'Article / Content'",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s books-eval htmlsnapshot summary"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A 20-item product grid page should be classified as a listing/product page, not an article."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "'Type: Article / Content' is printed. The useful signal is in the other sections (Link Groups found the 20×4 grid with 'grid(4 cols)'), so a reader who trusts the Type line is misled, and an agent that branches on it (article vs listing extraction) will take the wrong path."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The page-type heuristic appears to key on heading/content-node density and has no product-grid/list-page rule (or the rule ranks below the article rule for this page)."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/workflow/parse/html/PageSummaryIndexService.kt (type labels & selector hints section, ~line 392, and the link-group scoring that already recognises grid layouts)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Promote a 'Listing / Product grid' type when a high-scoring link group has many siblings with columnCount > 1 and repeated item structure (the data used for the 'grid(4 cols)' annotation is already computed).\n- Or print the type with a confidence marker and always show the link-group summary alongside it."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

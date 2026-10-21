@@ -60,7 +60,7 @@ function Get-AgentCommand {
     }
     $WorkingDirectory = Assert-AgentDirectory -Path $WorkingDirectory -ParameterName 'WorkingDirectory'
 
-    # Get-AgentBackend comes from config.ps1 (dot-sourced above): claude > kimi > codex > dsh > copilot.
+    # Get-AgentBackend comes from config.ps1 (dot-sourced above): dsh > claude > kimi > codex > copilot.
     $backend = Get-AgentBackend
 
     switch ($backend) {
@@ -142,6 +142,7 @@ function Get-AgentPromptArgs {
         Backend patterns:
           copilot:  -- -p <prompt>     (requires -- separator before -p)
           codex:    exec <prompt>      (non-interactive exec mode)
+          dsh:      --profile headless <prompt>  (headless profile; positional task)
           default:  -p <prompt>        (claude, kimi, and unknown backends)
 
         When $Prompt is empty, returns just the flag portion (for stdin redirect).
@@ -167,14 +168,39 @@ function Get-AgentPromptArgs {
             if ($hasPrompt) { return @('exec', $Prompt) } else { return @('exec') }
         }
         'dsh' {
-            # dsh run <task> runs non-interactively through a headless profile.
-            if ($hasPrompt) { return @('run', $Prompt) } else { return @('run') }
+            # dsh requires an explicit --profile; the headless profile answers one
+            # task, prints the final assistant message, and exits (0 = completed).
+            # The task is a positional argument — dsh has no `run` subcommand and
+            # no --print/stdin mode of its own.
+            if ($hasPrompt) { return @('--profile', 'headless', $Prompt) } else { return @('--profile', 'headless') }
         }
         default {
             # claude, kimi, opencode, and unknown backends use -p <prompt>
             if ($hasPrompt) { return @('-p', $Prompt) } else { return @('-p') }
         }
     }
+}
+
+function Test-AgentPromptViaStdin {
+    <#
+    .SYNOPSIS
+        Whether the backend can read its prompt from stdin instead of the command line.
+    .DESCRIPTION
+        Start-AgentProcess moves the prompt onto stdin on Windows because the
+        PowerShell → CreateProcess → cmd.exe chain misparses long or
+        special-character-rich arguments.  Only backends that accept a prompt on
+        stdin may use that path: dsh's headless profile takes its task as one
+        positional argument and rejects a missing/blank task before running, so
+        redirecting its prompt to stdin would fail every invocation.
+    .PARAMETER Backend
+        The agent backend name (claude, kimi, codex, dsh, copilot, ...).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Backend
+    )
+
+    return $Backend -ne 'dsh'
 }
 
 function New-AgentArguments {
@@ -317,7 +343,7 @@ function Start-AgentProcess {
         $isWindowsPlatform = [bool]$IsWindows
     }
 
-    # ── Stdin redirection for all prompts on Windows ──────────────────────
+    # ── Stdin redirection for prompt-capable backends on Windows ──────────
     # Windows command-line passing chains through PowerShell → .NET Process.Start
     # → CreateProcess → cmd.exe → claude.cmd → claude.exe.  Long or
     # special-character-rich prompts can be parsed incorrectly at one of
@@ -325,8 +351,12 @@ function Start-AgentProcess {
     # Writing the prompt to a temp file and redirecting stdin avoids this
     # entire class of bugs: the prompt never touches the command line, and
     # claude --print reads it from stdin.
+    #
+    # dsh is exempt (see Test-AgentPromptViaStdin): its headless profile takes
+    # the task as a positional argument only, so its prompt stays on argv where
+    # ConvertTo-WindowsCommandLineArgument escapes it.
     $stdinTempPath = $null
-    if ($isWindowsPlatform -and $Prompt) {
+    if ($isWindowsPlatform -and $Prompt -and (Test-AgentPromptViaStdin -Backend $Backend)) {
         $stdinTempPath = [System.IO.Path]::GetTempFileName()
         Set-Content -Path $stdinTempPath -Value $Prompt -Encoding UTF8 -NoNewline
         # Rebuild arguments without the prompt text, but keep the prompt-flag so

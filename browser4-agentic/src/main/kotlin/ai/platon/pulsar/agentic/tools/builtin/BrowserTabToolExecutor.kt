@@ -1,17 +1,22 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.FrameManager
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.tools.TargetNotFoundException
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
+import ai.platon.pulsar.api.JsWorld
 import ai.platon.pulsar.api.model.NavigateEntry
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.core.api.WebDriver
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.TimeoutCancellationException
 import java.time.Duration
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.logging.Logger
@@ -96,6 +101,24 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         private const val NAVIGATION_POLL_TIMEOUT_MS = 30_000L
         private const val NAVIGATION_DOM_READY_TIMEOUT_MS = 10_000L
         private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
+
+        /**
+         * Poll interval while waiting for a selector, in the same range as the
+         * driver's own `waitForSelector` polling policy (200–600 ms).
+         */
+        private const val WAIT_POLL_INTERVAL_MS = 200L
+
+        /**
+         * Wait budget of the `waitForSelector(selector)` overload, matching the
+         * driver's configured `waitForSelector` timeout (60 s).
+         */
+        private const val DEFAULT_WAIT_FOR_SELECTOR_TIMEOUT_MS = 60_000L
+
+        /**
+         * Wait budget of the no-timeout `waitForFunction`/`waitForPage`
+         * overloads, matching the 30 s the executor has always passed there.
+         */
+        private const val DEFAULT_WAIT_TIMEOUT_MS = 30_000L
 
         /**
          * Read the concatenated descendant text of an element, skipping
@@ -205,7 +228,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         toolSpec["eval"] = ToolSpec(
             domain = domain,
             method = "eval",
-            arguments = listOf(ToolSpec.Arg("expression", "String")),
+            arguments = listOf(
+                ToolSpec.Arg("expression", "String"),
+                ToolSpec.Arg("world", "String?", "main"),
+            ),
             returnType = "Any?",
             description = "Alias of evaluateValue for page or element-scoped JavaScript evaluation.",
             help = """
@@ -214,6 +240,9 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
                 Alias of tab.evaluateValue(...).
                 When both selector and expression are provided, expression is forwarded as functionDeclaration.
+                world — the JavaScript world the script sees: "main" (default) is the page's own world, where
+                page-defined globals such as window.myApp resolve; "isolated" is the driver's runtime world
+                (__browser4_runtime__), which page scripts cannot see or modify.
             """.trimIndent()
         )
         toolSpec["type"] = ToolSpec(
@@ -322,6 +351,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 ToolSpec.Arg("awaitPromise", "Boolean?", "false", "Await a promise returned by the expression."),
                 ToolSpec.Arg("waitSelector", "String?", "null", "Wait for this selector before evaluating."),
                 ToolSpec.Arg("waitTimeout", "Long?", "null", "How long to wait for 'waitSelector' (default 30000)."),
+                ToolSpec.Arg(
+                    "world", "String?", "main",
+                    "JavaScript world to evaluate in: main (the page's own world, sees page globals) " +
+                        "or isolated (the driver's runtime world)."
+                ),
             ),
             returnType = "Any?",
             description = "Evaluate JavaScript in the page, or against the element matched by selector.",
@@ -623,6 +657,21 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 Fetch interception) when no pattern is given.
             """.trimIndent()
         )
+        toolSpec["networkRoutes"] = ToolSpec(
+            domain = domain,
+            method = "networkRoutes",
+            arguments = emptyList(),
+            returnType = "List<Map<String, Any?>>",
+            description = "List the request routes currently registered on this tab, in registration order.",
+            help = """
+                tab.networkRoutes()
+
+                Returns every active route with the same shape networkRoute reports: pattern, action
+                ("abort" or "body"), contentType (for a mock) and resourceTypes (empty = every type).
+                Read-only: it never installs or removes a route, so inspecting the active routes no
+                longer means destroying them first.
+            """.trimIndent()
+        )
         // Frame-scope specs are normally generated from the WebDriver interface
         // source; the explicit entries keep them resolvable when the generator
         // falls back to the bundled JSON (e.g. running from a JAR).
@@ -725,6 +774,30 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         }
     }
 
+    /**
+     * Resolve the `world` argument of an eval call to a [JsWorld].
+     *
+     * Defaults to [JsWorld.MAIN] — the page's own world, which is what a caller
+     * asking to evaluate a script "in the page" expects, and where page-defined
+     * globals resolve.  The driver's world-less overloads prefer its isolated runtime
+     * world instead, so before this the same script returned `undefined` for
+     * `window.myApp` even though the page plainly defined it.
+     *
+     * An unknown value is refused with the accepted names rather than silently
+     * falling back, so a typo cannot change which world the script sees.
+     *
+     * @throws IllegalArgumentException when the value is not one of [JsWorld.NAMES].
+     */
+    private fun resolveJsWorld(value: String?): JsWorld {
+        if (value.isNullOrBlank()) {
+            return JsWorld.DEFAULT
+        }
+        return JsWorld.parse(value) ?: throw IllegalArgumentException(
+            "Unknown eval world '$value'. Valid worlds: ${JsWorld.NAMES} " +
+                "(main = the page's own world, isolated = the driver's runtime world)."
+        )
+    }
+
     // ---------------------------------------------------------------------------
     // Element-scoped reads — uniform locator resolution for `get` modes
     // ---------------------------------------------------------------------------
@@ -781,6 +854,102 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
     }
 
     /**
+     * [elementNotFoundMessage] plus a one-shot cross-frame diagnostic.
+     *
+     * A CSS selector that matches nothing in the ACTIVE scope may well exist in
+     * another frame of the same page — the user's mistake is the scope, not the
+     * selector, and the plain "No element matches selector" leaves them with no
+     * way to find that out. The hint names the frame and the exact command that
+     * recovers (see [crossFrameMatchHint]).
+     *
+     * The base message is never rewritten, only appended to, and the lookup is
+     * best-effort: any failure yields the unmodified message.
+     */
+    private suspend fun elementNotFoundMessageWithFrameHint(driver: WebDriver, selector: String): String {
+        val message = elementNotFoundMessage(selector)
+        val hint = crossFrameMatchHint(driver, selector) ?: return message
+        return message + hint
+    }
+
+    /**
+     * ` — the selector matched inside frame "payframe"; run \`frame payframe\`
+     * first.` when [selector] resolves in a frame OTHER than the active one, or
+     * null when it does not (or when the question cannot be answered).
+     *
+     * The probe is deliberately read-only: it queries the other frames' documents
+     * through a private [FrameManager] instead of switching the session's frame
+     * scope, because a diagnostic must not leave the session scoped somewhere the
+     * caller did not ask for (that is the failure mode the frame-scope work
+     * exists to remove). A frame whose document is not reachable through the DOM
+     * domain — cross-origin, removed, or a stale frame id — simply produces no
+     * hint.
+     */
+    private suspend fun crossFrameMatchHint(driver: WebDriver, selector: String): String? {
+        // Refs are backend node ids: they resolve globally or they are stale, so
+        // there is no "other frame" to point at.
+        if (isElementRef(selector)) {
+            return null
+        }
+        val pulsarDriver = driver as? PulsarWebDriver ?: return null
+        val frames = bestEffort { driver.frameList() } ?: return null
+        // Only the main frame exists: no other scope to point at.
+        val candidates = frames.filter { !it.isMainFrame && !it.active }
+        if (candidates.isEmpty()) {
+            return null
+        }
+
+        val probe = frameProbeFactory(pulsarDriver) ?: return null
+        candidates.forEach { frame ->
+            val nodeId = bestEffort { probe.queryInFrame(frame.id, selector) }
+            if (nodeId != null && nodeId > 0) {
+                return " — the selector matched inside frame \"${frame.label}\"; " +
+                    "run `frame ${frame.label}` first."
+            }
+        }
+        return null
+    }
+
+    /**
+     * The single read the cross-frame diagnostic performs on another frame's
+     * document.
+     */
+    internal interface CrossFrameProbe {
+        /** Matching node id inside [frameId], or 0 when the selector matches nothing. */
+        suspend fun queryInFrame(frameId: String, selector: String): Int
+    }
+
+    /**
+     * Builds the [CrossFrameProbe] used by [crossFrameMatchHint], or null when
+     * the tab cannot answer.
+     *
+     * A seam, not a feature: the real probe is a [FrameManager] over the tab's
+     * live CDP protocol, which a unit test has no browser to stand up — it
+     * substitutes a fake here. Production never reassigns it.
+     */
+    internal var frameProbeFactory: (PulsarWebDriver) -> CrossFrameProbe? = { driver ->
+        val frameManager = FrameManager(driver.browserProtocol)
+        object : CrossFrameProbe {
+            override suspend fun queryInFrame(frameId: String, selector: String): Int =
+                frameManager.queryInFrame(frameId, selector)
+        }
+    }
+
+    /**
+     * [block]'s result, or null when it fails.
+     *
+     * For best-effort diagnostics only: a cancellation keeps propagating, since
+     * swallowing it would break the caller's own timeout/cancellation contract.
+     */
+    private suspend fun <T> bestEffort(block: suspend () -> T): T? = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        logger.fine("Cross-frame diagnostic failed: ${e.message}")
+        null
+    }
+
+    /**
      * Resolve [selector] to the first matching live-DOM element and read its
      * text/attribute/property via [functionDeclaration].  See the contract in
      * the section comment above.
@@ -796,7 +965,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             // The locator could not be resolved.  Refs are ephemeral backend
             // node ids — expire them loudly instead of returning a bare null.
             if (isElementRef(selector)) {
-                throw IllegalArgumentException(elementNotFoundMessage(selector))
+                throw TargetNotFoundException(elementNotFoundMessage(selector))
             }
             return null
         }
@@ -873,6 +1042,54 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             return true
         }
         return url.substringBefore(':').lowercase() in BROWSER_ADDRESS_SCHEMES
+    }
+
+    /**
+     * Whether [selector] matches an element in the page, for the `ariaSnapshot`
+     * scoped capture.
+     *
+     * Two things this must not do, both of which it used to:
+     *
+     * 1. Emit `document.querySelector(<selector>)` with the selector interpolated
+     *    *unquoted*. The escaped text is meant for a single-quoted JavaScript
+     *    string literal, so the literal must actually be there — without the
+     *    quotes the generated script is a syntax error for EVERY selector
+     *    (`document.querySelector(#main)`), which made `snapshot --selector`
+     *    unable to work at all.
+     * 2. Collapse "the query itself failed" into "no element matched". A selector
+     *    the page's CSS parser rejects (or a driver/evaluation failure) is a
+     *    different fact from an empty match, and reporting it as an empty match
+     *    hides the real message — the syntax error, the DOMException, the
+     *    transport failure. Those are rethrown here with the selector and the
+     *    underlying message attached.
+     *
+     * @return true when the query ran and matched; false when it ran and matched
+     *   nothing
+     * @throws IllegalStateException when the query could not be evaluated
+     */
+    private suspend fun ariaSnapshotSelectorMatches(driver: WebDriver, selector: String): Boolean {
+        val expression = "!!document.querySelector('${Browser4WebDriver.escapeJsSelector(selector)}')"
+        val result = try {
+            driver.evaluateValue(expression)
+        } catch (e: Exception) {
+            throw IllegalStateException(
+                "ariaSnapshot: CSS selector '$selector' could not be evaluated ($expression): " +
+                    "${e.message ?: e.javaClass.simpleName}",
+                e
+            )
+        }
+        return when (result) {
+            is Boolean -> result
+            null -> throw IllegalStateException(
+                "ariaSnapshot: CSS selector '$selector' produced no result ($expression); " +
+                    "the page did not answer the selector query"
+            )
+
+            else -> throw IllegalStateException(
+                "ariaSnapshot: CSS selector '$selector' produced ${result::class.simpleName} instead of a " +
+                    "boolean ($expression); the selector query did not run as expected"
+            )
+        }
     }
 
     /**
@@ -976,6 +1193,61 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             // Best-effort: navigation detection failures should not break the command
             logger.fine("waitForPotentialNavigation: exception while checking navigation: ${e.message}")
         }
+    }
+
+    /**
+     * Poll [driver] until [selector] resolves to a live element, then report how
+     * long that took; fail loudly once [timeoutMillis] has passed.
+     *
+     * The upstream `AbstractWebDriver.waitUntil` wraps its polling loop in
+     * `withTimeoutOrNull` and DISCARDS the null, so `waitForSelector` reported
+     * success for a selector that never appeared (its leftover-time result
+     * simply went negative). A wait that cannot fail is worse than no wait at
+     * all: an unready page reads as ready — the CLI printed "✓ Element found"
+     * for selectors that cannot exist. Poll [WebDriver.exists] here and throw a
+     * real [TimeoutException] instead; the dispatcher classifies that as
+     * TIMEOUT, so the caller gets a failure and a non-zero exit.
+     *
+     * An exception raised by `exists` (an invalid locator, a tab that died
+     * mid-wait) propagates immediately, exactly as it did through `waitUntil`.
+     *
+     * @return the elapsed milliseconds until the element appeared — the success
+     *   signal the wait API documents as a non-negative number.
+     */
+    private suspend fun awaitElement(driver: WebDriver, selector: String, timeoutMillis: Long): Long {
+        val startedAt = System.currentTimeMillis()
+        val deadline = startedAt + timeoutMillis
+        while (true) {
+            if (driver.exists(selector)) {
+                return System.currentTimeMillis() - startedAt
+            }
+            if (System.currentTimeMillis() >= deadline) {
+                throw TimeoutException(
+                    "Timed out after ${timeoutMillis}ms: element \"$selector\" did not appear in the " +
+                        "current document. Re-run `snapshot` if it is a ref, check the selector, and " +
+                        "check the active frame when one is selected (see `frames`)."
+                )
+            }
+            delay(WAIT_POLL_INTERVAL_MS.milliseconds)
+        }
+    }
+
+    /** The timeout raised when a `waitForPage` URL never matched. */
+    private fun pageWaitTimeoutException(url: String, timeoutMillis: Long): TimeoutException = TimeoutException(
+        "Timed out after ${timeoutMillis}ms: no page with URL \"${summarizeWaitTarget(url)}\" was found."
+    )
+
+    /** The timeout raised when a `waitForFunction` predicate never became true. */
+    private fun conditionWaitTimeoutException(pageFunction: String, timeoutMillis: Long): TimeoutException =
+        TimeoutException(
+            "Timed out after ${timeoutMillis}ms: condition \"${summarizeWaitTarget(pageFunction)}\" " +
+                "never became true."
+        )
+
+    /** First line of [target], clipped — a `wait --fn` script can be pages long. */
+    private fun summarizeWaitTarget(target: String): String {
+        val firstLine = target.lineSequence().firstOrNull().orEmpty().trim()
+        return if (firstLine.length > 80) firstLine.take(80) + "..." else firstLine
     }
 
     /**
@@ -1149,7 +1421,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     args.isEmpty() -> throw IllegalArgumentException("waitForSelector requires 'selector' (optional 'timeoutMillis')")
                     args.containsKey("selector") && !args.containsKey("timeoutMillis") -> {
                         validateArgs(args, allowed("selector"), setOf("selector"), functionName)
-                        driver.waitForSelector(paramString(args, "selector", functionName)!!)
+                        awaitElement(
+                            driver,
+                            paramString(args, "selector", functionName)!!,
+                            DEFAULT_WAIT_FOR_SELECTOR_TIMEOUT_MS
+                        )
                     }
 
                     args.containsKey("selector") && args.containsKey("timeoutMillis") -> {
@@ -1159,7 +1435,8 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                             setOf("selector", "timeoutMillis"),
                             functionName
                         )
-                        driver.waitForSelector(
+                        awaitElement(
+                            driver,
                             paramString(args, "selector", functionName)!!,
                             paramLong(args, "timeoutMillis", functionName)!!
                         )
@@ -1210,15 +1487,21 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 when {
                     args.containsKey("url") && args.containsKey("timeoutMillis") -> {
                         validateArgs(args, allowed("url", "timeoutMillis"), setOf("url", "timeoutMillis"), functionName)
-                        driver.waitForPage(
-                            paramString(args, "url", functionName)!!,
-                            Duration.ofMillis(paramLong(args, "timeoutMillis", functionName)!!)
-                        )
+                        val url = paramString(args, "url", functionName)!!
+                        val timeoutMillis = paramLong(args, "timeoutMillis", functionName)!!
+                        // The driver's waitFor* helpers wrap their poll in
+                        // withTimeoutOrNull and return null when the condition
+                        // never became true — a silent timeout the caller read as
+                        // success. Turn the null into a real TimeoutException.
+                        driver.waitForPage(url, Duration.ofMillis(timeoutMillis))
+                            ?: throw pageWaitTimeoutException(url, timeoutMillis)
                     }
 
                     args.containsKey("url") -> {
                         validateArgs(args, allowed("url"), setOf("url"), functionName)
-                        driver.waitForPage(paramString(args, "url", functionName)!!, Duration.ofMillis(30000))
+                        val url = paramString(args, "url", functionName)!!
+                        driver.waitForPage(url, Duration.ofMillis(DEFAULT_WAIT_TIMEOUT_MS))
+                            ?: throw pageWaitTimeoutException(url, DEFAULT_WAIT_TIMEOUT_MS)
                     }
 
                     else -> throw IllegalArgumentException("waitForPage requires 'url' (optional 'timeoutMillis')")
@@ -1229,14 +1512,18 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 when {
                     args.containsKey("pageFunction") && args.containsKey("timeoutMillis") -> {
                         validateArgs(args, allowed("pageFunction", "timeoutMillis"), setOf("pageFunction", "timeoutMillis"), functionName)
-                        driver.waitForFunction(
-                            paramString(args, "pageFunction", functionName)!!,
-                            Duration.ofMillis(paramLong(args, "timeoutMillis", functionName)!!)
-                        )
+                        val pageFunction = paramString(args, "pageFunction", functionName)!!
+                        val timeoutMillis = paramLong(args, "timeoutMillis", functionName)!!
+                        // See waitForPage: null means the predicate never became
+                        // truthy, and used to be reported as a successful wait.
+                        driver.waitForFunction(pageFunction, Duration.ofMillis(timeoutMillis))
+                            ?: throw conditionWaitTimeoutException(pageFunction, timeoutMillis)
                     }
                     args.containsKey("pageFunction") -> {
                         validateArgs(args, allowed("pageFunction"), setOf("pageFunction"), functionName)
-                        driver.waitForFunction(paramString(args, "pageFunction", functionName)!!, Duration.ofMillis(30000))
+                        val pageFunction = paramString(args, "pageFunction", functionName)!!
+                        driver.waitForFunction(pageFunction, Duration.ofMillis(DEFAULT_WAIT_TIMEOUT_MS))
+                            ?: throw conditionWaitTimeoutException(pageFunction, DEFAULT_WAIT_TIMEOUT_MS)
                     }
                     else -> throw IllegalArgumentException("waitForFunction requires 'pageFunction' (optional 'timeoutMillis')")
                 }
@@ -1295,9 +1582,13 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "isEnabled" -> {
                 // No dedicated WebDriver.isEnabled in the pulsar-browser API;
                 // resolve the element with evaluateValue and check disabled/readonly.
+                // A locator that resolves to nothing yields null — report `false`,
+                // like isVisible/isChecked do for the same selector, so all three
+                // `is *` commands answer with a boolean of the same type.
                 validateArgs(args, allowed("selector"), setOf("selector"), functionName)
                 val selector = paramString(args, "selector", functionName)!!
                 driver.evaluateValue(selector, "function() { return !(this.disabled || this.readOnly); }")
+                    ?: false
             }
 
             // Interactions
@@ -1659,11 +1950,12 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 // full page tree, which is indistinguishable from a successful
                 // scoped capture (Issue 1).
                 if (selector != null) {
-                    val found = driver.evaluateValue(
-                        "!!document.querySelector(${Browser4WebDriver.escapeJsSelector(selector)})"
-                    ) as? Boolean ?: false
-                    require(found) {
-                        "ariaSnapshot: CSS selector '$selector' matched no element on the page"
+                    require(ariaSnapshotSelectorMatches(driver, selector)) {
+                        // Worded with the phrase the error mapper recognises as a
+                        // target miss, so "the page does not contain it" is told
+                        // apart from "your call was malformed" all the way to the
+                        // client's error code.
+                        "ariaSnapshot: no element matches selector '$selector' on the page"
                     }
                 }
 
@@ -2283,16 +2575,26 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         driver.evaluateValueDetail(
                             selector,
                             paramString(normalizedArgs, "functionDeclaration", functionName)!!
-                        ) ?: throw IllegalArgumentException(elementNotFoundMessage(selector))
+                        ) ?: throw TargetNotFoundException(elementNotFoundMessageWithFrameHint(driver, selector))
                     }
 
                     normalizedArgs.containsKey("expression") -> {
-                        validateArgs(normalizedArgs, allowed("expression", "awaitPromise", "waitSelector", "waitTimeout"), setOf("expression"), functionName)
-                        if (awaitPromise) {
-                            driver.evaluateValueDetail(paramString(normalizedArgs, "expression", functionName)!!, awaitPromise = true)
-                        } else {
-                            driver.evaluateValueDetail(paramString(normalizedArgs, "expression", functionName)!!)
-                        }
+                        validateArgs(
+                            normalizedArgs,
+                            allowed("expression", "awaitPromise", "waitSelector", "waitTimeout", "world"),
+                            setOf("expression"),
+                            functionName
+                        )
+                        val expression = paramString(normalizedArgs, "expression", functionName)!!
+                        // Which JavaScript world the script sees.  The driver's
+                        // world-less overloads prefer its isolated runtime world, which
+                        // is where the injected helpers live — but a page-defined global
+                        // (`window.myApp`) reads `undefined` there, so a caller asking to
+                        // evaluate "in the page" got a confusing empty result.  `main`
+                        // (the default) evaluates against the page's own world; `isolated`
+                        // stays available for reading the driver runtime.
+                        val world = resolveJsWorld(normalizedArgs["world"]?.toString())
+                        driver.evaluateValueDetail(expression, awaitPromise, world)
                     }
 
                     else -> throw IllegalArgumentException(evaluationValueUsage(functionName))
@@ -2315,12 +2617,17 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         driver.evaluateValueDetail(
                             selector,
                             paramString(args, "functionDeclaration", functionName)!!
-                        ) ?: throw IllegalArgumentException(elementNotFoundMessage(selector))
+                        ) ?: throw TargetNotFoundException(elementNotFoundMessageWithFrameHint(driver, selector))
                     }
 
                     args.containsKey("expression") -> {
-                        validateArgs(args, allowed("expression"), setOf("expression"), functionName)
-                        driver.evaluateValueDetail(paramString(args, "expression", functionName)!!)
+                        validateArgs(args, allowed("expression", "world"), setOf("expression"), functionName)
+                        // Same world contract as the "eval"/"evaluateValue" branch above.
+                        driver.evaluateValueDetail(
+                            paramString(args, "expression", functionName)!!,
+                            awaitPromise = false,
+                            world = resolveJsWorld(args["world"]?.toString())
+                        )
                     }
 
                     else -> throw IllegalArgumentException("evaluateValueDetail requires 'expression' or ('selector','functionDeclaration')")
@@ -2345,7 +2652,19 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     allowed("selector"),
                     setOf("selector"),
                     functionName
-                ); driver.boundingBox(paramString(args, "selector", functionName)!!)
+                )
+                // Return a plain object: the driver's RectD is a domain model the
+                // MCP serializer can only render as {type, description}, so
+                // `get box` printed an opaque Java toString instead of the
+                // documented {x, y, width, height}. A miss stays null.
+                driver.boundingBox(paramString(args, "selector", functionName)!!)?.let { rect ->
+                    mapOf(
+                        "x" to rect.x,
+                        "y" to rect.y,
+                        "width" to rect.width,
+                        "height" to rect.height,
+                    )
+                }
             }
 
             // Jsoup / resource
@@ -2566,6 +2885,13 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 val b4Driver = driver as? Browser4WebDriver
                     ?: throw IllegalArgumentException("networkUnroute requires a Browser4WebDriver session")
                 b4Driver.networkUnroute(paramString(args, "urlPattern", functionName, required = false))
+            }
+
+            "networkRoutes" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkRoutes requires a Browser4WebDriver session")
+                b4Driver.networkRoutes()
             }
 
             "help" -> help()

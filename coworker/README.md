@@ -107,7 +107,7 @@ Coworker keeps its control data in the current repository, but task execution ca
 - `Paths.WorkspaceRoot` keeps `coworker/tasks`, logs, and memory rooted in this repository.
 - `Paths.TargetRepositoryRoot` sets the repository where task-mode agents run. When omitted, task execution falls back to `WorkspaceRoot` for backward compatibility.
 
-Task execution uses an agent backend selected by `coworker/scripts/config.ps1`, in priority order: the `BROWSER4_AGENT` environment variable (`claude`, `kimi`, `codex`, `dsh`, or `copilot`), then the per-backend argument arrays in `config.psd1` (`CLAUDE` > `KIMI` > `CODEX` > `DSH`), then `copilot` as the fallback.
+Task execution uses an agent backend selected by `coworker/scripts/config.ps1`, in priority order: the `BROWSER4_AGENT` environment variable (`dsh`, `claude`, `kimi`, `codex`, or `copilot`), then the per-backend argument arrays in `config.psd1` (`DSH` > `CLAUDE` > `KIMI` > `CODEX`), then `copilot` as the fallback. `dsh` (DeepSeek Harness) is the preferred external harness and is active by default in `config.psd1`; headless runs fail closed when a tool asks for approval, so set `DSH_PERMISSION_MODE=danger-full-access` for an unfenced run.
 
 ## Tags
 

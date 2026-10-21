@@ -1,5 +1,6 @@
 package ai.platon.pulsar.protocol.browser.impl
 
+import ai.platon.pulsar.chrome.Browser4Extensions
 import ai.platon.pulsar.chrome.Browser4UserAgent
 import ai.platon.pulsar.chrome.manage.PulsarBrowserLauncher
 import ai.platon.pulsar.api.ChromeOptions
@@ -34,6 +35,7 @@ class DefaultBrowserFactory(
         // by `createStandardLaunchOptions()`. A user agent already decided by the caller or by
         // `browser.launch.user.agent` is left untouched.
         Browser4UserAgent.applyTo(launchOptions, launcherOptions.settings)
+        Browser4Extensions.applyTo(launchOptions, launcherOptions.settings)
         return getLauncher(browserId.browserType).launch(browserId, launcherOptions, launchOptions)
     }
 

@@ -1,0 +1,205 @@
+{
+  "meta": {
+    "mode": "dev",
+    "source": "20261013-162836-form-filling.issues.json",
+    "scenario": "form-filling",
+    "date": "20261013-162836"
+  },
+  "background": {
+    "workarounds": "",
+    "task": "All nine task steps were completed **and verified** against `http://localhost:18080/generated/form-filling.html` using a dedicated session (`form-fill-eval`):\n\n- **Interactive snapshot (`-i`)** discovered 6 text inputs (`e3` First Name, `e4` Last Name, `e5` Email, `e7` Phone, `e8` Company, `e10` Comments), 2 dropdowns (`e6` Country, `e9` Experience level), 5 checkboxes, 3 radios, and the submit button (`e89`).\n- **Text inputs filled**: Ada / Lovelace / ada.lovelace@example.com / +1 555 013 4237 (Phone) / comments text. Each value was **read back** with `get property <ref> value` to confirm persistence.\n- **Dropdowns**: Country = \"Singapore\" (value `sg`), Experience level = \"Advanced\" — both confirmed via the command's echoed selected values.\n- **Checkboxes checked**: ≥2 — Testing (`e15`), AI agents (`e16`), plus the required \"I agree to the testing terms\" (`e18`); all confirmed with `is checked` → `true`.\n- **Submitted** by clicking `e89`; `wait --load networkidle` completed; **result verified** via `get text \"#result-data\"` — submitted values appear in the payload (`\"firstName\": \"Ada\", ... \"contactMethod\": \"phone\", \"phoneNumber\": \"+1 555 013 4237\", \"topics\": [\"automation\",\"testing\",\"ai\"], \"experienceLevel\": \"advanced\"`) — plus `get attr \"#result-panel\" class` → `callout success visible`, and the confirmation text **\"Submission Result — Your form data was captured successfully.\"**\n- **Final `-v 0` snapshot** of the result page captured (saved, plus a scroll-to-top variant per the docs' mid-page warning).\n\nTwo caveats learned along the way: the fixture's Phone/Company fields are **conditional** — hidden unless \"Phone\"/\"Business\" radio is selected, and the page *clears* them while hidden (my first attempt filled them anyway; they were discarded). The canonical run above selected the Phone radio first, so the value persisted. Separately, the backend **died mid-session** partway through; the flow had to be redone after recovery (see Issues 2–3).",
+    "commands": "**Key decisions**: took refs from `-i` snapshots and verified chained fills empirically (node IDs proved stable for a given document); used the sidebar state-log JSON as ground truth for page state; used `#result-data`/`#result-panel` for submission verification; revealed the conditional Phone field via the radio before filling.\n\n**Workarounds required**:\n1. First submission succeeded but Phone/Company were empty — the page clears hidden conditional fields, and `fill` had reported success. Re-submitted after selecting the Phone radio.\n2. **Backend died mid-session** → `fill` misreported \"No active browser session\"; only `list` revealed \"backend unreachable at http://127.0.0.1:8285\". Next command auto-restarted the server (13.2 s) but the session could not be reattached (\"Session refresh needed\").\n3. Recovery left a **two-tabs-same-URL zombie state**: `fill e3` failed with stale-ref errors, `click`/`fill` reported `✓` with no effect on the tab being read, `eval` returned `NO_STATE`. Fixed by `close` + fresh `open` — after which the identical refs worked in one pass.\n4. `get attr`/`get property` on an existing element with an empty value printed \"No elements matched\" — used `--json`/refs to disambiguate.\n\n**Investigation**: traced the death window in the runtime-bundle logs (`logs/pulsar.log` — no graceful-shutdown lines, no `hs_err` file), confirmed duplicate tabs via `tab-list`, and located two CLI bugs in source (`commands.rs:1636`, `main.rs:8435/27380`).",
+    "executionContext": "**Setup**: verified `pwd`; `./b4w.ps1 help`; read `skills/browser4-cli/SKILL.md` + `references/quick-patterns.md`; verified MockSite with `curl` (HTTP 200). Temporary artifacts written to `.test-sessions/20261013T0154334271610Z/` (`ff-*.txt/json`).\n\n**Commands used** (all via `./b4w.ps1`, session `-s form-fill-eval`): `open --headless <url>`, `snapshot -i [--stdout]`, `fill e3/e4/e5/e7/e8/e10 \"<value>\"`, `click e12`, `click e89`, `select e6 \"Singapore\"`, `select e9 \"Advanced\"`, `check e15/e16/e18`, `wait --load networkidle`, `get text \"#result-data\"`, `get text \"#state-log\"`, `get text \"#result-panel\"`, `get attr \"#result-panel\" class`, `get property e3/e4/e5/e7 value`, `is checked \"#topic-testing\"/\"#topic-ai\"/\"#agree-terms\"`, `is visible \"#phone-number\"`, `eval`, `snapshot -v 0 --stdout`, `tab-list`, `tab-select 1`, `list`, `page-info`, `close`, `open`.\n\n**Key decisions**: took refs from `-i` snapshots and verified chained fills empirically (node IDs proved stable for a given document); used the sidebar state-log JSON as ground truth for page state; used `#result-data`/`#result-panel` for submission verification; revealed the conditional Phone field via the radio before filling.\n\n**Workarounds required**:\n1. First submission succeeded but Phone/Company were empty — the page clears hidden conditional fields, and `fill` had reported success. Re-submitted after selecting the Phone radio.\n2. **Backend died mid-session** → `fill` misreported \"No active browser session\"; only `list` revealed \"backend unreachable at http://127.0.0.1:8285\". Next command auto-restarted the server (13.2 s) but the session could not be reattached (\"Session refresh needed\").\n3. Recovery left a **two-tabs-same-URL zombie state**: `fill e3` failed with stale-ref errors, `click`/`fill` reported `✓` with no effect on the tab being read, `eval` returned `NO_STATE`. Fixed by `close` + fresh `open` — after which the identical refs worked in one pass.\n4. `get attr`/`get property` on an existing element with an empty value printed \"No elements matched\" — used `--json`/refs to disambiguate.\n\n**Investigation**: traced the death window in the runtime-bundle logs (`logs/pulsar.log` — no graceful-shutdown lines, no `hs_err` file), confirmed duplicate tabs via `tab-list`, and located two CLI bugs in source (`commands.rs:1636`, `main.rs:8435/27380`)."
+  },
+  "assessment": {
+    "completionStatus": "Successful — all 9 task steps completed and verified. The form was filled (Ada/Lovelace/ada.lovelace@example.com, country Singapore, experience Advanced, phone +1 555 013 4237, ≥2 checkboxes plus the required terms box), submitted, and the result was verified via get text/get attr (submitted values present in #result-data; #result-panel class 'callout success visible'; message 'Submission Result — Your form data was captured successfully.'), plus a final -v 0 snapshot. Caveats: the first completed attempt was invalidated by a mid-session backend crash and by the fixture's conditional Phone/Company fields discarding values filled while hidden; the whole flow had to be redone after recovery (close + fresh open).",
+    "successRate": "85% — all task steps eventually succeeded, but roughly 15% of interaction attempts failed or no-oped during the crash-recovery window (stale-ref failures, click/fill reporting success without effect), and two full re-runs of the fill flow were required.",
+    "issuesFound": 5,
+    "majorBlockers": "The backend dev server silently died mid-session (no graceful-shutdown log, no crash dump), destroying the live session; recovery auto-restarted the server but left a two-tabs-same-URL state in which commands reported success without affecting the page being read, and freshly taken refs were rejected as stale — resolved only by close + fresh open.",
+    "mostConfusingAspects": "While the backend was down, `fill` said 'No active browser session' even though the session existed — only `list` revealed the server was unreachable. After recovery, `✓ Clicked`/`✓ Filled` confirmations had no effect and refs from a seconds-old snapshot failed as 'stale' with no navigation; `tab-list` showed two identical-URL tabs with no active-tab marker. `get attr`/`get property` printing 'No elements matched' for an element that demonstrably exists (empty value) inverted the documented value contract and misled debugging.",
+    "mostValuableImprovements": "1) Distinguish 'backend unreachable' from 'no session' and restart the backend transparently (or say clearly that live session state will be lost). 2) Make post-crash recovery deterministic: single active tab, always-visible active-tab marker, and a consistency check between the tab being mutated and the tab being read, so a `✓` can never mean 'did nothing'. 3) Fix the get attr/property empty-value diagnostics (propagate mode/name; empty string must not claim 'no elements matched'). 4) Mark hidden/conditional elements in snapshots and surface `fill --verify` in the form-fill recipes. 5) Label or suppress the raw JSON echo from `select`.",
+    "usabilityRating": 7
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "`get attr`/`get property` reports 'No elements matched' when the element exists but the value is empty",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s form-fill-eval get attr \"#first-name\" data-bogus-xyz    (visible, filled field; attribute genuinely absent)\nExpected per the documented value contract: `\"\"` = element matched, value absent.\nAlso: ./b4w.ps1 -s form-fill-eval get property \"#phone-number\" value  (existing input, empty value)\nAnd for structured proof: append --json → {\"status\":\"ok\",...,\"output\":{\"result\":\"\",\"selector\":\"#first-name\"}} (note: no \"mode\" field)."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A matched element with an absent/empty attribute or property should print the value (\"\") plus the matched-but-empty diagnostic the CLI claims to emit for attr/property modes (\"Element matched but the attribute 'data-bogus-xyz' is empty or missing — or no element matched\"), consistent with SKILL.md §5's value contract (\"\" = matched, empty; null = no match)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Prints an empty line followed by the generic branch: \"No elements matched \\\"#first-name\\\".\" / \"The `get` command resolves refs against the live page; CSS selector support varies by mode and backend resolution.\" / htmlsnapshot advice. This falsely says the selector matched nothing and suggests picking different selectors — it misled the evaluation into concluding a hidden input could not be resolved when it resolved fine. `--json` output confirms the element matched (result \"\") and shows no \"mode\" field."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The `get` command's tool_params_fn in commands.rs builds params as {selector, propName} or {selector, attrName} and never includes a `mode` (or `name`) key — the mode is encoded only in the MCP tool name (select_first_property_value_or_null / select_first_attribute_or_null). handle_get() in main.rs reads tool_params[\"mode\"], gets None, defaults to \"text\", so get_no_value_diagnostic_lines() (main.rs:8394) takes the generic else branch instead of the mode-aware attr/property branch at line 8405. The existing unit test get_attr_null_message_does_not_claim_no_elements_matched (main.rs:30401) calls the helper directly with mode=\"attr\" and therefore passes while the production wiring never passes that mode. Additionally the empty_result check treats \"\" (matched-but-empty) and \"null\" (no match) identically, so even a correct message would be attached to the wrong case."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/commands.rs:1636 (get tool_params_fn); cli/browser4-cli/src/main.rs:8428 (handle_get), 8394 (get_no_value_diagnostic_lines)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Propagate the mode (and the attr/property name) into tool_params in commands.rs, e.g. add \"mode\": \"property\"/\"attr\" and \"name\": name to the emitted JSON, so handle_get's diagnostics select the intended branch.\n- Branch on the actual result: keep \"No elements matched\" only for JSON null; for the empty-string case print the matched-but-empty wording (and never suggest changing selectors).\n- Add an end-to-end test that runs the real command path (tool_params_fn -> handle_get formatting), not just the diagnostic helper, so the wiring gap cannot regress.\n- Optionally render an explicit marker for the empty case (e.g. `(empty)`) so humans can tell \"matched, empty\" from \"no match\" at a glance."
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "Backend silently died mid-session; the CLI misreported it as 'No active browser session' and the live session was lost",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "In dev mode, run a normal multi-step flow (open → snapshot → fill → click → snapshot -v 0). Mid-session (backend log shows activity until 00:04:06) the backend at 127.0.0.1:8285 stopped responding. Next command: ./b4w.ps1 -s form-fill-eval fill e8 \"Acme Corp\" →\n  Error: No active browser session. Run 'browser4-cli.exe open <url>' or 'browser4-cli.exe goto <url>' first to load a page, then try 'fill' again.  (exit 3)\nOnly ./b4w.ps1 list revealed: \"Browser4 backend is not started or unreachable at http://127.0.0.1:8285.\" with the session listed as Status Unknown / Next open Refresh."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A distinct, honest error when the backend port is closed (naming host:port and the actual cause), plus either transparent auto-restart of the backend for page-dependent commands or accurate guidance that the backend went down and the live session/page state will be lost."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The command blamed the session ('No active browser session') even though the session existed — it was the server that was gone. For this command class no auto-restart was attempted; a later command (page-info) silently restarted the server (13.2s) and then reported 'Session refresh needed' — the live browser state (my submitted form page) was unrecoverable. The backend's own log shows entries up to 00:04:06 and then the next instance's startup at 00:05:35 with no graceful-shutdown lines; no hs_err_pid file exists; the log segment covering the death window was not retained in the bundle logs (rotation), so the trigger is unlogged."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Two layers. (1) CLI: the pre-dispatch gate at main.rs:27380-27391 returns the hard-coded 'No active browser session' CliError (ExitCode::Session) whenever the local backend port is closed for a page-dependent command, conflating 'backend unreachable' with 'no session' — and it returns before ensure_server_running() can restart the server. (2) Backend: the JVM stopped without logging any shutdown sequence and without a crash dump, which points to abrupt external termination (e.g. a kill from another process active in the same checkout/workspace — evidence of heavy concurrent activity: the same runtime bundle logged six backend startups between 21:18 and 23:53, agent-trace logs exist for tasks at 23:40-23:54 in this workspace, and another Browser4 instance holds port 8088). Exact cause needs investigation (audit process kills; preserve the previous instance's log across restarts)."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:27380 (should_ensure_server_running gate; error constructed at 27387); backend lifecycle/logging in cli/browser4-cli/src/daemon.rs"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Replace the message with a backend-aware error: state that the Browser4 server at <host:port> is not running/unreachable, that the live browser session state will be lost if it is restarted, and which command will restart it.\n- For page-dependent commands with a saved session, attempt the same auto-start path other commands use (or explicitly document why it is skipped) instead of failing outright.\n- Preserve the previous backend instance's log across restarts (unique rotated names) so a crash window is always diagnosable; log a beacon on unexpected JVM termination (shutdown hook / launcher wrapper).\n- Document in the dev-mode/session docs that a backend restart invalidates live sessions (browser survives; tabs/state do not) and how to recover deterministically."
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "Post-crash recovery left a duplicate-tab session where commands reported success without effect and fresh refs failed as 'stale'",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "After the crash in Issue 2, let the next command auto-restart the backend, then interact with the recovered session:\n  ./b4w.ps1 -s form-fill-eval fill e3 \"Ada\"  → [INTERNAL] browser_type failed: fill: no element found for selector [backend:3]. The selector may be stale — re-run `snapshot` to refresh refs.\n  ./b4w.ps1 -s form-fill-eval click e12        → ✓ Clicked e12   (but contact method stayed 'email' in the page state)\n  ./b4w.ps1 -s form-fill-eval fill e7 \"+1 555 013 4237\" → ✓ Filled  (but phoneNumber stayed \"\")\n  ./b4w.ps1 -s form-fill-eval tab-list         → TWO tabs with the identical URL, no active-tab marker\n  ./b4w.ps1 -s form-fill-eval eval \"window.__browser4State...\" (after tab-select 1) → NO_STATE\nThe same refs (e3, e12, e7) worked immediately in a fresh close+open session."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A recovered session has one deterministic active tab; a `✓` confirmation means the action affected the page the user reads back; refs from the most recent snapshot resolve as long as the document is unchanged."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The reconnected browser contained two tabs of the same URL; different commands resolved/interacted with different tabs (or read state from a tab the actions never touched), producing (a) stale-ref 'no element found [backend:3]' errors seconds after a snapshot with no navigation, and (b) false success confirmations for click/fill that changed nothing on the observed page. The phone fill 'succeeded' into a still-hidden field and was discarded by the page, compounding the confusion."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "After a backend restart the session manager re-attaches to the still-running browser but does not normalize its tab state: a pre-existing/leftover tab of the same URL survives alongside the re-opened one, and the session's active-tab pointer is unset (tab-list showed no active marker until an explicit tab-select). The CLI has no cross-check that the tab it mutates is the tab it snapshots/reads. The exact per-command tab resolution needs investigation in PulsarSessionManager.getOrRecoverSession and the CLI's session/tab targeting."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-rest session recovery (PulsarSessionManager.getOrRecoverSession); CLI tab targeting (cli/browser4-cli/src/main.rs, with_session / tab handling)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- On recovery, deterministically select an active tab and either close duplicate tabs of the same URL or explicitly report 'N tabs found; using tab <n>'.\n- Always render the active-tab marker in `tab-list` (currently it only appears after an explicit `tab-select`), so users can see which tab commands will hit.\n- Before mutating, validate the resolved target against the tab snapshot was taken from; fail loudly instead of reporting ✓ when the ref resolves in a different document/tab.\n- Detect 'document replaced since snapshot' per tab so refs fail with an accurate reason rather than 'stale selector' after a restart."
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "Hidden conditional fields are unmarked in snapshots, `fill` reports success when the page discards the value, and the form-fill recipe omits `--verify`",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "On the same fixture (contact method = Email):\n  ./b4w.ps1 -s form-fill-eval snapshot -i  → lists 'textbox \"tel phone-number phoneNumber +1 555 123 4567\" [ref=e7]' with no hidden marker (only the missing [box=...] hints)\n  ./b4w.ps1 -s form-fill-eval fill e7 \"+1 555 123 4567\" → ✓ Filled\n  ./b4w.ps1 -s form-fill-eval get text \"#result-data\" after submit → \"phoneNumber\": \"\"  (the page's updateDynamicFields() clears values of non-active conditional fields)\nUsing the documented-only-in-help flag: ./b4w.ps1 -s form-fill-eval fill e7 \"...\" --verify would have reported the read-back mismatch."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Interactive elements that are not rendered (display:none / zero box) should be distinguishable in snapshot output (e.g. a [hidden] annotation), and the canonical form-fill workflow (SKILL.md copy-paste template / quick-patterns.md §2) should show `fill --verify` so silent value loss is caught at interaction time."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The `-i` snapshot presents hidden conditional fields like ordinary textboxes; `fill` prints a plain `✓ Filled` although the page immediately discards the value; the loss surfaces only later in the submitted payload. The `--verify` flag exists (shown in `help fill`) but is absent from every form-filling recipe."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The snapshot renderer emits [box=...] only for rendered elements and adds no annotation for the hidden case, so hiddenness is only inferable from a missing box on interactive nodes. The skill/quick-pattern form-fill recipes document --submit but not --verify, unlike `type`/`select` whose recipes mention verification."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs (snapshot rendering / box emission); skills/browser4-cli/references/quick-patterns.md (Interactive Form Fill, §2); skills/browser4-cli/SKILL.md (copy-paste template)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Annotate interactive elements without a layout box in snapshot/-i output (e.g. `[hidden]` or `[box=0x0]`), so agents and users can tell a conditional/invisible field before filling it.\n- Add `--verify` to the canonical form-fill example in SKILL.md and quick-patterns.md, and mention that a conditional field filled while hidden can be cleared by page JS.\n- When --verify detects a mismatch, add a hint that the element may be hidden/conditional or that page script may have cleared it, instead of only reporting the raw mismatch."
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "`select` prints an unlabeled raw JSON array before the friendly confirmation",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s form-fill-eval select e6 \"Singapore\"\nOutput:\n  [\"sg\"]\n  ✓ Selected 'Singapore' in e6"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Human-readable mode prints one clear confirmation line (optionally including the resolved value); the raw payload appears only under --json or is clearly labeled."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "A bare JSON array `[\"sg\"]` is printed with no context before the confirmation — it reads like debug output and a first-time user cannot tell what it means (it is the selected option's value)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The select handler prints the raw non-empty tool response verbatim in human mode (main.rs:12772-12775 — if !text.is_empty() { cli_println!(\"{}\", text); }) before emitting the '✓ Selected…' line; for select the raw response is the JSON array of selected values."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:12772 (select handler raw echo)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Suppress the raw echo in human mode when it is just the selected-values array, or format it (e.g. `Selected values: sg`).\n- Fold the resolved value into the confirmation: `✓ Selected 'Singapore' (value: sg)` — keeps the useful label→value mapping without the stray line.\n- Keep the raw array only in --json output."
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

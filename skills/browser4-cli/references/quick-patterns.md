@@ -38,8 +38,9 @@ Named sessions isolate browser state. Create and switch with `-s <name>`, list w
 ```bash
 browser4-cli -s research goto "https://en.wikipedia.org"   # opens "research"
 browser4-cli -s news     goto "https://news.ycombinator.com" # opens "news"
-browser4-cli -s news     snapshot -i --stdout              # act inside "news"
+browser4-cli -s news     snapshot -v 0 --stdout            # act inside "news"
 browser4-cli list                                          # show all sessions
+browser4-cli list --all                                    # + sessions from other checkouts (Workspace column)
 browser4-cli -s news     close                             # close only "news"
 browser4-cli close-all                                     # close every session
 ```
@@ -71,6 +72,7 @@ browser4-cli open --headless "https://example.com"
 browser4-cli snapshot grep "See also"             # searches the live AX tree — no prior capture needed
 browser4-cli snapshot grep -i "price|rating"      # case-insensitive regex alternation
 browser4-cli snapshot grep -A 3 -B 1 "Checkout"   # show surrounding context lines
+browser4-cli snapshot grep --diff -c -F "## Added"  # search the last --auto-diff report instead of the tree
 ```
 
 ### 4. Mouse Interactions
@@ -99,6 +101,23 @@ browser4-cli eval "getComputedStyle(document.querySelector('.tooltip')).visibili
 browser4-cli eval "document.querySelector('.card-detail').clientHeight"              # grew past 0
 ```
 
+**Getting refs for draggable/hover targets:** `snapshot -i` is a strict interactive-only filter —
+inner text is merged into the names of the elements that survive: buttons, links, inputs and
+pointer (`cursor:pointer`) elements keep refs, but draggable items (`li[draggable=true]`,
+`cursor:grab`) and hover-only targets (tooltip spans) lose theirs, and `-v` drops them from the
+output entirely. For those targets, snapshot the plain way, act from those refs, then re-snapshot:
+
+```bash
+browser4-cli snapshot -v 0                    # refs for all on-screen elements, draggable included
+browser4-cli drag <source-ref> <target-ref>   # act using those refs
+browser4-cli snapshot -v 0                    # re-snapshot: refs are invalidated by the interaction
+```
+
+> **Note:** `-i -v <n>` returns only interactive elements in that one viewport chunk — a focused
+> interactive screenful, not a filtered full tree. Extending the interactive heuristic to
+> draggable/hover-revealed elements is expected, so those refs stop silently disappearing; until
+> then, do not use `-i` as the only orientation view before acting.
+
 ### 5. Dialog Handling
 
 Native browser dialogs (`alert()`, `confirm()`, `prompt()`) block the page's main thread while they are open. A click that triggers a dialog returns quickly with a "dialog is pending" error instead of hanging — the click stays parked server-side and completes on its own once the dialog is handled. Do not re-run the triggering click (it would open a second dialog):
@@ -121,9 +140,9 @@ browser4-cli dialog-dismiss                       # cancel/dismiss any dialog
 ### 6. Verifying Results (verify-after-interaction)
 
 ```bash
-# After click — diff vs previous snapshot
+# After click — capture, then read the diff appendix at the end of the output
 browser4-cli click <submit-ref>
-browser4-cli snapshot -v 0 --auto-diff --stdout   # shows only what changed
+browser4-cli snapshot -v 0 --auto-diff --stdout   # full tree first, then ### Diff / ## Added
 
 # After hover — check the computed style of the revealed content
 browser4-cli hover <ref>
@@ -194,25 +213,29 @@ browser4-cli agent run "Find the top 5 products and their prices on this page"
 
 # 2. Poll until complete
 browser4-cli agent status <task-id>
-# Look for: "isDone": true   (terminal states report "processState": "completed")
+# Look for: "status": "done"   (terminal: done | failed | cancelled)
 
-# 3. Get the result
+# 3. Get the result (summary + keyFindings + filesChanged + workspace)
 browser4-cli agent result <task-id>
 ```
 
 **Note:** `agent run` is asynchronous. To block in one command, pass `--wait` (default 600s; tune with `--wait-timeout <seconds>` or `BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS`). If the wait window expires, the task keeps running server-side and stays listed in `agent list` for later polling with `agent status` / `agent result`.
 
-**Status codes reference:**
+**Status envelope reference** (`agent status`, shared by every async domain):
 
-| statusCode | processState | Meaning |
-|-----------|-------------|---------|
-| (null) | `"created"` | Queued, not yet picked up |
-| 102 | `"in_progress"` | Agent is actively working |
-| 200 | `"done"` | Task completed successfully |
-| 417 | `"done"` | Expectation failed (e.g., missing LLM key) |
-| 4xx/5xx | `"done"` | Task failed — inspect `message` for details |
+| `status` | Meaning | Keep polling? |
+|-----------|---------|---------------|
+| `queued` | Submitted, not picked up yet | yes |
+| `running` | Agent is actively working | yes |
+| `done` | Completed successfully — call `agent result` | no |
+| `failed` | Failed; `error` explains why (e.g. 404 unknown id, 417 missing LLM key) | no |
+| `cancelled` | The task was cancelled | no |
 
-**CLI status labels:** `queued` (submitted, waiting), `processing` (working), `completed` (finished — call `agent result`), `failed (NNN)` (failed with HTTP status NNN). `browser4-cli agent list` shows all tracked tasks.
+Alongside `status`, the envelope carries `statusCode` (the backend's own code), `message`
+(human-readable progress), `processed` (agent step count) and — in `agent result` — the
+agent's `keyFindings`, `filesChanged` and the `workspace` its deliverables live in.
+
+**CLI status labels:** `queued` (submitted, waiting), `processing` (working), `completed` (finished — call `agent result`), `failed (NNN)` (failed, with the backend's code), `cancelled`. `browser4-cli agent list` shows all tracked tasks with these labels, refreshed from the backend on every call.
 
 ### 11. Agent Memory (progressive)
 
@@ -231,8 +254,8 @@ See **[agent.md](agent.md)** for full details including LLM key configuration, e
 |------|---------|-------------|
 | `-s <name>` | session commands | Target a named session |
 | `--stdout` | `snapshot` | Print to stdout instead of a file |
-| `--auto-diff` | `snapshot` | Diff vs the previous snapshot — shows only what changed |
-| `-i`, `--interactive` | `snapshot` | Interactive-oriented rendering: inner text merged into element names so ref lines are self-contained targets (not a strict interactive-only filter — pair with `-v 0` to bound size) |
+| `--auto-diff` | `snapshot` | Capture, then append a diff appendix vs the previous deliberate snapshot (full tree is printed first) |
+| `-i`, `--interactive` | `snapshot` | Interactive-only rendering (strict filter); see Pattern 4 |
 | `--all` | `htmlsnapshot get` | Return all matches (JSON array) |
 | `--sql @file` | `htmlsnapshot query` | Read the X-SQL query from a file (avoids shell quoting) |
 | `--wait`, `--wait-timeout <s>` | `agent run` | Block for the result (default 600 s) |

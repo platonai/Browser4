@@ -20,7 +20,32 @@ FROM DOM_LOAD_AND_SELECT(url, cssQuery [, offset, limit])
 [LIMIT <n>]
 ```
 
-No other SQL syntax is supported — no CTEs (`WITH`), no subqueries in `FROM`, no `EXPLODE`, no joins. The only valid table source is `DOM_LOAD_AND_SELECT`.
+What is accepted around that pattern:
+
+| Clause or construct | Status |
+|---------------------|--------|
+| `WHERE` / `ORDER BY` / `LIMIT`, aggregates (`COUNT`, `SUM`, …) in the `SELECT` list | Supported |
+| `JOIN` of two `DOM_LOAD_AND_SELECT` sources (incl. a self-join) | Executes, but costly |
+| CTE (`WITH …`) | Rejected |
+| Subquery in `FROM`, `EXPLODE`, another table source | Not supported |
+
+> ⚠ **A join duplicates the page load per source.** Each `DOM_LOAD_AND_SELECT(...)` in the `FROM`
+> clause resolves its own url through the page-load path, so a two-source join enters that path
+> twice — which is why joins are discouraged for page-data extraction. A self-join also multiplies
+> rows (6 cards × 6 cards = 36); use one only when the cross product is what you want:
+
+```sql
+-- Self-join: two selections over the same page — 1 row, n = 36 for a 6-card list
+SELECT COUNT(*) AS n
+FROM DOM_LOAD_AND_SELECT(@url, 'div.product-card') a
+JOIN DOM_LOAD_AND_SELECT(@url, 'div.product-card') b ON 1=1;
+```
+
+CTEs (`WITH …`) are rejected because the statement must start with `SELECT` — the server answers
+`Only select statements are supported`.
+
+> **Note:** `EXPLODE`/`POSEXPLODE` do exist in this H2 dialect as UDFs that turn a `ValueArray`
+> into a `ResultSet`, but they are not page-data sources — `DOM_LOAD_AND_SELECT` stays the source.
 
 **URL parameter:** When used through `htmlsnapshot query` or `swarm query`, use the **unquoted** `@url` placeholder to reference the target page URL. Do NOT use `'.'` as a literal URL — it is not valid and will cause a 500 error. The `@url` placeholder is replaced with the actual page URL by `SQLTemplate.createSQL()`.
 
@@ -74,6 +99,25 @@ WHERE DOM_IS_NOT_NIL(DOM)
 > ```
 >
 > `htmlsnapshot inspect` flags clipped samples and prints a ready `htmlsnapshot get all attr "<sel>" <attr>` line when it detects the pattern; you can also compare `get all text "h3 a"` with `get all attr "h3 a" title` to confirm.
+>
+> **The selector inside a `DOM_*` function is evaluated INSIDE the row, not on the whole page.** `FROM DOM_LOAD_AND_SELECT(@url, 'article.product_pod')` makes each matched card the root of the row's DOM, so `DOM_FIRST_ATTR(DOM, 'h3 a', 'title')` looks for an `h3 a` *within that card*. A page-level reference written for the whole document (e.g. `'a'`, which is the card's image link before its `h3` link) therefore resolves to a different element and silently returns `""` — one empty value per row is the symptom. Read the printed sample value next to the selector as the contract: if the snippet does not return that value, the selector is not container-relative.
+
+### Machine-readable numeric output
+
+```sql
+-- JSON consumers: cast numeric functions in the SELECT list. Without the cast the value rides a
+-- custom H2 type and comes back quoted — {"price": "899.99", "rating": "4.6"} — not as a number.
+SELECT
+    DOM_FIRST_TEXT(DOM, '.title') AS title,
+    CAST(DOM_FIRST_FLOAT(DOM, '.price', 0.0) AS DOUBLE) AS price,
+    CAST(STR_FIRST_FLOAT(DOM_FIRST_TEXT(DOM, '.rating'), 0.0) AS DOUBLE) AS rating
+FROM DOM_LOAD_AND_SELECT(@url, '.product-card');
+```
+
+> **Note:** emitting JSON numbers for numeric-returning functions (`DOM_FIRST_FLOAT`,
+> `DOM_FIRST_INTEGER`, `STR_FIRST_FLOAT`, …) is the expected behavior; today their serialization is
+> string-based, so `htmlsnapshot query --result-only` prints quoted strings and consumers must parse
+> them or cast in the `SELECT` list. The numeric `CAST(… AS DOUBLE)` shown above is the workaround.
 
 ### Extract page metadata
 
@@ -141,6 +185,23 @@ SELECT ARRAY_FIRST_NOT_BLANK(
 ) AS product_name
 FROM DOM_LOAD_AND_SELECT('https://shop.example.com/product/42', 'body');
 ```
+
+### Capture metadata: the `box=` and `w=` extras
+
+The `htmlsnapshot` capture prints each interactive element as
+`1. button.shop-btn  "SHOP NOW →"  [box=286 248 123 35; w=1004305]`. The two bracketed extras are:
+
+| Extra | Meaning |
+|-------|---------|
+| `box=<x> <y> <width> <height>` | Bounding box, printed verbatim from the runtime's `vi` data |
+| `w=<n>` | Visual-prominence weight — `1 000 000 + area` for controls, group area for links |
+
+The list is ordered by weight descending, and the renderer keeps that order inside each printed
+group (Buttons / Inputs / Controls / Links / Other) — so `w=` steps down within a group, not across
+the whole list.
+
+> **Note:** `w=` is emitted without a label and `--help htmlsnapshot` documents only
+> tag/class/id/aria/bounding-box, so the field is unexplained and opaque to a first-time reader.
 
 ---
 
@@ -358,6 +419,10 @@ Scalar functions (input: DOM + selector string, output: scalar)
 > ```
 >
 > The same comparison **works** in `SELECT` and `ORDER BY` (e.g. `ORDER BY DOM_FIRST_FLOAT(DOM, '.price', 0.0) DESC`), so only predicates need the cast — `STR_FIRST_FLOAT(DOM_FIRST_TEXT(DOM, sel), default)` is the drop-in workaround for `WHERE`/`ORDER BY`.
+>
+> The same custom value type decides JSON typing too: an uncast numeric function serializes as a
+> **string** in the resultSet — see
+> [Machine-readable numeric output](#machine-readable-numeric-output).
 
 > **Where `:expr(...)` is evaluated:** PowerCSS `:expr()` visual filters ARE evaluated in the `DOM_LOAD_AND_SELECT` selector (the `FROM` clause) and in `htmlsnapshot get` / `get all` / `inspect` selectors, which run over a fresh snapshot of the active page (the tab is captured first, so they filter the page as it is now). Inside **`DOM_FIRST_*`/`DOM_ALL_*` UDF selector arguments** `:expr` is **not reliably evaluated and can silently match nothing** (no error) — in particular the image helpers `DOM_FIRST_IMG`/`DOM_NTH_IMG`/`DOM_ALL_IMGS` ignore `:expr(...)` entirely. Keep UDF selector arguments to plain CSS (e.g. `'img'`) and move visual filters to the `FROM` clause (`DOM_LOAD_AND_SELECT(@url, 'img:expr(width > 250)')`) or to `htmlsnapshot get`/`inspect`; to read image URLs, use `DOM_FIRST_ATTR(DOM, 'img', 'src')`. See [power-dom.md](power-dom.md).
 

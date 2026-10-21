@@ -24,7 +24,15 @@ import ai.platon.pulsar.agentic.tools.builtin.CodingToolExecutor
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingWorkspace
+import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.window.SessionWindowProbe
+import ai.platon.pulsar.chrome.window.WindowObservation
+import ai.platon.pulsar.chrome.window.WindowVisibilityPolicy
+import ai.platon.pulsar.chrome.window.WindowVisibilityReport
+import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.rest.session.SessionCloseReport
+import ai.platon.pulsar.rest.session.SessionStatus
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.dom.FeaturedDocument
@@ -37,6 +45,7 @@ import com.fasterxml.jackson.annotation.JsonSetter
 import com.fasterxml.jackson.annotation.Nulls
 import com.fasterxml.jackson.databind.node.ArrayNode
 import jakarta.servlet.http.HttpServletResponse
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
@@ -176,6 +185,12 @@ class MCPToolController(
     private val toolResultCache: ToolResultCache = ToolResultCache.shared,
 ) {
     /**
+     * Session-scoped window verification (see [handleWindowState]). Stateless
+     * apart from the process-table seam, so one instance serves every call.
+     */
+    private val windowProbe = SessionWindowProbe()
+
+    /**
      * Shared receiver resolution — the very same helper backs the standard MCP
      * server, so a custom-domain tool cannot behave differently per channel.
      */
@@ -190,6 +205,40 @@ class MCPToolController(
 
     /** Same validation rules as the standard MCP server (see ToolSpecValidator). */
     private val validator = ToolSpecValidator.fromSystemProperties()
+
+    /**
+     * Session-scoped tools that read or manipulate the page over CDP and are
+     * therefore blocked by an open native dialog.
+     *
+     * The tool layer guards the page-state reads and the eval family
+     * (`BrowserTabToolExecutor.DIALOG_GUARDED_ACTIONS`); the tab and frame
+     * handlers live in a different executor and were left out, so a pending
+     * dialog made `tab-list` wait out the client's HTTP timeout and then report
+     * a network error. Interactive actions (click/fill/type/press) stay out of
+     * the guard: they are the calls that legitimately OPEN a dialog.
+     */
+    private val dialogGuardedSessionTools: Set<Pair<String, String>> = setOf(
+        "browser" to "listTabs",
+        "browser" to "newTab",
+        "browser" to "switchTab",
+        "browser" to "closeTab",
+        "tab" to "frameList",
+        "tab" to "frameSwitch",
+        "tab" to "frameMain",
+    )
+
+    /**
+     * The dialog-pending failure for [managed], or null when no native dialog is
+     * open (or the session has no bound driver to ask).
+     *
+     * The message is the driver's own (`Browser4WebDriver.requireNoPendingDialog`),
+     * so the CLI and the tool layer say the same thing and name the same two
+     * commands.
+     */
+    private fun pendingDialogMessage(managed: ManagedSession): String? {
+        val driver = managed.agenticSession.boundDriver as? Browser4WebDriver ?: return null
+        return runCatching { driver.requireNoPendingDialog() }.exceptionOrNull()?.message
+    }
 
     companion object {
         /** Log/metrics channel label for the private dispatcher. */
@@ -206,12 +255,21 @@ class MCPToolController(
         internal const val CACHE_FLAG = "cache"
 
         /**
+         * How long the session listing waits for one driver to report its current
+         * URL. A wedged page (a pending dialog, a dead transport) must not stall
+         * `list`, which is the command a user runs to diagnose exactly that.
+         */
+        private const val SESSION_URL_PROBE_TIMEOUT_MS = 3_000L
+
+        /**
          * Playwright-MCP style frontend tool name aliases: the names an agent
          * reaches for first, mapped to the internal tool they stand for.
          *
-         * The key set is kept in sync with [McpToolNames.frontendAliases] and
-         * asserted by `McpToolAliasParityTest`; visibility is internal so that
-         * test can read it.
+         * The key set equals [McpToolNames.dispatcherAliasNames] — the shared
+         * [McpToolNames.frontendAliases] plus the few names only this dispatcher
+         * resolves (see [McpToolNames.dispatcherOnlyAliasNames]) — and is asserted
+         * by `McpToolAliasParityTest`; visibility is internal so that test can
+         * read it.
          */
         internal val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
             "browser_navigate" to "navigate",
@@ -252,11 +310,76 @@ class MCPToolController(
             "browser_network_request" to "network_request",
             "browser_network_route" to "network_route",
             "browser_network_unroute" to "network_unroute",
+            // Read-only counterpart of network_route/network_unroute: inspecting
+            // the active routes must not require removing them first.
+            "browser_network_routes" to "network_routes",
             "browser_har_start" to "har_start",
             "browser_har_stop" to "har_stop",
             "browser_frame_list" to "frame_list",
             "browser_frame_switch" to "frame_switch",
             "browser_frame_main" to "frame_main",
+            // Session-scoped window verification: answers about THIS session's own
+            // browser, instead of a machine-wide process scan that can only ever
+            // describe other browsers (a session browser's temp context-group
+            // profile carries no workspace token). Dispatcher-only — there is no
+            // (domain, method) tool behind it, so it is listed in
+            // McpToolNames.dispatcherOnlyAliasNames rather than in the shared
+            // frontendAliases table.
+            "browser_window_state" to "window_state",
+        )
+
+        /**
+         * Legacy/special tool names the dispatcher resolves itself, mapped to the
+         * canonical `(domain, method)` each one stands for.
+         *
+         * Two places read this table, which is what keeps them from drifting apart:
+         *
+         * - [resolveMcpToolCall] applies it explicitly, so these names resolve even
+         *   when `ToolSpecGenerator` cannot read `WebDriver.kt` from the classpath
+         *   (e.g. running from a JAR in CI);
+         * - [dispatchToToolExecutor] refuses to hand them to a custom-domain
+         *   executor. A registered domain only *looks* like it owns the name:
+         *   `page_url` / `page_title` share their prefix with the registered `page`
+         *   (formats) domain, whose executor never declared them and answered
+         *   "Unsupported page method: url" — breaking `snapshot` and every other CLI
+         *   read of the page URL.
+         */
+        private val LEGACY_TOOL_TARGETS: Map<String, Pair<String, String>> = mapOf(
+            "navigate" to ("tab" to "navigate"),
+            "reload" to ("tab" to "reload"),
+            "go_back" to ("tab" to "goBack"),
+            "go_forward" to ("tab" to "goForward"),
+            "page_title" to ("tab" to "title"),
+            "page_url" to ("tab" to "currentUrl"),
+            "switch_tab" to ("browser" to "switchTab"),
+            "tab_select" to ("browser" to "switchTab"),
+            "tab_new" to ("browser" to "newTab"),
+            "tab_list" to ("browser" to "listTabs"),
+            "tab_close" to ("browser" to "closeTab"),
+            "close_tab" to ("browser" to "closeTab"),
+            "keydown" to ("tab" to "keyDown"),
+            "keyup" to ("tab" to "keyUp"),
+            "mousemove" to ("tab" to "mouseMove"),
+            "mousedown" to ("tab" to "mouseDown"),
+            "mouseup" to ("tab" to "mouseUp"),
+            "mousewheel" to ("tab" to "mouseWheel"),
+            "consoleMessages" to ("tab" to "consoleMessages"),
+            "consoleClear" to ("tab" to "consoleClear"),
+            "focus" to ("tab" to "focus"),
+            "is_visible" to ("tab" to "isVisible"),
+            "is_enabled" to ("tab" to "isEnabled"),
+            "is_checked" to ("tab" to "isChecked"),
+            "dialog_status" to ("tab" to "dialogStatus"),
+            "network_requests" to ("tab" to "networkRequests"),
+            "network_request" to ("tab" to "networkRequestDetail"),
+            "network_route" to ("tab" to "networkRoute"),
+            "network_unroute" to ("tab" to "networkUnroute"),
+            "network_routes" to ("tab" to "networkRoutes"),
+            "har_start" to ("tab" to "harStart"),
+            "har_stop" to ("tab" to "harStop"),
+            "frame_list" to ("tab" to "frameList"),
+            "frame_switch" to ("tab" to "frameSwitch"),
+            "frame_main" to ("tab" to "frameMain"),
         )
 
         private const val CLEAR_SESSION_STORAGE_SCRIPT = """
@@ -336,6 +459,8 @@ class MCPToolController(
             workspaceRoot = CodingWorkspace.workspaceRoot,
             allowExternalAccess = CodingWorkspace.allowExternalAccess,
             allowDestructive = CodingWorkspace.allowDestructive,
+            // P2.3: snapshots survive a backend restart (revert/diff after a crash).
+            persistSnapshots = true,
         )
     }
     private val standaloneCodingTarget: CodingToolExecutor.Target by lazy {
@@ -481,6 +606,10 @@ class MCPToolController(
                 "delete_session_data" -> handleDeleteSessionData(request)
                 "attach_browser" -> handleAttachBrowser(request)
                 "check_session_ready" -> handleCheckSessionReady(request)
+                // Both the frontend alias and the internal name: the aliases are
+                // applied *after* this switch (inside dispatchToToolExecutor), so an
+                // inline tool has to accept the name the client actually sends.
+                "window_state", "browser_window_state" -> handleWindowState(request)
                 "command_batch" -> handleCommandBatch(request)
                 // All other tools → dynamic dispatch through CustomToolRegistry or AgentToolManager
                 else -> dispatchToToolExecutor(request)
@@ -530,6 +659,9 @@ class MCPToolController(
             "open_session", "close_session", "list_sessions",
             "close_all_sessions", "kill_all_sessions", "delete_session_data",
             "attach_browser", "check_session_ready",
+            // Session-scoped window verification (browser_window_state is the
+            // frontend alias): answers about THIS session's browser.
+            "window_state",
         )
 
         // Include every frontend tool alias so the CLI readiness probe
@@ -583,13 +715,28 @@ class MCPToolController(
      * The CLI fetches this endpoint at startup to render declared plugin
      * commands as first-class named commands (argument parsing, help) with no
      * CLI code change — the plugin manifest/spec is the single source of truth.
+     *
+     * @param includeExamples also return built-in specs that declare usage
+     *   examples (`ToolSpec.examples`) but no [ToolSpec.cliName]. The CLI's
+     *   `--help --examples` path asks for them, so a built-in command can source
+     *   its examples from the tool spec instead of a hand-written list. Default
+     *   false keeps the startup discovery payload (plugin-declared commands only)
+     *   unchanged.
      */
     @GetMapping("/tools/specs")
-    fun listCliToolSpecs(): ResponseEntity<Any> {
-        val specs = CustomToolRegistry.instance.getAllExecutors()
-            .flatMap { executor -> executor.getToolSpecs().values }
-            .filter { !it.cliName.isNullOrBlank() }
-            .sortedBy { it.cliName }
+    fun listCliToolSpecs(
+        @RequestParam(defaultValue = "false") includeExamples: Boolean,
+    ): ResponseEntity<Any> {
+        // The registry holds plugin/mounted executors; the builtin `coding`
+        // domain is served by the standalone executor, and its specs are what
+        // `code devtask`/`code verify` example lookups resolve against.
+        val specs = (
+            CustomToolRegistry.instance.getAllExecutors().flatMap { executor -> executor.getToolSpecs().values } +
+                standaloneCodingExecutor.getToolSpecs().values
+            )
+            .distinctBy { "${it.domain}.${it.method}" }
+            .filter { !it.cliName.isNullOrBlank() || (includeExamples && it.examples.isNotEmpty()) }
+            .sortedWith(compareBy({ it.cliName ?: "" }, { it.domain }, { it.method }))
         return ResponseEntity.ok(mapOf("tools" to specs))
     }
 
@@ -613,15 +760,51 @@ class MCPToolController(
 
     private fun handleCloseSession(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
-        val deleted = sessionManager.deleteSession(sessionId)
-        return if (deleted) {
+        val report = sessionManager.closeSession(sessionId)
+        return if (report != null) {
             // Whatever that session's reads returned is gone with its page.
             toolResultCache.invalidateSession(sessionId)
-            ResponseEntity.ok(textResponse("Session closed"))
+            // The text stays stable for existing clients; the structured payload
+            // is where the honest outcome lives: whether the browser process is
+            // VERIFIED gone (`browserTerminated` is null when it could not be
+            // checked) and what profile space the close reclaimed. A client that
+            // prints "Browser terminated" unconditionally is now able to stop.
+            ResponseEntity.ok(
+                textResponse(
+                    "Session closed",
+                    structuredContent = closeReportPayload(report),
+                )
+            )
         } else {
             ResponseEntity.ok(errorResponse("Session not found: $sessionId"))
         }
     }
+
+    /**
+     * The machine-readable form of [SessionCloseReport].
+     *
+     * `browserTerminated` is tri-state on purpose — `true`/`false`/absent-or-null
+     * — because "we could not check" is a different answer from both "it is
+     * gone" and "it is still running", and a client must be able to say so.
+     */
+    private fun closeReportPayload(report: SessionCloseReport): Map<String, Any?> = mapOf(
+        "sessionId" to report.sessionId,
+        "kind" to report.kind.name,
+        "sessionClosed" to true,
+        "browserTerminated" to report.browserTerminated,
+        "browserTermination" to report.termination,
+        "browserTerminationDetail" to report.processSummary,
+        "browserPid" to (report.process?.pid ?: 0L),
+        "profileCleanup" to report.profileCleanup,
+        "profileCleanupDetail" to report.profileSummary,
+        "profilePath" to (report.profile?.path?.toString() ?: ""),
+        "reclaimedBytes" to report.reclaimedBytes,
+        // A close that only detached from a browser other sessions still drive
+        // says so: the browser object, its tabs and its process were left as they
+        // were, which is not the same fact as "this session's browser is gone".
+        "detachedOnly" to report.detachedOnly,
+        "sharedWith" to report.sharedWith,
+    )
 
     private suspend fun handleListSessions(): ResponseEntity<MCPToolCallResponse> {
         val sessions = sessionManager.getAllSessions().map { s ->
@@ -633,7 +816,7 @@ class MCPToolController(
             val healthy = runCatching { sessionManager.checkHealthy(s).isOK }.getOrDefault(false)
             mapOf<String, Any>(
                 "sessionId" to s.sessionId,
-                "url" to (s.url ?: ""),
+                "url" to sessionPageUrl(s, live = s.status == SessionStatus.ACTIVE),
                 "status" to s.status.wire,
                 "healthy" to healthy,
                 "kind" to s.kind.name,
@@ -654,23 +837,142 @@ class MCPToolController(
                 "browserName" to (s.browserIdentity?.name ?: ""),
                 "browserVersion" to (s.browserIdentity?.version ?: ""),
                 "browserUa" to (s.browserIdentity?.rawUa ?: ""),
+                // Which browser this session is REALLY driving, for sessions that
+                // attached to one: the verified endpoint/port and the session that
+                // already owned it. Without these, `list` shows a session name and
+                // a page but nothing that says where the page lives.
+                "endpoint" to (s.attachEvidence?.endpoint ?: ""),
+                "cdpPort" to (s.attachEvidence?.port ?: 0),
+                "ownedBySessionId" to (s.attachEvidence?.ownedBySessionId ?: ""),
             )
         }
         val json = pulsarObjectMapper().writeValueAsString(sessions)
         return ResponseEntity.ok(textResponse(json))
     }
 
+    /**
+     * The current page URL of [managed], or `""` when it cannot be determined.
+     *
+     * `ManagedSession.url` is never written by any code path, so serializing it
+     * directly reported every live session as unknown — and the CLI renders the
+     * empty value as `-`, which its own docs define as "backend unreachable or
+     * session stale". A live session therefore advertised a dead backend. Ask
+     * the session's ALREADY-BOUND driver instead (the `boundDriver` accessor
+     * never launches a browser, unlike `ManagedSession.driver`), falling back to
+     * the stored value.
+     *
+     * Every failure path — no bound driver, a closed tab, a dead transport, a
+     * driver that does not answer in time — yields `""`: `list` is the command a
+     * user runs to find out what is wrong, so it must never be the thing that
+     * hangs.
+     */
+    private suspend fun sessionPageUrl(managed: ManagedSession, live: Boolean): String {
+        if (live) {
+            val liveUrl = runCatching {
+                withTimeoutOrNull(SESSION_URL_PROBE_TIMEOUT_MS) {
+                    managed.agenticSession.boundDriver?.currentUrl()?.takeIf { it.isNotBlank() }
+                }
+            }.getOrNull()
+            if (liveUrl != null) {
+                return liveUrl
+            }
+        }
+        return managed.url?.takeIf { it.isNotBlank() } ?: ""
+    }
+
+    /**
+     * Answers whether the browser of THIS session has a visible window.
+     *
+     * The check is session-scoped on purpose. The CLI used to decide this from a
+     * machine-wide `chrome.exe` scan narrowed by a workspace token, which cannot
+     * see a session browser at all: those are launched under the shared temp
+     * context-group root and carry no workspace identifier. The lookup therefore
+     * only ever described *other* processes — producing a warning on a
+     * demonstrably visible headed window whenever an orphan happened to be alive,
+     * and silence (the very regression the check exists for) when none was.
+     *
+     * The response is a tri-state: `VISIBLE` / `HIDDEN` / `UNKNOWN`, with
+     * `verified=false` exactly when the check could not be performed. `UNKNOWN`
+     * is not a failure and must not be rendered as a warning.
+     */
+    private suspend fun handleWindowState(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val session = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("Session not found: $sessionId"))
+
+        val displayMode = runCatching { PulsarSettings.parse(session.capabilities).displayMode?.name }.getOrNull()
+        val facts = sessionManager.sessionBrowserFacts(sessionId)
+        if (facts == null) {
+            // No bound browser: nothing can be observed, and saying so is the
+            // honest answer — never a claim about a window that was not checked.
+            val report = WindowVisibilityPolicy.classify(WindowObservation(requestedDisplayMode = displayMode))
+            return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(windowStatePayload(sessionId, report))))
+        }
+
+        // The page targets the endpoint advertises are part of the evidence: a
+        // window check that says "visible" while the browser serves nothing would
+        // be describing a browser the session cannot use.
+        val targetUrls = if (facts.port > 0) {
+            runCatching {
+                PulsarSessionManager.verifyCdpEndpoint("http://127.0.0.1:${facts.port}").pageTargetUrls
+            }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
+
+        val report = windowProbe.probe(
+            driver = session.agenticSession.boundDriver,
+            contextDir = facts.contextDir,
+            debugPort = facts.port,
+            requestedDisplayMode = displayMode,
+            pageTargetUrls = targetUrls,
+        )
+        return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(windowStatePayload(sessionId, report))))
+    }
+
+    /** The JSON contract the CLI renders from: session id plus the full verdict. */
+    private fun windowStatePayload(
+        sessionId: String,
+        report: WindowVisibilityReport,
+    ): Map<String, Any?> = linkedMapOf<String, Any?>(
+        "sessionId" to sessionId,
+    ).apply {
+        putAll(report.toMap())
+    }
+
     private fun handleCloseAllSessions(): ResponseEntity<MCPToolCallResponse> {
-        val count = sessionManager.deleteAllSessions()
+        val reports = sessionManager.closeAllSessions()
         toolResultCache.clear()
-        return ResponseEntity.ok(textResponse("Closed $count session(s)"))
+        return ResponseEntity.ok(
+            textResponse("Closed ${reports.size} session(s)", closeAllReportPayload(reports))
+        )
     }
 
     private fun handleKillAllSessions(): ResponseEntity<MCPToolCallResponse> {
-        val count = sessionManager.deleteAllSessions()
+        val reports = sessionManager.closeAllSessions()
         toolResultCache.clear()
-        return ResponseEntity.ok(textResponse("Killed $count session(s)"))
+        return ResponseEntity.ok(
+            textResponse("Killed ${reports.size} session(s)", closeAllReportPayload(reports))
+        )
     }
+
+    /**
+     * The aggregate form of [closeReportPayload] for `close-all` / `kill-all`.
+     *
+     * The counts are separated on purpose: `browserTerminated` counts only the
+     * browsers PROVEN gone, `browserUnverified` the sessions whose process could
+     * not be checked, and `browserSurvived` the ones still running after the
+     * kill. Summing them into "N browsers terminated" is how a leaked Chrome
+     * stayed invisible.
+     */
+    private fun closeAllReportPayload(reports: List<SessionCloseReport>): Map<String, Any?> = mapOf(
+        "closed" to reports.size,
+        "browserTerminated" to reports.count { it.browserTerminated == true },
+        "browserSurvived" to reports.count { it.browserTerminated == false },
+        "browserUnverified" to reports.count { it.process != null && it.browserTerminated == null },
+        "reclaimedBytes" to reports.sumOf { it.reclaimedBytes },
+        "sessions" to reports.map { closeReportPayload(it) },
+    )
 
     private suspend fun handleDeleteSessionData(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -743,15 +1045,35 @@ class MCPToolController(
         )
         // Surface the verified browser identity (from /json/version) so the
         // CLI can print which browser the endpoint really drives instead of
-        // just the requested endpoint/channel.
+        // just the requested endpoint/channel. The attach evidence adds WHAT was
+        // observed at the endpoint — the port, the page targets, and whether the
+        // browser belongs to another live session — so a channel name that bound
+        // a browser the caller never opened is reported instead of implied.
         val identity = session.browserIdentity
-        val payload = mapOf(
+        val evidence = session.attachEvidence
+        val payload = mutableMapOf<String, Any?>(
             "sessionId" to session.sessionId,
             "browser" to (identity?.name ?: ""),
             "browserFamily" to (identity?.family ?: ""),
             "browserVersion" to (identity?.version ?: ""),
             "browserUa" to (identity?.rawUa ?: ""),
+            "verifiedBrowser" to (evidence?.verifiedBrowser ?: ""),
+            "endpoint" to (evidence?.endpoint ?: cdpEndpoint ?: ""),
+            "port" to (evidence?.port ?: cdpPort ?: 0),
+            "pageTargets" to (evidence?.pageTargetCount ?: 0),
+            "pageTargetUrls" to (evidence?.pageTargetUrls ?: emptyList<String>()),
+            // The session whose browser this endpoint already is ("" when the
+            // endpoint was unattached). A non-empty value means the bind was to a
+            // browser another session opened — the client must say so, and can
+            // point the user at `-s <owner>` or an explicit --cdp endpoint.
+            "ownedBySessionId" to (evidence?.ownedBySessionId ?: ""),
+            "reboundFromPort" to (evidence?.reboundFromPort ?: 0),
         )
+        if (evidence?.ownedBySessionId != null) {
+            payload["warning"] = "attached to the browser of session '${evidence.ownedBySessionId}' " +
+                "(port ${evidence.port}, ${evidence.pageTargetCount} page target(s)) — not a browser this " +
+                "session opened; pass an explicit --cdp http://127.0.0.1:${evidence.port} to pin the instance"
+        }
         return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(payload)))
     }
 
@@ -1042,9 +1364,17 @@ class MCPToolController(
         val toolName = normalizedRequest.tool
         val args = normalizeToolArguments(toolName, normalizedRequest.arguments)
 
-        // Extract domain from tool name and try CustomToolRegistry
+        // Extract domain from tool name and try CustomToolRegistry.
+        //
+        // A registered domain must not shadow a legacy name the dispatcher itself
+        // resolves ([LEGACY_TOOL_TARGETS]): `page_url` / `page_title` share their
+        // prefix with the registered `page` (formats) domain, so the registry lookup
+        // claimed them for an executor that never declared them — answering
+        // "Unsupported page method: url" and failing every CLI read of the page URL
+        // (`snapshot` first). Those names stay with the built-in agent tools.
         val domain = extractDomain(toolName)
         val customExecutor = CustomToolRegistry.instance.get(domain)
+            ?.takeUnless { toolName in LEGACY_TOOL_TARGETS }
 
         // Reject malformed calls before any dispatch, with the same rules (and
         // codes) the standard MCP server applies.
@@ -1186,7 +1516,11 @@ class MCPToolController(
             val evaluate = result
             val exception = evaluate.exception
             if (exception != null) {
-                ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception)))
+                // Classify from the failure, not from the composed text: the help
+                // block appended below carries parameter names like `waitTimeout`,
+                // and letting prose decide the code turned a stale-ref lookup miss
+                // into a retryable TIMEOUT (see ToolErrorMapper.isTargetMiss).
+                ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception), exception.cause))
             } else {
                 val text = ToolResultTextRenderer.render(evaluate)
 
@@ -1601,9 +1935,11 @@ class MCPToolController(
         // Fail loud when an externally CDP-attached browser has died: getSession
         // does not run health resolution, so without this gate the stale driver
         // would return cached data (last URL from currentUrl, null from evaluate)
-        // with exit status 0. The message tells the user to re-attach.
+        // with exit status 0. The failure carries its own code — "the browser is
+        // gone" and "only the tab this session drove is gone" need different
+        // reactions from a script, and wording must not decide the status.
         sessionManager.cdpAttachedSessionUnavailable(managed)?.let {
-            return ResponseEntity.ok(errorResponse(it))
+            return ResponseEntity.ok(errorResponse(it.message, it.code))
         }
 
         val agent = managed.agenticSession.companionAgent as? BasicBrowserAgent
@@ -1616,12 +1952,27 @@ class MCPToolController(
         val toolCall = resolveMcpToolCall(toolName, args, agent)
             ?: return ResponseEntity.ok(errorResponse("Unknown tool: ${request.tool}"))
 
+        // The tool layer guards page-state reads and the eval family against a
+        // pending native dialog (BrowserTabToolExecutor.DIALOG_GUARDED_ACTIONS),
+        // but the session-scoped tab/frame handlers run CDP on the same blocked
+        // page and were left out: `tab-list` hung for the whole client timeout
+        // and then surfaced a network-timeout error. Check before dispatching so
+        // the failure is immediate and names the dialog instead.
+        if (dialogGuardedSessionTools.contains(toolCall.domain to toolCall.method)) {
+            pendingDialogMessage(managed)?.let { message ->
+                return ResponseEntity.ok(errorResponse(message, ToolErrorCode.DIALOG_PENDING))
+            }
+        }
+
         return try {
             val result = agent.agentToolManager.execute(toolCall)
             val evaluate = result.evaluate
             val exception = evaluate.exception
             if (exception != null) {
-                ResponseEntity.ok(errorResponse(buildErrorMessage(request.tool, exception)))
+                // Same as the other dispatchers: the code comes from the
+                // throwable, never from the composed text (which includes the
+                // appended tool description).
+                ResponseEntity.ok(errorResponse(buildErrorMessage(request.tool, exception), exception.cause))
             } else {
                 // Rendered by the shared renderer so the standard MCP server (8088)
                 // and this dispatcher return identical text for the same tool call.
@@ -1654,40 +2005,10 @@ class MCPToolController(
         // Also includes essential tools whose specs are normally auto-generated from
         // @MCP-annotated WebDriver methods — the explicit entries ensure they resolve
         // even when ToolSpecGenerator cannot read WebDriver.kt from the classpath
-        // (e.g. running from a JAR in CI).
-        when (toolName) {
-            "navigate" -> return ToolCall("tab", "navigate", args1)
-            "reload" -> return ToolCall("tab", "reload", args1)
-            "go_back" -> return ToolCall("tab", "goBack", args1)
-            "go_forward" -> return ToolCall("tab", "goForward", args1)
-            "page_title" -> return ToolCall("tab", "title", args1)
-            "page_url" -> return ToolCall("tab", "currentUrl", args1) // or just rely on pageUrl if it exists
-            "switch_tab", "tab_select" -> return ToolCall("browser", "switchTab", args1)
-            "tab_new" -> return ToolCall("browser", "newTab", args1)
-            "tab_list" -> return ToolCall("browser", "listTabs", args1)
-            "tab_close", "close_tab" -> return ToolCall("browser", "closeTab", args1)
-            "keydown" -> return ToolCall("tab", "keyDown", args1)
-            "keyup" -> return ToolCall("tab", "keyUp", args1)
-            "mousemove" -> return ToolCall("tab", "mouseMove", args1)
-            "mousedown" -> return ToolCall("tab", "mouseDown", args1)
-            "mouseup" -> return ToolCall("tab", "mouseUp", args1)
-            "mousewheel" -> return ToolCall("tab", "mouseWheel", args1)
-            "consoleMessages" -> return ToolCall("tab", "consoleMessages", args1)
-            "consoleClear" -> return ToolCall("tab", "consoleClear", args1)
-            "focus" -> return ToolCall("tab", "focus", args1)
-            "is_visible" -> return ToolCall("tab", "isVisible", args1)
-            "is_enabled" -> return ToolCall("tab", "isEnabled", args1)
-            "is_checked" -> return ToolCall("tab", "isChecked", args1)
-            "dialog_status" -> return ToolCall("tab", "dialogStatus", args1)
-            "network_requests" -> return ToolCall("tab", "networkRequests", args1)
-            "network_request" -> return ToolCall("tab", "networkRequestDetail", args1)
-            "network_route" -> return ToolCall("tab", "networkRoute", args1)
-            "network_unroute" -> return ToolCall("tab", "networkUnroute", args1)
-            "har_start" -> return ToolCall("tab", "harStart", args1)
-            "har_stop" -> return ToolCall("tab", "harStop", args1)
-            "frame_list" -> return ToolCall("tab", "frameList", args1)
-            "frame_switch" -> return ToolCall("tab", "frameSwitch", args1)
-            "frame_main" -> return ToolCall("tab", "frameMain", args1)
+        // (e.g. running from a JAR in CI). The same table keeps a custom domain from
+        // claiming these names in [dispatchToToolExecutor].
+        LEGACY_TOOL_TARGETS[toolName]?.let { (legacyDomain, method) ->
+            return ToolCall(legacyDomain, method, args1)
         }
 
         // 2. Generic mapping
@@ -1863,6 +2184,14 @@ class MCPToolController(
     private fun textResponse(text: String): MCPToolCallResponse =
         MCPToolCallResponse(content = listOf(MCPContent(text = text)))
 
+    /**
+     * A successful response whose text stays stable for existing clients while
+     * the same facts travel in `structuredContent` for clients that branch on
+     * them (see [closeReportPayload]).
+     */
+    private fun textResponse(text: String, structuredContent: Map<String, Any?>): MCPToolCallResponse =
+        MCPToolCallResponse(content = listOf(MCPContent(text = text)), structuredContent = structuredContent)
+
     private fun textResponse(text: String, pagination: PaginationMeta?): MCPToolCallResponse =
         MCPToolCallResponse(content = listOf(MCPContent(text = text)), pagination = pagination)
 
@@ -1915,7 +2244,8 @@ class MCPToolController(
         // (__pulsar_utils__ — a session whose tab predates the backend process,
         // or a tab that never received the injected runtime) to an actionable
         // message instead of leaking the internal JS stack.
-        val message = if (isMissingPageHelperError(rawMessage)) missingPageHelperErrorMessage() else rawMessage
+        val mapped = if (isMissingPageHelperError(rawMessage)) missingPageHelperErrorMessage() else rawMessage
+        val message = toCliHints(mapped)
         val sb = StringBuilder("$toolName failed: $message")
 
         // Contextual tips for known error patterns
@@ -1926,13 +2256,31 @@ class MCPToolController(
         // Explicit help from the tool executor.  The static tool description /
         // signature attached by AbstractToolExecutor is only useful for usage
         // errors (missing/unknown parameters); on runtime errors it reads like
-        // a debug dump, so reserve it for usage errors.
+        // a debug dump, so reserve it for usage errors.  A target lookup miss is
+        // a runtime error even when the executor signalled it as a bad-argument
+        // type — the call's shape was valid, the page simply lacked the target.
         if (isUsageError(exception.cause, rawMessage) && !exception.help.isNullOrBlank()) {
             sb.append(" help: ${exception.help}")
         }
 
         return sb.toString()
     }
+
+    /**
+     * Translate API-facing recovery hints into the commands the caller can
+     * actually run.
+     *
+     * The frame-scope messages are composed in the driver, which knows the MCP
+     * method names (`frameList()`, `frameMain()`) but not the client's command
+     * surface: a user reading "List the page frames with `frameList()`" has no
+     * such command to run. Backticked and bare forms are both handled, so the
+     * translation cannot produce doubled backticks.
+     */
+    private fun toCliHints(message: String): String = message
+        .replace("`frameList()`", "`frames`")
+        .replace("frameList()", "`frames`")
+        .replace("`frameMain()`", "`frame main`")
+        .replace("frameMain()", "`frame main`")
 
     /**
      * Build a chain of exception messages from [e] through all its causes,
@@ -1991,8 +2339,14 @@ internal fun missingPageHelperErrorMessage(): String =
  * 'help:' text.  Static help is reserved for usage errors (bad parameters,
  * unknown fields/methods); runtime errors get their own actionable mapping and
  * must not read as a debug dump.
+ *
+ * A target lookup miss is a runtime error even when it arrives as an
+ * `IllegalArgumentException` — the call's shape was valid and the page simply
+ * lacked the element/ref/frame, so the 30-line signature dump would answer a
+ * question nobody asked.
  */
 internal fun isUsageError(cause: Throwable?, message: String): Boolean {
+    if (ToolErrorMapper.isTargetMiss(message)) return false
     if (cause is IllegalArgumentException) return true
     return listOf(
         "missing parameter",

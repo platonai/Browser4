@@ -128,28 +128,63 @@ class HarBuilderTest {
     @Test
     @DisplayName("computes entry time and timings from monotonic timestamps and ResourceTiming")
     fun computesTimeAndTimings() {
+        // CDP `ResourceTiming` offsets are MILLISECONDS relative to `requestTime`
+        // (which is seconds since epoch), and HAR 1.2 wants milliseconds too — so the
+        // phases below are written in ms and must come back unchanged.  The fixture
+        // used to describe sub-millisecond offsets while the builder multiplied by
+        // 1000, so the test pinned a ~1000x inflation: a 2 ms DNS lookup was reported
+        // as 2 s and the phases did not add up to the entry's own `time`.
         val timing = ResourceTiming(
             requestTime = 10.0,
             proxyStart = 0.0, proxyEnd = 0.0,
-            dnsStart = 10.0, dnsEnd = 10.05,
-            connectStart = 10.05, connectEnd = 10.15,
-            sslStart = 10.06, sslEnd = 10.10,
+            dnsStart = 10.0, dnsEnd = 12.0,
+            connectStart = 12.0, connectEnd = 15.0,
+            sslStart = 12.5, sslEnd = 14.5,
             workerStart = 0.0, workerReady = 0.0, workerFetchStart = 0.0, workerRespondWithSettled = 0.0,
-            sendStart = 10.15, sendEnd = 10.20,
+            sendStart = 15.0, sendEnd = 16.0,
             pushStart = 0.0, pushEnd = 0.0,
-            receiveHeadersEnd = 10.40,
+            receiveHeadersEnd = 40.0,
         )
         val entry = harOf(tracked(timing = timing))
         // total = (10.5 - 10.0) * 1000
         assertEquals(500L, entry["time"])
         val timings = entry["timings"] as Map<String, Any?>
-        assertEquals(50L, timings["dns"])
-        assertEquals(100L, timings["connect"])
-        assertEquals(40L, timings["ssl"])
-        assertEquals(50L, timings["send"])
-        assertEquals(200L, timings["wait"])
-        // receive = total - known
-        assertEquals(60L, timings["receive"])
+        assertEquals(2L, timings["dns"], "a 2 ms lookup must be reported as 2 ms")
+        assertEquals(3L, timings["connect"])
+        assertEquals(2L, timings["ssl"])
+        assertEquals(1L, timings["send"])
+        assertEquals(24L, timings["wait"])
+        // receive = total - known (500 - 32)
+        assertEquals(468L, timings["receive"])
+        // The phases a HAR consumer adds up must fit inside the total the same
+        // document reports; the 1000x inflation is what broke that invariant.
+        val phases = listOf("dns", "connect", "ssl", "send", "wait", "receive")
+            .sumOf { (timings[it] as? Number)?.toLong() ?: 0L }
+        assertEquals(entry["time"] as Long, phases, "timings must add up to the entry time")
+    }
+
+    @Test
+    @DisplayName("a timing phase CDP did not report is -1, never a coerced measurement")
+    fun unreportedTimingPhaseIsMinusOne() {
+        // Only DNS was reported: every other phase is "not available" in HAR, and
+        // requestTime is absent so the offsets cannot be interpreted at all.
+        val timing = ResourceTiming(
+            requestTime = 0.0,
+            proxyStart = 0.0, proxyEnd = 0.0,
+            dnsStart = 0.0, dnsEnd = 0.0,
+            connectStart = -1.0, connectEnd = -1.0,
+            sslStart = -1.0, sslEnd = -1.0,
+            workerStart = 0.0, workerReady = 0.0, workerFetchStart = 0.0, workerRespondWithSettled = 0.0,
+            sendStart = 0.0, sendEnd = 0.0,
+            pushStart = 0.0, pushEnd = 0.0,
+            receiveHeadersEnd = -1.0,
+        )
+        val timings = harOf(tracked(timing = timing))["timings"] as Map<String, Any?>
+
+        assertEquals(-1L, timings["dns"])
+        assertEquals(-1L, timings["connect"])
+        assertEquals(-1L, timings["send"])
+        assertEquals(-1L, timings["wait"])
     }
 
     @Test

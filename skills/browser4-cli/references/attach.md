@@ -102,6 +102,29 @@ when it is a browser-level WebSocket:
 
 Both failures produce a loud error (naming the endpoint and how to fix it) instead of a silent success. After a successful attach, the CLI prints the target browser's real current page URL so you can confirm it is driving the browser you intended.
 
+**The endpoint is verified again after binding.** A debugging port can change hands between the
+probe and the actual attach (another Chrome instance grabs it, or the first one exits), which used to
+mean the session silently drove a different browser. The bound browser's product is therefore re-read
+and compared with what the probe reported: a mismatch fails loudly, naming both products, the port and
+every page target that was observed. Attach failures carry dedicated **non-retryable** codes, so a
+retry loop cannot spin on them:
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `ENDPOINT_UNREACHABLE` | 502 | nothing answered at the endpoint (connection refused/reset) |
+| `ENDPOINT_NOT_CDP` | 502 | something answered, but it is not a CDP/DevTools endpoint |
+| `ENDPOINT_NO_PAGE_TARGETS` | 409 | a CDP endpoint with no `page` target to drive |
+
+**Multi-instance hazard — attaching to a browser another session already drives.** Attaching to a
+browser that a live Browser4 session owns is allowed (it is the documented workflow), but it is
+reported rather than silent: a warning names the owning session, the attach response carries
+`ownedBySessionId`, and `list` shows it on the row. Two sessions driving one browser share its tabs
+and profile, so closing one must not be expected to shut the other's browser down.
+
+The attach response is JSON, so scripts can branch on the observed facts instead of parsing prose:
+`{sessionId, browser, browserFamily, browserVersion, endpoint, port, pageTargets, pageTargetUrls,
+ownedBySessionId, reboundFromPort, warning?}`.
+
 ### Verify the Actual Browser After Attach
 
 `attach` reports **which browser actually connected**, not just the channel you requested:
@@ -132,6 +155,10 @@ Then verify the connection shows the browser you expect (use `browser4-cli list`
 ```
 
 Re-run the suggested attach command, then confirm with `list` that the connection shows the browser you expect.
+
+**The error says WHICH link died.** Two failures look alike and are not: the browser process is gone, or the browser is fine and only the tab/driver link died (the tab was closed, the page crashed, or another session detached it). The first reads *"… is no longer reachable — it was closed or crashed"* (`ENDPOINT_UNREACHABLE`); the second reads *"… is still running — only the tab this session was driving is gone"* (`ENDPOINT_NO_PAGE_TARGETS`). Never start hunting for a crashed browser on the second message: `curl http://localhost:<port>/json/version` answers 200 and the browser is untouched.
+
+**Re-attach IS the recovery.** `attach` rebuilds an unhealthy bound driver on the browser it binds, so re-running the same attach command restores a session whose driven tab was lost — no `close` needed first. If the post-attach page read still fails, the browser itself is gone (or the port now answers as a different browser) and the failure says so.
 
 ## Patterns
 
@@ -186,13 +213,21 @@ browser4-cli -s debug-session screenshot --filename state.png
 ```
 
 > **Important:** When the default (unnamed) session slot is already occupied (e.g., by a prior `open` or `attach`), `attach --extension` without `-s <name>` will fail with "An unnamed session already exists." Use `-s <name>` to create a named session instead, or `close` the existing unnamed session first.
+>
+> The restriction is **not** extension-specific: `attach --cdp <channel|url>` and `attach --endpoint <url> --cdp …` are refused the same way while the unnamed slot drives a browser, because binding them would displace that session. The error names the pattern to use: `browser4-cli -s <name> attach --cdp chrome`.
 
 > **Session-slot semantics:** each distinct `-s <name>` (and the unnamed default slot)
 > resolves to its OWN backend session id; attaching the same browser under two names
 > creates two independent sessions rather than aliasing one. Re-attaching an EXISTING
 > name to an endpoint reuses that name's session (an idempotent re-attach to the same
-> port keeps the existing driver; attaching to a different port rebinds it and logs a
-> warning). Closing one name never tears down a different name's session.
+> port keeps the existing driver when it is healthy, and rebuilds it when it is not;
+> attaching to a different port rebinds it and logs a warning). Closing one name never
+> tears down a different name's session: when another session still drives the same
+> browser, `close` detaches only — it closes the tab that session drove, leaves the
+> shared browser object, the other session's tab and driver, and the browser process
+> exactly as they were. Closing the last session attached to that browser is the one
+> that tears the shared browser object down. `close --json` reports which case it was:
+> `detachedOnly` plus the `sharedWith` session ids.
 
 ### 5. Attach via Browser4 Extension
 

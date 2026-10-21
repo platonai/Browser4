@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service
 
+import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PGInstructResult
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
@@ -97,9 +98,12 @@ class CommandStatusConversionTest {
         assertEquals(now, commandStatus.lastModifiedTime)
         assertEquals(now.plusSeconds(5), commandStatus.finishTime)
 
-        // Verify that pageStatusCode and pageContentBytes are at default values
-        // since AgentTaskStatus doesn't have these fields
-        assertEquals(ProtocolStatusCodes.SC_CREATED, commandStatus.pageStatusCode)
+        // Verify that pageStatusCode and pageContentBytes are at default values:
+        // AgentTaskStatus carries the PAGE's observed HTTP status (see
+        // DocumentHttpStatus), and this status never observed a page, so the honest
+        // value is "unknown" — not 201/SC_CREATED, a task-lifecycle code that used
+        // to contradict the record's own message.
+        assertEquals(PAGE_STATUS_UNKNOWN, commandStatus.pageStatusCode)
         assertEquals(0, commandStatus.pageContentBytes)
     }
 

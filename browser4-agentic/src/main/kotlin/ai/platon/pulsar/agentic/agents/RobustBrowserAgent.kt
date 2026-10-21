@@ -23,6 +23,7 @@ import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
 import ai.platon.pulsar.chrome.dom.util.DomDebug
+import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.Strings
@@ -44,6 +45,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -349,6 +351,21 @@ open class RobustBrowserAgent(
     private val noopLimit: Int get() = (noopLimitOverride ?: config.consecutiveNoOpLimit).coerceAtLeast(1)
 
     /**
+     * Repair-round budget for this agent (plan P1.3). Driven by the latest
+     * `coding.verify` verdict observed in the tool results: a failing verdict
+     * spends one round, the diagnostics go back to the model as a user message,
+     * and an exhausted budget fails the task with the verdict as evidence.
+     */
+    private val repairLoop = RepairLoop(config.repairMaxRounds)
+
+    /**
+     * Latest structured verification verdict observed in the tool results of
+     * the current run (null until `coding.verify` has run). Reset per run.
+     */
+    @Volatile
+    private var lastVerificationVerdict: VerificationReport? = null
+
+    /**
      * Coding mode override (see [BasicBrowserAgent.codingMode]): set by
      * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] when the task is
      * detected as a pure coding task. Skips the search-engine navigation and screenshots.
@@ -409,14 +426,16 @@ open class RobustBrowserAgent(
         resetInnerToolExecutions()
         onWillRun(action)
 
-        // The first context created below starts this run's execution session; all
-        // contexts (and their agent states) of this run share that session id.
-        val contextCountBefore = stateManager.contexts.size
+        // Track the session id directly from the resolve result instead of
+        // indexing into the shared contexts list (which may be trimmed in the
+        // future, and could leak the previous run's session id on early failure).
+        var runSessionId: String? = null
 
         try {
             val ctx = agentScope.coroutineContext.minusKey(Job)
 
             val result = withContext(ctx) { resolveProblemInCoroutine(action) }
+            runSessionId = result.context.sessionId
 
             onDidRun(action, result.result)
 
@@ -431,7 +450,7 @@ open class RobustBrowserAgent(
             throw e
         } finally {
             stateManager.writeAllProcessTrace()
-            _lastRunSessionId = stateManager.contexts.getOrNull(contextCountBefore)?.sessionId
+            _lastRunSessionId = runSessionId
         }
 
         return stateHistory.snapshotFor(_lastRunSessionId)
@@ -601,8 +620,10 @@ open class RobustBrowserAgent(
         )
 
         // Overall timeout to prevent indefinite hangs for a full resolve session
-        // Calculate effective timeout accounting for potential retry delays
-        val maxPossibleDelays = (0 until config.maxRetries).fold(0L) { acc, i -> acc + calculateRetryDelay(i) }
+        // Use the deterministic worst-case delay budget: maxRetries * maxDelayMs.
+        // (calculateRetryDelay has random jitter, which would make the timeout
+        // budget non-deterministic across runs.)
+        val maxPossibleDelays = config.maxRetries * config.maxRetryDelayMs
         val effectiveTimeout = config.resolveTimeoutMs + maxPossibleDelays
 
         return try {
@@ -625,7 +646,14 @@ open class RobustBrowserAgent(
                     "instruction" to Strings.compactInline(instruction, COMPACT_INLINE_SESSION_LENGTH)
                 ), message = "⏳ resolve TIMEOUT"
             )
-            val actResult = ActResultHelper.failed(e, action = instruction)
+            // Wrap in a non-cancellation error: a resolve timeout is NOT a user
+            // cancellation. run() rethrows the ActResult exception, and a raw
+            // TimeoutCancellationException would route through the cancellation
+            // channel and be misreported as "cancelled" by callers.
+            val timeoutError = PerceptiveAgentError.TimeoutError(
+                "⏳ Resolve timeout after $effectiveTimeout ms", e
+            )
+            val actResult = ActResultHelper.failed(timeoutError, action = instruction)
             ResolveResult(baseContext, actResult)
         } finally {
             // clear history so the next task will have a clean operation trace for summary.
@@ -655,12 +683,28 @@ open class RobustBrowserAgent(
                 // wait for the user to raise the limit before re-launching.
                 logger.error("🛑 resolve.request-token-limit.sid={} msg={}", sid, e.message)
                 return ResolveResult(activeContext, ActResultHelper.failed(e, action = action.action))
+            } catch (e: CancellationException) {
+                // Cancellation (including the overall resolve timeout) must
+                // propagate — retrying a cancelled coroutine defeats structured
+                // concurrency and masks the real stop reason.
+                throw e
             } catch (e: Exception) {
                 lastError = e
                 logger.error("💥 resolve.unexpected attempt={} sid={} msg={}", attempt + 1, sid, e.message, e)
 
                 cleanupPartialState(activeContext)
-                stateManager.buildBaseExecutionContext(action, "resolve-init-recovery")
+
+                // Permanent errors (validation/illegal-state) gain nothing from
+                // a retry — fail fast instead of burning more LLM tokens.
+                if (!retryStrategy.shouldRetry(e)) {
+                    logger.error("🛑 resolve.permanent sid={} msg={}", sid, e.message)
+                    break
+                }
+                // Back off before the next attempt; without this the retry loop
+                // hammers an already-failing model/browser with zero delay.
+                if (attempt < config.maxRetries) {
+                    delay(calculateRetryDelay(attempt).milliseconds)
+                }
             }
         }
 
@@ -758,15 +802,16 @@ open class RobustBrowserAgent(
 
             return ResolveResult(context, actResult)
         } catch (e: CancellationException) {
+            // User cancellation or the overall resolve timeout — propagate so
+            // the resolve layer can record 'resolveTimeout' and report a
+            // timeout instead of a user cancellation.
             logger.info(
                 "🛑 doResolve.cancelled sid={} steps={} reason={}",
                 context.sid,
                 context.step,
                 e.message ?: "user interruption"
             )
-
-            val result = ActResultHelper.failed(e, initContext.instruction)
-            return ResolveResult(context, result)
+            throw e
         } catch (e: Exception) {
             throw handleResolutionFailure(e, context, startTime)
         }
@@ -815,6 +860,12 @@ open class RobustBrowserAgent(
             var textOnlyStreak = 0
             var turn = 0
             val maxTurns = config.maxSteps.coerceAtLeast(1)
+            // A new run starts with no verdict and a full repair budget.
+            lastVerificationVerdict = null
+        // A new run starts with a clean mutation log so the finish gate compares
+        // the report against THIS run's writes/deletes only.
+        agentToolManager.codingFs.clearMutations()
+            repairLoop.reset()
             logger.info("🚀 cli-agent.start sid={} turns={} instr='{}'",
                 context.sid, maxTurns, Strings.compactInline(action.action, 100))
 
@@ -856,8 +907,21 @@ open class RobustBrowserAgent(
                 val response = loop.generate(roundMessages)
                 // P2-3: keep whatever the model exposed on the next round.
                 exposedSpecsThisRun = loop.exposedSpecsSnapshot()
+                // P1.3: remember the newest verification verdict this round
+                // produced — the completion decision and the repair budget are
+                // driven by it, not by the model's own claim.
+                recordVerificationVerdict(roundToolRecords)
                 val completion = completionRef.get()
                 if (completion != null && completion.isDecidedComplete) {
+                    val repair = nextRepairMessage(context)
+                    if (repair != null) {
+                        // The gate failed and the budget allows another round:
+                        // feed the structured diagnostics back and continue the
+                        // loop instead of accepting the completion claim.
+                        messages = messages + UserMessage.from(repair)
+                        turn++
+                        continue
+                    }
                     return completeCliRun(completion, context)
                 }
                 val text = response.content
@@ -932,11 +996,11 @@ open class RobustBrowserAgent(
             agentMemory.consolidator?.schedule(context.sid)
             val actResult = buildFinalActResult(initContext.instruction, context, startTime, stopReason)
             return ResolveResult(context, actResult)
-        } catch (e: TimeoutCancellationException) {
+        } catch (e: LlmInferenceTimeoutException) {
             // P1-1: a single LLM call exceeded the per-call inference timeout.
-            // This is NOT a user cancellation — surface it as a distinct
-            // failure reason so the task status says "inference timed out"
-            // instead of "cancelled" (the two have very different retry cues).
+            // AgentToolCallLoop distinguishes this from outer cancellation via
+            // the dedicated exception type, so this branch only fires for a
+            // genuine hung/slow provider call.
             logger.warn("⛔ cli-agent.inference-timeout sid={} after {} ms: {}",
                 context.sid, config.llmInferenceTimeoutMs, e.message)
             agentMemory.sink.failed(
@@ -944,16 +1008,16 @@ open class RobustBrowserAgent(
                 "LLM inference timed out after ${config.llmInferenceTimeoutMs}ms", step = context.step,
             )
             agentMemory.consolidator?.schedule(context.sid)
-            val timeoutError = IllegalStateException(
-                "LLM inference timed out after ${config.llmInferenceTimeoutMs} ms", e,
-            )
-            return ResolveResult(context, ActResultHelper.failed(timeoutError, initContext.instruction))
+            return ResolveResult(context, ActResultHelper.failed(e, initContext.instruction))
         } catch (e: CancellationException) {
+            // User cancellation or the overall resolve timeout — propagate so
+            // the resolve layer can record 'resolveTimeout' and report a
+            // timeout instead of a user cancellation.
             logger.info(
                 "🛑 cli-agent.cancelled sid={} reason={}",
                 context.sid, e.message ?: "user interruption"
             )
-            return ResolveResult(context, ActResultHelper.failed(e, initContext.instruction))
+            throw e
         } catch (e: Exception) {
             // Failure memory event (user cancellation is deliberately excluded).
             agentMemory.sink.failed(context.sid, uuid.toString(), e.message ?: e.javaClass.simpleName)
@@ -1584,6 +1648,11 @@ open class RobustBrowserAgent(
             reference docs.
             Use coding.* tools for file/workspace work when needed, and system.skillDoc(name)
             to read reference documents on demand.
+
+            Before system.taskComplete on a coding task that changes the repository, run
+            coding.verify(module="<module>") and make its verdict pass. A failing verdict is
+            fed back to you with the diagnostics for up to ${config.repairMaxRounds} repair
+            round(s); "the code looks right" is not a passing verdict.
             """.trimIndent()
         )
         append("\n\n### CLI Quick Reference (resident)\n\n")
@@ -1614,7 +1683,13 @@ open class RobustBrowserAgent(
               memory_note (the note stays visible and survives compression).
               When past tasks might be relevant, search them with memory_search.
             - When the task is finished, call system.taskComplete(
-              summary=..., keyFindings=[...], filesChanged=[...], problems=[...]).
+              summary=..., keyFindings=[...], filesChanged=[...], deletedFiles=[...],
+              problems=[...]).
+              The report is checked against a trace of what actually happened:
+              list EVERY file you wrote or edited in filesChanged and every file
+              you deleted in deletedFiles — an omitted file fails the gate.
+              When you ran coding.verify, paste its exact VERDICT_JSON line
+              verbatim into the summary; a cited verdict must match the recorded one.
             """.trimIndent()
         )
     }
@@ -1852,35 +1927,53 @@ open class RobustBrowserAgent(
 
         require(action.isDecidedComplete) { "Required action.isComplete" }
 
-        // ── Finish-report hard validation (design §3.2) ─────────────────────
-        // A completion claim with ZERO executed tool calls is a fabricated
-        // narrative (observed: 35s / 1 step / 0 tool calls "all done"). Reject
-        // it in strict mode so the task fails instead of reporting success.
+        // ── Finish-report hard validation (design §3.2, plan P0.5) ──────────
+        // A completion claim is only as good as the evidence behind it: the rules
+        // live in [FinishReportGate] (deterministic, unit-tested) and this block
+        // only gathers the evidence and applies the verdict.
+        // Under `finishGateCheck=strict` the first violation fails the task;
+        // under `warn` every violation is logged instead.
+        val strict = config.finishGateCheck.equals("strict", ignoreCase = true)
+
         // Two sources: outer states (one per model turn with an executed tool)
         // and inner-loop executions recorded by the tool-calling coordinator.
         val runStates = stateHistory.snapshotFor(context.sessionId).states
         val outerExecuted = runStates.filter { it.toolCallResult != null }
-        val totalExecuted = outerExecuted.size + innerToolExecutionCount
-        if (totalExecuted == 0 && config.finishGateCheck.equals("strict", ignoreCase = true)) {
-            throw IllegalStateException(
-                "Finish report rejected: task completed with zero executed tool calls (false-completion guard)"
-            )
-        }
-        // Gate cross-check: gates claiming `ran:true` should reference tools that
-        // actually executed. Matches against outer states AND inner-loop names
-        // (exact or method-substring); free-form gate names make strict failure
-        // risky, so mismatches warn instead of failing.
         val executedNames = outerExecuted
             .mapNotNull { s -> s.actionDomain?.let { d -> "$d.${s.method}" } }
             .toSet() + innerToolExecutionNames
-        action.gates.orEmpty().filter { it["ran"] == true }.forEach { gate ->
-            val name = gate["name"]?.toString() ?: return@forEach
-            val matched = executedNames.any { it.endsWith(name) || it.contains(name) }
-            if (!matched) {
-                logger.warn(
-                    "⚠ finish.gate sid={} gate='{}' claims ran but no matching tool call executed; executed={}",
-                    sid.take(8), name, executedNames.joinToString(",")
-                )
+        val filesChanged = action.filesChanged.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }
+        val workspace = finishWorkspaceRoot()
+        val gitChanged = workspace?.let { gitChangedFiles(it) }
+        if (workspace != null && gitChanged == null) {
+            logger.debug("finish.report: git unavailable in {} — filesChanged cross-check skipped", workspace)
+        }
+
+        val verdict = FinishReportGate.evaluate(
+            FinishEvidence(
+                executedToolCalls = outerExecuted.size + innerToolExecutionCount,
+                executedToolNames = executedNames,
+                gates = action.gates.orEmpty(),
+                filesChanged = filesChanged,
+                gitChangedFiles = gitChanged,
+                requiredGates = config.finishRequiredGates,
+                claimedDeletedFiles = action.deletedFiles.orEmpty(),
+                recordedMutations = agentToolManager.codingFs.mutationsSnapshot()
+                    .map { "${it.op} ${it.path}" },
+                claimedVerdictJson = extractVerdictJson(action.summary),
+                actualVerdictJson = (lastVerificationVerdict?.toJson() ?: lastInnerVerdictJson),
+                gitDeletedFiles = workspace?.let { gitDeletedFiles(it) },
+            )
+        )
+        verdict.warnings.forEach { warning ->
+            logger.warn("⚠ finish.report sid={} {}", sid.take(8), warning)
+        }
+        if (verdict.violations.isNotEmpty()) {
+            if (strict) {
+                throw IllegalStateException("Finish report rejected: ${verdict.violations.first()}")
+            }
+            verdict.violations.forEach { violation ->
+                logger.warn("⚠ finish.report sid={} {}", sid.take(8), violation)
             }
         }
 
@@ -1912,8 +2005,159 @@ open class RobustBrowserAgent(
         }
     }
 
-    // ─── Final act result & summary ───────────────────────────────────────────
+    // ─── Finish-report evidence helpers ───────────────────────────────────────
 
+    /**
+     * Workspace whose git state backs the `filesChanged` cross-check.
+     * `-Dbrowser4.agent.finish.workspace=<dir>` wins; otherwise the enclosing
+     * git work tree of the process working directory.
+     */
+    private fun finishWorkspaceRoot(): Path? {
+        val configured = config.finishWorkspace.takeIf { it.isNotBlank() }
+        val start = if (configured != null) Path.of(configured) else Path.of(System.getProperty("user.dir"))
+        return findGitRoot(start)
+    }
+
+    private fun findGitRoot(start: Path): Path? {
+        var dir: Path? = runCatching { start.toAbsolutePath().normalize() }.getOrNull()
+        var hops = 0
+        while (dir != null && hops < 12) {
+            if (Files.isDirectory(dir.resolve(".git")) || Files.isRegularFile(dir.resolve(".git"))) {
+                return dir
+            }
+            dir = dir.parent
+            hops++
+        }
+        return null
+    }
+
+    /**
+     * Repository-relative changed paths from `git status --porcelain`.
+     *
+     * @return null when git is unavailable or the call fails — the check is
+     *   skipped rather than failing a task because a host has no git.
+     */
+    /**
+     * The `VERDICT_JSON: {...}` object cited in the report summary, if any.
+     *
+     * The report is asked to paste the verdict verbatim; extracting it here lets
+     * the completion gate compare the citation with the verdict the run actually
+     * recorded instead of trusting the prose.
+     */
+    private fun extractVerdictJson(summary: String?): String? {
+        if (summary.isNullOrBlank()) return null
+        val marker = "VERDICT_JSON:"
+        val at = summary.indexOf(marker)
+        if (at < 0) return null
+        val rest = summary.substring(at + marker.length).trimStart()
+        val start = rest.indexOf('{')
+        if (start < 0) return null
+        val end = rest.lastIndexOf('}')
+        if (end <= start) return null
+        return rest.substring(start, end + 1)
+    }
+
+    private fun gitChangedFiles(workspace: Path): Set<String>? =
+        gitStatus(workspace)?.first
+
+    /** Repository-relative DELETED paths (` D` / `D ` in porcelain), null when git is unavailable. */
+    private fun gitDeletedFiles(workspace: Path): Set<String>? =
+        gitStatus(workspace)?.second
+
+    /**
+     * `git status --porcelain` split into (changed, deleted).
+     *
+     * Deletions are tracked separately: a deleted file is absent from the
+     * changed-file list, so a "deleted X" claim needs its own evidence.
+     */
+    private fun gitStatus(workspace: Path): Pair<Set<String>, Set<String>>? {
+        return try {
+            val process = ProcessBuilder("git", "-C", workspace.toString(), "status", "--porcelain")
+                .redirectErrorStream(true)
+                .start()
+            if (!process.waitFor(15, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                return null
+            }
+            if (process.exitValue() != 0) return null
+            val text = process.inputStream.bufferedReader().use { it.readText() }
+            val changed = linkedSetOf<String>()
+            val deleted = linkedSetOf<String>()
+            text.lineSequence().forEach { line ->
+                if (line.length < 4) return@forEach
+                var path = line.substring(3).trim()
+                // Rename/copy form: "old -> new" — the new path is what exists.
+                if (" -> " in path) path = path.substringAfter(" -> ")
+                val normalized = normalizeRepoPath(path)
+                if (normalized.isEmpty()) return@forEach
+                if (line.startsWith(" D") || line.startsWith("D ") || line.startsWith("DD")) {
+                    deleted += normalized
+                } else {
+                    changed += normalized
+                }
+            }
+            changed to deleted
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun normalizeRepoPath(raw: String): String =
+        raw.trim().trim('"').replace('\\', '/').removePrefix("./").removePrefix("/")
+
+    // ─── Repair loop (plan P1.3) ──────────────────────────────────────────────
+
+    /**
+     * Keep the newest structured verdict from this round's tool results.
+     *
+     * Only results that actually carry a verdict are considered: the
+     * `VERDICT_JSON:` line of the human rendering, or the pure-JSON reply of
+     * `coding.verify(json=true)`.
+     */
+    private fun recordVerificationVerdict(records: List<RoundToolRecord>) {
+        val candidate = records.lastOrNull { record ->
+            record.resultText.contains(VerificationReport.VERDICT_PREFIX) ||
+                (record.name.contains("verify", ignoreCase = true) &&
+                    record.resultText.trimStart().startsWith("{"))
+        } ?: return
+        VerificationReport.parseFromText(candidate.resultText)?.let { lastVerificationVerdict = it }
+    }
+
+    /**
+     * The repair message to inject, or null when the completion may proceed.
+     *
+     * A failing verdict spends one repair round and returns the bounded
+     * feedback (diagnostics included) as a user message. When the budget is
+     * spent while the verdict still fails, the task FAILS with the verdict as
+     * evidence — an exhausted budget is never a silent success (plan P1.3).
+     */
+    private fun nextRepairMessage(context: ExecutionContext): String? {
+        val verdict = lastVerificationVerdict ?: return null
+        val decision = repairLoop.decide(verdict)
+        return when (decision.action) {
+            RepairLoop.Action.RETRY -> {
+                val reason = verdict.failureReason() ?: "verification did not pass"
+                cliLoopTracer.logEvent(
+                    "repair.round",
+                    mapOf("round" to decision.round, "maxRounds" to repairLoop.maxRounds, "reason" to reason),
+                )
+                logger.info(
+                    "🔁 cli-agent.repair.round sid={} round={}/{} reason={}",
+                    context.sid, decision.round, repairLoop.maxRounds, reason,
+                )
+                decision.message
+            }
+
+            RepairLoop.Action.EXHAUSTED -> throw IllegalStateException(
+                "Finish report rejected: verification still fails after " +
+                    "${repairLoop.roundsUsed} repair round(s) — ${verdict.failureReason()}"
+            )
+
+            RepairLoop.Action.PASSED, RepairLoop.Action.DISABLED -> null
+        }
+    }
+
+    // ─── Final act result & summary ───────────────────────────────────────────
     private suspend fun buildFinalActResult(
         instruction: String, cxtIn: ExecutionContext, startTime: Instant, stopReason: StopReason? = null
     ): ActResult {

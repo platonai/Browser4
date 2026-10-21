@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!--
+    Device-metrics fixture.
+
+    `width=device-width` is the reason this page exists: an
+    `Emulation.setDeviceMetricsOverride` with `mobile: true` makes Chrome honour this
+    meta tag, so the layout viewport follows the emulated width instead of Chrome's
+    mobile default (980px).  That keeps `innerWidth` a faithful read of the emulated
+    size in the mobile phase as well as the desktop one, which is what the persistence
+    assertions in `test_e2e_device_emulation_persistence` compare.
+
+    A page without this tag reports 980px wide under `set device --mobile`, which is
+    correct mobile emulation but useless as a fixed expectation.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Browser4 CLI Emulation Fixture</title>
+  <style>
+    body { margin: 0; font-family: monospace; padding: 24px; }
+    #metrics { margin-top: 16px; padding: 12px; border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <h1>Device metrics probe</h1>
+  <p>The current viewport, as the page sees it:
+     <code>innerWidth x innerHeight @ devicePixelRatio</code>.</p>
+  <div id="metrics">not-run</div>
+
+  <script>
+    (function () {
+      function render() {
+        document.getElementById('metrics').textContent =
+          window.innerWidth + 'x' + window.innerHeight + '@' + window.devicePixelRatio;
+      }
+
+      // An emulation override lands as a viewport change, so the readout follows it.
+      window.addEventListener('resize', render);
+      render();
+    })();
+  </script>
+</body>
+</html>

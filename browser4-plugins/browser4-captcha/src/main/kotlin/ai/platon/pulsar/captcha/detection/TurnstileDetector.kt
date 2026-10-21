@@ -49,6 +49,7 @@ open class TurnstileDetector(val conf: ImmutableConfig) : CaptchaDetector {
             val siteKey = parsed["siteKey"] as? String
             val action = parsed["action"] as? String
             val cdata = parsed["cdata"] as? String
+            val widgetCount = (parsed["widgetCount"] as? Number)?.toInt() ?: 1
 
             val metadata = mutableMapOf<String, String>()
             if (cdata != null) metadata["cdata"] = cdata
@@ -59,6 +60,7 @@ open class TurnstileDetector(val conf: ImmutableConfig) : CaptchaDetector {
                 action = action,
                 selector = ".cf-turnstile",
                 confidence = 0.95f,
+                widgetCount = widgetCount,
                 metadata = metadata
             )
         } catch (e: Exception) {

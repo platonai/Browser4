@@ -1,0 +1,241 @@
+{
+  "meta": {
+    "date": "20261015-115532",
+    "source": "20261015-115532-html-snapshot-extraction.issues.json",
+    "mode": "dev",
+    "scenario": "html-snapshot-extraction"
+  },
+  "background": {
+    "workarounds": "",
+    "task": "**Task: extract book data from books.toscrape.com using `htmlsnapshot`** — completed successfully. All 10 steps executed.\n\n| # | Step | Result |\n|---|------|--------|\n| 1 | Navigate to `http://books.toscrape.com/` | ✅ Redirected to `https://books.toscrape.com/` (HTTP→HTTPS); title \"All products \\| Books to Scrape - Sandbox\" |\n| 2 | Capture fresh HTML snapshot | ✅ 62 KB · text/html · 20 images · 94 links · 100 interactive elements (20 book cards, 80 links) |\n| 3 | Text of first book title | ✅ `A Light in the ...` — **the page's own markup truncates it**; full title from the `title` attribute: **\"A Light in the Attic\"** |\n| 4 | HTML of first product container | ✅ Inner HTML of `article.product_pod`: `div.image_container` → `p.star-rating.Three` → `h3 > a[title]` → `div.product_price` (£51.77, In stock, Add to basket) |\n| 5 | `href` of first book link | ✅ Raw: `catalogue/a-light-in-the-attic_1000/index.html` · Absolute: `https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html` |\n| 6 | Text of every book title | ✅ 20 elements returned; page markup truncates 8 of them (e.g. `Sapiens: A Brief History ...`). Full values via `get all attr \"h3 a\" title` (e.g. `Sapiens: A Brief History of Humankind`) |\n| 7 | Titles 6–10 via `--offset`/`--limit` | ✅ `--offset 5 --limit 5` → The Requiem Red, The Dirty Little Secrets ..., The Coming Woman: A ..., The Boys in the ..., The Black Maria |\n| 8 | Export snapshot to HTML file | ✅ `.test-sessions/20261015T0901431699046Z/books-page.html` (42,957 bytes, ends with `</html>`, book titles present for offline grep) |\n| 9 | Page summary | ✅ 76-line WPSI outline: page type, 4 link groups, 23 landmarks, 20 content nodes, 3 lists, stats (516 nodes / 94 links / 20 buttons / 21 forms / 20 images); full YAML saved to `.browser4-cli/snapshot/htmlsnapshot-summary-2026-10-15T11-53-12-001Z.yml` (57,751 bytes) |\n| 10 | Grep \"price\" + count | ✅ `htmlsnapshot grep -c \"price\"` → **40**. Independently cross-checked against the exported HTML: 40 occurrences (41 case-insensitive — the extra is the page banner \"**Prices** and ratings here were randomly assigned…\") |",
+    "commands": "```\n1.  ./b4w.ps1 help                                  # + --help htmlsnapshot / \"htmlsnapshot get\" / \"htmlsnapshot get all\"\n2.  ./b4w.ps1 goto \"http://books.toscrape.com/\"     # reused existing DEFAULT session, printed redirect notice + snapshot link\n3.  ./b4w.ps1 htmlsnapshot                          # capture + metadata (step 2)\n4.  ./b4w.ps1 htmlsnapshot get text \"h3 a\"          # first title (step 3)\n5.  ./b4w.ps1 htmlsnapshot get attr \"h3 a\" title    # full (untruncated) first title\n6.  ./b4w.ps1 htmlsnapshot get html \"article.product_pod\"        # container HTML (step 4)\n7.  ./b4w.ps1 htmlsnapshot get attr \"h3 a\" href [--absolute]     # first link (step 5)\n8.  ./b4w.ps1 htmlsnapshot get all text \"h3 a\"                   # all titles (step 6)\n9.  ./b4w.ps1 htmlsnapshot get all text \"h3 a\" --offset 5 --limit 5 [# --json]   # titles 6–10 (step 7)\n10. ./b4w.ps1 htmlsnapshot export --file \"<scratch>/books-page.html\"             # export (step 8)\n11. ./b4w.ps1 htmlsnapshot summary > \"<scratch>/summary-full.txt\"                # summary (step 9)\n12. ./b4w.ps1 htmlsnapshot get all attr \"h3 a\" title              # all 20 full titles (title-attr workaround)\n13. ./b4w.ps1 htmlsnapshot grep -c \"price\"                        # count (step 10) → 40\n14. ./b4w.ps1 htmlsnapshot grep \"price\" [--all]                   # match listing\n15. Offline cross-checks: grep -o \"price\" <exported file> | wc -l → 40\n```\n\n**Key decisions / workarounds:**\n- **Selector discovery:** I did not guess selectors. `htmlsnapshot summary` surfaced `article .product_pod` and the docs' `inspect` example gave the `h3 a` title-link pattern; `get`/`get all` then worked first try.\n- **Truncated titles (documented pitfall):** `text` returned `A Light in the ...`. The docs twice state `text`/`textcontent` cannot recover page-truncated text and point to the carrying attribute — `get attr \"h3 a\" title` returned the full values for step 3 and again for all 20 titles.\n- **Relative hrefs (documented pitfall):** `attr` returned the raw relative href; `--absolute` resolved it against the page URL.\n- **Stream discipline verified:** `grep`'s freshness header goes to stderr (piped stdout was pure match lines); `-c` printed exactly `40`.\n- **Pagination semantics:** `--offset` is 0-based and skips before slicing; the human count line reports the *returned* slice (see Issue 1).\n- One operator error — `htmlsnapshot summary --all` — was rejected with a precise, actionable message listing the supported options; no issue.\n\n**Evidence files (this run's scratch dir):** `books-page.html`, `summary-full.txt`.\n\n---\n\n\n\n**Overall usability (1–10): 7** — The documentation is unusually thorough (the SKILL.md, `--help <command>` pages, and the truncated-text/relative-href warnings all matched observed behavior exactly, and `skills get` keeps docs version-matched), error messages are precise and actionable, and the htmlsnapshot workflow required no guesswork. The deduction is for output-quality defects that actively mislead: the sliced match count contradicting the documented verification recipe, and the summary's \"copy-paste ready\" commands that don't work.",
+    "executionContext": "**Commands used (all via `./b4w.ps1` from the repo root):**\n\n```\n1.  ./b4w.ps1 help                                  # + --help htmlsnapshot / \"htmlsnapshot get\" / \"htmlsnapshot get all\"\n2.  ./b4w.ps1 goto \"http://books.toscrape.com/\"     # reused existing DEFAULT session, printed redirect notice + snapshot link\n3.  ./b4w.ps1 htmlsnapshot                          # capture + metadata (step 2)\n4.  ./b4w.ps1 htmlsnapshot get text \"h3 a\"          # first title (step 3)\n5.  ./b4w.ps1 htmlsnapshot get attr \"h3 a\" title    # full (untruncated) first title\n6.  ./b4w.ps1 htmlsnapshot get html \"article.product_pod\"        # container HTML (step 4)\n7.  ./b4w.ps1 htmlsnapshot get attr \"h3 a\" href [--absolute]     # first link (step 5)\n8.  ./b4w.ps1 htmlsnapshot get all text \"h3 a\"                   # all titles (step 6)\n9.  ./b4w.ps1 htmlsnapshot get all text \"h3 a\" --offset 5 --limit 5 [# --json]   # titles 6–10 (step 7)\n10. ./b4w.ps1 htmlsnapshot export --file \"<scratch>/books-page.html\"             # export (step 8)\n11. ./b4w.ps1 htmlsnapshot summary > \"<scratch>/summary-full.txt\"                # summary (step 9)\n12. ./b4w.ps1 htmlsnapshot get all attr \"h3 a\" title              # all 20 full titles (title-attr workaround)\n13. ./b4w.ps1 htmlsnapshot grep -c \"price\"                        # count (step 10) → 40\n14. ./b4w.ps1 htmlsnapshot grep \"price\" [--all]                   # match listing\n15. Offline cross-checks: grep -o \"price\" <exported file> | wc -l → 40\n```\n\n**Key decisions / workarounds:**\n- **Selector discovery:** I did not guess selectors. `htmlsnapshot summary` surfaced `article .product_pod` and the docs' `inspect` example gave the `h3 a` title-link pattern; `get`/`get all` then worked first try.\n- **Truncated titles (documented pitfall):** `text` returned `A Light in the ...`. The docs twice state `text`/`textcontent` cannot recover page-truncated text and point to the carrying attribute — `get attr \"h3 a\" title` returned the full values for step 3 and again for all 20 titles.\n- **Relative hrefs (documented pitfall):** `attr` returned the raw relative href; `--absolute` resolved it against the page URL.\n- **Stream discipline verified:** `grep`'s freshness header goes to stderr (piped stdout was pure match lines); `-c` printed exactly `40`.\n- **Pagination semantics:** `--offset` is 0-based and skips before slicing; the human count line reports the *returned* slice (see Issue 1).\n- One operator error — `htmlsnapshot summary --all` — was rejected with a precise, actionable message listing the supported options; no issue.\n\n**Evidence files (this run's scratch dir):** `books-page.html`, `summary-full.txt`.\n\n---\n\n\n\n**Overall usability (1–10): 7** — The documentation is unusually thorough (the SKILL.md, `--help <command>` pages, and the truncated-text/relative-href warnings all matched observed behavior exactly, and `skills get` keeps docs version-matched), error messages are precise and actionable, and the htmlsnapshot workflow required no guesswork. The deduction is for output-quality defects that actively mislead: the sliced match count contradicting the documented verification recipe, and the summary's \"copy-paste ready\" commands that don't work."
+  },
+  "assessment": {
+    "completionStatus": "Successful — all 10 task steps completed and independently verified (counts cross-checked offline against the exported HTML). The htmlsnapshot family did everything the task required on the first or second try, with no failed commands, retries, or backend problems.",
+    "successRate": "100% of task steps; 3 of the 10 steps needed a documented follow-up call (title attribute for untruncated values, --absolute for the href, title attribute again for all 20 titles) because the page's own markup truncates the display text.",
+    "issuesFound": 6,
+    "majorBlockers": "None. The daemon/backend were already running; goto reused the existing DEFAULT session (2 tabs), the HTTP→HTTPS redirect was reported inline, and every htmlsnapshot command returned data. First-run latency docs (Maven build + Spring Boot start) did not apply this session.",
+    "mostConfusingAspects": "1) htmlsnapshot get text returned \"A Light in the ...\" — a first-time user cannot tell page-inherent truncation from a tool bug without reading the reference docs, which mention it only in passing. 2) The summary's \"Copy-paste ready\" suggested commands produced 93 mixed links / 0 matches, which reads as a user error until you inspect the generated selectors. 3) The \"N elements matched.\" line silently changes meaning to \"N returned\" once --offset/--limit are used, exactly when a user is paginating and most likely to trust it. 4) Line-vs-occurrence counting with grep -c is a subtle trap for a \"count occurrences\" task.",
+    "mostValuableImprovements": "Fix the summary's suggested-command generation (correct compound-class selectors, derive the item selector instead of appending \" a\", dedupe, validate) since it is advertised as copy-paste ready; make the element count total-aware under pagination; and add an occurrence-counting mode to grep plus an outerhtml field to get. Cheapest wins first: the two count/suggestion fixes are small, local, and remove misleading output rather than adding features.",
+    "usabilityRating": 7
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "get all count line and match_count report the paginated slice, not the total match count",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 htmlsnapshot get all text \"h3 a\" --offset 5 --limit 5  →  \"5 elements matched.\"; same command with --json → \"match_count\":5. ./b4w.ps1 htmlsnapshot get all text \"h3 a\" --offset 5  →  \"15 elements matched.\". The selector actually matches 20 elements (verified by the command without flags and by htmlsnapshot inspect).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The count should be the total number of elements the selector matches (20), or be explicitly labelled as the number of returned rows (e.g. \"5 of 20 elements\"). The documentation tells users this count is the reliable way to verify a selector's match count.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Both the human \"N elements matched.\" line and the --json match_count reflect the length of the already-sliced result array, so paginating silently produces a wrong answer to \"does my selector match N elements?\". The in-code comment claims it is \"the reliable 'does the selector match N elements?' answer\".",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI derives the count from the returned JSON array's length after the server applied --offset/--limit, instead of using a total-match value. The backend response carries no total, so the printed number is bounded by --limit/--offset.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_html_snapshot_get() — array_count computed at ~line 10382-10394 and match_count at ~line 10448-10451",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Report the true match total: have the backend return a totalMatches value in the get all response and print/emit that instead of the sliced array length\n- When a total is unavailable, label the number as the returned count (\"5 elements returned\") so it is not mistaken for the selector's match count\n- Cover the --offset/--limit case in the existing unit tests for the count line and the --json envelope\n- Align skills/browser4-cli/references/htmlsnapshot.md, which currently instructs users to use this count to verify a selector's element count",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "Summary \"Suggested Commands\" are invalid or misleading, and are duplicated",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 htmlsnapshot summary → read the ### Suggested Commands block, then run the listed commands:\n  1) ./b4w.ps1 htmlsnapshot get all text \".row a\" --limit 20  → 93 elements (sidebar category links, empty strings, 'next'), not the 20 book titles; --limit 20 truncates the output and hides the mismatch. This line is printed twice.\n  2) ./b4w.ps1 htmlsnapshot get all text \".col-sm-8 col-md-9 a\" → \"No elements matched\" (the selector is a descendant selector, not the compound div.col-sm-8.col-md-9).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The block is labelled \"Copy-paste ready — use these to extract data\", so each command should run successfully and return the page's repeated items (the 20 book titles/links).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Two of the three suggested commands fail their stated purpose: one returns 93 unrelated anchors, one returns nothing, and one is printed twice.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Two defects compound. (1) Backend: PageSummaryIndexService.buildSelectorHint() returns \".\" + the raw class attribute, so multi-class elements become \".class1 class2\" (a descendant selector) instead of \".class1.class2\"; the correct compound formatter already exists in the same file (formatClassList). The summary YAML therefore contains selectors like \".header container-fluid\" and \".col-sm-8 col-md-9\". (2) CLI: format_summary_outline() takes each link-group container selector and blindly appends \" a\" with --limit 20, without deduplicating (two groups collapse to the same \".row\" selector) or validating that the result matches anything or is precise (the intended item-level selector is the link group's own item tag/link, not any descendant anchor).",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:format_summary_outline() (suggestion block ~line 11562-11580); browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/workflow/parse/html/PageSummaryIndexService.kt:buildSelectorHint() ~line 424 (and containerSelector at ~line 718)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Fix buildSelectorHint() to emit compound class selectors (reuse formatClassList) so generated selectors actually match\n- Derive the suggested extraction selector from the link group's item structure (itemTag + the anchor that carries the item text/title) instead of appending a bare \" a\"\n- Deduplicate identical suggestions before printing\n- Validate a suggestion before printing it (or mark it unverified) — e.g. skip selectors whose match count differs wildly from the group's item count\n- Add a fixture-page test asserting that every printed suggestion matches (and that its match count is plausible)",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "Summary header repeats \"### Page\" and misclassifies a product listing as \"Article / Content\"",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 htmlsnapshot summary on https://books.toscrape.com/ (a 20-item product grid) → output begins:\n  ### Page\n  - Page URL: …\n  - Page Title: …\n  ### Page\n  - Type: Article / Content",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A single Page section combining URL/title/type, and a page-type label that reflects a catalog/listing page.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The \"### Page\" heading prints twice (once for URL/Title, once for Type), and a product listing with 20 repeated product cards and no article prose is labelled \"Article / Content\" — a misleading first line of the \"compressed overview\" the command exists to provide.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI prints its own Page block (URL/Title) before rendering the YAML's Page section instead of merging them; the page-type classifier in the WPSI algorithm appears to lack a listing/catalog category, so a grid of product cards falls through to the article/content bucket.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:format_summary_outline() (heading emission ~line 11203+); browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/workflow/parse/html/WpsiPageSummaryAlgorithm.kt",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Merge the URL/Title lines into the summary's own Page section and print one heading\n- Add a listing/catalog page-type classification (many sibling item containers with repeated link groups) and prefer it over Article/Content when no article-like text density exists\n- Add a regression test using a listing fixture (e.g. the books fixture page) asserting the detected page type",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "htmlsnapshot get cannot return an element's outer HTML",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 htmlsnapshot get html \"article.product_pod\" → returns only the container's inner HTML; the wrapper `<article class=\"product_pod\" …>` tag itself (with its classes) is absent from the output. The field list is limited to text | textcontent | html | attr.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A way to retrieve the first product container's outer markup (including the <article> element itself) when a task asks for \"the HTML of the container\".",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "`html` is inner HTML only; obtaining the outer markup requires a different command family as a workaround: ./b4w.ps1 eval \"document.querySelector('article.product_pod').outerHTML\".",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "No outerHTML field (or --outer flag) exists in the htmlsnapshot get field set; validate_html_snapshot_field() rejects anything outside the four documented fields, and no alternative is suggested in the error or help text.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:validate_html_snapshot_field() (line 10241) and handle_html_snapshot_get()",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add an `outerhtml` field (or `--outer` modifier) that serializes the matched element itself\n- Until then, mention the `eval \"el.outerHTML\"` workaround in the `html` field's help/doc text so users don't have to search for it",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "get all prints its result as one long single-line JSON array in human mode",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 htmlsnapshot get all text \".row a\" (or any selector matching many elements) → the entire result is one unbroken line, e.g. [\"Books to Scrape\",\"Travel\",…,\"next\"] followed by \"93 elements matched.\" — about 1.5 screens of horizontally-scrolled text with empty strings interleaved.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Human-facing output that is scannable — one item per line (with an index), the JSON array form reserved for --json/pipe mode.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Human mode prints a raw single-line JSON array; long results wrap unpredictably in the terminal and are hard to read or diff, which pushes users to add --json and post-process immediately.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The get all human path prints the backend's array verbatim; there is no line-per-item rendering mode for the default (non-json) output.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_html_snapshot_get() (text printing ~line 10382 and the --json match_count path ~line 10448)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- In default mode, render one result per line with a 1-based index, and keep the raw JSON array for --json mode\n- Offer a --format lines|json switch consistent with htmlsnapshot query --format\n- Keep the existing \"N elements matched.\" trailer after the list",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "grep -c counts matching lines and there is no way to count true occurrences (-o equivalent)",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 htmlsnapshot grep -c \"price\" → 40 (matching lines). Against minified single-line HTML the same pattern would report 1 regardless of how many times \"price\" occurs. No -o/--only-matching flag exists to count actual occurrences.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A documented way to obtain the number of occurrences of a pattern in the snapshot, since the natural task \"count how often X appears\" is not always equal to the number of matching lines.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Only the line count is available. On this page the two coincide only because the exported HTML is pretty-printed one occurrence per line (verified: 40 lines = 40 case-sensitive occurrences in the exported file). The documentation warns that -c counts lines, but offers no occurrence-counting alternative.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The grep implementation (run_grep_on_source) is line-oriented and exposes no only-matching mode; matches are reported per line, so multiple occurrences on one line collapse into one count.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_html_snapshot_grep() (line 12662) / run_grep_on_source() (line 12898)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add -o/--only-matching (print each match) so `… grep -o price | wc -l` counts occurrences, matching GNU grep muscle memory\n- Or add --count-matches that reports total occurrences alongside the existing -c line count\n- Document the distinction explicitly in the -c help text (the reference doc already explains the line-vs-element caveat)",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

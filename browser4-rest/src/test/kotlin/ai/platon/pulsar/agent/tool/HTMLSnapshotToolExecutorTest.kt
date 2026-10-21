@@ -1264,4 +1264,142 @@ class HTMLSnapshotToolExecutorTest {
         assertFalse(innerHtml.contains("tp="), "get html output must not leak tp: $innerHtml")
         assertTrue(innerHtml.contains("vi="), "get html output must keep vi boxes: $innerHtml")
     }
+
+    // =========================================================================
+    // outerhtml, the total match count, and unparsable selectors
+    // =========================================================================
+
+    /** The repeating product card of books.toscrape.com, three times. */
+    private val productCardsHtml = """
+        <html><body><ol class="row">
+        <li><article class="product_pod"><h3><a title="Alpha">Alpha</a></h3></article></li>
+        <li><article class="product_pod"><h3><a title="Beta">Beta</a></h3></article></li>
+        <li><article class="product_pod"><h3><a title="Gamma">Gamma</a></h3></article></li>
+        </ol></body></html>
+    """.trimIndent()
+
+    @Test
+    @DisplayName("outerhtml returns the matched element itself while html returns its inner markup")
+    fun outerHtmlReturnsTheElementItself() {
+        val doc = booksDoc()
+
+        val outer = extractSnapshotField(doc, "outerhtml", "article.product_pod", null, false)
+        assertTrue(
+            outer.startsWith("<article class=\"product_pod\">"),
+            "outer markup must include the wrapper element: $outer"
+        )
+        assertTrue(outer.endsWith("</article>"), "outer markup must close the wrapper: $outer")
+        assertTrue(outer.contains("<h3>"), "outer markup must include the children: $outer")
+
+        val inner = extractSnapshotField(doc, "html", "article.product_pod", null, false)
+        assertFalse(
+            inner.contains("<article"),
+            "html must stay INNER markup — outerhtml is the field that carries the wrapper: $inner"
+        )
+        assertTrue(inner.contains("<h3>"), inner)
+    }
+
+    @Test
+    @DisplayName("get all with includeMeta reports the total match count the slice was taken from")
+    fun getAllWithIncludeMetaReportsTheTotalMatchCount() = runBlocking<Unit> {
+        val managed = sessionWithSnapshot(productCardsHtml)
+
+        val out = executor().call(
+            "scrape_all",
+            mapOf(
+                "sessionId" to "s", "field" to "attr", "selector" to "h3 a", "attrName" to "title",
+                "offset" to 1, "limit" to 1, "includeMeta" to true,
+            ),
+            managed,
+        ) as String
+
+        val json = mapper.readTree(out)
+        assertEquals(3, json["totalMatches"].asInt(), "the selector matches three cards: $out")
+        assertEquals(1, json["returned"].asInt(), "one row was returned: $out")
+        assertEquals(1, json["offset"].asInt())
+        assertEquals(1, json["limit"].asInt())
+        assertEquals(listOf("Beta"), json["values"].map { it.asText() }, out)
+    }
+
+    @Test
+    @DisplayName("get all without includeMeta still answers the bare array it always did")
+    fun getAllWithoutIncludeMetaStaysABareArray() = runBlocking<Unit> {
+        val managed = sessionWithSnapshot(productCardsHtml)
+
+        val out = executor().call(
+            "scrape_all",
+            mapOf("sessionId" to "s", "field" to "text", "selector" to "h3 a"),
+            managed,
+        ) as String
+
+        assertEquals("""["Alpha","Beta","Gamma"]""", out)
+    }
+
+    @Test
+    @DisplayName("extractSnapshotFieldPage counts the matches before pagination slices them")
+    fun fieldPageKeepsThePrePaginationTotal() {
+        val doc = FeaturedDocument(org.jsoup.Jsoup.parse(productCardsHtml))
+
+        val page = extractSnapshotFieldPage(doc, "text", "h3 a", null, false, offset = 1, limit = 1)
+
+        assertEquals(3, page.totalMatches, "the total is the selector's match count, not the slice length")
+        assertEquals(listOf("Beta"), page.values)
+        val unpaginated = extractSnapshotFieldPage(doc, "text", "h3 a", null, false, 0, -1)
+        assertEquals(3, unpaginated.totalMatches)
+        assertEquals(3, unpaginated.values.size)
+    }
+
+    @Test
+    @DisplayName("a selector the CSS engine cannot parse is a syntax error, not an empty match")
+    fun malformedSelectorsAreRejectedAsSyntaxErrors() {
+        for (selector in listOf("article[[", "div:not(", "p > >", ">>>")) {
+            val exception = assertThrows<IllegalArgumentException>("'$selector' must be rejected") {
+                requireParsableSnapshotSelector(selector)
+            }
+            assertTrue(exception.message!!.contains("Invalid CSS selector \"$selector\""), exception.message)
+        }
+
+        // Valid selectors pass — including the PowerCSS :expr() form the tool itself suggests.
+        for (selector in listOf(":root", "h3 a", "article.product_pod", """[class*="Add to basket"]""", "h3:expr(a>0)")) {
+            requireParsableSnapshotSelector(selector)
+        }
+    }
+
+    @Test
+    @DisplayName("get all rejects a malformed selector before it captures the page")
+    fun getAllRejectsAMalformedSelectorBeforeCapture() {
+        // The session carries NO capture stub on purpose: a read that validated its selector only
+        // after capturing would fail here with a mock/NPE error instead of the selector error.
+        val session = sessionShowing(tab("https://example.com/x"))
+
+        val exception = assertThrows<IllegalArgumentException> {
+            runBlocking {
+                executor().call(
+                    "scrape_all",
+                    mapOf("sessionId" to "s", "field" to "text", "selector" to "article[["),
+                    ManagedSession("s", session, null),
+                )
+            }
+        }
+
+        assertTrue(exception.message!!.contains("Invalid CSS selector"), exception.message)
+    }
+
+    @Test
+    @DisplayName("inspect rejects a malformed selector with a syntax error as well")
+    fun inspectRejectsAMalformedSelector() {
+        val session = sessionShowing(tab("https://example.com/x"))
+
+        val exception = assertThrows<IllegalArgumentException> {
+            runBlocking {
+                executor().call(
+                    "inspect",
+                    mapOf("sessionId" to "s", "selector" to "div:not("),
+                    ManagedSession("s", session, null),
+                )
+            }
+        }
+
+        assertTrue(exception.message!!.contains("Invalid CSS selector"), exception.message)
+    }
 }

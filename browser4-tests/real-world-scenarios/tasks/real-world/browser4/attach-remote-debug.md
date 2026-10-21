@@ -12,4 +12,5 @@ If neither is available, attempt the commands and document the outcome as a usab
 5. Take a snapshot of the current page to see its accessibility tree.
 6. Save the browser state from the attached session to preserve cookies and storage.
 7. If multiple tabs are available, switch between them and take screenshots of each.
-8. When done, close the attached session.
+8. When done, close the attached session with `disconnect` — the alias of `close` that `attach.md` documents for attached sessions. It must resolve as a real command (not fail with "Unknown command"), and it must detach rather than kill the external browser: verify the browser is still running and re-attachable afterwards.
+9. Record whether `disconnect` and `close` produced the same output and exit code for the attached session, and whether anything in `help` pointed at the alias.

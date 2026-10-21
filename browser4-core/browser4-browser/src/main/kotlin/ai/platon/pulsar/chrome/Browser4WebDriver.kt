@@ -1,7 +1,11 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.cdt.kt.protocol.events.log.EntryAdded
 import ai.platon.cdt.kt.protocol.support.types.EventListener
 import ai.platon.cdt.kt.protocol.types.console.ConsoleMessageSource
+import ai.platon.cdt.kt.protocol.types.log.LogEntry
+import ai.platon.cdt.kt.protocol.types.log.LogEntryLevel
+import ai.platon.cdt.kt.protocol.types.log.LogEntrySource
 import ai.platon.cdt.kt.protocol.types.page.CaptureScreenshotFormat
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserSettings
@@ -36,6 +40,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlin.math.roundToLong
 import kotlin.random.Random
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -96,6 +101,17 @@ open class Browser4WebDriver(
     }
 
     /**
+     * Start the console capture when this driver is attached to its tab, so the logs of the page
+     * load that follows (and of anything the page did before the first `console` read) are captured;
+     * see [startConsoleCaptureOnAttach]. The hook is a no-op when the transport has no console
+     * capture, and it never blocks the caller: the attachment happens inside driver construction.
+     */
+    override fun onDriverCreated() {
+        super.onDriverCreated()
+        startConsoleCaptureOnAttach()
+    }
+
+    /**
      * Viewport center of a drag element, plus the stable CSS path used to
      * re-locate it inside the drag script (where CDP node object ids are
      * not available for the target), a frame-residency flag, the viewport
@@ -143,6 +159,24 @@ open class Browser4WebDriver(
         /** Confirmation text of [consoleClear]; unchanged from the page-side implementation. */
         internal const val CONSOLE_CLEARED_MESSAGE = "Console cleared"
 
+        /**
+         * The levels [consoleMessages] accepts as its `min-level` filter, matching the level
+         * vocabulary of [ConsoleMessageBuffer] (`error=0, warn=1, info=2, log=2, debug=3`).
+         *
+         * The filter used to be unvalidated: `console warning` and `console bogus` were silently
+         * treated as `info` and answered with a superset of what was asked for.
+         */
+        internal val CONSOLE_LEVELS = setOf("error", "warn", "info", "log", "debug")
+
+        /**
+         * Buffered entry that tells the user the first `console` read started the capture, so logs
+         * the page emitted before it are gone (CDP does not replay events). Reported instead of a
+         * bare `[]`, which reads as "the page logged nothing".
+         */
+        internal const val CONSOLE_CAPTURE_NOTICE =
+            "Console capture started with this call — messages the page logged before it were not " +
+                "recorded (Chrome does not replay console events)."
+
         /** The CDP command behind [ensureFocusEmulation]. */
         internal const val FOCUS_EMULATION_CDP = "Emulation.setFocusEmulationEnabled"
 
@@ -178,6 +212,12 @@ open class Browser4WebDriver(
          * [PulsarBrowser], so no CDP connections are torn down or duplicated.
          * Callers should unbind the original driver and bind the returned
          * instance.
+         *
+         * This is the attachment path of every Browser4 session, and it is where
+         * the console capture is started (see [startConsoleCaptureOnAttach]):
+         * the driver must be listening before the session's first page load,
+         * otherwise the logs of that load are unrecoverable — Chrome does not
+         * replay console events.
          */
         fun from(driver: PulsarWebDriver): Browser4WebDriver =
             Browser4WebDriver(
@@ -185,7 +225,7 @@ open class Browser4WebDriver(
                 chromeTab = driver.chromeTab,
                 browserProtocol = driver.browserProtocol,
                 browser = driver.browser,
-            )
+            ).also { it.startConsoleCaptureOnAttach() }
 
         /**
          * Escape [text] for embedding as a single-quoted JavaScript string literal.
@@ -325,6 +365,29 @@ open class Browser4WebDriver(
             }
             return null
         }
+
+        /**
+         * Interpret the `evaluateValue(selector, "function(){ return this != null; }")`
+         * probe used by the click-family overrides ([Browser4WebDriver.click],
+         * [Browser4WebDriver.dblclick], [Browser4WebDriver.hover]) before they
+         * fall back to the upstream synthetic DOM path.  The upstream click
+         * reports success for a selector that matches nothing — the CLI prints
+         * "✓ Clicked ..." and exits 0 while the page saw nothing — so the probe
+         * makes the whole mouse family fail loudly, exactly like [inputTargetError]
+         * does for the input family.
+         *
+         * @param action the user-facing command name used as the message prefix
+         * @param selector the selector as the caller typed it
+         * @param exists the raw probe result (`true` when the selector resolved to an element)
+         * @return null when the target exists, otherwise the user-facing error message
+         */
+        internal fun pointerTargetError(action: String, selector: String, exists: Any?): String? =
+            if (exists == true) {
+                null
+            } else {
+                "$action: no element found for selector [$selector]. " +
+                    "The selector may be stale — re-run `snapshot` to refresh refs."
+            }
 
         /**
          * Bulk-insert [text] via `document.execCommand('insertText')` on the
@@ -1158,6 +1221,51 @@ open class Browser4WebDriver(
          */
         internal fun shouldReportViFailure(lastReportedUrl: String?, documentUrl: String): Boolean =
             lastReportedUrl != documentUrl
+
+        /**
+         * Whether the HAR timing parts of one entry — [knownMillis], the sum of
+         * its positive parts — are implausible for a request whose total is
+         * [totalMillis].
+         *
+         * The HAR `timings` parts decompose the entry's `time`, so a sum that
+         * dwarfs the total can only be the 1000x unit error of
+         * `HarBuilder.deltaMillis`, never a measurement. The 4x + 100 ms margin
+         * keeps clock skew and rounding out of the decision, and an unknown
+         * total (`-1`, a request that never finished) is never rewritten.
+         */
+        internal fun harTimingsAreInflated(totalMillis: Long, knownMillis: Long): Boolean =
+            totalMillis > 0 && knownMillis > totalMillis * 4 + 100
+
+        /**
+         * One route as [Browser4WebDriver.networkRoute] reports it and as
+         * [Browser4WebDriver.networkRoutes] lists it.
+         *
+         * The action is the point: `--abort` and `--body` routes used to be
+         * echoed as the same `{"routed": pattern}`, so an operator auditing
+         * several routes could not tell them apart.
+         *
+         * @param routes the resulting route count, or null for a listing entry
+         */
+        internal fun routeSummary(
+            urlPattern: String,
+            abort: Boolean,
+            contentType: String?,
+            resourceTypes: List<String>,
+            routes: Int?,
+        ): Map<String, Any?> {
+            val summary = linkedMapOf<String, Any?>(
+                "pattern" to urlPattern,
+                "action" to if (abort) "abort" else "body",
+            )
+            if (contentType != null) {
+                summary["contentType"] = contentType
+            }
+            summary["resourceTypes"] = resourceTypes
+            if (routes != null) {
+                summary["routes"] = routes
+            }
+            return summary
+        }
     }
 
 /**
@@ -1280,11 +1388,95 @@ internal enum class DragDropPosition(val key: String) {
      * Stop the active HAR recording and build the HAR 1.2 document from all
      * requests observed so far.
      *
+     * Stopping without an active recording is an error: the observer would
+     * happily build a document from the tracked buffer, so `network har stop`
+     * used to print (and write) an entry-less HAR that is indistinguishable
+     * from a recording that legitimately captured nothing. [harRecording]
+     * answers "am I recording?" without stopping anything.
+     *
+     * The returned `timings` are in milliseconds as HAR 1.2 requires; see
+     * [normalizeHarTimings] for why the driver has to enforce that.
+     *
      * @return `{ recording, contentMode, entries, har }` where `har` is the
      * HAR document (serialize to JSON to get a `.har` file).
+     * @throws WebDriverException when no recording is active.
      */
+    @Throws(WebDriverException::class)
     suspend fun harStop(): Map<String, Any?> {
-        return networkObserver.harStop()
+        if (!networkObserver.isHarRecording) {
+            throw WebDriverException(
+                "network har stop: no HAR recording is active — start one with 'network har start' first.",
+                driver = this@Browser4WebDriver,
+            )
+        }
+        return normalizeHarTimings(networkObserver.harStop())
+    }
+
+    /**
+     * Whether a HAR recording is currently active on this tab.
+     *
+     * Answers "am I recording?" without stopping the recording (the state
+     * [harStop] needs and the CLI cannot otherwise query).
+     */
+    suspend fun harRecording(): Boolean {
+        networkObserver.ensureEnabled()
+        return networkObserver.isHarRecording
+    }
+
+    /**
+     * Rewrite the `timings` of [payload]'s HAR document in milliseconds.
+     *
+     * `HarBuilder.deltaMillis` scales the CDP `ResourceTiming` offsets of
+     * `Network.responseReceived` by 1000, but this Chrome reports those offsets
+     * in milliseconds already, so every `timings` part comes out ~1000x too
+     * large: a localhost request that took 11 ms shows `wait: 9173`, and
+     * `receive` (the clamped remainder of the correct total) collapses to 0.
+     * HAR 1.2 requires milliseconds.
+     *
+     * The correction is driven by the entry's own `time` — computed from the
+     * monotonic clock, so it is correct — through [harTimingsAreInflated], and
+     * is a no-op for an entry whose parts already decompose its total, so it
+     * stops doing anything as soon as the builder emits milliseconds itself.
+     * Only the positive parts are scaled: `-1` means "not available" in HAR and
+     * is preserved, and `receive` is recomputed from the corrected total.
+     *
+     * @return [payload] itself when nothing needed correcting (the unchanged
+     * document, so callers that never record a HAR see no behaviour change)
+     */
+    private fun normalizeHarTimings(payload: Map<String, Any?>): Map<String, Any?> {
+        val log = (payload["har"] as? Map<*, *>)?.get("log") as? Map<*, *> ?: return payload
+        val entries = log["entries"] as? List<*> ?: return payload
+
+        var corrected = 0
+        val rewritten = entries.map { entry ->
+            val harEntry = entry as? Map<*, *> ?: return@map entry
+            val timings = harEntry["timings"] as? Map<*, *> ?: return@map entry
+            val totalMillis = (harEntry["time"] as? Number)?.toLong() ?: -1L
+            val knownMillis = timings.values.filterIsInstance<Number>().sumOf { maxOf(0L, it.toLong()) }
+            if (!harTimingsAreInflated(totalMillis, knownMillis)) {
+                return@map entry
+            }
+
+            val scaled = timings.entries.associate { (name, value) ->
+                val millis = (value as? Number)?.toLong() ?: -1L
+                name.toString() to if (millis < 0) -1L else maxOf(1L, (millis / 1000.0).roundToLong())
+            }.toMutableMap()
+            scaled["receive"] = maxOf(0L, totalMillis - scaled.values.filter { it >= 0 }.sum())
+            corrected++
+            harEntry.toMutableMap().apply { put("timings", scaled) }
+        }
+
+        if (corrected == 0) {
+            return payload
+        }
+        logger.warn(
+            "HAR timings of {} entries were ~1000x the entry time (HarBuilder scales the CDP " +
+                "ResourceTiming offsets by 1000); scaled them back to the milliseconds HAR 1.2 requires",
+            corrected
+        )
+        return payload.toMutableMap().apply {
+            put("har", mapOf("log" to log.toMutableMap().apply { put("entries", rewritten) }))
+        }
     }
 
     /**
@@ -1298,8 +1490,12 @@ internal enum class DragDropPosition(val key: String) {
      * @param contentType Content-Type for the mock response (e.g. `application/json`).
      * @param resourceType Only intercept requests of these CDP resource types
      * (comma-separated, e.g. `xhr,fetch`); empty matches all.
-     * @return `{ "routed": urlPattern }`.
+     * @return `{ "routed": urlPattern, "action": "abort"|"body", … }` — the
+     * `routed` key matches agent-browser, the added fields state what was
+     * actually installed (a mock and an abort were otherwise indistinguishable
+     * in the output) plus the resulting route count.
      */
+    @Throws(WebDriverException::class)
     suspend fun networkRoute(
         urlPattern: String,
         abort: Boolean = false,
@@ -1317,17 +1513,65 @@ internal enum class DragDropPosition(val key: String) {
             null
         }
         val types = resourceType?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
-        return routeManager.route(urlPattern, response, abort, types)
+        return routeManager.route(urlPattern, response, abort, types) + routeSummary(
+            urlPattern = urlPattern,
+            abort = abort,
+            contentType = contentType,
+            resourceTypes = types,
+            routes = routeManager.routeList().size,
+        )
     }
 
     /**
      * Remove routes. Without [urlPattern] every route is removed and Fetch
      * interception is disabled.
      *
-     * @return `{ "unrouted": urlPattern | "all" }`.
+     * Removing a pattern that was never registered is an error: the previous
+     * behaviour echoed the pattern unconditionally, so a typo (or a route that
+     * was already removed) was indistinguishable from a real removal.
+     *
+     * @return `{ "unrouted": urlPattern | "all", "removed": n, "routes": n }` —
+     * the `unrouted` key matches agent-browser, `removed`/`routes` report what
+     * actually changed.
+     * @throws WebDriverException when [urlPattern] matches no registered route.
      */
+    @Throws(WebDriverException::class)
     suspend fun networkUnroute(urlPattern: String? = null): Map<String, Any?> {
-        return routeManager.unroute(urlPattern)
+        val registered = routeManager.routeList()
+        if (urlPattern != null && registered.none { it.urlPattern == urlPattern }) {
+            throw WebDriverException(
+                "network unroute: no route is registered for pattern [$urlPattern] — " +
+                    "list the active routes with `network routes` before removing one.",
+                driver = this@Browser4WebDriver,
+            )
+        }
+
+        val result = routeManager.unroute(urlPattern)
+        val remaining = routeManager.routeList().size
+        return result + mapOf(
+            "removed" to (registered.size - remaining),
+            "routes" to remaining,
+        )
+    }
+
+    /**
+     * List the routes currently registered on this tab, in registration order
+     * (the read-only counterpart of [networkRoute] / [networkUnroute]).
+     *
+     * Each entry has the same shape [networkRoute] reports: `pattern`,
+     * `action` (`abort` or `body`), `contentType` (for a mock) and
+     * `resourceTypes` (empty = every type).
+     */
+    suspend fun networkRoutes(): List<Map<String, Any?>> {
+        return routeManager.routeList().map { route ->
+            routeSummary(
+                urlPattern = route.urlPattern,
+                abort = route.abort,
+                contentType = route.response?.contentType,
+                resourceTypes = route.resourceTypes,
+                routes = null,
+            )
+        }
     }
 
     /**
@@ -1474,9 +1718,16 @@ internal enum class DragDropPosition(val key: String) {
      * being the exact center, which would repeat the same pixel on every request.
      *
      * Uses the drag-style instant scroll + visibility poll, so the resolved
-     * center is stable before the pointer moves.  Best-effort: when the
-     * element cannot be resolved or never becomes visible, the pointer is
-     * left alone and the upstream click proceeds as before.
+     * center is stable before the pointer moves.  The pointer move itself stays
+     * best-effort: when the element cannot be resolved, lives in a frame, never
+     * becomes visible, or the jittered point is covered by an overlay, the
+     * pointer is left alone and the upstream DOM click is the correct fallback.
+     *
+     * A null return therefore means "the trusted pointer path is unusable for
+     * this target", *not* "the call may report success": the click family
+     * probes the selector before it falls back (see
+     * [failIfPointerTargetMissing]), so a target that does not resolve at all
+     * fails loudly instead of printing a success tick.
      *
      * @return the point the pointer was actually moved to, which is also the point a trusted click
      *   must press at (see [trustedClickPoint]), or null when the pointer was left alone
@@ -1524,6 +1775,40 @@ internal enum class DragDropPosition(val key: String) {
         // caller re-tests the hit where the pointer actually is before pressing (see
         // [trustedClickPoint]).
         return point.copy(x = pointerX, y = pointerY, hit = false)
+    }
+
+    /**
+     * Fail loudly when [selector] does not resolve to an element, so the
+     * click family cannot report success for a typo or a stale ref.
+     *
+     * The probe is the locator path the read commands use
+     * (`evaluateValue(selector, "function(){ return this != null; }")`), so it
+     * resolves exactly the locators `get`/`fill` resolve, and the message is
+     * the same one the input family throws (see [pointerTargetError]).
+     *
+     * A probe that *failed* (transport, session or execution-context error)
+     * must never break a working click: this is the last step before the
+     * upstream DOM path, which is the correct fallback for every element the
+     * probe cannot judge, so a failure is only logged and the caller proceeds.
+     * Only a probe that ran and did not report the element throws.
+     *
+     * @param action the user-facing command name used as the message prefix
+     * @param selector the selector as the caller typed it
+     * @throws WebDriverException when the selector demonstrably resolved to nothing
+     */
+    @Throws(WebDriverException::class)
+    private suspend fun failIfPointerTargetMissing(action: String, selector: String) {
+        val probe = runCatching { evaluateValue(selector, "function(){ return this != null; }") }
+        if (probe.isFailure) {
+            logger.debug(
+                "Cannot probe [{}] for {} ({}); using the upstream DOM path",
+                selector, action, probe.exceptionOrNull()?.message
+            )
+            return
+        }
+
+        val message = pointerTargetError(action, selector, probe.getOrNull()) ?: return
+        throw WebDriverException(message, driver = this@Browser4WebDriver)
     }
 
     /**
@@ -1601,12 +1886,19 @@ internal enum class DragDropPosition(val key: String) {
      *
      * The click itself is dispatched as trusted CDP input when the element can be clicked at its
      * own coordinates, and falls back to the upstream DOM path otherwise (see [clickTrusted]).
+     * That fallback is only taken for a target that resolved: when the pointer could not be placed
+     * on the element *and* the trusted dispatch was not possible, the selector is probed and an
+     * unresolvable target is reported instead of silently no-oping (see
+     * [failIfPointerTargetMissing]).
      */
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, count: Int) {
         val hovered = movePointerToClickTarget(selector)
         withDialogWatch("click") {
             if (!clickTrusted(selector, count, trustedClickPoint(hovered))) {
+                if (hovered == null) {
+                    failIfPointerTargetMissing("click", selector)
+                }
                 super.click(selector, count)
             }
         }
@@ -1772,15 +2064,77 @@ internal enum class DragDropPosition(val key: String) {
      * The double-click is dispatched as trusted CDP input when the element can be clicked at its
      * own coordinates (see [clickTrusted]); a modifier click keeps the upstream path, which already
      * uses CDP on every platform because the modifier bitmask has no DOM equivalent.
+     *
+     * Like [click], the upstream fallback is only taken for a target that resolved: a selector
+     * that does not resolve at all is reported instead of printing a success tick (see
+     * [failIfPointerTargetMissing]).
      */
     @Throws(WebDriverException::class)
     override suspend fun dblclick(selector: String, modifier: String) {
         val hovered = movePointerToClickTarget(selector)
         withDialogWatch("dblclick") {
-            if (modifier.isNotBlank() || !clickTrusted(selector, 2, trustedClickPoint(hovered))) {
+            if (!(modifier.isBlank() && clickTrusted(selector, 2, trustedClickPoint(hovered)))) {
+                if (hovered == null) {
+                    failIfPointerTargetMissing("dblclick", selector)
+                }
                 super.dblclick(selector, modifier)
             }
         }
+    }
+
+    /**
+     * Hover the pointer over the element identified by [selector].
+     *
+     * The upstream implementation moves the emulated pointer onto the resolved
+     * element, so — unlike a click — it has no synthetic DOM fallback: a
+     * selector that matches nothing simply does nothing while the command
+     * reports success.  [selector] is therefore probed first with the same
+     * locator path the read commands use, and an unresolvable target fails
+     * loudly (see [failIfPointerTargetMissing]) instead of printing
+     * "✓ Hovered ...".  Resolvable targets are handed to the upstream
+     * implementation unchanged.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun hover(selector: String) {
+        failIfPointerTargetMissing("hover", selector)
+        super.hover(selector)
+    }
+
+    /**
+     * Tick the checkbox/radio matched by [selector].
+     *
+     * `setChecked` resolves the element through the same tolerant locator path as
+     * the upstream click, so a selector that matches nothing returns without an
+     * error and the command printed "✓ Checked ..." and exited 0.  The target is
+     * probed first (see [failIfPointerTargetMissing]); a resolvable target is
+     * handed to the upstream implementation unchanged.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun check(selector: String) {
+        failIfPointerTargetMissing("check", selector)
+        super.check(selector)
+    }
+
+    /** Clear the checkbox matched by [selector]; see [check] for the fail-loud contract. */
+    @Throws(WebDriverException::class)
+    override suspend fun uncheck(selector: String) {
+        failIfPointerTargetMissing("uncheck", selector)
+        super.uncheck(selector)
+    }
+
+    /**
+     * Move focus to the element matched by [selector].
+     *
+     * The upstream implementation is explicitly silent (`invokeDeferredSilently`),
+     * so an unresolvable selector was indistinguishable from a focused element —
+     * the command printed a success tick for a target that does not exist.  The
+     * probe makes the miss loud (see [failIfPointerTargetMissing]) while a
+     * resolvable, non-focusable element keeps behaving exactly as before.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun focus(selector: String) {
+        failIfPointerTargetMissing("focus", selector)
+        super.focus(selector)
     }
 
     // ---------------------------------------------------------------------------
@@ -2206,6 +2560,21 @@ internal enum class DragDropPosition(val key: String) {
     @Volatile
     private var consoleListener: EventListener? = null
 
+    /**
+     * The `Log.entryAdded` listener (uncaught page errors), registered at most once per driver and
+     * only when the transport exposes its raw event dispatcher; see [subscribePageErrors].
+     */
+    @Volatile
+    private var consoleErrorListener: EventListener? = null
+
+    /**
+     * Driver-scoped scope for the console capture started at attach; the attachment runs inside
+     * driver construction, which cannot suspend (see [startConsoleCaptureOnAttach]).
+     */
+    private val consoleCaptureScope: CoroutineScope by lazy {
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    }
+
     /** Guards the one-time capture setup; see [ensureConsoleCapture]. */
     private val consoleCaptureStarted = AtomicBoolean(false)
 
@@ -2259,23 +2628,46 @@ internal enum class DragDropPosition(val key: String) {
      * Read the buffered browser console messages filtered to [level] and above
      * (error=0, warn=1, info=2, log=2, debug=3).
      *
-     * Messages are collected from CDP `Console.messageAdded` events, so reading the console never
-     * modifies the page (see [ConsoleMessageBuffer] for why that matters). Capture starts with the
-     * first call — like the page-side buffer it replaces — and falls back to [consoleMessagesJs] when
-     * the transport cannot enable the Console domain; `browser.console.capture=false` skips CDP
-     * entirely, see [B4Constants.CONSOLE_CAPTURE_CDP].
+     * Messages are collected from CDP `Console.messageAdded` events — page `console.*` calls plus
+     * the uncaught exceptions Chrome reports on the same domain with source `javascript`, and, when
+     * the transport exposes its event dispatcher, the page errors of `Log.entryAdded` (see
+     * [ensureConsoleCapture]) — so reading the console never modifies the page (see
+     * [ConsoleMessageBuffer] for why that matters). Falls back to [consoleMessagesJs] when the
+     * transport cannot enable the CDP domains; `browser.console.capture=false` skips CDP entirely,
+     * see [B4Constants.CONSOLE_CAPTURE_CDP].
+     *
+     * The capture starts when the driver is attached to its tab (see
+     * [startConsoleCaptureOnAttach]) or, at the latest, on the first navigation/evaluation of that
+     * tab, so the logs of the page load itself are captured. If this call is the one that had to
+     * start it — a driver bound to a page that was already loaded — the buffer is seeded with
+     * [CONSOLE_CAPTURE_NOTICE] rather than returning a bare `[]` that implies the page logged
+     * nothing.
+     *
+     * @param level One of [CONSOLE_LEVELS]; anything else is rejected instead of silently
+     *   defaulting to `info`.
+     * @throws WebDriverException when [level] is not a known level.
      */
     @Throws(WebDriverException::class)
     suspend fun consoleMessages(level: String = "info"): JsEvaluation? {
+        val minimum = requireConsoleLevel(level)
+        val wasLive = consoleListener != null
         if (!consoleCaptureOverCdp || !ensureConsoleCapture()) {
-            return evaluateValueDetail(consoleMessagesJs(level))
+            return evaluateValueDetail(consoleMessagesJs(minimum))
         }
 
-        return JsEvaluation(value = consoleBuffer.toJson(level), cdpType = "string")
+        if (!wasLive && consoleBuffer.size() == 0) {
+            // This read is the one that started the capture (the page was already loaded when the
+            // driver was attached, or the transport only became usable here): report the gap instead
+            // of returning [] , which reads as "the page logged nothing".
+            consoleBuffer.add("info", CONSOLE_CAPTURE_NOTICE)
+        }
+
+        return JsEvaluation(value = consoleBuffer.toJson(minimum), cdpType = "string")
     }
 
     /**
-     * Clear the buffered browser console messages.
+     * Clear the buffered browser console messages (page `console.*` calls and captured page errors
+     * alike).
      *
      * @see consoleMessages
      */
@@ -2290,6 +2682,28 @@ internal enum class DragDropPosition(val key: String) {
     }
 
     /**
+     * Validate the user-supplied `min-level` [level] of [consoleMessages] and normalize it.
+     *
+     * The lenient [ConsoleMessageBuffer.normalizeLevel] stays for levels that come *from the page*;
+     * a level typed by the user is a filter, and an unknown one silently widening the result (the
+     * old behaviour mapped everything to `info`) is exactly the failure this rejects.
+     *
+     * @return the normalized (lower-case) level, safe to pass to the buffer
+     * @throws WebDriverException when [level] is not one of [CONSOLE_LEVELS]
+     */
+    @Throws(WebDriverException::class)
+    private fun requireConsoleLevel(level: String): String {
+        val normalized = level.trim().lowercase()
+        if (normalized !in CONSOLE_LEVELS) {
+            throw WebDriverException(
+                "console: unknown level [$level]. Valid levels: ${CONSOLE_LEVELS.joinToString(", ")}.",
+                driver = this@Browser4WebDriver,
+            )
+        }
+        return normalized
+    }
+
+    /**
      * Start capturing console messages for this driver, once.
      *
      * `Console.messageAdded` is the only console event the protocol layer exposes
@@ -2300,14 +2714,32 @@ internal enum class DragDropPosition(val key: String) {
      * `Console.messageAdded` still delivers every page `console.*` call, so the deprecated event is
      * the cheaper of the two, and the driver favours it over patching the page.
      *
+     * ## Uncaught page errors
+     *
+     * Uncaught exceptions never arrive with source `console-api`, which is all the original filter
+     * accepted, so `errors` could report a `console.error()` while the `Error` thrown right next to
+     * it stayed invisible. Two more channels are therefore subscribed:
+     *
+     *  - `Console.messageAdded` entries with source `javascript` — Chrome reports uncaught
+     *    exceptions there, with level `error`, on the domain already enabled;
+     *  - `Log.entryAdded` with source `javascript` (after `Log.enable`), on the transport's raw
+     *    event dispatcher. The `Log` domain is not page-observable, unlike `Runtime.enable`, which
+     *    the base library keeps off as a bot-detection signal, so this is the one exception channel
+     *    that is added without weakening the anti-fingerprinting posture.
+     *
+     * Network/security/deprecation entries stay excluded: they are noise, not page errors.
+     *
      * @return false when the Console domain could not be enabled, i.e. the caller must fall back to
      * the page-side buffer (an extension/relay transport that does not implement the command)
      *
-     * The decision is taken once per driver: a transport that rejects the command is remembered, so
-     * the page-side fallback is neither retried on every read nor warned about twice. Note the
-     * converse case, which no code can detect: a transport that accepts `Console.enable` but never
-     * delivers `Console.messageAdded` leaves the console legitimately empty — indistinguishable from
-     * a page that logs nothing, hence the one-shot debug line on the first captured message.
+     * The decision is taken once per driver — i.e. per tab, since a driver is bound to one tab — and
+     * a transport that rejects the command is remembered, so the page-side fallback is neither
+     * retried on every read nor warned about twice. A tab switch resolves the driver of the tab that
+     * is switched to, and that driver starts its own capture at attach, so a switch neither reuses
+     * nor invalidates the capture of another tab. Note the converse case, which no code can detect: a
+     * transport that accepts `Console.enable` but never delivers `Console.messageAdded` leaves the
+     * console legitimately empty — indistinguishable from a page that logs nothing, hence the
+     * one-shot debug line on the first captured message.
      *
      * Enabling the domain was measured against the signal that made the base library default
      * `Runtime.enable` to off: on Chrome 153.0.8010.52 the getter, inherited-getter and
@@ -2346,20 +2778,131 @@ internal enum class DragDropPosition(val key: String) {
 
         consoleListener = browserProtocol.onConsoleMessageAdded { event ->
             val message = event.message
-            if (message.source != ConsoleMessageSource.CONSOLE_API) {
-                // Only page `console.*` calls, matching the buffer this replaces (network/security
-                // entries would otherwise show up as console messages).
-                return@onConsoleMessageAdded
-            }
-            if (consoleBuffer.add(message.level.name, message.text) && !consoleCaptureConfirmed) {
-                consoleCaptureConfirmed = true
-                // A relay can accept Console.enable and never deliver events; this line is the only
-                // evidence in the log that the capture is actually working on this transport.
-                logger.debug("Console message capture is live on this driver")
+            when (message.source) {
+                // Page `console.*` calls, matching the buffer this replaces.
+                ConsoleMessageSource.CONSOLE_API ->
+                    bufferConsoleMessage(message.level.name, message.text)
+
+                // Uncaught page exceptions, which Chrome reports on the same domain with source
+                // `javascript` (the original source filter dropped exactly these).
+                ConsoleMessageSource.JAVASCRIPT ->
+                    bufferConsoleMessage(
+                        message.level.name,
+                        withSourceLocation(message.text, message.url, message.line)
+                    )
+
+                // Network/security/deprecation entries are noise, not console messages.
+                else -> Unit
             }
         }
 
+        subscribePageErrors()
+
         return true
+    }
+
+    /**
+     * Subscribe to the uncaught page errors of `Log.entryAdded`, when the transport exposes its raw
+     * event dispatcher (see [ensureConsoleCapture] for why this channel is needed).
+     *
+     * Best-effort by design: an older or relay transport without `Log.enable` must not break the
+     * console read — the `Console.messageAdded` channel above still carries the exceptions.
+     */
+    private suspend fun subscribePageErrors() {
+        val devTools = browserProtocol.remoteDevToolsOrNull ?: return
+        runCatching {
+            browserProtocol.executeCdpCommand("Log.enable")
+            consoleErrorListener = devTools.addEventListener(
+                "Log",
+                "entryAdded",
+                { event -> if (event is EntryAdded) onLogEntryAdded(event.entry) },
+                EntryAdded::class.java,
+            )
+        }.onFailure {
+            logger.debug("Log.entryAdded is not available on this transport ({}); page exceptions " +
+                "keep being captured through Console.messageAdded", it.message)
+        }
+    }
+
+    /**
+     * Buffer one CDP `Log.entryAdded` entry when it describes a page error, with its source
+     * location appended so `errors` reports where the exception was thrown.
+     *
+     * Only the `javascript` source is accepted: it carries uncaught exceptions and unhandled
+     * rejections, while `network`/`security`/`deprecation` entries are exactly the noise the
+     * original source filter existed to suppress.
+     */
+    private fun onLogEntryAdded(entry: LogEntry) {
+        if (entry.source != LogEntrySource.JAVASCRIPT) {
+            return
+        }
+        val level = when (entry.level) {
+            LogEntryLevel.ERROR -> "error"
+            LogEntryLevel.WARNING -> "warn"
+            LogEntryLevel.INFO -> "info"
+            LogEntryLevel.VERBOSE -> "debug"
+        }
+        bufferConsoleMessage(level, withSourceLocation(entry.text, entry.url, entry.lineNumber))
+    }
+
+    /**
+     * Append the source location of a console/log [text] — `Uncaught Error: Fancy error!
+     * (http://host/myscript.js:3)` — so a captured page error names its origin. Text without a
+     * usable location (inline scripts, entries Chrome did not attribute) is returned unchanged.
+     */
+    private fun withSourceLocation(text: String, url: String?, line: Int?): String {
+        if (url.isNullOrBlank() || (line ?: 0) <= 0) {
+            return text
+        }
+        return "$text ($url:$line)"
+    }
+
+    /**
+     * Buffer one console entry and confirm the capture on the first one, so a live capture shows up
+     * in the log (a relay can accept `Console.enable` and never deliver events; this line is the
+     * only evidence that the capture works on this transport).
+     */
+    private fun bufferConsoleMessage(level: String, text: String) {
+        if (consoleBuffer.add(level, text) && !consoleCaptureConfirmed) {
+            consoleCaptureConfirmed = true
+            logger.debug("Console message capture is live on this driver")
+        }
+    }
+
+    /**
+     * Start the CDP console capture for this tab as soon as the driver is attached, without blocking
+     * the caller (the attachment happens inside driver/session construction).
+     *
+     * Capture used to start at the first `console` read, and since Chrome does not replay console
+     * events, every log the page produced before that read — including the whole first page load —
+     * was lost, so the first read answered `[]` on a page that plainly logs. Starting at attach
+     * covers the page-load window; the read-time start below remains as the fallback and reports
+     * itself (see [consoleMessages]).
+     *
+     * Respects `browser.console.capture=false` by not touching the transport at all.
+     */
+    private fun startConsoleCaptureOnAttach() {
+        if (!consoleCaptureOverCdp) {
+            return
+        }
+        consoleCaptureScope.launch {
+            runCatching { ensureConsoleCapture() }.onFailure {
+                logger.debug("Could not start the console capture at attach: {}", it.message)
+            }
+        }
+    }
+
+    /**
+     * Await the console capture start on a command path (navigation), where the page load must not
+     * begin before the listener is live; see [startConsoleCaptureOnAttach].
+     */
+    private suspend fun startConsoleCaptureIfEnabled() {
+        if (!consoleCaptureOverCdp) {
+            return
+        }
+        runCatching { ensureConsoleCapture() }.onFailure {
+            logger.debug("Could not start the console capture before navigating: {}", it.message)
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -2445,11 +2988,76 @@ internal enum class DragDropPosition(val key: String) {
      * evaluation: a new driver navigates, a pooled tab is re-used by navigating, and a driver
      * bound to a tab that already has a document evaluates. The call is idempotent and, once the
      * emulation is in effect, costs a single field read.
+     *
+     * A frame scope selected with `frame`/`frameSwitch` is cleared first: a navigation replaces the
+     * whole frame tree, so the recorded frame id no longer resolves and every frame-scoped element
+     * operation afterwards fails with "The selected frame ... is not reachable" — including the
+     * post-navigation steps of the navigation command itself, which made `goto` report failure for
+     * a navigation that had succeeded. See [clearFrameScopeBeforeNavigation].
+     *
+     * The console capture is (re)started on the same hook, before the load begins, so the page's
+     * own logs are captured from the first byte rather than from the first `console` read (see
+     * [startConsoleCaptureOnAttach]).
      */
     @Throws(WebDriverException::class)
     override suspend fun navigate(entry: NavigateEntry) {
         ensureFocusEmulation()
+        clearFrameScopeBeforeNavigation("navigation")
+        startConsoleCaptureIfEnabled()
         super.navigate(entry)
+    }
+
+    /**
+     * Reload this tab, clearing a selected frame scope first — a reload replaces the frame tree just
+     * like any other navigation (see [clearFrameScopeBeforeNavigation]).
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun reload() {
+        clearFrameScopeBeforeNavigation("reload")
+        super.reload()
+    }
+
+    /**
+     * Go back in the history, clearing a selected frame scope first — a history navigation replaces
+     * the frame tree just like any other navigation (see [clearFrameScopeBeforeNavigation]).
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun goBack() {
+        clearFrameScopeBeforeNavigation("goBack")
+        super.goBack()
+    }
+
+    /**
+     * Go forward in the history, clearing a selected frame scope first — a history navigation
+     * replaces the frame tree just like any other navigation (see
+     * [clearFrameScopeBeforeNavigation]).
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun goForward() {
+        clearFrameScopeBeforeNavigation("goForward")
+        super.goForward()
+    }
+
+    /**
+     * Clear the frame scope selected with `frame`/`frameSwitch` before the navigation [action]
+     * replaces the whole frame tree.
+     *
+     * The driver's frame scope is kept across navigation by the library and only reconciled when
+     * the frame tree is re-listed (`frames`, `frame main`) or when the *asynchronous*
+     * `Page.frameNavigated` handler of the main frame runs — too late for the navigation command
+     * itself and, for `reload`, never for the following element commands. Clearing it up front with
+     * the library's own public reset ([frameMain]) makes the documented contract ("navigation
+     * resets the scope") hold for the navigation that is being issued, and leaves element
+     * resolution on the main document until the user selects a frame again.
+     *
+     * [frameMain] is a local state reset (it issues no CDP command) and is a no-op when no frame is
+     * selected, so this costs a field read on the common path. It is deliberately not wrapped in a
+     * catch: a reset that cannot run must not be silently skipped, and its failure mode is the same
+     * health state that fails the navigation itself.
+     */
+    private suspend fun clearFrameScopeBeforeNavigation(action: String) {
+        logger.debug("Clearing the frame scope before {}", action)
+        frameMain()
     }
 
     /**
@@ -3224,7 +3832,11 @@ internal enum class DragDropPosition(val key: String) {
             // failure is a false negative — report success instead of throwing.
             val positionBefore = sourcePositionFingerprint(sourceObjectId)
             var dragSucceeded = false
-            repeat(3) { attempt ->
+            // A plain `for` + `break`: `repeat` has no break, and a `return@repeat` on success is a
+            // `continue`, which dispatched the whole dragstart → drop → dragend lifecycle three
+            // times per command (pages with non-idempotent drop handlers ran their side effect
+            // three times). Attempts 2 and 3 therefore only run after a transient CDP failure.
+            for (attempt in 0 until 3) {
                 try {
                     val result = browserProtocol.callFunctionOn(
                         script,
@@ -3236,7 +3848,7 @@ internal enum class DragDropPosition(val key: String) {
                     val scriptError = dragScriptErrorMessage(result?.result?.value)
                     if (scriptError == null) {
                         dragSucceeded = true
-                        return@repeat
+                        break
                     }
                     if (attempt > 0 && positionBefore != null) {
                         val positionAfter = sourcePositionFingerprint(sourceObjectId)
@@ -3247,7 +3859,7 @@ internal enum class DragDropPosition(val key: String) {
                                     "attempt dispatched the drag lifecycle. Treating the drag as completed."
                             )
                             dragSucceeded = true
-                            return@repeat
+                            break
                         }
                     }
                     throw WebDriverException(
@@ -3259,6 +3871,11 @@ internal enum class DragDropPosition(val key: String) {
                 } catch (e: ChromeDriverException) {
                     lastCdpFailure = e
                     if (attempt < 2) {
+                        logger.warn(
+                            "Drag of '$sourceSelector' to '$targetSelector' hit a transient CDP failure " +
+                                "({}); retrying (attempt {} of 3)",
+                            e.message, attempt + 2
+                        )
                         delay(200)
                     }
                 }

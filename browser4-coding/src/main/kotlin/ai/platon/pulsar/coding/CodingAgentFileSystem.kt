@@ -52,10 +52,24 @@ class CodingAgentFileSystem(
      * Browser4 governance set (VERSION, AGENTS.md, BOM, root pom).
      */
     private val protectedFiles: Set<String> = DEFAULT_PROTECTED_FILES,
+    /**
+     * Persist write snapshots under `<workspace>/.browser4/coding-snapshots/`
+     * so `revert`/`diff` survive a backend restart (plan P2.3). The directory is
+     * git-ignored. Off by default so tests and throw-away workspaces stay
+     * pristine; the production wiring (`AgentToolManager`, `MCPToolController`)
+     * enables it.
+     */
+    private val persistSnapshots: Boolean = false,
 ) {
     companion object {
         const val MAX_READ_SIZE_BYTES = 5 * 1024 * 1024L // 5 MB
         const val MAX_GLOB_RESULTS = 10_000
+
+        /** Upper bound of the per-session mutation log (oldest entries drop out). */
+        const val MAX_MUTATION_LOG = 200
+
+        /** Path comparison is case-insensitive on Windows only. */
+        private val IS_WINDOWS = System.getProperty("os.name").lowercase().contains("win")
 
         /**
          * Upper bound for [listDir] recursion. The requested [listDir.maxDepth] is honored
@@ -134,17 +148,62 @@ class CodingAgentFileSystem(
 
     private val canonicalRoot: Path by lazy { workspaceRoot.toRealPath() }
 
-    /** File change tracker for reverting */
+    /**
+     * File change tracker for reverting.
+     *
+     * [checksum] is a real content hash (`sha256:<hex>`), not a timestamp: it
+     * backs the optimistic-concurrency guard on writes — a file another process
+     * touched must not be overwritten blindly, and a revert target is identified
+     * by content (plan P2.3).
+     */
     private data class FileSnapshot(
         val path: Path,
         val existed: Boolean,
         val content: String?,
-        val checksum: Long,
+        val checksum: String,
         val trackedAtMillis: Long = System.currentTimeMillis(),
     )
 
     private val snapshots = ConcurrentHashMap<Path, FileSnapshot>()
     private val changeCounter = AtomicInteger(0)
+
+    /**
+     * Ordered log of every mutation this file system performed (write/append/
+     * delete/move/copy/revert), bounded.
+     *
+     * Why: the completion gate can only compare *structured* claims. Without a
+     * record of what actually happened, a report saying "I only confirmed the
+     * files, they already existed" is indistinguishable from the truth even when
+     * the run wrote those files three tool calls earlier. The log turns that
+     * narrative into a checkable contradiction.
+     */
+    private val mutationLog = java.util.concurrent.ConcurrentLinkedDeque<FileMutation>()
+    private val mutationCount = AtomicInteger(0)
+
+    /** One file mutation, [op] ∈ {write, append, delete, move, copy, revert}. */
+    data class FileMutation(val op: String, val path: String, val ok: Boolean)
+
+    /** Snapshot of the mutation log, oldest first. */
+    fun mutationsSnapshot(): List<FileMutation> = mutationLog.toList()
+
+    /** Reset the log (a new task started). */
+    fun clearMutations() {
+        mutationLog.clear()
+        mutationCount.set(0)
+    }
+
+    private fun recordMutation(op: String, path: Path, ok: Boolean) {
+        val relative = runCatching { workspaceRoot.relativize(path.toAbsolutePath().normalize()).toString() }
+            .getOrElse { path.toString() }
+        mutationLog.addLast(FileMutation(op, relative.replace('\\', '/'), ok))
+        if (mutationCount.incrementAndGet() > MAX_MUTATION_LOG) {
+            mutationLog.pollFirst()
+        }
+    }
+
+    /** JSON codec + location for persisted snapshots (plan P2.3). */
+    private val snapshotMapper = com.fasterxml.jackson.databind.ObjectMapper()
+    private val snapshotDir: Path by lazy { workspaceRoot.resolve(".browser4").resolve("coding-snapshots") }
 
     // ------------------------------------------------------------------
     // Reading
@@ -210,15 +269,29 @@ class CodingAgentFileSystem(
     /**
      * Write content to a file. Creates parent directories if needed.
      * Takes a snapshot before writing for potential revert.
+     *
+     * The write is atomic (temp file in the same directory + move), so a crash
+     * mid-write cannot leave a half-written source file behind — a partial
+     * Kotlin file then poisons every later compile (plan P0.8).
+     *
+     * @param expectedChecksum optimistic concurrency (plan P2.3/P2.5): when
+     *   given, the write only proceeds if the file's CURRENT content hashes to
+     *   exactly this value (see [checksumOf]). A concurrent edit then fails
+     *   loudly instead of being silently overwritten.
      */
     suspend fun writeFile(
         path: String,
         content: String,
         encoding: Charset = StandardCharsets.UTF_8,
         createSnapshot: Boolean = true,
+        expectedChecksum: String? = null,
     ): String {
         val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
         if (resolved.isDirectory()) return errorResult("Cannot write to a directory: $path")
+        protectionViolation(resolved)?.let { return errorResult(it) }
+        expectedChecksum?.let { expected ->
+            concurrencyViolation(resolved, expected)?.let { return errorResult(it) }
+        }
 
         return try {
             // Take snapshot before writing
@@ -227,10 +300,10 @@ class CodingAgentFileSystem(
             }
 
             withContext(Dispatchers.IO) {
-                Files.createDirectories(resolved.parent)
-                Files.writeString(resolved, content, encoding)
+                writeAtomic(resolved, content, encoding)
             }
             changeCounter.incrementAndGet()
+            recordMutation("write", resolved, true)
             "✓ Wrote ${content.length} chars to $path (${Files.size(resolved)} bytes)"
         } catch (e: IOException) {
             errorResult("Failed to write '$path': ${e.message}")
@@ -239,17 +312,24 @@ class CodingAgentFileSystem(
 
     /**
      * Append content to a file.
+     *
+     * Implemented as read + atomic rewrite rather than an `APPEND` open so the
+     * append cannot interleave with a concurrent writer and cannot leave a
+     * torn tail on crash.
      */
     suspend fun appendFile(path: String, content: String): String {
         val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        if (resolved.isDirectory()) return errorResult("Cannot append to a directory: $path")
+        protectionViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             snapshotFile(resolved)
             withContext(Dispatchers.IO) {
-                Files.createDirectories(resolved.parent)
-                Files.writeString(resolved, content, StandardOpenOption.CREATE, StandardOpenOption.APPEND)
+                val existing = if (resolved.exists()) Files.readString(resolved) else ""
+                writeAtomic(resolved, existing + content)
             }
             changeCounter.incrementAndGet()
+            recordMutation("append", resolved, true)
             "✓ Appended ${content.length} chars to $path"
         } catch (e: IOException) {
             errorResult("Failed to append to '$path': ${e.message}")
@@ -293,9 +373,10 @@ class CodingAgentFileSystem(
             }
 
             withContext(Dispatchers.IO) {
-                Files.writeString(resolved, replaced)
+                writeAtomic(resolved, replaced)
             }
             changeCounter.incrementAndGet()
+            recordMutation("edit", resolved, true)
 
             val occurrences = if (count < 0) "all" else "up to $count"
             "✓ Replaced $occurrences occurrence(s) of '$oldStr' → '$newStr' in $path"
@@ -350,9 +431,10 @@ class CodingAgentFileSystem(
             }
 
             withContext(Dispatchers.IO) {
-                Files.writeString(resolved, replaced)
+                writeAtomic(resolved, replaced)
             }
             changeCounter.incrementAndGet()
+            recordMutation("replace", resolved, true)
 
             val occurrences = if (count < 0) "${matches.size}" else "up to $count"
             "✓ Replaced $occurrences regex match(es) of '$regex' → '$replacement' in $path"
@@ -381,7 +463,8 @@ class CodingAgentFileSystem(
         protectionViolation(resolved)?.let { return errorResult(it) }
 
         return try {
-            val lines = withContext(Dispatchers.IO) { Files.readAllLines(resolved) }
+            val original = withContext(Dispatchers.IO) { Files.readString(resolved) }
+            val lines = lineList(original)
             if (startLine > lines.size) {
                 return errorResult("startLine $startLine beyond file end (${lines.size} lines): $path")
             }
@@ -394,9 +477,10 @@ class CodingAgentFileSystem(
             newLines.addAll(startLine - 1, content.lines())
 
             withContext(Dispatchers.IO) {
-                Files.writeString(resolved, newLines.joinToString("\n") + "\n")
+                writeAtomic(resolved, joinLines(newLines, original))
             }
             changeCounter.incrementAndGet()
+            recordMutation("replaceLines", resolved, true)
 
             "✓ Replaced lines $startLine..$endLine in $path with ${content.lines().size} line(s)"
         } catch (e: IOException) {
@@ -414,7 +498,8 @@ class CodingAgentFileSystem(
         protectionViolation(resolved)?.let { return errorResult(it) }
 
         return try {
-            val lines = withContext(Dispatchers.IO) { Files.readAllLines(resolved) }
+            val original = withContext(Dispatchers.IO) { Files.readString(resolved) }
+            val lines = lineList(original)
             val idx = lines.indexOfFirst { it.contains(anchor) }
             if (idx < 0) {
                 return "⚠️ Anchor '$anchor' not found in $path — no changes made"
@@ -426,9 +511,10 @@ class CodingAgentFileSystem(
             newLines.addAll(idx + 1, content.lines())
 
             withContext(Dispatchers.IO) {
-                Files.writeString(resolved, newLines.joinToString("\n") + "\n")
+                writeAtomic(resolved, joinLines(newLines, original))
             }
             changeCounter.incrementAndGet()
+            recordMutation("insert", resolved, true)
 
             "✓ Inserted after line ${idx + 1} (anchor '$anchor') in $path"
         } catch (e: IOException) {
@@ -438,17 +524,22 @@ class CodingAgentFileSystem(
 
     /**
      * Restore a file to its snapshot (the state before the first tracked write).
-     * Fails if no snapshot exists — use [changeSummary] to see tracked files.
+     *
+     * The snapshot is looked up in memory first and then on disk
+     * (`.browser4/coding-snapshots/`), so a revert still works after a backend
+     * restart (plan P2.3). Fails if no snapshot exists — use [changeSummary] to
+     * see tracked files.
      */
     suspend fun revert(path: String): String {
         val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
-        val snapshot = snapshots[resolved] ?: return errorResult("No snapshot available for revert: $path")
+        val snapshot = snapshots[resolved] ?: loadPersistedSnapshot(resolved)
+            ?: return errorResult("No snapshot available for revert: $path")
+        snapshots.putIfAbsent(resolved, snapshot)
 
         return try {
             withContext(Dispatchers.IO) {
                 if (snapshot.existed && snapshot.content != null) {
-                    Files.createDirectories(resolved.parent)
-                    Files.writeString(resolved, snapshot.content)
+                    writeAtomic(resolved, snapshot.content)
                 } else if (snapshot.existed) {
                     // Snapshot existed but content was null (binary or unreadable) — leave untouched
                     return@withContext
@@ -457,6 +548,7 @@ class CodingAgentFileSystem(
                 }
             }
             changeCounter.incrementAndGet()
+            recordMutation("revert", resolved, true)
             "✓ Reverted $path to snapshot"
         } catch (e: IOException) {
             errorResult("Failed to revert '$path': ${e.message}")
@@ -524,6 +616,29 @@ class CodingAgentFileSystem(
         if (resolved.fileName.toString() in VCS_DIRS) {
             return errorResult("Refusing to delete version-control directory: $path")
         }
+        // Hard protection: never delete a link or a junction. Deleting the LINK
+        // is at best confusing (the workspace loses a module) and at worst
+        // destructive on platforms/APIs that follow the reparse point into the
+        // target tree. Observed in practice: an agent deleted the
+        // `browser4-coding` junction inside its workspace while trying to "fix"
+        // a Maven reactor problem.
+        resolveLinkTarget(resolved)?.let { target ->
+            return errorResult(
+                "Refusing to delete a link or junction: $path (it points at $target). " +
+                    "Delete the target explicitly if that is really intended."
+            )
+        }
+        // A recursive delete must not walk through a link either: one junction
+        // inside a directory turns "delete this folder" into "wipe a checkout".
+        if (recursive && resolved.isDirectory()) {
+            val linkedChild = firstLinkedChild(resolved)
+            if (linkedChild != null) {
+                return errorResult(
+                    "Refusing recursive delete of '$path' — it contains a link or junction: " +
+                        resolved.relativize(linkedChild)
+                )
+            }
+        }
         // Also refuse deleting a VCS dir when the target is one of its parents and
         // recursive would swallow it — e.g. deleting a directory that *is* a .git
         // parent is allowed, but the walk below never enters VCS dirs.
@@ -545,6 +660,7 @@ class CodingAgentFileSystem(
                 }
             }
             changeCounter.incrementAndGet()
+            recordMutation("delete", resolved, true)
             "✓ Deleted: $path"
         } catch (e: IOException) {
             errorResult("Failed to delete '$path': ${e.message}")
@@ -552,9 +668,32 @@ class CodingAgentFileSystem(
     }
 
     /** Version-control metadata directory names that recursive deletes must not touch. */
-    private fun hasVcsChild(dir: Path): Boolean {
-        return VCS_DIRS.any { vcs -> Files.isDirectory(dir.resolve(vcs)) }
-    }
+    private fun hasVcsChild(dir: Path): Boolean =
+        VCS_DIRS.any { vcs -> Files.isDirectory(dir.resolve(vcs)) }
+
+    /**
+     * The link/junction target behind [path], or null when [path] is a plain
+     * file/directory.
+     *
+     * A junction (Windows reparse point) is not a symbolic link to NIO, so
+     * `isSymbolicLink` misses it; comparing the real path with the absolute
+     * path catches both kinds without platform-specific APIs.
+     */
+    private fun resolveLinkTarget(path: Path): Path? = runCatching {
+        val absolute = path.toAbsolutePath().normalize()
+        val real = path.toRealPath()
+        if (samePath(real, absolute)) null else real
+    }.getOrNull()
+
+    private fun samePath(a: Path, b: Path): Boolean =
+        if (IS_WINDOWS) a.toString().equals(b.toString(), ignoreCase = true) else a == b
+
+    /** The first direct child of [dir] that is a link/junction, or null. */
+    private fun firstLinkedChild(dir: Path): Path? = runCatching {
+        Files.list(dir).use { stream ->
+            stream.filter { resolveLinkTarget(it) != null }.findFirst().orElse(null)
+        }
+    }.getOrNull()
 
     /**
      * Create a directory (and parents if needed).
@@ -580,6 +719,8 @@ class CodingAgentFileSystem(
         val src = resolvePath(source) ?: return errorResult("Source not resolved: $source")
         val dst = resolvePath(dest) ?: return errorResult("Dest not resolved: $dest")
         if (!src.exists()) return errorResult("Source not found: $source")
+        // A copy into a governance file is a replace in disguise.
+        protectionViolation(dst)?.let { return errorResult(it) }
 
         return try {
             withContext(Dispatchers.IO) {
@@ -591,6 +732,7 @@ class CodingAgentFileSystem(
                 }
             }
             changeCounter.incrementAndGet()
+            recordMutation("copy", dst, true)
             "✓ Copied $source → $dest"
         } catch (e: IOException) {
             errorResult("Failed to copy '$source' → '$dest': ${e.message}")
@@ -605,6 +747,10 @@ class CodingAgentFileSystem(
         val src = resolvePath(source) ?: return errorResult("Source not resolved: $source")
         val dst = resolvePath(dest) ?: return errorResult("Dest not resolved: $dest")
         if (!src.exists()) return errorResult("Source not found: $source")
+        // A move deletes the source and replaces the destination — both ends
+        // must respect governance protection.
+        protectionViolation(src)?.let { return errorResult(it) }
+        protectionViolation(dst)?.let { return errorResult(it) }
 
         return try {
             snapshotFile(src)
@@ -613,6 +759,7 @@ class CodingAgentFileSystem(
                 Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING)
             }
             changeCounter.incrementAndGet()
+            recordMutation("move", dst, true)
             "✓ Moved $source → $dest"
         } catch (e: IOException) {
             errorResult("Failed to move '$source' → '$dest': ${e.message}")
@@ -663,77 +810,95 @@ class CodingAgentFileSystem(
     }
 
     /**
+     * Workspace-relative paths matching a glob [pattern] (e.g. a recursive glob for Foo.kt),
+     * sorted, at most [maxResults].
+     *
+     * Used to resolve a bare filename mentioned in a dev task to the module that
+     * owns it — the planner cannot guess a directory from `PulsarWebDriver.kt`
+     * (eval K1), and walking the tree is the caller's job (I/O stays here).
+     */
+    suspend fun findFiles(pattern: String, maxResults: Int = 50): List<String> {
+        val (baseDir, globPart) = splitGlobPattern(pattern)
+        if (!baseDir.exists()) return emptyList()
+        val matches = try {
+            withContext(Dispatchers.IO) { walkGlob(baseDir, globPart, maxResults) }
+        } catch (_: IOException) {
+            return emptyList()
+        }
+        return matches.sortedBy { it.toString() }
+            .map { canonicalRoot.relativize(it).toString().replace('\\', '/') }
+            .take(maxResults)
+    }
+
+    /** Split a glob pattern into the non-wildcard base directory and the glob part. */
+    private fun splitGlobPattern(pattern: String): Pair<Path, String> {
+        if (!pattern.contains("**") && !pattern.contains("*")) return canonicalRoot to pattern
+        // Find the FIRST wildcard segment: everything before it is the base directory.
+        // Split on '/' and '\\' manually — Path.of() rejects wildcard characters on Windows.
+        val allParts = pattern.replace('\\', '/').split('/').filter { it.isNotEmpty() }
+        val firstWildcard = allParts.indexOfFirst { it.contains("*") || it.contains("?") }
+        val baseDir = if (firstWildcard > 0) {
+            canonicalRoot.resolve(allParts.take(firstWildcard).joinToString("/"))
+        } else {
+            canonicalRoot
+        }
+        val globPart = if (firstWildcard >= 0) {
+            allParts.drop(firstWildcard).joinToString("/")
+        } else {
+            allParts.joinToString("/")
+        }
+        return baseDir to globPart
+    }
+
+    private fun walkGlob(baseDir: Path, globPart: String, maxResults: Int): List<Path> {
+        val pathMatcher = FileSystems.getDefault().getPathMatcher("glob:$globPart")
+        // JDK glob semantics: "**/*" requires at least one directory level, so it silently
+        // misses files directly under the base dir. Add a second matcher with the leading
+        // "**/" stripped ("**" matches zero or more directories) to catch root-level files.
+        val rootLevelMatcher = if (globPart.startsWith("**/")) {
+            FileSystems.getDefault().getPathMatcher("glob:${globPart.removePrefix("**/")}")
+        } else {
+            null
+        }
+        val results = mutableListOf<Path>()
+
+        Files.walkFileTree(baseDir, object : SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (dir != baseDir && dir.fileName.toString() in searchExcludedDirs) {
+                    return FileVisitResult.SKIP_SUBTREE
+                }
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                val rel = baseDir.relativize(file)
+                if (pathMatcher.matches(rel) ||
+                    (rootLevelMatcher != null && rootLevelMatcher.matches(rel)) ||
+                    pathMatcher.matches(file.fileName)
+                ) {
+                    results.add(file)
+                    if (results.size >= maxResults) return FileVisitResult.TERMINATE
+                }
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
+                return FileVisitResult.SKIP_SUBTREE
+            }
+        })
+        return results
+    }
+
+    /**
      * Search for files matching a glob pattern.
      * Supports ** for recursive matching.
      */
     suspend fun glob(pattern: String, maxResults: Int = MAX_GLOB_RESULTS): String {
-        // Separate the base dir from the glob pattern
-        val baseDir: Path
-        val globPart: String
-
-        if (pattern.contains("**") || pattern.contains("*")) {
-            // Find the FIRST wildcard segment: everything before it is the base directory.
-            // Split on '/' and '\\' manually — Path.of() rejects wildcard characters on Windows.
-            // (The previous implementation took the LAST non-wildcard segment and then built the
-            // base from all parts up to and including it, which pulled wildcard segments into
-            // Path.resolve() → "Illegal char <*>" on Windows.)
-            val allParts = pattern.replace('\\', '/').split('/').filter { it.isNotEmpty() }
-            val firstWildcard = allParts.indexOfFirst { it.contains("*") || it.contains("?") }
-            baseDir = if (firstWildcard > 0) {
-                canonicalRoot.resolve(allParts.take(firstWildcard).joinToString("/"))
-            } else {
-                canonicalRoot
-            }
-            globPart = if (firstWildcard >= 0) {
-                allParts.drop(firstWildcard).joinToString("/")
-            } else {
-                allParts.joinToString("/")
-            }
-        } else {
-            baseDir = canonicalRoot
-            globPart = pattern
-        }
-
+        val (baseDir, globPart) = splitGlobPattern(pattern)
         if (!baseDir.exists()) return "Base directory not found: $baseDir"
 
         return try {
-            val pathMatcher = FileSystems.getDefault().getPathMatcher("glob:$globPart")
-            // JDK glob semantics: "**/*" requires at least one directory level, so it silently
-            // misses files directly under the base dir. Add a second matcher with the leading
-            // "**/" stripped ("**" matches zero or more directories) to catch root-level files.
-            val rootLevelMatcher = if (globPart.startsWith("**/")) {
-                FileSystems.getDefault().getPathMatcher("glob:${globPart.removePrefix("**/")}")
-            } else {
-                null
-            }
-            val results = mutableListOf<Path>()
-
-            withContext(Dispatchers.IO) {
-                Files.walkFileTree(baseDir, object : SimpleFileVisitor<Path>() {
-                    override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
-                        if (dir != baseDir && dir.fileName.toString() in searchExcludedDirs) {
-                            return FileVisitResult.SKIP_SUBTREE
-                        }
-                        return FileVisitResult.CONTINUE
-                    }
-
-                    override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
-                        val rel = baseDir.relativize(file)
-                        if (pathMatcher.matches(rel) ||
-                            (rootLevelMatcher != null && rootLevelMatcher.matches(rel)) ||
-                            pathMatcher.matches(file.fileName)
-                        ) {
-                            results.add(file)
-                            if (results.size >= maxResults) return FileVisitResult.TERMINATE
-                        }
-                        return FileVisitResult.CONTINUE
-                    }
-
-                    override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
-                        return FileVisitResult.SKIP_SUBTREE
-                    }
-                })
-            }
+            val results = withContext(Dispatchers.IO) { walkGlob(baseDir, globPart, maxResults) }
 
             if (results.isEmpty()) {
                 "No files matching '$pattern'"
@@ -1034,8 +1199,157 @@ class CodingAgentFileSystem(
                 if (ext !in BINARY_EXTENSIONS) Files.readString(path) else null
             } catch (_: Exception) { null }
         } else null
-        val checksum = try { Files.getLastModifiedTime(path).toMillis() } catch (_: Exception) { 0L }
-        snapshots[path] = FileSnapshot(path, existed, content, checksum)
+        val snapshot = FileSnapshot(path, existed, content, checksumString(content))
+        snapshots[path] = snapshot
+        persistSnapshot(snapshot)
+    }
+
+    /**
+     * `sha256:<hex>` of a file's current content, or null when the file is
+     * absent/binary. Feed it back as `write(..., expectedChecksum=…)` for
+     * optimistic concurrency (plan P2.3/P2.5).
+     */
+    fun checksumOf(path: String): String? {
+        val resolved = resolvePath(path) ?: return null
+        if (!resolved.exists() || resolved.isDirectory()) return null
+        if (resolved.extension.lowercase() in BINARY_EXTENSIONS) return null
+        return runCatching { checksumString(Files.readString(resolved)) }.getOrNull()
+    }
+
+    private fun checksumString(content: String?): String {
+        if (content == null) return "absent"
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(content.toByteArray(StandardCharsets.UTF_8))
+        return "sha256:" + digest.take(16).joinToString("") { "%02x".format(it) }
+    }
+
+    /** Optimistic-concurrency guard: null when the current content matches [expected]. */
+    private fun concurrencyViolation(resolved: Path, expected: String): String? {
+        val actual = if (resolved.exists() && !resolved.isDirectory() && !isBinary(resolved)) {
+            runCatching { checksumString(Files.readString(resolved)) }.getOrNull()
+        } else if (!resolved.exists()) {
+            "absent"
+        } else {
+            null
+        }
+        if (actual == null) return null // binary/unreadable: cannot verify, do not block
+        if (actual == expected) return null
+        val rel = runCatching { canonicalRoot.relativize(resolved).toString().replace('\\', '/') }
+            .getOrDefault(resolved.toString())
+        return "Refusing to write '$rel': content changed since it was read " +
+            "(expected $expected, found $actual). Re-read the file and retry."
+    }
+
+    private fun isBinary(path: Path): Boolean = path.extension.lowercase() in BINARY_EXTENSIONS
+
+    /** Persist one snapshot so a revert survives a restart (plan P2.3). */
+    private fun persistSnapshot(snapshot: FileSnapshot) {
+        if (!persistSnapshots) return
+        runCatching {
+            Files.createDirectories(snapshotDir)
+            val node = snapshotMapper.createObjectNode()
+            val rel = runCatching { canonicalRoot.relativize(snapshot.path).toString().replace('\\', '/') }
+                .getOrDefault(snapshot.path.toString())
+            node.put("path", rel)
+            node.put("existed", snapshot.existed)
+            node.put("checksum", snapshot.checksum)
+            node.put("trackedAtMillis", snapshot.trackedAtMillis)
+            snapshot.content?.let { node.put("content", it) }
+            writeAtomic(snapshotDir.resolve(snapshotFileName(snapshot.path)), node.toString())
+        }
+    }
+
+    private fun loadPersistedSnapshot(path: Path): FileSnapshot? {
+        if (!persistSnapshots) return null
+        return runCatching {
+            val file = snapshotDir.resolve(snapshotFileName(path))
+            if (!Files.isRegularFile(file)) return null
+            val node = snapshotMapper.readTree(Files.readString(file))
+            val contentNode = node.get("content")
+            FileSnapshot(
+                path = path,
+                existed = node.get("existed")?.asBoolean() ?: false,
+                content = contentNode?.takeIf { !it.isNull }?.asText(),
+                checksum = node.get("checksum")?.asText() ?: "absent",
+                trackedAtMillis = node.get("trackedAtMillis")?.asLong() ?: 0L,
+            )
+        }.getOrNull()
+    }
+
+    /** Stable per-path snapshot file name (SHA-256 of the workspace-relative path). */
+    private fun snapshotFileName(path: Path): String {
+        val rel = runCatching { canonicalRoot.relativize(path).toString().replace('\\', '/') }
+            .getOrDefault(path.toString())
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(rel.toByteArray(StandardCharsets.UTF_8))
+        return digest.take(16).joinToString("") { "%02x".format(it) } + ".json"
+    }
+
+    /**
+     * Atomically replace [target] with [content].
+     *
+     * Writes a sibling temp file and moves it into place: `ATOMIC_MOVE` on the
+     * same filesystem is a rename, so readers see either the old or the new
+     * file — never a truncated one. Falls back to a plain replace move where the
+     * filesystem cannot do atomic moves (some container/FUSE mounts).
+     *
+     * The temp file is always cleaned up, including when the move throws — a
+     * crashed write must not leave `.b4-*.tmp` litter in the repository.
+     */
+    private fun writeAtomic(
+        target: Path,
+        content: String,
+        encoding: Charset = StandardCharsets.UTF_8,
+    ) {
+        val dir = target.toAbsolutePath().parent
+            ?: throw IOException("Cannot resolve parent directory of $target")
+        Files.createDirectories(dir)
+        val tmp = Files.createTempFile(dir, ".b4-write-", ".tmp")
+        try {
+            Files.writeString(tmp, content, encoding, StandardOpenOption.TRUNCATE_EXISTING)
+            try {
+                Files.move(
+                    tmp, target,
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            runCatching { Files.deleteIfExists(tmp) }
+        }
+    }
+
+    /**
+     * Split [text] into lines, dropping the empty element produced by a
+     * trailing newline, so callers can re-join with [joinLines] without
+     * inventing or losing a final line.
+     */
+    private fun lineList(text: String): List<String> {
+        if (text.isEmpty()) return emptyList()
+        val lines = text.lines().toMutableList()
+        if (lines.isNotEmpty() && lines.last().isEmpty()) lines.removeAt(lines.size - 1)
+        return lines
+    }
+
+    /**
+     * Re-join [lines] using the ORIGINAL file's newline style and trailing
+     * newline presence. Line-range edits must not rewrite a CRLF file as LF
+     * (that produced whole-file diffs and broke CRLF-preserving tooling).
+     */
+    private fun joinLines(lines: List<String>, original: String): String {
+        val eol = when {
+            original.contains("\r\n") -> "\r\n"
+            original.contains('\n') -> "\n"
+            original.contains('\r') -> "\r"
+            else -> "\n"
+        }
+        val trailingNewline = original.isEmpty() ||
+            original.endsWith("\n") || original.endsWith("\r")
+        if (lines.isEmpty()) return ""
+        val body = lines.joinToString(eol)
+        return if (trailingNewline) body + eol else body
     }
 
     private fun errorResult(message: String): String = "Error: $message"
@@ -1149,5 +1463,4 @@ class CodingAgentFileSystem(
         else -> "${bytes / (1024 * 1024 * 1024)} GB"
     }
 }
-
 

@@ -1,8 +1,8 @@
 package ai.platon.pulsar.agentic.tools.advanced.crawl
 
+import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.sql.SQLTemplate
-import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.event.ServerSideEventHandlers
 import com.fasterxml.jackson.annotation.JsonCreator
@@ -42,7 +42,16 @@ data class QueryRequest @JsonCreator constructor(
 data class ScrapeResponse(
     var id: String? = null,
     var statusCode: Int = ResourceStatus.SC_CREATED,
-    var pageStatusCode: Int = ProtocolStatusCodes.SC_CREATED,
+    /**
+     * The HTTP status of the PAGE this task loaded, or [PAGE_STATUS_UNKNOWN] when
+     * no page status was observed.
+     *
+     * Deliberately not a task-lifecycle code: this field used to default to
+     * `201 / SC_CREATED` ("created"), which every task that never set it reported
+     * as the page's HTTP status — contradicting the same record's message. A real
+     * `201` returned by a page is still representable and distinguishable.
+     */
+    var pageStatusCode: Int = PAGE_STATUS_UNKNOWN,
     var pageContentBytes: Int = 0,
 
     /**
@@ -89,11 +98,41 @@ data class ScrapeResponse(
      * Wall-clock duration of the task in milliseconds: `startedTime -> finishTime`
      * for a task that ran to completion, `createdTime -> finishTime` for one that
      * never started, and null while the task is still running.
+     *
+     * This is *processing* time only — the queue wait is
+     * [`queuedMillis`][queuedMillis], and the total time to result is
+     * `createdTime -> finishTime`.
      */
     val durationMillis: Long?
         get() {
             val end = finishTime ?: return null
             val start = startedTime ?: createdTime ?: return null
+            return java.time.Duration.between(start, end).toMillis().coerceAtLeast(0)
+        }
+
+    /**
+     * How long the task waited in the queue before a worker picked it up
+     * (`createdTime -> startedTime`), or null while it is still queued.
+     *
+     * Reported separately from [durationMillis] because that split is the whole
+     * difference between "the work is slow" and "the pool is busy" — a distinction
+     * a single duration number cannot make.
+     */
+    val queuedMillis: Long?
+        get() {
+            val start = startedTime ?: return null
+            val created = createdTime ?: return null
+            return java.time.Duration.between(created, start).toMillis().coerceAtLeast(0)
+        }
+
+    /**
+     * Total time from submission to result (`createdTime -> finishTime`), or null
+     * while the task is still running.
+     */
+    val elapsedMillis: Long?
+        get() {
+            val end = finishTime ?: return null
+            val start = createdTime ?: return null
             return java.time.Duration.between(start, end).toMillis().coerceAtLeast(0)
         }
 
@@ -146,7 +185,19 @@ fun ScrapeResponse.failed(statusCode: Int): ScrapeResponse {
 
 fun ScrapeResponse.emitEvent(event: String) {
     this.event = event
-    this.lastModifiedTime = Instant.now()
+    val now = Instant.now()
+    this.lastModifiedTime = now
+    // The FIRST event of a task is emitted when a worker actually starts the work
+    // (the load pipeline's `onWillLoad`), which is exactly when the task leaves the
+    // queue — so this is where `startedTime` belongs.
+    //
+    // Leaving it to `refresh()`/`complete()` instead stamped the task's start at the
+    // moment it *finished* for every worker that reported only terminal updates
+    // (swarm query tasks): `startedTime == finishTime` made the reported duration a
+    // handful of milliseconds and hid the queue wait completely.
+    if (startedTime == null) {
+        startedTime = now
+    }
 }
 
 fun ScrapeResponse.failed(statusCode: Int, pageStatusCode: Int): ScrapeResponse {
@@ -304,7 +355,7 @@ data class PageVisitStatus(
      * */
     var processState: String = "created", // created, in_progress, done
 
-    var pageStatusCode: Int = ProtocolStatusCodes.SC_CREATED,
+    var pageStatusCode: Int = PAGE_STATUS_UNKNOWN,
     var pageContentBytes: Int = 0,
 
     var message: String? = null, // additional message, e.g. the action flow

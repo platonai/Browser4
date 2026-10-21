@@ -130,6 +130,13 @@ data class CrawlResponse(
     val pages: List<CrawlPageResult>? = null,
     val error: String? = null,
     val diagnostic: String? = null,
+    /**
+     * When the crawl was submitted, as **epoch milliseconds** (unlike the
+     * [startedTime]/[finishTime] siblings, which are ISO-8601 instants).
+     *
+     * Stable for the whole life of the task: the in-flight and terminal records
+     * carry the submission value forward instead of re-evaluating the default.
+     */
     val createdAt: Long = System.currentTimeMillis(),
     val taskTTLMinutes: Int = 60,
     /** Set when a worker first picks up the task (first non-CREATED status). */
@@ -283,6 +290,18 @@ data class CrawlPageResult(
     val title: String? = null,
     val contentLength: Long? = null,
     val depth: Int = 0,
+    /**
+     * The HTTP status the page was served with (200, 404, 503, …), or null when the
+     * row was produced without a response (a fetch that raised, a zero-byte load).
+     *
+     * Without it an error page was indistinguishable from a real one: a 404/500
+     * body still parses into a document, so the crawl reported "1 page found" with
+     * status OK and the consumer had no way to tell that the page it asked for does
+     * not exist.  Rows with [servedFromStore] keep the status of the *stored* copy's
+     * origin, so a store-served row is not an HTTP error even when its status looks
+     * like one.
+     */
+    val httpStatus: Int? = null,
     val extracted: List<Map<String, Any?>>? = null,
     /** Non-null when X-SQL extraction was attempted but failed on this page. */
     val extractionError: String? = null,

@@ -92,6 +92,38 @@ describe('_buildArgs', () => {
       assert.ok(!args.includes(undefined), 'should not contain undefined');
     });
   });
+
+  // dsh takes the task as a bare positional argument of its headless profile
+  // (`dsh --profile headless "<task>"`); it has no prompt flag and rejects stdin.
+  describe('when the provider takes a positional prompt (dsh)', () => {
+    it('should append the prompt after the profile args with no flag', () => {
+      llm.init({ provider: 'dsh' });
+      const args = llm._buildArgs('say ok');
+
+      assert.deepEqual(args, ['--profile', 'headless', 'say ok']);
+    });
+
+    it('should leave the args alone when the prompt is missing', () => {
+      llm.init({ provider: 'dsh' });
+
+      assert.deepEqual(llm._buildArgs(null), ['--profile', 'headless']);
+      assert.deepEqual(llm._buildArgs(''), ['--profile', 'headless'],
+        'an empty prompt must not become an empty positional argument');
+    });
+
+    it('should add the headless profile when config supplies only the binary', () => {
+      // config.psd1's `DSH = @('dsh')` yields an empty baseArgs array.
+      llm.init({ provider: 'dsh', baseArgs: [] });
+
+      assert.deepEqual(llm._buildArgs('say ok'), ['--profile', 'headless', 'say ok']);
+    });
+
+    it('should keep a profile pinned in the base args', () => {
+      llm.init({ provider: 'dsh', baseArgs: ['--profile', 'acp'] });
+
+      assert.deepEqual(llm._buildArgs('say ok'), ['--profile', 'acp', 'say ok']);
+    });
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -193,6 +225,71 @@ describe('PROVIDER_DEFS', () => {
     const def = llm.PROVIDER_DEFS.openai;
     assert.equal(def.binary, 'openai');
     assert.equal(def.promptFlag, '-p');
+  });
+
+  it('should define dsh provider with a positional prompt and no run subcommand', () => {
+    const def = llm.PROVIDER_DEFS.dsh;
+    assert.equal(def.binary, 'dsh');
+    assert.equal(def.promptPosition, 'positional');
+    assert.deepEqual(def.baseArgs, ['--profile', 'headless']);
+    assert.notEqual(def.promptFlag, 'run', 'dsh has no `run` subcommand');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// _parsePsd1Config — backend priority (dsh preferred)
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('_parsePsd1Config', () => {
+  function writeTempConfig(content) {
+    const file = path.join(os.tmpdir(),
+      `llm-config-${Date.now()}-${Math.random().toString(36).slice(2)}.psd1`);
+    fs.writeFileSync(file, content, 'utf-8');
+    return file;
+  }
+
+  function withConfig(content, fn) {
+    const file = writeTempConfig(content);
+    try {
+      return fn(llm._parsePsd1Config(file));
+    } finally {
+      try { fs.unlinkSync(file); } catch (_) {}
+    }
+  }
+
+  it('should prefer an active DSH block over an active CLAUDE block', () => {
+    withConfig(
+      "@{\n  DSH = @(\n    'dsh'\n  )\n  CLAUDE = @(\n    'claude'\n    '--verbose'\n  )\n}\n",
+      (cfg) => {
+        assert.equal(cfg.type, 'dsh');
+        assert.equal(cfg.binary, 'dsh');
+        assert.deepEqual(cfg.baseArgs, []);
+      });
+  });
+
+  it('should prefer an active CLAUDE block over KIMI/CODEX when DSH is commented', () => {
+    withConfig(
+      "@{\n  # DSH = @(\n  #   'dsh'\n  # )\n  CLAUDE = @(\n    'claude'\n    '--verbose'\n  )\n  CODEX = @(\n    'codex'\n  )\n}\n",
+      (cfg) => {
+        assert.equal(cfg.type, 'claude');
+        assert.deepEqual(cfg.baseArgs, ['--verbose']);
+      });
+  });
+
+  it('should fall through to COPILOT when only COPILOT is active', () => {
+    withConfig(
+      "@{\n  # CLAUDE = @(\n  #   'claude'\n  # )\n  COPILOT = @(\n    'gh'\n    'copilot'\n  )\n}\n",
+      (cfg) => {
+        assert.equal(cfg.type, 'copilot');
+        assert.equal(cfg.binary, 'gh');
+        assert.deepEqual(cfg.baseArgs, ['copilot']);
+      });
+  });
+
+  it('should return null for a config with no active backend block', () => {
+    withConfig("@{\n  # CLAUDE = @(\n  #   'claude'\n  # )\n}\n", (cfg) => {
+      assert.equal(cfg, null);
+    });
   });
 });
 

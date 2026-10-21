@@ -106,6 +106,25 @@ function Assert-ContainsString {
     }
 }
 
+function Assert-NotContainsString {
+    param(
+        [string]$Label,
+        [string]$Haystack,
+        [string]$Needle
+    )
+    $passed = $Haystack -notmatch [regex]::Escape($Needle)
+    if ($passed) {
+        Write-Host "    ✅ $Label" -ForegroundColor Green
+    } else {
+        Write-Host "    ❌ $Label — string unexpectedly contains '$Needle'" -ForegroundColor Red
+        $script:ContentFailures++
+    }
+    $exitCode = if ($passed) { 0 } else { 1 }
+    if (Get-Command Register-CliResult -ErrorAction SilentlyContinue) {
+        Register-CliResult -Label $Label -ExitCode $exitCode -Elapsed ([TimeSpan]::Zero)
+    }
+}
+
 function Assert-NotNull {
     param(
         [string]$Label,
@@ -926,6 +945,62 @@ $muteOutput = & {
 $muteResult = @($muteOutput | Where-Object { $_ -is [hashtable] })[0]
 Assert-Returns -Label 'Relay: silent child reports zero output lines' -Actual $muteResult.OutputLines -Expected 0
 Assert-Returns -Label 'Relay: silent child still reports its exit code' -Actual $muteResult.ExitCode -Expected 0
+Assert-Returns -Label 'Relay: healthy console reports no echo failures' -Actual $muteResult.ConsoleWriteFailures -Expected 0
+
+Write-Host "━━━ RWS run: relay returns although a descendant holds the pipes ━━━" -ForegroundColor Cyan
+
+# Regression guard for "the run finished but the shell never came back":
+# a child's stdout/stderr are anonymous pipes, and a grandchild inherits them
+# through CreateProcess.  When the grandchild outlives the child (the JVM,
+# headless Chrome, an agent CLI), the pipes stay open, so
+# Process.WaitForExit() (parameterless) — which also waits for the async
+# readers to reach EOF — blocked the caller for as long as that grandchild
+# lived.  Ctrl+C cannot break a thread parked in that native wait, so a
+# finished 5-hour run had to be killed from outside.  The drain is bounded now:
+# this call must come back within -DrainTimeoutSec, long before the holder
+# exits on its own.
+$grandchildSeconds = 15
+$pipeHolderChild = Join-Path $relayDir 'spawns-pipe-holding-grandchild.ps1'
+@"
+Write-Output 'holder-child-line-one'
+`$exe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+`$null = Start-Process -FilePath `$exe -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds $grandchildSeconds') -NoNewWindow -PassThru
+Write-Output 'holder-child-line-two'
+"@ | Set-Content -LiteralPath $pipeHolderChild -Encoding utf8
+
+$pipeHolderLog = Join-Path $relayDir 'pipe-holder.log'
+$pipeHolderWatch = [Diagnostics.Stopwatch]::StartNew()
+$pipeHolderOutput = & {
+    Invoke-ChildProcessStreaming -FilePath $pwshExe `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $pipeHolderChild) `
+        -LogFile $pipeHolderLog -HeartbeatSeconds 0 -DrainTimeoutSec 3
+} 6>&1
+$pipeHolderWatch.Stop()
+
+$pipeHolderResult = @($pipeHolderOutput | Where-Object { $_ -is [hashtable] })[0]
+$pipeHolderText = ($pipeHolderOutput | ForEach-Object { "$_" }) -join "`n"
+
+Assert-NotNull -Label 'Relay with pipe-holding grandchild: returns a result' -Value $pipeHolderResult
+Assert-Returns -Label 'Relay with pipe-holding grandchild: child exit code' -Actual $pipeHolderResult.ExitCode -Expected 0
+Assert-Returns -Label 'Relay with pipe-holding grandchild: both child lines captured' -Actual $pipeHolderResult.OutputLines -Expected 2
+Assert-ContainsString -Label 'Relay with pipe-holding grandchild: warns about the held pipes' -Haystack $pipeHolderText -Needle 'still held open'
+# Bounded drain is 3s; the unbounded call would sit here for $grandchildSeconds.
+Assert-Returns -Label 'Relay with pipe-holding grandchild: returns in bounded time' `
+    -Actual ($pipeHolderWatch.Elapsed.TotalSeconds -lt 12) -Expected $true
+
+if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+    Assert-ContainsString -Label 'Relay with pipe-holding grandchild: names the surviving descendant' `
+        -Haystack $pipeHolderText -Needle 'descendant process(es)'
+} else {
+    Write-Host '    (skipped survivor listing assertion — Win32_Process is Windows-only)' -ForegroundColor DarkGray
+}
+
+# The bounded drain plus the EOF counter are what make the return possible;
+# pin them so a future "simplify back to WaitForExit()" cannot slip through.
+$runnerSource = Get-Content -LiteralPath $TestPs1Path -Raw
+Assert-ContainsString -Label 'Relay: runner drains with Wait-ChildOutputDrain' `
+    -Haystack $runnerSource -Needle 'Wait-ChildOutputDrain -Relay $relay'
+Assert-ContainsString -Label 'Relay: relay tracks stream EOF' -Haystack $runnerSource -Needle 'EofCount'
 
 Remove-Item -LiteralPath $relayDir -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -1053,6 +1128,24 @@ Assert-ContainsString -Label 'Wiring: skills -Show runs the conformance check' -
 
 $contractShow = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession -Show mcp-contract *>&1" *>&1 | Out-String
 Assert-ContainsString -Label 'Wiring: mcp-contract -Show runs the conformance check' -Haystack $contractShow -Needle 'skill-doc-lint.ps1'
+
+Write-Host "━━━ ps: unknown arguments are rejected, not silently ignored ━━━" -ForegroundColor Cyan
+
+# `ps --list` used to be forwarded to every test script and dropped there, so
+# the whole suite ran (long enough to look like a hang) instead of listing.
+$psUnknown = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession ps --list *>&1; `$LASTEXITCODE" *>&1 | Out-String
+Assert-ContainsString -Label 'ps --list: reports the unrecognized argument' -Haystack $psUnknown -Needle "unrecognized argument(s) for 'ps': --list"
+Assert-ContainsString -Label 'ps --list: points at -Show ps' -Haystack $psUnknown -Needle 'test.ps1 -Show ps'
+Assert-ContainsString -Label 'ps --list: names the known argument set' -Haystack $psUnknown -Needle 'Known arguments: -Quiet'
+
+# The one accepted argument must keep working, including with -Show.
+$psQuietShow = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession -Show ps -Quiet *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'ps -Quiet: still listed under -Show' -Haystack $psQuietShow -Needle 'Found '
+
+# A combined run keeps the old pass-through behaviour: the flag belongs to the
+# other suite, so `ps` must not reject it.
+$psCombined = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession -Show ps fast -pl nowhere *>&1" *>&1 | Out-String
+Assert-NotContainsString -Label 'ps + fast -pl: not rejected when ps is not the sole target' -Haystack $psCombined -Needle 'unrecognized argument(s)'
 
 # ═══════════════════════════════════════════════════════════════════
 # Summary

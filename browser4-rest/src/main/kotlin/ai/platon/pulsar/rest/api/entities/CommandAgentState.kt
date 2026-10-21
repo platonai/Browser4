@@ -24,6 +24,12 @@ data class CommandAgentState(
     var evaluationPreviousGoal: String? = null,
     var summary: String? = null,
     var isComplete: Boolean? = null,
+    // AI: completion key findings, files changed and open problems — the agent's own
+    // completion report (system.taskComplete). They are carried through to
+    // CommandResult so `agent result` returns the deliverable, not just a summary.
+    var keyFindings: List<String>? = null,
+    var filesChanged: List<String>? = null,
+    var problems: List<String>? = null,
     // When the step state was created
     var timestamp: String? = null,
 )
@@ -83,6 +89,9 @@ internal fun AgentState.toCommandAgentState(): CommandAgentState {
         evaluationPreviousGoal = evaluationPreviousGoal,
         summary = summary,
         isComplete = isComplete,
+        keyFindings = keyFindings,
+        filesChanged = filesChanged,
+        problems = problems,
         timestamp = timestamp.toString(),
     )
 }

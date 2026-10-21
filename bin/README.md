@@ -32,6 +32,7 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 - `skills`: Run skills module tests
 - `mcp`: Run MCP module tests
 - `mcp-contract`: Contract gate — tool matrix, docs, lint and validators (agentic + rest)
+- `verify`: Run the `code devtask` plan-quality evaluation (`bin/eval-devtask.ps1`) — plan shape, signal binding, CLI argument contract, `--verify` semantics, determinism and the read-only guarantee. Needs a live dev backend, so it runs alone; forwards `-Fast` (default), `-Strict`, `-NoBuild`, `-Json`, `-Probe=<id,...>`
 - `ps`: Run all PowerShell `*.tests.ps1` files in the project
 - `main`: Run all Browser4 main tests (`fast`, `rest`, `it`, `e2e`)
 - `cli` / `browser4-cli`: Run Rust Browser4 CLI tests from `cli/browser4-cli`
@@ -58,6 +59,8 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 ./bin/test.sh cli -- --nocapture         # Pass extra cargo test args
 ./bin/test.sh server -Dmock.site.port=18080
 ./bin/test.sh skills                     # Run skills-focused agentic tests
+./bin/test.sh verify                     # code devtask plan-quality eval (fast)
+./bin/test.sh verify -Strict             # treat every gate as a hard failure
 ./bin/test.sh rws                        # Run real-world-scenario unit tests
 ./bin/test.sh rws --scenarios            # Run all agent-scenario tasks
 ./bin/test.sh rws --scenarios amazon     # Run a specific scenario task
@@ -86,6 +89,47 @@ Tests the full lifecycle: install → smoke-test → uninstall → re-install �
 | `-WorkingDir <path>` | Override the working directory |
 | `-Help` | Show help message |
 
+### `eval-devtask.ps1`, `eval-devtask.sh`
+
+Black-box evaluation of `browser4-cli code devtask` — the Browser4
+self-development planner reached as `./b4w.ps1 cli code devtask "<task>"`.
+
+Runs a fixed matrix of natural-language dev tasks through the real
+wrapper → CLI → MCP → `coding_devTask` chain and grades the rendered plan:
+step shape, signal binding (module / file / test class / new plugin module),
+determinism, read-only planning, the CLI argument contract, `--verify`
+semantics, and latency. Purely plan-mode: it never passes `--execute`, and the
+`G-READONLY` gate proves the working tree is untouched.
+
+The task definition, gate catalogue, and known-gap register (K1–K8 at the
+4.14.2 baseline) live in
+[`docs-dev/copilot/eval-code-devtask.md`](../docs-dev/copilot/eval-code-devtask.md).
+
+```powershell
+.\bin\eval-devtask.ps1                                # full eval, ~2 min
+.\bin\eval-devtask.ps1 -Fast -NoBuild                 # plan-only, reuse the built binary
+.\bin\eval-devtask.ps1 -Probe existing-plugin -Json   # one probe, JSON report
+.\bin\eval-devtask.ps1 -Strict                        # known gaps become failures
+```
+
+```bash
+# Linux / macOS / Git Bash — same arguments, forwarded to pwsh
+./bin/eval-devtask.sh -Fast
+```
+
+| Parameter | Description |
+|---|---|
+| `-Fast` | Skip `--verify` and the determinism re-run |
+| `-Strict` | Treat registered known gaps as failures |
+| `-Json` | Print the report as JSON only |
+| `-JsonPath <path>` | Also write the JSON report (write it outside the repo — it would otherwise trip the read-only gate) |
+| `-Probe <id,...>` | Run only the named probes |
+| `-TimeoutSec <n>` | Per-invocation timeout (default 300; raise it for `--verify` + Maven) |
+| `-NoBuild` | Forward `-NoBuild` to `b4w.ps1` (reuse the built CLI binary) |
+
+Exit codes: `0` every required gate passes, `1` a required gate failed (or any
+known gap under `-Strict`), `2` harness/environment problem.
+
 ### `verify-plugin.ps1`, `verify-plugin.sh`
 
 Validate that a built plugin JAR has the correct structure for deployment.
@@ -95,9 +139,14 @@ Checks that the JAR contains:
 - `META-INF/spring/…AutoConfiguration.imports` — Spring auto-configuration entry
 - Compiled `.class` files
 - No embedded dependency JARs (thin-JAR requirement)
+- A manifest `version` that matches the artifact version (`plugin list` renders
+  the manifest value, so a hand-maintained literal makes the loaded build
+  unidentifiable). Reported as a warning; `-Strict` / `--strict` makes it a
+  failure.
 
 ```powershell
 .\bin\verify-plugin.ps1 path\to\plugin.jar
+.\bin\verify-plugin.ps1 path\to\plugin.jar -Strict
 ```
 
 ### `start-runtime.ps1`
@@ -236,7 +285,9 @@ document correctness, and SKILL documentation AI-friendliness. See also [mainten
 
 **Reporters** (`reporters/`): `report-console.ps1` (colorized terminal), `report-json.ps1`, `report-github-annotations.ps1`, `report-summary.ps1` (markdown).
 
-**Shared modules** (`common/`): `MaintenanceUtil.ps1` (logging, results, thresholds), `MaintenanceState.ps1` (persistent state I/O with file locking).
+**Shared modules** (`common/`): `MaintenanceUtil.ps1` (logging, results, thresholds), `MaintenanceState.ps1` (persistent state I/O with file locking), `Util.ps1` (encoding pin).
+
+**Console encoding**: dot-sourcing `common/Util.ps1` pins the process to UTF-8 (`Set-Utf8ConsoleEncoding`), because every consumer of these scripts reads UTF-8 — the relay in `bin/test.ps1`, the per-run logs, CI and the capture used for issue tracking. A redirected stream otherwise starts on the Windows OEM code page, where this tree's decoration degrades into line noise: `·` / `—` become `??` and `═` becomes `?T` (CP936 `A8 54`, whose `0x54` is a literal `T`). New entry points should dot-source `common/Util.ps1` — or the module that already does, such as `maintenance/common/MaintenanceUtil.ps1`. `bin/tests/console-encoding.tests.ps1` asserts the behavior end-to-end, from raw child bytes.
 
 **Configuration**: `thresholds/thresholds.psd1` (all numeric thresholds, overridable via env vars), `state/maintenance-state.json` (team-shared run history in git).
 

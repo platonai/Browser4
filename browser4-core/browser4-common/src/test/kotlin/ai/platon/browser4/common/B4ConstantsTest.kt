@@ -52,4 +52,13 @@ class B4ConstantsTest {
         // unfocused background tab, which is the signal the key exists to suppress.
         assertEquals(true, B4Constants.FOCUS_EMULATION_DEFAULT)
     }
+
+    @Test
+    @DisplayName("the extensions inherit key and its default are pinned")
+    fun extensionsInheritKeyAndDefaultArePinned() {
+        assertEquals("browser.extensions.inherit", B4Constants.EXTENSIONS_INHERIT)
+        // Inheritance stays the default: extensions carry useful login state for real-world
+        // tasks, so the user must opt into a pure environment rather than the other way round.
+        assertEquals(true, B4Constants.EXTENSIONS_INHERIT_DEFAULT)
+    }
 }

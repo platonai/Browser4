@@ -1144,6 +1144,134 @@ foreach ($f in $shouldKeep) {
 Write-Host ''
 
 # ═══════════════════════════════════════════════════════════════════
+# TESTS: plugin bundling helpers
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Plugin bundling helpers ━━━" -ForegroundColor Cyan
+
+# --- Get-PluginJarIdentity / name wrappers --------------------------------
+$imagesIdentity = Get-PluginJarIdentity -jarName 'browser4-images-4.14.1-SNAPSHOT.jar'
+Assert-Equal -Label 'PJI: plugin name' -Actual $imagesIdentity.Plugin -Expected 'browser4-images'
+Assert-Equal -Label 'PJI: version' -Actual $imagesIdentity.Version -Expected '4.14.1-SNAPSHOT'
+
+$profileIdentity = Get-PluginJarIdentity -jarName 'browser4-profile-import-4.14.0-rc.10.jar'
+Assert-Equal -Label 'PJI: multi-segment plugin name' -Actual $profileIdentity.Plugin -Expected 'browser4-profile-import'
+Assert-Equal -Label 'PJI: rc version' -Actual $profileIdentity.Version -Expected '4.14.0-rc.10'
+
+$shadedIdentity = Get-PluginJarIdentity -jarName 'browser4-pptx-4.14.1-SNAPSHOT-shaded.jar'
+Assert-Equal -Label 'PJI: -shaded classifier stripped (plugin)' -Actual $shadedIdentity.Plugin -Expected 'browser4-pptx'
+Assert-Equal -Label 'PJI: -shaded classifier stripped (version)' -Actual $shadedIdentity.Version -Expected '4.14.1-SNAPSHOT'
+
+Assert-Null -Label 'PJI: shade intermediate (original- prefix) is not a plugin' `
+    -Value (Get-PluginJarIdentity -jarName 'original-browser4-pptx-4.14.1-SNAPSHOT.jar')
+Assert-Null -Label 'PJI: version-less third-party JAR has no identity' `
+    -Value (Get-PluginJarIdentity -jarName 'acme-helper.jar')
+
+Assert-Equal -Label 'GPV: wrapper returns the version' `
+    -Actual (Get-PluginVersionFromJarName -jarName 'browser4-swarm-4.14.1-SNAPSHOT.jar') `
+    -Expected '4.14.1-SNAPSHOT'
+Assert-Equal -Label 'GPV: unmatched name returns empty' `
+    -Actual (Get-PluginVersionFromJarName -jarName 'not-a-plugin.txt') -Expected ''
+Assert-Equal -Label 'GPB: wrapper returns the plugin name' `
+    -Actual (Get-PluginBaseNameFromJarName -jarName 'browser4-markdown-4.14.1-SNAPSHOT.jar') `
+    -Expected 'browser4-markdown'
+
+# --- Select-BundlePluginJar ----------------------------------------------
+$pluginSelectDir = New-TempDir 'plugin-select'
+function New-PluginJarFile {
+    param([string]$Directory, [string]$Name, [string]$LastWriteTime = '2026-01-01T00:00:00')
+    $path = Join-Path $Directory $Name
+    Set-Content -LiteralPath $path -Value 'jar placeholder' -Encoding UTF8
+    (Get-Item -LiteralPath $path).LastWriteTime = [datetime]$LastWriteTime
+    return (Get-Item -LiteralPath $path)
+}
+
+$imagesSnapshotA = New-PluginJarFile -Directory (New-TempDir 'plugin-select/a') -Name 'browser4-images-4.14.1-SNAPSHOT.jar' -LastWriteTime '2026-01-01T00:00:00'
+$imagesSnapshotB = New-PluginJarFile -Directory (New-TempDir 'plugin-select/b') -Name 'browser4-images-4.14.1-SNAPSHOT.jar' -LastWriteTime '2026-02-01T00:00:00'
+$imagesOldRelease = New-PluginJarFile -Directory $pluginSelectDir -Name 'browser4-images-4.13.0.jar'
+
+# A JAR from another release train never wins, even when it is the newest file.
+$selection = Select-BundlePluginJar -Candidates @($imagesOldRelease, $imagesSnapshotA, $imagesSnapshotB) -ProjectVersion '4.14.1-SNAPSHOT'
+Assert-Equal -Label 'SBP: newest same-version snapshot wins' `
+    -Actual $selection.Jar.FullName -Expected $imagesSnapshotB.FullName
+Assert-Equal -Label 'SBP: other-version candidate reported' `
+    -Actual ($selection.FoundVersions -join ',') -Expected '4.13.0,4.14.1-SNAPSHOT'
+
+$otherTrain = Select-BundlePluginJar -Candidates @($imagesOldRelease) -ProjectVersion '4.14.1-SNAPSHOT'
+Assert-Null -Label 'SBP: no matching version → no JAR' -Value $otherTrain.Jar
+Assert-Equal -Label 'SBP: found versions listed for the warning' -Actual ($otherTrain.FoundVersions -join ',') -Expected '4.13.0'
+Assert-Equal -Label 'SBP: another release train never wins over the checkout version' `
+    -Actual (Select-BundlePluginJar -Candidates @($imagesOldRelease, $imagesSnapshotA) -ProjectVersion '4.14.1-SNAPSHOT').Jar.FullName `
+    -Expected $imagesSnapshotA.FullName
+
+$noCandidates = Select-BundlePluginJar -Candidates @() -ProjectVersion '4.14.1-SNAPSHOT'
+Assert-Null -Label 'SBP: empty candidate list → no JAR' -Value $noCandidates.Jar
+Assert-Equal -Label 'SBP: empty candidate list → no versions' -Actual $noCandidates.FoundVersions.Count -Expected 0
+
+# --- Select-PreservedPluginJars ------------------------------------------
+$preserveDir = New-TempDir 'plugin-preserve'
+$installedPptx = New-PluginJarFile -Directory $preserveDir -Name 'browser4-pptx-4.14.1-SNAPSHOT.jar'
+$staleImages = New-PluginJarFile -Directory $preserveDir -Name 'browser4-images-4.13.0.jar'
+$thirdPartyOld = New-PluginJarFile -Directory $preserveDir -Name 'acme-plugin-1.0.0.jar' -LastWriteTime '2026-01-01T00:00:00'
+$thirdPartyNew = New-PluginJarFile -Directory $preserveDir -Name 'acme-plugin-1.1.0.jar' -LastWriteTime '2026-03-01T00:00:00'
+$unversioned = New-PluginJarFile -Directory $preserveDir -Name 'custom-plugin.jar'
+
+$preserved = Select-PreservedPluginJars -PreservedJars @($installedPptx, $staleImages, $thirdPartyOld, $thirdPartyNew, $unversioned) `
+    -BundledPluginNames @('browser4-swarm', 'browser4-images')
+$restoredNames = @($preserved.Restore | ForEach-Object { $_.Name }) -join ','
+Assert-Equal -Label 'SPP: installed-but-not-bundled plugin survives' `
+    -Actual ($restoredNames -like '*browser4-pptx-4.14.1-SNAPSHOT.jar*') -Expected $true
+Assert-Equal -Label 'SPP: bundled plugin duplicate dropped' `
+    -Actual ($restoredNames -like '*browser4-images*') -Expected $false
+Assert-Equal -Label 'SPP: newest third-party version wins' `
+    -Actual (($preserved.Restore | Where-Object { $_.Name -like 'acme-plugin-*' }).Name) -Expected 'acme-plugin-1.1.0.jar'
+Assert-Equal -Label 'SPP: version-less third-party JAR kept' `
+    -Actual ($restoredNames -like '*custom-plugin.jar*') -Expected $true
+Assert-Equal -Label 'SPP: three JARs restored (pptx + newest acme + unversioned)' -Actual $preserved.Restore.Count -Expected 3
+Assert-Equal -Label 'SPP: dropped JARs reported' -Actual $preserved.Dropped.Count -Expected 2
+Assert-True -Label 'SPP: drop note names the bundled plugin' `
+    -Condition (($preserved.Dropped -join ' ') -match 'browser4-images')
+Assert-True -Label 'SPP: drop note names the superseded third-party JAR' `
+    -Condition (($preserved.Dropped -join ' ') -match 'acme-plugin-1.0.0.jar')
+
+$nothingPreserved = Select-PreservedPluginJars -PreservedJars @() -BundledPluginNames @('browser4-swarm')
+Assert-Equal -Label 'SPP: empty snapshot restores nothing' -Actual $nothingPreserved.Restore.Count -Expected 0
+Assert-Equal -Label 'SPP: empty snapshot drops nothing' -Actual $nothingPreserved.Dropped.Count -Expected 0
+
+# --- Resolve-SourceTreePluginJar -----------------------------------------
+$sourceTreeRoot = New-TempDir 'source-tree'
+$pptxTarget = Join-Path $sourceTreeRoot 'browser4-plugins/browser4-pptx/target'
+New-Item -ItemType Directory -Path $pptxTarget -Force | Out-Null
+$null = New-PluginJarFile -Directory $pptxTarget -Name 'browser4-pptx-4.13.0.jar'
+$expectedPptxJar = New-PluginJarFile -Directory $pptxTarget -Name 'browser4-pptx-4.14.1-SNAPSHOT.jar' -LastWriteTime '2026-05-01T00:00:00'
+$null = New-PluginJarFile -Directory $pptxTarget -Name 'original-browser4-pptx-4.14.1-SNAPSHOT.jar'
+
+Assert-Equal -Label 'RSP: exact version wins over the shade intermediate' `
+    -Actual (Resolve-SourceTreePluginJar -RepositoryRoot $sourceTreeRoot -ModuleName 'browser4-pptx' -ProjectVersion '4.14.1-SNAPSHOT') `
+    -Expected $expectedPptxJar.FullName
+Assert-Equal -Label 'RSP: falls back to the newest non-source JAR' `
+    -Actual (Resolve-SourceTreePluginJar -RepositoryRoot $sourceTreeRoot -ModuleName 'browser4-pptx' -ProjectVersion '9.9.9') `
+    -Expected $expectedPptxJar.FullName
+Assert-Equal -Label 'RSP: unbuilt module returns empty' `
+    -Actual (Resolve-SourceTreePluginJar -RepositoryRoot $sourceTreeRoot -ModuleName 'browser4-nope' -ProjectVersion '4.14.1-SNAPSHOT') `
+    -Expected ''
+
+# --- Metadata: available/preserved plugin fields --------------------------
+$metaPlugins = Get-BundleMetadataJson -assetName 'plugins.zip' -modules @('java.base') -mainClass 'com.example.Main' `
+    -plugins @('browser4-swarm-4.14.1-SNAPSHOT.jar') -pluginVersion '4.14.1-SNAPSHOT' `
+    -availablePlugins @('browser4-pptx — shaded JAR') -preservedPlugins @('browser4-pptx-4.14.1-SNAPSHOT.jar') `
+    | ConvertFrom-Json
+Assert-Equal -Label 'BMJ: availablePlugins recorded' -Actual $metaPlugins.availablePlugins.Count -Expected 1
+Assert-Equal -Label 'BMJ: preservedPlugins recorded' -Actual $metaPlugins.preservedPlugins[0] -Expected 'browser4-pptx-4.14.1-SNAPSHOT.jar'
+Assert-Equal -Label 'BMJ: bundled plugins still recorded' -Actual $metaPlugins.plugins[0] -Expected 'browser4-swarm-4.14.1-SNAPSHOT.jar'
+
+# Back-compat: callers that pass neither field still get empty arrays.
+$metaLegacy = Get-BundleMetadataJson -assetName 'legacy.zip' -modules @('java.base') -mainClass 'com.example.Main' | ConvertFrom-Json
+Assert-Equal -Label 'BMJ: availablePlugins defaults to empty' -Actual $metaLegacy.availablePlugins.Count -Expected 0
+Assert-Equal -Label 'BMJ: preservedPlugins defaults to empty' -Actual $metaLegacy.preservedPlugins.Count -Expected 0
+
+Write-Host ''
+
+# ═══════════════════════════════════════════════════════════════════
 # TESTS: Edge cases and boundary conditions
 # ═══════════════════════════════════════════════════════════════════
 Write-Host "━━━ Edge cases & boundaries ━━━" -ForegroundColor Cyan

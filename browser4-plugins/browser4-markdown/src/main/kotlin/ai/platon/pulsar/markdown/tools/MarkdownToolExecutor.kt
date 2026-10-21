@@ -20,6 +20,7 @@ import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.markdown.config.MarkdownConfig
+import ai.platon.pulsar.markdown.service.CrawlSummary
 import ai.platon.pulsar.markdown.service.LlmsMode
 import ai.platon.pulsar.markdown.service.MarkdownConverter
 import ai.platon.pulsar.markdown.service.MarkdownUtils
@@ -80,8 +81,9 @@ open class MarkdownToolExecutor(
                 - filePath: absolute path to the saved .md file
                 - title: page title
                 - charCount: number of characters in the markdown
-                - linkCount: number of internal links discovered
-                - imageCount: number of images on the page
+                - linkCount: number of markdown links in the generated file
+                - internalLinkCount: number of internal (same-domain) links on the page
+                - imageCount: number of images referenced in the markdown
             """.trimIndent()
         )
 
@@ -105,6 +107,10 @@ open class MarkdownToolExecutor(
                 Follows internal same-domain links using BFS order.
                 Each visited page is converted to markdown and saved as a .md file.
 
+                The crawl navigates the session's active tab; when it finishes the
+                tab is navigated back to the page the crawl started from
+                (entryUrl / tabRestored in the summary).
+
                 Configuration defaults (override with properties or arguments):
                 - maxDepth: ${config.maxDepth} (0 = single page only)
                 - maxPages: ${config.maxPages}
@@ -112,12 +118,16 @@ open class MarkdownToolExecutor(
                 - crawlDelayMs: ${config.crawlDelayMs}ms between pages
 
                 Returns a CrawlSummary with:
-                - pagesCrawled: total pages successfully crawled
+                - pagesAttempted: pages attempted (pagesCrawled + pagesFailed)
+                - pagesCrawled: pages successfully converted and saved
                 - pagesFailed: pages that failed
                 - totalLinksDiscovered: total internal links found
                 - totalImages: total images found across pages
                 - durationMs: total crawl time
-                - pageResults: per-page results with filePath, title, linkCount
+                - entryUrl: the page the session tab was on before the crawl
+                - tabRestored: whether the session tab was navigated back to entryUrl
+                - pageResults: per-page results with filePath, title, charCount,
+                  linkCount (links in the file) and internalLinkCount (links on the page)
             """.trimIndent()
         )
 
@@ -161,7 +171,12 @@ open class MarkdownToolExecutor(
                 using Jsoup parsing. This is a lightweight alternative that does not require
                 a browser. Does NOT execute JavaScript.
 
-                Returns the same result type as markdown.convert().
+                Uses the same output conventions as markdown.convert(): YAML front matter
+                with the page title (from <title>, the first <h1>, or og:title), the title
+                as H1, and a filename derived from the title with the URL as fallback.
+
+                Returns {filePath, title, url, charCount, linkCount, success, error},
+                where linkCount is the number of markdown links in the saved file.
                 For JavaScript-rendered content, use markdown.convert() or markdown.crawl() instead.
             """.trimIndent()
         )
@@ -176,6 +191,8 @@ open class MarkdownToolExecutor(
                 markdown.discoverLinks()
 
                 Scans the current page DOM for all <a href> elements.
+                Fragment-only anchors (#section) and the page's own URL are not
+                links to another page and are excluded.
                 Returns a list of PageLink objects with:
                 - href: the raw href attribute value
                 - text: link text (truncated at 200 chars)
@@ -253,7 +270,8 @@ open class MarkdownToolExecutor(
                         "title" to result.title,
                         "url" to result.url,
                         "charCount" to 0,
-                        "linkCount" to result.internalLinkCount,
+                        "linkCount" to 0,
+                        "internalLinkCount" to result.internalLinkCount,
                         "imageCount" to result.imageCount,
                         "durationMs" to (System.currentTimeMillis() - startTime),
                         "error" to "No content extracted from page",
@@ -289,7 +307,8 @@ open class MarkdownToolExecutor(
                     "title" to result.title,
                     "url" to result.url,
                     "charCount" to result.markdown.length,
-                    "linkCount" to result.internalLinkCount,
+                    "linkCount" to result.markdownLinkCount,
+                    "internalLinkCount" to result.internalLinkCount,
                     "imageCount" to result.imageCount,
                     "durationMs" to durationMs,
                 )
@@ -309,23 +328,7 @@ open class MarkdownToolExecutor(
 
                 val summary = crawler.crawl(driver = driver, outputDir = dir)
 
-                mapOf(
-                    "pagesCrawled" to summary.pagesCrawled,
-                    "pagesFailed" to summary.pagesFailed,
-                    "totalLinksDiscovered" to summary.totalLinksDiscovered,
-                    "totalImages" to summary.totalImages,
-                    "durationMs" to summary.durationMs,
-                    "pageResults" to summary.pageResults.map { pr ->
-                        mapOf(
-                            "url" to pr.url,
-                            "title" to pr.title,
-                            "filePath" to pr.filePath,
-                            "linkCount" to pr.linkCount,
-                            "success" to pr.success,
-                            "error" to (pr.error ?: ""),
-                        )
-                    },
-                )
+                crawlSummaryMap(summary)
             }
 
             "crawlFrom" -> {
@@ -342,23 +345,7 @@ open class MarkdownToolExecutor(
 
                 val summary = crawler.crawl(driver = driver, startUrl = startUrl, outputDir = dir)
 
-                mapOf(
-                    "pagesCrawled" to summary.pagesCrawled,
-                    "pagesFailed" to summary.pagesFailed,
-                    "totalLinksDiscovered" to summary.totalLinksDiscovered,
-                    "totalImages" to summary.totalImages,
-                    "durationMs" to summary.durationMs,
-                    "pageResults" to summary.pageResults.map { pr ->
-                        mapOf(
-                            "url" to pr.url,
-                            "title" to pr.title,
-                            "filePath" to pr.filePath,
-                            "linkCount" to pr.linkCount,
-                            "success" to pr.success,
-                            "error" to (pr.error ?: ""),
-                        )
-                    },
-                )
+                crawlSummaryMap(summary)
             }
 
             "fetch" -> {
@@ -372,6 +359,7 @@ open class MarkdownToolExecutor(
                     "filePath" to result.filePath,
                     "title" to result.title,
                     "url" to result.url,
+                    "charCount" to result.charCount,
                     "linkCount" to result.linkCount,
                     "success" to result.success,
                     "error" to (result.error ?: ""),
@@ -444,6 +432,34 @@ open class MarkdownToolExecutor(
                     "Supported: convert, crawl, crawlFrom, fetch, discoverLinks, read."
             )
         }
+    }
+
+    /**
+     * Render a [CrawlSummary] as the tool result map shared by `crawl` and `crawlFrom`.
+     */
+    private fun crawlSummaryMap(summary: CrawlSummary): Map<String, Any?> {
+        return mapOf(
+            "pagesAttempted" to summary.pagesAttempted,
+            "pagesCrawled" to summary.pagesCrawled,
+            "pagesFailed" to summary.pagesFailed,
+            "totalLinksDiscovered" to summary.totalLinksDiscovered,
+            "totalImages" to summary.totalImages,
+            "durationMs" to summary.durationMs,
+            "entryUrl" to summary.entryUrl,
+            "tabRestored" to summary.tabRestored,
+            "pageResults" to summary.pageResults.map { pr ->
+                mapOf(
+                    "url" to pr.url,
+                    "title" to pr.title,
+                    "filePath" to pr.filePath,
+                    "charCount" to pr.charCount,
+                    "linkCount" to pr.linkCount,
+                    "internalLinkCount" to pr.internalLinkCount,
+                    "success" to pr.success,
+                    "error" to (pr.error ?: ""),
+                )
+            },
+        )
     }
 
     /**

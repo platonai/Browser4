@@ -84,6 +84,7 @@ function Get-AiAnalyzer {
     }
 
     $knownAnalyzers = @(
+        @{ Bin = 'dsh';     Name = 'DSH'      },
         @{ Bin = 'claude';  Name = 'Claude'   },
         @{ Bin = 'copilot'; Name = 'Copilot'  }
     )
@@ -861,19 +862,42 @@ function Invoke-CopilotAnalysis {
 
     # Invoke the best available AI CLI.  When agent-utils is available (repo
     # layout preserved), delegate to it for full feature support.  Otherwise
-    # use the inline fallback that probes claude/copilot on PATH directly.
+    # use the inline fallback that probes dsh/claude/copilot on PATH directly.
     if ($script:AgentUtilsAvailable) {
         $analysisText = Invoke-AgentAiAnalysis -Prompt $fullPrompt -Quiet
     } else {
         $analyzer = Get-AiAnalyzer
         if (-not $analyzer) {
-            Write-Host '  ℹ No AI CLI found on PATH (checked: claude, copilot) — skipping analysis' -ForegroundColor DarkGray
+            Write-Host '  ℹ No AI CLI found on PATH (checked: dsh, claude, copilot) — skipping analysis' -ForegroundColor DarkGray
             return $null
         }
         Write-Host "`n🤖 Running AI analysis with $analyzer ..." -ForegroundColor Magenta
         try {
-            $result = & $analyzer -p $fullPrompt 2>&1
-            $analysisText = ($result | Out-String).Trim()
+            # Write the prompt to a temp file and hand the CLI only a short
+            # pointer to it, so the argv stays tiny however large the logs are.
+            # dsh has no prompt flag and rejects stdin, so the task is positional.
+            $promptFile = [System.IO.Path]::GetTempFileName()
+            $outputFile = [System.IO.Path]::GetTempFileName()
+            try {
+                Set-Content -Path $promptFile -Value $fullPrompt -Encoding UTF8 -NoNewline
+                $shortPrompt = "Please read the instructions in the file '$promptFile' and follow them exactly. Do not summarise the file — execute every instruction it contains."
+                $promptDir = Split-Path $promptFile -Parent
+                # Per-backend non-interactive grammar.
+                $analyzerArgs = switch ($analyzer) {
+                    'dsh' { @('--profile', 'headless', $shortPrompt) }
+                    'claude' { @('-p', $shortPrompt, '--add-dir', $promptDir) }
+                    default { @('-p', $shortPrompt) }
+                }
+                # Array splatting keeps one argv element per item, so the prompt's
+                # spaces survive; Start-Process -ArgumentList would re-split them.
+                & $analyzer @analyzerArgs *> $outputFile
+                $analysisText = if (Test-Path $outputFile) {
+                    (Get-Content -Path $outputFile -Raw -Encoding UTF8).Trim()
+                }
+                else { '' }
+            } finally {
+                Remove-Item $promptFile, $outputFile -ErrorAction SilentlyContinue
+            }
         } catch {
             Write-Warning "Invoke-CopilotAnalysis: $analyzer invocation failed: $($_.Exception.Message)"
             $analysisText = $null

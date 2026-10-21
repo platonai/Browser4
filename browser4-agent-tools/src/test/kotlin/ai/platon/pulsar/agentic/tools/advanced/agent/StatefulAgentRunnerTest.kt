@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
+import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.AgentHistory
@@ -187,6 +188,56 @@ class StatefulAgentRunnerTest {
             }
             assertEquals(1, maxActive.get(), "agent runs must not overlap")
             statuses.forEach { assertTrue(it.isDone) }
+        } finally {
+            runner.close()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // pageStatusCode: the PAGE's HTTP status, or unknown — never 201
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("a task whose page loaded with 200 reports the page's 200, not 201")
+    fun taskReportsTheObservedPageStatus() = runBlocking {
+        val agent = mockAgent(history = AgentHistory(), lastRunSessionId = "run-p")
+        coEvery { agent.run(any<String>()) } returns AgentHistory()
+        val driver = mockk<ai.platon.pulsar.api.WebDriver>(relaxed = true)
+        coEvery { driver.evaluateValue(DocumentHttpStatus.RESPONSE_STATUS_EXPRESSION) } returns 200
+        val session = mockSession(agent)
+        every { session.boundDriver } returns driver
+        val runner = StatefulAgentRunner(session)
+        try {
+            val status = AgentTaskStatus()
+            runner.execute("read the page", status)
+
+            assertEquals(200, status.pageStatusCode, "the page's own status must be reported")
+            assertNotEquals(
+                ResourceStatus.SC_CREATED,
+                status.pageStatusCode,
+                "201/'created' is a task-lifecycle code, not the page's HTTP status",
+            )
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("a task whose page status cannot be observed reports unknown, never 201")
+    fun taskReportsUnknownWhenThePageCannotBeRead() = runBlocking {
+        val agent = mockAgent(history = AgentHistory(), lastRunSessionId = "run-u")
+        coEvery { agent.run(any<String>()) } returns AgentHistory()
+        val driver = mockk<ai.platon.pulsar.api.WebDriver>(relaxed = true)
+        coEvery { driver.evaluateValue(any<String>()) } returns null
+        val session = mockSession(agent)
+        every { session.boundDriver } returns driver
+        val runner = StatefulAgentRunner(session)
+        try {
+            val status = AgentTaskStatus()
+            runner.execute("coding task", status)
+
+            assertEquals(B4Constants.PAGE_STATUS_UNKNOWN, status.pageStatusCode)
+            assertNotEquals(ResourceStatus.SC_CREATED, status.pageStatusCode)
         } finally {
             runner.close()
         }

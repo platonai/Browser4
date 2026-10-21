@@ -9,17 +9,26 @@ import ai.platon.pulsar.chrome.network.NetworkObserver
 import ai.platon.pulsar.chrome.network.RouteManager
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionChromeService
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionMessageSender
+import ai.platon.pulsar.chrome.session.BrowserProcessReaper
+import ai.platon.pulsar.chrome.session.ProcessTermination
+import ai.platon.pulsar.chrome.session.ProcessTerminationReport
+import ai.platon.pulsar.chrome.session.ProfileCleanup
+import ai.platon.pulsar.chrome.session.ProfileCleanupReport
+import ai.platon.pulsar.chrome.session.SessionProfileReaper
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_MODE
 import ai.platon.browser4.common.B4Constants.CONTEXT_DIR_CAPABILITY
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
+import ai.platon.browser4.common.B4Constants.PROFILE_PATH_CAPABILITY
 import ai.platon.browser4.common.B4Constants.SESSION_ID_CAPABILITY
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AbstractAgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContexts
+import ai.platon.pulsar.agentic.tools.AttachFailureException
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.api.AbstractBrowser
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.common.CheckState
@@ -115,6 +124,13 @@ class PulsarSessionManager(
     }
 
     private val sessions = ConcurrentHashMap<String, ManagedSession>()
+
+    /**
+     * Safety net for the browser process tree a session launched: the normal
+     * close asks Chrome to exit, and this verifies (and, if needed, enforces)
+     * that no process of that tree is left behind.
+     */
+    private val browserProcessReaper = BrowserProcessReaper()
 
     /** Maps display names (e.g. "DEFAULT") to UUID-based session IDs for consistent reuse. */
     private val displayNameToSessionId = ConcurrentHashMap<String, String>()
@@ -293,13 +309,13 @@ class PulsarSessionManager(
      * the last-known URL from `currentUrl`, `null` from `evaluate`, etc. That
      * hides the fact that the target browser is gone.
      *
-     * Returns a user-facing error string when the bound browser is no longer
-     * reachable (the caller must turn it into an `isError` tool response), or
-     * `null` when the call may proceed. Browser4-launched and
+     * Returns the user-facing failure — the message plus the code a client
+     * branches on — when the bound browser can no longer drive the session's
+     * page, or `null` when the call may proceed. Browser4-launched and
      * extension-attached sessions always return `null` here: they have their
      * own recreation / readiness paths.
      */
-    fun cdpAttachedSessionUnavailable(session: ManagedSession): String? {
+    fun cdpAttachedSessionUnavailable(session: ManagedSession): AttachLivenessFailure? {
         if (session.kind != SessionKind.CDP_ATTACHED) return null
         // Nothing was ever bound — let the normal tool path report its own
         // error instead of masking it with a liveness message.
@@ -312,10 +328,36 @@ class PulsarSessionManager(
             ?.let { listOfNotNull(it.name, it.version).joinToString(" ").ifBlank { null } }
             ?.let { " ($it)" }
             .orEmpty()
-        return "The CDP-attached browser$label for session '${session.sessionId}' is no longer " +
-            "reachable — it was closed or crashed. Browser4 does not own this browser, so it is " +
-            "not restarted automatically. Re-attach to reconnect: " +
-            "browser4-cli attach --cdp <endpoint> (or attach --extension)."
+
+        // Two different failures reach this point and they need different
+        // answers: the browser process is gone, or the browser is alive and only
+        // the tab/driver link died. One "it was closed or crashed" sentence for
+        // both made users chase a crash that never happened, while `curl` on the
+        // CDP port answered 200 (attach-remote-debug#4). The browser is asked
+        // directly; a browser that cannot answer is reported as unreachable,
+        // which is the answer that assumes the least.
+        val browserAlive = runCatching {
+            runBlocking { session.agenticSession.boundBrowser?.healthy() }
+        }.getOrNull()?.isOK == true
+
+        return if (browserAlive) {
+            AttachLivenessFailure(
+                "The browser$label for session '${session.sessionId}' is still running — only the tab " +
+                    "this session was driving is gone (closed, replaced, or its DevTools connection " +
+                    "dropped). Nothing was lost with the browser, and Browser4 will not restart it. " +
+                    "Re-attach to pick up a live tab: browser4-cli attach --cdp <endpoint> " +
+                    "(or attach --extension).",
+                ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS,
+            )
+        } else {
+            AttachLivenessFailure(
+                "The CDP-attached browser$label for session '${session.sessionId}' is no longer " +
+                    "reachable — it was closed or crashed. Browser4 does not own this browser, so it is " +
+                    "not restarted automatically. Re-attach to reconnect: " +
+                    "browser4-cli attach --cdp <endpoint> (or attach --extension).",
+                ToolErrorCode.ENDPOINT_UNREACHABLE,
+            )
+        }
     }
 
     suspend fun checkHealthy(session: ManagedSession): CheckState {
@@ -529,7 +571,12 @@ class PulsarSessionManager(
             ?: "http://127.0.0.1:$port"
         val verification = verifyCdpEndpoint(normalizedEndpoint)
         describeAttachFailure(normalizedEndpoint, verification)?.let { failure ->
-            throw IllegalArgumentException(failure)
+            // The code travels with the failure so the client branches on the
+            // OBSERVED condition instead of inferring it from prose: "nothing is
+            // listening" and "no page target" need different fixes, and neither
+            // is a retryable browser rejection (which is what the generic CDP
+            // rule inferred from the words "CDP endpoint").
+            throw AttachFailureException(failure, attachFailureCode(verification))
         }
         logger.info(
             "CDP attach verification OK | {} | browser={} | pageTargets={}",
@@ -567,26 +614,110 @@ class PulsarSessionManager(
         // An explicit attach by the SAME session id to a DIFFERENT port is a
         // deliberate re-attach; rebind rather than fail, but say so loudly — it
         // must never look like the previous binding silently moved.
+        val previousPort = (existingDriver?.browser as? PulsarBrowser)?.port
         if (existingDriver != null) {
-            val previousPort = (existingDriver.browser as? PulsarBrowser)?.port
             logger.warn(
                 "Session {} is explicitly re-attaching from browser port {} to port {}; rebinding now",
                 sessionId, previousPort, port
             )
         }
 
+        // Which OTHER live session already drives this port? `attach --cdp chrome`
+        // resolves a channel to whatever endpoint answers first, so the browser a
+        // session ends up driving is routinely the one ANOTHER session opened.
+        // That is a supported workflow, but never a silent one: the evidence goes
+        // into the attach report so the client can say whose browser it bound.
+        val foreignOwnerSessionId = findSessionOwningBrowserPort(port, sessionId)
+        if (foreignOwnerSessionId != null) {
+            logger.warn(
+                "attach: endpoint {} (port {}) is already the browser of session '{}'; " +
+                    "session '{}' is being bound to it as well (observed page targets: {})",
+                normalizedEndpoint, port, foreignOwnerSessionId, sessionId, verification.pageTargetUrls
+            )
+        }
 
         // Bind the external browser to the session
         val browser = PulsarBrowser(port = port, settings = BrowserSettings())
+
+        // Verify the wrapper really drives the browser that was probed. Both
+        // readings are taken from the same port moments apart, so a difference
+        // means the port changed hands between the probe and the bind — binding
+        // it would drive a browser nobody verified. Fail loud, naming both
+        // products and everything that was observed.
+        val boundProduct = runCatching { browser.chrome.version.browser }.getOrNull()
+        val verifiedProduct = verification.browser
+        if (!verifiedProduct.isNullOrBlank() && !boundProduct.isNullOrBlank() &&
+            verifiedProduct.trim() != boundProduct.trim()
+        ) {
+            runCatching { browser.close() }
+            throw AttachFailureException(
+                "attach refused: port $port answered as '$verifiedProduct' during verification but the " +
+                    "browser bound to session '$sessionId' reports '$boundProduct' — the endpoint changed " +
+                    "between probe and bind (verified page targets: " +
+                    "${verification.pageTargetUrls.ifEmpty { listOf("<none>") }.joinToString()}). " +
+                    "Re-run attach with an explicit --cdp http://127.0.0.1:<port> of the browser you mean.",
+                ToolErrorCode.ENDPOINT_UNREACHABLE,
+            )
+        }
+
         session.agenticSession.bindBrowser(browser)
+        // A re-attach binds a NEW browser wrapper, so the driver left over from
+        // the previous binding must be replaced with it here — while attach can
+        // still see and report what happened (attach-remote-debug#1).
+        if (existingDriver != null) {
+            rebuildDriverAfterReattach(session, browser, existingDriver)
+        }
+        session.attachEvidence = AttachEvidence(
+            endpoint = normalizedEndpoint,
+            port = port,
+            verifiedBrowser = verifiedProduct,
+            pageTargetCount = verification.pageTargetCount,
+            pageTargetUrls = verification.pageTargetUrls,
+            ownedBySessionId = foreignOwnerSessionId,
+            reboundFromPort = previousPort?.takeIf { it != port },
+        )
 
         logger.info(
-            "Attached session {} to browser at port {} (endpoint: {})",
-            sessionId, port, cdpEndpoint ?: "N/A"
+            "Attached session {} to browser at port {} (endpoint: {}, verified targets: {})",
+            sessionId, port, cdpEndpoint ?: "N/A", verification.pageTargetUrls
         )
 
         return session
     }
+
+    /**
+     * The session that already drives the browser listening on [port], or null.
+     *
+     * Reads the bound browser's own port instead of any recorded value: the
+     * question is which session is *currently* on that browser, and a session
+     * that was rebound elsewhere must not keep claiming it.
+     */
+    private fun findSessionOwningBrowserPort(port: Int, excludeSessionId: String): String? {
+        return findForeignBrowserOwner(port, boundBrowserPortBindings(), excludeSessionId)
+    }
+
+    /**
+     * Every live session currently bound to a browser listening on [port],
+     * ignoring [excludeSessionId] — the list form a close needs, because an
+     * attached endpoint can be shared by more than two sessions.
+     */
+    private fun findSessionsOwningBrowserPort(port: Int, excludeSessionId: String): List<String> {
+        return findForeignBrowserOwners(port, boundBrowserPortBindings(), excludeSessionId)
+    }
+
+    /**
+     * `sessionId to boundPort` for every live session whose browser reports a
+     * port. The port is read from the bound browser itself, never from a
+     * recorded value: the question is who is on that browser *now*.
+     */
+    private fun boundBrowserPortBindings(): List<Pair<String, Int>> =
+        sessions.values.mapNotNull { candidate ->
+            runCatching {
+                (candidate.agenticSession.boundBrowser as? PulsarBrowser)?.port
+                    ?.takeIf { it > 0 }
+                    ?.let { candidate.sessionId to it }
+            }.getOrNull()
+        }
 
     /**
      * Bind a session to a browser reached through its **browser-level CDP
@@ -617,21 +748,28 @@ class PulsarSessionManager(
                 settings = BrowserSettings()
             )
         } catch (e: Exception) {
-            throw IllegalArgumentException(webSocketAttachFailure(browserWebSocketUrl, e))
+            throw AttachFailureException(
+                webSocketAttachFailure(browserWebSocketUrl, e),
+                ToolErrorCode.ENDPOINT_UNREACHABLE,
+            )
         }
 
         val tabs = try {
             browser.chrome.listTabs()
         } catch (e: Exception) {
             runCatching { browser.close() }
-            throw IllegalArgumentException(webSocketAttachFailure(browserWebSocketUrl, e))
+            throw AttachFailureException(
+                webSocketAttachFailure(browserWebSocketUrl, e),
+                ToolErrorCode.ENDPOINT_UNREACHABLE,
+            )
         }
         if (tabs.isEmpty()) {
             runCatching { browser.close() }
-            throw IllegalArgumentException(
+            throw AttachFailureException(
                 "CDP endpoint $browserWebSocketUrl is reachable but lists no page target. " +
                     "Open a tab in that browser, then retry attach — or attach through the extension: " +
-                    "browser4-cli attach --extension"
+                    "browser4-cli attach --extension",
+                ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS,
             )
         }
 
@@ -668,10 +806,17 @@ class PulsarSessionManager(
         }
 
         session.agenticSession.bindBrowser(browser)
-        runCatching { bindToExistingPageTab(browser, session.agenticSession) }
-            .onFailure {
-                logger.warn("attach --cdp: no existing page tab bound for {}; {}", sessionId, it.message)
-            }
+        // Same rule as the HTTP path: a stale driver would keep driving the
+        // previous wrapper and every later command would fail on it
+        // (attach-remote-debug#1).
+        if (existingDriver != null) {
+            rebuildDriverAfterReattach(session, browser, existingDriver)
+        } else {
+            runCatching { bindToExistingPageTab(browser, session.agenticSession) }
+                .onFailure {
+                    logger.warn("attach --cdp: no existing page tab bound for {}; {}", sessionId, it.message)
+                }
+        }
 
         logger.info(
             "Attached session {} to the browser WebSocket {} (port {})",
@@ -696,6 +841,10 @@ class PulsarSessionManager(
      *   response was received, `null` when the request never completed. Chrome's
      *   built-in remote debugging (chrome://inspect/#remote-debugging) answers
      *   every `/json*` path with 404 and is diagnosed from this field.
+     * @property pageTargetUrls the addresses of the page targets the endpoint
+     *   advertised, in discovery order. Observed evidence: a failure (or a
+     *   mis-bind) is reported with the targets that were actually there, so the
+     *   caller can tell which browser it really reached.
      */
     data class CdpEndpointVerification(
         val reachable: Boolean,
@@ -703,6 +852,7 @@ class PulsarSessionManager(
         val pageTargetCount: Int,
         val detail: String,
         val versionStatus: Int? = null,
+        val pageTargetUrls: List<String> = emptyList(),
     )
 
     /**
@@ -818,11 +968,16 @@ class PulsarSessionManager(
                 }
                 val array = com.fasterxml.jackson.databind.ObjectMapper().readTree(response.body())
                 // Count only page targets; ignore browser_ui / service_worker etc.
-                var pages = 0
+                // Their addresses are kept as the observed evidence a failure or a
+                // mis-bind is reported with, so the caller sees which browser it
+                // really reached.
+                val urls = mutableListOf<String>()
                 for (node in array) {
-                    if (node.path("type").asText("") == "page") pages++
+                    if (node.path("type").asText("") == "page") {
+                        urls += node.path("url").asText("")
+                    }
                 }
-                pages
+                urls
             } catch (e: Exception) {
                 return CdpEndpointVerification(
                     reachable = true,
@@ -836,9 +991,10 @@ class PulsarSessionManager(
             return CdpEndpointVerification(
                 reachable = true,
                 browser = browser,
-                pageTargetCount = pageTargets,
-                detail = "browser=$browser pages=$pageTargets",
-                versionStatus = version.statusCode()
+                pageTargetCount = pageTargets.size,
+                detail = "browser=$browser pages=${pageTargets.size}",
+                versionStatus = version.statusCode(),
+                pageTargetUrls = pageTargets
             )
         }
 
@@ -880,6 +1036,64 @@ class PulsarSessionManager(
                     "or attach through the extension: browser4-cli attach --extension"
             }
             return null
+        }
+
+        /**
+         * The code for the condition [describeAttachFailure] just described.
+         *
+         * Kept beside the message so the two can never disagree about which
+         * endpoint condition was observed — a client that branches on the code
+         * must land in the same branch a human reading the sentence would.
+         */
+        fun attachFailureCode(verification: CdpEndpointVerification): ToolErrorCode = when {
+            // An HTTP 404 proves something answered, just not on the CDP
+            // discovery path — a different condition from "nothing is listening".
+            !verification.reachable && verification.versionStatus == HTTP_NOT_FOUND ->
+                ToolErrorCode.ENDPOINT_NOT_CDP
+
+            !verification.reachable -> ToolErrorCode.ENDPOINT_UNREACHABLE
+            verification.pageTargetCount == 0 -> ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS
+            // The endpoint answered with at least one page target, so there is no
+            // attach failure to classify; a transport failure after that point is
+            // the generic upstream/CDP case.
+            else -> ToolErrorCode.CDP_ERROR
+        }
+
+        /**
+         * The session id whose browser list contains [port], ignoring
+         * [excludeSessionId] (the session being attached) — or null.
+         *
+         * Pure so the wrong-browser decision can be tested without a browser:
+         * [bindings] is `sessionId to boundPort` for every live session.
+         */
+        fun findForeignBrowserOwner(
+            port: Int,
+            bindings: List<Pair<String, Int>>,
+            excludeSessionId: String?,
+        ): String? {
+            if (port <= 0) return null
+            return bindings.firstOrNull { (sessionId, boundPort) ->
+                sessionId != excludeSessionId && boundPort == port
+            }?.first
+        }
+
+        /**
+         * Every session id whose bound browser contains [port], ignoring
+         * [excludeSessionId] — empty when none does.
+         *
+         * The list form is what a close needs: one attached endpoint can be
+         * shared by more than two sessions, and *any* survivor means the shared
+         * browser object must not be torn down (see [closeSession]).
+         */
+        fun findForeignBrowserOwners(
+            port: Int,
+            bindings: List<Pair<String, Int>>,
+            excludeSessionId: String?,
+        ): List<String> {
+            if (port <= 0) return emptyList()
+            return bindings
+                .filter { (sessionId, boundPort) -> sessionId != excludeSessionId && boundPort == port }
+                .map { it.first }
         }
 
         /**
@@ -1538,20 +1752,65 @@ class PulsarSessionManager(
      * @return True if the session was deleted, false if not found.
      */
     fun deleteSession(sessionId: String): Boolean {
+        return closeSession(sessionId) != null
+    }
+
+    /**
+     * Closes a session and reports what actually happened to the browser process
+     * and the profile directory it owned.
+     *
+     * The report exists because the previous contract could only say "closed": a
+     * browser process whose session row was gone, or a kill that did not take,
+     * was indistinguishable from a clean shutdown — the CLI then printed
+     * "Browser terminated" over a live process. [SessionCloseReport] carries the
+     * verified outcome instead.
+     *
+     * @param sessionId The session identifier (display name or UUID).
+     * @return the report, or null when no such session exists.
+     */
+    fun closeSession(sessionId: String): SessionCloseReport? {
         // Resolve display names to their UUID, matching getSession.  Without
         // this, closing by display name silently "fails" and leaks the session.
         val resolvedId = displayNameToSessionId.getOrDefault(sessionId, sessionId)
-        val session = sessions.remove(resolvedId) ?: return false
+        val session = sessions.remove(resolvedId) ?: return null
+
+        // The context dir must be read BEFORE closing: a destroyed browser may
+        // no longer answer `id`, and it is the only handle on the pid marker and
+        // the profile that has to be reclaimed.
+        var contextDir: Path? = null
+        var processReport: ProcessTerminationReport? = null
+        var profileReport: ProfileCleanupReport? = null
+        var sharedWith: List<String> = emptyList()
 
         try {
             val pulsarSession = session.agenticSession
             val browser = pulsarSession.boundBrowser
+            contextDir = ownsBrowser(session, browser)?.let { browserContextDir(it) }
 
             // logger.info("---------------------DELETE MANAGED SESSION BEGIN----------------------------")
             logger.info(
                 "---- Deleting session `{}`, closing pulsar session #{} {}",
                 resolvedId, pulsarSession.id, pulsarSession.display
             )
+
+            // Sessions attached to the SAME CDP endpoint drive one shared browser
+            // object, and closing that object retires every driver registered on
+            // it. Closing it for one attached session therefore also killed a
+            // sibling session's driver and the tab it was driving, contradicting
+            // the documented "closing one name never tears down a different name's
+            // session" (attach-remote-debug#3). When a sibling is still attached,
+            // this close DETACHES: the session's own driver goes — with the tab it
+            // drove — and the shared browser object stays for the survivor.
+            // Only attached sessions can share a browser object: a Browser4-launched
+            // session owns its own, on its own port.
+            sharedWith = if (session.kind == SessionKind.CDP_ATTACHED) {
+                findSessionsOwningBrowserPort((browser as? PulsarBrowser)?.port ?: 0, resolvedId)
+            } else {
+                emptyList()
+            }
+            if (sharedWith.isNotEmpty()) {
+                detachFromSharedAttachedBrowser(pulsarSession, browser, sharedWith, resolvedId)
+            }
 
             // Close the session AND deregister it from the context's session
             // registry. A plain close() leaves a zombie session in
@@ -1563,8 +1822,9 @@ class PulsarSessionManager(
                     logger.warn("Failed to deregister session {}, falling back to plain close: {}", sessionId, e.message)
                     pulsarSession.close()
                 }
-            // Close the companion browser if it exists
-            if (browser != null) {
+            // Close the companion browser if it exists — but never the one a
+            // sibling session is still driving.
+            if (browser != null && sharedWith.isEmpty()) {
                 // A CDP-attached browser is OWNED BY THE USER, not by Browser4.
                 // closeBrowser() below closes every tab the session holds a
                 // driver for; when those are the browser's only tabs the headed
@@ -1586,6 +1846,31 @@ class PulsarSessionManager(
             logger.error("Error closing session {}: {}", resolvedId, e.message, e)
         }
 
+        // The browser this session LAUNCHED is ours to reap: closeBrowser() asks
+        // it to exit, and this verifies it — a process that survives a close is
+        // the orphan leak the session table cannot see any more.
+        if (contextDir != null) {
+            processReport = browserProcessReaper.terminate(contextDir)
+            if (!processReport.isGone && processReport.outcome != ProcessTermination.NO_PID_FILE) {
+                logger.warn(
+                    "Session {} closed but its browser process is not confirmed gone: {}",
+                    resolvedId, processReport.summary
+                )
+            }
+            // Deleting a profile whose browser may still be alive would break it,
+            // so the directory goes only once the process is gone (or when there
+            // was no pid marker to check and the browser was closed normally).
+            profileReport = if (processReport.isGone || processReport.outcome == ProcessTermination.NO_PID_FILE) {
+                SessionProfileReaper.deleteIfDisposable(contextDir, protectedProfileDirs(session))
+            } else {
+                ProfileCleanupReport(
+                    ProfileCleanup.RETAINED,
+                    path = contextDir,
+                    reason = "browser process not confirmed gone (${processReport.outcome})",
+                )
+            }
+        }
+
         // Clean up extension-related resources for this session
         extensionBrowsers.remove(resolvedId)?.close()
         pendingExtensionConnections.remove(resolvedId)
@@ -1596,7 +1881,123 @@ class PulsarSessionManager(
             persistSessionRegistry()
         }
 
-        return true
+        return SessionCloseReport(
+            sessionId = resolvedId,
+            kind = session.kind,
+            process = processReport,
+            profile = profileReport,
+            sharedWith = sharedWith,
+        )
+    }
+
+    /**
+     * Detach one session from a CDP-attached browser that other sessions still drive.
+     *
+     * Closing a session closes the browser object it holds, and every session
+     * attached to the same endpoint holds the *same* object — so a plain close
+     * retired the surviving sessions' drivers and the tabs they were driving.
+     * This path takes back only what belongs to the closing session:
+     *
+     * - the driver and browser are **unbound first**, because the close that
+     *   follows ([AbstractPulsarContext.closeSession]) closes everything the
+     *   session still holds;
+     * - the session's own driver is then closed, which closes the tab it drove
+     *   and drops the browser's reference to it — the documented
+     *   close-on-attached behaviour — without touching the shared browser
+     *   object or any other session's driver;
+     * - the browser object itself, its other tabs and the browser process are
+     *   left exactly as they were.
+     *
+     * @param pulsarSession the session being closed
+     * @param browser its bound browser, the object shared with [sharedWith]
+     * @param sharedWith the live sessions that keep driving that browser
+     * @param sessionId the resolved session id, for logging
+     */
+    private fun detachFromSharedAttachedBrowser(
+        pulsarSession: AgenticSession,
+        browser: ai.platon.pulsar.api.Browser?,
+        sharedWith: List<String>,
+        sessionId: String,
+    ) {
+        val driver = pulsarSession.boundDriver
+
+        runCatching { driver?.let { pulsarSession.unbindDriver(it) } }
+            .onFailure {
+                logger.warn(
+                    "Close of session {} could not unbind its driver from the shared attached browser: {}",
+                    sessionId, it.message
+                )
+            }
+        runCatching { browser?.let { pulsarSession.unbindBrowser(it) } }
+            .onFailure {
+                logger.warn(
+                    "Close of session {} could not unbind the shared attached browser: {}",
+                    sessionId, it.message
+                )
+            }
+
+        runCatching { driver?.close() }
+            .onFailure {
+                logger.warn("Close of session {} could not close its own driver: {}", sessionId, it.message)
+            }
+
+        logger.info(
+            "Session {} detached from the CDP-attached browser still driven by {}; " +
+                "the shared browser, its tabs and its process are left untouched",
+            sessionId, sharedWith.joinToString(", ")
+        )
+    }
+
+    /**
+     * The [Browser] of [session] when this session OWNS it (Browser4 launched it),
+     * else null — a CDP/extension-attached browser belongs to the user and must
+     * never be killed or have its profile deleted by a close.
+     */
+    private fun ownsBrowser(session: ManagedSession, browser: ai.platon.pulsar.api.Browser?): ai.platon.pulsar.api.Browser? =
+        browser?.takeIf { session.kind.ownsBrowser }
+
+    /** The chrome context dir of [browser], or null when it cannot be read. */
+    private fun browserContextDir(browser: ai.platon.pulsar.api.Browser): Path? =
+        runCatching { browser.id.profile.contextDir }.getOrNull()
+
+    /**
+     * Directories this session pinned explicitly and that therefore survive the
+     * close: a named session's `contextDir` capability (its dedicated profile is
+     * stable across restarts) and an `--profile <path>` opened by the user.
+     */
+    private fun protectedProfileDirs(session: ManagedSession): Set<Path> {
+        val capabilities = session.capabilities ?: return emptySet()
+        return listOf(CONTEXT_DIR_CAPABILITY, PROFILE_PATH_CAPABILITY)
+            .mapNotNull { key -> capabilities[key]?.toString()?.takeIf { it.isNotBlank() } }
+            .mapNotNull { value -> runCatching { Path.of(value).toAbsolutePath().normalize() }.getOrNull() }
+            .toSet()
+    }
+
+    /** Closes every session, returning one report per session. */
+    fun closeAllSessions(): List<SessionCloseReport> {
+        return sessions.keys.toList().mapNotNull { sessionId -> closeSession(sessionId) }
+    }
+
+    /**
+     * Where the browser behind [sessionId] actually runs.
+     *
+     * Everything a check about "this session's window" needs, answered from the
+     * session's OWN binding: the chrome context dir (which holds the launcher's
+     * pid marker) and the CDP port. No process enumeration is involved — a
+     * session browser is launched with a temp context-group profile that carries
+     * no workspace token, so a machine-wide scan can only ever describe *other*
+     * browsers.
+     *
+     * @return the facts, or null when the session does not exist or drives no browser
+     */
+    fun sessionBrowserFacts(sessionId: String): SessionBrowserFacts? {
+        val session = getSession(sessionId) ?: return null
+        val browser = session.agenticSession.boundBrowser ?: return null
+        return SessionBrowserFacts(
+            contextDir = browserContextDir(browser),
+            port = runCatching { browser.port }.getOrDefault(0),
+            ownsBrowser = session.kind.ownsBrowser,
+        )
     }
 
     /**
@@ -1668,7 +2069,6 @@ class PulsarSessionManager(
         }
         return count
     }
-
     /**
      * Closes all active sessions managed by this instance.
      */
@@ -1713,4 +2113,135 @@ class PulsarSessionManager(
         (browser as? AbstractBrowser)?.frontDriver = b4Driver
         return b4Driver
     }
+
+    /**
+     * Makes a re-attach usable by replacing the driver the previous binding left behind.
+     *
+     * `boundDriver` is a bean lookup on the session, so a driver bound *before*
+     * the re-attach keeps answering every tool call even after a new browser
+     * wrapper was bound: the session then drives the old browser object while
+     * [AgenticSession.boundBrowser] reports the new one, and
+     * [cdpAttachedSessionUnavailable] reads that stale driver's `INIT` state
+     * forever — attach prints success while every following command fails with
+     * "no longer reachable", and the documented recovery cannot recover
+     * (attach-remote-debug#1). Unbinding the stale driver first is what makes
+     * the lookup resolve to the replacement, exactly as [recoverLostDriverLink]
+     * does it.
+     *
+     * The replacement is built here, at attach time, rather than lazily on the
+     * caller's next command, so a rebuild that cannot work is visible to the
+     * attach report instead of surfacing later as an unrelated failure. The
+     * stale driver's tab is deliberately left open — it may be the user's visible
+     * page, and a re-attach must not cost them a tab; its DevTools connection is
+     * released when the session closes.
+     *
+     * @return the replacement driver, or null when the browser offers no page tab
+     *   to drive (the normal lazy path then creates one on first use, as it does
+     *   after a first attach).
+     */
+    private fun rebuildDriverAfterReattach(
+        session: ManagedSession,
+        browser: PulsarBrowser,
+        staleDriver: WebDriver,
+    ): WebDriver? {
+        val agenticSession = session.agenticSession
+
+        runCatching { agenticSession.unbindDriver(staleDriver) }
+            .onFailure {
+                logger.warn(
+                    "attach: could not unbind the previous driver of session {} ({}); " +
+                        "the replacement is bound next",
+                    session.sessionId, it.message
+                )
+            }
+
+        return runCatching { bindToExistingPageTab(browser, agenticSession) }
+            .onFailure {
+                logger.warn(
+                    "attach: session {} rebound to a browser but no driver could be bound to its page " +
+                        "tab; the next command will try again: {}",
+                    session.sessionId, it.message
+                )
+            }
+            .getOrNull()
+    }
+}
+
+/**
+ * Where the browser behind one session actually runs.
+ *
+ * @property contextDir the chrome context dir (`<contextDir>/launcher.pid` names
+ *   the process, `<contextDir>/PULSAR_CHROME` is the user data dir), or null when
+ *   the browser does not expose one (e.g. a CDP-attached external browser)
+ * @property port the CDP port the session's browser listens on, 0 when unknown
+ * @property ownsBrowser whether Browser4 launched this browser (an attached
+ *   browser belongs to the user and is never reaped)
+ */
+data class SessionBrowserFacts(
+    val contextDir: Path?,
+    val port: Int,
+    val ownsBrowser: Boolean,
+)
+
+/**
+ * What closing one session actually did to the browser process and the
+ * temporary profile directory it owned.
+ *
+ * A close used to be a `Boolean`, so "the session row is gone" was the only
+ * thing a caller could learn — a browser process that survived the kill (or a
+ * profile directory left in `%TEMP%`) looked exactly like a clean shutdown, and
+ * clients printed "Browser terminated" over a live Chrome. Every field here is
+ * an observation, not an assumption; [browserTerminated] is `null` when the
+ * question could not be answered at all.
+ *
+ * @property sessionId the resolved session id that was closed
+ * @property kind the session kind — an attached browser is never reaped
+ * @property process the process-tree outcome, or null for a session that owns no browser
+ * @property profile the context-directory outcome, or null for a session that owns no browser
+ * @property sharedWith the live sessions that were still driving the same attached
+ *   browser, so this close detached instead of tearing that browser down. Empty
+ *   for a close that owned its browser outright.
+ */
+data class SessionCloseReport(
+    val sessionId: String,
+    val kind: SessionKind,
+    val process: ProcessTerminationReport? = null,
+    val profile: ProfileCleanupReport? = null,
+    val sharedWith: List<String> = emptyList(),
+) {
+    /**
+     * Whether this close left a browser running that other sessions still drive,
+     * rather than closing the shared object — the fact a client needs before it
+     * prints "the browser keeps running" or blames itself for a dead session.
+     */
+    val detachedOnly: Boolean get() = sharedWith.isNotEmpty()
+
+    /**
+     * Whether the browser process the session launched is verified gone:
+     * `true` (observed gone), `false` (observed alive), `null` (unverifiable —
+     * there was no pid marker, so nothing was proven either way).
+     */
+    val browserTerminated: Boolean?
+        get() = process?.let {
+            when (it.outcome) {
+                ProcessTermination.TERMINATED, ProcessTermination.ALREADY_GONE -> true
+                ProcessTermination.NO_PID_FILE -> null
+                else -> false
+            }
+        }
+
+    /** The [ProcessTermination] wire name, for clients that branch on it. */
+    val termination: String get() = process?.outcome?.name ?: "NOT_APPLICABLE"
+
+    /** The [ProfileCleanup] wire name, for clients that branch on it. */
+    val profileCleanup: String get() = profile?.outcome?.name ?: "NOT_APPLICABLE"
+
+    /** Bytes of temporary profile reclaimed by this close. */
+    val reclaimedBytes: Long get() = profile?.freedBytes ?: 0
+
+    /** One honest line about the browser process. */
+    val processSummary: String get() = process?.summary ?: "session owns no Browser4 browser"
+
+    /** One honest line about the profile directory. */
+    val profileSummary: String get() = profile?.summary ?: "no profile directory"
 }

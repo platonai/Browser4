@@ -467,7 +467,10 @@ class CrawlService(
             request = request,
             seedUrls = seedUrls,
             parallelTabs = resolveParallelTabs(request),
-            taskTimeoutMillis = resolveTaskTimeoutMillis(request)
+            taskTimeoutMillis = resolveTaskTimeoutMillis(request),
+            // Pinned to the CREATED record's own stamp so the submitted row and every
+            // later terminal row report one identical submission instant.
+            createdAt = response.createdAt
         )
 
         startTask(task)
@@ -625,6 +628,9 @@ class CrawlService(
                 resolveTaskTimeoutMillis(request)
             },
             resume = plan,
+            // A resume continues the SAME task, so the submission instant is the one
+            // the checkpoint recorded — not the time the resume was requested.
+            createdAt = previous.createdAt,
             run = checkpoint.run + 1,
             resumeCount = resumeCount,
             resumedFrom = interruptedAt
@@ -715,6 +721,9 @@ class CrawlService(
             taskId = taskId,
             status = CrawlStatus.INTERNAL_SERVER_ERROR,
             error = "No URLs provided",
+            // The CREATED record was published microseconds ago with the submission
+            // stamp — a rejection must report that instant, not the rejection time.
+            createdAt = taskStore.getIfPresent(taskId)?.createdAt ?: System.currentTimeMillis(),
             startedTime = now,
             finishTime = now
         )
@@ -1091,6 +1100,9 @@ class CrawlService(
                 linksDiscovered = task.linksDiscovered.get(),
                 pages = pages,
                 diagnostic = currentResult?.diagnostic,
+                // Carried forward, or a poller watching the task would see the
+                // submission instant drift to the time of the latest publish.
+                createdAt = currentResult?.createdAt ?: task.createdAt,
                 startedTime = currentResult?.startedTime ?: Instant.now(),
                 seedStatuses = task.seedStatuses.filterNotNull(),
                 // Losses are visible while the crawl still runs,
@@ -1362,6 +1374,10 @@ class CrawlService(
         val pagesExpected = collected.rounds.sumOf { it.pagesExpected }
         val timedOut = collected.rounds.firstOrNull { it.timedOut }
         val lossNote = buildLossNote(allPages.size, pagesExpected, failedPages)
+        // A 4xx/5xx body is a document, so it used to be counted as a delivered page
+        // with status OK.  The per-row `httpStatus` makes it detectable; this note is
+        // what stops the summary from calling such a crawl successful in silence.
+        val httpErrorNote = buildHttpErrorNote(allPages)
         val remaining = collected.rounds.sumOf { it.outstanding.size + it.frontier.size }
         // A crawl can finish with pages it never received: a URL that failed
         // terminally is settled, not outstanding, and the run is still "complete".
@@ -1390,9 +1406,12 @@ class CrawlService(
             pages = allPages,
             // The loss note is appended, never substituted: a diagnostic
             // that explained "no out-links" must not hide dropped pages.
-            diagnostic = listOfNotNull(existingDiagnostic, lossNote, resumeNote).joinToString(" | ")
+            diagnostic = listOfNotNull(existingDiagnostic, lossNote, httpErrorNote, resumeNote).joinToString(" | ")
                 .takeIf { it.isNotBlank() },
             error = timedOut?.timeoutError,
+            // The submission instant, carried forward from the in-flight record (or the
+            // context when that record was evicted) — see CrawlTaskContext.createdAt.
+            createdAt = previous?.createdAt ?: task.createdAt,
             startedTime = previous?.startedTime ?: now,
             finishTime = now,
             seedStatuses = collected.seedStatuses,
@@ -1539,6 +1558,8 @@ class CrawlService(
                 },
                 pagesFound = snapshot.pages.size,
                 linksDiscovered = existing?.linksDiscovered ?: task.linksDiscovered.get(),
+                // The submission instant, not the moment the limit fired.
+                createdAt = existing?.createdAt ?: task.createdAt,
                 pages = snapshot.pages.takeIf { it.isNotEmpty() },
                 seedStatuses = snapshot.seedStatuses,
                 // The loss note is appended, never substituted: a diagnostic that
@@ -1593,6 +1614,7 @@ class CrawlService(
             parallelTabs = task.parallelTabs,
             taskTimeoutMillis = task.taskTimeoutMillis,
             maxConcurrentFetches = task.peakInFlight.get(),
+            createdAt = existing?.createdAt ?: task.createdAt,
             startedTime = existing?.startedTime ?: now,
             finishTime = now,
             resumedFrom = task.resumedFrom,
@@ -1692,6 +1714,7 @@ class CrawlService(
             parallelTabs = previous?.parallelTabs ?: 0,
             taskTimeoutMillis = previous?.taskTimeoutMillis ?: 0,
             maxConcurrentFetches = previous?.maxConcurrentFetches ?: 0,
+            createdAt = previous?.createdAt ?: System.currentTimeMillis(),
             startedTime = previous?.startedTime ?: now,
             finishTime = now,
             pagesFound = previous?.pagesFound ?: 0,
@@ -1874,6 +1897,17 @@ class CrawlService(
          * the report cannot disagree about it (see [planResume]).
          */
         val resume: CrawlResumePlan? = null,
+        /**
+         * When this task was submitted (epoch millis).
+         *
+         * Carried on the context — not read from the task store — because every
+         * terminal record must report the *submission* instant: the store entry can
+         * be evicted while the crawl runs, and a terminal `CrawlResponse` built
+         * without it silently falls back to the data-class default, which stamps
+         * `createdAt` at finalization and makes a completed task look like it was
+         * created when it finished.
+         */
+        val createdAt: Long = System.currentTimeMillis(),
         /**
          * Which run this is: 1 for the submission, 2 for the first resume, and so on.
          * Recorded on every row ([CrawlPageResult.run]) so a merged result says

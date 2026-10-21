@@ -294,7 +294,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `open [url]` | Open a browser session or reconnect to an existing one. **Headless by default.** Supports `--headed` (visible window), `--headless`, `--profile <path>`, `--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`, `--interact-level <FASTEST\|FAST\|DEFAULT>`. **Note:** `SYSTEM_DEFAULT` is deprecated and unsupported on Chrome ≥ 143 — use `attach` + `state-save`/`state-load` to reuse system browser state (see [browser-state-import.md](skills/browser4-cli/references/browser-state-import.md)). |
 | `attach` | Attach to an existing browser via CDP or the Browser4 extension. Supports `--cdp <url\|port\|channel>` and remote endpoint options. A channel name resolves candidates from the browser's `DevToolsActivePort`, `--remote-debugging-port` and listening ports, and binds the first endpoint that can host a page — over `/json`, or over the browser-level WebSocket that Chrome's built-in `chrome://inspect/#remote-debugging` toggle publishes (`attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>` also works). After a successful attach the CLI prints the browser that actually connected (`Connected browser: …` / `Attached to … at …`) and shows a ⚠ warning when it conflicts with the requested channel (e.g. requested msedge but Chrome connected) — verify it before driving the session. |
 | `close` | Close the active browser session. |
-| `list` | List browser sessions with their status and next-open behavior. The Connection column prefers the backend-reported actual browser and annotates channel conflicts (e.g. `requested msedge · actual Google Chrome`). Supports `--all`. |
+| `list` | List browser sessions with their status and next-open behavior. The Connection column prefers the backend-reported actual browser and annotates channel conflicts (e.g. `requested msedge · actual Google Chrome`). Supports `--all`, which adds a Workspace column and includes the sessions persisted by every other checkout (`*` marks the workspace you are running in; foreign rows read Unknown / `-` / Refresh because this backend cannot verify them). |
 | `session-default <name>` | Make a named session become the default unnamed session. |
 | `close-all` | Close all sessions without stopping the backend. |
 | `kill-all` | Force-stop the backend and Browser4-managed browser processes. |
@@ -517,9 +517,9 @@ These commands require an LLM key.
 | `chat <message>` | Send a plain AI chat request without auto-appended browser context. |
 | `chat-result <id>` | Retrieve the result of an async chat task. |
 | `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. Supports `--wait` (block for the result) and `--wait-timeout <seconds>` (default 600). |
-| `agent status <id>` | Check a running task. |
-| `agent result <id>` | Fetch a completed result. |
-| `agent list` | List tracked agent tasks and their status. |
+| `agent status <id>` | Check a task — the shared status envelope (`status`: queued/running/done/failed/cancelled, plus `statusCode`, `message` and the agent's step count). |
+| `agent result <id>` | Fetch a completed task's result: its summary, `keyFindings`, `filesChanged` and the workspace its deliverables live in. |
+| `agent list` | List tracked agent tasks with the same statuses (refreshed from the backend on every call); `--clear` untracks the finished ones. |
 
 ```bash
 browser4-cli extract "product name, price, rating"
@@ -590,7 +590,7 @@ The `co` prefix is accepted as an alias for `swarm`.
 | `swarm result <id>` | Fetch a completed swarm result. |
 | `swarm list` | List tracked swarm tasks. |
 | `swarm close` | Close the swarm session and release browser resources. |
-| `crawl [url]` | Crawl from a URL or seed file. Supports `--seed-file`, `--sql`, `--sql-stdin`, `--sql-base64`, `--format`, `--output`, `-d/--depth`, `-ol/--out-link-selector`, `-olp/--out-link-pattern`, `-tl/--top-links`, `-a/--args`, `--refresh`, `--parse`, `--expires`, `-p/--priority`, `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly`, `-bg/--background`. |
+| `crawl [url]` | Crawl from a URL or seed file (every seed must be an absolute http(s) URL — a malformed one is refused before the crawl is submitted). Supports `--seed-file`, `--sql`, `--sql-stdin`, `--sql-base64`, `--format`, `--output`, `-d/--depth`, `-ol/--out-link-selector`, `-olp/--out-link-pattern`, `-tl/--top-links`, `-a/--args`, `--refresh`, `--parse`, `--expires`, `-p/--priority`, `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly`, `-bg/--background`. |
 | `crawl status <id>` | Check crawl task status. |
 | `crawl result <id>` | Fetch crawl results. |
 | `crawl cancel <id>` | Cancel a running crawl (the checkpoint is kept, so it can be resumed). |
@@ -646,7 +646,21 @@ These commands operate on Browser4's learned experience store.
 
 #### Plugins
 
-Plugins are server-side JARs that extend Browser4.
+Plugins are server-side JARs that extend Browser4. A development runtime bundle
+ships the first-party plugins the checkout builds — `browser4-swarm`,
+`browser4-images`, `browser4-markdown`, `browser4-media` and `browser4-seo`
+(SEO is opt-in: enable it with `-Dbrowser4.plugins.enable=browser4-seo`).
+`browser4-{captcha,pptx,profile-import,summary-demo}` are installed on demand:
+
+```bash
+browser4-cli plugin install "browser4-plugins/browser4-pptx/target/browser4-pptx-$(cat VERSION).jar"
+browser4-cli stop    # the next command restarts the dev backend
+```
+
+Plugin tool names are the snake_case form of `domain.method`
+(`image.detectImages` → `image_detect_images`) and are enumerated by
+`browser4-cli tool list` (or `GET /mcp/tools`); `plugin list` lists installed plugin
+JARs, not tools.
 
 | Command | Description |
 |---|---|
@@ -654,6 +668,7 @@ Plugins are server-side JARs that extend Browser4.
 | `plugin info <name>` | Show plugin details. |
 | `plugin install <file>` | Install a plugin from a local JAR file. Supports `--replace`. |
 | `plugin remove <name>` | Remove a plugin. Supports `-y`, `--yes`. |
+| `tool list [--filter <substr>]` | List every MCP tool name the backend advertises (plugin tools included); `tool call <name> --json '{…}'` invokes one. |
 
 #### Advanced and currently hidden commands
 
@@ -807,6 +822,11 @@ Browser4 includes a lightweight **MockSite** server that serves static HTML page
 
 **Windows (pwsh — PowerShell 7+):** `./bin/test.ps1 mock-site -Dmock.site.port=18080`
 **Linux/macOS:** `./bin/test.sh mock-site -Dmock.site.port=18080`
+
+> **First run on a cold Maven cache takes 10–15 minutes** (observed ~13 min) and prints nothing
+> while it installs `browser4-dependencies`, then `browser4-rest` and its ~25 modules — the first
+> `[PASS]` banner only appears after each phase finishes. Once the artifacts are cached, startup is
+> fast. Don't kill the process and start a second concurrent Maven build.
 
 Key demo pages are served at `http://localhost:18080/generated/`. For the full page listing, environment variables, Python fallback, and Maven-based launch, see [MockSite](docs/mocksite.md). For the test taxonomy and tagging system, see [Test Taxonomy](docs/TESTING.md).
 

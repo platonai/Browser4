@@ -44,18 +44,24 @@ class ToolResultTextRendererTest {
     }
 
     @Test
-    @DisplayName("JS null renders as null while undefined and Unit render as empty")
-    fun nullAndUndefinedAreDistinguished() {
+    @DisplayName("JS null and undefined both render as null while Kotlin Unit renders empty")
+    fun nullAndUndefinedRenderAsNull() {
+        // `help eval` and references/eval.md promise `null` for JS null AND
+        // undefined; rendering undefined as "" made it indistinguishable from an
+        // empty string, which the CLI's null-aware branch cannot recover from.
         assertEquals("null", ToolResultTextRenderer.render(null, "null"))
-        assertEquals("", ToolResultTextRenderer.render(null, "undefined"))
+        assertEquals("null", ToolResultTextRenderer.render(null, "undefined"))
+        // Kotlin Unit is not a JS value at all: it stays empty.
         assertEquals("", ToolResultTextRenderer.render(null, null))
+        // An empty string is still an empty string, never null.
+        assertEquals("", ToolResultTextRenderer.render(""))
     }
 
     @Test
     @DisplayName("an evaluation envelope renders its value with its own class name")
     fun evaluationEnvelopeIsRendered() {
         assertEquals("null", ToolResultTextRenderer.render(TcEvaluate(value = null, className = "null")))
-        assertEquals("", ToolResultTextRenderer.render(TcEvaluate(value = null, className = "undefined")))
+        assertEquals("null", ToolResultTextRenderer.render(TcEvaluate(value = null, className = "undefined")))
         assertEquals("Welcome", ToolResultTextRenderer.render(TcEvaluate(value = "Welcome", className = "String")))
     }
 

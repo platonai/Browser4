@@ -6,19 +6,26 @@ import ai.platon.pulsar.coding.CdpTrapCheck
 import ai.platon.pulsar.coding.CodeRunner
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
+import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.coding.DevFlowScaffolds
+import ai.platon.pulsar.coding.DevTaskCheckpoint
+import ai.platon.pulsar.coding.DevTaskCheckpointStore
+import ai.platon.pulsar.coding.DevTaskStepResult
+import ai.platon.pulsar.coding.DevTaskStepSnapshot
 import ai.platon.pulsar.coding.DevTaskPlanner
 import ai.platon.pulsar.coding.LanguageServerManager
 import ai.platon.pulsar.coding.KotlinSemanticIndexer
 import ai.platon.pulsar.coding.MavenBuildSupport
 import ai.platon.pulsar.coding.ModuleGraph
 import ai.platon.pulsar.coding.ModuleMap
-import ai.platon.pulsar.coding.ModuleMapSource
-import ai.platon.pulsar.coding.RepoConsistencyCheck
+import ai.platon.pulsar.coding.RepoConsistencyReporter
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.TokenEstimator
 import ai.platon.pulsar.coding.CodingTokenStats
 import ai.platon.pulsar.coding.ValidationResult
+import ai.platon.pulsar.coding.VerificationReport
+import ai.platon.pulsar.coding.VerificationRunner
+import ai.platon.pulsar.coding.WorkspaceIsolation
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.model.TcEvaluate
@@ -81,6 +88,8 @@ class CodingToolExecutor : AbstractToolExecutor() {
 
     override val domain = "coding"
 
+    private val logger = org.slf4j.LoggerFactory.getLogger(CodingToolExecutor::class.java)
+
     override val receiverClass: KClass<*> = CodingToolExecutor.Target::class
 
     /**
@@ -101,6 +110,16 @@ class CodingToolExecutor : AbstractToolExecutor() {
 
     /** Maven build wrapper for Browser4 self-development (`coding.mvnBuild`). */
     private val mavenBuild = MavenBuildSupport()
+
+    /**
+     * Deterministic verification authority (`coding.verify`): aggregates
+     * compile / test / repo-consistency / trapCheck into one structured
+     * [VerificationReport] the finish gate and the CLI can consume.
+     */
+    private val verification = VerificationRunner(mavenBuild)
+
+    /** JSON rendering for structured sidecars (`verdict` / `--json` output). */
+    private val jsonMapper = com.fasterxml.jackson.databind.ObjectMapper()
 
     /** Zero-dependency Kotlin symbol/reference extraction (`coding.ktSymbols`/`ktReferences`). */
     private val kotlinIndexer = KotlinSemanticIndexer()
@@ -219,9 +238,20 @@ class CodingToolExecutor : AbstractToolExecutor() {
             arguments = listOf(
                 ToolSpec.Arg("path", "String"),
                 ToolSpec.Arg("content", "String"),
+                ToolSpec.Arg("expectedChecksum", "String", "null"),
             ),
             returnType = "String",
-            description = "Write content to a file (creates parent directories, overwrites existing)"
+            description = "Write content to a file (creates parent directories, overwrites existing). " +
+                "Writes are atomic. Pass expectedChecksum (from coding.checksum) to make the write " +
+                "optimistic: it fails loudly when the file changed since it was read instead of " +
+                "overwriting someone else's edit."
+        )
+        toolSpec["checksum"] = ToolSpec(
+            domain = domain, method = "checksum",
+            arguments = listOf(ToolSpec.Arg("path", "String")),
+            returnType = "String",
+            description = "Content checksum of a file (`sha256:...`). Use it as write(expectedChecksum=…) " +
+                "for optimistic concurrency, or to verify that a file really changed."
         )
         toolSpec["append"] = ToolSpec(
             domain = domain, method = "append",
@@ -419,12 +449,14 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 ToolSpec.Arg("goals", "String", "compile"),
                 ToolSpec.Arg("skipTests", "Boolean", "true"),
                 ToolSpec.Arg("timeoutSeconds", "Long", "300"),
+                ToolSpec.Arg("json", "Boolean", "false"),
             ),
             returnType = "String",
             description = "Build a Browser4 Maven module (-pl <module> -am <goals>) and return structured " +
                 "Kotlin/Java compiler diagnostics (file:line:col — message) instead of raw logs. " +
                 "module e.g. 'browser4-rest' or 'browser4-plugins/browser4-seo'; goals default 'compile'. " +
-                "Use this to check Kotlin code before/after edits — the fast alternative to a JDTLS server."
+                "Use this to check Kotlin code before/after edits — the fast alternative to a JDTLS server. " +
+                "json=true returns the same result as a machine-readable object (exitCode/success/diagnostics)."
         )
 
         // --- Kotlin semantic layer (zero-dependency symbol/reference extraction) ---
@@ -612,12 +644,14 @@ class CodingToolExecutor : AbstractToolExecutor() {
             arguments = listOf(
                 ToolSpec.Arg("type", "String"),
                 ToolSpec.Arg("path", "String", "null"),
+                ToolSpec.Arg("json", "Boolean", "false"),
             ),
             returnType = "String",
             description = "Validate a Browser4 plugin directory, skill file, JS file, script file, or repo governance. " +
                 "type: 'plugin' (path=plugin dir) | 'skill' | 'js' | 'script' (path=file path) | " +
                 "'repo-consistency' (no path — checks VERSION vs root pom vs BOM vs module registration). " +
-                "Returns a list of issues with severity (error/warning/info)."
+                "Returns a list of issues with severity (error/warning/info). json=true returns {valid, errorCount, issues} "
+                + "as machine-readable JSON."
         )
 
         // --- Browser4 self-development: CDP pitfall awareness ---
@@ -645,6 +679,55 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "root pom/BOM/CI) are always protected and cannot be unprotected."
         )
 
+        // --- Browser4 self-development: resumable dev task ---
+        toolSpec["resumeDevTask"] = ToolSpec(
+            domain = domain, method = "resumeDevTask",
+            arguments = listOf(ToolSpec.Arg("taskId", "String")),
+            returnType = "String",
+            description = "Resume a crashed or failed `coding.devTask(execute=true)` run from its checkpoint " +
+                "(plan P2.4). Completed steps are skipped and the remaining steps run in order; the " +
+                "checkpoint id is printed by every execute run (and again on failure). A run that used " +
+                "workspace isolation continues inside the worktree the failed run kept.",
+            examples = listOf(
+                ai.platon.pulsar.agentic.model.ToolExample(
+                    title = "resume a failed run",
+                    args = mapOf("taskId" to "dt-20261021190300123"),
+                ),
+            ),
+        )
+
+        // --- Verification authority: deterministic "done" verdict ---
+        toolSpec["verify"] = ToolSpec(
+            domain = domain, method = "verify",
+            arguments = listOf(
+                ToolSpec.Arg("module", "String", "null"),
+                ToolSpec.Arg("checks", "String", "compile,repo-consistency"),
+                ToolSpec.Arg("runTests", "Boolean", "false"),
+                ToolSpec.Arg("testClasses", "String", "null"),
+                ToolSpec.Arg("files", "String", "null"),
+                ToolSpec.Arg("timeoutSeconds", "Long", "300"),
+                ToolSpec.Arg("json", "Boolean", "false"),
+            ),
+            returnType = "String",
+            description = "Run the deterministic verification gate and return a structured verdict. Aggregates " +
+                "compile (mvn -pl <module> -am compile / cargo check), tests (mvn test / cargo test), " +
+                "repo-consistency and trapCheck into {passed, checks:[{name,ran,ok,exitCode,durationMs," +
+                "evidence,diagnostics}]}. A check that did not RUN never counts as green. Use this instead of " +
+                "narrating completion: the finish gate and the CLI consume the VERDICT_JSON line. " +
+                "checks is a comma-separated subset of compile,test,repo-consistency,trapCheck; json=true " +
+                "returns the verdict as pure JSON.",
+            examples = listOf(
+                ai.platon.pulsar.agentic.model.ToolExample(
+                    title = "compile a module and validate the repo",
+                    args = mapOf("module" to "browser4-coding", "checks" to "compile,repo-consistency"),
+                ),
+                ai.platon.pulsar.agentic.model.ToolExample(
+                    title = "machine-readable verdict",
+                    args = mapOf("module" to "browser4-coding", "json" to "true"),
+                ),
+            ),
+        )
+
         // --- Browser4 self-development: high-level dev task entry ---
         toolSpec["devTask"] = ToolSpec(
             domain = domain, method = "devTask",
@@ -665,7 +748,26 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "verify) also runs the module's test suite (mvn test -pl <module> -am / cargo test). " +
                 "execute=true runs the generated plan steps in order (scaffold, build, tests, validation) and " +
                 "stops at the first failure. " +
-                "module overrides the inferred module."
+                "module overrides the inferred module.",
+            examples = listOf(
+                ai.platon.pulsar.agentic.model.ToolExample(
+                    title = "plan a module test fix",
+                    args = mapOf("task" to "fix a test in browser4-plugins/browser4-seo and run SeoServiceTest"),
+                ),
+                ai.platon.pulsar.agentic.model.ToolExample(
+                    title = "plan and run the deterministic checks",
+                    args = mapOf(
+                        "task" to "touch browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/DevTaskPlanner.kt",
+                        "verify" to "true",
+                    ),
+                ),
+                ai.platon.pulsar.agentic.model.ToolExample(
+                    title = "bare driver filename (resolved against the workspace)",
+                    args = mapOf(
+                        "task" to "fix cursor positioning in Browser4WebDriver.kt and add a test class FillCursorTest in browser4-rest",
+                    ),
+                ),
+            ),
         )
 
         // --- Token usage statistics ---
@@ -770,11 +872,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 )
             }
             "write" -> {
-                validateArgs(args, allowed = setOf("path", "content"), required = setOf("path", "content"), functionName)
+                validateArgs(
+                    args,
+                    allowed = setOf("path", "content", "expectedChecksum"),
+                    required = setOf("path", "content"),
+                    functionName,
+                )
                 fs.writeFile(
                     path = paramString(args, "path", functionName)!!,
                     content = paramString(args, "content", functionName)!!,
+                    expectedChecksum = paramString(
+                        args, "expectedChecksum", functionName, required = false, default = null
+                    ),
                 )
+            }
+            "checksum" -> {
+                validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                fs.checksumOf(path)
+                    ?: "No checksum available for $path (missing, binary, or outside the workspace)"
             }
             "append" -> {
                 validateArgs(args, allowed = setOf("path", "content"), required = setOf("path", "content"), functionName)
@@ -936,12 +1052,13 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 servers.entries.joinToString("\n") { "${it.key}: ${if (it.value) "available" else "NOT installed"}" }
             }
             "mvnBuild" -> {
-                validateArgs(args, allowed = setOf("module", "goals", "skipTests", "timeoutSeconds"),
+                validateArgs(args, allowed = setOf("module", "goals", "skipTests", "timeoutSeconds", "json"),
                     required = setOf("module"), functionName)
                 val module = paramString(args, "module", functionName)!!
                 val goals = paramString(args, "goals", functionName, required = false, default = "compile") ?: "compile"
                 val skipTests = paramBool(args, "skipTests", functionName, required = false, default = true) ?: true
                 val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
+                val json = paramBool(args, "json", functionName, required = false, default = false) ?: false
                 val result = mavenBuild.build(
                     shell = shell,
                     module = module,
@@ -949,7 +1066,9 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     skipTests = skipTests,
                     timeoutSeconds = timeout,
                 )
-                mavenBuild.format(result)
+                // Structured sidecar (plan P0.2): the human text is unchanged by
+                // default, machine consumers opt in with json=true.
+                if (json) buildResultJson(result) else mavenBuild.format(result)
             }
             "ktSymbols" -> {
                 validateArgs(args, allowed = setOf("path", "pattern"), required = setOf("path"), functionName)
@@ -1339,15 +1458,17 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 }
             }
             "validate" -> {
-                validateArgs(args, allowed = setOf("type", "path"), required = setOf("type"), functionName)
+                validateArgs(args, allowed = setOf("type", "path", "json"), required = setOf("type"), functionName)
                 val type = paramString(args, "type", functionName)!!
                 val path = paramString(args, "path", functionName, required = false, default = null)
+                val json = paramBool(args, "json", functionName, required = false, default = false) ?: false
                 when (type) {
                     "plugin" -> {
                         // Resolve through the fs sandbox before handing the raw path to the validator
                         val resolved = fs.resolvePathString(path ?: throw IllegalArgumentException("path is required for type 'plugin'"))
                             ?: throw IllegalArgumentException("Path not allowed: $path")
-                        ArtifactValidator.validatePlugin(resolved).format()
+                        val result = ArtifactValidator.validatePlugin(resolved)
+                        if (json) validationJson(result) else result.format()
                     }
                     "skill" -> {
                         val content = fs.readFile(path ?: throw IllegalArgumentException("path is required for type 'skill'"))
@@ -1355,17 +1476,23 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         // Cross-check every domain.method( reference in the skill body
                         // against the tools the agent can actually see/call.
                         val refIssues = ArtifactValidator.validateToolReferences(content, knownTools(), path)
-                        ValidationResult.of(result.issues + refIssues).format()
+                        val combined = ValidationResult.of(result.issues + refIssues)
+                        if (json) validationJson(combined) else combined.format()
                     }
                     "js" -> {
                         val content = fs.readFile(path ?: throw IllegalArgumentException("path is required for type 'js'"))
-                        ArtifactValidator.validateJs(content, path).format()
+                        val result = ArtifactValidator.validateJs(content, path)
+                        if (json) validationJson(result) else result.format()
                     }
                     "script" -> {
                         val content = fs.readFile(path ?: throw IllegalArgumentException("path is required for type 'script'"))
-                        ArtifactValidator.validateScript(content, path).format()
+                        val result = ArtifactValidator.validateScript(content, path)
+                        if (json) validationJson(result) else result.format()
                     }
-                    "repo-consistency" -> repoConsistencyReport(fs)
+                    "repo-consistency" -> {
+                        val outcome = RepoConsistencyReporter.check(fs)
+                        if (json) validationJson(outcome.result) else outcome.format()
+                    }
                     else -> throw IllegalArgumentException(
                         "Unknown validate type: $type. Supported: plugin, skill, js, script, repo-consistency")
                 }
@@ -1384,19 +1511,56 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val on = paramBool(args, "on", functionName, required = false, default = true) ?: true
                 fs.protect(path, on)
             }
+            "resumeDevTask" -> {
+                validateArgs(args, allowed = setOf("taskId"), required = setOf("taskId"), functionName)
+                resumeDevTask(paramString(args, "taskId", functionName)!!, receiver as Target)
+            }
+            "verify" -> {
+                validateArgs(
+                    args,
+                    allowed = setOf("module", "checks", "runTests", "testClasses", "files", "timeoutSeconds", "json"),
+                    required = emptySet(),
+                    functionName,
+                )
+                val module = paramString(args, "module", functionName, required = false, default = null)
+                val checks = paramStringList(args, "checks", functionName, required = false)
+                val runTests = paramBool(args, "runTests", functionName, required = false, default = false) ?: false
+                val testClasses = paramStringList(args, "testClasses", functionName, required = false)
+                val files = paramStringList(args, "files", functionName, required = false)
+                val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
+                val json = paramBool(args, "json", functionName, required = false, default = false) ?: false
+                val report = verification.verify(
+                    shell = shell,
+                    fs = fs,
+                    module = module,
+                    checks = checks,
+                    runTests = runTests,
+                    testClasses = testClasses,
+                    trapCheckFiles = files,
+                    timeoutSeconds = timeout,
+                )
+                // Human summary stays readable; the trailing VERDICT_JSON line
+                // is the machine contract (finish gate, CLI --json, eval harness).
+                if (json) report.toJson() else report.format()
+            }
             "devTask" -> {
-                validateArgs(args, allowed = setOf("task", "verify", "runTests", "execute", "module"), required = setOf("task"), functionName)
+                validateArgs(args, allowed = setOf("task", "verify", "runTests", "execute", "module", "json"), required = setOf("task"), functionName)
                 val task = paramString(args, "task", functionName)!!
                 val verify = paramBool(args, "verify", functionName, required = false, default = false) ?: false
                 val runTests = paramBool(args, "runTests", functionName, required = false, default = false) ?: false
                 val execute = paramBool(args, "execute", functionName, required = false, default = false) ?: false
                 val moduleOverride = paramString(args, "module", functionName, required = false, default = null)
+                val json = paramBool(args, "json", functionName, required = false, default = false) ?: false
 
                 // Resolve module mentions against the LIVE pom graph when possible.
                 val graph = runCatching { scanModuleGraph(fs) }.getOrNull()
                 val knownModules = graph?.nodes?.keys?.toList()?.takeIf { it.isNotEmpty() }
                     ?: ModuleMap.MODULES
-                val plan = DevTaskPlanner.plan(task, knownModules)
+                // Bare filenames (e.g. "Browser4WebDriver.kt") have no directory
+                // part, so the planner cannot bind them to a module on its own
+                // (eval K1). Resolve them against the live workspace first.
+                val fileIndex = buildBareFileIndex(fs, task)
+                val plan = DevTaskPlanner.plan(task, knownModules, fileIndex)
                 val planModules = if (!moduleOverride.isNullOrBlank()) {
                     listOf(moduleOverride)
                 } else {
@@ -1409,6 +1573,10 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         appendLine("      ${s.command}")
                     }
                     appendLine("Signals: ${plan.summary}")
+                    if (plan.acceptance.isNotEmpty()) {
+                        // Rendered by the module's pure helper (single source of the format).
+                        appendLine(ai.platon.pulsar.coding.AcceptanceSummary.summarize(plan.acceptance))
+                    }
                     if (planModules.isNotEmpty() && moduleOverride.isNullOrBlank()) {
                         appendLine("Inferred modules: ${planModules.joinToString(", ")}")
                     }
@@ -1421,16 +1589,16 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 }.trimEnd()
 
                 if (execute) {
-                    return executeDevTaskPlan(planText, plan, receiver as Target)
+                    return executeDevTaskPlan(planText, plan, receiver as Target, task)
                 }
 
                 if (!verify) return planText
 
-                // verify=true: run the fast checks against the live workspace.
-                val results = mutableListOf<String>()
-                // Same tie-break rule as DevTaskPlanner.buildSteps: a freshly
-                // scaffolded plugin module wins over same-depth DEPENDENTS-key
-                // mentions, so verify/runTests never compile the wrong module.
+                // verify=true: run the deterministic gate against the live
+                // workspace. Same tie-break rule as DevTaskPlanner.buildSteps: a
+                // freshly scaffolded plugin module wins over same-depth
+                // DEPENDENTS-key mentions, so verify/runTests never compile the
+                // wrong module.
                 val verifyCandidates = if (moduleOverride.isNullOrBlank()) {
                     plan.newPluginModules + plan.modules
                 } else {
@@ -1438,38 +1606,22 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 }
                 val mavenModule = verifyCandidates.filter { it != ModuleMap.CLI_CRATE }
                     .maxByOrNull { it.count { c -> c == '/' } }
-                if (mavenModule != null) {
-                    results += "mvnBuild compile of $mavenModule:\n" +
-                        mavenBuild.format(mavenBuild.build(shell, mavenModule, "compile", true, 300))
-                }
-                plan.driverFiles.take(1).forEach { file ->
-                    val content = fs.readFile(file)
-                    if (!content.startsWith("Error:")) {
-                        results += "trapCheck on $file:\n${CdpTrapCheck.format(content)}"
-                    }
-                }
-                results += "repo-consistency:\n${repoConsistencyReport(fs)}"
-
-                // runTests=true: execute the module's test suite (the AGENTS.md
-                // "smallest scope" step) after the compile check passed. When the
-                // task named test classes, scope with -Dtest=... (smallest scope).
-                if (runTests) {
-                    if (mavenModule != null) {
-                        val testArg = plan.testClasses.joinToString(",").ifBlank { null }
-                        val cmd = ModuleMap.mavenTestCommand(mavenModule, testArg)
-                        val r = shell.executeRaw(cmd, timeoutSeconds = 600)
-                        results += "tests on $mavenModule${testArg?.let { " [-Dtest=$it]" } ?: ""} (exit ${r.exitCode}):\n" +
-                            listOf(r.stdout, r.stderr).filter { it.isNotBlank() }.joinToString("\n").takeLast(3000)
-                    }
-                    if (ModuleMap.CLI_CRATE in planModules) {
-                        val cmd = ModuleMap.cargoTestCommand()
-                        val r = shell.executeRaw(cmd, timeoutSeconds = 600)
-                        results += "cargo tests (exit ${r.exitCode}):\n" +
-                            listOf(r.stdout, r.stderr).filter { it.isNotBlank() }.joinToString("\n").takeLast(3000)
-                    }
-                }
-
-                planText + "\n\n--- Verification ---\n" + results.joinToString("\n\n")
+                    ?: verifyCandidates.firstOrNull()
+                val fileArg = plan.driverFiles.take(1)
+                val report = verification.verify(
+                    shell = shell,
+                    fs = fs,
+                    module = mavenModule,
+                    // repo-consistency always runs; compile is only meaningful
+                    // with a module; trapCheck only with a driver file; the test
+                    // check is requested explicitly.
+                    checks = listOf("compile", "repo-consistency", "trapCheck"),
+                    runTests = runTests,
+                    testClasses = plan.testClasses,
+                    trapCheckFiles = fileArg,
+                    timeoutSeconds = 600,
+                )
+                planText + "\n\n--- Verification ---\n" + (if (json) report.toJson() else report.format())
             }
 
             "tokenStats" -> {
@@ -1499,34 +1651,199 @@ class CodingToolExecutor : AbstractToolExecutor() {
      * Execute a [DevTaskPlanner.DevPlan] step by step using the same coding
      * methods exposed to LLM agents. Execution is fail-fast: the first failing
      * step stops the run and reports which step failed.
+     *
+     * With `-Dbrowser4.agent.workspace.isolation=worktree` (plan P2.1/P2.2) the
+     * whole run happens in an isolated git worktree: the steps receive a
+     * shell + filesystem rooted there (so build artifacts and shell side effects
+     * are isolated too), the change is merged back only when every step
+     * succeeded, and an exception discards the worktree — the main tree was
+     * never written to.
      */
     private suspend fun executeDevTaskPlan(
         planText: String,
         plan: DevTaskPlanner.DevPlan,
         receiver: Target,
+        task: String,
     ): String {
+        val store = DevTaskCheckpointStore(receiver.fs.workspaceRoot)
+        val now = java.time.Instant.now().toString()
+        val checkpoint = DevTaskCheckpoint(
+            id = "dt-" + now.replace(Regex("[^0-9]"), "").take(17),
+            task = task,
+            steps = plan.steps.map {
+                DevTaskStepSnapshot(it.order, it.tool, it.purpose, it.command, it.args)
+            },
+            createdAt = now,
+            updatedAt = now,
+        )
+        store.save(checkpoint)
+        return runCheckpointedPlan(planText, plan, receiver, checkpoint, store, resumed = false)
+    }
+
+    /**
+     * Resume a dev task from its checkpoint (plan P2.4).
+     *
+     * Completed steps are skipped (their effects are already on disk — or in the
+     * retained worktree), the remaining steps run in order, and the checkpoint is
+     * updated after each one, so a second crash can be resumed again.
+     */
+    private suspend fun resumeDevTask(taskId: String, receiver: Target): String {
+        val store = DevTaskCheckpointStore(receiver.fs.workspaceRoot)
+        val checkpoint = store.load(taskId)
+            ?: return "No dev-task checkpoint found for '$taskId' under " +
+                "${receiver.fs.workspaceRoot.resolve(DevTaskCheckpointStore.DIR)}"
+        if (checkpoint.isDone) {
+            return "Dev task ${checkpoint.id} already completed (state=${checkpoint.state}). " +
+                "Start a new task instead of resuming it."
+        }
+        val steps = checkpoint.steps.sortedBy { it.order }.map {
+            DevTaskPlanner.PlanStep(it.order, it.tool, it.purpose, it.command, it.args)
+        }
+        val plan = DevTaskPlanner.DevPlan(
+            summary = checkpoint.task,
+            modules = emptyList(),
+            files = emptyList(),
+            driverFiles = emptyList(),
+            testClasses = emptyList(),
+            newPluginModules = emptyList(),
+            steps = steps,
+        )
+        val header = buildString {
+            appendLine("Resuming dev task ${checkpoint.id} (${checkpoint.completed.size}/${checkpoint.steps.size} steps done):")
+            checkpoint.steps.forEach { s ->
+                val mark = if (checkpoint.completed.any { it.order == s.order }) "✓" else " "
+                appendLine("  [$mark] ${s.order}. [${s.tool}] ${s.purpose}")
+                appendLine("      ${s.command}")
+            }
+            if (checkpoint.failureMessage != null) {
+                appendLine("Previous failure at step ${checkpoint.failedStep}: ${checkpoint.failureMessage}")
+            }
+        }.trimEnd()
+        return runCheckpointedPlan(header, plan, receiver, checkpoint, store, resumed = true)
+    }
+
+    private suspend fun runCheckpointedPlan(
+        planText: String,
+        plan: DevTaskPlanner.DevPlan,
+        receiver: Target,
+        checkpointIn: DevTaskCheckpoint,
+        store: DevTaskCheckpointStore,
+        resumed: Boolean,
+    ): String {
+        var checkpoint = checkpointIn
+
+        // A failed isolated run keeps its worktree; a resume continues inside it.
+        val retainedRoot = checkpoint.isolatedRoot
+            ?.let { runCatching { java.nio.file.Path.of(it) }.getOrNull() }
+            ?.takeIf { java.nio.file.Files.isDirectory(it) }
+        val reopened = retainedRoot?.let { WorkspaceIsolation.reopen(it, checkpoint.id) }
+        val isolation = reopened ?: if (retainedRoot == null) beginIsolation(receiver) else null
+        val effective = when {
+            reopened != null -> targetAt(reopened.isolatedRoot)
+            isolation != null -> targetAt(isolation.isolatedRoot)
+            else -> receiver
+        }
+
+        val completedOrders = checkpoint.completed.map { it.order }.toSet()
         val lines = mutableListOf<String>()
         var failed = false
+        var verdictPassed: Boolean? = null
 
-        for (step in plan.steps) {
-            lines += "Step ${step.order}. [${step.tool}] ${step.purpose}"
-            try {
-                val method = step.tool.removePrefix("coding.")
-                val stepArgs: Map<String, Any?> = HashMap<String, Any?>().apply {
-                    step.args.forEach { (key, value) -> put(key, value) }
+        try {
+            for (step in plan.steps) {
+                if (step.order in completedOrders) {
+                    lines += "Step ${step.order}. [${step.tool}] skipped (already completed — resume)"
+                    continue
                 }
-                val result = callFunctionOn(domain, method, stepArgs, receiver)
-                val text = when (result) {
-                    null -> "(no output)"
-                    is String -> result
-                    else -> result.toString()
+                lines += "Step ${step.order}. [${step.tool}] ${step.purpose}"
+                if (step.tool == DevTaskPlanner.IMPLEMENT_TOOL) {
+                    lines += "⏸ Implementation step — not mechanically executable. " +
+                        "An agent must make the change (e.g. `agent run \"<task>\"`), then the " +
+                        "verification step decides completion."
+                    checkpoint = checkpoint.copy(
+                        completed = checkpoint.completed + DevTaskStepResult(
+                            step.order, step.tool, true, "contract step (agent implementation)"
+                        ),
+                        updatedAt = java.time.Instant.now().toString(),
+                    )
+                    store.save(checkpoint)
+                    continue
                 }
-                lines += text.trimEnd()
-            } catch (e: Exception) {
-                lines += "FAILED: ${e.message}"
-                failed = true
-                break
+                try {
+                    val method = step.tool.removePrefix("coding.")
+                    val stepArgs: Map<String, Any?> = HashMap<String, Any?>().apply {
+                        step.args.forEach { (key, value) -> put(key, value) }
+                    }
+                    val result = callFunctionOn(domain, method, stepArgs, effective)
+                    val text = when (result) {
+                        null -> "(no output)"
+                        is String -> result
+                        else -> result.toString()
+                    }
+                    VerificationReport.extractJson(text)?.let { json ->
+                        verdictPassed = runCatching { VerificationReport.fromJson(json)?.passed }.getOrNull()
+                            ?: verdictPassed
+                    }
+                    lines += text.trimEnd()
+                    checkpoint = checkpoint.copy(
+                        completed = checkpoint.completed + DevTaskStepResult(
+                            step.order, step.tool, true, text.take(DevTaskCheckpointStore.MAX_STEP_OUTPUT)
+                        ),
+                        updatedAt = java.time.Instant.now().toString(),
+                    )
+                    store.save(checkpoint)
+                } catch (e: Exception) {
+                    lines += "FAILED: ${e.message}"
+                    failed = true
+                    checkpoint = checkpoint.copy(
+                        state = DevTaskCheckpoint.STATE_FAILED,
+                        failedStep = step.order,
+                        failureMessage = e.message ?: e.javaClass.simpleName,
+                        isolatedRoot = isolation?.isolatedRoot?.toString(),
+                        updatedAt = java.time.Instant.now().toString(),
+                    )
+                    store.save(checkpoint)
+                    break
+                }
             }
+        } catch (e: Exception) {
+            // A crash outside a step (isolation failure): keep the worktree for a resume.
+            logger.warn("devtask.execution aborted: {}", e.message)
+            throw e
+        }
+
+        var isolationSection = ""
+        if (isolation != null) {
+            val outcome = if (failed) {
+                // P2.1: the main tree stays clean because every write went to the
+                // worktree — and the worktree is KEPT so a resume can continue.
+                WorkspaceIsolation.Outcome(
+                    true,
+                    runCatching { isolation.changedFiles() }.getOrDefault(emptyList()),
+                    "Isolated worktree kept for resume at ${isolation.isolatedRoot} (main tree untouched)",
+                )
+            } else {
+                isolation.commit("coding.devTask execute")
+            }
+            isolationSection = buildString {
+                appendLine()
+                appendLine("--- Isolation ---")
+                appendLine(if (outcome.ok) "✓ ${outcome.message}" else "✗ ${outcome.message}")
+                if (outcome.changedFiles.isNotEmpty()) {
+                    appendLine("Changed files (${outcome.changedFiles.size}):")
+                    outcome.changedFiles.take(50).forEach { appendLine("  $it") }
+                }
+            }
+        }
+
+        if (!failed) {
+            checkpoint = checkpoint.copy(
+                state = DevTaskCheckpoint.STATE_DONE,
+                verificationPassed = verdictPassed,
+                isolatedRoot = null,
+                updatedAt = java.time.Instant.now().toString(),
+            )
+            store.save(checkpoint)
         }
 
         return buildString {
@@ -1538,17 +1855,48 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 appendLine()
                 appendLine("Stopped at first failure.")
             }
+            append(isolationSection)
+            appendLine()
+            appendLine("--- Checkpoint ---")
+            appendLine("id: ${checkpoint.id}  state: ${checkpoint.state}  " +
+                "steps: ${checkpoint.completed.size}/${checkpoint.steps.size}" +
+                (checkpoint.verificationPassed?.let { "  verify.passed=$it" } ?: ""))
+            if (failed) {
+                appendLine("Resume with: coding.resumeDevTask(taskId=\"${checkpoint.id}\")")
+            }
+            if (resumed) appendLine("Resumed run.")
         }.trimEnd()
     }
 
-    /**
-     * `validate(type="repo-consistency")`: check the repo-governance invariants
-     * against the live workspace — VERSION vs root pom vs BOM versions, module
-     * registration (registered modules exist; on-disk module dirs are
-     * registered), and plugin SDK versions (every in-repo plugin manifest
-     * declares sdkVersion == VERSION). Zero dependencies; reads a few files +
-     * directory listings.
-     */
+    /** A coding target whose shell and filesystem are rooted at [root]. */
+    private fun targetAt(root: java.nio.file.Path): Target = Target(
+        CodingAgentShell(baseDir = root, allowDestructive = CodingWorkspace.allowDestructive),
+        CodingAgentFileSystem(
+            workspaceRoot = root,
+            allowExternalAccess = CodingWorkspace.allowExternalAccess,
+            allowDestructive = CodingWorkspace.allowDestructive,
+        ),
+    )
+
+    /** Start an isolated workspace when the switch is on and the tree supports it. */
+    private suspend fun beginIsolation(receiver: Target): WorkspaceIsolation? {
+        if (!CodingWorkspace.isIsolationEnabled()) return null
+        val root = receiver.fs.workspaceRoot
+        if (!WorkspaceIsolation.isAvailable(root)) {
+            logger.warn(
+                "workspace isolation requested but {} is not a git work tree — executing in place",
+                root,
+            )
+            return null
+        }
+        return runCatching {
+            WorkspaceIsolation.begin(root, "devtask-${System.currentTimeMillis()}")
+        }.getOrElse { e ->
+            logger.warn("workspace isolation could not start ({}); executing in place", e.message)
+            null
+        }
+    }
+
     /**
      * Keep the static [ModuleMap] snapshot consistent when a new plugin module is
      * scaffolded: insert the module into MODULES (unique anchor line) AND complete
@@ -1608,79 +1956,46 @@ class CodingToolExecutor : AbstractToolExecutor() {
         }
     }
 
-    private suspend fun repoConsistencyReport(fs: CodingAgentFileSystem): String {
-        val versionContent = fs.readFile("VERSION").takeUnless { it.startsWith("Error:") }
-        val rootPom = fs.readFile("pom.xml").takeUnless { it.startsWith("Error:") }
-        val bomPom = fs.readFile("browser4-dependencies/pom.xml").takeUnless { it.startsWith("Error:") }
-
-        val root = fs.workspaceRoot
-        val (onDiskModuleDirs, pluginManifestContents) = withContext(Dispatchers.IO) {
-            val moduleDirs = Files.list(root).use { stream ->
-                stream.filter { Files.isDirectory(it) }
-                    .filter { !it.fileName.toString().startsWith(".") }
-                    .filter { Files.isRegularFile(it.resolve("pom.xml")) }
-                    .map { root.relativize(it).toString().replace('\\', '/') }
-                    .sorted()
-                    .toList()
-            }
-            // Every in-repo plugin manifest outside build output (target/) and
-            // hidden dirs (.git, .worktrees, .claude, ...) — other branches'
-            // checkouts must not be scanned.
-            val manifests = runCatching {
-                Files.walk(root).use { stream ->
-                    stream.filter { RepoConsistencyCheck.isPluginManifestPath(it) }
-                        .map { Files.readString(it) }
-                        .toList()
-                }
-            }.getOrDefault(emptyList())
-            moduleDirs to manifests
-        }
-
-        // Live module topology from the real poms — cross-checked against the
-        // static ModuleMap snapshot (MODULES + DEPENDENTS) so module drift fails
-        // validation instead of silently corrupting devTask planning.
-        val liveGraph = runCatching {
-            ModuleGraph.build(ModuleGraph.scanPoms(root))
-        }.getOrNull()
-        val liveModules = liveGraph?.nodes?.keys?.sorted() ?: emptyList()
-        val liveDependentsOf: (String) -> Set<String> = { m ->
-            liveGraph?.nodes?.filterValues { it.dependencies.contains(m) }?.keys?.toSet() ?: emptySet()
-        }
-
-        // Prefer the ON-DISK ModuleMap.kt as the static snapshot. The loaded
-        // ModuleMap class comes from the running backend's build and can be
-        // stale (e.g. right after scaffoldToDir synced a new module) — comparing
-        // against it reports false drift. Parse the source file so the check
-        // reflects what the next build will actually compile.
-        val moduleMapSource = fs.readFile(
-            "browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/ModuleMap.kt"
-        ).takeUnless { it.startsWith("Error:") }
-        val parsedModuleMap = moduleMapSource?.let { ModuleMapSource.parse(it) }
-        // When the disk snapshot cannot be parsed (mock/foreign workspace), the
-        // loaded-class comparison is meaningless (it produces massive false
-        // drift) — skip the drift checks and surface a warning instead.
-        val staticModules = parsedModuleMap?.modules ?: emptyList()
-        val staticDependents = parsedModuleMap?.dependents ?: emptyMap()
-        val staleFallbackNote = if (parsedModuleMap == null) {
-            "\n⚠ ModuleMap.kt could not be read from disk — ModuleMap drift checks are skipped; " +
-                "sync browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/ModuleMap.kt if you expect them."
-        } else ""
-
-        val result = RepoConsistencyCheck.check(
-            versionContent = versionContent,
-            rootPom = rootPom,
-            bomPom = bomPom,
-            moduleExists = { m -> fs.exists(m) },
-            onDiskModuleDirs = onDiskModuleDirs,
-            pluginManifestContents = pluginManifestContents,
-            staticModuleMap = staticModules,
-            liveModuleDirs = liveModules,
-            staticDependents = staticDependents,
-            liveDependentsOf = liveDependentsOf,
-            moduleMapSource = moduleMapSource,
+    /**
+     * Structured sidecar for `mvnBuild` (plan P0.2). The default tool reply
+     * stays human prose; `json=true` returns this object instead so the CLI and
+     * CI can consume the build verdict without parsing `✓ Build succeeded`.
+     */
+    private fun buildResultJson(result: ai.platon.pulsar.coding.BuildResult): String =
+        jsonMapper.writeValueAsString(
+            linkedMapOf(
+                "module" to result.module,
+                "goals" to result.goals,
+                "exitCode" to result.exitCode,
+                "success" to result.success,
+                "timedOut" to result.timedOut,
+                "diagnostics" to result.diagnostics.map { d ->
+                    linkedMapOf(
+                        "file" to d.file,
+                        "line" to d.line,
+                        "column" to d.column,
+                        "severity" to d.severity,
+                        "message" to d.message,
+                    )
+                },
+            )
         )
-        return result.format() + staleFallbackNote
-    }
+
+    /** Structured sidecar for `validate` (plan P0.2). */
+    private fun validationJson(result: ValidationResult): String =
+        jsonMapper.writeValueAsString(
+            linkedMapOf(
+                "valid" to result.valid,
+                "errorCount" to result.issues.count { it.severity == ai.platon.pulsar.coding.Severity.ERROR },
+                "issues" to result.issues.map { issue ->
+                    linkedMapOf(
+                        "severity" to issue.severity.name.lowercase(),
+                        "message" to issue.message,
+                        "file" to issue.file,
+                    )
+                },
+            )
+        )
 
     /**
      * Scan the live module graph from the workspace's real pom.xml files.
@@ -1688,7 +2003,28 @@ class CodingToolExecutor : AbstractToolExecutor() {
      * graph is rebuilt from the poms instead of a hand-maintained snapshot.
      */
     private suspend fun scanModuleGraph(fs: CodingAgentFileSystem): ModuleGraph.Graph {
-        return ModuleGraph.build(ModuleGraph.scanPoms(fs.workspaceRoot))
+        // Cached by the poms' mtime/size signature: planning runs on every
+        // `code devtask`, and a full re-scan per call dominated warm latency
+        // (eval K8). Any pom edit invalidates the cache.
+        return ModuleGraph.cachedGraph(fs.workspaceRoot)
+    }
+
+    /**
+     * Bare filename → workspace-relative path for the names [task] mentions.
+     *
+     * The planner is pure and cannot walk the tree; this is the I/O half of the
+     * K1 fix. Only the mentioned basenames are searched, and the walk prunes
+     * `target/`, `.git/` and `node_modules/`, so the cost stays small.
+     */
+    private suspend fun buildBareFileIndex(fs: CodingAgentFileSystem, task: String): Map<String, String> {
+        val names = DevTaskPlanner.bareFileNames(task)
+        if (names.isEmpty()) return emptyMap()
+        val index = linkedMapOf<String, String>()
+        for (name in names) {
+            val hit = fs.findFiles("**/$name", maxResults = 5).firstOrNull()
+            if (hit != null) index[name] = hit
+        }
+        return index
     }
 
     /**

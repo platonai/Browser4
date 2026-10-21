@@ -102,6 +102,7 @@ echo 'a[href]' | browser4-cli htmlsnapshot inspect --stdin
 | `--sql "…"` output is mangled or empty | Shell reinterprets nested quotes (Windows/Git Bash) | Use `--sql @file.sql` or `--sql-stdin` |
 | `eval "…"` returns `null` or syntax errors | Quotes stripped across the 4 shell layers | Use `--file` / `--stdin` / `--base64` |
 | `htmlsnapshot inspect --selector "…"` breaks on special chars | `$`, backticks, or quotes in the selector | Use `@file`, `--stdin`, or `--selector-base64` |
+| A `/`-leading value is mangled | MSYS path conversion | Omit `--path` if `/` is the default, or use `./b4w.sh` / `MSYS2_ARG_CONV_EXCL='*'` |
 
 ## PowerShell-Specific: `@` Splatting
 
@@ -149,13 +150,24 @@ The result is a silently wrong crawl: only the seed page is reported (`Crawl com
 
 **`./b4w.ps1` called from Git Bash is affected too** — Git Bash runs the script by spawning the native `pwsh.exe`, and conversion applies to every argument of that spawn, regardless of quoting. Only a real PowerShell console (or cmd) is conversion-free.
 
+`b4w.ps1` detects the rewritten value and fails fast instead of forwarding it, printing the
+de-converted command to re-run. Its check covers the bare form, the part after `=`, the split
+`--path=C` + `/…` form that MSYS can produce, and a `--name=<drive>:/…` signature — so
+`--path=/` is caught as well.
+
 **Workarounds:**
 - Prefer `./b4w.sh` (conversion disabled for all arguments).
-- Use a value that does not start with `/`: `-olp "product/"`, `-olp "ec/dp"`.
+- Omit the flag when its default is already a `/` value — `cookie-set --path` defaults to `/`:
+  `./b4w.ps1 cookie-set session_id abc123 --domain localhost --httpOnly --secure`.
+- Use a value that does not start with `/`: `-olp "product/"` (instead of `-olp "/product/"`),
+  `-olp "ec/dp"`.
 - Or export the exclusion yourself before invoking anything:
   `export MSYS2_ARG_CONV_EXCL='*'` (older equivalent: `MSYS_NO_PATHCONV=1`).
 
 Applies to any value that legitimately starts with `/` and is not an existing file path — `-olp`/`--out-link-pattern` (e.g. `/product/`), `snapshot grep` patterns like `/ec/dp/`, and similar. The CLI prints a warning when a pattern value looks like a mangled Windows path (contains `:/`).
+
+`cookie-set --path /` is the same case, and its `--path=/` spelling is rewritten identically —
+both need the same workaround (or just omit the flag: `cookie-set --path` defaults to `/`).
 
 ## Why This Works
 

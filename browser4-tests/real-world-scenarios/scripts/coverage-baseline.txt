@@ -1,0 +1,67 @@
+# Coverage baseline for real-world-scenarios.
+# Every command listed here is a KNOWN gap: it is not covered by any scenario
+# and not excused in coverage-exclusions.psd1 yet.  coverage.ps1 fails only when a
+# NEW gap appears, so landing scenarios should shrink this file:
+#   pwsh ./browser4-tests/real-world-scenarios/scripts/coverage.ps1 -UpdateBaseline
+# Generated: 2026-10-10T08:39:23Z
+act
+agent-cancel
+batch
+chat
+chat-result
+config
+config-delete
+config-get
+config-list
+config-set
+crawl-cancel
+crawl-clear
+crawl-result
+crawl-resume
+crawl-status
+diff-snapshot
+doctor
+doctor-log
+doctor-metrics
+doctor-status
+htmlsnapshot-algorithms
+htmlsnapshot-readability
+keyboard
+keydown
+keyup
+mousedown
+mousemove
+mouseup
+plugin-info
+plugin-install
+plugin-remove
+profile-import
+profiler-start
+profiler-stop
+profiles-list
+scrape
+scrape-formats
+session-default
+skill-info
+skill-install
+skill-list
+skill-reload
+skill-uninstall
+skills
+skills-get
+skills-list
+skills-path
+skills-unpack
+snapshot-clean
+snapshot-list
+uninstall
+upgrade
+vitals
+web-vitals
+webdb-export
+webdb-normalize
+webminer-run-example
+webminer-uninstall
+webminer-update
+webminer-version
+webminer-views

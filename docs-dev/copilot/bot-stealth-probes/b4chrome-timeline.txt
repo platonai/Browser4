@@ -1,0 +1,30 @@
+TARGET 28D10AE9770BA8DBC10FDC9A285C516F about:blank
+HOOK identifier: 1
+
+===== TIMELINE (state changes only) =====
+{"t":0,"when":"docstart","state":"chrome=[loadTimes,csi,app] runtime=[ABSENT] sm=ABSENT"}
+
+===== FINAL =====
+{
+ "url": "https://ipfighter.com/bot-detection",
+ "finalChromeKeys": [
+  "loadTimes",
+  "csi",
+  "app"
+ ],
+ "finalRuntimeType": "undefined",
+ "liveCheck": "runtime-or-sendMessage ABSENT (site test would be pass:N/A)",
+ "verdictText": "chrome.runtime || Full Chrome exposes chrome.runtime. Headless Chrome may omit it. || chrome.runtime.sendMessage",
+ "allScripts": [
+  "https://ipfighter.com/lib/tailwind.min.js",
+  "https://ipfighter.com/js/web/header.min.js?v=1.0.0",
+  "https://ipfighter.com/js/web/common.min.js?v=1.0.2",
+  "https://ipfighter.com/js/web/bot-detection.min.js?v=1.0.2",
+  "https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js",
+  "https://www.googletagmanager.com/gtm.js?id=GTM-PG7V9W3",
+  "https://client.crisp.chat/l.js",
+  "https://client.crisp.chat/static/javascripts/client_default_8d4e7ec.js"
+ ]
+}
+
+===== SCRIPT GREP =====

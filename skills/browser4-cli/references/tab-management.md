@@ -27,7 +27,25 @@ Use tab commands for multi-tab workflows — opening several pages in one sessio
 
 All tab commands scope to a session: they affect the session targeted via `-s <session>` (or the DEFAULT session when `-s` is omitted). Run `browser4-cli list` first to see all sessions and their IDs before multi-session tab work.
 
-Tab operations never leave the session — `window new` is the only command that creates a separate browser window (still within the same session's browser instance).
+Tab operations never leave the session. In the managed/headless backend `window new` behaves like
+`tab-new`: it creates an **additional tab/target in the same browser instance** and auto-selects
+it (the CLI prints the same `Created tab with GUID: …` / `✓ Switched to tab <n>` lines for both),
+so the two commands are aliases today — different windows appear only when the backing browser
+gives each target its own OS window (headed mode).
+
+Page-opened popups (`window.open`, `target="_blank"`) are ordinary new targets: the CLI neither
+announces them nor switches to them (auto-select is implemented in the `tab-new` / `window new`
+dispatch only), so list and select them explicitly after triggering one:
+
+```bash
+browser4-cli click "#open-popup"     # page opens a popup target
+browser4-cli tab-list                # find the new entry (index + GUID + URL)
+browser4-cli tab-select 1            # switch to it explicitly
+browser4-cli page-info               # confirm which page the session is on now
+```
+
+> **Note:** no document or test yet covers whether a `window.open` target is registered in
+> `tab-list` in every mode — verify with `tab-list` on your build instead of assuming it.
 
 ## How It Works
 
@@ -50,8 +68,11 @@ browser4-cli tab-close          # closes the active tab (bare form = current tab
 ### Windows
 
 ```bash
-browser4-cli window new "https://example.com"   # open a page in a new browser window
+browser4-cli window new "https://example.com"   # new tab/target + auto-select (alias of tab-new)
 ```
+
+In the managed/headless backend this is the same operation as `tab-new`: one more tab/target in
+the session's browser, auto-selected. Expect a separate OS window only in headed mode.
 
 ### Cross-session tab operations
 

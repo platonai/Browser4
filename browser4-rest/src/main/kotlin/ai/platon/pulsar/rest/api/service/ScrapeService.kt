@@ -144,6 +144,18 @@ class ScrapeService(
                 "", ResourceStatus.SC_REQUEST_TIMEOUT, ProtocolStatusCodes.REQUEST_TIMEOUT,
                 message = "X-SQL query timed out after 120s. The page may be too large or the session may be unresponsive."
             )
+        } catch (e: IllegalArgumentException) {
+            // A refused statement is the caller's mistake, not a server fault: the
+            // non-SELECT rejection ("Only select statements are supported", a CTE,
+            // a forbidden statement) used to be caught by the generic handler below
+            // and answered with HTTP 500, which reads as "Browser4 is broken" for
+            // what is a 400-class input problem.  The message is preserved so the
+            // caller can see which rule was broken.
+            logger.warn("X-SQL statement rejected: >>>${request.sql}<<< — {}", e.message)
+            return ScrapeResponse(
+                "", ResourceStatus.SC_BAD_REQUEST, ProtocolStatusCodes.EXCEPTION,
+                message = e.message ?: "X-SQL statement rejected"
+            )
         } catch (e: Exception) {
             logger.error("Unexpected error executing query: >>>${request.sql}<<<", e)
             return ScrapeResponse(

@@ -1,14 +1,18 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.api.JsWorld
 import ai.platon.pulsar.api.model.FrameInfo
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.agentic.tools.TargetNotFoundException
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.chrome.protocol.DialogEvent
 import ai.platon.pulsar.chrome.protocol.DialogHandler
+import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -21,6 +25,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
+import java.util.concurrent.TimeoutException
 
 class BrowserTabToolExecutorTest {
     private val executor = BrowserTabToolExecutor()
@@ -316,7 +321,7 @@ class BrowserTabToolExecutorTest {
             val handler = Mockito.mock(DialogHandler::class.java)
             `when`(driver.dialogHandler).thenReturn(handler)
             `when`(handler.hasPendingDialog()).thenReturn(false)
-            `when`(driver.evaluateValueDetail("document.title"))
+            `when`(driver.evaluateValueDetail("document.title", awaitPromise = false, world = JsWorld.MAIN))
                 .thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
 
             val result = executor.callFunctionOn(
@@ -325,7 +330,7 @@ class BrowserTabToolExecutorTest {
             )
 
             assertEquals("Browser4 CLI Other Fixture", result.value)
-            verify(driver).evaluateValueDetail("document.title")
+            verify(driver).evaluateValueDetail("document.title", awaitPromise = false, world = JsWorld.MAIN)
         }
     }
 
@@ -344,7 +349,7 @@ class BrowserTabToolExecutorTest {
     fun `evaluateValue accepts page expression`() {
         runBlocking {
             val driver = Mockito.mock(WebDriver::class.java)
-            `when`(driver.evaluateValueDetail("document.title"))
+            `when`(driver.evaluateValueDetail("document.title", awaitPromise = false, world = JsWorld.MAIN))
                 .thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
 
             val result = executor.callFunctionOn(
@@ -353,7 +358,7 @@ class BrowserTabToolExecutorTest {
             )
 
             assertEquals("Browser4 CLI Other Fixture", result.value)
-            verify(driver).evaluateValueDetail("document.title")
+            verify(driver).evaluateValueDetail("document.title", awaitPromise = false, world = JsWorld.MAIN)
         }
     }
 
@@ -409,7 +414,7 @@ class BrowserTabToolExecutorTest {
     fun `eval accepts page expression`() {
         runBlocking {
             val driver = Mockito.mock(WebDriver::class.java)
-            `when`(driver.evaluateValueDetail("document.title"))
+            `when`(driver.evaluateValueDetail("document.title", awaitPromise = false, world = JsWorld.MAIN))
                 .thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
 
             val result = executor.callFunctionOn(
@@ -418,7 +423,90 @@ class BrowserTabToolExecutorTest {
             )
 
             assertEquals("Browser4 CLI Other Fixture", result.value)
-            verify(driver).evaluateValueDetail("document.title")
+            verify(driver).evaluateValueDetail("document.title", awaitPromise = false, world = JsWorld.MAIN)
+        }
+    }
+
+    @Test
+    fun `eval defaults to the page's own JavaScript world`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.evaluateValueDetail("window.myApp.version", awaitPromise = false, world = JsWorld.MAIN))
+                .thenReturn(JsEvaluation(value = "1.2.3"))
+
+            // The reported defect: a page defines window.myApp, `eval window.myApp.version`
+            // read undefined because the driver's isolated runtime world has no page
+            // globals.  The default must therefore be MAIN — a caller asking to evaluate
+            // "in the page" means the page's world.
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "window.myApp.version")),
+                driver
+            )
+
+            assertEquals("1.2.3", result.value)
+            verify(driver).evaluateValueDetail("window.myApp.version", awaitPromise = false, world = JsWorld.MAIN)
+            // ...and never the driver's own world.
+            Mockito.verify(driver, Mockito.never())
+                .evaluateValueDetail("window.myApp.version", awaitPromise = false, world = JsWorld.ISOLATED)
+        }
+    }
+
+    @Test
+    fun `eval honours an explicit isolated world`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(
+                driver.evaluateValueDetail(
+                    "typeof __browser4_runtime__", awaitPromise = false, world = JsWorld.ISOLATED
+                )
+            ).thenReturn(JsEvaluation(value = "object"))
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "eval",
+                    mutableMapOf<String, Any?>(
+                        "expression" to "typeof __browser4_runtime__",
+                        "world" to "isolated"
+                    )
+                ),
+                driver
+            )
+
+            assertEquals("object", result.value)
+            verify(driver).evaluateValueDetail(
+                "typeof __browser4_runtime__", awaitPromise = false, world = JsWorld.ISOLATED
+            )
+        }
+    }
+
+    @Test
+    fun `eval rejects an unknown world instead of silently choosing one`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "eval",
+                    mutableMapOf<String, Any?>(
+                        "expression" to "document.title",
+                        // Cyrillic 'е' — a plausible paste artifact that must not be
+                        // rounded to the main world behind the caller's back.
+                        "world" to "pag\u0435"
+                    )
+                ),
+                driver
+            )
+
+            // AbstractToolExecutor wraps thrown errors into an unsuccessful result.
+            assertFalse(result.success)
+            val message = result.exception?.message.orEmpty()
+            assertTrue(message.contains("main, isolated"), message)
+            // The refusal happens before any evaluation: an unknown world must not be
+            // rounded to the default one (all-raw-argument verify — no matchers).
+            Mockito.verify(driver, Mockito.never())
+                .evaluateValueDetail("document.title", false, JsWorld.MAIN)
+            Mockito.verify(driver, Mockito.never())
+                .evaluateValueDetail("document.title", false, JsWorld.ISOLATED)
         }
     }
 
@@ -565,7 +653,7 @@ class BrowserTabToolExecutorTest {
             fun `eval with awaitPromise calls two-arg evaluateValueDetail`() {
                 runBlocking {
                     val driver = Mockito.mock(WebDriver::class.java)
-                    `when`(driver.evaluateValueDetail("fetch('/api/data')", true))
+                    `when`(driver.evaluateValueDetail("fetch('/api/data')", true, JsWorld.MAIN))
                         .thenReturn(JsEvaluation(value = mapOf("status" to 200)))
 
                     val result = executor.callFunctionOn(
@@ -581,7 +669,7 @@ class BrowserTabToolExecutorTest {
                     )
 
                     assertEquals(mapOf("status" to 200), result.value)
-                    verify(driver).evaluateValueDetail("fetch('/api/data')", true)
+                    verify(driver).evaluateValueDetail("fetch('/api/data')", true, JsWorld.MAIN)
                 }
             }
 
@@ -589,7 +677,7 @@ class BrowserTabToolExecutorTest {
             fun `eval without awaitPromise defaults to one-arg overload`() {
                 runBlocking {
                     val driver = Mockito.mock(WebDriver::class.java)
-                    `when`(driver.evaluateValueDetail("document.title"))
+                    `when`(driver.evaluateValueDetail("document.title", awaitPromise = false, world = JsWorld.MAIN))
                         .thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
 
                     val result = executor.callFunctionOn(
@@ -598,7 +686,7 @@ class BrowserTabToolExecutorTest {
                     )
 
                     assertEquals("Browser4 CLI Other Fixture", result.value)
-                    verify(driver).evaluateValueDetail("document.title")
+                    verify(driver).evaluateValueDetail("document.title", awaitPromise = false, world = JsWorld.MAIN)
                 }
             }
 
@@ -606,7 +694,7 @@ class BrowserTabToolExecutorTest {
             fun `evaluateValue with awaitPromise calls two-arg evaluateValueDetail`() {
                 runBlocking {
                     val driver = Mockito.mock(WebDriver::class.java)
-                    `when`(driver.evaluateValueDetail("new Promise(r => setTimeout(() => r(42), 100))", true))
+                    `when`(driver.evaluateValueDetail("new Promise(r => setTimeout(() => r(42), 100))", true, JsWorld.MAIN))
                         .thenReturn(JsEvaluation(value = 42))
 
                     val result = executor.callFunctionOn(
@@ -622,7 +710,7 @@ class BrowserTabToolExecutorTest {
                     )
 
                     assertEquals(42, result.value)
-                    verify(driver).evaluateValueDetail("new Promise(r => setTimeout(() => r(42), 100))", true)
+                    verify(driver).evaluateValueDetail("new Promise(r => setTimeout(() => r(42), 100))", true, JsWorld.MAIN)
                 }
             }
 
@@ -1286,5 +1374,385 @@ class BrowserTabToolExecutorTest {
             schema!!.contains("\"pending\"") && schema.contains("\"type\":\"object\""),
             "the declared result schema must describe the {pending, type, message} map, was: $schema"
         )
+    }
+
+    // ── a wait that cannot fail is worse than no wait: every wait must time out ──
+
+    @Test
+    fun `waitForSelector fails with a timeout when the element never appears`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.exists("#never-in-dom")).thenReturn(false)
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "waitForSelector",
+                    mutableMapOf<String, Any?>("selector" to "#never-in-dom", "timeoutMillis" to 150L)
+                ),
+                driver
+            )
+
+            assertFalse(result.success, "a selector that never resolves must fail the wait")
+            val cause = result.exception?.cause
+            assertTrue(cause is TimeoutException, "expected a TimeoutException, got $cause")
+            val message = cause?.message.orEmpty()
+            assertTrue(message.contains("#never-in-dom"), "the message must name the target: $message")
+            assertTrue(message.contains("150"), "the message must name the budget: $message")
+            // The upstream wait swallows its own timeout (withTimeoutOrNull), so
+            // delegating to it is what made `wait` unable to fail.
+            Mockito.verify(driver, Mockito.never()).waitForSelector(Mockito.anyString(), Mockito.anyLong())
+        }
+    }
+
+    @Test
+    fun `waitForSelector reports the elapsed millis when the element appears`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.exists("#present")).thenReturn(true)
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "waitForSelector",
+                    mutableMapOf<String, Any?>("selector" to "#present", "timeoutMillis" to 1_000L)
+                ),
+                driver
+            )
+
+            assertTrue(result.success)
+            val elapsed = result.value as? Long
+            assertTrue(elapsed != null && elapsed >= 0, "expected elapsed millis, got ${result.value}")
+        }
+    }
+
+    @Test
+    fun `waitForFunction fails instead of returning null when the condition never becomes true`() {
+        runBlocking {
+            // The driver's waitFor* helpers return null on timeout; it used to be
+            // reported as a successful wait.
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "waitForFunction",
+                    mutableMapOf<String, Any?>("pageFunction" to "false", "timeoutMillis" to 1_000L)
+                ),
+                driver
+            )
+
+            assertFalse(result.success, "a condition that never became true must fail the wait")
+            val cause = result.exception?.cause
+            assertTrue(cause is TimeoutException, "expected a TimeoutException, got $cause")
+            assertTrue(cause?.message.orEmpty().contains("never became true"), cause?.message.orEmpty())
+        }
+    }
+
+    @Test
+    fun `waitForPage fails instead of returning null when the URL never matches`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "waitForPage",
+                    mutableMapOf<String, Any?>("url" to "**/never-matches-this", "timeoutMillis" to 1_000L)
+                ),
+                driver
+            )
+
+            assertFalse(result.success, "a URL that never matched must fail the wait")
+            val cause = result.exception?.cause
+            assertTrue(cause is TimeoutException, "expected a TimeoutException, got $cause")
+            val message = cause?.message.orEmpty()
+            assertTrue(message.contains("never-matches-this"), message)
+        }
+    }
+
+    // ── `is *` assertions and `get box` answer with stable shapes ──
+
+    @Test
+    fun `isEnabled reports false for a selector that resolves to nothing`() {
+        runBlocking {
+            // An unresolvable locator makes evaluateValue return null; isVisible
+            // and isChecked answer false for the same selector, so isEnabled must
+            // not be the one command that answers null.
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "isEnabled", mutableMapOf<String, Any?>("selector" to "#missing")),
+                driver
+            )
+
+            assertTrue(result.success)
+            assertEquals(false, result.value)
+        }
+    }
+
+    @Test
+    fun `get box returns a plain object instead of the driver RectD wrapper`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.boundingBox("#scroll-target"))
+                .thenReturn(RectD(24.0, 2159.0, 1857.0, 24.0))
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "boundingBox", mutableMapOf<String, Any?>("selector" to "#scroll-target")),
+                driver
+            )
+
+            // A RectD reaches the MCP client as {type, description}; the
+            // documented contract is {x, y, width, height}.
+            assertEquals(
+                mapOf("x" to 24.0, "y" to 2159.0, "width" to 1857.0, "height" to 24.0),
+                result.value
+            )
+        }
+    }
+
+    @Test
+    fun `get box stays null when the element does not exist`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "boundingBox", mutableMapOf<String, Any?>("selector" to "#missing")),
+                driver
+            )
+
+            assertTrue(result.success)
+            assertEquals(null, result.value)
+        }
+    }
+
+    // ── a scoped selector miss names the frame the selector actually lives in ──
+
+    /**
+     * A mocked [PulsarWebDriver] with no pending dialog.
+     *
+     * The eval family is dialog-guarded, so the guard reads the driver's dialog
+     * handler before the branch under test ever runs.
+     */
+    private fun mockPulsarDriverWithoutDialog(): PulsarWebDriver {
+        val driver = Mockito.mock(PulsarWebDriver::class.java)
+        val handler = Mockito.mock(DialogHandler::class.java)
+        `when`(driver.dialogHandler).thenReturn(handler)
+        `when`(handler.hasPendingDialog()).thenReturn(false)
+        return driver
+    }
+
+    @Test
+    fun `a scoped selector miss names the frame the selector exists in`() {
+        runBlocking {
+            val scopedExecutor = BrowserTabToolExecutor()
+            val driver = mockPulsarDriverWithoutDialog()
+            `when`(driver.frameList()).thenReturn(
+                listOf(
+                    FrameInfo(id = "main", url = "https://example.com/", depth = 0, active = true),
+                    FrameInfo(
+                        id = "pay-id", name = "payframe", url = "https://example.com/pay",
+                        parentId = "main", depth = 1
+                    ),
+                )
+            )
+            scopedExecutor.frameProbeFactory = { _ ->
+                object : BrowserTabToolExecutor.CrossFrameProbe {
+                    override suspend fun queryInFrame(frameId: String, selector: String): Int =
+                        if (frameId == "pay-id") 42 else 0
+                }
+            }
+
+            val result = scopedExecutor.callFunctionOn(
+                ToolCall(
+                    "tab", "eval",
+                    mutableMapOf<String, Any?>(
+                        "selector" to "#pay-heading",
+                        "functionDeclaration" to "element => element.textContent"
+                    )
+                ),
+                driver
+            )
+
+            val message = result.exception?.cause?.message ?: ""
+            // Appended, never rewritten: the plain miss is still the first line.
+            assertTrue(message.contains("No element matches selector \"#pay-heading\""), message)
+            assertTrue(message.contains("matched inside frame \"payframe\""), message)
+            assertTrue(message.contains("run `frame payframe` first"), message)
+        }
+    }
+
+    @Test
+    fun `a selector miss keeps the plain message when only the main frame exists`() {
+        runBlocking {
+            val scopedExecutor = BrowserTabToolExecutor()
+            val driver = mockPulsarDriverWithoutDialog()
+            `when`(driver.frameList()).thenReturn(
+                listOf(FrameInfo(id = "main", url = "https://example.com/", depth = 0, active = true))
+            )
+            var probed = false
+            scopedExecutor.frameProbeFactory = { _ ->
+                object : BrowserTabToolExecutor.CrossFrameProbe {
+                    override suspend fun queryInFrame(frameId: String, selector: String): Int {
+                        probed = true
+                        return 1
+                    }
+                }
+            }
+
+            val result = scopedExecutor.callFunctionOn(
+                ToolCall(
+                    "tab", "eval",
+                    mutableMapOf<String, Any?>(
+                        "selector" to "#never-in-dom",
+                        "functionDeclaration" to "element => element.textContent"
+                    )
+                ),
+                driver
+            )
+
+            assertEquals("No element matches selector \"#never-in-dom\".", result.exception?.cause?.message)
+            assertFalse(probed, "with only the main frame there is no other scope to point at")
+        }
+    }
+
+    @Test
+    fun `a failing cross-frame lookup never replaces the element-not-found message`() {
+        runBlocking {
+            val scopedExecutor = BrowserTabToolExecutor()
+            val driver = mockPulsarDriverWithoutDialog()
+            `when`(driver.frameList()).thenReturn(
+                listOf(
+                    FrameInfo(id = "main", url = "https://example.com/", depth = 0, active = true),
+                    FrameInfo(id = "other", name = "otherframe", parentId = "main", depth = 1),
+                )
+            )
+            scopedExecutor.frameProbeFactory = { _ ->
+                object : BrowserTabToolExecutor.CrossFrameProbe {
+                    // A cross-origin frame is unreachable; the diagnostic must
+                    // swallow that, not fail the call a second time.
+                    override suspend fun queryInFrame(frameId: String, selector: String): Int =
+                        throw IllegalStateException("frame document is not reachable")
+                }
+            }
+
+            val result = scopedExecutor.callFunctionOn(
+                ToolCall(
+                    "tab", "eval",
+                    mutableMapOf<String, Any?>(
+                        "selector" to "#pay-heading",
+                        "functionDeclaration" to "element => element.textContent"
+                    )
+                ),
+                driver
+            )
+
+            assertEquals("No element matches selector \"#pay-heading\".", result.exception?.cause?.message)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // ariaSnapshot --selector: the selector must reach the page as a real
+    // JavaScript string literal, and a failed query must not read as "no match".
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("ariaSnapshot quotes and escapes the CSS selector it evaluates")
+    fun ariaSnapshotQuotesAndEscapesSelector() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        val selector = "div[data-x='a b']"
+        val captured = mutableListOf<String>()
+        `when`(driver.evaluateValue(Mockito.anyString())).thenAnswer { invocation ->
+            captured += invocation.getArgument<String>(0)
+            true
+        }
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>("selector" to selector)),
+            driver
+        )
+
+        assertTrue(result.success, "the probe must not fail for a valid selector: ${result.exception}")
+        assertEquals(1, captured.size)
+        // The escaped selector has to be INSIDE quotes: without them the generated
+        // script was a syntax error for every selector, so `snapshot --selector`
+        // could never work.
+        assertEquals("!!document.querySelector('div[data-x=\\'a b\\']')", captured[0])
+    }
+
+    @Test
+    @DisplayName("ariaSnapshot reports a selector that matched nothing as a target miss")
+    fun ariaSnapshotReportsNoMatchAsTargetMiss() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        `when`(driver.evaluateValue(Mockito.anyString())).thenReturn(false)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>("selector" to "#missing")),
+            driver
+        )
+
+        val message = result.exception?.cause?.message.orEmpty()
+        assertTrue(message.contains("no element matches selector"), message)
+        assertEquals(
+            ToolErrorCode.TARGET_NOT_FOUND,
+            ToolErrorMapper.classifyMessage(message),
+            "an empty match is a permanent target miss, not a usage error: $message"
+        )
+    }
+
+    @Test
+    @DisplayName("ariaSnapshot surfaces a failed selector query instead of reporting no match")
+    fun ariaSnapshotSurfacesFailedQuery() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        val failure = RuntimeException("SyntaxError: '>>>' is not a valid selector")
+        `when`(driver.evaluateValue(Mockito.anyString())).thenThrow(failure)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>("selector" to ">>>")),
+            driver
+        )
+
+        val message = result.exception?.cause?.message.orEmpty()
+        assertTrue(message.contains("could not be evaluated"), message)
+        assertTrue(message.contains(">>>"), "the selector must be named: $message")
+        assertTrue(
+            message.contains("not a valid selector"),
+            "the underlying JavaScript/DOM message must survive: $message",
+        )
+        assertFalse(
+            message.contains("no element matches selector"),
+            "a failed query is not an empty match: $message",
+        )
+    }
+
+    @Test
+    @DisplayName("ariaSnapshot refuses to read a non-boolean probe result as no match")
+    fun ariaSnapshotRejectsNonBooleanProbeResult() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        // A driver that answers with something unexpected must not be read as
+        // "the selector matched nothing" — that is how a broken probe looked like
+        // a legitimate empty result.
+        `when`(driver.evaluateValue(Mockito.anyString())).thenReturn(3)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>("selector" to "#x")),
+            driver
+        )
+
+        val message = result.exception?.cause?.message.orEmpty()
+        assertTrue(message.contains("instead of a boolean"), message)
+        assertFalse(message.contains("no element matches selector"), message)
+    }
+
+    @Test
+    @DisplayName("ariaSnapshot without a selector never probes the page")
+    fun ariaSnapshotWithoutSelectorSkipsProbe() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>()),
+            driver
+        )
+
+        assertTrue(result.success, "unscoped capture must still work: ${result.exception}")
+        Mockito.verify(driver, Mockito.never()).evaluateValue(Mockito.anyString())
+        Unit
     }
 }

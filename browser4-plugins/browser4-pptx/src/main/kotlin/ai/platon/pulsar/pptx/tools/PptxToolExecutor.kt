@@ -22,6 +22,7 @@ import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.pptx.config.PptxConfig
 import ai.platon.pulsar.pptx.service.PageContentExtractor
 import ai.platon.pulsar.pptx.service.PptxGenerator
+import ai.platon.pulsar.pptx.service.PptxGenerator.PptxGenerationOutput
 import kotlin.reflect.KClass
 import java.nio.file.Path
 
@@ -50,7 +51,7 @@ open class PptxToolExecutor(
                 ToolSpec.Arg("outputDir", "String?", "null"),
             ),
             returnType = "PptxGenerationResult",
-            description = "Extract structured content (headings, paragraphs, images, tables, lists, code blocks) from the current web page and generate a PowerPoint (PPTX) file. Images are downloaded and embedded in the slides. The PPTX contains a title slide followed by content slides grouped by heading sections. The generated filename is <sanitized-title>_<timestamp>.pptx.",
+            description = "Extract structured content (headings, paragraphs, images, tables, lists, code blocks) from the current web page and generate a PowerPoint (PPTX) file. Images are downloaded and embedded in the slides. The PPTX contains a title slide followed by content slides grouped by heading sections. Page chrome (navigation, sidebars, status badges, edit links) is filtered out. The generated filename is <sanitized-title>_<timestamp>.pptx.",
             help = """
                 pptx.generate()
                 pptx.generate(outputDir: String?)
@@ -62,21 +63,37 @@ open class PptxToolExecutor(
 
                 Content is organized into slides:
                 - Title slide (page title + URL)
-                - Section slides grouped by heading hierarchy
+                - One or more slides per heading section; content that does not fit a
+                  slide continues on a "(continued N)" slide instead of being dropped
                 - Images are downloaded and embedded
                 - Tables and lists are preserved
+
+                Image downloads are bounded: pptx.download.timeout.seconds per image and
+                pptx.download.total-timeout.seconds for the whole phase. When the phase
+                deadline expires the file is still written with the images that were
+                fetched, and the result carries the missing-image details. Image hosts that
+                need a proxy are reached through pptx.download.proxy, HTTPS_PROXY/HTTP_PROXY,
+                the JVM proxy properties, or the OS system proxy.
 
                 Returns a PptxGenerationResult with:
                 - filePath: absolute path to the generated PPTX file
                 - slideCount: number of slides created
                 - blockCount: number of content blocks extracted
-                - imageCount: number of images actually embedded
-                - downloadedImages: images successfully downloaded
-                - failedImages: images that failed to download
-                - skippedImages: images dropped (per-slide cap / slide overflow)
+                - imageCount: number of images actually embedded on slides
+                - downloadedImages: images downloaded successfully
+                - failedImages: image downloads that errored (network/timeout/HTTP)
+                - skippedImages: image blocks that could not be placed on any slide
+                  (not downloaded, unsupported by XSLF, or embed failure)
+                - skippedBlocks: content blocks that could not be rendered at all
+                - skippedBlockKinds: skippedBlocks broken down by block kind
+                - imageDownloadMs: wall clock spent downloading images
+                - imageDownloadDeadlineExceeded: true when the download phase hit its deadline
+                - warnings: human readable diagnostics, present when the deck is partial
                 - durationMs: generation time in milliseconds
 
-                The output file is saved to pptx.output.dir (default: downloads/pptx/).
+                The output file is saved to pptx.output.dir (default: ~/.browser4/downloads/pptx,
+                an absolute path under the user's Browser4 state directory — never the backend
+                working directory).
             """.trimIndent()
         )
     }
@@ -102,24 +119,21 @@ open class PptxToolExecutor(
                 val dir = resolveOutputDir(outputArg)
 
                 // Extract content blocks from the page
+                val extractStart = System.currentTimeMillis()
                 val blocks = contentExtractor.extract(driver)
                 logger.info(
-                    "pptx.generate: extracted {} blocks from {}",
-                    blocks.size, driver.currentUrl()
+                    "pptx.generate: extracted {} blocks from {} in {} ms",
+                    blocks.size, driver.currentUrl(), System.currentTimeMillis() - extractStart
                 )
 
                 if (blocks.isEmpty()) {
-                    return mapOf(
-                        "filePath" to "",
-                        "slideCount" to 0,
-                        "blockCount" to 0,
-                        "imageCount" to 0,
-                        "downloadedImages" to 0,
-                        "failedImages" to 0,
-                        "skippedImages" to 0,
-                        "durationMs" to (System.currentTimeMillis() - startTime),
-                        "pageUrl" to driver.currentUrl(),
-                        "error" to "No content blocks extracted from page",
+                    return buildResultPayload(
+                        result = null,
+                        blockCount = 0,
+                        slideCount = 0,
+                        durationMs = System.currentTimeMillis() - startTime,
+                        pageUrl = driver.currentUrl(),
+                        error = "No content blocks extracted from page",
                     )
                 }
 
@@ -128,6 +142,7 @@ open class PptxToolExecutor(
                 val pageUrl = driver.currentUrl()
 
                 // Generate PPTX
+                val generateStart = System.currentTimeMillis()
                 val result = pptxGenerator.generate(
                     blocks = blocks,
                     pageUrl = pageUrl,
@@ -152,23 +167,19 @@ open class PptxToolExecutor(
                 val durationMs = System.currentTimeMillis() - startTime
                 logger.info(
                     "pptx.generate complete: {} slides, {} blocks, {} embedded images " +
-                        "({} downloaded, {} failed, {} skipped), {}ms",
+                        "({} downloaded, {} failed, {} skipped), render+write {} ms " +
+                        "(image download {} ms), total {} ms",
                     slideCount, blocks.size, imageCount,
-                    result.embeddedImageCount + result.skippedImageCount - result.failedImageCount,
-                    result.failedImageCount, result.skippedImageCount,
-                    durationMs
+                    result.downloadedImageCount, result.failedImageCount, result.skippedImageCount,
+                    System.currentTimeMillis() - generateStart, result.imageDownloadMillis, durationMs
                 )
 
-                mapOf(
-                    "filePath" to result.path.toString(),
-                    "slideCount" to slideCount,
-                    "blockCount" to blocks.size,
-                    "imageCount" to imageCount,
-                    "downloadedImages" to (result.embeddedImageCount + result.skippedImageCount),
-                    "failedImages" to result.failedImageCount,
-                    "skippedImages" to result.skippedImageCount,
-                    "durationMs" to durationMs,
-                    "pageUrl" to pageUrl,
+                buildResultPayload(
+                    result = result,
+                    blockCount = blocks.size,
+                    slideCount = slideCount,
+                    durationMs = durationMs,
+                    pageUrl = pageUrl,
                 )
             }
 
@@ -176,6 +187,52 @@ open class PptxToolExecutor(
                 "Unsupported pptx method: $functionName. Supported: generate."
             )
         }
+    }
+
+    /**
+     * Build the `pptx_generate` result payload.
+     *
+     * `downloadedImages` is the downloader's own success count. It is deliberately
+     * not derived from the slide counters: `embedded + skipped` describes how images
+     * landed on slides, so it over-reports downloads whenever the per-slide image cap,
+     * the slide splitter, or a failed embed drops an image that was never downloaded.
+     *
+     * @param result the generation output, or null when nothing was generated
+     * @param blockCount number of content blocks extracted from the page
+     * @param slideCount number of slides written to the file
+     * @param durationMs total tool duration in milliseconds
+     * @param pageUrl the page the deck was generated from
+     * @param error set when generation did not produce a file
+     * @return the MCP tool result payload
+     */
+    protected fun buildResultPayload(
+        result: PptxGenerationOutput?,
+        blockCount: Int,
+        slideCount: Int,
+        durationMs: Long,
+        pageUrl: String,
+        error: String? = null,
+    ): Map<String, Any?> {
+        val payload = mutableMapOf<String, Any?>(
+            "filePath" to (result?.path?.toString() ?: ""),
+            "slideCount" to slideCount,
+            "blockCount" to blockCount,
+            "imageCount" to (result?.embeddedImageCount ?: 0),
+            "downloadedImages" to (result?.downloadedImageCount ?: 0),
+            "failedImages" to (result?.failedImageCount ?: 0),
+            "skippedImages" to (result?.skippedImageCount ?: 0),
+            "skippedBlocks" to (result?.skippedBlockCount ?: 0),
+            "skippedBlockKinds" to (result?.skippedBlockKinds ?: emptyMap<String, Int>()),
+            "imageDownloadDeadlineExceeded" to (result?.imageDownloadDeadlineExceeded ?: false),
+            "imageDownloadMs" to (result?.imageDownloadMillis ?: 0L),
+            "durationMs" to durationMs,
+            "pageUrl" to pageUrl,
+            "warnings" to (result?.warnings ?: emptyList<String>()),
+        )
+        if (error != null) {
+            payload["error"] = error
+        }
+        return payload
     }
 
     /**

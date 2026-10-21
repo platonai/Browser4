@@ -1,0 +1,169 @@
+{
+  "meta": {
+    "date": "20261015-134222",
+    "scenario": "tab-management",
+    "source": "20261015-134222-tab-management.issues.json",
+    "mode": "dev"
+  },
+  "background": {
+    "commands": "",
+    "workarounds": "",
+    "executionContext": "**Setup:** Confirmed CWD `D:/workspace/Browser4/Browser4-4.14`; ran `./b4w.ps1 help`; read `skills/browser4-cli/SKILL.md` and `references/tab-management.md` in full; read `--help` for `tab-list`, `tab-new`, `tab-select`, `tab-close`. No manual server setup was needed — the first `goto` reached the already-running backend immediately (no latency or startup errors).\n\n**Main flow (all `./b4w.ps1 …`, run from the repo root):**\n\n| Step | Command | Result |\n|---|---|---|\n| 1 | `goto \"https://en.wikipedia.org/wiki/Web_scraping\"` | Reused leftover DEFAULT session; navigated ✓ |\n| 2 | `tab-list` | 1 tab ✓ |\n| 3 | `tab-new \"https://news.ycombinator.com\"` | Created, selected index **0** ✓ |\n| 4 | `tab-new \"https://en.wikipedia.org/wiki/Data_mining\"` | Created, selected index **2** ✓ |\n| 5 | `tab-list` | 3 tabs + ▶ active marker ✓ |\n| 6 | `tab-select 1` → `snapshot -v 0` | Web scraping verified ✓ |\n| 7 | `tab-select 0` → `snapshot -v 0` | Hacker News verified ✓ |\n| 8 | `tab-close 0` | HN closed ✓ |\n| 9 | `tab-list` | HN removed ✓ |\n| 10 | `tab-select 0`/`snapshot`, `tab-select 1`/`snapshot` | Both remaining tabs verified ✓ |\n\n**Key decisions:**\n- Used the documented workflow (`tab-list → tab-new → tab-select → snapshot → tab-close → verify`) from `tab-management.md`.\n- Step 6 said \"switch to the *first* tab (Web scraping)\"; since `tab-list` showed it at **index 1**, I used its actual index rather than trusting the \"first tab\" assumption.\n- Used default `snapshot -v 0` (bounded 30-line preview + file link) instead of `--stdout` to avoid dumping 27–63 KB trees; refs weren't needed for verification.\n- Used `tab-close --guid <guid>` for cleanup to avoid index ambiguity.\n\n**Additional probes (for issue analysis/root cause):** `--json tab-list` (clean envelope, `active` boolean), `page-info` (shows `▶ Active page … (2/2 tabs total)`), out-of-range `tab-select 5` (exit 1, stderr: `Error: Tab index 5 is out of range. There are 2 tabs (indices 0-1).` — good), `tab-list --json` (flag after command works), sessions `list` (table correctly aligned — isolates the bug to the tab table), two blank-tab experiments (new tab landed at index 0 then index 3 under identical conditions), and source inspection of `handle_tab_list`/`handle_tab_new` (Rust) and `BrowserToolExecutor.listTabs` (Kotlin).\n\n**Artifacts:** all evidence files (`task3-01…task3-28`) are under `.test-sessions/20261015T0901431699046Z/`. The CLI itself wrote snapshot YAMLs to the repo-root `.browser4-cli/snapshot/`, which is gitignored and is the documented location.\n\n---\n\n# C+D. Issues Found and Overall Assessment (JSON)\n\n\n\n**Notes on the positives (for balance):** the help system is unusually strong for a first-time user (`--help <command>`, categories, aliases, examples); the tab workflow docs (`tab-management.md`) gave a correct copy-paste recipe that worked verbatim; errors are clear and go to stderr with exit code 1 (verified: `tab-select 5`); `snapshot` bounds its terminal output with a preview + file link; `tab-close` confirms URL+GUID; `--json` envelopes are clean and include an accurate `active` flag; `page-info` and the `▶` marker made context verification unambiguous. The evaluation deductions come from the index semantics (the heart of this task), the misleading help claim, and the broken table alignment.",
+    "task": "**Outcome: Successful — all 10 steps completed on the first attempt.**\n\nThe multi-tab scenario ran end-to-end against the locally-built backend (headless, default session):\n\n1. **Navigate to Wikipedia \"Web scraping\"** — done. The CLI printed `Using existing session DEFAULT (current page: https://en.wikipedia.org/wiki/A_Pattern_Language)` and reused the leftover tab (a persisted session from a previous run), then navigated it.\n2. **Initial tab state** — 1 tab: `0 → Web scraping - Wikipedia`.\n3. **New tab → Hacker News** — created; CLI reported `Created tab with GUID: 706985AC…` / `Switched to tab 0`.\n4. **New tab → Wikipedia \"Data mining\"** — created; CLI reported `Switched to tab 2` (note: the *end* of the list this time, not index 0).\n5. **List all tabs** — 3 tabs: `0 = Hacker News`, `1 = Web scraping`, `2 = Data mining (active, marked ▶)`. Importantly, the Web scraping article was **not** at index 0 despite being the task's \"first tab\", because of the inconsistent insertion behavior (Issues 2–3).\n6. **Switch to Web scraping by index (1)** + snapshot — verified: URL `…/wiki/Web_scraping`, title `Web scraping - Wikipedia`, 372-node Wikipedia tree.\n7. **Switch to Hacker News (index 0)** + snapshot — verified: URL `https://news.ycombinator.com/`, title `Hacker News`, HN header/links in the tree.\n8. **Close Hacker News (index 0)** — `Closed tab 0 (https://news.ycombinator.com/ — GUID: 706985…)`.\n9. **List again** — 2 tabs; HN gone; `▶` correctly moved to Web scraping.\n10. **Verify remaining tabs** — `tab-select 0` + snapshot (Web scraping ✓); `tab-select 1` + snapshot (Data mining ✓, 884-node tree).\n\nThe session was left in the expected final state (2 tabs: Web scraping + Data mining, Web scraping active); two experiment tabs created during root-cause investigation were cleaned up by GUID.\n\n---"
+  },
+  "assessment": {
+    "completionStatus": "Successful — all 10 steps of the multi-tab scenario completed on the first attempt with no retries; the session ended in the expected state (2 tabs: Web scraping + Data mining). The only deviation from the task text: Web scraping was at index 1 rather than 0, so its actual index from tab-list was used.",
+    "successRate": "100% of the 10 task steps succeeded on the first attempt; ~95% overall including the investigation probes (all commands behaved consistently, only the interpretation of tab indices required empirical testing because the help text misled).",
+    "issuesFound": 4,
+    "majorBlockers": "",
+    "mostConfusingAspects": "1) Tab indices do not match the browser's visible tab order: identical `tab-new` invocations placed new tabs at index 0, the end, index 0, and the end, while the help text promises 'index 0 on Windows headless CDP' — a user scripting by index cannot predict which tab is which. 2) `goto` silently reused a leftover tab from a previous session ('current page: A Pattern Language'), which is documented behaviour but surprising as an 'initial state'. 3) The tab-list table's header row is visibly misaligned with its data, making columns hard to read at a glance.",
+    "mostValuableImprovements": "1) Fix handle_tab_list's GUID column width so the table renders correctly (trivial, high-visibility). 2) Make tab ordering deterministic/meaningful in the backend (or clearly document index as an opaque listing position and steer users to --guid). 3) Correct the platform-specific insertion-position claim in the tab-new/tab-select help. 4) Document the ▶ active marker and the `active` JSON field.",
+    "usabilityRating": 7
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "tab-list table header/separator do not align with data rows (GUID column width never computed)",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 tab-list   (any session with at least one tab)\nObserved with 3 tabs; analyze line lengths: header + separator rows = 83 chars, data rows = 113 chars."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A table whose header labels and dashed separator sit directly above their columns, as in the `list` (sessions) command, whose table is correctly aligned."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The header row is 83 chars while data rows are 113 chars. The 'GUID' header field is 4 chars wide but GUIDs are 32-char strings, so each data row overflows that cell and pushes 'Title'/'URL' 30 columns to the right of their headers (e.g. 'Title' header at column 15, actual titles at column 45). The active-row '▶ ' marker is additionally prepended before the padded index field, shifting the index of active rows 2 columns right of the header."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "In handle_tab_list() the GUID column width is computed as `let guid_w = \"GUID\".len();` (always 4) while idx_w/title_w/url_w are widened to the data maxima via .max(...). Rust's `{:<4}` does not truncate, so 32-char GUIDs overflow and shift all later columns; header/separator rows are also printed without the 2-char active-marker prefix accounted for."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:handle_tab_list() (approx. lines 3643-3710, the human-readable table branch)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Compute the GUID width from the data like the other columns: `let guid_w = \"GUID\".len().max(tabs.iter().map(|t| format_guid_display(t.guid.as_deref()).len()).max().unwrap_or(0));`\n- Account for the 2-char active marker in the header/separator rows (e.g. print the header with a 2-space prefix before the index field) so the Index column also lines up\n- Add a unit test asserting the header/separator line length equals each data row length (the sessions `list` table already behaves correctly and can serve as the reference implementation)"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "tab-new/tab-select help states a platform-specific insertion index that does not hold; new-tab index is unpredictable",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 --help tab-new (and --help tab-select) on Windows headless CDP, then run four tab creations and note the reported indices: two `tab-new <url>` calls reported index 0 and index 2; two `tab-new` (about:blank) calls reported index 0 and index 3."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Either new tabs consistently appear where the help says (index 0 on Windows headless CDP), or the help describes the actual, observed behaviour without a platform-specific promise."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The help text says 'Tab insertion position is determined by Chrome (not Browser4) ... on Windows headless CDP, new tabs appear at index 0 (before the active tab); on macOS they typically appear after the active tab.' On Windows headless CDP the new tab landed at index 0 in 2 of 4 identical cases and at the end of the list in the other 2. The position is not determined by Chrome at all: the index is the position of the tab in the backend's tab listing (see next issue), which is not the browser's tab-strip order."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The help text was written assuming Chrome/CDP insert-position semantics, but the CLI's index for a new tab comes from matching the new GUID inside the backend's `listDrivers()` order (see BrowserToolExecutor.listTabs), which is an unordered internal map. The code comment in the CLI itself states 'the list order is not guaranteed to reflect creation order (backed by ConcurrentHashMap)'. The reference doc (skills/browser4-cli/references/tabs.md) is more careful ('varies by platform, Chrome version and mode ... prefer --guid'), so the two documents contradict each other."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/help.rs:3330 (tab-new notes) and cli/browser4-cli/src/help.rs:3469 (tab-select notes)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Replace the platform-specific claim with the accurate statement: the index is the tab's position in the backend's tab listing, which may not match the browser window's tab order, can place a brand-new tab anywhere, and must be read from `tab-list` rather than predicted\n- Keep the existing advice to always run `tab-list` after creating a tab and to prefer `--guid` when order matters\n- After the backend stabilises tab ordering (see next issue), revise both help texts again so docs and behaviour converge"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "Tab indices come from an unordered internal driver map, so they do not reflect the browser's tab strip and are inherently fragile",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 tab-new (about:blank) → new tab reported at index 0; repeat with a different active tab → new tab reported at index 3. The index assigned to a new tab bears no relation to visual position or creation order. Also: after closing the active tab, the list's ▶ marker moves to an index that a user cannot predict from the browser window's tab order."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "An 'index' shown next to tabs should be stable and meaningful (e.g. left-to-right tab-strip order or creation order), so 'switch to the first tab' unambiguously identifies a tab across commands."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Indices are the positions of drivers in `browser.listDrivers()` iteration order. New tabs therefore appear at arbitrary indices (observed 0, 2, 0, 3 across four creations), the ordering does not correspond to the browser's visible tab strip, and the backend's own code comments acknowledge the order is unstable ('ConcurrentHashMap iteration order is unstable'), which is why switchTab deliberately returns a GUID and the CLI re-identifies tabs by GUID internally."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "BrowserToolExecutor.listTabs builds the response with `browser.listDrivers().mapIndexed { i, driver -> mapOf(\"index\" to i.toString(), ...) }`. listDrivers() is backed by the base library's driver map (a ConcurrentHashMap), which has no ordering contract; newDriver() insertion does not place the driver at a predictable position, and index→tab resolution can bind the wrong tab if the order shifts between calls (per the comment at the switchTab branch)."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/BrowserToolExecutor.kt — listTabs / newTab / switchTab (class callFunctionOn, domain browser)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Sort drivers deterministically in listTabs (e.g. by driver creation sequence recorded at newDriver time, or by the CDP target list order) so `index` matches the visual tab strip and is stable across invocations\n- Until the order is deterministic, keep the CLI's GUID-based resolution (already implemented) and consider making GUID the documented primary handle for all tab commands, with index described as a convenience snapshot\n- Add an e2e test that creates three tabs and asserts their reported indices follow a defined order — today the code comments admit instability without a test pinning the contract"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "tab-list --help does not document the active-tab marker (▶) or the JSON `active` field",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 --help tab-list → Notes say only 'Outputs a table with Index, GUID, Title, and URL columns by default.' Then run ./b4w.ps1 tab-list (▶ appears next to one row) and ./b4w.ps1 --json tab-list (each tab has an \"active\" boolean)."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The help mentions the active-tab indicator so a first-time user knows how to identify which tab subsequent commands will act on."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Neither the '▶' marker in the table nor the `active` field in the JSON output is mentioned in the command's help; the backend tool spec does describe an 'active marker', so the CLI help is the incomplete surface."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The help text in the tab-list notes was not updated when the active marker and `active` JSON field were added to the table/JSON renderers."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/help.rs (tab-list notes); cli/browser4-cli/src/main.rs:handle_tab_list()"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add one note line: 'The active tab (the one that page commands act on) is marked with ▶; `--json` reports it as the `active` boolean per tab.'\n- Mention that `tab-list` does not trigger a snapshot (already documented in a note) and that index values can shift after tab creation/close, so `--guid` is the stable target"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

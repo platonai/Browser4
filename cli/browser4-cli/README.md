@@ -70,9 +70,10 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 
 | Command | Description |
 |---|---|
-| `open [url]` | Open a browser session or refresh the saved one if it is no longer active |
-| `close` | Close the browser |
-| `list` | List browser sessions with their status and next-open behavior |
+| `open [url]` | Open a browser session or refresh the saved one if it is no longer active. `--headed`/`--headless` pick the display mode, `--display-mode GUI\|HEADLESS\|SUPERVISED` is the same choice in the backend's own spelling (exclusive with the boolean pair), `--max-open-tabs <n>` caps the session's tabs, `--profile-mode`/`--profile`/`--interact-level` tune the rest, `--fresh` starts over instead of reconnecting |
+| `close` | Close the browser. Reports what actually happened: the backend's tri-state (`browserTerminated` true/false/null) decides whether “terminated” is printed, and survivors are named |
+| `disconnect` | Alias of `close`, for an attached session: it detaches from the external browser (whose tabs this session was driving are closed) instead of pretending to terminate it |
+| `list` | List browser sessions with their status and next-open behavior. `--all` adds a Workspace column covering the sessions persisted by every other checkout; `--verbose` lifts the URL/Session-ID column caps |
 | `close-all` | Close all browser sessions without stopping the Browser4 backend |
 | `kill-all` | Forcefully stop the Browser4 backend and kill all browser processes |
 | `stop` | Gracefully stop the Browser4 server |
@@ -103,7 +104,7 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 
 | Command | Description |
 |---|---|
-| `click <ref> [button]` | Perform click on a web page. `--modifiers`, `--follow` (detect new tabs) |
+| `click <ref> [button]` | Perform click on a web page. `--count <n>` clicks n times in one call (2 = double click, 3 = triple click; not with `--modifiers`), `--modifiers`, `--follow` (detect new tabs), `--auto-dismiss-dialogs` |
 | `dblclick <ref> [button]` | Perform double click on a web page. `--modifiers`, `--follow` (detect new tabs) |
 | `hover <ref>` | Hover over element on page |
 | `drag <startRef> <endRef>` | Perform drag and drop between two elements |
@@ -117,7 +118,7 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 
 | Command | Description |
 |---|---|
-| `snapshot` | Capture page snapshot to obtain element refs. Supports `--boxes`, `-i`/`--interactive`, `-u`/`--urls`, `-c`/`--compact`, `-d`/`--depth <n>`, `--selector <sel>`, `--raw`, `--stdout`. `--stdout`/`--raw` paginate large trees at 2000 lines/page by default (truncated output appends a hint to stdout when piped; footer goes to stderr) — use `--page N`, `--page-size N`, or `--all`/`--page-size 0` for the complete tree |
+| `snapshot` | Capture page snapshot to obtain element refs. Supports `--boxes`, `-i`/`--interactive` (interactive-**only**: buttons/links/inputs/`cursor:pointer` — draggable and hover-only targets lose their refs, so use `-v 0` for those), `-u`/`--urls`, `-c`/`--compact`, `-d`/`--depth <n>`, `--selector <sel>`, `--raw`, `--stdout`. `--stdout`/`--raw` paginate large trees at 2000 lines/page by default (truncated output appends a hint to stdout when piped; footer goes to stderr) — use `--page N`, `--page-size N`, or `--all`/`--page-size 0` for the complete tree |
 | `get <mode> <selector> [name]` | Extract data from a page element (text, html, box, styles, property, attr) |
 | `eval [expression] [ref]` | Evaluate JavaScript expression on page or element |
 | `wait [target]` | Wait for a condition: element, time, text, URL pattern, page load, or JS expression |
@@ -187,7 +188,7 @@ frames) are not supported in this version — `frames` cannot see them and
 | Command | Description |
 |---|---|
 | `download [--dir <path>] [--behavior allow\|deny]` | Configure the browser download folder (`Browser.setDownloadBehavior`) |
-| `wait --download [--dir <path>] [--timeout <ms>]` | Poll the download directory until a download completes |
+| `wait --download [--dir <path>] [--timeout <ms>]` | Poll the download directory until a download completes. Success means "some non-partial file exists and no `.crdownload`/`.tmp`/`.part` file does", so a directory that already contains a file reports completion instantly — point it at an empty directory (or clean it first) |
 
 ### Network inspection, HAR & routing
 
@@ -240,10 +241,11 @@ extensions) are also possible via `open --profile` or PROTOTYPE mode. See
 
 | Command | Description |
 |---|---|
-| `extract <instruction>` | Extract structured data from the current page |
+| `extract <instruction>` | Extract data from the current page. Without `--schema` the result is always the fixed `{title, content, links}` envelope — the instruction shapes the text inside `content`; pass `--schema` (JSON Schema or `{"fields":[…]}`) to get named top-level fields |
 | `agent run <task>` | Run an autonomous agent task (async, returns task ID). `--wait` blocks for the result; `--wait-timeout <seconds>` tunes the wait window (default 600). |
-| `agent status <id>` | Check the status of a running agent task |
-| `agent result <id>` | Get the result of a completed agent task |
+| `agent status <id>` | Check a task — the shared status envelope (`status`: `queued`/`running`/`done`/`failed`/`cancelled`, plus `statusCode`, `message` and the agent's step count). `done`/`failed`/`cancelled` are terminal; an unknown id answers `statusCode: 404` with the reason and exits non-zero. |
+| `agent result <id>` | Get a completed task's result: its summary plus the agent's `keyFindings`, `filesChanged`, `problems` and the `workspace` its deliverables live in (a task whose answer is a file is reachable from here). |
+| `agent list` | List tracked agent tasks with the same statuses (refreshed from the backend on every call); `--clear` untracks the finished ones. |
 
 ### Swarm
 
@@ -357,6 +359,14 @@ failed, 400 not honourable).
 | `crawl list` | List all tracked crawl tasks and their status |
 | `crawl resume <id>` | Continue an interrupted crawl from its checkpoint (no repeat requests for URLs that already succeeded) |
 
+Every seed — the positional `url` and each `--seed-file` line — must be an absolute http(s)
+URL. A value the crawl could never fetch (`formats`, `example.com`, `htps://…`) is refused
+before the task is submitted, naming the seed and, for a seed file, the line it came from:
+
+```text
+Error: Invalid crawl URL 'formats' (urls.txt line 4): expected an absolute http(s) URL such as https://example.com/page.
+```
+
 `crawl` collects its units (one per seed URL) concurrently by default — each unit
 runs on its own browser tab leased from the driver pool. Use `--parallel <n>` to
 bound how many run at once (`--parallel 1` restores the strictly sequential
@@ -422,10 +432,27 @@ Skills are AI agent instruction files bundled into the CLI binary at compile tim
 | `webminer version` | Show installed and latest available versions |
 | `webminer uninstall` | Remove the installed release |
 | `webminer run-example` | Download the sample dataset and run the full pipeline (needs 7-Zip) |
-| `webminer all <html-dir>` | Full pipeline (encode → cluster → views) with `--max-files`, `--output`, `--resume` |
+| `webminer all <html-dir>` | Full pipeline (encode → cluster → views) with `--max-files` (default **40** — raise it for larger corpora, the run truncates silently), `--output`, `--resume`. The interactive report and encoded dataset go to the OS temp dir (`%TEMP%/webminer-pereg/…`), not `--output` |
 | `webminer views <result-dir>` | Rebuild interactive views from an existing clustering result |
 
 Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`). The same `~/.scent/webminer` installation is used by the [web-miner skill](../../skills/browser4-web-miner/SKILL.md).
+
+### Plugins & MCP tools
+
+| Command | Description |
+|---|---|
+| `plugin list` | List the installed plugin JARs (and their load/enabled status) — **not** the tools they expose |
+| `plugin info <name>` | Show one installed plugin; the short name the CLI advertises (`captcha`, `browser4-captcha`, a JAR name or a path) resolves to the installed artifact, and a miss lists what is installed |
+| `plugin install <file>` | Install a plugin from a local JAR (a shell-expanded glob or a literal `*` also works; when several JARs match, the one matching this CLI's version is installed and the choice is reported). Restart the backend afterwards |
+| `plugin remove <name>` | Remove a plugin |
+| `plugin <domain> <method>` | Run one plugin tool, e.g. `plugin media detectVideos` |
+| `plugin <domain> --help` | The methods of one plugin domain (also `--help plugin-<domain>`) |
+| `tool list [--filter <substr>]` | Every MCP tool name the backend advertises (or `GET /mcp/tools`) |
+| `tool call <name> [--json '{…}']` | Invoke any advertised tool by name; `--fail-on-error` exits non-zero when the payload reports `success:false` (a failure is otherwise reported on stderr with exit 0) |
+
+A development runtime bundle ships the first-party plugins the checkout builds (`swarm`, `images`,
+`markdown`, `media`, `seo`); `captcha`, `pptx`, `profile-import` and `summary-demo` are installed on
+demand. See `skills/browser4-cli/references/plugins.md` for the full story.
 
 ### Install / Admin
 
@@ -451,7 +478,7 @@ Keys: `server` (default Browser4 URL), `timeout` (seconds, positive integer), `p
 | Option | Description |
 |---|---|
 | `--help [command]` | Print help (all commands, or detailed help for a specific command) |
-| `--help --examples` | Print the runnable tool examples for a command, fetched from the backend's tool specs (falls back to a one-line notice when the backend is unreachable) |
+| `--help --examples` | Print runnable examples for a command. The CLI's own `Examples:` block answers offline; when the backend is reachable its richer tool-level examples (titles, notes, snippets) are shown instead |
 | `--version` | Print version |
 | `--json` | Emit machine-parseable JSON to stdout |
 | `-q, --quiet` | Suppress normal output, only show errors |

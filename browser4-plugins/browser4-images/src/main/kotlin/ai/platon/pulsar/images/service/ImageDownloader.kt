@@ -17,6 +17,7 @@ package ai.platon.pulsar.images.service
 
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.images.config.ImageConfig
+import ai.platon.pulsar.images.config.ImageProxyResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -26,16 +27,20 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.UnknownHostException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.concurrent.TimeUnit
 import kotlin.io.path.*
 
 /**
  * Downloads image files using a dual strategy:
  *
  * 1. **Primary: Direct OkHttp download** — independent HTTP client, bypasses all browser [BlockRule] settings.
- *    Handles redirects, Content-Disposition filename extraction, progress tracking, and size validation.
+ *    Handles redirects, percent-decoded/Content-Type-aligned filenames, streaming to disk, dimension
+ *    decoding, and size validation.
  *
  * 2. **Fallback: CDP network interception** — for session-authenticated content that requires
  *    browser cookies/headers. (Reserved for future use.)
@@ -64,9 +69,10 @@ open class ImageDownloader(
         val bytesDownloaded: Long,
         /** Content-Type from the response header */
         val contentType: String? = null,
-        /** Image width from detection (if available) */
+        /** Image width: the detected (intrinsic, else rendered) size when detection
+         * data is available, otherwise decoded from the downloaded bytes. */
         val width: Int? = null,
-        /** Image height from detection (if available) */
+        /** Image height: see [width]. */
         val height: Int? = null,
         /** Total duration in milliseconds */
         val durationMs: Long,
@@ -80,7 +86,7 @@ open class ImageDownloader(
      * Summary of a bulk download operation.
      */
     data class BulkDownloadSummary(
-        /** Total number of images attempted */
+        /** Number of images actually attempted (after dimension filtering) */
         val totalAttempted: Int,
         /** Number of successful downloads */
         val successful: Int,
@@ -90,6 +96,10 @@ open class ImageDownloader(
         val totalBytesDownloaded: Long,
         /** Per-image results */
         val results: List<ImageDownloadResult>,
+        /** Distinct sources detection found, before any dimension filtering */
+        val totalDetected: Int = totalAttempted,
+        /** Sources dropped by the dimension filter; never counts unknown-size sources */
+        val filteredOut: Int = 0,
     )
 
     /**
@@ -274,11 +284,17 @@ open class ImageDownloader(
                     logger.info("Downloaded {} ({}) in {}ms",
                         uniquePath.fileName, ImageUtils.formatFileSize(totalRead), durationMs)
 
+                    // Decode the saved bytes so a single download reports the same
+                    // dimensions a bulk download does (detection data is absent here).
+                    val dimensions = ImageUtils.readImageDimensions(uniquePath)
+
                     ImageDownloadResult(
                         url = validatedUrl,
                         filePath = uniquePath.toAbsolutePath().toString(),
                         bytesDownloaded = totalRead,
                         contentType = contentType,
+                        width = dimensions?.first,
+                        height = dimensions?.second,
                         durationMs = durationMs,
                         success = true,
                     )
@@ -286,24 +302,13 @@ open class ImageDownloader(
             }
         } catch (e: IOException) {
             logger.warn("Download failed for {}: {}", validatedUrl, e.message)
-            // A connection reset/timeout often means direct egress is blocked
-            // while the browser succeeds through the OS system proxy — the JVM
-            // does not inherit it. Point at the proxy configuration.
-            val message = e.message ?: ""
-            val networkish = message.contains("reset", ignoreCase = true) ||
-                message.contains("timed out", ignoreCase = true) ||
-                message.contains("unreachable", ignoreCase = true)
-            val proxyHint = if (networkish) {
-                " — if this host needs a proxy, set image.download.proxy or JVM -Dhttps.proxyHost " +
-                    "(the browser's system proxy is not inherited by the JVM)"
-            } else ""
             ImageDownloadResult(
                 url = validatedUrl,
                 filePath = "",
                 bytesDownloaded = 0,
                 durationMs = System.currentTimeMillis() - startTime,
                 success = false,
-                error = "IO error: ${message}$proxyHint",
+                error = networkFailureMessage(e, System.currentTimeMillis() - startTime),
             )
         } catch (e: Exception) {
             logger.warn("Download failed for {}: {}", validatedUrl, e.message)
@@ -319,17 +324,75 @@ open class ImageDownloader(
     }
 
     /**
+     * Turn a transport failure into an actionable message: the cause class, how
+     * long the attempt took, the proxy that was used (or none), and how to
+     * configure one.
+     *
+     * Downloads deliberately fail inside the plugin's own timeout budget
+     * ([ImageConfig.downloadTimeoutSeconds], below the caller's HTTP timeout),
+     * so this message is what a caller sees instead of a bare transport timeout.
+     */
+    internal fun networkFailureMessage(e: IOException, elapsedMs: Long): String {
+        // OkHttp layers its own wrapper over the transport failure, and the most
+        // specific text ("Connection refused", "timeout") lives further down the
+        // chain — e.g. ConnectException("Failed to connect to /127.0.0.1:1")
+        // caused by ConnectException("Connection refused") — so classify on the
+        // whole chain, not just the outermost message.
+        val chain = generateSequence(e as Throwable?) { it.cause }.take(8).toList()
+        val messages = chain.mapNotNull { it.message?.takeIf { message -> message.isNotBlank() } }
+        val raw = messages.joinToString("; ")
+        val rootMessage = messages.lastOrNull().orEmpty()
+
+        val cause = when {
+            raw.contains("refused", ignoreCase = true) -> "connection refused"
+            chain.any { it is UnknownHostException } -> "host not found"
+            chain.any { it is NoRouteToHostException } -> "no route to host"
+            chain.any { it is InterruptedIOException } || raw.contains("timed out", ignoreCase = true) ||
+                raw.contains("timeout", ignoreCase = true) -> "timed out"
+            raw.contains("reset", ignoreCase = true) -> "connection reset"
+            chain.any { it is ConnectException } -> "connection failed"
+            raw.isNotBlank() -> raw
+            else -> e::class.simpleName ?: "IO error"
+        }
+        val budget = "connect timeout ${config.connectTimeoutSeconds}s, " +
+            "per-download budget ${config.downloadTimeoutSeconds}s"
+        val detail = if (rootMessage.isNotBlank() && !cause.contains(rootMessage, ignoreCase = true)) {
+            " Root cause: $rootMessage."
+        } else {
+            ""
+        }
+        return "Network error: $cause after ${elapsedMs}ms ($budget; $proxyStatus).$detail " +
+            "If this host needs a proxy, set image.download.proxy (e.g. http://127.0.0.1:8080), " +
+            "HTTPS_PROXY, or -Dhttps.proxyHost/-Dhttps.proxyPort."
+    }
+
+    /**
+     * The proxy the download client would use, for error messages. Resolved
+     * once: the OS lookup spawns a process on Windows, and a failing bulk
+     * download would otherwise repeat it per image.
+     */
+    private val proxyStatus: String by lazy {
+        val spec = ImageProxyResolver.resolve(config.proxy)
+        if (spec == null) "no proxy detected" else "using proxy $spec"
+    }
+
+    /**
      * Bulk download all detected images with concurrency control.
      *
-     * @param images      the detected image sources to download
-     * @param outputDir   directory to save files in
-     * @param concurrency maximum concurrent downloads (default: config.concurrentDownloads)
-     * @return [BulkDownloadSummary] with per-image results
+     * @param images        the detected image sources to download (already filtered)
+     * @param outputDir     directory to save files in
+     * @param concurrency   maximum concurrent downloads (default: config.concurrentDownloads)
+     * @param totalDetected sources detection found before dimension filtering, so
+     *   the summary can explain how many were filtered out
+     * @param filteredOut   sources dropped by the dimension filter before this call
+     * @return [BulkDownloadSummary] with per-image results and the filter counts
      */
     open suspend fun downloadAll(
         images: List<ImageDetector.ImageSource>,
         outputDir: Path = Path.of(config.downloadDir),
         concurrency: Int = config.concurrentDownloads,
+        totalDetected: Int = images.size,
+        filteredOut: Int = 0,
     ): BulkDownloadSummary = coroutineScope {
         val startTime = System.currentTimeMillis()
         val semaphore = Semaphore(concurrency.coerceAtLeast(1))
@@ -355,7 +418,12 @@ open class ImageDownloader(
                             outputDir = outputDir,
                             headers = defaultHeaders()
                         )
-                        result.copy(width = image.naturalWidth ?: image.width, height = image.naturalHeight ?: image.height)
+                        // Detection data wins when present; otherwise keep the
+                        // dimensions decoded from the downloaded bytes.
+                        result.copy(
+                            width = image.naturalWidth ?: image.width ?: result.width,
+                            height = image.naturalHeight ?: image.height ?: result.height,
+                        )
                     }
                 }
             }
@@ -369,8 +437,9 @@ open class ImageDownloader(
         val totalBytes = results.filter { it.success }.sumOf { it.bytesDownloaded }
 
         logger.info(
-            "Bulk download complete: {}/{} successful, {} total, in {}ms",
-            successful, results.size, ImageUtils.formatFileSize(totalBytes), totalTime
+            "Bulk download complete: {}/{} successful ({}/{} sources after filtering), {} total, in {}ms",
+            successful, results.size, images.size, totalDetected,
+            ImageUtils.formatFileSize(totalBytes), totalTime
         )
 
         BulkDownloadSummary(
@@ -379,6 +448,8 @@ open class ImageDownloader(
             failed = failed,
             totalBytesDownloaded = totalBytes,
             results = results,
+            totalDetected = totalDetected,
+            filteredOut = filteredOut,
         )
     }
 

@@ -72,7 +72,9 @@ data class ContentBlock(
  *
  * Runs a JS probe in the page context that walks the DOM in document order,
  * collecting headings, paragraphs, images, tables, lists, code blocks, and
- * blockquotes as structured [ContentBlock] objects.
+ * blockquotes as structured [ContentBlock] objects. Page chrome — site
+ * navigation, banners, sidebars, edit links and maintenance/status badges — is
+ * excluded before it can become slide content.
  */
 open class PageContentExtractor(
     private val config: PptxConfig = PptxConfig(),
@@ -80,19 +82,83 @@ open class PageContentExtractor(
     private val logger = getLogger(PageContentExtractor::class)
 
     /**
+     * The extraction probe used by [extract], with the configured
+     * `pptx.detect.exclude-selectors` spliced into the built-in chrome selectors.
+     */
+    protected open val extractionScript: String by lazy { buildExtractionScript(config.excludeSelectors) }
+
+    /**
      * Extract structured content from the current page.
      *
      * @param driver the WebDriver connected to the target page
-     * @return list of [ContentBlock] objects in document order
+     * @return list of [ContentBlock] objects in document order, without leading page chrome
      */
     open suspend fun extract(driver: WebDriver): List<ContentBlock> {
         val result = try {
-            driver.evaluate(CONTENT_EXTRACTION_SCRIPT)
+            driver.evaluate(extractionScript)
         } catch (e: Exception) {
             logger.warn("Failed to extract page content: {}", e.message)
             null
         }
-        return parseResult(result)
+        return filterLeadingChrome(parseResult(result))
+    }
+
+    /**
+     * Drop leading page-chrome blocks that the selector list cannot identify.
+     *
+     * A short table or list that appears *before* the first heading is a
+     * status/metadata band — a protection badge, a "featured article" chip, a
+     * breadcrumb — not article content, and it is what made the opening slides of
+     * a Wikipedia deck contain nothing but "Featured article" / "Page semi-protected".
+     * Longer tables (data, infoboxes) and everything after the first heading are
+     * always kept, and a page that would be emptied by the filter is returned as is.
+     *
+     * @param blocks the parsed content blocks in document order
+     * @return the blocks without the leading chrome
+     */
+    open fun filterLeadingChrome(blocks: List<ContentBlock>): List<ContentBlock> {
+        if (blocks.isEmpty()) return blocks
+
+        val kept = mutableListOf<ContentBlock>()
+        var beforeFirstHeading = true
+        var filtered = 0
+
+        for (block in blocks) {
+            if (beforeFirstHeading && block.type != "title") {
+                when {
+                    block.type == "heading" -> beforeFirstHeading = false
+                    isLeadingChrome(block) -> {
+                        filtered++
+                        continue
+                    }
+                    else -> beforeFirstHeading = false
+                }
+            }
+            kept.add(block)
+        }
+
+        if (filtered == 0) return blocks
+        // Never turn a page into an empty deck: chrome is only dropped when real
+        // content follows it.
+        if (kept.none { it.type != "title" }) return blocks
+
+        logger.info("Filtered {} leading page-chrome block(s) before the first heading", filtered)
+        return kept
+    }
+
+    /**
+     * Whether a leading block carries too little text to be article content.
+     *
+     * @param block the block to inspect
+     * @return true for short leading tables and lists
+     */
+    private fun isLeadingChrome(block: ContentBlock): Boolean {
+        val text = when (block.type) {
+            "table" -> block.rows?.flatten()?.joinToString(" ") ?: return false
+            "list" -> block.items?.joinToString(" ") ?: return false
+            else -> return false
+        }
+        return text.trim().length < LEADING_CHROME_MAX_TEXT_LENGTH
     }
 
     /**
@@ -114,6 +180,84 @@ open class PageContentExtractor(
     }
 
     companion object {
+        /** Placeholder in [CONTENT_EXTRACTION_SCRIPT] replaced by the JSON selector array. */
+        const val EXCLUDE_SELECTOR_PLACEHOLDER = "__PPTX_EXCLUDE_SELECTORS__"
+
+        /** Text length below which a leading table/list is treated as page chrome. */
+        const val LEADING_CHROME_MAX_TEXT_LENGTH = 80
+
+        /**
+         * Page-chrome subtrees that are never content: site navigation, banners,
+         * complementary rails, ARIA landmarks, and the furniture of the big wiki
+         * skins (status badges, edit links, sidebars, navboxes, category links).
+         *
+         * Everything below an element matching one of these is skipped before it can
+         * become a slide, which is what kept Wikipedia status badges ("Featured
+         * article", "Page semi-protected") and sidebar text on the opening slides.
+         * Site-specific chrome can be added with `pptx.detect.exclude-selectors`.
+         */
+        val DEFAULT_EXCLUDE_SELECTORS: List<String> = listOf(
+            "nav",
+            "aside",
+            "[role=\"navigation\"]",
+            "[role=\"banner\"]",
+            "[role=\"complementary\"]",
+            "[role=\"search\"]",
+            "[role=\"contentinfo\"]",
+            "[role=\"menu\"]",
+            "[role=\"menubar\"]",
+            "[role=\"toolbar\"]",
+            "[role=\"alert\"]",
+            "[role=\"dialog\"]",
+            "[aria-hidden=\"true\"]",
+            "#mw-indicators",
+            ".mw-indicators",
+            ".mw-indicator",
+            "#siteSub",
+            "#contentSub",
+            "#jump-to-nav",
+            "#catlinks",
+            "#footer",
+            ".mw-editsection",
+            ".mw-jump-link",
+            ".printfooter",
+            ".navbox",
+            ".vertical-navbox",
+            ".sidebar",
+            ".metadata",
+            ".ambox",
+            ".vector-toc",
+            ".vector-page-toolbar",
+            ".vector-main-menu",
+            ".vector-column-end"
+        )
+
+        /**
+         * Build the extraction probe, adding [extraExcludeSelectors] to
+         * [DEFAULT_EXCLUDE_SELECTORS].
+         *
+         * @param extraExcludeSelectors site-specific selectors from
+         *        `pptx.detect.exclude-selectors`
+         * @return the JavaScript probe to evaluate in the page
+         */
+        fun buildExtractionScript(extraExcludeSelectors: List<String> = emptyList()): String {
+            val selectors = DEFAULT_EXCLUDE_SELECTORS +
+                    extraExcludeSelectors.map { it.trim() }.filter { it.isNotEmpty() }
+            return CONTENT_EXTRACTION_SCRIPT.replace(EXCLUDE_SELECTOR_PLACEHOLDER, jsonStringArray(selectors))
+        }
+
+        /**
+         * Render [values] as a JSON string array literal for embedding in the probe.
+         *
+         * @param values the strings to encode
+         * @return a JSON array literal, e.g. `["nav",".sidebar"]`
+         */
+        fun jsonStringArray(values: List<String>): String = values.joinToString(
+            separator = ",", prefix = "[", postfix = "]"
+        ) { value ->
+            "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        }
+
         /**
          * CDP JavaScript probe that extracts structured content from the page DOM.
          *
@@ -128,7 +272,9 @@ open class PageContentExtractor(
          * - Blockquotes (<blockquote>)
          *
          * Content is ordered as it appears in the DOM. Heading hierarchy is preserved
-         * so the PPTX generator can group content into sections.
+         * so the PPTX generator can group content into sections. The
+         * [EXCLUDE_SELECTOR_PLACEHOLDER] token is replaced by
+         * [buildExtractionScript] with the chrome selectors to filter out.
          */
         val CONTENT_EXTRACTION_SCRIPT = """
 (function() {
@@ -145,6 +291,21 @@ open class PageContentExtractor(
     var body = document.body;
     if (!body) { return JSON.stringify(blocks); }
 
+    // Page chrome (navigation, banners, sidebars, status badges, edit links) is not
+    // content: everything below a matching element is rejected with its subtree.
+    var EXCLUDE_SELECTORS = __PPTX_EXCLUDE_SELECTORS__;
+
+    function isExcluded(node) {
+        if (!EXCLUDE_SELECTORS || !node.closest) return false;
+        try {
+            // An unsupported selector from pptx.detect.exclude-selectors must not
+            // break extraction — fall back to "not excluded".
+            return !!node.closest(EXCLUDE_SELECTORS);
+        } catch (e) {
+            return false;
+        }
+    }
+
     // TreeWalker to traverse all elements in document order
     var walker = document.createTreeWalker(
         body,
@@ -153,8 +314,10 @@ open class PageContentExtractor(
             acceptNode: function(node) {
                 var tag = node.tagName.toUpperCase();
                 var skip = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'SVG', 'NAV', 'HEADER', 'FOOTER',
-                    'META', 'LINK', 'BR', 'HR', 'INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'FORM'];
+                    'META', 'LINK', 'BR', 'HR', 'INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'FORM',
+                    'ASIDE', 'DIALOG'];
                 if (skip.indexOf(tag) !== -1) return NodeFilter.FILTER_REJECT;
+                if (isExcluded(node)) return NodeFilter.FILTER_REJECT;
                 return NodeFilter.FILTER_ACCEPT;
             }
         },

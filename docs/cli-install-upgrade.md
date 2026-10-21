@@ -279,7 +279,17 @@ the Spring context during startup, so installing or removing a plugin JAR
 (via `POST /api/plugins/install` or by copying a JAR into `plugins/`)
 normally requires a server restart to take effect.
 
-The CLI automates this: it fingerprints the `plugins/` directory when it
+A development bundle already ships the first-party plugins the checkout builds
+(`browser4-swarm`, `browser4-images`, `browser4-markdown`, `browser4-media`,
+`browser4-seo`); `browser4-{captcha,pptx,profile-import,summary-demo}` are
+installed on demand, and `build-runtime-bundle.ps1` prints each one with its
+exact `plugin install` command. Because `plugins/` sits inside the bundle's
+build-output tree, the build snapshots the JARs it finds there before resetting
+the tree and carries them over afterwards — an installed plugin survives a
+rebuild, and every restored or dropped JAR is reported (and recorded in
+`runtime-bundle.json` as `preservedPlugins`).
+
+The CLI automates the restart: it fingerprints the `plugins/` directory when it
 launches the server, and on every later command it re-checks the
 fingerprint. When the plugin set has changed, the local server is stopped
 and relaunched automatically before the command runs — a "warm restart"

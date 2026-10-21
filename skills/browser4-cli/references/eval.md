@@ -23,8 +23,9 @@ browser4-cli eval --json "document.querySelectorAll('.product-card').length"
 browser4-cli eval "element => element.textContent" --ref e5
 ```
 
-- The expression runs in the page context; JS exceptions are surfaced as CLI errors.
-- Only the **return value** is printed — `console.log` output is discarded.
+- The expression runs against the live DOM; JS exceptions are surfaced as CLI errors.
+- Only the **return value** is printed — `console.log` output is not part of eval's result
+  (read it with `browser4-cli console`).
 - Anything beyond a trivial expression belongs in `--file`, `--stdin` or `--base64` (see [shell-quoting.md](shell-quoting.md)).
 
 ## When to Use
@@ -45,10 +46,73 @@ The expression is evaluated over CDP against the live page. Input channel and ta
 
 Return-value semantics:
 
-- `null` for JS null/undefined, `""` for an empty string, otherwise the value itself.
+- JS `null` prints as `null`, and so does `undefined` in the default main world: an undefined
+  result is carried as JSON `null`, so the two are **indistinguishable in plain output**. An
+  empty string prints as `""`, which is a third result collapsing into a second rendering.
 - Objects and arrays are serialized as valid JSON.
 - `--json` wraps the result in the CLI's JSON envelope; scalar results become quoted strings, numbers/booleans/null pass through.
-- **`console.log()` is not captured.** Scripts written in the natural "compute and log" style print only the value of the last statement (often `null`). Use `return` (or end with the value); the CLI prints a reminder when it detects `console.log` in the expression.
+- Do not rely on telling `undefined`, `null` and `''` apart — have the expression return an
+  explicit sentinel instead:
+  `eval "typeof x === 'undefined' ? 'MISSING' : x"`.
+- **`console.log()` output is not part of eval's own result** — only the expression's return
+  value is printed. Read page logs with `browser4-cli console` (or `errors` for error-level
+  entries only), and note that capture starts with the **first `console` read**: messages
+  logged before it are not recorded, so run `browser4-cli console --clear` before the
+  interaction (it also starts capture and empties the buffer), or read `console` early and
+  again afterwards.
+- Scripts written in the natural "compute and log" style therefore print only the value of the
+  last statement (often `""`). Use `return` (or end with the value); the CLI prints a reminder
+  when it detects `console.log` in the expression.
+
+> Note: the CLI's `null` branch prints the literal text the backend sends. A main-world
+> evaluation of `undefined` is carried as JSON `null`, so it prints `null`; check with
+> `typeof` (or `--json`, where the value passes through as JSON null) when the difference
+> matters.
+
+### Execution World — Main World by Default, `--world isolated` for the Runtime
+
+`eval` runs in the **page's own JavaScript world** by default. That is the world page scripts
+run in, so anything the page defined is in scope:
+
+```bash
+browser4-cli eval "window.myApp.version"        # main world: resolves
+browser4-cli eval "document.title"              # both worlds: same DOM
+```
+
+Use `--world isolated` to evaluate in the driver's own world instead — a separate context the
+backend creates per main frame with `Page.createIsolatedWorld` (world name
+`__browser4_runtime__`), where the injected runtime helpers live and where page scripts can
+neither see nor modify what you write:
+
+```bash
+browser4-cli eval "typeof __browser4_runtime__" --world isolated   # "object"
+```
+
+The two worlds share the DOM but not JavaScript globals:
+
+- A global written in the **main world** (`eval "window.__probe = 42"`) is visible to page
+  scripts; the same write with `--world isolated` is not.
+- A global written by the page (`window.myApp`) is **only** visible in the main world — reading
+  it with `--world isolated` returns `null`, which is why the default changed: the same command
+  used to read `null` for a value the page plainly had.
+- `--world` accepts `main` (aliases: `page`, `default`) and `isolated` (alias: `runtime`). An
+  unknown value is refused with the accepted names rather than silently picking one.
+
+DOM reads such as `eval "document.querySelector(…)"` work in **both** worlds because they walk
+the same DOM. Patching the DOM directly from `eval` (e.g. `el.textContent = "x"`) also lands in
+that shared DOM, but it bypasses the page's own JS/framework state and event handlers, so the
+page may not observe it as a real interaction — prefer `fill`/`click`/`type`.
+
+When you need the page to own a value, do not write JS globals through `eval`:
+
+```bash
+# Let the page update its own state through its real inputs, then read the result back.
+browser4-cli fill e3 "hello"                  # the page's own model/handlers run
+browser4-cli eval "document.querySelector('#result').textContent"
+```
+
+`console.log` output produced by `eval` is captured by `browser4-cli console` in either world
+(subject to the capture-start caveat above).
 
 ## Patterns
 
@@ -86,7 +150,8 @@ browser4-cli eval --file page_info.js --json
 # → {"links":3,"images":2,"forms":1}
 ```
 
-`console.log(...)` inside the file is discarded — only the returned object is printed.
+`console.log(...)` inside the file is not part of eval's result — only the returned object is
+printed (the logged lines are readable with `browser4-cli console`).
 
 ## Flags
 
@@ -106,7 +171,7 @@ browser4-cli eval --file page_info.js --json
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Printed value is `null` although the script computes something | `console.log` output is not captured; the last statement's value is | End with the value or use `return` |
+| Printed value is `null` or `""` although the script computes something | `console.log` output is not eval's result | End with the value or `return`; read logs with `console` |
 | `element is not defined` | The expression used `element.property` instead of an arrow function | Write `element => element.property` and pass the ref (`--ref e5` or positionally) |
 | Expression mangled by the shell | Quotes stripped by bash/PowerShell before the CLI sees them | Use `--file`, `--stdin`/`--js`, `--base64`, or see [shell-quoting.md](shell-quoting.md) |
 | JS exception reported as a CLI error | The expression threw in the page (typo, missing element) | Guard with optional chaining or select the element first |

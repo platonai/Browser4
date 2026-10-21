@@ -28,6 +28,10 @@ param(
     [string[]]$Arguments
 )
 
+# Emit UTF-8 through a redirected stream — see Set-Utf8ConsoleEncoding in
+# bin/common/Util.ps1 (under CP936 "·" becomes "??" and "═" becomes "?T").
+. (Join-Path $PSScriptRoot 'common/Util.ps1')
+
 # ---- Env var registry ----
 $KnownVars = @(
     # ---- CLI: Runtime & Paths ----

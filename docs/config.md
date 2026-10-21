@@ -99,7 +99,7 @@ OpenRouter gives access to many models through one API. `model.name` defaults to
 
 ```properties
 deepseek.api.key=sk-...
-deepseek.model.name=deepseek-v4-flash[1m]
+deepseek.model.name=deepseek-v4-flash
 ```
 
 | Env var               | Property              | Default |
@@ -479,18 +479,32 @@ starts normally with no captcha functionality.
 
 ### Enabling CAPTCHA
 
-1. **Runtime bundle**: drop `browser4-captcha.jar` into the `plugins/` directory
-   (or `lib/`) — picked up automatically via the `lib/*:plugins/*` classpath
-   wildcard. No rebuild needed.
+1. **Runtime bundle**: drop the plugin JAR into the `plugins/` directory (or
+   `lib/`) — picked up automatically via the `lib/*:plugins/*` classpath
+   wildcard. Adding or removing a JAR needs a backend restart. `plugins/` is the
+   directory `browser4-cli plugin install` writes to, and it lives inside the
+   bundle's build-output tree: a rebuild snapshots the JARs found there and
+   carries them over, so an installed plugin survives it (the build reports
+   every carried-over JAR and every same-plugin duplicate it dropped).
 2. **Development** (`spring-boot:run`): add as a Maven dependency.
 3. **Fat JAR**: add `browser4-captcha` as a dependency before building.
 
-From the source tree you can also install via the CLI:
+From the source tree you can also install via the CLI — pass exactly one JAR
+(the CLI rejects a shell-expanded `*.jar` glob):
 
 ```bash
-browser4-cli plugin install browser4-plugins/browser4-captcha/target/browser4-captcha-*.jar
+# bash
+browser4-cli plugin install "browser4-plugins/browser4-captcha/target/browser4-captcha-$(cat VERSION).jar"
+# PowerShell
+# ./b4w.ps1 plugin install "browser4-plugins/browser4-captcha/target/browser4-captcha-$(Get-Content VERSION).jar"
+
 browser4-cli stop    # the next browser4-cli command auto-restarts the dev backend
 ```
+
+A development runtime bundle already ships `browser4-{swarm,images,markdown,media,seo}`;
+`browser4-captcha` is installed on demand because it needs an external solving
+service. The bundle build lists every not-bundled plugin with the exact install
+command, and records them in `runtime-bundle.json` (`availablePlugins`).
 
 ### Calling the CAPTCHA tools
 
@@ -506,8 +520,17 @@ browser4-cli tool call captcha_solve --json '{"type": "RECAPTCHA_V2", "siteKey":
 ```
 
 With no API key configured, `captcha_get_balance` returns
-`{configured: false, balance: null, ...}` and `captcha_solve` fails with
-"No CAPTCHA solving provider configured".
+`{"configured": false, "balance": null, "providers": [], "message": "…"}` and
+`captcha_solve` fails with "No CAPTCHA solving provider configured".
+
+Result keys per tool (stable, empty values are sent as an explicit `null` / `[]`
+instead of being dropped):
+
+| Tool | Keys |
+|---|---|
+| `captcha_detect` | `isPresent`, `captchaType`, `siteKey`, `action`, `selector`, `confidence`, `metadata`, `waitMillis`, `attempts`, `waited`, `elapsedMillis` |
+| `captcha_get_balance` | `configured`, `balance`, `providers`, `message` (only when no provider is configured) |
+| `captcha_solve`, `captcha_solve_image` | `token`, `status`, `provider`, `solveTimeMs`, plus `taskId` / `error` when the provider reports them |
 
 ### Configuration Properties
 
@@ -519,7 +542,9 @@ With no API key configured, `captcha_get_balance` returns
 | `captcha.twocaptcha.api.key` | (none) | API key for 2Captcha |
 | `captcha.anticaptcha.api.key` | (none) | API key for Anti-Captcha |
 | `captcha.solve.timeout.seconds` | `120` | Max wait for a solution |
-| `captcha.poll.interval.ms` | `1000` | Interval between status polls |
+| `captcha.poll.interval.ms` | `1000` | Interval between solver **status** polls |
+| `captcha.detect.poll.interval.ms` | `250` | Interval between detection passes while a `captcha.detect(waitMillis=…)` call waits for a widget to render |
+| `captcha.solve.proxy` | (none) | Proxy for solver-service requests; blank falls back to the JVM / environment proxy settings |
 | `captcha.detection.enabled` | `true` | Auto-detect CAPTCHAs on page load |
 | `captcha.auto.solve.types` | `RECAPTCHA_V2,HCAPTCHA,TURNSTILE` | CAPTCHA types to auto-solve (comma-separated, or `ALL`) |
 | `captcha.report.failed.enabled` | `true` | Report failed solves for refund (2Captcha / Anti-Captcha only) |
@@ -542,6 +567,80 @@ captcha.auto.solve.types=RECAPTCHA_V2,RECAPTCHA_V3,HCAPTCHA,TURNSTILE
 | Yes | `true` (or absent) | CAPTCHA fully active |
 | Yes | `false` | CAPTCHA disabled (property blocks it) |
 | No | any value | CAPTCHA silently skipped (no error) |
+
+---
+
+## 🧩 Other First-Party Plugins
+
+Property tables for the plugins a development runtime bundle ships
+(`browser4-images`, `browser4-media`, `browser4-pptx`). They live in
+`plugins/` and are toggled by their own `*.enabled` key.
+
+Where a plugin writes its output matters in development mode: the backend's
+working directory is the runtime bundle's build-output tree, so a *relative*
+default lands somewhere a rebuild can wipe and a user cannot find.
+`browser4-images` and `browser4-media` anchor their defaults at the user's
+Browser4 state directory (`~/.browser4/downloads/…`); `browser4-pptx` and
+`browser4-markdown` still default to the relative `downloads/pptx` /
+`downloads/markdown`, so pass an absolute `outputDir` (or set the property to
+one) when the location matters.
+
+### 📷 `browser4-images`
+
+| Property | Default | Description |
+|---|---|---|
+| `image.enabled` | `true` | Disable the plugin without removing its JAR |
+| `image.download.dir` | `~/.browser4/downloads/images` | Destination for `image.download` / `downloadAll` / `downloadBatch`; a relative value resolves against the backend working directory |
+| `image.download.timeout.seconds` | `25` | Per-download HTTP budget. Deliberately below the CLI's 30 s default tool-call timeout so the plugin's own actionable error survives; the connect phase is derived from it (`min(value, 10)` s) |
+| `image.download.proxy` | (none) | Explicit proxy, e.g. `127.0.0.1:10808` or `http://127.0.0.1:10808`. Resolution order when unset: `image.download.proxy` → `-Dhttps.proxyHost`/`-Dhttp.proxyHost` → `HTTPS_PROXY`/`HTTP_PROXY` → the operating-system proxy (WinINET on Windows) |
+| `image.download.max-size` | `52428800` (50 MB) | Largest single download accepted |
+| `image.download.concurrent` | `5` | Parallel downloads in bulk mode |
+| `image.auto-detect.enabled` | `false` | Detect images on every page load |
+| `image.auto-download.enabled` | `false` | Download detected images automatically |
+| `image.detect.min-width` / `image.detect.min-height` | `0` | Default size filter for detection |
+| `image.detect.skip-svg` | `false` | Skip SVG sources (XML, not raster) |
+| `image.detect.skip-data-uris` | `true` | Skip `data:` URI sources |
+
+The detect/download tools take a `dimensionBasis` argument (`rendered`
+default, `natural` to filter on intrinsic size) so a minimum-size filter does
+not silently mix layout and intrinsic dimensions.
+
+### 🎬 `browser4-media`
+
+| Property | Default | Description |
+|---|---|---|
+| `media.enabled` | `true` | Disable the plugin without removing its JAR |
+| `media.download.dir` | `~/.browser4/downloads/media` | Destination for `media.download` / `media.process` outputs |
+| `media.download.timeout.seconds` | `300` | Per-download HTTP budget (media files are large; raise the CLI `--timeout` too) |
+| `media.download.max-size` | `524288000` (500 MB) | Largest single download accepted |
+| `media.download.concurrent` | `3` | Parallel downloads |
+| `media.ffmpeg.path` / `media.ffprobe.path` | `ffmpeg` / `ffprobe` | Binaries used by `media.getInfo`, `process`, `extractAudio`, `trim`, `compress` |
+| `media.ffmpeg.timeout.seconds` | `600` | Deadline for one FFmpeg run |
+| `media.auto-detect.enabled` | `false` | Detect videos on every page load |
+
+### 📊 `browser4-pptx`
+
+| Property | Default | Description |
+|---|---|---|
+| `pptx.enabled` | `true` | Disable the plugin without removing its JAR |
+| `pptx.output.dir` | `downloads/pptx` | Destination directory for generated decks |
+| `pptx.download.timeout.seconds` | `30` | Per-image HTTP budget |
+| `pptx.download.total-timeout.seconds` | `60` | Overall deadline for the whole image-download phase; when it expires the deck is written from the images already fetched |
+| `pptx.download.max-size` | `10485760` (10 MB) | Largest image accepted per download |
+| `pptx.download.concurrent` | `3` | Parallel image downloads |
+| `pptx.download.proxy` | (none) | Explicit proxy for image downloads; order: `pptx.download.proxy` → `HTTPS_PROXY`/`HTTP_PROXY` → JVM proxy properties → OS proxy (WinINET on Windows, then the JVM `ProxySelector`). SOCKS entries are ignored (OkHttp cannot express them) |
+| `pptx.download.use-system-proxy` | `true` | Set to `false` to skip the OS-proxy lookup |
+| `pptx.detect.exclude-selectors` | (none) | Extra CSS selectors whose subtrees are excluded from slide content (site chrome, ad slots) |
+| `pptx.detect.skip-svg` / `pptx.detect.skip-data-uris` | `true` / `true` | Sources that cannot be embedded into a slide |
+| `pptx.slide.width` / `pptx.slide.height` | `720` / `540` | Slide geometry in points |
+| `pptx.slide.max-images` | `2` | Images embedded per content slide |
+| `pptx.slide.max-content-blocks` | `6` | Blocks per content slide before a continuation slide is started |
+| `pptx.title.max-length` | `120` | Deck/slide title truncation |
+| `pptx.auto-generate.enabled` | `false` | Generate a deck on every page load |
+
+`pptx_generate` has no CLI-side deadline of its own: pass `--timeout` large
+enough for the download phase (for example `--timeout 300`), or lower
+`pptx.download.total-timeout.seconds` to bound the backend instead.
 
 ---
 

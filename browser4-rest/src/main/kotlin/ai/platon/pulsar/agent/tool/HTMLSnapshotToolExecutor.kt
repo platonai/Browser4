@@ -9,6 +9,7 @@ import ai.platon.pulsar.agentic.tools.specs.ToolResultSchemas
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.dom.FeaturedDocument
+import ai.platon.pulsar.dom.select.PowerQueryParser
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.rest.api.service.ScrapeService
 import ai.platon.pulsar.rest.mcp.controller.*
@@ -80,8 +81,9 @@ import kotlin.reflect.KClass
  * ## Methods
  *
  * - `capture(sessionId)` — Serialize the live tab's document, persist it, and return metadata
- * - `scrape(sessionId, field, selector?, attrName?)` — Extract text/html/attr from a single element
- * - `scrape_all(sessionId, field, selector?, attrName?, offset?, limit?)` — Extract from all matching elements
+ * - `scrape(sessionId, field, selector?, attrName?)` — Extract text/textcontent/html/outerhtml/attr from a single element
+ * - `scrape_all(sessionId, field, selector?, attrName?, offset?, limit?, includeMeta?)` — Extract from all matching
+ *   elements (with `includeMeta`, the answer also carries the total match count the slice was taken from)
  * - `query(sessionId?, sql, url?)` — Execute an X-SQL query against the active page, or against a stored url
  * - `export(sessionId)` — Export the full HTML of the current page
  * - `summary(sessionId, algorithm?)` — Generate a page summary (built-in WPSI YAML by default; plugin algorithms selectable)
@@ -137,15 +139,19 @@ class HTMLSnapshotToolExecutor(
             method = "scrape",
             arguments = listOf(
                 ToolSpec.Arg("sessionId", "String", null),
-                ToolSpec.Arg("field", "String", null),
+                ToolSpec.Arg("field", "String", null, "One of $SNAPSHOT_FIELD_LIST."),
                 ToolSpec.Arg("selector", "String", ":root"),
                 ToolSpec.Arg("attrName", "String?", "null", "Attribute to read when field=attr."),
                 ToolSpec.Arg("absoluteUrls", "Boolean", "false", ABSOLUTE_URLS_ARG_DESCRIPTION),
                 ToolSpec.Arg("expires", "String", DEFAULT_EXPIRES, EXPIRES_ARG_DESCRIPTION),
             ),
             returnType = "String",
-            description = "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. " +
-                "text is normalized inner text; textcontent is the raw textContent (whitespace kept). " +
+            description = "Extract text, textcontent, html, outerhtml, or an attribute value from a single element " +
+                "matching a CSS selector. " +
+                "text is normalized inner text; textcontent is the raw textContent (whitespace kept); html is the " +
+                "element's INNER markup; outerhtml is the element ITSELF (`<article class=\"product_pod\">…</article>`). " +
+                "A selector the CSS engine cannot parse is rejected as invalid instead of answering \"no elements " +
+                "matched\". " +
                 "Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form " +
                 "submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d " +
                 "to serve the stored snapshot instead when it is younger than that, so the read works on the previous " +
@@ -174,22 +180,29 @@ class HTMLSnapshotToolExecutor(
             method = "scrape_all",
             arguments = listOf(
                 ToolSpec.Arg("sessionId", "String", null),
-                ToolSpec.Arg("field", "String", null),
+                ToolSpec.Arg("field", "String", null, "One of $SNAPSHOT_FIELD_LIST."),
                 ToolSpec.Arg("selector", "String", ":root"),
                 ToolSpec.Arg("attrName", "String?", "null", "Attribute to read when field=attr."),
                 ToolSpec.Arg("absoluteUrls", "Boolean", "false", ABSOLUTE_URLS_ARG_DESCRIPTION),
                 ToolSpec.Arg("offset", "Int", "0"),
                 ToolSpec.Arg("limit", "Int", "-1"),
                 ToolSpec.Arg("expires", "String", DEFAULT_EXPIRES, EXPIRES_ARG_DESCRIPTION),
+                ToolSpec.Arg("includeMeta", "Boolean", "false", SNAPSHOT_INCLUDE_META_ARG),
             ),
             returnType = "String",
             outputSchema = ToolResultSchemas.HTML_SNAPSHOT_SCRAPE_ALL,
-            description = "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. " +
-                "text is normalized inner text; textcontent is the raw textContent (whitespace kept). " +
+            description = "Extract text, textcontent, html, outerhtml, or attribute values from ALL elements matching " +
+                "a CSS selector. " +
+                "text is normalized inner text; textcontent is the raw textContent (whitespace kept); html is each " +
+                "element's INNER markup; outerhtml is each element ITSELF. " +
+                "A selector the CSS engine cannot parse is rejected as invalid instead of answering \"no elements " +
+                "matched\". " +
                 "Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form " +
                 "submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d " +
                 "to serve the stored snapshot instead when it is younger than that. With field=attr and " +
-                "absoluteUrls=true, URL-valued attributes are resolved against the page URL.",
+                "absoluteUrls=true, URL-valued attributes are resolved against the page URL. " +
+                "With includeMeta=true the answer is {values, totalMatches, returned, offset, limit} instead of the " +
+                "bare array, so the selector's TOTAL match count stays visible under offset/limit.",
             examples = listOf(
                 ToolExample(
                     title = "Read every product title",
@@ -658,8 +671,8 @@ class HTMLSnapshotToolExecutor(
         val absoluteUrls = paramBool(args, "absoluteUrls", "scrape", required = false, default = false) ?: false
         val expires = parseExpires(args, "scrape")
 
-        if (field !in setOf("text", "textcontent", "html", "attr")) {
-            throw IllegalArgumentException("Unknown field '$field'. Use text, textcontent, html, or attr.")
+        if (field !in SNAPSHOT_FIELDS) {
+            throw IllegalArgumentException("Unknown field '$field'. Use $SNAPSHOT_FIELD_LIST.")
         }
         if (field == "attr" && attrName.isNullOrBlank()) {
             throw IllegalArgumentException("The 'attr' field requires an attribute name.")
@@ -667,6 +680,7 @@ class HTMLSnapshotToolExecutor(
         if (isElementReference(selector)) {
             throw IllegalArgumentException("Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead.")
         }
+        requireParsableSnapshotSelector(selector)
 
         val managed = resolveSession(args, receiver)
 
@@ -691,9 +705,13 @@ class HTMLSnapshotToolExecutor(
         val offset = paramInt(args, "offset", "scrape_all", required = false, default = 0) ?: 0
         val limit = paramInt(args, "limit", "scrape_all", required = false, default = -1) ?: -1
         val expires = parseExpires(args, "scrape_all")
+        // Opt-in envelope: the bare array is the historical answer, and only a caller
+        // that asks for the pagination metadata gets the object form.  See
+        // [SNAPSHOT_INCLUDE_META_ARG] for why the total cannot be derived from the array.
+        val includeMeta = paramBool(args, "includeMeta", "scrape_all", required = false, default = false) ?: false
 
-        if (field !in setOf("text", "textcontent", "html", "attr")) {
-            throw IllegalArgumentException("Unknown field '$field'. Use text, textcontent, html, or attr.")
+        if (field !in SNAPSHOT_FIELDS) {
+            throw IllegalArgumentException("Unknown field '$field'. Use $SNAPSHOT_FIELD_LIST.")
         }
         if (field == "attr" && attrName.isNullOrBlank()) {
             throw IllegalArgumentException("The 'attr' field requires an attribute name.")
@@ -701,24 +719,50 @@ class HTMLSnapshotToolExecutor(
         if (isElementReference(selector)) {
             throw IllegalArgumentException("Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead.")
         }
+        requireParsableSnapshotSelector(selector)
 
         val managed = resolveSession(args, receiver)
 
-        val results = managed.withLock {
+        val page = managed.withLock {
             // The active page's FRESH snapshot, as `get` does — see the contract at the bottom of this
             // file.
             val document = parseSnapshotPage(
                 managed, snapshotPageFor(managed, requestedUrl = null, expires), noCache = true
             )
-            extractSnapshotFields(document, field, selector, attrName, absoluteUrls, offset, limit)
+            extractSnapshotFieldPage(document, field, selector, attrName, absoluteUrls, offset, limit)
         }
 
-        @Suppress("UNCHECKED_CAST")
-        val resultList = results as List<Any?>
-        return pulsarObjectMapper().copy()
-            .setSerializationInclusion(JsonInclude.Include.ALWAYS)
-            .writeValueAsString(resultList)
+        return payloadMapper().writeValueAsString(
+            if (includeMeta) page.toJsonNode() else page.values
+        )
     }
+
+    /**
+     * The `includeMeta` answer: the extracted slice *and* the count it was sliced from.
+     *
+     * The value array alone cannot answer "how many elements does this selector match?" once
+     * `offset`/`limit` have sliced it — a paginated `get all` used to report the slice length
+     * (`--offset 5 --limit 5` said 5 for a 20-element selector), which is exactly the number
+     * callers verify a selector with.  [SnapshotFieldPage.totalMatches] is counted before the
+     * slice, so it is.
+     */
+    private fun SnapshotFieldPage.toJsonNode(): ObjectNode =
+        pulsarObjectMapper().createObjectNode().apply {
+            put("offset", offset)
+            put("limit", limit)
+            put("returned", values.size)
+            put("totalMatches", totalMatches)
+            val valuesArray = pulsarObjectMapper().createArrayNode()
+            values.forEach { valuesArray.add(it) }
+            set<ArrayNode>("values", valuesArray)
+        }
+
+    /**
+     * The mapper every JSON payload of this family is written with: empty values included, so an
+     * empty extraction is an empty string in the array, never a missing element.
+     */
+    private fun payloadMapper() =
+        pulsarObjectMapper().copy().setSerializationInclusion(JsonInclude.Include.ALWAYS)
 
     private suspend fun query(args: Map<String, Any?>, receiver: Any = Any()): String {
         val scrapeService = this.scrapeService
@@ -873,6 +917,33 @@ class HTMLSnapshotToolExecutor(
     companion object {
         /** The `expires` value every read defaults to: never reuse a stored snapshot. */
         internal const val DEFAULT_EXPIRES = "0s"
+
+        /**
+         * The `field` values `scrape` / `scrape_all` accept.
+         *
+         * `html` is the element's INNER markup (`element.html()`), `outerhtml` the element itself
+         * (`element.outerHtml()`) — asking for "the HTML of the container" used to be answerable only
+         * through `eval "….outerHTML"`, because the field set stopped at `html`.
+         */
+        internal val SNAPSHOT_FIELDS: Set<String> = setOf("text", "textcontent", "html", "outerhtml", "attr")
+
+        /** [SNAPSHOT_FIELDS] spelled for an error message or a tool description. */
+        internal const val SNAPSHOT_FIELD_LIST = "text, textcontent, html, outerhtml, or attr"
+
+        /**
+         * The `includeMeta` argument of `scrape_all`.
+         *
+         * Without it the answer is the bare JSON array of extracted values — the historical shape,
+         * unchanged.  With it the answer is `{values, totalMatches, returned, offset, limit}`, because
+         * the array cannot say how many elements the selector matched: `offset`/`limit` have already
+         * sliced it, so `[a,b,c,d,e]` is what a 20-element selector returns for `offset=5 limit=5`.
+         * `totalMatches` is counted before the slice.
+         */
+        internal const val SNAPSHOT_INCLUDE_META_ARG =
+            "Ask for the pagination envelope {values, totalMatches, returned, offset, limit} instead of the " +
+                "bare array. totalMatches is the selector's full match count measured BEFORE offset/limit are " +
+                "applied, so it answers \"does this selector match N elements?\" even when the returned slice " +
+                "is shorter."
 
         /** The `expires` tool argument, documented once for every read that accepts it. */
         internal const val EXPIRES_ARG_DESCRIPTION =
@@ -1124,6 +1195,16 @@ class HTMLSnapshotToolExecutor(
 
     private suspend fun inspect(args: Map<String, Any?>, receiver: Any = Any()): String {
         val expires = parseExpires(args, "inspect")
+        val selector = paramString(args, "selector", "inspect", required = false, default = ":root")?.ifEmpty { ":root" } ?: ":root"
+        val maxMatches = paramInt(args, "max", "inspect", required = false, default = 20) ?: 20
+        val maxDepth = paramInt(args, "depth", "inspect", required = false, default = 5) ?: 5
+
+        // Validate before the capture, for two reasons: a typo must not cost a snapshot, and
+        // `inspectDocument` evaluates the selector through an engine that swallows the parse
+        // failure — an unparsable selector would otherwise be treated as "matched nothing" and
+        // silently answered with an auto-discovered pattern instead of an error.
+        requireParsableSnapshotSelector(selector)
+
         val managed = resolveSession(args, receiver)
 
         return managed.withLock {
@@ -1132,11 +1213,12 @@ class HTMLSnapshotToolExecutor(
                 managed, snapshotPageFor(managed, requestedUrl = null, expires), noCache = true
             )
 
-            val selector = paramString(args, "selector", "inspect", required = false, default = ":root")?.ifEmpty { ":root" } ?: ":root"
-            val maxMatches = paramInt(args, "max", "inspect", required = false, default = 20) ?: 20
-            val maxDepth = paramInt(args, "depth", "inspect", required = false, default = 5) ?: 5
+            val payload = inspectDocument(document, selector, maxMatches, maxDepth)
 
-            inspectDocument(document, selector, maxMatches, maxDepth)
+            // The payload says which selector was analysed, never how many elements the caller's own
+            // selector matched, and its truncation hints are standalone element references rather than
+            // container-relative paths — see [annotateInspectPayload] for both.
+            annotateInspectPayload(document, payload)
         }
     }
 
@@ -1259,11 +1341,41 @@ class HTMLSnapshotToolExecutor(
 // =========================================================================
 
 // =========================================================================
-// Field extraction (text / textcontent / html / attr)
+// Field extraction (text / textcontent / html / outerhtml / attr)
 //
 // File-level so the exact field semantics are unit-testable against a plain
 // jsoup document, without a browser session.
 // =========================================================================
+
+/**
+ * Reject a CSS selector the PowerCSS selector engine cannot parse, naming the selector and the
+ * underlying parse error.
+ *
+ * Without this check a typo (`article[[`, `div:not(`, `p > >`) is indistinguishable from a valid
+ * selector that matches nothing: `FeaturedDocument.select` parses through the engine's
+ * `parseOrNull`, which **swallows** the parse failure (it logs it and returns an empty result), so
+ * every read answered `[]` / "No elements matched" with a success status — and the CLI then told
+ * the user "the element is simply not there", sending them to look for a missing element instead of
+ * a missing bracket.
+ *
+ * The selector is parsed with the very parser the evaluation uses
+ * ([ai.platon.pulsar.dom.select.PowerQueryParser]), so a PowerCSS extension (`:expr(…)`) stays
+ * valid: only what the engine itself would refuse is rejected here.
+ *
+ * @throws IllegalArgumentException when [selector] cannot be parsed as a selector.
+ */
+internal fun requireParsableSnapshotSelector(selector: String) {
+    try {
+        PowerQueryParser.parse(selector)
+    } catch (e: Exception) {
+        val detail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+        throw IllegalArgumentException(
+            "Invalid CSS selector \"$selector\": $detail. " +
+                "A selector the CSS engine cannot parse is a syntax error, not a selector that matched " +
+                "nothing — fix the selector (or drop it to use the default :root) and retry."
+        )
+    }
+}
 
 /**
  * Read ONE field from the first element matching [selector] (querySelector
@@ -1275,6 +1387,8 @@ class HTMLSnapshotToolExecutor(
  *   site itself truncated in the HTML source; an attribute (e.g. `title`) or
  *   the detail page is the only source for that.
  * - `html` — the element's inner HTML.
+ * - `outerhtml` — the element ITSELF, markup included (`<article class="…">…</article>`),
+ *   which is what "the HTML of the container" means.
  * - `attr` — an attribute value; with [absoluteUrls], URL-valued attributes
  *   are resolved against the document base URI.
  */
@@ -1286,14 +1400,22 @@ internal fun extractSnapshotField(
     absoluteUrls: Boolean
 ): String {
     val element = document.selectFirstOrNull(selector) ?: return ""
-    return when (field) {
-        "text" -> element.text()
-        "textcontent" -> element.wholeText().trim()
-        "html" -> element.html()
-        "attr" -> readSnapshotAttribute(element, attrName!!, absoluteUrls)
-        else -> ""
-    }
+    return readSnapshotField(element, field, attrName, absoluteUrls)
 }
+
+/**
+ * A page of extracted values together with the count the page was sliced from.
+ *
+ * @property totalMatches how many elements the selector matched, measured **before**
+ *   `offset`/`limit` — the number that answers "does this selector match N elements?".
+ * @property values the extracted slice, in document order.
+ */
+internal data class SnapshotFieldPage(
+    val totalMatches: Int,
+    val values: List<String>,
+    val offset: Int,
+    val limit: Int,
+)
 
 /** All-elements (querySelectorAll) variant of [extractSnapshotField], paginated. */
 internal fun extractSnapshotFields(
@@ -1304,19 +1426,47 @@ internal fun extractSnapshotFields(
     absoluteUrls: Boolean,
     offset: Int,
     limit: Int
-): List<String> {
+): List<String> = extractSnapshotFieldPage(document, field, selector, attrName, absoluteUrls, offset, limit).values
+
+/**
+ * [extractSnapshotFields] plus the count of the elements the selector matched **before** pagination.
+ *
+ * The slice alone cannot answer "how many elements does this selector match?" — that is the whole
+ * reason the total travels beside it (see `scrape_all`'s `includeMeta`).
+ */
+internal fun extractSnapshotFieldPage(
+    document: FeaturedDocument,
+    field: String,
+    selector: String,
+    attrName: String?,
+    absoluteUrls: Boolean,
+    offset: Int,
+    limit: Int
+): SnapshotFieldPage {
     val elements = document.select(selector)
     val paginated = if (offset > 0) elements.drop(offset) else elements
     val limited = if (limit > 0) paginated.take(limit) else paginated
-    return limited.map { element ->
-        when (field) {
-            "text" -> element.text()
-            "textcontent" -> element.wholeText().trim()
-            "html" -> element.html()
-            "attr" -> readSnapshotAttribute(element, attrName!!, absoluteUrls)
-            else -> ""
-        }
-    }
+    return SnapshotFieldPage(
+        totalMatches = elements.size,
+        values = limited.map { element -> readSnapshotField(element, field, attrName, absoluteUrls) },
+        offset = offset,
+        limit = limit,
+    )
+}
+
+/** The per-element half of [extractSnapshotField] / [extractSnapshotFields]. */
+private fun readSnapshotField(
+    element: org.jsoup.nodes.Element,
+    field: String,
+    attrName: String?,
+    absoluteUrls: Boolean
+): String = when (field) {
+    "text" -> element.text()
+    "textcontent" -> element.wholeText().trim()
+    "html" -> element.html()
+    "outerhtml" -> element.outerHtml()
+    "attr" -> readSnapshotAttribute(element, attrName!!, absoluteUrls)
+    else -> ""
 }
 
 /**

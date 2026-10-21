@@ -305,7 +305,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `open [url]` | 打开浏览器会话，或重新连接已有会话。**默认为无头模式。** 支持 `--headed`（可视窗口）、`--headless`、`--profile <path>`、`--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`、`--interact-level <FASTEST\|FAST\|DEFAULT>`。**注意：** `SYSTEM_DEFAULT` 已废弃，Chrome ≥ 143 不支持——复用系统浏览器状态请用 `attach` + `state-save`/`state-load`（见 [browser-state-import.md](skills/browser4-cli/references/browser-state-import.md)）。 |
 | `attach` | 通过 CDP 或 Browser4 扩展附加到现有浏览器。支持 `--cdp <url\|port\|channel>` 与远程 endpoint 选项。channel 名会依次从浏览器的 `DevToolsActivePort`、`--remote-debugging-port` 与监听端口收集候选，并绑定第一个能承载页面的端点——走 `/json`，或走 Chrome 内置 `chrome://inspect/#remote-debugging` 开关发布的浏览器级 WebSocket（也可直接 `attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>`）。成功附加后 CLI 会打印实际连接的浏览器（`Connected browser: …` / `Attached to … at …`），当实际浏览器与请求的 channel 不符（如请求 msedge 却连到 Chrome）时会输出 ⚠ 告警——请在驱动会话前核对。 |
 | `close` | 关闭当前活动浏览器会话。 |
-| `list` | 列出浏览器会话及其状态和下次打开行为。Connection 列优先显示后端上报的真实浏览器，并在 channel 冲突时标注（如 `requested msedge · actual Google Chrome`）。支持 `--all`。 |
+| `list` | 列出浏览器会话及其状态和下次打开行为。Connection 列优先显示后端上报的真实浏览器，并在 channel 冲突时标注（如 `requested msedge · actual Google Chrome`）。支持 `--all`：额外加一列 Workspace 并纳入其它 checkout 持久化的会话（`*` 标记当前所在 workspace；其它 workspace 的行显示 Unknown / `-` / Refresh，因为当前后端无法校验它们）。 |
 | `session-default <name>` | 把一个命名会话设为默认未命名会话。 |
 | `close-all` | 关闭所有会话，但不停止后端。 |
 | `kill-all` | 强制停止后端以及 Browser4 管理的浏览器进程。 |
@@ -524,9 +524,9 @@ browser4-cli htmlsnapshot readability --text-only --all
 | `chat <message>` | 发送纯 AI chat 请求，不自动追加浏览器上下文。 |
 | `chat-result <id>` | 获取异步 chat 任务结果。 |
 | `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。 |
-| `agent status <id>` | 查询运行中的任务状态。 |
-| `agent result <id>` | 获取已完成任务的结果。 |
-| `agent list` | 列出已跟踪的 agent 任务及其状态。 |
+| `agent status <id>` | 查询任务状态——共享状态信封（`status`：queued/running/done/failed/cancelled，另有 `statusCode`、`message` 与 agent 步数）。 |
+| `agent result <id>` | 获取已完成任务的结果：摘要、`keyFindings`、`filesChanged`，以及产物所在的 workspace 目录。 |
+| `agent list` | 列出已跟踪的 agent 任务（状态与 `agent status` 一致，每次调用都会向服务端刷新）；`--clear` 可移除已结束的任务。 |
 
 ```bash
 browser4-cli extract "product name, price, rating"
@@ -596,7 +596,7 @@ browser4-cli network route "**/api/users" --body '{"users":[]}' --content-type a
 | `swarm result <id>` | 获取已完成的 swarm 任务结果。 |
 | `swarm list` | 列出已跟踪的 swarm 任务。 |
 | `swarm close` | 关闭 swarm 会话并释放浏览器资源。 |
-| `crawl [url]` | 从 URL 或 seed file 开始抓取。支持 `--seed-file`、`--sql`、`--sql-stdin`、`--sql-base64`、`--format`、`--output`、`-d/--depth`、`-ol/--out-link-selector`、`-olp/--out-link-pattern`、`-tl/--top-links`、`-a/--args`、`--refresh`、`--parse`、`--expires`、`-p/--priority`、`--page-load-timeout`、`--ignore-url-query`、`--no-norm`、`--readonly`、`-bg/--background`。 |
+| `crawl [url]` | 从 URL 或 seed file 开始抓取（每个种子必须是绝对 http(s) URL，非法值会在提交前被拒绝）。支持 `--seed-file`、`--sql`、`--sql-stdin`、`--sql-base64`、`--format`、`--output`、`-d/--depth`、`-ol/--out-link-selector`、`-olp/--out-link-pattern`、`-tl/--top-links`、`-a/--args`、`--refresh`、`--parse`、`--expires`、`-p/--priority`、`--page-load-timeout`、`--ignore-url-query`、`--no-norm`、`--readonly`、`-bg/--background`。 |
 | `crawl status <id>` | 查询 crawl 任务状态。 |
 | `crawl result <id>` | 获取 crawl 结果。 |
 | `crawl cancel <id>` | 取消运行中的 crawl 任务（检查点会保留，因此之后仍可续传）。 |
@@ -652,7 +652,20 @@ Browser4 中有两套不同的 “skill” 表面：
 
 #### 插件
 
-插件是运行在服务端的 JAR 扩展，用于扩展 Browser4 能力。
+插件是运行在服务端的 JAR 扩展，用于扩展 Browser4 能力。开发模式的运行时
+bundle 会随源码树一起打包首批插件：`browser4-swarm`、`browser4-images`、
+`browser4-markdown`、`browser4-media`、`browser4-seo`（SEO 为显式启用：
+`-Dbrowser4.plugins.enable=browser4-seo`）。`browser4-{captcha,pptx,profile-import,summary-demo}`
+需要按需安装：
+
+```bash
+browser4-cli plugin install "browser4-plugins/browser4-pptx/target/browser4-pptx-$(cat VERSION).jar"
+browser4-cli stop    # 下一条命令会自动重启开发后端
+```
+
+插件工具名是 `domain.method` 的 snake_case 形式
+（`image.detectImages` → `image_detect_images`），用 `browser4-cli tool list`
+（或 `GET /mcp/tools`）枚举；`plugin list` 列出的是已安装的插件 JAR，不是工具名。
 
 | 命令 | 说明 |
 |---|---|
@@ -660,6 +673,7 @@ Browser4 中有两套不同的 “skill” 表面：
 | `plugin info <name>` | 显示插件详情。 |
 | `plugin install <file>` | 从本地 JAR 文件安装插件。支持 `--replace`。 |
 | `plugin remove <name>` | 删除插件。支持 `-y`、`--yes`。 |
+| `tool list [--filter <substr>]` | 列出后端公布的全部 MCP 工具名（含插件工具）；`tool call <name> --json '{…}'` 调用其中之一。 |
 
 #### 高级 / 当前隐藏命令
 
@@ -803,6 +817,11 @@ Browser4 自带一个轻量级 **MockSite** 服务器，用于提供静态 HTML 
 
 **Windows（pwsh —— PowerShell 7+）：** `./bin/test.ps1 mock-site -Dmock.site.port=18080`
 **Linux/macOS：** `./bin/test.sh mock-site -Dmock.site.port=18080`
+
+> **首次运行（Maven 缓存为空）需要 10–15 分钟**（实测约 13 分钟），期间终端没有任何输出：
+> 脚本会依次安装 `browser4-dependencies`，再安装 `browser4-rest` 及其约 25 个模块，每个阶段
+> 完成后才打印一条 `[PASS]` 横幅。构建产物缓存之后启动很快；等待期间不要杀掉进程，也不要
+> 同时启动第二个 Maven 构建。
 
 关键演示页面位于 `http://localhost:18080/generated/`。完整页面列表、环境变量、Python 回退方案和基于 Maven 的启动方式请见 [MockSite](docs/mocksite.md)。测试分类体系与标签系统请见 [Test Taxonomy](docs/TESTING.md)。
 

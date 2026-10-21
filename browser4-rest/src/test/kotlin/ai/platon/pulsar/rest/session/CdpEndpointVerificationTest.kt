@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.session
 
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import com.sun.net.httpserver.HttpServer
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -222,5 +223,82 @@ class CdpEndpointVerificationTest {
             PulsarSessionManager.normalizeCdpEndpoint("ws://localhost:9222/devtools/browser/x", 9222)
         )
         assertEquals("http://example.com:9222", PulsarSessionManager.normalizeCdpEndpoint("http://example.com", 9222))
+    }
+
+    @Test
+    @DisplayName("verifyCdpEndpoint reports the page target addresses it observed")
+    fun verifyCdpEndpointReportsObservedPageTargets() {
+        stubCdpEndpoints(
+            "Chrome/151.0.0.0",
+            listOf(
+                mapOf("type" to "page", "title" to "Example", "url" to "https://example.com/after-redirect"),
+                mapOf("type" to "browser_ui", "title" to "Omnibox", "url" to "chrome://omnibox"),
+            )
+        )
+        val result = PulsarSessionManager.verifyCdpEndpoint("http://127.0.0.1:$port")
+
+        assertEquals(listOf("https://example.com/after-redirect"), result.pageTargetUrls)
+        assertEquals(1, result.pageTargetCount)
+    }
+
+    @Test
+    @DisplayName("attachFailureCode names the observed endpoint condition, never a retryable CDP error")
+    fun attachFailureCodeNamesObservedCondition() {
+        // Nothing listening: the transport failed and no HTTP status was seen.
+        assertEquals(
+            ToolErrorCode.ENDPOINT_UNREACHABLE,
+            PulsarSessionManager.attachFailureCode(
+                PulsarSessionManager.CdpEndpointVerification(
+                    reachable = false, browser = null, pageTargetCount = 0, detail = "ConnectException"
+                )
+            )
+        )
+        // Something answered HTTP, but not on the CDP discovery path.
+        assertEquals(
+            ToolErrorCode.ENDPOINT_NOT_CDP,
+            PulsarSessionManager.attachFailureCode(
+                PulsarSessionManager.CdpEndpointVerification(
+                    reachable = false, browser = null, pageTargetCount = 0,
+                    detail = "GET /json/version → HTTP 404", versionStatus = 404,
+                )
+            )
+        )
+        // A live browser with nothing to drive.
+        assertEquals(
+            ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS,
+            PulsarSessionManager.attachFailureCode(
+                PulsarSessionManager.CdpEndpointVerification(
+                    reachable = true, browser = "Chrome/151.0.0.0", pageTargetCount = 0,
+                    detail = "browser=Chrome/151.0.0.0 pages=0", versionStatus = 200,
+                )
+            )
+        )
+        // All three are permanent: retrying the identical attach cannot help.
+        assertFalse(ToolErrorCode.ENDPOINT_UNREACHABLE.retryable)
+        assertFalse(ToolErrorCode.ENDPOINT_NOT_CDP.retryable)
+        assertFalse(ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS.retryable)
+    }
+
+    @Test
+    @DisplayName("findForeignBrowserOwner names the session that already drives the port")
+    fun findForeignBrowserOwnerFindsTheOtherSession() {
+        val bindings = listOf("managed" to 41698, "other" to 35616)
+
+        assertEquals(
+            "managed",
+            PulsarSessionManager.findForeignBrowserOwner(41698, bindings, excludeSessionId = "ch")
+        )
+        // Re-attaching the SAME session to its own browser is not a conflict.
+        assertEquals(
+            null,
+            PulsarSessionManager.findForeignBrowserOwner(41698, bindings, excludeSessionId = "managed")
+        )
+        // An endpoint no live session drives is not a conflict either.
+        assertEquals(
+            null,
+            PulsarSessionManager.findForeignBrowserOwner(19999, bindings, excludeSessionId = "ch")
+        )
+        // Port 0 (extension attach / WebSocket without a port) never matches.
+        assertEquals(null, PulsarSessionManager.findForeignBrowserOwner(0, listOf("x" to 0), "ch"))
     }
 }

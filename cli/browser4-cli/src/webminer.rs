@@ -166,6 +166,176 @@ pub fn run_jar(jar: &Path, java_exe: &Path, forward: &[String]) -> Result<i32, S
     Ok(status.code().unwrap_or(1))
 }
 
+/// `--max-files` default of the scent-miner `all` pipeline: when the flag is
+/// omitted the JAR encodes at most this many documents, so a larger corpus is
+/// truncated even though the run still ends with `PIPELINE COMPLETE`.
+///
+/// Kept in sync with the `webminer all` help text (`commands.rs`) and
+/// `webminer all --help`.
+pub const DEFAULT_MAX_FILES: usize = 40;
+
+/// Flags of the `webminer all` pipeline that take their value as a separate
+/// token (see the command definition in `commands.rs`).  Needed to tell the
+/// positional corpus directory apart from a flag value.
+const PIPELINE_VALUE_FLAGS: &[&str] = &["--max-files", "--output"];
+
+/// Corpus size vs. the `--max-files` cap of one `webminer all` run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineFileCap {
+    /// Corpus directory as passed on the command line.
+    pub corpus_dir: PathBuf,
+    /// HTML files found under `corpus_dir` (recursive, `.html`/`.htm`).
+    pub discovered: usize,
+    /// Effective cap: the user's `--max-files`, else [`DEFAULT_MAX_FILES`].
+    pub cap: usize,
+    /// Whether `cap` came from the command line (`--max-files`).
+    pub cap_explicit: bool,
+}
+
+impl PipelineFileCap {
+    /// Documents the pipeline will encode (`min(discovered, cap)`).
+    pub fn processed(&self) -> usize {
+        self.discovered.min(self.cap)
+    }
+
+    /// Documents the cap silently drops.
+    pub fn skipped(&self) -> usize {
+        self.discovered.saturating_sub(self.cap)
+    }
+
+    /// Whether the cap drops part of the corpus.
+    pub fn truncates(&self) -> bool {
+        self.discovered > self.cap
+    }
+
+    fn cap_label(&self) -> String {
+        if self.cap_explicit {
+            format!("--max-files {}", self.cap)
+        } else {
+            format!("--max-files {} (default)", self.cap)
+        }
+    }
+
+    /// Warning printed before the JAR starts when the corpus exceeds the cap,
+    /// or `None` when nothing will be dropped.
+    ///
+    /// The truncation is otherwise only visible as one mid-log line
+    /// ("Scanned 40 of 50 HTML file(s)") in a long pipeline run, and the final
+    /// `PIPELINE COMPLETE` reads as if the whole corpus was processed.
+    pub fn warning(&self) -> Option<String> {
+        if !self.truncates() {
+            return None;
+        }
+        Some(format!(
+            "\u{26A0}  webminer all encodes at most {} of the {} HTML file(s) found under {} ({}).\n\
+             \x20  The remaining {} file(s) are dropped and the run still ends with PIPELINE COMPLETE.\n\
+             \x20  Process the whole corpus with:  webminer all {} --max-files {}",
+            self.cap,
+            self.discovered,
+            self.corpus_dir.display(),
+            self.cap_label(),
+            self.skipped(),
+            self.corpus_dir.display(),
+            self.discovered,
+        ))
+    }
+
+    /// Final summary, printed after the JAR exits: repeats the discovered and
+    /// processed counts so the cap cannot be missed at the end of a long run.
+    pub fn summary(&self, exit_code: i32) -> String {
+        if self.truncates() {
+            format!(
+                "[webminer] corpus summary (exit {}): {} HTML file(s) found under {}; \
+                 {} — {} encoded at most, {} file(s) left out; re-run with --max-files {} for the whole corpus.",
+                exit_code,
+                self.discovered,
+                self.corpus_dir.display(),
+                self.cap_label(),
+                self.processed(),
+                self.skipped(),
+                self.discovered,
+            )
+        } else {
+            format!(
+                "[webminer] corpus summary (exit {}): {} HTML file(s) found under {}; \
+                 {} — {} processed, nothing truncated.",
+                exit_code,
+                self.discovered,
+                self.corpus_dir.display(),
+                self.cap_label(),
+                self.processed(),
+            )
+        }
+    }
+}
+
+/// Parse `--max-files N` / `--max-files=N` from the forwarded JAR arguments.
+fn parse_max_files(forward: &[String]) -> Option<usize> {
+    let mut iter = forward.iter();
+    while let Some(token) = iter.next() {
+        let value = if let Some(inline) = token.strip_prefix("--max-files=") {
+            Some(inline)
+        } else if token == "--max-files" {
+            iter.next().map(String::as_str)
+        } else {
+            None
+        };
+        if let Some(value) = value {
+            if let Ok(parsed) = value.trim().parse::<usize>() {
+                return Some(parsed);
+            }
+        }
+    }
+    None
+}
+
+/// Positional corpus directory of a forwarded `webminer all` invocation.
+///
+/// `forward[0]` is the JAR subcommand; every other token is forwarded verbatim
+/// (the CLI does not re-parse the pipeline flags), so the corpus directory is
+/// the first positional token — flag values such as `--max-files 50` must not
+/// be mistaken for it.
+fn pipeline_corpus_dir(forward: &[String]) -> Option<&str> {
+    let mut iter = forward.iter();
+    if iter.next().map(String::as_str) != Some("all") {
+        return None;
+    }
+
+    let mut skip_next = false;
+    for token in iter {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if token.starts_with('-') {
+            if PIPELINE_VALUE_FLAGS.contains(&token.as_str()) {
+                skip_next = true;
+            }
+            continue;
+        }
+        return Some(token.as_str());
+    }
+    None
+}
+
+/// Corpus-vs-cap report for a `webminer all` invocation, or `None` when the
+/// invocation is not `all` or its corpus directory is not readable (the JAR
+/// reports a bad directory itself).
+pub fn pipeline_file_cap(forward: &[String]) -> Option<PipelineFileCap> {
+    let corpus = PathBuf::from(pipeline_corpus_dir(forward)?);
+    if !corpus.is_dir() {
+        return None;
+    }
+
+    let explicit_cap = parse_max_files(forward);
+    Some(PipelineFileCap {
+        discovered: count_html_files(&corpus),
+        cap: explicit_cap.unwrap_or(DEFAULT_MAX_FILES),
+        cap_explicit: explicit_cap.is_some(),
+        corpus_dir: corpus,
+    })
+}
+
 /// Run a webminer pipeline command (`all <dir>`, `views <result-dir>`, or
 /// any other JAR command) with the installed JAR and a detected Java 17+.
 pub fn run_pipeline(forward: &[String]) -> Result<i32, String> {
@@ -174,7 +344,25 @@ pub fn run_pipeline(forward: &[String]) -> Result<i32, String> {
             .to_string()
     })?;
     let java = crate::java::find_java17()?;
-    run_jar(&jar, &java, forward)
+
+    // `webminer all` silently caps the corpus at `--max-files` (default 40) and
+    // still ends with PIPELINE COMPLETE, so warn before the run and repeat the
+    // counts afterwards.  A user following the <1,000-page guidance otherwise
+    // gets results from a fraction of the corpus without noticing.
+    let file_cap = pipeline_file_cap(forward);
+    if let Some(cap) = &file_cap {
+        if let Some(warning) = cap.warning() {
+            eprintln!("{warning}");
+        }
+    }
+
+    let exit_code = run_jar(&jar, &java, forward)?;
+
+    if let Some(cap) = &file_cap {
+        eprintln!("{}", cap.summary(exit_code));
+    }
+
+    Ok(exit_code)
 }
 
 // ---------------------------------------------------------------------------
@@ -1017,5 +1205,113 @@ mod tests {
         let jar_comps: Vec<_> = jar.components().collect();
         assert_eq!(jar_comps[jar_comps.len() - 2].as_os_str(), "lib");
         assert_eq!(jar_comps[jar_comps.len() - 1].as_os_str(), "scent-miner.jar");
+    }
+
+    fn args(tokens: &[&str]) -> Vec<String> {
+        tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_max_files_accepts_both_spellings() {
+        assert_eq!(parse_max_files(&args(&["all", "corpus"])), None);
+        assert_eq!(parse_max_files(&args(&["all", "corpus", "--max-files", "50"])), Some(50));
+        assert_eq!(parse_max_files(&args(&["all", "corpus", "--max-files=900"])), Some(900));
+        // A non-numeric or missing value is passed through to the JAR, which
+        // reports the real error — the CLI must not invent a cap.
+        assert_eq!(parse_max_files(&args(&["all", "corpus", "--max-files", "abc"])), None);
+        assert_eq!(parse_max_files(&args(&["all", "corpus", "--max-files"])), None);
+    }
+
+    #[test]
+    fn pipeline_corpus_dir_ignores_flag_values() {
+        assert_eq!(
+            pipeline_corpus_dir(&args(&["all", "./corpus", "--max-files", "50"])),
+            Some("./corpus")
+        );
+        // `50` is the value of --max-files, not the corpus directory.
+        assert_eq!(
+            pipeline_corpus_dir(&args(&["all", "--max-files", "50", "./corpus"])),
+            Some("./corpus")
+        );
+        assert_eq!(
+            pipeline_corpus_dir(&args(&["all", "--max-files=50", "--output", "out", "./corpus"])),
+            Some("./corpus")
+        );
+        // `views` (and any other JAR command) has no corpus cap.
+        assert_eq!(pipeline_corpus_dir(&args(&["views", "./result"])), None);
+        assert_eq!(pipeline_corpus_dir(&args(&["all"])), None);
+    }
+
+    /// A corpus larger than the cap must be flagged before the run and summed
+    /// up after it — the JAR truncates silently and still prints
+    /// PIPELINE COMPLETE.
+    #[test]
+    fn pipeline_file_cap_reports_truncation() {
+        let dir = std::env::temp_dir().join("browser4-cli-webminer-cap-truncated");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        for i in 0..45 {
+            let target = if i % 3 == 0 {
+                dir.join("nested").join(format!("page-{i}.html"))
+            } else {
+                dir.join(format!("page-{i}.html"))
+            };
+            std::fs::write(&target, "<html></html>").unwrap();
+        }
+        // A non-HTML file must not be counted as corpus input.
+        std::fs::write(dir.join("notes.txt"), "x").unwrap();
+
+        let cap = pipeline_file_cap(&args(&["all", dir.to_str().unwrap()])).expect("cap report");
+        assert_eq!(cap.discovered, 45);
+        assert_eq!(cap.cap, DEFAULT_MAX_FILES);
+        assert!(!cap.cap_explicit);
+        assert!(cap.truncates());
+        assert_eq!(cap.processed(), DEFAULT_MAX_FILES);
+        assert_eq!(cap.skipped(), 5);
+
+        let warning = cap.warning().expect("truncation must warn");
+        assert!(warning.contains("45"), "warning names the corpus size: {warning}");
+        assert!(warning.contains("40"), "warning names the cap: {warning}");
+        assert!(
+            warning.contains("--max-files 45"),
+            "warning shows how to process the whole corpus: {warning}"
+        );
+
+        let summary = cap.summary(0);
+        assert!(summary.contains("45") && summary.contains("40") && summary.contains('5'));
+        assert!(
+            summary.to_lowercase().contains("left out"),
+            "summary must repeat the truncation: {summary}"
+        );
+
+        // An explicit cap above the corpus size processes everything.
+        let cap = pipeline_file_cap(&args(&["all", dir.to_str().unwrap(), "--max-files", "900"]))
+            .expect("cap report");
+        assert!(!cap.truncates());
+        assert!(cap.cap_explicit);
+        assert_eq!(cap.processed(), 45);
+        assert_eq!(cap.skipped(), 0);
+        assert_eq!(cap.warning(), None);
+        assert!(
+            cap.summary(0).contains("nothing truncated"),
+            "a full run must say so: {}",
+            cap.summary(0)
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A non-`all` invocation (or a corpus path that does not exist) must not
+    /// invent a cap report: the JAR owns that validation.
+    #[test]
+    fn pipeline_file_cap_skips_non_all_and_missing_dirs() {
+        let missing = std::env::temp_dir().join("browser4-cli-webminer-cap-missing");
+        let _ = std::fs::remove_dir_all(&missing);
+        assert_eq!(
+            pipeline_file_cap(&args(&["all", missing.to_str().unwrap()])),
+            None
+        );
+        assert_eq!(pipeline_file_cap(&args(&["views", "."])), None);
+        assert_eq!(pipeline_file_cap(&args(&[])), None);
     }
 }

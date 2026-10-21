@@ -1,6 +1,8 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
+import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
 import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.event.AgentEventBus
@@ -357,6 +359,10 @@ open class StatefulAgentRunner(
         // getting results for the right task (prevents cross-talk confusion).
         status.submittedTask = plainCommand
 
+        // Record where this task's tools may write, so a finished task can point its
+        // caller at the deliverables instead of leaving them to search app-data.
+        status.workspace = (agent as? BasicBrowserAgent)?.workspaceRoot?.toString()
+
         // Pure coding tasks (file ops / build) don't need a browser page. Switch the
         // agent into coding mode: no driver health check, no search-engine navigation,
         // no screenshots — those page steps were the source of the 30s DOM timeouts
@@ -407,6 +413,13 @@ open class StatefulAgentRunner(
             else taskScopedHistory(agent.stateHistory, startIndex)
         }
         status.agentHistory = history
+
+        // The page the task ended on: its HTTP status is the honest value for the
+        // record's `pageStatusCode`. Read BEFORE the user page is restored below —
+        // afterwards the session is back on the user's page and the status would
+        // describe a page the task never touched. Unobservable ⇒ PAGE_STATUS_UNKNOWN,
+        // never the model's old 201/"created" default.
+        status.pageStatusCode = DocumentHttpStatus.of(session.boundDriver) ?: PAGE_STATUS_UNKNOWN
 
         // Restore the user's page if the agent navigated away from it
         try {

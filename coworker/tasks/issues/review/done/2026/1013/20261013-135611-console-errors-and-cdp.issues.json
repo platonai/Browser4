@@ -1,0 +1,493 @@
+{
+  "meta": {
+    "date": "20261013-135611",
+    "source": "20261013-135611-console-errors-and-cdp.issues.json",
+    "mode": "dev",
+    "scenario": "console-errors-and-cdp"
+  },
+  "background": {
+    "task": "All 13 scenario steps were executed against the real backend and MockSite fixtures via `./b4w.ps1`. **Outcome: partially successful** — dialogs (AC6/AC7), clearing (AC3), raw CDP (AC4) and most of the \"no silent failure\" contract (AC8) work well, but the diagnostics core is unreliable: **AC2 fails outright** (uncaught page errors are never reported by `errors` or `console`), and **AC1 fails on the natural first read** (the fixture's `console.log` is invisible until the page is re-navigated because capture only starts with the first `console` call). While testing tab scoping I also found that console capture **silently dies after tab switches** and that a pending dialog makes `tab-list` hang for 30s.\n\nConcrete task outcomes: `console` / `console warn` / `errors` leveling works once capture is live (`[]` vs. the `here:<url>` log vs. `Not a JS error`); `console --clear` / `errors --clear` empty the buffer; `cdp Runtime.evaluate --json '{\"expression\":\"document.title\"}'` → `{\"result\":{\"type\":\"string\",\"value\":\"Browser4 CLI Console Probe Fixture\"}}` matching `eval document.title`; `tool call title` → `Browser4 CLI Console Probe Fixture` (same as `page-info`); `dialog-status` correctly reported `{\"pending\":true,\"type\":\"confirm\",\"message\":\"Confirm action\"}` while blocked, and `dialog-accept` / `dialog-dismiss` produced `confirmResult: \"accepted\"` / `\"dismissed\"` and `promptResult: \"hello-from-cli\"` / `\"__dismissed__\"`.",
+    "executionContext": "- **Prep:** verified repo root; `./b4w.ps1 help`; read `skills/browser4-cli/SKILL.md` + `quick-patterns.md`; MockSite already up on :18080 (HTTP 200). Used isolated sessions `diag-probe`, `diag-cap`, `diag-cap2` (closed at the end).\n- **Console (steps 1–4):** `goto consolelog.html` → `console` = `[]` → `reload` → entry appears (capture-start gap). `console warn` / `console error` / `console info` compared. `goto error.html` → `console` showed `Not a JS error` but **never** `Fancy error!`; repeated after `reload` and with a late `throw` — still absent. Probe fixture: `console` empty → `eval \"b4Probe.run()\"` → `{\"ownGetter\":false,...}` → `console` now shows 2 `[object Object]` entries (probe becomes observable; the JSON itself shows no serialization signal).\n- **Clearing (5–6):** `console --clear` → `Console cleared`, next read `[]`; `errors --clear` likewise (and clears the whole buffer, not just errors).\n- **Raw CDP (7–8):** `Page.getFrameTree`, `DOM.getDocument`, then two-step `DOM.getDocument`→`DOM.querySelectorAll \"*\"` (30 nodes).\n- **Tool passthrough (9–10):** `plugin list` = plugin JARs only (docs claim tools); `GET /mcp/tools` = names only; used `title`, `wait_for_selector`; found `--json` means *input args* after `tool call` and *output envelope* before the command.\n- **Dialogs (11–13):** click parked with exit 1 `[INTERNAL]`; `dialog-status` pending; accept/dismiss cycles; prompt accept with text.\n- **Error paths (AC8):** unknown tool (exit 1), bad JSON (exit 2), missing/extraneous args (exit 1, with `Allowed=[…]`), no session (exit 1, \"Session required\"), bogus CDP method (exit 1) — all good; but an invalid `console` level is silently accepted (exit 0).\n- **Workarounds required:** reload/re-navigate to see console output at all; `--timeout 8` wasn't needed (snapshot guard fails fast); tab-scope testing was impossible while a dialog was pending because `tab-select`/`tab-list` block.",
+    "commands": "",
+    "workarounds": ""
+  },
+  "assessment": {
+    "completionStatus": "Partially Successful — all 13 scenario steps were executed end-to-end; dialog handling (AC6/AC7), clearing (AC3), raw CDP (AC4) and most of the no-silent-failure contract (AC8) pass, but AC2 fails outright (uncaught page errors are never reported) and AC1 fails on the natural first read (the fixture's console.log is invisible until the page is re-navigated); console capture additionally breaks silently after tab switches.",
+    "successRate": "75% — 6 of 8 acceptance criteria fully met in the documented flow; AC1 only after a re-navigation, AC2 not met at all; plus 2 failures found outside the AC list (capture loss after tab switching, tab-list hang on pending dialog).",
+    "issuesFound": 13,
+    "majorBlockers": "None that stopped the scenario, but two blocked acceptance criteria: (1) there is no channel for uncaught JS exceptions — `errors` is only `console --min-level error` over Console.messageAdded filtered to console-api source, so the error fixture's Fancy error! can never be seen; (2) console capture begins at the first `console` call and is lost on tab operations, so the first read after a navigation returns an empty list indistinguishable from 'the page logged nothing'.",
+    "mostConfusingAspects": "For a first-time user: the very first `console` read after goto returns [] on a page that clearly logs; nothing in the help explains the capture window or the per-tab buffer/reset. `--help --examples` (advertised in every command's help) answers 'is the backend running?' on a healthy backend. `tool call` gives no way to discover a tool's arguments, and --json means input args after the command but output envelope before it. A dialog-pending click is reported as an [INTERNAL] error, while the docs call it a normal 'dialog pending' result, and while the dialog is open some commands fail fast with a perfect dialog message while others (tab-list) hang 30s on an HTTP timeout.",
+    "mostValuableImprovements": "1) Capture uncaught exceptions (Runtime.exceptionThrown / Log.entryAdded) and surface them via `errors` with source/line. 2) Start console capture at session/tab creation (or clearly report that earlier messages were not recorded) and re-bind it after tab switches. 3) Give dialog-pending its own non-INTERNAL outcome and apply the pending-dialog guard to tab commands so nothing hangs. 4) Fix `--help --examples` (query a full tool-spec endpoint, stop misblaming the backend) and add `tool list`/`tool describe`. 5) Validate `console <level>` and list the accepted values in help.",
+    "usabilityRating": 6
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Uncaught JS errors are never reported by `errors` or `console` (AC2 fails)",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s diag goto http://localhost:18080/assets/error.html\n./b4w.ps1 -s diag reload\n./b4w.ps1 -s diag errors   # -> [{\"level\":\"error\",\"text\":\"Not a JS error\",...}] only\n./b4w.ps1 -s diag console  # -> same; 'Fancy error!' absent\n./b4w.ps1 -s diag eval \"setTimeout(() => { throw new Error('late boom') }, 50); 'x'\"\n./b4w.ps1 -s diag errors   # -> []\n(the first two commands can be run in any session; a reload guarantees capture is already live)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "`errors` reports the uncaught Error('Fancy error!') thrown from the inline script/sourceURL myscript.js with a source and line reference; the late uncaught error is likewise reported.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Only `console.error('Not a JS error')` is listed. The uncaught exception never appears in `console` or `errors`, even after a reload with capture demonstrably active, and even for a late throw while capture is live. Nothing distinguishes 'no page errors' from 'exceptions are not captured'.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Console capture is CDP `Console.messageAdded` filtered to `message.source == ConsoleMessageSource.CONSOLE_API` (Browser4WebDriver.ensureConsoleCapture). Uncaught exceptions are delivered by Chrome with source=javascript (Console domain) and by Runtime.exceptionThrown / Log.entryAdded (javascript category), none of which is listened to or accepted by that filter. `errors` is implemented purely as `console --min-level error` (cli/browser4-cli/src/commands.rs, errors CommandDef -> browser_console_messages), so there is no separate page-error channel to fall back on. The filter was added to suppress network/security noise but also drops every JS exception.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/browser4-browser/src/main/kotlin/ai/platon/pulsar/chrome/Browser4WebDriver.kt:ensureConsoleCapture() (source filter); cli/browser4-cli/src/commands.rs:1887 (errors CommandDef)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Capture uncaught exceptions separately: listen on Runtime.exceptionThrown (and/or Log.entryAdded with source=javascript) and store them with source/line/column in a page-error buffer.\n- Make `errors` read that buffer (console.* calls with level error + uncaught exceptions), and keep `console --min-level error` semantics documented as 'console API only'.\n- Do not simply widen the Console.messageAdded filter to all sources: network/security entries would leak in as before — tag entries with their source instead and filter at read time.\n- Add an e2e assertion against the error.html fixture (Fancy error! + myscript.js line) so AC2 is covered by CI.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "Console capture starts at the first `console` call, so page-load logs are silently lost on first use (AC1 fails on the natural flow)",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s fresh goto http://localhost:18080/assets/consolelog.html\n./b4w.ps1 -s fresh console   # -> []\n./b4w.ps1 -s fresh reload\n./b4w.ps1 -s fresh console   # -> [{\"level\":\"log\",\"text\":\"here:http://localhost:18080/assets/consolelog.html\",...}]",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The first `console` read after navigating returns the fixture's console.log entry (AC1). If capture cannot be retroactive, the CLI should say so instead of returning an empty list.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The first read returns `[]`, which reads as 'the page logged nothing'. The message only appears after a second page load. `console` help says only 'List console messages' — nothing about capture starting at the first call, so the empty result is misleading.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "ensureConsoleCapture() is only invoked from consoleMessages()/consoleClear(); before that call no Console.enable / listener exists, and CDP does not replay Console.messageAdded events. Any navigation performed before the first console read therefore produces uncapturable output. The design is documented in a code KDoc ('Capture starts with the first call') but not in any user-facing help, SKILL.md, or tip.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/browser4-browser/src/main/kotlin/ai/platon/pulsar/chrome/Browser4WebDriver.kt:consoleMessages()/ensureConsoleCapture(); cli/browser4-cli/src/commands.rs:1857 (console CommandDef)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Start console capture when the driver/tab is first created (or at least on the first navigation) instead of waiting for the first `console` call.\n- If enabling at session start is too costly, make the first read say so: e.g. 'capture started with this call; N messages before it were not recorded' — never return a bare `[]` that implies the page logged nothing.\n- Document the capture window in `--help console` and in SKILL.md next to the console/errors rows.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "Console/error capture silently stops working after tab operations",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s s goto http://localhost:18080/assets/consolelog.html\n./b4w.ps1 -s s reload ; ./b4w.ps1 -s s console   # entry present (capture working)\n./b4w.ps1 -s s tab-new\n./b4w.ps1 -s s goto http://localhost:18080/assets/consolelog.html ; ./b4w.ps1 -s s reload\n./b4w.ps1 -s s console   # -> [] (tab 0 logging works)\n./b4w.ps1 -s s tab-select 1 ; ./b4w.ps1 -s s tab-select 0\n./b4w.ps1 -s s reload ; ./b4w.ps1 -s s console   # -> [] even though the page logs on every load; stays empty on every later read",
+          "label": "Reproduction"
+        },
+        {
+          "body": "`console` keeps returning the active tab's messages after switching tabs, or clearly reports that capture was reset/re-attached.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "After a tab-select round trip the buffer is empty and no further console messages are ever captured for that session — page loads, eval-injected console.log and errors are all invisible, with no warning. Also, message buffers are not preserved per tab: switching to the tab that previously held messages shows `[]`.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Console state is per driver instance (consoleBuffer, consoleListener, consoleCaptureStarted/consoleCaptureConfirmed in Browser4WebDriver) while tab-switching swaps the driver/target behind the session. The stale listener latch or the new driver's buffer is used for reads, so no events reach the buffer. The exact swap point (session active-tab resolution vs. BrowserTabToolExecutor consoleMessages dispatch) needs instrumentation to confirm, but the trigger — any tab-select round trip with >=2 tabs — is deterministic.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/browser4-browser/src/main/kotlin/ai/platon/pulsar/chrome/Browser4WebDriver.kt (console buffer/listener fields, ensureConsoleCapture); browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/BrowserTabToolExecutor.kt:2457 (consoleMessages dispatch)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Re-bind console capture on the driver that actually serves the session after tab-select/tab-new (re-run ensureConsoleCapture against the new target, or reset the latch when the target changes).\n- Consider a session-level console buffer keyed by tab GUID so messages survive tab switches and are attributable to a tab.\n- Until fixed, detect the case (capture confirmed once, then zero events while a page navigates/logs) and warn on stderr rather than returning a silent `[]`.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "A pending dialog makes `tab-list` hang for 30s and fail with a misleading network-timeout error",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s s goto http://localhost:18080/b4/mcp-tool-controller-interactive-fixture.html\n./b4w.ps1 -s s click \"#confirm-target\"   # dialog pending\n./b4w.ps1 -s s tab-list                    # hangs ~30s",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A fast, actionable error such as the one `snapshot` gives: 'Page is blocked by a native confirm dialog: \"Confirm action\". Use dialog-accept or dialog-dismiss...'",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "After ~30s: `Error: HTTP request timed out [tool=browser_tabs, endpoint=http://127.0.0.1:8283/mcp/call-tool, timeout=30s, sessionId=...]: error sending request for url (...)` (exit 1). This reads like a backend/network outage, not a blocked page. `snapshot` on the same session fails in ~4s with the correct dialog-specific message, so the guard is inconsistent across commands.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The dialog-pending click parks server-side and the tab listing path (browser_tabs) contends with it without a dialog guard, so the HTTP call waits out the CLI timeout. Other commands (e.g. page_url used by snapshot) check the dialog state first and fail fast with a domain-specific message.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/BrowserTabToolExecutor.kt (tabs method) — add the same dialog guard used by the page-state read path (message text originates near browser4-core/browser4-browser/src/main/kotlin/ai/platon/pulsar/chrome/Browser4WebDriver.kt:1570-1585)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add the pending-dialog guard to the tab listing/selection handlers so they fail immediately with the dialog-specific message.\n- When a CLI call times out while the session has a pending dialog, surface 'Page is blocked by a native dialog' instead of a raw HTTP timeout.\n- Audit remaining session-scoped commands (tab-select, frames, network …) for the same guard.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "`console <level>` silently accepts unknown levels instead of validating them",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s s console bogus    # -> full list, exit 0\n./b4w.ps1 -s s console warning  # -> treated as unknown/info too ('warn' is the real token)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A non-zero exit with an actionable message listing the accepted levels (error, warn, info, log, debug), consistent with the strict validation `tool call` performs on its arguments.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The level is silently ignored and defaults to `info`, so `console warning` and `console bogus` return a superset of what the user asked for with exit 0. `--help console` lists no valid level values either, so the failure mode is invisible.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "ConsoleMessageBuffer.levelPriority() maps unknown levels to 2 (info) by design to mirror the old page-side filter, and the CLI console CommandDef defines `min-level` as an unvalidated positional string. The backend therefore cannot distinguish a typo from 'info'.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/browser4-browser/src/main/kotlin/ai/platon/pulsar/chrome/ConsoleMessageBuffer.kt:levelPriority(); cli/browser4-cli/src/commands.rs:1857 (console CommandDef)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Validate `min-level` in the CLI (or backend) against the documented set and exit non-zero with the accepted values on anything else; optionally accept common synonyms ('warning' -> 'warn', 'verbose' -> 'debug').\n- List the accepted values in `--help console` and in the SKILL.md row.\n- Keep the lenient normalizeLevel() for messages coming from the page, but not for the user-supplied filter.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "Dialog-triggering click is reported as an `[INTERNAL]` failure with exit 1, contradicting the documented 'dialog pending' result",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s s click \"#confirm-target\"",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The docs (help Quick Start: \"click returns 'dialog pending'; then accept\"; quick-patterns.md: click 'returns quickly with a \"dialog is pending\" error') describe an expected, typed outcome that a script can branch on.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "`Error: [INTERNAL] browser_click failed: The click opened a native confirm dialog: \"Confirm action\" and is paused until the dialog is handled. Run 'dialog-accept' (or 'dialog-dismiss') to let the click finish; do not re-run the click.` (exit 1). The message body is excellent, but the `[INTERNAL]` tag and exit 1 classify a normal two-step-flow state as an internal crash, and the Quick Start wording ('returns') does not match a hard error.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Browser4WebDriver throws a WebDriverException when the click parks on a dialog; the CLI maps that to the generic internal error code. The dialog outcome is a first-class state (dialog-status already reports it) but has no dedicated error/result code.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/browser4-browser/src/main/kotlin/ai/platon/pulsar/chrome/Browser4WebDriver.kt:1583 (WebDriverException); CLI error classification in cli/browser4-cli/src/main.rs / commands.rs (click)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Give the dialog-pending outcome its own code (e.g. DIALOG_PENDING) so the CLI can print a non-error notice, or at minimum stop tagging it [INTERNAL].\n- Align the docs: state the exact exit code and message shape for the two-step flow so scripts can test for it.\n- Have dialog-accept/dialog-dismiss print an explicit confirmation ('Dialog accepted: confirm \"Confirm action\"') instead of only a page/snapshot block.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 7,
+      "title": "`--help --examples` is a dead end for console/errors/cdp/dialog-* and misblames the backend",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 console --help --examples   # backend demonstrably running\n./b4w.ps1 errors --help --examples\n./b4w.ps1 cdp --help --examples\n./b4w.ps1 dialog-accept --help --examples\n./b4w.ps1 goto --help --examples     # built-in examples, then 'Tool-level examples are unavailable: is the backend running?'",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Examples for the command, or an accurate 'no examples declared' message.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "'No examples available for 'console' — is the backend running?' (errors/cdp/dialog-accept identical), and 'Tool-level examples are unavailable: is the backend running?' appended for commands that do have built-in examples. Every command's help also advertises 'Runnable examples: browser4-cli console --help --examples', so a first-time user follows a link that blames a healthy backend.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "build_tool_examples() fetches GET /mcp/tools/specs, but the backend's listCliToolSpecs() filters that endpoint to specs that declare a cliName (plugin-declared CLI commands). Built-in tab tools are excluded by design, so the list is empty here and the CLI prints its 'specs.is_empty() -> is the backend running?' reason. The tool examples that do exist backend-side (ToolExample/TabToolExamples) are unreachable over this path.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:fetch_tool_spec_values()/build_tool_examples()/examples_or_reason() (~21300-21345); browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:640 (listCliToolSpecs)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Point build_tool_examples at an endpoint that serves all tool specs (add e.g. GET /mcp/tools/specs/all, or include built-in specs with a query flag), or embed the examples CLI-side.\n- Distinguish 'backend unreachable' from 'endpoint returned no specs' in the reason string — never say 'is the backend running?' when it just answered.\n- If a command has no examples at all, say 'no examples declared for this command' and keep the built-in usage lines.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 8,
+      "title": "`tool call` discovery is broken as documented: `plugin list` shows no tools, no argument schemas, and `--json` changes meaning by position",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 plugin list                 # lists 1 plugin JAR, no tools\ncurl http://127.0.0.1:8283/mcp/tools   # tool NAMES only, no schemas\n./b4w.ps1 tool call title             # -> Browser4 CLI Console Probe Fixture (bare string)\n./b4w.ps1 --json tool call title      # -> {\"status\":\"ok\",\"command\":\"tool-call\",\"output\":{\"result\":\"...\"}}\n./b4w.ps1 tool call wait_for_selector --json '{\"bogus\":1}'   # only way to learn the arg names",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A documented, reliable way to discover tool names AND their argument shapes without reading backend source, and one consistent meaning for --json.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "(a) SKILL.md says 'List tools via `plugin list` or GET /mcp/tools' — `plugin list` lists installed plugin JARs, not tools. (b) GET /mcp/tools returns names only; GET /mcp/tools/specs is filtered to plugin-declared commands and returns {\"tools\":[]}. Argument names/types are discoverable only by deliberately failing a call (the error text is good: [UNKNOWN_ARGUMENT] ... Allowed=[] / [MISSING_REQUIRED_ARG] ... requires 'selector') or by reading Kotlin sources. (c) `tool call x --json '{...}'` passes input args while `--json x tool call` selects the JSON output envelope — the same flag means input in one position and output in the other. (d) `tool call` prints the tool's raw text (a bare string, or a Java object like {\"type\":\"java.time.Duration\",\"description\":\"PT59.9955912S\"} for wait_for_selector) although --help promises 'the JSON result'.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "No CLI command or backend endpoint exposes full tool-spec metadata (arguments, return type, examples) for built-in agent tools; /mcp/tools lists names only and /mcp/tools/specs is scoped to plugin-declared CLI commands. Tool results are printed as the raw string payload, so typed values (java.time.Duration) leak through.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_tool_call()/parse_tool_call_json(); skills/browser4-cli/SKILL.md:234 (tool call row); browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:562/640 (listTools/listCliToolSpecs)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add `tool list` (names + one-line description) and `tool describe <name>` (arguments, types, defaults, help) driven by the backend tool specs, or expose the full spec list at a documented endpoint and reference it from `--help tool call`.\n- Fix the SKILL.md claim that `plugin list` lists MCP tools.\n- Serialize passthrough results so Java types never leak (durations as numbers/ISO strings) and consider always emitting the JSON envelope for `tool call`.\n- Reserve one meaning for --json (e.g. rename the args flag to --args or --input-json) or document the positional rule prominently.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 9,
+      "title": "`goto` to the current URL claims 'page unchanged' but reloads the page",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s s goto http://localhost:18080/assets/consolelog.html   # 2nd+ invocation with same URL\n./b4w.ps1 -s s console   # a NEW console.log entry appears each time",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Either a no-op navigation, or a message that says the page was reloaded.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Prints 'Already at <url> — page unchanged.' but the page re-executes on every call (new console.log entries with fresh timestamps), which can resubmit stateful pages (POST results, one-time tokens, analytics).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The target-URL comparison at cli/browser4-cli/src/main.rs:2867 prints the 'unchanged' message while the driver navigation still runs (or the same-URL branch still calls get/reload), so the message and the action disagree.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:2867",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- If the URL matches and no navigation is needed, skip the driver navigation entirely; otherwise change the text to 'Already at <url> — reloaded.'\n- Add a unit test that asserts the navigation call is not issued when the same-URL branch prints 'page unchanged'.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 10,
+      "title": "False 'Possible blocked/challenge page' advisory fires on tiny valid pages",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s s goto http://localhost:18080/assets/consolelog.html\n# ⚠ Possible blocked/challenge page — detected page text is implausibly empty (16 chars) after a successful navigation.\n./b4w.ps1 -s s goto http://localhost:18080/assets/error.html   # (0 chars)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The advisory reserved for pages whose emptiness is suspicious; a localhost test fixture is neither blocked nor suspicious.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Every navigation to these minimal fixtures prints the challenge advisory plus a 'retry the step once' next-step, adding noise and implying a block on a page that loaded perfectly (the same result was reported twice in this run before the user learns to ignore it).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The empty-body heuristic in cli/browser4-cli/src/main.rs (~29246) treats 'few visible chars and no iframes' as suspicious; the documented exemptions (widget/demo pages, content paths like /wiki/) do not cover minimal local fixtures or localhost origins.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:29246 (implausibly empty advisory)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Exempt localhost/loopback origins from the advisory.\n- Lower the false-positive rate by considering the page's element count or the presence of a <title>/body content instead of raw text length for very small documents.\n- Make the advisory one line ('page body is nearly empty — this may be a slow render'): the current two-line retry script is heavy for a weak signal.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 11,
+      "title": "`eval` tip says console.log output 'is not captured', contradicting the `console` command",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s s eval \"console.log('m3'); 'ok'\"\n# stderr: ℹ️  console.log() output is not captured — only the expression's return value is shown.\n./b4w.ps1 -s s console   # {\"level\":\"log\",\"text\":\"m3\",...} — it WAS captured",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The tip scopes the statement to the eval command's own output and points at the command that does show it.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "'console.log() output is not captured' is a blanket claim; the same session's `console` command promptly shows the m3 entry captured via CDP. A first-time user may conclude browser4-cli cannot see page logs at all.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The tip was written for the eval tool boundary (the eval result returns only the expression value) but is worded as a global capture statement. It fires on any expression containing 'console.log(' regardless of context.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:27937",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Reword to 'console.log output is not shown in eval's result — read it with `browser4-cli console`.'\n- Mention the capture-start caveat (messages logged before the first `console` read are not recorded) so the pointer does not lead to another confusing empty list.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 12,
+      "title": "dialog-status/console scoping is undocumented, and 'no dialog' is indistinguishable from 'cannot tell'",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s diag-probe dialog-status     # {\"pending\":true,\"type\":\"confirm\",\"message\":\"Confirm action\"}\n./b4w.ps1 -s diag-cap  dialog-status      # {\"pending\":false} while the other session is blocked",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Documentation states that the query is scoped to the session's active tab, and the output distinguishes 'queried and found none' from 'could not determine'.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "`--help dialog-status` is one sentence with no scope hint; neither SKILL.md nor quick-patterns.md mention tab/session scoping. A bare {\"pending\":false} is printed whenever the query path succeeds, and there is no way to ask 'is some tab blocked?' — with multiple tabs the answer silently depends on which tab is active (and tab-select itself hangs while a dialog is pending, see the timeout issue). The same undocumented scoping applies to `console`/`errors`.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The dialog status/possible-dialog state lives on the driver for the active tab; the CLI/MCP surface exposes no scope field or which-tab qualifier, and the help text was never extended when multi-tab support was added.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs (dialog-status CommandDef); browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:303 (dialog_status mapping)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- State the scope in `--help dialog-status` and the docs ('queries the session's active tab') and include a scope/tab field in the JSON output (e.g. {\"scope\":\"tab 0AA3...\",\"pending\":false}).\n- Consider a session-wide flag (--all-tabs) that reports pending dialogs per tab.\n- Document that console/errors are also per-tab buffers (and, per the reliability issue above, currently reset by tab operations).",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 13,
+      "title": "`list` shows URL '-' for live sessions that are displaying a page",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s diag-probe goto http://localhost:18080/assets/error.html\n./b4w.ps1 list            # URL column '-' for diag-probe, Status Active\n./b4w.ps1 list --json     # url\":\"-\"",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The URL column shows the session's current page (the docs say '-' means the backend is unreachable or the session is stale).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Every active session, including ones the CLI itself reports as 'current page: http://localhost:18080/assets/error.html' in goto output, renders '-' in the list URL column (Status Active, Connection Browser4, Next open Reuse). Users are told '-' means unreachable/stale while the same row says Active.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The backend session record's url field is empty (handleListSessions maps `s.url ?: \"\"`), while the CLI's own state file know the last URL; the backend appears not to record URLs for CLI-driven navigation (browser_navigate). A follow-up trace of the navigate handler vs. session.url assignment is needed.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:handleListSessions() (url field); cli/browser4-cli/src/main.rs (list rendering)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Make the navigation path record the page URL on the session so `list`/`list --json` can show it, or fall back to the CLI's locally recorded last URL.\n- Reserve '-' strictly for unknown/unreachable and keep the docs accurate either way.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

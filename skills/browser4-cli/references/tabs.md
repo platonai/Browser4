@@ -43,6 +43,13 @@ All four accept `-s <session>` (DEFAULT session otherwise) and `--json`.
   over CDP and never makes one the browser's foreground tab, so `active: true` does not mean the tab
   is the window's selected tab, and it does not mean the page sees itself as focused — that comes
   from the per-tab focus emulation (see [browser-modes.md](browser-modes.md)).
+- **Active-tab marker:** the human table prefixes the active tab's index with `▶ ` (the other rows
+  are indented so the columns stay aligned): `▶ 0  a1b2c3…  Example  https://example.com`. The marker
+  is drawn only when the backend reported an active tab for the session, so a table with no marker
+  means “the active tab could not be determined”, never “no tab is active”. A session that has just
+  been opened and never switched reports its **first** tab as active (there is no front driver until
+  something calls `tab-select`, and the backend falls back to the first tab rather than reporting
+  every row inactive).
 - **Session scoping:** Prefix tab commands with `-s <session-id>` to target a non-default session.
   The `list` command shows all tracked sessions and their IDs.
 - **Last-tab behavior:** Chrome requires at least one open tab. Closing the last tab makes Chrome
@@ -56,6 +63,15 @@ All four accept `-s <session>` (DEFAULT session otherwise) and `--json`.
 - **No auto-snapshot:** `tab-list`, `tab-new`, `tab-close` and `tab-select` do NOT trigger
   automatic snapshots. After `tab-select`, run `snapshot` explicitly to get fresh element refs for
   the new active tab — the switch changes the active page context.
+- **`window new` is an alias of `tab-new` here:** in the managed/headless backend both commands
+  create an additional tab/target in the same browser and auto-select it, printing the same
+  `Created tab with GUID: …` / `✓ Switched to tab <n>` lines. A separate OS window is a headed-mode
+  artifact, not something the command controls.
+- **Popups:** a page-opened popup (`window.open`, `target="_blank"`) is an ordinary new target.
+  The CLI does not announce it and does not switch to it (auto-select lives in the `tab-new` /
+  `window new` dispatch), so run `tab-list` after triggering the popup and switch explicitly with
+  `tab-select <index>` or `--guid <guid>`. **Note:** whether every popup type is registered in
+  `tab-list` is not covered by tests yet — verify on your build.
 - **Extension sessions:** When closing tabs on extension-attached sessions, the backend may report
   an error even though the tab was successfully closed (Chrome's `chrome.tabs.remove` callback can
   fire an error after the tab is already gone). The CLI verifies that the tab was actually removed

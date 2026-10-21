@@ -328,9 +328,26 @@ object HarBuilder {
     private fun decodeQueryComponent(component: String): String =
         runCatching { URLDecoder.decode(component, StandardCharsets.UTF_8.name()) }.getOrDefault(component)
 
+    /**
+     * A CDP resource-timing delta as HAR milliseconds.
+     *
+     * CDP's `ResourceTiming` fields (`dnsStart`/`dnsEnd`, `connectStart`/`connectEnd`,
+     * `sslStart`/`sslEnd`, `sendStart`/`sendEnd`, `receiveHeadersEnd`) are already
+     * **milliseconds** relative to the request start, and HAR 1.2 `timings` are
+     * milliseconds too — so the delta is used as-is.
+     *
+     * The previous `* 1000` conversion reported every phase ~1000x too large (a 3 ms
+     * DNS lookup became 3 s) while the entry's `time` — computed from timestamps, not
+     * from these deltas — stayed correct, so the phases did not even add up to the
+     * total the same document reported.
+     *
+     * A phase CDP did not report (or reported out of order) becomes HAR's `-1`,
+     * "not available", rather than a coerced minimum that would look like a
+     * measurement.
+     */
     private fun deltaMillis(start: Double, end: Double): Long {
         if (start <= 0.0 || end <= 0.0 || end <= start) return -1
-        return ((end - start) * 1000.0).roundToLong().coerceAtLeast(1L)
+        return (end - start).roundToLong().coerceAtLeast(0L)
     }
 
     private fun formatTimestamp(epochMillis: Long): String = HAR_TIMESTAMP_FORMAT.format(Instant.ofEpochMilli(epochMillis))

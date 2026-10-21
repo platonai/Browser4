@@ -1,0 +1,241 @@
+{
+  "meta": {
+    "scenario": "bulk-scale-routing",
+    "source": "20261013-132610-bulk-scale-routing.issues.json",
+    "date": "20261013-132610",
+    "mode": "dev"
+  },
+  "background": {
+    "workarounds": "",
+    "executionContext": "**Preparation:** Confirmed repo root, read `./b4w.ps1 help` and the full `skills/browser4-cli/SKILL.md`, plus `crawl.md`, `swarm.md`, `loop.md`, `decision-trees.md` (the §4b branch docs). MockSite was already running on :18080 (verified `/ec/sitemap.xml`, `/generated/crawl/index.html`).\n\n**AC1:** `goto` auto-started the dev backend cleanly (~10 s, bundle pre-built). `htmlsnapshot` captured 9 KB / 22 interactive elements. `htmlsnapshot inspect` auto-discovered the repeating `div.product-card` pattern with `.product-title`/`.product-price`/`.product-rating` selectors — genuinely useful discovery output. Wrote `listing-query.sql` in the scratch dir and ran it; table output was clean.\n\n**AC2:** Created `seed-urls.txt` + `detail-query.sql` in the scratch dir. Crawl completed in ~30 s (3 pages, peak 3 units in flight), one row per URL.\n\n**AC3:** Viewed the hub fixture to know its link set. Ran the scenario's exact command → b4w.ps1's MSYS guard rejected `-olp \"/product/\"` (exit 1, actionable message). Re-ran with the guard's documented workaround `MSYS2_ARG_CONV_EXCL='*'` → 10 pages found, categories excluded.\n\n**AC4 (required repair):** `swarm create` succeeded, but `swarm query` returned `503 Swarm backend is not installed` (exit 1). `doctor status` showed `Plugins: total 0`. Investigation: the plugin JAR was built at `browser4-plugins/browser4-swarm/target/…rc.10.jar` but not in the repo path the bundle build scans; `build-runtime-bundle.ps1` derives the Maven repo from `$env:HOME` (`C:\\Users\\pereg\\.m2`) while this machine's Maven is redirected via `C:\\Users\\pereg\\.m2\\settings.xml` to `D:\\Users\\pereg\\.m2\\repository`. Repair applied: `mvn install -pl browser4-plugins/browser4-swarm -DskipTests` → `./b4w.ps1 stop` → `MAVEN_REPO_LOCAL='D:\\Users\\pereg\\.m2\\repository' BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1 ./b4w.ps1 goto …` → `Plugins: total 1 (loaded)`. Swarm then worked end-to-end; closed with `swarm close`.\n\n**AC5:** Named session `price-watch` opened; the loop was launched as a background process so `loop --list` and `loop --status --name mock-price-watch` could be checked *while running* (1/2 iters, 10s interval, state file path shown). Both iterations printed the price; loop finished and auto-cleaned its state.\n\n**AC6:** Wrote `ac6-few-urls.sh` (scratch dir) with a 3-URL loop using `goto`/`htmlsnapshot`/`htmlsnapshot get text` + `sleep 2`; all titles extracted, log saved to the scratch dir.\n\n**Decisions:** stayed on the DEFAULT session for AC1–AC3/AC6 and a named session for AC5 as the scenario specifies; used `--format table` for human-readable verification; used `swarm status <batch-id>` for polling (batch endpoint); treated the bundle repair as in-scope because it rebuilds strictly from the local source tree.\n\n**Files (all in `.test-sessions/20261013T0154334271610Z/`):** `listing-query.sql`, `detail-query.sql`, `seed-urls.txt`, `ac6-few-urls.sh`, `ac6-output.log`.\n\n---",
+    "commands": "",
+    "task": "All six acceptance criteria were completed and verified against MockSite on localhost:18080:\n\n| AC | Approach | Result |\n|---|---|---|\n| AC1 | `goto` listing page → `htmlsnapshot` → `htmlsnapshot query --sql @listing-query.sql --format table` with `DOM_LOAD_AND_SELECT(@url, '.product-card')` | ✅ 6 correlated rows (title + price + rating + link) from one page |\n| AC2 | Seed file (3 product URLs) + `detail-query.sql` (`DOM_BASE_URI`, `#productTitle`, `#product-price`) → `crawl --seed-file ... --depth 0 --sql @... --format table --refresh` | ✅ 3/3 rows, one per seed URL, exit 0 |\n| AC3 | `crawl http://localhost:18080/generated/crawl/index.html -d 2 -ol \"a.product\" -olp \"/product/\"` | ✅ 10 product pages (depth 0–2) discovered; the 3 `category/*.html` links present on the hub were correctly excluded |\n| AC4 | `swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4` → `swarm query --seed-file ... --refresh` → `swarm status` (batch) → `swarm result` → `swarm close` | ⚠️/✅ Initially blocked by **503 \"Swarm backend is not installed\"**; after repairing the local runtime bundle (see Issue 1) all 3 tasks completed in 864 ms with url/title/price verified, session closed |\n| AC5 | `-s price-watch goto <product>` → `loop --name mock-price-watch --count 2 -i 10 -- -s price-watch eval \"...\"` | ✅ Both iterations returned `$899.99`; `loop --list`/`--status` observed live at 0/2 → 1/2; state auto-cleaned, exit 0 |\n| AC6 | Bash loop over 3 product URLs calling `goto` + `htmlsnapshot` + `htmlsnapshot get text \"#productTitle\"` with `sleep 2` | ✅ 3/3 titles extracted; no crawl/swarm/loop needed |"
+  },
+  "assessment": {
+    "completionStatus": "Successful — all six acceptance criteria completed and verified against MockSite (AC4 only after repairing the local dev-mode runtime bundle).",
+    "successRate": "90% — every AC passed; AC4 required an out-of-band bundle repair, and the exact AC3 command needed the documented MSYS workaround.",
+    "issuesFound": 6,
+    "majorBlockers": "AC4/swarm was completely blocked by the dev runtime bundle shipping without the browser4-swarm plugin (every /api/swarm job call returned 503). Root-caused to build-runtime-bundle.ps1 not honoring Maven's configured localRepository (settings.xml redirects it to D:\\Users\\pereg\\.m2 while the script scans C:\\Users\\pereg\\.m2). Repaired with mvn install of the plugin + a forced bundle rebuild with MAVEN_REPO_LOCAL set; swarm then worked end-to-end.",
+    "mostConfusingAspects": "1) `swarm create` reporting success and doctor showing an active SWARM session while the swarm backend was entirely absent — the failure surfaced only on job submission. 2) The forced-rebuild env var silently doing nothing until the server is stopped. 3) `list` showing '-' URLs (documented as 'backend unreachable / stale session') for sessions that were verifiably live. 4) Discovering that the local Maven repo is redirected to D: and that the bundle script assumes ~/.m2. 5) The AC3 example pattern needing an env-var prefix under Git Bash.",
+    "mostValuableImprovements": "Fix the bundle build to resolve Maven's real local repository and to version-match the swarm plugin (and surface the missing-plugin warning to the user); make swarm create/doctor report a missing swarm backend immediately with the dev-mode fix recipe; make `list` show real URLs for active sessions; make BROWSER4_CLI_FORCE_REBUILD_BUNDLE warn instead of silently skipping; correct the Git Bash crawl examples. Core flows (goto, snapshot/inspect, X-SQL query, seed-file crawl, link-discovery crawl, loop, and the few-URL shell pattern) all worked first try and matched the documentation — the discoverability tooling (`htmlsnapshot inspect`) and error messages were notably good.",
+    "usabilityRating": 7
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Dev-mode runtime bundle ships without the browser4-swarm plugin — all swarm job endpoints return 503",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "1. Fresh dev checkout + backend started via ./b4w.ps1 goto <url>.\n2. ./b4w.ps1 swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4 --clear-stale  → prints 'Swarm session created: SWARM', exit 0.\n3. ./b4w.ps1 swarm query --sql \"@query.sql\" --seed-file seed-urls.txt --refresh  → 'Error: HTTP request failed with status 503 Service Unavailable: Swarm backend is not installed. Install the browser4-swarm plugin and restart the server.' exit 1.\n4. ./b4w.ps1 doctor status → Plugins: total 0.\nRepair used: mvn install -pl browser4-plugins/browser4-swarm -DskipTests; ./b4w.ps1 stop; MAVEN_REPO_LOCAL='D:\\Users\\pereg\\.m2\\repository' BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1 ./b4w.ps1 goto http://localhost:18080/ec/ → Plugins: total 1; swarm query then succeeds.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Swarm works out of the box in dev mode (AC4 requires it), or the CLI refuses/warns at the first swarm command with a concrete fix recipe.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The whole AC4 branch of SKILL.md §4b was dead on arrival: swarm create looked successful, swarm query 503'd. The bundle build's own warning ('browser4-swarm plugin JAR not found in the local Maven repo … will return 503 until the plugin is installed') was never surfaced in the CLI output — the rebuild log the user sees says only 'Local Browser4 runtime bundle built successfully'.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "build-runtime-bundle.ps1 resolves the Maven local repository as `${MAVEN_REPO_LOCAL:-$HOME/.m2/repository}`. On this machine $HOME/C:\\Users\\pereg\\.m2\\settings.xml sets <localRepository>D:\\Users\\pereg\\.m2\\repository</localRepository>, so Maven (and `mvn install`) write to D:, while the bundle build scans C:\\Users\\pereg\\.m2\\repository, finds no browser4-swarm JAR, and copies nothing into the bundle's plugins/ directory. The backend then loads 0 plugins and the thin REST facade throws SwarmNotInstalledException (503).",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-apps/browser4-bundle/build-runtime-bundle.ps1 (the $localRepo/$swarmGroupDir block, ~lines 975-994)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Resolve the local repository from Maven itself (mvn -q help:evaluate -Dexpression=settings.localRepository -DforceStdout) or parse settings.xml, instead of assuming ~/.m2/repository.\n- Surface the missing-plugin Write-Warning to the CLI user (currently invisible), and/or have `doctor status` flag 'Plugins: total 0' as a swarm-affecting defect.\n- Match the plugin artifact to the project version when copying (see separate issue) and fail the bundle assembly loudly when no match exists.\n- Document the dev-mode plugin recipe (mvn install -pl browser4-plugins/browser4-swarm + forced bundle rebuild, incl. MAVEN_REPO_LOCAL for redirected repos) in swarm.md and SKILL.md.\n- Consider building the plugin as part of the same reactor/bundle assembly so repo-location mismatches cannot drop it silently.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "Runtime bundle picks the browser4-swarm JAR by newest file mtime, bundling a version-mismatched plugin (rc.8 into an rc.10 backend)",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "With several browser4-swarm-4.14.0-rc.* versions present in the Maven repo, force a bundle rebuild (BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1 after ./b4w.ps1 stop), then list browser4-apps/browser4-bundle/target/runtime-bundle/_work/.../plugins/.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The bundled plugin matches the checkout version (4.14.0-rc.10, per VERSION/pom and doctor's reported backend build).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "browser4-swarm-4.14.0-rc.8.jar was bundled (its file mtime was ~8 minutes newer than the rc.10 JAR in the same repo). It happened to load and work, but the backend now runs a plugin from a different release train.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "build-runtime-bundle.ps1 (~line 985) does Get-ChildItem browser4-swarm-*.jar | Sort-Object LastWriteTime -Descending | Select-Object -First 1 — 'newest file wins' with no filter against the project version.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-apps/browser4-bundle/build-runtime-bundle.ps1:985",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Filter candidates by the project version (read VERSION / project.version) before falling back to newest-mtime.\n- When only mismatched versions exist, print an explicit warning naming the versions, or fail the bundle build.\n- Record the bundled plugin version in doctor's Plugins report so skew is visible.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "`swarm create` reports success (and doctor shows an active SWARM session) even when the swarm backend is not installed",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "On a backend without the plugin: ./b4w.ps1 swarm create --display-mode HEADLESS → 'Swarm session created: SWARM (display=HEADLESS, contexts=2, max-tabs=4)', exit 0. Then any ./b4w.ps1 swarm query … → 503. doctor status simultaneously reports '-- Swarm -- session: SWARM (status: active), tasks: total=2 done=2 running=0'.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "swarm create should detect the missing swarm backend and fail or warn immediately (the session is useless — every job will 503), or at minimum not present a healthy-looking active swarm state.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "False-positive success; the user only discovers the problem one step later when a job submission 503s. Wasted a session teardown + investigation cycle.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "`swarm create` only creates/attaches a browser session named SWARM (Rust CLI, main.rs ~13868) — it never consults the plugin-backed REST facade. Job submission is the first call that reaches SwarmController, which throws SwarmNotInstalledException. The doctor Swarm section appears to report session/task state from local tracking, so it also looks healthy without the backend.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:13868 (swarm create handler); browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/controller/SwarmController.kt",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Have swarm create probe the backend (e.g. GET /api/swarm/status) and fail fast with the 'not installed' message and remediation.\n- Make doctor status mark the Swarm section as unavailable when the plugin is absent instead of showing an active session + task counts.\n- Reuse one shared error path so the 503 message always includes the dev-mode install/rebuild recipe.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "`list` shows URL '-' for active sessions with live pages although the backend is reachable",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s price-watch goto http://localhost:18080/ec/dp/B0E000001; then ./b4w.ps1 list --verbose (or --json). Sessions show URL '-', 'backend_reachable': true, Status Active, Next open Reuse. ./b4w.ps1 -s price-watch page-info immediately shows 'URL: http://localhost:18080/ec/dp/B0E000001'.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Per SKILL.md §2, `list` shows every session's current page URL (the URL comes 'from the backend', truncated to 48 chars); '-' is documented to mean 'the backend is unreachable or the saved session is stale'.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Both live sessions (price-watch + default, both used seconds earlier) render '-' in the URL column and in --json, while the backend is reachable and page-info reports real URLs. The documented meaning of '-' actively misleads: a user checking session state would conclude the sessions are stale.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The URL is taken from the backend's persisted session record (main.rs ~4959: 'Current page URL from the backend record; \"-\" when unavailable (backend unreachable, older backend, or a stale local session)'). In this build that record is evidently never populated/updated — sessions navigated via goto keep an empty URL — and the CLI silently degrades to the same '-' used for the unreachable case.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_list() (~line 5180) with session URL resolution ~4915-4960; backend session registry DTO in browser4-rest",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Populate/update the backend session record on navigation, or have `list` resolve the URL from the live tab (page-info path) for active sessions.\n- If the URL truly cannot be resolved, use a distinct marker (e.g. '?') and a stderr note instead of reusing the documented unreachable/stale '-'.\n- Add an e2e test asserting a session that just navigated shows its URL in `list --json`.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1 is a silent no-op while the server is already running",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "With the backend already running: MAVEN_REPO_LOCAL='D:\\Users\\pereg\\.m2\\repository' BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1 ./b4w.ps1 goto http://localhost:18080/ec/ → normal command output, no rebuild, no message. After ./b4w.ps1 stop, the same env var triggers 'Assembling Browser4 runtime bundle …'.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Either rebuild (stop/rebuild/restart) or an explicit notice that the forced rebuild was skipped because the server is already running, and how to do it.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The flag is silently ignored; the user believes a rebuild happened when nothing changed (this cost a diagnostic cycle during the plugin fix).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The force-rebuild path lives inside the server-start branch (daemon.rs should_force_rebuild_bundle / FORCE_REBUILD_BUNDLE_ENV, ~lines 2558-2570) which is never reached when a healthy managed server already exists; there is no else-branch reporting the skip.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/daemon.rs:2558 (should_force_rebuild_bundle and its call site)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- When the env var is set and a server is already running, print 'ignoring BROWSER4_CLI_FORCE_REBUILD_BUNDLE: server already running; run `browser4-cli stop` first'.\n- Or auto-restart: stop the server, rebuild, start, and say so.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "Git Bash: the documented `-olp \"/product/\"` example fails on the MSYS path-conversion guard; examples don't show the required env prefix",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "From Git Bash: ./b4w.ps1 crawl http://localhost:18080/generated/crawl/index.html -d 2 -ol \"a.product\" -olp \"/product/\" → 'Error: argument C:/Program Files/Git/product/ … was rewritten by Git Bash's MSYS path conversion', exit 1. Works as MSYS2_ARG_CONV_EXCL='*' ./b4w.ps1 … (or with -olp \"product/\").",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The scenario/crawl.md example runs as written from Git Bash, or the example shows the required invocation.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Fast, accurate failure (the guard is correct and even names both workarounds), but the copy-paste example in the docs and scenario doesn't work unmodified in the reference Git Bash environment — a first-time user hits a wall on step one of AC3.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Git Bash rewrites leading-'/' argument values into Windows paths before pwsh starts; the original token is unrecoverable, so b4w.ps1 refuses (by design) while crawl.md documents the pattern with a leading '/'.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1 (MSYS mangled-argument guard, ~lines 86-144); skills/browser4-cli/references/crawl.md (Git Bash caveat + link-discovery examples)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Change Git Bash examples to `-olp \"product/\"` (no leading '/') or prefix them with MSYS2_ARG_CONV_EXCL='*'.\n- Mention the workaround next to the quick-start crawl examples, not only in the caveat block at the bottom of crawl.md.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

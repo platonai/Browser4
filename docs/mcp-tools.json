@@ -61,13 +61,13 @@
       "type" : "Int?",
       "required" : false,
       "default" : "null",
-      "description" : "Zero-based tab index."
+      "description" : "Zero-based tab index as published by listTabs (stable creation order)."
     }, {
       "name" : "tabId",
       "type" : "String?",
       "required" : false,
       "default" : "null",
-      "description" : "Tab GUID; give either this or index."
+      "description" : "Tab GUID; the robust target, give either this or index."
     } ],
     "examples" : [ {
       "title" : "Close the second tab",
@@ -76,7 +76,8 @@
       },
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "help" : "closeTab(index: Int?, tabId: String?)\n\nPrefer tabId (the GUID from listTabs): it identifies the tab itself and\nsurvives unrelated opens/closes. `index` is the position in listTabs'\nstable creation-ordered listing, not Chrome's tab-strip position."
   }, {
     "domain" : "browser",
     "method" : "listTabs",
@@ -89,7 +90,8 @@
       "expectsError" : false,
       "runnable" : true,
       "executable" : true
-    } ]
+    } ],
+    "help" : "listTabs()\n\nEach entry: index, guid, title, url, active (a JSON boolean). `index` is the\ntab's position in this listing, ordered by stable driver-creation order, so\nrepeated calls agree and switchTab/closeTab resolve the same position. It is\nNOT Chrome's tab-strip position. Targets that must survive tab churn should\nuse `guid` (pass it as `tabId`)."
   }, {
     "domain" : "browser",
     "method" : "newTab",
@@ -124,13 +126,13 @@
       "type" : "Int?",
       "required" : false,
       "default" : "null",
-      "description" : "Zero-based tab index."
+      "description" : "Zero-based tab index as published by listTabs (stable creation order)."
     }, {
       "name" : "tabId",
       "type" : "String?",
       "required" : false,
       "default" : "null",
-      "description" : "Tab GUID; give either this or index."
+      "description" : "Tab GUID; the robust target, give either this or index."
     } ],
     "examples" : [ {
       "title" : "Switch to the second tab",
@@ -139,7 +141,8 @@
       },
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "help" : "switchTab(index: Int?, tabId: String?)\n\nPrefer tabId (the GUID from listTabs): it identifies the tab itself, so it\nkeeps working after tabs are opened or closed. `index` is the position in\nlistTabs' stable creation-ordered listing — not Chrome's tab-strip\nposition, which Browser4 cannot rely on because tabs are opened over CDP."
   }, {
     "domain" : "command",
     "method" : "cancel",
@@ -161,7 +164,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "Stops the task's runner and reports the outcome as JSON\n(`cancelled=true|false`, plus a `reason` whenever nothing was cancelled).\nA page visit cannot be interrupted mid-navigation: cancelling a live one\nreports `cancelled=false` with that reason, and so does cancelling a task\nthat already finished — the response never pretends the id is unknown."
   }, {
     "domain" : "command",
@@ -184,7 +187,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "command.result(id: String)\n\nThe status envelope plus a `result` field holding the command's own\npayload. Poll `command.status` until it is terminal before reading, or\ncall this directly and treat a non-terminal `status` as \"not ready\"."
   }, {
     "domain" : "command",
@@ -263,7 +266,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "command.status(id: String)\n\nReturns the shared envelope — `taskId`, `status`\n(`queued|running|done|failed|cancelled`), `processed` when the agent\nhas recorded steps, and the tool names to poll, read and cancel with.\nAn unknown id reports `status=failed`, never a healthy-looking state."
   }, {
     "domain" : "crawl",
@@ -286,7 +289,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "Cancels the task's coroutine and finalizes its record, so a client can\nstop polling immediately. Cancelling an unknown or already finished\ntask is reported (cancelled=false) rather than treated as an error:\nthe desired end state already holds."
   }, {
     "domain" : "crawl",
@@ -309,7 +312,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "crawl.result(id: String)\n\nThe status envelope plus `pages` — one entry per crawled URL with its\ntitle, content length and any X-SQL extraction. Poll `crawl.status`\nuntil it is terminal before reading."
   }, {
     "domain" : "crawl",
@@ -333,20 +336,20 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "crawl.status(id: String)\n\nReturns the shared envelope — `taskId`, `status`\n(`queued|running|done|failed|cancelled`), `processed` (pages collected\nso far), `elapsedMs` once the task finished, and the tool names to\npoll, read and cancel with. An unknown id reports `status=failed`."
   }, {
     "domain" : "crawl",
     "method" : "submit",
     "mcpNames" : [ "crawl_submit" ],
     "signature" : "crawl.submit(url: String, depth: Int = 1, args: String = \"\", parallelTabs: Int? = null, taskTimeoutMillis: Long? = null)",
-    "description" : "Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default.",
+    "description" : "Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default. Every seed must be an absolute http(s) URL: a seed the crawl could never fetch is refused with `Malformed url: <...>` and no task is created.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "url",
       "type" : "String",
       "required" : true,
-      "description" : "Seed URL to start from. Required unless the seed list is supplied through `args`."
+      "description" : "Seed URL to start from. Required unless the seed list is supplied through `args`. Must be an absolute http(s) URL."
     }, {
       "name" : "depth",
       "type" : "Int",
@@ -759,7 +762,7 @@
     "method" : "scrape",
     "mcpNames" : [ "html_snapshot_scrape" ],
     "signature" : "html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null, absoluteUrls: Boolean = false, expires: String = 0s)",
-    "description" : "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector. text is normalized inner text; textcontent is the raw textContent (whitespace kept). Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that, so the read works on the previous snapshot version without touching the tab. With field=attr and absoluteUrls=true, URL-valued attributes (href, src, …) are resolved against the page URL.",
+    "description" : "Extract text, textcontent, html, outerhtml, or an attribute value from a single element matching a CSS selector. text is normalized inner text; textcontent is the raw textContent (whitespace kept); html is the element's INNER markup; outerhtml is the element ITSELF (`<article class=\"product_pod\">…</article>`). A selector the CSS engine cannot parse is rejected as invalid instead of answering \"no elements matched\". Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that, so the read works on the previous snapshot version without touching the tab. With field=attr and absoluteUrls=true, URL-valued attributes (href, src, …) are resolved against the page URL.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "sessionId",
@@ -770,7 +773,7 @@
       "name" : "field",
       "type" : "String",
       "required" : true,
-      "description" : "field: String"
+      "description" : "One of text, textcontent, html, outerhtml, or attr."
     }, {
       "name" : "selector",
       "type" : "String",
@@ -821,8 +824,8 @@
     "domain" : "html_snapshot",
     "method" : "scrape_all",
     "mcpNames" : [ "html_snapshot_scrape_all" ],
-    "signature" : "html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, absoluteUrls: Boolean = false, offset: Int = 0, limit: Int = -1, expires: String = 0s)",
-    "description" : "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector. text is normalized inner text; textcontent is the raw textContent (whitespace kept). Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that. With field=attr and absoluteUrls=true, URL-valued attributes are resolved against the page URL.",
+    "signature" : "html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, absoluteUrls: Boolean = false, offset: Int = 0, limit: Int = -1, expires: String = 0s, includeMeta: Boolean = false)",
+    "description" : "Extract text, textcontent, html, outerhtml, or attribute values from ALL elements matching a CSS selector. text is normalized inner text; textcontent is the raw textContent (whitespace kept); html is each element's INNER markup; outerhtml is each element ITSELF. A selector the CSS engine cannot parse is rejected as invalid instead of answering \"no elements matched\". Operates on a FRESH snapshot of the active page: the live tab is captured first, then read, so form submissions, SPA updates and `eval` mutations are visible without a separate capture. Pass expires=1d to serve the stored snapshot instead when it is younger than that. With field=attr and absoluteUrls=true, URL-valued attributes are resolved against the page URL. With includeMeta=true the answer is {values, totalMatches, returned, offset, limit} instead of the bare array, so the selector's TOTAL match count stays visible under offset/limit.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "sessionId",
@@ -833,7 +836,7 @@
       "name" : "field",
       "type" : "String",
       "required" : true,
-      "description" : "field: String"
+      "description" : "One of text, textcontent, html, outerhtml, or attr."
     }, {
       "name" : "selector",
       "type" : "String",
@@ -870,6 +873,12 @@
       "required" : false,
       "default" : "0s",
       "description" : "How old a stored snapshot of the ACTIVE page may be before the read replaces it, e.g. 0s (default), 30s, 10m, 2h, 1d — the same meaning as LoadOptions -expires. 0s never reuses a stored copy, so the read captures the live page; a positive value serves the stored snapshot while it is younger than the window and captures only when it is older or missing. Used to work on the previous snapshot version without touching the tab."
+    }, {
+      "name" : "includeMeta",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "false",
+      "description" : "Ask for the pagination envelope {values, totalMatches, returned, offset, limit} instead of the bare array. totalMatches is the selector's full match count measured BEFORE offset/limit are applied, so it answers \"does this selector match N elements?\" even when the returned slice is shorter."
     } ],
     "examples" : [ {
       "title" : "Read every product title",
@@ -1790,7 +1799,7 @@
     "domain" : "tab",
     "method" : "eval",
     "mcpNames" : [ "eval" ],
-    "signature" : "tab.eval(expression: String)",
+    "signature" : "tab.eval(expression: String, world: String? = main)",
     "description" : "Alias of evaluateValue for page or element-scoped JavaScript evaluation.",
     "returnType" : "Any?",
     "arguments" : [ {
@@ -1798,6 +1807,12 @@
       "type" : "String",
       "required" : true,
       "description" : "expression: String"
+    }, {
+      "name" : "world",
+      "type" : "String?",
+      "required" : false,
+      "default" : "main",
+      "description" : "world: String? = main"
     } ],
     "examples" : [ {
       "title" : "Evaluate an expression",
@@ -1807,7 +1822,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "help" : "tab.eval(expression: String)\ntab.eval(expression: String, selector: String)\n\nAlias of tab.evaluateValue(...).\nWhen both selector and expression are provided, expression is forwarded as functionDeclaration."
+    "help" : "tab.eval(expression: String)\ntab.eval(expression: String, selector: String)\n\nAlias of tab.evaluateValue(...).\nWhen both selector and expression are provided, expression is forwarded as functionDeclaration.\nworld — the JavaScript world the script sees: \"main\" (default) is the page's own world, where\npage-defined globals such as window.myApp resolve; \"isolated\" is the driver's runtime world\n(__browser4_runtime__), which page scripts cannot see or modify."
   }, {
     "domain" : "tab",
     "method" : "evaluate",
@@ -1855,7 +1870,7 @@
     "domain" : "tab",
     "method" : "evaluateValue",
     "mcpNames" : [ "evaluate_value", "browser_evaluate" ],
-    "signature" : "tab.evaluateValue(expression: String? = null, selector: String? = null, functionDeclaration: String? = null, awaitPromise: Boolean? = false, waitSelector: String? = null, waitTimeout: Long? = null)",
+    "signature" : "tab.evaluateValue(expression: String? = null, selector: String? = null, functionDeclaration: String? = null, awaitPromise: Boolean? = false, waitSelector: String? = null, waitTimeout: Long? = null, world: String? = main)",
     "description" : "Evaluate JavaScript in the page, or against the element matched by selector.",
     "returnType" : "Any?",
     "arguments" : [ {
@@ -1894,6 +1909,12 @@
       "required" : false,
       "default" : "null",
       "description" : "How long to wait for 'waitSelector' (default 30000)."
+    }, {
+      "name" : "world",
+      "type" : "String?",
+      "required" : false,
+      "default" : "main",
+      "description" : "JavaScript world to evaluate in: main (the page's own world, sees page globals) or isolated (the driver's runtime world)."
     } ],
     "examples" : [ {
       "title" : "Read the page title in JS",
@@ -2804,6 +2825,14 @@
       "executable" : true
     } ],
     "help" : "tab.networkRoute(urlPattern: String, abort: Boolean = false, body: String? = null, contentType: String? = null, resourceType: String? = null)\n\nIntercepts requests whose URL matches urlPattern (\"*\" matches all; plain text matches\nURLs containing it; \"*\" globs like \"**/api/users\" are supported).\nabort — fail matching requests instead of sending them.\nbody/contentType — answer matching requests with this mock response.\nresourceType — only intercept these CDP resource types (comma-separated, e.g. \"xhr,fetch\").\nRemove routes with tab.networkUnroute()."
+  }, {
+    "domain" : "tab",
+    "method" : "networkRoutes",
+    "mcpNames" : [ "network_routes", "browser_network_routes" ],
+    "signature" : "tab.networkRoutes()",
+    "description" : "List the request routes currently registered on this tab, in registration order.",
+    "returnType" : "List<Map<String, Any?>>",
+    "help" : "tab.networkRoutes()\n\nReturns every active route with the same shape networkRoute reports: pattern, action\n(\"abort\" or \"body\"), contentType (for a mock) and resourceTypes (empty = every type).\nRead-only: it never installs or removes a route, so inspecting the active routes no\nlonger means destroying them first."
   }, {
     "domain" : "tab",
     "method" : "networkUnroute",
