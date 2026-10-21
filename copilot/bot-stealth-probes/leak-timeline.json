@@ -1,0 +1,1 @@
+{"status":"ok","command":"eval","output":{"result":{"url":"https://ipfighter.com/bot-detection","n":-1},"expression":"() => ({url:location.href, n: window.__leakLog ? window.__leakLog.length : -1, log: window.__leakLog})"}}
