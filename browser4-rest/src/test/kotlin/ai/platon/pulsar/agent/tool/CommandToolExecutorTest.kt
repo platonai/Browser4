@@ -45,7 +45,8 @@ class CommandToolExecutorTest {
         statusCode: Int = ResourceStatus.SC_OK,
         processState: String = "done",
         message: String? = null,
-    ) = CommandStatus(id = id, statusCode = statusCode, processState = processState, message = message)
+        cancelled: Boolean = false,
+    ) = CommandStatus(id = id, statusCode = statusCode, processState = processState, message = message, cancelled = cancelled)
 
     @Test
     @DisplayName("a finished command reports done, with no invented progress")
@@ -128,6 +129,25 @@ class CommandToolExecutorTest {
     }
 
     @Test
+    @DisplayName("a running synchronous task explains why nothing was cancelled")
+    fun runningSynchronousTaskExplainsWhyNothingWasCancelled() {
+        `when`(runner.cancelAgentTask("y1")).thenReturn(false)
+        `when`(runner.getStatus("s1", "y1")).thenReturn(
+            status(id = "y1", statusCode = ResourceStatus.SC_CREATED, processState = "in_progress")
+        )
+
+        val cancelled = json("cancel", mapOf("id" to "y1", "sessionId" to "s1"))
+
+        assertEquals(false, cancelled["cancelled"])
+        assertEquals("running", cancelled["status"])
+        val reason = cancelled["reason"].toString()
+        assertTrue(
+            reason.contains("synchronous") && reason.contains("no cancellable job"),
+            "the reason must explain the synchronous-run case instead of staying blank: $reason",
+        )
+    }
+
+    @Test
     @DisplayName("the declared outputSchema accepts what the tools produce")
     fun outputSchemaMatchesProduction() {
         `when`(runner.getStatus("s1", "t1")).thenReturn(status())
@@ -146,6 +166,21 @@ class CommandToolExecutorTest {
                 "$method produced a result that violates its own schema",
             )
         }
+    }
+
+    @Test
+    @DisplayName("a cancelled task reports the cancelled word on later polls, not failed")
+    fun cancelledTaskReportsTheCancelledWord() {
+        `when`(runner.getStatus("s1", "t1")).thenReturn(
+            status(id = "t1", statusCode = ResourceStatus.SC_EXPECTATION_FAILED, message = "Task cancelled", cancelled = true)
+        )
+
+        val envelope = json("status", mapOf("id" to "t1", "sessionId" to "s1"))
+
+        assertEquals("cancelled", envelope["status"], "a user-requested cancel must not look like a task failure")
+        assertEquals(ResourceStatus.SC_EXPECTATION_FAILED, envelope["statusCode"])
+        assertEquals("Task cancelled", envelope["message"])
+        assertFalse(envelope.containsKey("error"), "cancelled is not an error")
     }
 
     @Test

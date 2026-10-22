@@ -22,10 +22,13 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class StatefulAgentRunnerTest {
@@ -191,6 +194,176 @@ class StatefulAgentRunnerTest {
         } finally {
             runner.close()
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // P0: cancelling a queued task must leave a terminal status, not a zombie
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("cancelling a queued task marks its status terminal failed")
+    fun cancelQueuedTaskMarksStatusTerminal() = runBlocking {
+        val agent = mockAgent(history = AgentHistory(), lastRunSessionId = "run-q")
+        coEvery { agent.run(any<String>()) } coAnswers {
+            delay(3_000)
+            AgentHistory()
+        }
+        val runner = StatefulAgentRunner(mockSession(agent))
+        try {
+            val running = runner.create()
+            runner.submit("long running task", running)
+            // Let the first task enter its run and hold the mutex.
+            delay(200)
+            val queued = runner.create()
+            runner.submit("queued task", queued)
+            delay(100)
+
+            assertTrue(runner.cancel(queued.id), "the queued task's job must be tracked")
+            assertTrue(queued.isDone, "a cancelled queued task must not stay 'created'")
+            assertEquals(ResourceStatus.SC_EXPECTATION_FAILED, queued.statusCode)
+            assertTrue(queued.cancelled, "a user-requested cancel must be flagged as cancelled")
+            assertTrue(
+                queued.failureReason!!.contains("cancel", ignoreCase = true),
+                "the failure reason must say the task was cancelled",
+            )
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("close aborts in-flight and queued tasks and marks their statuses terminal")
+    fun closeAbortsInFlightAndQueuedTasks() = runBlocking {
+        val agent = mockAgent(history = AgentHistory(), lastRunSessionId = "run-c")
+        coEvery { agent.run(any<String>()) } coAnswers {
+            delay(5_000)
+            AgentHistory()
+        }
+        val runner = StatefulAgentRunner(mockSession(agent))
+        val running = runner.create()
+        val queued = runner.create()
+        runner.submit("running task", running)
+        runner.submit("queued task", queued)
+        // Let the first task enter its run; the second stays queued on the mutex.
+        delay(200)
+
+        runner.close()
+
+        assertTrue(running.isDone, "close must not leave a running task's status non-terminal")
+        assertTrue(queued.isDone, "a task queued at shutdown must not stay 'created' forever")
+        assertEquals(ResourceStatus.SC_EXPECTATION_FAILED, queued.statusCode)
+        assertTrue(queued.cancelled, "a shutdown abort is reported as cancelled, not failed")
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // P2.5: restore must not revive interrupted tasks as zombie queued rows
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("restoreFromDisk reports an interrupted non-terminal task as failed")
+    fun restoreFromDiskMarksInterruptedNonTerminalAsFailed() {
+        val agent = mockAgent(AgentHistory(), "run-z")
+        val runner1 = StatefulAgentRunner(mockSession(agent))
+        val createdId = try {
+            // A task created but never executed: what a mid-flight crash leaves on disk.
+            runner1.create().id
+        } finally {
+            runner1.close()
+        }
+
+        // A fresh runner (simulated restart) restores from the same JSONL.
+        val runner2 = StatefulAgentRunner(mockSession(agent))
+        try {
+            val restored = runner2.getStatus(createdId)
+            assertNotNull(restored, "the interrupted task must still be restorable")
+            assertTrue(restored!!.isDone, "an interrupted task must not be restored as a live 'created' status")
+            assertEquals(ResourceStatus.SC_EXPECTATION_FAILED, restored.statusCode)
+            assertEquals("Interrupted by server restart", restored.failureReason)
+            assertFalse(restored.cancelled, "a restart interruption is a failure, not a user cancel")
+        } finally {
+            runner2.close()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Compaction TTL must be measured from finishTime, not createdTime
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("compaction keeps a recently finished task even when it was created long ago")
+    fun compactionKeepsRecentlyFinishedTask() {
+        val agent = mockAgent(AgentHistory(), "run-t")
+        val runner = StatefulAgentRunner(mockSession(agent))
+        try {
+            runner.persistence.append(
+                AgentTaskStatus(id = "t-old-created", statusCode = ResourceStatus.SC_OK, processState = "done").apply {
+                    createdTime = Instant.now().minusSeconds(3 * 3600)
+                    finishTime = Instant.now().minusSeconds(60)
+                }
+            )
+            runner.restoreFromDisk()
+            runner.compactPersistence()
+
+            assertNotNull(
+                runner.getStatus("t-old-created"),
+                "a task finished within the TTL must survive compaction despite its old createdTime",
+            )
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("compaction removes a task whose finish is past the TTL")
+    fun compactionRemovesTaskPastTheFinishTtl() {
+        val agent = mockAgent(AgentHistory(), "run-e")
+        val runner = StatefulAgentRunner(mockSession(agent))
+        try {
+            runner.persistence.append(
+                AgentTaskStatus(id = "t-expired", statusCode = ResourceStatus.SC_OK, processState = "done").apply {
+                    createdTime = Instant.now().minusSeconds(2 * 3600)
+                    finishTime = Instant.now().minusSeconds(2 * 3600)
+                }
+            )
+            // A large TTL during restore so the row is loaded; a small TTL for compaction.
+            runner.taskTtlMinutes = 10_000
+            runner.restoreFromDisk()
+            assertNotNull(runner.getStatus("t-expired"))
+            runner.taskTtlMinutes = 1
+            runner.compactPersistence()
+
+            assertNull(runner.getStatus("t-expired"), "a task finished past the TTL must be compacted out")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("statusFromDisk reports the last row for an id without building a runner")
+    fun statusFromDiskReportsLastRowWithoutBuildingARunner() {
+        val agent = mockAgent(AgentHistory(), "run-d")
+        val runner = StatefulAgentRunner(mockSession(agent))
+        val createdId: String = try {
+            runner.create().id
+        } finally {
+            runner.close()
+        }
+
+        // Two calls: the first scans the file, the second must hit the
+        // fingerprint cache and return the same snapshot.
+        val first = StatefulAgentRunner.statusFromDisk(createdId)
+        val second = StatefulAgentRunner.statusFromDisk(createdId)
+
+        assertNotNull(first, "a row on disk must be answerable without a runner")
+        assertEquals(first!!.id, second!!.id)
+        assertTrue(first.isDone, "an interrupted row is reported as a terminal failure")
+        assertEquals("Interrupted by server restart", first.failureReason)
+        assertFalse(first.cancelled, "a restart interruption is a failure, not a user cancel")
+
+        // Unknown ids stay unknown; repeated polls reuse the cached snapshot
+        // (same file fingerprint) instead of rescanning the file each time.
+        assertNull(StatefulAgentRunner.statusFromDisk("no-such-id"))
+        assertNull(StatefulAgentRunner.statusFromDisk("no-such-id"))
     }
 
     // ─────────────────────────────────────────────────────────────────────

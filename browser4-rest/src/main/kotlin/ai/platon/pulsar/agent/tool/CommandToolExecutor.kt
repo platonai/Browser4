@@ -210,8 +210,14 @@ class CommandToolExecutor(
                 // null (param absent) must stay null so the agent falls back to
                 // its configured runEngine; RunEngine.parse(null) would force
                 // OBSERVE_ACT and clobber a CLI_TOOL_LOOP config.
-                val engine = paramString(args, "engine", functionName, required = false)
-                    ?.let { RunEngine.parse(it) }
+                val engine = paramString(args, "engine", functionName, required = false)?.also {
+                    // RunEngine.parse silently maps ANY unknown value to the default
+                    // engine — a typo such as "clli" would look accepted and change
+                    // nothing. Fail loudly instead.
+                    require(it.trim().lowercase() in ENGINE_VALUES) {
+                        "Unknown engine '$it': expected 'cli' or 'observe-act' (deprecated)"
+                    }
+                }?.let { RunEngine.parse(it) }
                 if (isAsync) {
                     service.submitPlainCommand(sessionId, command, noopLimit, engine)
                 } else {
@@ -262,6 +268,9 @@ class CommandToolExecutor(
         }
     }
 
+    /** Aliases `RunEngine.parse` recognizes; anything else must be a loud client error. */
+    private val ENGINE_VALUES = setOf("cli", "observe-act", "observe_act", "v1", "legacy")
+
     /**
      * The shared status envelope of a command task.
      *
@@ -279,7 +288,11 @@ class CommandToolExecutor(
             status = word,
             // The agent's step count is the only monotonic progress signal the domain
             // has; a page load does not report one, and `null` is honest about that.
-            processed = status.instructResults.size.takeIf { it > 0 },
+            // Agent-driven tasks never fill instructResults: their steps live in
+            // agentHistory (refreshed while the task runs), so fall back to that —
+            // otherwise the CLI's "(N step(s))" progress stayed at zero forever.
+            processed = (status.instructResults.size.takeIf { it > 0 }
+                ?: status.agentHistory?.states?.size?.takeIf { it > 0 }),
             // The domain's own code: callers key on 404 to tell "no such task" from a
             // genuine failure without pattern-matching English error text.
             statusCode = status.statusCode,
@@ -294,6 +307,10 @@ class CommandToolExecutor(
 
     /** `CommandStatus` mapped onto the shared status vocabulary. */
     private fun statusWord(status: CommandStatus): String = when {
+        // A cancelled task is done and non-OK, but calling it "failed" turns a
+        // user-requested cancel into an unexplained failure on every later poll —
+        // the flag (set only by explicit cancel/close paths) wins over the code.
+        status.isDone && status.cancelled -> "cancelled"
         status.isDone -> if (status.statusCode == ResourceStatus.SC_OK) "done" else "failed"
         status.processState == "created" -> "queued"
         else -> "running"
@@ -303,15 +320,22 @@ class CommandToolExecutor(
      * Why a cancellation did not happen.
      *
      * The envelope alone cannot distinguish "a live page visit that cannot be
-     * interrupted" from "an agent task that already finished" — both report
-     * `cancelled=false`, and leaving the caller to guess is how a cancel silently
-     * looks like a no-op. A page visit is checked first because it is the case that
-     * is still *running* when the answer is false.
+     * interrupted", "an agent task that already finished", and "a synchronous
+     * run with no cancellable job" — all report `cancelled=false`, and leaving
+     * the caller to guess is how a cancel silently looks like a no-op. A page
+     * visit is checked first because it is the case that is still *running*
+     * when the answer is false.
      */
     private fun cancelReason(cancelled: Boolean, pageVisit: Boolean, status: CommandStatus): Map<String, Any> = when {
         cancelled -> emptyMap()
         pageVisit -> mapOf("reason" to "page visit tasks run to completion and cannot be cancelled")
         status.isDone -> mapOf("reason" to "task already finished")
-        else -> emptyMap()
+        else -> mapOf(
+            "reason" to (
+                "no cancellable job is registered for this id — a synchronous " +
+                    "'command run' cannot be cancelled mid-run; submit it asynchronously " +
+                    "(async=true, the default) if cancelling it matters"
+                )
+        )
     }
 }

@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.api.model.BrowserUseState
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -20,7 +21,8 @@ class AgentRunnerPersistenceTest {
     // -----------------------------------------------------------------
 
     @Test
-    fun `restore loads agent tasks from JSONL`(@TempDir tempDir: Path) {
+    @DisplayName("restore loads agent tasks from JSONL")
+    fun restoreLoadsAgentTasksFromJsonl(@TempDir tempDir: Path) {
         val persistence = createPersistence(tempDir)
         val task1 = AgentTaskStatus(id = "a1", statusCode = 201).apply {
             startedTime = null; lastModifiedTime = null; finishTime = null
@@ -45,7 +47,8 @@ class AgentRunnerPersistenceTest {
     }
 
     @Test
-    fun `restore handles missing file gracefully`(@TempDir tempDir: Path) {
+    @DisplayName("restore handles a missing file gracefully")
+    fun restoreHandlesMissingFileGracefully(@TempDir tempDir: Path) {
         val persistence = createPersistence(tempDir)
         val restored = mutableListOf<AgentTaskStatus>()
         val count = persistence.restore { restored.add(it) }
@@ -54,7 +57,8 @@ class AgentRunnerPersistenceTest {
     }
 
     @Test
-    fun `restore skips corrupt lines`(@TempDir tempDir: Path) {
+    @DisplayName("restore skips corrupt lines")
+    fun restoreSkipsCorruptLines(@TempDir tempDir: Path) {
         val persistence = createPersistence(tempDir)
         val task = AgentTaskStatus(id = "good", statusCode = 200).apply {
             startedTime = null; lastModifiedTime = null; finishTime = null
@@ -76,7 +80,8 @@ class AgentRunnerPersistenceTest {
     }
 
     @Test
-    fun `restore empty file returns zero tasks`(@TempDir tempDir: Path) {
+    @DisplayName("restore of an empty file returns zero tasks")
+    fun restoreEmptyFileReturnsZeroTasks(@TempDir tempDir: Path) {
         val persistence = createPersistence(tempDir)
         // Write empty file
         val jsonlPath = persistence.javaClass.getDeclaredField("file").let {
@@ -91,12 +96,31 @@ class AgentRunnerPersistenceTest {
         assertEquals(0, count)
     }
 
+    @Test
+    @DisplayName("rewrite replaces the file atomically with exactly the given entries")
+    fun rewriteReplacesFileWithGivenEntries(@TempDir tempDir: Path) {
+        val persistence = createPersistence(tempDir)
+        persistence.append(AgentTaskStatus(id = "r1", statusCode = 200, processState = "done"))
+        persistence.append(AgentTaskStatus(id = "r2", statusCode = 200, processState = "done"))
+
+        persistence.rewrite(listOf(AgentTaskStatus(id = "r3", statusCode = 200, processState = "done")))
+
+        val restored = mutableListOf<AgentTaskStatus>()
+        persistence.restore { restored.add(it) }
+        assertEquals(listOf("r3"), restored.map { it.id }, "rewritten file must contain only the rewritten entries")
+
+        // The temp file must not linger next to the target after a move.
+        val jsonlPath = tempDir.resolve("agent-tasks.jsonl")
+        assertFalse(Files.exists(jsonlPath.resolveSibling("agent-tasks.jsonl.tmp")), "rewrite must not leave a temp file behind")
+    }
+
     // -----------------------------------------------------------------
     // agentHistory survives the JSONL round-trip (restart persistence)
     // -----------------------------------------------------------------
 
     @Test
-    fun `agent task status round-trips agent history with state fields`(@TempDir tempDir: Path) {
+    @DisplayName("agent task status round-trips agent history with state fields")
+    fun agentTaskStatusRoundTripsAgentHistoryWithStateFields(@TempDir tempDir: Path) {
         val persistence = createPersistence(tempDir)
         val state = AgentState(step = 2, instruction = "open the page", browserUseState = BrowserUseState.DUMMY).apply {
             sessionId = "run-1"
@@ -133,7 +157,8 @@ class AgentRunnerPersistenceTest {
     }
 
     @Test
-    fun `agent task status round-trips agent history with failed state`(@TempDir tempDir: Path) {
+    @DisplayName("agent task status round-trips agent history with failed state")
+    fun agentTaskStatusRoundTripsAgentHistoryWithFailedState(@TempDir tempDir: Path) {
         val persistence = createPersistence(tempDir)
         val state = AgentState(step = 1, instruction = "click submit", browserUseState = BrowserUseState.DUMMY).apply {
             sessionId = "run-1"
@@ -154,6 +179,25 @@ class AgentRunnerPersistenceTest {
         val rs = restored[0].agentHistory!!.states.single()
         assertEquals("element not found", rs.exception?.message)
         assertFalse(rs.isSuccess)
+    }
+
+    @Test
+    @DisplayName("the cancelled flag round-trips through the JSONL file")
+    fun cancelledFlagRoundTripsThroughJsonl(@TempDir tempDir: Path) {
+        val persistence = createPersistence(tempDir)
+        persistence.append(AgentTaskStatus(id = "c1", statusCode = 417, processState = "done").apply {
+            cancelled = true
+        })
+        persistence.append(AgentTaskStatus(id = "c2", statusCode = 417, processState = "done"))
+
+        val restored = mutableListOf<AgentTaskStatus>()
+        persistence.restore { restored.add(it) }
+
+        assertTrue(restored.first { it.id == "c1" }.cancelled, "cancelled must survive the round-trip")
+        assertFalse(
+            restored.first { it.id == "c2" }.cancelled,
+            "a plain failure must not be flagged cancelled (rows written before the field existed deserialize as false)",
+        )
     }
 
     // -----------------------------------------------------------------

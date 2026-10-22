@@ -18,12 +18,15 @@ import ai.platon.pulsar.rest.api.entities.toCommandStatus
 import ai.platon.pulsar.rest.config.CommandNormalizer
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
+import com.github.benmanes.caffeine.cache.Cache
+import com.github.benmanes.caffeine.cache.Caffeine
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.io.Closeable
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -80,10 +83,14 @@ class UserCommandExecutor(
      * Lightweight cache for immediately-rejected commands (e.g. blank input)
      * that don't need a full page visitor or agent runner.
      *
-     * Entries persist until [close] to match the behaviour of the main status
-     * caches — callers can re-read a terminal status multiple times.
+     * Bounded: entries expire after 1 hour of being written and the cache caps
+     * at 1 000 — this used to be an unbounded ConcurrentHashMap that persisted
+     * until [close], so repeatedly submitting rejected commands grew it forever.
      * */
-    private val rejectedStatuses = ConcurrentHashMap<String, CommandStatus>()
+    private val rejectedStatuses: Cache<String, CommandStatus> = Caffeine.newBuilder()
+        .maximumSize(1_000)
+        .expireAfterWrite(1, TimeUnit.HOURS)
+        .build()
 
     fun ensurePageVisitor(sessionId: String): StatefulPageVisitor {
         val existing = pageVisitors[sessionId]
@@ -116,7 +123,13 @@ class UserCommandExecutor(
             runCatching { existing.close() }
         }
         return agentRunners.getOrPut(sessionId) {
-            StatefulAgentRunner(sessionManager.getOrCreateSession(sessionId).agenticSession)
+            StatefulAgentRunner(
+                sessionManager.getOrCreateSession(sessionId).agenticSession,
+                // Confine the agent run to the bounded dispatcher: MAX_CONCURRENT_COMMANDS
+                // only gated page visits before — agent tasks ran on unbounded
+                // Dispatchers.IO, so "10 concurrent commands" silently did not cover them.
+                runDispatcher = commandDispatcher
+            )
         }
     }
 
@@ -207,7 +220,7 @@ class UserCommandExecutor(
         // 1. Bad command — reject immediately without creating a page visitor
         if (command.isBlank()) {
             val status = CommandStatus(statusCode = ResourceStatus.SC_BAD_REQUEST, processState = "done")
-            rejectedStatuses[status.id] = status
+            rejectedStatuses.put(status.id, status)
             return status.id
         }
 
@@ -332,7 +345,7 @@ class UserCommandExecutor(
     fun getStatus(sessionId: String, id: String): CommandStatus? {
         // Check the lightweight rejected-statuses cache first — these are terminal
         // statuses that were never registered with a page visitor or agent runner.
-        rejectedStatuses[id]?.let { return it }
+        rejectedStatuses.getIfPresent(id)?.let { return it }
 
         val owner = taskOwner[id]
         val status = when (owner) {
@@ -341,17 +354,15 @@ class UserCommandExecutor(
             "agent" -> ensureAgentRunner(sessionId).getStatus(id)?.toCommandStatus()
                 ?: fallbackPageStatus(sessionId, id)
             else -> {
-                // Unknown owner (stale taskOwner after a restart, or a task
-                // created by a previous instance): probe every existing runner
-                // and visitor first — each runner restores the global JSONL
-                // persistence into its status cache on construction. Only when
-                // no runner exists at all, construct one so restoreFromDisk can
-                // revive terminal statuses. Without this, a restarted backend
-                // answered "null" and the CLI overwrote its cached terminal
-                // statuses with "queued" (P2.5).
+                // Unknown owner (stale taskOwner after a restart, or a task created by a
+                // previous instance): probe every existing runner and visitor, then fall
+                // back to a disk-only restore. This used to build a full agent runner
+                // (and therefore a session) as a side effect of a status poll — polling
+                // a just-unknown id with an arbitrary session id grew the session and
+                // runner maps (each runner also spawns a periodic compaction job).
                 agentRunners.values.firstNotNullOfOrNull { it.getStatus(id)?.toCommandStatus() }
                     ?: pageVisitors.values.firstNotNullOfOrNull { it.getStatus(id)?.toCommandStatus() }
-                    ?: ensureAgentRunner(sessionId).getStatus(id)?.toCommandStatus()
+                    ?: StatefulAgentRunner.statusFromDisk(id)?.toCommandStatus()
             }
         }
 
@@ -458,7 +469,7 @@ class UserCommandExecutor(
         pageVisitors.clear()
         agentRunners.clear()
         taskOwner.clear()
-        rejectedStatuses.clear()
+        rejectedStatuses.invalidateAll()
         logger.info("UserCommandExecutor closed ({} page visitors, {} agent runners, {} tracked tasks)",
             pageCount, agentCount, taskCount)
     }

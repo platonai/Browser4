@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.entities
 
 import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
+import ai.platon.pulsar.agentic.tools.TaskEnvelopes
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
@@ -63,6 +64,15 @@ data class CommandStatus(
 
     var message: String? = null, // human-readable status description
 
+    /**
+     * True when the task was cancelled (explicit cancel, runner close, server
+     * shutdown) rather than failing on its own. Kept as an explicit flag because
+     * the persisted row's HTTP-styled code stays `failed`/417 — see
+     * [AgentTaskStatus.cancelled]. [`statusWord`](CommandToolExecutor) maps it
+     * onto the shared `cancelled` vocabulary word on subsequent polls.
+     */
+    var cancelled: Boolean = false,
+
     /** Internal event trace for debugging — concatenated lifecycle event names. */
     var eventTrace: String? = null,
 
@@ -80,7 +90,6 @@ data class CommandStatus(
     val status: String get() = ResourceStatus.getStatusText(statusCode)
     var lastModifiedTime: Instant? = null
     var finishTime: Instant? = null
-
     /**
      * Indicates whether the task has completed.
      * Serialized as "isDone" in JSON — the Jackson Kotlin module preserves the Kotlin
@@ -177,20 +186,9 @@ fun CommandStatus.emitEvent(event: String) {
     this.event = event
     // Keep the internal event trace for debugging separate from the user-facing message.
     eventTrace = if (eventTrace != null) "$eventTrace,$event" else event
-    // Generate a concise human-readable status description.
-    message = when {
-        "created" in event -> "Task created, waiting to start"
-        "onWillRun" in event -> "Agent starting up"
-        "onWillAct" in event -> "Agent planning next action"
-        "onDidAct" in event -> "Agent completed an action"
-        "onWillGenerate" in event -> "Agent generating response"
-        "onDidGenerate" in event -> "Agent response generated"
-        "onError" in event -> "Agent encountered an error"
-        "onDidRun" in event -> "Agent run completed, finalizing"
-        "onWillFail" in event -> "Agent task failing"
-        "onDidFail" in event -> "Agent task failed"
-        else -> "Task is in progress"
-    }
+    // Generate a concise human-readable status description; the exact event-name
+    // mapping is shared with AgentTaskStatus so the two copies cannot drift apart.
+    message = TaskEnvelopes.progressMessage(event, fallback = "Task is in progress")
 }
 
 fun CommandStatus.failed(statusCode: Int, pageStatusCode: Int): CommandStatus {
@@ -239,6 +237,7 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     // Map internal "done" processState to user-facing "completed" in the JSON output.
     status.processState = if (this.processState == "done") "completed" else this.processState
     status.message = this.message
+    status.cancelled = this.cancelled
     status.eventTrace = this.eventTrace
     status.lastModifiedTime = this.lastModifiedTime
     status.finishTime = this.finishTime
