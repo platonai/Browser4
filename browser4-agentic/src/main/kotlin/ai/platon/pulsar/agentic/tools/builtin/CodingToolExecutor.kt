@@ -174,7 +174,8 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 ToolSpec.Arg("workingDir", "String", "null"),
             ),
             returnType = "String",
-            description = "Execute a shell command. Supports git, cargo, mvn, npm, python, node, javac, and hundreds more dev tools. Use for building, testing, running scripts, and version control."
+            description = "Execute a shell command. Supports git, cargo, mvn, npm, python, node, javac, and hundreds more dev tools. Use for building, testing, running scripts, and version control. " +
+                "Windows runs the command through cmd.exe (use Windows syntax: dir, type, cd /); Linux/macOS through sh -c."
         )
         toolSpec["shellOutput"] = ToolSpec(
             domain = domain, method = "shellOutput",

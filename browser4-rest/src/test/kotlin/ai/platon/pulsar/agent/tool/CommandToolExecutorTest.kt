@@ -3,6 +3,8 @@ package ai.platon.pulsar.agent.tool
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.rest.api.entities.CommandAgentHistory
+import ai.platon.pulsar.rest.api.entities.CommandAgentState
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -14,6 +16,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.mockito.Mockito.`when`
+import java.time.Instant
 
 /**
  * The command domain must speak the same async contract as crawl: the shared
@@ -60,6 +63,48 @@ class CommandToolExecutorTest {
         assertEquals("command_status", envelope["statusTool"])
         assertEquals("command_cancel", envelope["cancelTool"])
         assertFalse(envelope.containsKey("processed"), "no steps recorded means no progress claim")
+    }
+
+    @Test
+    @DisplayName("a running agent task reports elapsed time and its step count")
+    fun runningAgentTaskReportsElapsedAndSteps() {
+        val started = Instant.now().minusSeconds(90)
+        val running = status(
+            statusCode = ResourceStatus.SC_PROCESSING,
+            processState = "in_progress",
+            message = "Agent is working"
+        ).apply {
+            startedTime = started
+            agentHistory = CommandAgentHistory(
+                mutableListOf(CommandAgentState(step = 12), CommandAgentState(step = 13))
+            )
+        }
+        `when`(runner.getStatus("s1", "t1")).thenReturn(running)
+
+        val envelope = json("status", mapOf("id" to "t1", "sessionId" to "s1"))
+
+        assertEquals("running", envelope["status"])
+        assertEquals(2, envelope["processed"], "the agent's step count is the progress signal")
+        val elapsedMs = (envelope["elapsedMs"] as Number).toLong()
+        assertTrue(elapsedMs >= 90_000, "elapsedMs must reflect startedTime, got $elapsedMs")
+    }
+
+    @Test
+    @DisplayName("the live tool-call counter is reported as progress while a CLI run is in flight")
+    fun liveToolExecutionsAreReportedAsProgress() {
+        // A CLI tool-loop run writes its step history only when it completes, so
+        // the tool counter is the only progress signal available mid-run.
+        val running = status(
+            statusCode = ResourceStatus.SC_PROCESSING,
+            processState = "in_progress",
+            message = "Agent is working"
+        ).apply { toolExecutions = 37 }
+        `when`(runner.getStatus("s1", "t1")).thenReturn(running)
+
+        val envelope = json("status", mapOf("id" to "t1", "sessionId" to "s1"))
+
+        assertEquals("running", envelope["status"])
+        assertEquals(37, envelope["processed"], "the tool counter is the only live progress signal")
     }
 
     @Test

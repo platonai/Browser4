@@ -10,6 +10,8 @@ import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.common.ResourceStatus
+import java.time.Duration
+import java.time.Instant
 import kotlin.reflect.KClass
 
 /**
@@ -283,16 +285,24 @@ class CommandToolExecutor(
      */
     private fun envelopeOf(status: CommandStatus, overrideStatus: String? = null): Map<String, Any> {
         val word = overrideStatus ?: statusWord(status)
+        // Progress signals, best first: the live tool-call counter the engine
+        // reports while a CLI run is in flight, the recorded step history, then the
+        // domain's own instruct results. A page load has none of them, and `null`
+        // stays honest about that.
+        val processed = status.toolExecutions.takeIf { it > 0 }
+            ?: status.agentHistory?.states?.size?.takeIf { it > 0 }
+            ?: status.instructResults.size.takeIf { it > 0 }
+        // How long the task has been running: a poller could previously not tell a
+        // 50-minute run from one that started seconds ago (`agent status` showed
+        // only "running / 102 / Agent is working").
+        val elapsedMs = status.startedTime?.let { started ->
+            Duration.between(started, status.finishTime ?: Instant.now()).toMillis().coerceAtLeast(0)
+        }
         return TaskEnvelopes.of(
             taskId = status.id,
             status = word,
-            // The agent's step count is the only monotonic progress signal the domain
-            // has; a page load does not report one, and `null` is honest about that.
-            // Agent-driven tasks never fill instructResults: their steps live in
-            // agentHistory (refreshed while the task runs), so fall back to that —
-            // otherwise the CLI's "(N step(s))" progress stayed at zero forever.
-            processed = (status.instructResults.size.takeIf { it > 0 }
-                ?: status.agentHistory?.states?.size?.takeIf { it > 0 }),
+            processed = processed,
+            elapsedMs = elapsedMs,
             // The domain's own code: callers key on 404 to tell "no such task" from a
             // genuine failure without pattern-matching English error text.
             statusCode = status.statusCode,

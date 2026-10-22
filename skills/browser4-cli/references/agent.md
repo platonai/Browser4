@@ -135,7 +135,7 @@ Returns the **shared task envelope** — the same shape every long-running tool
 
 ```json
 {"taskId":"3b27930e-48bc-4460-aae7-be521f0a9194","status":"running","statusCode":202,
- "message":"Agent planning next action","processed":3,
+ "message":"Agent planning next action","processed":3,"elapsedMs":184512,
  "statusTool":"command_status","resultTool":"command_result","cancelTool":"command_cancel"}
 ```
 
@@ -145,7 +145,8 @@ Returns the **shared task envelope** — the same shape every long-running tool
 | `status` | `queued` \| `running` \| `done` \| `failed` \| `cancelled` — the **only** field to branch on |
 | `statusCode` | The backend's own code (200 done, 404 no such task, 417 failed) |
 | `message` | Human-readable progress while the task is healthy |
-| `processed` | Agent step count, present once steps were recorded |
+| `processed` | Agent progress: the live tool-call count while a CLI tool-loop run is in flight, or the recorded step count once steps were written |
+| `elapsedMs` | How long the task has been running, so a long `running` is distinguishable from a just-started one |
 | `error` | Present only when `status` is `failed` |
 | `statusTool` / `resultTool` / `cancelTool` | The MCP tools a generic client should call next |
 

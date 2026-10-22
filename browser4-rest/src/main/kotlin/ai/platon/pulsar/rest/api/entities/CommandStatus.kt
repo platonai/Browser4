@@ -91,6 +91,26 @@ data class CommandStatus(
     var lastModifiedTime: Instant? = null
     var finishTime: Instant? = null
     /**
+     * When a worker first picked the task up (agent tasks only; null for page
+     * visits and unknown ids).
+     *
+     * Exposed so the status envelope can report `elapsedMs`: a caller polling a
+     * 50-minute agent run previously had no way to tell it apart from a task
+     * that had been running for two seconds.
+     */
+    var startedTime: Instant? = null
+
+    /**
+     * Live count of tool calls the agent has executed, reported by the engine's
+     * throttled progress events (0 when it reports none).
+     *
+     * It is the only progress signal available while a CLI tool-loop run is in
+     * flight: the step history is written when the run completes, so `processed`
+     * used to stay null for the whole (possibly hour-long) run.
+     */
+    var toolExecutions: Int = 0
+
+    /**
      * Indicates whether the task has completed.
      * Serialized as "isDone" in JSON — the Jackson Kotlin module preserves the Kotlin
      * property name directly, unlike the Java Bean convention which would strip "is".
@@ -184,6 +204,9 @@ fun CommandStatus.failed(statusCode: Int): CommandStatus {
 
 fun CommandStatus.emitEvent(event: String) {
     this.event = event
+    // A progress event is a status change: refresh the timestamp so
+    // commandStatusFlow/SSE observers actually see it.
+    lastModifiedTime = Instant.now()
     // Keep the internal event trace for debugging separate from the user-facing message.
     eventTrace = if (eventTrace != null) "$eventTrace,$event" else event
     // Generate a concise human-readable status description; the exact event-name
@@ -241,6 +264,8 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     status.eventTrace = this.eventTrace
     status.lastModifiedTime = this.lastModifiedTime
     status.finishTime = this.finishTime
+    status.startedTime = this.startedTime
+    status.toolExecutions = this.toolExecutions
     status.workspace = this.workspace
     // The page this task ended on. AgentTaskStatus now carries it (observed from
     // the live page, see DocumentHttpStatus); before that the conversion dropped

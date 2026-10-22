@@ -293,15 +293,18 @@ class MavenBuildSupport {
     ): BuildResult {
         val goalList = goals.trim().ifBlank { "compile" }
         val launcher = mavenLauncher(shell, workingDir)
-        val result = runMavenWithSelectorFallback(shell, module, timeoutSeconds, workingDir) { selector ->
-            mavenBuildCommand(launcher, selector, goalList, skipTests)
+        // Accept a bare module directory name (`browser4-browser`) for a nested
+        // reactor entry (`browser4-core/browser4-browser`); Maven would reject it.
+        val selector = resolveModuleSelector(shell, module, workingDir) ?: module
+        val result = runMavenWithSelectorFallback(shell, selector, timeoutSeconds, workingDir) { resolved ->
+            mavenBuildCommand(launcher, resolved, goalList, skipTests)
         }
 
         val combined = listOf(result.stdout, result.stderr)
             .filter { it.isNotBlank() }
             .joinToString("\n")
         return BuildResult(
-            module = module,
+            module = selector,
             goals = goalList,
             exitCode = result.exitCode,
             output = combined,
@@ -325,14 +328,15 @@ class MavenBuildSupport {
         workingDir: String? = null,
     ): BuildResult {
         val launcher = mavenLauncher(shell, workingDir)
-        val result = runMavenWithSelectorFallback(shell, module, timeoutSeconds, workingDir) { selector ->
-            mavenTestCommand(launcher, selector, testClasses)
+        val selector = resolveModuleSelector(shell, module, workingDir) ?: module
+        val result = runMavenWithSelectorFallback(shell, selector, timeoutSeconds, workingDir) { resolved ->
+            mavenTestCommand(launcher, resolved, testClasses)
         }
         val combined = listOf(result.stdout, result.stderr)
             .filter { it.isNotBlank() }
             .joinToString("\n")
         return BuildResult(
-            module = module,
+            module = selector,
             goals = "test",
             exitCode = result.exitCode,
             output = combined,
@@ -411,6 +415,72 @@ internal const val MAVEN_SELECTOR_FAILURE = "Could not find the selected project
 internal fun isMavenModuleSelectorFailure(output: String): Boolean =
     output.contains(MAVEN_SELECTOR_FAILURE, ignoreCase = true)
 
+/** Directory the module selectors are resolved against (working dir, else the workspace root). */
+internal fun moduleBaseDir(shell: CodingAgentShell, workingDir: String?): File? {
+    val base = workingDir?.takeIf { it.isNotBlank() }?.let { File(it) }
+        ?: runCatching { shell.canonicalWorkspaceDir.toFile() }.getOrNull()
+        ?: return null
+    return base.takeIf { it.isDirectory }
+}
+
+/**
+ * Resolve a model-supplied module selector to a reactor-relative path.
+ *
+ * The agent (and humans) usually name a module by its directory —
+ * `browser4-browser` — while the reactor entry is nested
+ * (`browser4-core/browser4-browser`). Maven only matches the path and answers
+ *
+ *     Could not find the selected project in the reactor: browser4-browser
+ *
+ * so `coding.verify(module="browser4-browser")` failed on the 2026-10-22
+ * refactor run even though the module existed and compiled 3 seconds later once
+ * the nested path was supplied by hand.
+ *
+ * A direct hit wins; otherwise the workspace is searched (bounded to
+ * [maxDepth], build/IDE directories pruned) for a directory with that name that
+ * carries a `pom.xml`.
+ *
+ * @return the selector to use, or null when the input already looks valid and
+ *   nothing matched — callers then keep the original value and Maven's own
+ *   error reaches the agent.
+ */
+internal fun resolveModuleSelector(
+    shell: CodingAgentShell,
+    module: String,
+    workingDir: String? = null,
+    maxDepth: Int = 4,
+): String? {
+    val root = moduleBaseDir(shell, workingDir) ?: return null
+    return resolveModuleSelector(root, module, maxDepth)
+}
+
+/** [resolveModuleSelector] against an explicit root (pure, unit-testable). */
+internal fun resolveModuleSelector(root: File, module: String, maxDepth: Int = 4): String? {
+    val raw = module.trim()
+    // `:artifactId` is Maven's own selector form — leave it alone.
+    if (raw.isEmpty() || raw.startsWith(":")) return null
+    val normalized = raw.replace('\\', '/').removePrefix("./").trim('/')
+    if (normalized.isEmpty() || normalized == ".") return null
+    if (File(root, normalized).let { File(it, "pom.xml").isFile }) return normalized
+
+    val target = normalized.substringAfterLast('/')
+    if (target.isEmpty()) return null
+    val found = root.walkTopDown()
+        .maxDepth(maxDepth)
+        .onEnter { dir ->
+            dir == root || (
+                dir.name != "target" &&
+                    dir.name != "node_modules" &&
+                    !dir.name.startsWith(".")
+                )
+        }
+        .firstOrNull { dir ->
+            dir.isDirectory && dir.name == target && File(dir, "pom.xml").isFile
+        } ?: return null
+    val relative = root.toPath().relativize(found.toPath()).toString().replace('\\', '/')
+    return relative.takeIf { it.isNotBlank() }
+}
+
 /**
  * Resolve a module's artifactId for the `-pl :<artifactId>` selector fallback.
  *
@@ -424,12 +494,9 @@ internal fun resolveModuleArtifactId(
 ): String? = runCatching {
     val trimmed = module.trim().removePrefix(":")
     if (trimmed.isEmpty()) return null
-    val base = workingDir?.takeIf { it.isNotBlank() }?.let { File(it) }
-        ?: runCatching { shell.canonicalWorkspaceDir.toFile() }.getOrNull()
-        ?: return null
+    val base = moduleBaseDir(shell, workingDir) ?: return null
     // A mocked/foreign workspace can hand back a File with a null path; every
     // File construction below stays inside this runCatching.
-    if (!base.isDirectory) return null
     val pom = File(File(base, trimmed), "pom.xml")
     if (!pom.isFile) return null
     ModuleGraph.parsePom(pom.readText())?.artifactId

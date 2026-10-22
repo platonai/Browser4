@@ -1,6 +1,8 @@
 package ai.platon.pulsar.agentic.agents
 
 import ai.platon.pulsar.coding.VerificationReport
+import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * Evidence a completion report must be anchored to (plan P0.5, design §3.2).
@@ -231,4 +233,54 @@ internal object FinishReportGate {
 
     private fun normalizePath(raw: String): String =
         raw.trim().trim('"').replace('\\', '/').removePrefix("./").removePrefix("/")
+}
+
+/**
+ * Pick the work tree whose git state backs a completion report's `filesChanged`.
+ *
+ * `-Dbrowser4.agent.finish.workspace=<dir>` wins; otherwise the **agent's own
+ * workspace** — the tree its coding tools actually wrote into — is used.
+ *
+ * Resolving the server's process working directory instead compared the report
+ * against a *different* tree (the checkout the server was launched from): that
+ * checkout is normally clean, so every file the agent really wrote in its
+ * isolated workspace looked fabricated and the strict gate rejected a perfectly
+ * good completion (observed: `filesChanged lists N file(s) git does not show as
+ * changed` for a run whose workspace compiled).
+ *
+ * The isolated workspace is a copy **without** `.git`, so this returns null
+ * there and the git rules are skipped; the run's mutation trace
+ * (`codingFs.mutationsSnapshot`) still backs rule 7.
+ *
+ * @param configured the `-Dbrowser4.agent.finish.workspace` value (may be blank)
+ * @param agentWorkspace the agent's workspace directory, or null when unknown
+ * @param processDir the JVM working directory, used only when no workspace exists
+ * @return the enclosing git work tree of the chosen directory, or null
+ */
+internal fun resolveFinishGitWorkspace(
+    configured: String,
+    agentWorkspace: Path?,
+    processDir: Path,
+): Path? {
+    val configuredDir = configured.takeIf { it.isNotBlank() }?.let { Path.of(it) }
+    if (configuredDir != null) return findGitRoot(configuredDir)
+    if (agentWorkspace != null) return findGitRoot(agentWorkspace)
+    return findGitRoot(processDir)
+}
+
+/**
+ * The nearest ancestor of [start] holding a `.git` entry (directory or file for
+ * a worktree/submodule checkout), or null within 12 hops.
+ */
+internal fun findGitRoot(start: Path): Path? {
+    var dir: Path? = runCatching { start.toAbsolutePath().normalize() }.getOrNull()
+    var hops = 0
+    while (dir != null && hops < 12) {
+        if (Files.isDirectory(dir.resolve(".git")) || Files.isRegularFile(dir.resolve(".git"))) {
+            return dir
+        }
+        dir = dir.parent
+        hops++
+    }
+    return null
 }

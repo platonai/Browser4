@@ -1,7 +1,9 @@
 package ai.platon.pulsar.coding
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import java.nio.charset.Charset
 import java.nio.file.Path
 
 /**
@@ -103,6 +105,73 @@ class CodingAgentShellTest {
         assertTrueAllowed(s, "python3.12.exe --version")
         assertTrueAllowed(s, "node.exe --version")
         assertDenied(s, "totally-unknown-tool.exe --version", "not allowed")
+    }
+
+    // --- Child-process output decoding (localized Windows) -------------------
+
+    @Test
+    @DisplayName("UTF-8 process output decodes unchanged")
+    fun utf8OutputDecodesUnchanged() {
+        val text = "目录 C 中的卷\n 文件 12 个"
+        assertEquals(text, CodingAgentShell.decodeProcessOutput(text.toByteArray(Charsets.UTF_8)))
+    }
+
+    @Test
+    @DisplayName("native-encoded output stays readable (cmd.exe on a localized Windows)")
+    fun nativeEncodedOutputIsReadable() {
+        // On a Chinese Windows this is GBK: the bytes are NOT valid UTF-8, so the
+        // decoder must fall back to the platform encoding instead of emitting U+FFFD.
+        val native = Charset.forName(System.getProperty("native.encoding") ?: "UTF-8")
+        val text = "C:\\> dir\n 目录: C:\\workspace\n 文件: 12 个"
+        assertEquals(text, CodingAgentShell.decodeProcessOutput(text.toByteArray(native)))
+    }
+
+    @Test
+    @DisplayName("a leading UTF-8 BOM is stripped")
+    fun utf8BomIsStripped() {
+        val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+        assertEquals("hello", CodingAgentShell.decodeProcessOutput(bom + "hello".toByteArray(Charsets.UTF_8)))
+    }
+
+    @Test
+    @DisplayName("undecodable bytes fall back instead of throwing")
+    fun invalidBytesFallBack() {
+        val decoded = CodingAgentShell.decodeProcessOutput(
+            byteArrayOf(0xFF.toByte(), 0xFE.toByte(), 0x41)
+        )
+        assertTrue(decoded.isNotEmpty(), "decoding must never throw on process output")
+    }
+
+    // --- Output truncation stays UTF-8 encodable -----------------------------
+
+    @Test
+    @DisplayName("truncation never splits a surrogate pair")
+    fun truncationKeepsSurrogatePairsIntact() {
+        val emoji = "😀" // surrogate pair
+        // The pair straddles the MAX_OUTPUT_CHARS boundary on purpose.
+        val output = "a".repeat(CodingAgentShell.MAX_OUTPUT_CHARS - 1) + emoji + "b"
+
+        val truncated = shell().truncateOutput(output, "dir")
+
+        assertTrue(truncated.startsWith("aaa"), "the head must be kept")
+        assertEquals(
+            truncated,
+            SafeText.sanitize(truncated),
+            "truncation left a lone surrogate behind (it breaks every later UTF-8 write)"
+        )
+        truncated.toByteArray(Charsets.UTF_8) // must not throw
+    }
+
+    @Test
+    @DisplayName("diagnostic output keeps both ends")
+    fun diagnosticOutputKeepsBothEnds() {
+        val output = "HEAD\n" + "x".repeat(CodingAgentShell.MAX_OUTPUT_CHARS) + "\n[ERROR] cannot find symbol"
+
+        val truncated = shell().truncateOutput(output, "mvn compile")
+
+        assertTrue(truncated.startsWith("HEAD"), "head must survive")
+        assertTrue(truncated.contains("[ERROR] cannot find symbol"), "the diagnostic tail must survive")
+        assertTrue(truncated.contains("output truncated"), "the middle must be replaced by the marker")
     }
 
     private fun assertTrueAllowed(s: CodingAgentShell, command: String) {

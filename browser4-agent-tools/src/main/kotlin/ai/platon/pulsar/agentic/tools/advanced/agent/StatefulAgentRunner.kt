@@ -44,8 +44,14 @@ open class StatefulAgentRunner(
     /**
      * Size-bounded, time-expiring cache of agent task statuses.
      *
-     * - Entries live at most 2 hours after last write.
-     * - At most 100 entries; Window TinyLFU eviction beyond that.
+     * - Entries live at most 2 hours after their last write. An in-progress task
+     *   now refreshes its entry on every progress event ([persistProgress]), so a
+     *   run longer than the TTL is no longer evicted while it is still running.
+     * - At most [STATUS_CACHE_SIZE] entries; Window TinyLFU eviction beyond that.
+     *   The previous 100 was too small for a long-lived server: a single coding
+     *   session submitted more than twenty tasks in an hour, so an older
+     *   still-running task could be evicted and `agent status` answered
+     *   "no such task" mid-run.
      * - Persisted to JSONL so task statuses survive restarts.
      *
      * Note: the cache's `expireAfterWrite` clock starts at `create()` (the single
@@ -54,7 +60,7 @@ open class StatefulAgentRunner(
      * for the on-disk TTL handling.
      * */
     private val statusCache: Cache<String, AgentTaskStatus> = Caffeine.newBuilder()
-        .maximumSize(100)
+        .maximumSize(STATUS_CACHE_SIZE)
         .expireAfterWrite(2, TimeUnit.HOURS)
         .recordStats()
         .build()
@@ -101,6 +107,10 @@ open class StatefulAgentRunner(
     @Volatile
     var taskTtlMinutes: Int = 120
 
+    /** Wall-clock time of the last in-progress snapshot (see [persistProgress]). */
+    @Volatile
+    private var lastProgressPersistedAt = 0L
+
     init {
         liveInstances.add(this)
         restoreFromDisk()
@@ -124,18 +134,25 @@ open class StatefulAgentRunner(
         val terminalState = TERMINAL_PROCESS_STATE
 
         persistence.restore { entry ->
+            // TTL is measured from the row's LAST activity, not its creation: a
+            // run that has been going for hours keeps writing progress rows, and
+            // judging those rows by createdTime threw the newest state away.
+            val lastActivity = entry.lastActivity()
             // Skip terminal entries whose TTL has expired — they were evicted
-            // from the cache before shutdown and should not be revived. The TTL
-            // is measured from when the task FINISHED (a task created long ago
-            // may have finished just before the shutdown); using createdTime
-            // here expired recently-finished, long-lived tasks too early.
+            // from the cache before shutdown and should not be revived.
             if (entry.processState == terminalState &&
-                (entry.finishTime ?: entry.createdTime).isBefore(ttlCutoff)
+                lastActivity.isBefore(ttlCutoff)
             ) {
-                logger.debug(
-                    "Skipping expired agent task {} during restore (finishTime={})",
-                    entry.id, entry.finishTime
-                )
+                logger.debug("Skipping expired agent task {} during restore (lastActivity={})", entry.id, lastActivity)
+                return@restore
+            }
+            // Skip stale non-terminal entries too: created/queued tasks are never
+            // auto-resumed after a restart, so restoring them only pollutes the
+            // status caches with zombie "queued" records from previous sessions.
+            if (entry.processState != terminalState &&
+                lastActivity.isBefore(ttlCutoff)
+            ) {
+                logger.debug("Skipping stale non-terminal agent task {} during restore (lastActivity={})", entry.id, lastActivity)
                 return@restore
             }
             // Terminal states never regress: when an earlier row already restored
@@ -173,53 +190,56 @@ open class StatefulAgentRunner(
     }
 
     /**
-     * Compact the JSONL persistence file: remove stale entries that are past TTL.
+     * Compact the JSONL persistence file.
      *
-     * The rewrite is the union of ALL live runners' statuses — each runner used to
-     * clear the shared file and re-append only its own cache, wiping the other
-     * runners' rows from the global file.
+     * Two triggers: terminal entries past the TTL, and a file larger than
+     * [COMPACTION_SIZE_THRESHOLD_BYTES] — periodic progress snapshots keep
+     * appending rows, so staleness alone can no longer be the trigger.
+     *
+     * The rewrite **merges** the rows already in the file with the live caches
+     * instead of writing only this runner's cache: the file is shared by every
+     * session (one row set under `<data>/agent/`), and rewriting just one
+     * session's view dropped tasks created by other sessions after this runner
+     * started. Sessions may also hold rows not yet flushed to disk, so every
+     * live runner's cache is unioned in as well.
      */
     internal fun compactPersistence() {
         val ttlCutoff = ttlCutoff()
         val terminalState = TERMINAL_PROCESS_STATE
 
-        val stale = statusCache.asMap().values.filter {
-            it.processState == terminalState && (it.finishTime ?: it.createdTime).isBefore(ttlCutoff)
+        val stale = statusCache.asMap().entries.filter {
+            it.value.processState == terminalState && it.value.lastActivity().isBefore(ttlCutoff)
         }
-        if (stale.isEmpty()) return
+        val oversized = persistence.sizeInBytes() > COMPACTION_SIZE_THRESHOLD_BYTES
+        if (stale.isEmpty() && !oversized) return
 
-        stale.forEach { statusCache.invalidate(it.id) }
-        logger.info("Compacted {} expired agent tasks (TTL: {} min)", stale.size, taskTtlMinutes)
+        stale.forEach { statusCache.invalidate(it.key) }
 
-        rewriteSharedPersistence()
-    }
-
-    /**
-     * Atomically rewrite the shared JSONL file with the union of every live runner's
-     * statuses (snapshots detached first: an in-progress status may hold the agent's
-     * live history reference, which mutates concurrently with this rewrite).
-     */
-    private fun rewriteSharedPersistence() {
-        val snapshots = sharedStatusesForRewrite().map { detachedSnapshot(it) }
-        persistence.rewrite(snapshots)
-    }
-
-    /** Union by task id across all live runners, newest `lastModifiedTime` wins. */
-    private fun sharedStatusesForRewrite(): Collection<AgentTaskStatus> {
-        val union = HashMap<String, AgentTaskStatus>()
-        for (runner in liveInstances) {
-            for (entry in runner.statusCache.asMap().values) {
-                val existing = union[entry.id]
-                if (existing == null || newerInstant(entry.lastModifiedTime, existing.lastModifiedTime)) {
-                    union[entry.id] = entry
+        // Merge + replace in ONE locked section (see JsonlPersistence#rewrite): a
+        // row another session appends mid-compaction lands in the replacement
+        // instead of vanishing between an unlocked read and the atomic move.
+        // Snapshots are detached: an in-progress status holds the agent's live
+        // history reference, which mutates concurrently with this rewrite.
+        var kept = emptyList<AgentTaskStatus>()
+        persistence.rewrite {
+            val merged = LinkedHashMap<String, AgentTaskStatus>()
+            // Append order: a later row for the same id supersedes the earlier one.
+            persistence.readAll().forEach { merged[it.id] = it }
+            // The live caches are newer than anything on disk — union every
+            // runner's, not only this runner's.
+            for (runner in liveInstances) {
+                for ((id, status) in runner.statusCache.asMap()) {
+                    merged[id] = status
                 }
             }
+            // Drop what restore would drop as well: anything with no activity for TTL.
+            kept = merged.values.filter { !it.lastActivity().isBefore(ttlCutoff) }
+            kept.map { it.detachedSnapshot() }
         }
-        return union.values
-    }
-
-    private fun detachedSnapshot(status: AgentTaskStatus): AgentTaskStatus = status.copy().apply {
-        agentHistory = status.agentHistory?.let { AgentHistory(it.states.toMutableList()) }
+        logger.info(
+            "Compacting agent task persistence ({} stale, {} rows kept, {} bytes, TTL {} min)",
+            stale.size, kept.size, persistence.sizeInBytes(), taskTtlMinutes
+        )
     }
 
     fun create(): AgentTaskStatus {
@@ -233,6 +253,31 @@ open class StatefulAgentRunner(
 
     private fun onStatusChanged(status: AgentTaskStatus) {
         persistence.append(status)
+    }
+
+    /**
+     * Persist the running task's latest status (throttled to
+     * [PROGRESS_PERSIST_INTERVAL_MS]) and refresh its cache entry.
+     *
+     * Previously a task only wrote its status when it finished. Two consequences
+     * were visible on real runs:
+     * - a backend restart revived the submit-time row (`created`, no message, no
+     *   startedTime) for a task that had been running for an hour;
+     * - the cache entry was written once at submit, and Caffeine's
+     *   `expireAfterWrite(2h)` evicted it while the task was still running, so
+     *   `agent status` answered "no task found" for a live task.
+     *
+     * The snapshot drops the agent history (huge for the legacy engine, empty for
+     * a running CLI task); the terminal write keeps it.
+     */
+    private fun persistProgress(status: AgentTaskStatus, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastProgressPersistedAt < PROGRESS_PERSIST_INTERVAL_MS) return
+        lastProgressPersistedAt = now
+        // put() counts as a write: it resets expireAfterWrite and keeps a long
+        // run's entry (and everything restored from disk) alive.
+        statusCache.put(status.id, status)
+        persistence.append(status.detachedSnapshot(includeHistory = false))
     }
 
     /**
@@ -284,8 +329,8 @@ open class StatefulAgentRunner(
             if (cause is CancellationException && !status.isDone) {
                 status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
                 status.cancelled = true
-                status.failureReason = status.failureReason ?: "Task cancelled"
-                status.message = status.message ?: "Task cancelled"
+                status.failureReason = status.failureReason ?: CANCELLED_MESSAGE
+                status.message = status.message ?: CANCELLED_MESSAGE
                 persistence.append(status)
             }
         }
@@ -307,8 +352,8 @@ open class StatefulAgentRunner(
         statusCache.getIfPresent(id)?.takeIf { !it.isDone }?.let { status ->
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
             status.cancelled = true
-            status.failureReason = "Task cancelled"
-            status.message = "Task cancelled"
+            status.failureReason = CANCELLED_MESSAGE
+            status.message = CANCELLED_MESSAGE
             persistence.append(status)
         }
         job.cancel()
@@ -344,8 +389,8 @@ open class StatefulAgentRunner(
             if (!status.isDone) {
                 status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
                 status.cancelled = true
-                status.failureReason = status.failureReason ?: "Task cancelled"
-                status.message = status.message ?: "Task cancelled"
+                status.failureReason = status.failureReason ?: CANCELLED_MESSAGE
+                status.message = status.message ?: CANCELLED_MESSAGE
                 onStatusChanged(status)
             }
             throw e
@@ -374,6 +419,10 @@ open class StatefulAgentRunner(
 
         try {
             status.refresh(ResourceStatus.SC_PROCESSING)
+            // The submit-time row says "created"; record the transition to
+            // "in progress" immediately so a restart cannot revive a task that had
+            // already started as if it were still queued.
+            persistProgress(status, force = true)
 
             // Per-task noop tolerance (e.g. `agent run --noop-limit 10`): long coding chains
             // benefit from a higher limit than the default. A null value resets any stale
@@ -405,6 +454,14 @@ open class StatefulAgentRunner(
                             if (!runHasReturned.get()) {
                                 status.agentHistory = taskScopedHistory(agent.stateHistory, startIndex)
                             }
+                            // The CLI engine reports its executed-tool count with the
+                            // throttled progress events (every 5 calls): surface it as
+                            // live progress and persist the snapshot, so a long run is
+                            // observable and survivable.
+                            (event.metadata["toolExecutions"] as? Number)?.let {
+                                status.toolExecutions = it.toInt()
+                            }
+                            persistProgress(status)
                             logger.debug("Collected event {} for agent task {} (session={})", event.eventType, status.id, session.uuid)
                         }
                     } catch (e: CancellationException) {
@@ -434,9 +491,14 @@ open class StatefulAgentRunner(
         } catch (e: CancellationException) {
             logger.warn("Agent task {} cancelled: {}", status.id, e.message)
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
+            // The CancellationException message is the coroutine's own name
+            // ("StandaloneCoroutine was cancelled") — internal noise that told
+            // the CLI user nothing about why the task ended. Report the fact,
+            // and mark the row as user-facing "cancelled" so `agent status`
+            // word and `failed` stay distinguishable.
             status.cancelled = true
-            status.failureReason = e.message ?: "Task cancelled"
-            status.message = e.message ?: "Task cancelled"
+            status.failureReason = CANCELLED_MESSAGE
+            status.message = CANCELLED_MESSAGE
             throw e
         } catch (e: Throwable) {
             logger.error("Failed to execute agent command: {} (session={})", plainCommand, session.uuid, e)
@@ -687,6 +749,23 @@ open class StatefulAgentRunner(
             )
         }
 
+        /** User-facing reason recorded when a task is cancelled (see [cancel]). */
+        const val CANCELLED_MESSAGE = "Task cancelled"
+
+        /** Max cached task statuses per runner (see the status cache's KDoc). */
+        const val STATUS_CACHE_SIZE = 1_000L
+
+        /** Minimum spacing between in-progress status snapshots (see [persistProgress]). */
+        const val PROGRESS_PERSIST_INTERVAL_MS = 10_000L
+
+        /**
+         * Persistence file size above which the 5-minute maintenance pass rewrites
+         * it even when no task has expired. Periodic progress snapshots grow the
+         * file without producing stale entries, so staleness alone can no longer
+         * be the trigger.
+         */
+        const val COMPACTION_SIZE_THRESHOLD_BYTES = 4L * 1024 * 1024
+
         fun agentPersistencePath(): Path = Path.of(
             System.getProperty("browser4.data.dir", System.getProperty("user.home")),
             ".browser4", "data", "agent", "agent-tasks.jsonl"
@@ -750,12 +829,6 @@ open class StatefulAgentRunner(
             // size and mtime-to-the-millisecond would otherwise share one snapshot.
             "${file.toAbsolutePath()}:${Files.getLastModifiedTime(file).toMillis()}:${Files.size(file)}"
         }.getOrNull()
-
-        private fun newerInstant(a: Instant?, b: Instant?): Boolean = when {
-            a == null -> false
-            b == null -> true
-            else -> a.isAfter(b)
-        }
 
         /**
          * Returns an independent [AgentHistory] containing only the states produced
