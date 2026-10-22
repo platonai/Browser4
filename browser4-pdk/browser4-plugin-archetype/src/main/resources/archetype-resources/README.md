@@ -4,7 +4,7 @@ ${pluginDescription}
 
 ## Prerequisites
 
-- JDK 17 or later
+- JDK 25 or later toolchain (the host platform's `provided` classes are Java 25 bytecode; the PDK parent still emits Java 17 bytecode for this plugin JAR)
 - Maven 3.9 or later (or use the included Maven wrapper)
 
 ## Build

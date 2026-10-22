@@ -23,7 +23,7 @@ Follow this walkthrough when creating, building, or extending a Browser4 plugin 
 
 Prerequisites:
 
-- JDK 17+
+- JDK 25+ toolchain (the platform's `provided` classes are Java 25 bytecode; the PDK parent still emits Java 17 bytecode for the plugin JAR)
 - Maven 3.9+
 - Access to the Browser4 PDK parent POM (`ai.platon.pulsar:browser4-pdk`) — published to Maven Central
 - For building the archetype locally: `mvn -pl browser4-pdk install` from this repository
