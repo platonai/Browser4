@@ -308,8 +308,9 @@ browser4-cli skills unpack                  # Unpack bundled skill files to disk
 
 Skill files are unpacked automatically during `browser4-cli install` (and refreshed by `upgrade`);
 unchanged files are skipped, so re-running is cheap. `install` / `upgrade` also copy the bundled
-skills into `~/.agents/skills` so agents (e.g. Codex) load them automatically. Overrides:
-`BROWSER4_SKILLS_DIR`, `BROWSER4_AGENTS_SKILLS_DIR`.
+skills into `~/.agents/skills` so agents (e.g. Codex) load them automatically — only the
+`browser4-cli` skill is synced there by default; use `skills unpack <dest>` to unpack everything.
+Overrides: `BROWSER4_SKILLS_DIR`, `BROWSER4_AGENTS_SKILLS_DIR`.
 
 ## 4. Decision Trees
 

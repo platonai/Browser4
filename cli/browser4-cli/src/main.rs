@@ -22648,20 +22648,24 @@ fn format_agents_skills_sync_message(outcome: SkillsSyncOutcome, agents_dir: &Pa
     }
 }
 
-/// Unpack bundled skill files into the AI-agent skills directory
-/// (`~/.agents/skills`, overridable via `BROWSER4_AGENTS_SKILLS_DIR`).
+/// Copy the agent-synced bundled skill files into the AI-agent skills
+/// directory (`~/.agents/skills`, overridable via `BROWSER4_AGENTS_SKILLS_DIR`).
 ///
-/// Agents such as Codex load skills from there automatically, so `install` /
-/// `upgrade` keep it in sync with the CLI binary's embedded skills.  Like the
-/// versioned-dir sync this is idempotent (write-if-changed).  Returns `Ok(None)`
+/// By default only the `browser4-cli` skill is copied there
+/// (`skills::AGENT_SYNCED_SKILL_NAMES`): the other bundled skills are
+/// Browser4-development oriented and would otherwise pollute the agent skill
+/// space shared with the user.  Agents that want the full set can unpack it
+/// explicitly (`browser4-cli skills unpack <dest>`).  Like the versioned-dir
+/// sync this is idempotent (write-if-changed) and never deletes files, so
+/// skills written by older CLI versions stay on disk.  Returns `Ok(None)`
 /// when no agents directory can be resolved (no override and no home dir).
 fn sync_skills_to_agents_dir() -> Result<Option<(SkillsSyncOutcome, PathBuf)>, String> {
     let Some(agents_dir) = skills::agents_skills_dir() else {
         eprintln!("⚠  Could not resolve the home directory; skipping AI-agent skills install.");
         return Ok(None);
     };
-    let files_total = skills::bundled_skill_file_count();
-    let files_written = skills::unpack_skills_to(&agents_dir)?;
+    let files_total = skills::bundled_agent_skill_file_count();
+    let files_written = skills::unpack_agent_skills_to(&agents_dir)?;
     Ok(Some((
         SkillsSyncOutcome {
             files_written,
@@ -22727,8 +22731,9 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
         }
     }
 
-    // Also install the bundled skills into the AI-agent skills directory
-    // (`~/.agents/skills`) so agents like Codex can load them automatically.
+    // Also copy the agent-synced skills (only the `browser4-cli` skill by
+    // default) into the AI-agent skills directory (`~/.agents/skills`) so
+    // agents like Codex can load them automatically.
     match sync_skills_to_agents_dir() {
         Ok(Some((outcome, agents_dir))) => {
             eprintln!("{}", format_agents_skills_sync_message(outcome, &agents_dir));
@@ -26353,7 +26358,8 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
         }
     }
 
-    // Keep the AI-agent skills directory (`~/.agents/skills`) in sync too.
+    // Keep the AI-agent skills directory (`~/.agents/skills`) in sync too:
+    // only the agent-synced skills (just `browser4-cli` by default).
     match sync_skills_to_agents_dir() {
         Ok(Some((outcome, agents_dir))) => {
             eprintln!("{}", format_agents_skills_sync_message(outcome, &agents_dir));
@@ -40123,6 +40129,54 @@ linkGroups:
             original,
             "SKILL.md should be restored to the bundled content"
         );
+    }
+
+    #[test]
+    fn test_unpack_agent_skills_to_filters_to_allowlist() {
+        let tmp = test_temp_dir();
+        let expected = skills::bundled_agent_skill_file_count();
+        assert!(
+            expected > 0,
+            "expected at least one agent-synced bundled skill (browser4-cli)"
+        );
+
+        // First unpack writes exactly the agent-synced files.
+        let first = skills::unpack_agent_skills_to(tmp.path()).expect("first unpack");
+        assert_eq!(
+            first, expected,
+            "first unpack should write only the agent-synced files"
+        );
+
+        // Only allowlisted skill directories may be created.
+        let mut found_dirs = std::collections::BTreeSet::new();
+        for entry in std::fs::read_dir(tmp.path()).expect("read agents skills dir") {
+            let entry = entry.expect("directory entry");
+            if entry.path().is_dir() {
+                found_dirs.insert(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        for dir in &found_dirs {
+            assert!(
+                skills::is_agent_synced_skill(dir),
+                "agents skills dir must only contain agent-synced skills, found: {dir}"
+            );
+        }
+
+        // The count matches the embedded browser4-cli files (the only
+        // allowlisted skill today, asserted independently of layout).
+        let only_allowlisted = skills::AGENT_SYNCED_SKILL_NAMES.len() == 1
+            && skills::AGENT_SYNCED_SKILL_NAMES[0] == "browser4-cli";
+        if only_allowlisted {
+            assert_eq!(
+                expected,
+                skills::skill_files_for("browser4-cli").len(),
+                "total should equal the embedded browser4-cli file count"
+            );
+        }
+
+        // Write-if-changed idempotence also holds for the filtered unpack.
+        let second = skills::unpack_agent_skills_to(tmp.path()).expect("second unpack");
+        assert_eq!(second, 0, "second unpack should skip identical files");
     }
 
     #[test]

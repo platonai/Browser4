@@ -418,7 +418,7 @@ Details: [Crawl checkpoint & resume](../../docs/crawl-checkpoint-resume.md).
 | `skills get --all` | Output every bundled skill concatenated |
 | `skills path [name]` | Print the skills directory path (or path to a specific skill) |
 
-Skills are AI agent instruction files bundled into the CLI binary at compile time. The bundled content always matches the installed CLI version. Set `BROWSER4_SKILLS_DIR` to override the skills directory path. Skill files are unpacked to the versioned installation directory during `browser4-cli install` and refreshed by `upgrade`; unpacking is idempotent (unchanged files are skipped), so re-running is cheap. `install` / `upgrade` also copy the bundled skills into `~/.agents/skills` so AI agents (e.g. Codex) can load them automatically (override with `BROWSER4_AGENTS_SKILLS_DIR`).
+Skills are AI agent instruction files bundled into the CLI binary at compile time. The bundled content always matches the installed CLI version. Set `BROWSER4_SKILLS_DIR` to override the skills directory path. Skill files are unpacked to the versioned installation directory during `browser4-cli install` and refreshed by `upgrade`; unpacking is idempotent (unchanged files are skipped), so re-running is cheap. `install` / `upgrade` also copy the bundled skills into `~/.agents/skills` so AI agents (e.g. Codex) can load them automatically (override with `BROWSER4_AGENTS_SKILLS_DIR`) — by default only the `browser4-cli` skill is copied there (`skills unpack <dest>` unpacks everything into a directory of your choice).
 
 ### webminer (WebMiner)
 
