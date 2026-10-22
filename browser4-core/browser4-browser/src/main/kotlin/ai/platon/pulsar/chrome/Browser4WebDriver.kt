@@ -57,9 +57,20 @@ import java.util.concurrent.atomic.AtomicBoolean
  * library to simplify this repository and reduce build time.  All types previously
  * in `ai.platon.browser4.*` now live in `ai.platon.pulsar.*` within that library.
  *
- * This class extends [PulsarWebDriver] directly — it is the **only** production
- * source file remaining in the `browser4-browser` module.  Everything else is
- * provided by the `pulsar-browser` dependency.
+ * This class extends [PulsarWebDriver] directly. Everything else in the
+ * `browser4-browser` module is either provided by the `pulsar-browser`
+ * dependency or lives in a small collaborator type in this package:
+ *
+ * - [Browser4WebDriverScripts] — the JavaScript snippets the driver evaluates;
+ * - [Browser4WebDriverParsers] — the conversions applied to values coming back
+ *   from CDP, and the user-facing error messages built from them;
+ * - [Browser4WebDriverStorage] — the data carriers for storage snapshots.
+ * - [ConsoleMessageBuffer] / [NetworkObserver] — the stateful log and network
+ *   observers the driver installs on the tab.
+ *
+ * The static helpers formerly declared on this class are kept as thin
+ * delegations in the companion object below, so existing call sites documented
+ * as `Browser4WebDriver.xxx(...)` continue to work unchanged.
  *
  * ## Extension guide
  *
@@ -154,7 +165,7 @@ open class Browser4WebDriver(
         internal const val TYPE_EXEC_LONG_THRESHOLD = 150
 
         /** The dual-world runtime global probed by [ensurePulsarUtilsInjected]. */
-        private const val PULSAR_UTILS_FUNCTION = "__pulsar_utils__"
+        internal const val PULSAR_UTILS_FUNCTION = "__pulsar_utils__"
 
         /** Confirmation text of [consoleClear]; unchanged from the page-side implementation. */
         internal const val CONSOLE_CLEARED_MESSAGE = "Console cleared"
@@ -183,27 +194,6 @@ open class Browser4WebDriver(
         private val storageStateMapper: ObjectMapper = jacksonObjectMapper()
             .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
 
-        private data class StorageStatePayload(
-            val cookies: List<Map<String, Any?>> = emptyList(),
-            val origins: List<StorageStateOriginPayload> = emptyList(),
-        )
-
-        private data class StorageStateOriginPayload(
-            val origin: String = "",
-            val localStorage: List<StorageStateEntryPayload> = emptyList(),
-        )
-
-        private data class StorageStateEntryPayload(
-            val name: String = "",
-            val value: String = "",
-        )
-
-        private data class StorageStateLoadSummary(
-            val cookies: Int,
-            val origins: Int,
-            val localStorageEntries: Int,
-        )
-
         /**
          * Create a [Browser4WebDriver] from an existing [PulsarWebDriver],
          * reusing its underlying CDP connection, tab, and browser.
@@ -227,453 +217,141 @@ open class Browser4WebDriver(
                 browser = driver.browser,
             ).also { it.startConsoleCaptureOnAttach() }
 
-        /**
-         * Escape [text] for embedding as a single-quoted JavaScript string literal.
-         * Escapes backslash, single quote, newline, and carriage return.
-         */
-        fun escapeJsString(text: String): String =
-            text.replace("\\", "\\\\")
-                .replace("'", "\\'")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
 
-        /**
-         * Escape [selector] for embedding inside a single-quoted JavaScript string
-         * literal (e.g. `document.querySelector('<selector>')`).  Escapes backslash
-         * and single quote.
-         */
-        fun escapeJsSelector(selector: String): String =
-            selector.replace("\\", "\\\\").replace("'", "\\'")
+    // ------------------------------------------------------------------
+    // Static helper facade. The implementations live in [Browser4WebDriverScripts]
+    // and [Browser4WebDriverParsers]; these delegations keep every historical
+    // `Browser4WebDriver.xxx(...)` call site working unchanged.
+    // ------------------------------------------------------------------
+    fun escapeJsString(text: String): String = Browser4WebDriverScripts.escapeJsString(text)
 
-        /**
-         * Split [text] into complete Unicode code points, preserving surrogate pairs
-         * (emoji, CJK supplementary ideographs).  The upstream `Keyboard.type()` walks
-         * the string with `charAt()` (UTF-16 code units), which splits surrogate pairs
-         * into invalid halves.  Iterating the returned list inserts each complete code
-         * point in a single CDP `Input.insertText` call.
-         */
-        fun codePoints(text: String): List<String> {
-            val result = mutableListOf<String>()
-            var i = 0
-            while (i < text.length) {
-                val codePoint = text.codePointAt(i)
-                val charCount = Character.charCount(codePoint)
-                result.add(text.substring(i, i + charCount))
-                i += charCount
-            }
-            return result
-        }
+    fun escapeJsSelector(selector: String): String = Browser4WebDriverScripts.escapeJsSelector(selector)
 
-        /**
-         * The `function()` body used by [fillSafe] (and the executor's fallback) to
-         * set an element's value while honoring user-input constraints.  Evaluated
-         * with `this` bound to the target element (via `callFunctionOn`).
-         */
-        fun fillValueJs(text: String): String =
-            """
-            function() {
-                var el = this;
-                if (!el) { return; }
-                if (el.disabled || el.readOnly) { return; }
-                var val = '${escapeJsString(text)}';
-                var maxLen = el.maxLength;
-                if (maxLen > 0 && val.length > maxLen) { val = val.substring(0, maxLen); }
-                if (el.isContentEditable) {
-                    el.textContent = val;
-                } else if (el.type === 'number' || el.type === 'range') {
-                    var numVal = parseFloat(val);
-                    if (!isNaN(numVal)) { el.valueAsNumber = numVal; }
-                    else { el.value = val; }
-                } else {
-                    el.value = val;
-                }
-                if (typeof el.focus === 'function') { el.focus(); }
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-            """.trimIndent()
+    fun codePoints(text: String): List<String> = Browser4WebDriverScripts.codePoints(text)
 
-        /**
-         * Interpret the `evaluateValue(selector, "function(){ return this != null; }")`
-         * probe used by the [selectOption] override.  The upstream selectOption
-         * reports success even when no element matches, which silently swallows
-         * typos and stale refs; the probe distinguishes:
-         * - `true` — the target exists, proceed;
-         * - `null` — the locator could not be resolved (missing element or a
-         *   locator failure), while driver/session/transport failures throw
-         *   inside evaluateValue rather than returning null;
-         * - anything else (`false`) — the locator resolved to a non-element.
-         *
-         * @return null when the target exists, otherwise the user-facing error message.
-         */
-        internal fun selectOptionTargetError(selector: String, exists: Any?): String? = when (exists) {
-            true -> null
-            null -> "Option target could not be resolved (not found or locator failure): $selector"
-            else -> "Option target not found: $selector"
-        }
+    fun fillValueJs(text: String): String = Browser4WebDriverScripts.fillValueJs(text)
 
-        /**
-         * Probe used by [Browser4WebDriver.typeAuto] (to choose an insertion
-         * strategy) and by [Browser4WebDriver.fillSafe] (to refuse a target that
-         * cannot be written) before either touches the element.  Evaluated with
-         * `this` bound to the target element; returns `{found:false}` when the
-         * locator resolves to nothing, otherwise the element kind,
-         * disabled/readOnly flags, and its CURRENT text (for the verify
-         * read-back).
-         */
-        fun inputTargetProbeJs(): String =
-            """
-            function() {
-                var el = this;
-                if (!el) { return { found: false }; }
-                var tag = (el.tagName || '').toUpperCase();
-                var kind = el.isContentEditable ? 'contenteditable'
-                    : (tag === 'TEXTAREA' ? 'textarea'
-                    : (tag === 'INPUT' ? 'input' : 'other'));
-                var text = (tag === 'INPUT' || tag === 'TEXTAREA') ? (el.value || '')
-                    : ((el.innerText !== undefined ? el.innerText : '') || '');
-                return { found: true, kind: kind, disabled: !!el.disabled, readOnly: !!el.readOnly, text: text };
-            }
-            """.trimIndent()
+    internal fun selectOptionTargetError(
+        selector: String,
+        exists: Any?,
+    ): String? = Browser4WebDriverParsers.selectOptionTargetError(selector, exists)
 
-        /**
-         * Interpret the [inputTargetProbeJs] result for an input command.
-         *
-         * The JS body of a fill/type is a no-op when `this` resolves to nothing
-         * (or the element refuses input), and `evaluateValue` then yields `null`,
-         * which is indistinguishable from a successful write for every caller up
-         * the stack — including the CLI, which would print "✓ Filled ..." and exit
-         * 0 for a selector that matched nothing.  Interpreting the probe here keeps
-         * that contract in one place instead of once per caller.
-         *
-         * @param action the user-facing command name used as the message prefix
-         * @param selector the selector as the caller typed it
-         * @param probe the raw [inputTargetProbeJs] result
-         * @return null when the target can receive input, otherwise the message to throw
-         */
-        fun inputTargetError(action: String, selector: String, probe: Any?): String? {
-            val map = probe as? Map<*, *>
-            if (map == null || map["found"] != true) {
-                return "$action: no element found for selector [$selector]. " +
-                    "The selector may be stale — re-run `snapshot` to refresh refs."
-            }
-            val disabled = map["disabled"] == true
-            val readOnly = map["readOnly"] == true
-            if (disabled || readOnly) {
-                return "$action: target [$selector] is ${if (disabled) "disabled" else "read-only"} " +
-                    "— user input is blocked."
-            }
-            return null
-        }
+    fun inputTargetProbeJs(): String = Browser4WebDriverScripts.inputTargetProbeJs()
 
-        /**
-         * Interpret the `evaluateValue(selector, "function(){ return this != null; }")`
-         * probe used by the click-family overrides ([Browser4WebDriver.click],
-         * [Browser4WebDriver.dblclick], [Browser4WebDriver.hover]) before they
-         * fall back to the upstream synthetic DOM path.  The upstream click
-         * reports success for a selector that matches nothing — the CLI prints
-         * "✓ Clicked ..." and exits 0 while the page saw nothing — so the probe
-         * makes the whole mouse family fail loudly, exactly like [inputTargetError]
-         * does for the input family.
-         *
-         * @param action the user-facing command name used as the message prefix
-         * @param selector the selector as the caller typed it
-         * @param exists the raw probe result (`true` when the selector resolved to an element)
-         * @return null when the target exists, otherwise the user-facing error message
-         */
-        internal fun pointerTargetError(action: String, selector: String, exists: Any?): String? =
-            if (exists == true) {
-                null
-            } else {
-                "$action: no element found for selector [$selector]. " +
-                    "The selector may be stale — re-run `snapshot` to refresh refs."
-            }
+    fun inputTargetError(
+        action: String,
+        selector: String,
+        probe: Any?,
+    ): String? = Browser4WebDriverParsers.inputTargetError(action, selector, probe)
 
-        /**
-         * Bulk-insert [text] via `document.execCommand('insertText')` on the
-         * element bound as `this`.  Focuses the element, collapses the cursor to
-         * the end of the content, then inserts the whole string in one editor
-         * transaction.  Returns `{ok: true}` on success or `{ok: false,
-         * reason}` when the element is not editable or the command is rejected.
-         *
-         * Note: `execCommand` is deprecated but supported in Chrome/Edge/Firefox
-         * (no removal schedule).  It synthesizes `beforeinput`/`input` events
-         * WITHOUT a key event chain — sites that require keyboard events
-         * (shortcuts, autocomplete) will not see it; that trade-off is why
-         * typeAuto keeps per-code-point `chars` as the default for short text.
-         */
-        fun typeExecJs(text: String): String =
-            """
-            function() {
-                var el = this;
-                if (!el) { return { ok: false, reason: 'no element' }; }
-                if (!el.isContentEditable && !(el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
-                    return { ok: false, reason: 'target is not an editable input/textarea/contenteditable' };
-                }
-                if (el.disabled || el.readOnly) {
-                    return { ok: false, reason: 'target is disabled or read-only' };
-                }
-                try { el.focus(); } catch (e) {}
-                if (el.isContentEditable) {
-                    try {
-                        var sel = window.getSelection();
-                        var range = document.createRange();
-                        range.selectNodeContents(el);
-                        range.collapse(false);
-                        sel.removeAllRanges();
-                        sel.addRange(range);
-                    } catch (e) {}
-                } else {
-                    try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {}
-                }
-                var text = '${escapeJsString(text)}';
-                var ok = false;
-                try { ok = document.execCommand('insertText', false, text); } catch (e) { ok = false; }
-                return ok ? { ok: true } : { ok: false, reason: "execCommand('insertText') returned false" };
-            }
-            """.trimIndent()
+    internal fun pointerTargetError(
+        action: String,
+        selector: String,
+        exists: Any?,
+    ): String? = Browser4WebDriverParsers.pointerTargetError(action, selector, exists)
 
-        /**
-         * Read the current text of the element bound as `this` — `value` for
-         * input/textarea, `innerText` for contenteditable — used by the
-         * typeAuto verify read-back.
-         */
-        fun typeReadBackJs(): String =
-            """
-            function() {
-                var el = this;
-                if (!el) { return null; }
-                var tag = (el.tagName || '').toUpperCase();
-                if (tag === 'INPUT' || tag === 'TEXTAREA') { return el.value || ''; }
-                return (el.innerText !== undefined ? el.innerText : '') || '';
-            }
-            """.trimIndent()
+    fun typeExecJs(text: String): String = Browser4WebDriverScripts.typeExecJs(text)
 
-        /**
-         * Normalize editor text before verification compares: NBSP → space and
-         * CRLF/CR → LF (browsers and editors differ in how they store line
-         * breaks).  Trailing whitespace differences are handled by the caller
-         * (trimmed on both sides of the comparison).
-         */
-        fun normalizeEditorText(text: String): String =
-            text.replace("\u00a0", " ")
-                .replace("\r\n", "\n")
-                .replace('\r', '\n')
+    fun typeReadBackJs(): String = Browser4WebDriverScripts.typeReadBackJs()
 
-        /**
-         * The IIFE used by [submitFormFallback] (and the executor's fallback) to
-         * submit the nearest form of the element matched by [selector] with DOM
-         * keyboard events and `requestSubmit()`/`submit()` — a last-resort path
-         * for JS-heavy pages that intercept both CDP Enter and the browser's
-         * implicit form submission.
-         */
-        fun submitFormFallbackJs(selector: String): String =
-            """
-            (function(){
-                var el=document.querySelector('${escapeJsSelector(selector)}');
-                if(!el)return false;
-                el.focus();
-                var o={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};
-                el.dispatchEvent(new KeyboardEvent('keydown',o));
-                el.dispatchEvent(new KeyboardEvent('keypress',o));
-                el.dispatchEvent(new KeyboardEvent('keyup',o));
-                var form=el.closest('form');
-                if(form){try{form.requestSubmit();}catch(e){}form.submit();}
-                return true;
-            })()
-            """.trimIndent()
+    fun normalizeEditorText(text: String): String = Browser4WebDriverScripts.normalizeEditorText(text)
 
-        /**
-         * The IIFE the executor uses for drivers that are not a [Browser4WebDriver], and the
-         * fallback when the Console domain cannot be enabled ([consoleMessages]).
-         *
-         * It patches the page's `console.*` and buffers on `window.__b4_console`, which a page can
-         * detect (the wrapper's source via `console.log.toString()` /
-         * `Function.prototype.toString.call`, its `name`, and the `prototype` property a native
-         * console method does not have) — [Browser4WebDriver.consoleMessages] therefore prefers CDP
-         * capture and leaves this builder for the cases where CDP is unavailable.
-         */
-        fun consoleMessagesJs(level: String): String =
-            """
-            (function() {
-                if (!window.__b4_console_intercepted) {
-                    window.__b4_console = window.__b4_console || [];
-                    var levels = ['log', 'warn', 'error', 'info', 'debug'];
-                    levels.forEach(function(lvl) {
-                        var original = console[lvl];
-                        console[lvl] = function() {
-                            var args = Array.prototype.slice.call(arguments);
-                            window.__b4_console.push({
-                                level: lvl,
-                                text: args.map(function(a) {
-                                    return typeof a === 'object' ? JSON.stringify(a) : String(a);
-                                }).join(' '),
-                                timestamp: Date.now()
-                            });
-                            original.apply(console, arguments);
-                        };
-                    });
-                    window.__b4_console_intercepted = true;
-                }
-                var minPriority = { error: 0, warn: 1, info: 2, log: 2, debug: 3 };
-                var min = minPriority['$level'] !== undefined ? minPriority['$level'] : 2;
-                var filtered = (window.__b4_console || []).filter(function(e) {
-                    var p = minPriority[e.level] !== undefined ? minPriority[e.level] : 2;
-                    return p <= min;
-                });
-                return JSON.stringify(filtered);
-            })()
-            """.trimIndent()
+    fun submitFormFallbackJs(selector: String): String = Browser4WebDriverScripts.submitFormFallbackJs(selector)
 
-        /** The expression used by [consoleClear] (and the executor's fallback). */
-        fun consoleClearJs(): String = "window.__b4_console = []; 'Console cleared'"
+    fun consoleMessagesJs(level: String): String = Browser4WebDriverScripts.consoleMessagesJs(level)
 
-        /**
-         * Normalize a cookie from a storage-state JSON payload for
-         * `Network.setCookies`.  Mirrors the upstream pulsar-browser
-         * normalization so states saved by `tab.saveStorageState()` round-trip
-         * unchanged.
-         *
-         * Beyond the upstream pass-through this validates the two fields whose
-         * violations make the downstream CDP layer reject the whole batch with
-         * the opaque `Invalid cookie fields` error (no field attribution):
-         * cookie paths that do not start with `/`, and cookie names containing
-         * characters the browser will not store (`;`, `=`, whitespace/control
-         * characters).  Failing here names the offending cookie so callers can
-         * act on it instead of receiving the browser's generic rejection.
-         *
-         * @param cookie Raw cookie entry from the storage-state payload.
-         * @return A map with the canonical `Network.setCookies` field set.
-         */
-        fun normalizeStorageStateCookie(cookie: Map<String, Any?>): Map<String, Any?> {
-            val name = cookie["name"]?.toString()?.trim().orEmpty()
-            require(name.isNotEmpty()) { "Storage state cookie name must not be blank" }
-            // Chrome's Network.setCookies rejects cookie names containing ';',
-            // '=', or whitespace/control characters ("Invalid cookie fields").
-            // Validate in-repo so the error names the cookie instead of leaking
-            // the browser's opaque rejection.
-            require(
-                name.none { it == ';' || it == '=' || it.code < 0x21 || it.code == 0x7F }
-            ) {
-                "Storage state cookie name '$name' contains characters the browser rejects " +
-                    "(whitespace/control characters, ';', '=')"
-            }
+    fun consoleClearJs(): String = Browser4WebDriverScripts.consoleClearJs()
 
-            val normalized = linkedMapOf<String, Any?>(
-                "name" to name,
-                "value" to (cookie["value"]?.toString() ?: ""),
-            )
+    fun normalizeStorageStateCookie(
+        cookie: Map<String, Any?>,
+    ): Map<String, Any?> = Browser4WebDriverParsers.normalizeStorageStateCookie(cookie)
 
-            cookie["url"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["url"] = it }
-            cookie["domain"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["domain"] = it }
-            cookie["path"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { path ->
-                // Chrome rejects cookie paths that do not start with '/'
-                // ("Invalid cookie fields"); validate in-repo so the error names
-                // the cookie instead of leaking the browser's opaque rejection.
-                require(path.startsWith('/')) {
-                    "Storage state cookie '$name' has an invalid path '$path': cookie paths must start with '/'"
-                }
-                normalized["path"] = path
-            }
-            cookie["expires"]?.toString()?.toDoubleOrNull()?.takeIf { it > 0 }?.let { normalized["expires"] = it }
-            cookie["httpOnly"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["httpOnly"] = it }
-            cookie["secure"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["secure"] = it }
-            cookie["sameSite"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["sameSite"] = it }
+    fun restoreLocalStorageScript(
+        entriesJson: String,
+    ): String = Browser4WebDriverScripts.restoreLocalStorageScript(entriesJson)
 
-            require("url" in normalized || "domain" in normalized) {
-                "Storage state cookie '$name' must include either url or domain"
-            }
-            return normalized
-        }
+    fun captureLocalStorageScript(): String = Browser4WebDriverScripts.captureLocalStorageScript()
 
-        /**
-         * Build the JavaScript used to restore localStorage entries for a single
-         * origin.  [entriesJson] must be a JSON array of `{name, value}` objects.
-         */
-        fun restoreLocalStorageScript(entriesJson: String): String =
-            """
-            (() => {
-              const entries = $entriesJson;
-              window.localStorage.clear();
-              for (const entry of entries) {
-                window.localStorage.setItem(entry.name, entry.value ?? "");
-              }
-              return entries.length;
-            })()
-            """.trimIndent()
+    fun extractCookiesFromCdpResult(
+        result: Any?,
+    ): List<Map<String, Any?>> = Browser4WebDriverParsers.extractCookiesFromCdpResult(result)
 
-        /**
-         * JavaScript returning the active origin's `localStorage` as a JSON
-         * object (`{"name": "value"}`), the capture counterpart of
-         * [restoreLocalStorageScript].  Used by `saveStorageState()`.
-         */
-        fun captureLocalStorageScript(): String =
-            "JSON.stringify(Object.fromEntries(Object.entries(window.localStorage)))"
+    fun isDocumentOriginReady(
+        evaluatedOrigin: String?,
+        targetOrigin: String,
+    ): Boolean = Browser4WebDriverParsers.isDocumentOriginReady(evaluatedOrigin, targetOrigin)
 
-        /** Target type for one raw CDP cookie object. */
-        private val COOKIE_MAP_TYPE = object : TypeReference<Map<String, Any?>>() {}
+    internal fun parseDragCenter(value: Any?): DragCenter? = Browser4WebDriverParsers.parseDragCenter(value)
 
-        /**
-         * Extract the cookie list from a raw `Network.getAllCookies` CDP result.
-         *
-         * The command answers `{"cookies": [...]}`, but the runtime shape depends
-         * on the transport: a direct CDP connection deserializes into typed CDP
-         * objects, while the extension relay hands back generic JSON maps/nodes.
-         * Nothing here is cast to
-         * `ai.platon.cdt.kt.protocol.types.network.Cookie` — that cast is what
-         * makes cookie reads fail on `attach --extension` sessions.
-         *
-         * @param result The raw value returned by `executeCdpCommand`.
-         * @return One map per cookie; empty when [result] carries no cookie array.
-         */
-        fun extractCookiesFromCdpResult(result: Any?): List<Map<String, Any?>> {
-            if (result == null) return emptyList()
+    internal fun jitteredPointerPosition(
+        x: Double,
+        y: Double,
+        width: Double,
+        height: Double,
+        jitter: Double = POINTER_JITTER_PX,
+    nextOffset: (Double) -> Double = { range -> Random.nextDouble(-range, range) },
+    ) = Browser4WebDriverParsers.jitteredPointerPosition(x, y, width, height, jitter, nextOffset)
 
-            val root = runCatching { pulsarObjectMapper().valueToTree<JsonNode>(result) }.getOrNull()
-                ?: return emptyList()
-            val cookies = when {
-                root.isArray -> root
-                root.isObject -> root.get("cookies") ?: return emptyList()
-                else -> return emptyList()
-            }
-            if (!cookies.isArray) return emptyList()
+    internal fun canClickWithTrustedInput(
+        point: DragCenter?,
+    ): Boolean = Browser4WebDriverParsers.canClickWithTrustedInput(point)
 
-            return cookies.mapNotNull { node ->
-                runCatching { pulsarObjectMapper().convertValue(node, COOKIE_MAP_TYPE) }.getOrNull()
-            }
-        }
+    internal fun trustedClickProbeInstallJs(): String = Browser4WebDriverScripts.trustedClickProbeInstallJs()
 
-        /**
-         * True once the evaluated `location.origin` has committed to exactly
-         * [targetOrigin].  Opaque-origin documents report `"null"` (or fail to
-         * evaluate at all), so neither case counts as ready.
-         */
-        fun isDocumentOriginReady(evaluatedOrigin: String?, targetOrigin: String): Boolean =
-            !evaluatedOrigin.isNullOrBlank() && evaluatedOrigin.trim() == targetOrigin
+    internal fun trustedClickProbeReadJs(): String = Browser4WebDriverScripts.trustedClickProbeReadJs()
 
-        /**
-         * Parse the JSON produced by [dragCenterJs] into a [DragCenter].
-         * Returns null when the value is missing, malformed, or lacks a usable
-         * CSS path (which makes the element unre-locatable at drag time).
-         */
-        internal fun parseDragCenter(value: Any?): DragCenter? {
-            val json = value as? String ?: return null
-            val node = runCatching { pulsarObjectMapper().readTree(json) }.getOrNull() ?: return null
-            val x = node.get("x")?.takeIf { it.isNumber }?.asDouble() ?: return null
-            val y = node.get("y")?.takeIf { it.isNumber }?.asDouble() ?: return null
-            val cssPath = node.get("cssPath")?.asText()?.takeIf { it.isNotBlank() } ?: return null
-            return DragCenter(
-                x = x,
-                y = y,
-                cssPath = cssPath,
-                inFrame = node.get("inFrame")?.asBoolean() ?: false,
-                viewportWidth = node.get("vw")?.takeIf { it.isNumber }?.asInt() ?: 0,
-                viewportHeight = node.get("vh")?.takeIf { it.isNumber }?.asInt() ?: 0,
-                width = node.get("w")?.takeIf { it.isNumber }?.asDouble() ?: 0.0,
-                height = node.get("h")?.takeIf { it.isNumber }?.asDouble() ?: 0.0,
-                hit = node.get("hit")?.asBoolean() ?: false,
-            )
-        }
+    internal fun dragCenterJs(): String = Browser4WebDriverScripts.dragCenterJs()
+
+    internal fun hitTestJs(point: DragCenter): String = Browser4WebDriverScripts.hitTestJs(point)
+
+    internal fun buildDragSequenceScript(
+        targetCssPath: String,
+        sourceX: Double,
+        sourceY: Double,
+        targetX: Double,
+        targetY: Double,
+        delays: List<Long>,
+        dropPosition: String = "center",
+    ): String = Browser4WebDriverScripts.buildDragSequenceScript(targetCssPath, sourceX, sourceY, targetX, targetY, delays, dropPosition)
+
+    internal fun dragScriptErrorMessage(
+        result: Any?,
+    ): String? = Browser4WebDriverParsers.dragScriptErrorMessage(result)
+
+    internal fun dragPositionFingerprintJs(): String = Browser4WebDriverScripts.dragPositionFingerprintJs()
+
+    internal fun dragPositionReportJs(): String = Browser4WebDriverScripts.dragPositionReportJs()
+
+    internal fun parseDragPositionReport(
+        value: Any?,
+    ): String? = Browser4WebDriverParsers.parseDragPositionReport(value)
+
+    internal fun viDataStatusJs(): String = Browser4WebDriverScripts.viDataStatusJs()
+
+    internal fun storeCaptureMetaLinkJs(
+        normalizedUri: String,
+    ): String = Browser4WebDriverScripts.storeCaptureMetaLinkJs(normalizedUri)
+
+    internal fun parseViDataProbe(value: Any?): ViDataProbe? = Browser4WebDriverParsers.parseViDataProbe(value)
+
+    internal fun shouldReportViFailure(
+        lastReportedUrl: String?,
+        documentUrl: String,
+    ): Boolean = Browser4WebDriverParsers.shouldReportViFailure(lastReportedUrl, documentUrl)
+
+    internal fun harTimingsAreInflated(
+        totalMillis: Long,
+        knownMillis: Long,
+    ): Boolean = Browser4WebDriverParsers.harTimingsAreInflated(totalMillis, knownMillis)
+
+    internal fun routeSummary(
+        urlPattern: String,
+        abort: Boolean,
+        contentType: String?,
+        resourceTypes: List<String>,
+        routes: Int?,
+    ): Map<String, Any?> = Browser4WebDriverParsers.routeSummary(urlPattern, abort, contentType, resourceTypes, routes)
+
 
         /**
          * Maximum pointer jitter (CSS pixels) applied before a click-family pointer move.
@@ -689,416 +367,10 @@ open class Browser4WebDriver(
         internal const val POINTER_JITTER_EDGE_INSET_PX = 1.0
 
         /**
-         * Nudge the element center ([x], [y]) by a random offset of at most
-         * `min(jitter, box/2 - inset)` per axis, so the result stays inside the element of the given
-         * [width]/[height] box.
-         *
-         * An element whose box is unknown (0) or too small to hold any offset keeps the exact
-         * center: moving the pointer outside the element would break the CSS `:hover` state this
-         * move exists to establish (see `movePointerToClickTarget`), which is worse than a
-         * repeatable coordinate.
-         *
-         * @param nextOffset produces a uniform offset in `[-range, range]`; injected in tests
-         */
-        internal fun jitteredPointerPosition(
-            x: Double,
-            y: Double,
-            width: Double,
-            height: Double,
-            jitter: Double = POINTER_JITTER_PX,
-            nextOffset: (Double) -> Double = { range -> Random.nextDouble(-range, range) },
-        ): Pair<Double, Double> {
-            val maxOffset = if (width > 0.0 && height > 0.0) {
-                minOf(jitter, minOf(width, height) / 2.0 - POINTER_JITTER_EDGE_INSET_PX).coerceAtLeast(0.0)
-            } else {
-                0.0
-            }
-
-            if (maxOffset <= 0.0) {
-                return x to y
-            }
-
-            return (x + nextOffset(maxOffset)) to (y + nextOffset(maxOffset))
-        }
-
-        /**
          * The page global installed for the duration of one trusted click, see
          * [trustedClickProbeInstallJs].
          */
         internal const val TRUSTED_CLICK_PROBE = "__b4_trusted_click_probe__"
-
-        /**
-         * Whether a click at [point] may be dispatched as trusted CDP input.
-         *
-         * [point] must carry the hit result for the exact coordinates it is to be pressed at —
-         * [dragCenterJs] supplies it for the resolved centre, [hitTestJs] for the jittered hover
-         * point a click actually uses.
-         *
-         * Two conditions rule it out, both because the coordinates would then be wrong:
-         *
-         * - frame-resident elements: `getBoundingClientRect` is frame-relative while
-         *   `Input.dispatchMouseEvent` takes main-frame viewport coordinates;
-         * - an element that is not hit at that point (occluded by an overlay, `pointer-events:
-         *   none`, moved by an async layout shift): the trusted click would land on whatever is on
-         *   top and silently click an unrelated element. The DOM fallback dispatches on the element
-         *   itself and has no such failure mode.
-         */
-        internal fun canClickWithTrustedInput(point: DragCenter?): Boolean =
-            point != null && !point.inFrame && point.hit
-
-        /**
-         * Install a one-shot page probe that counts **trusted** mouse events.
-         *
-         * A CDP press/release pair either reaches the page — then the document observes trusted
-         * `mousedown`/`mouseup`/`click` events — or it does not, and the driver must not report
-         * success for a click that never happened. The probe is the authority for that decision. It
-         * is installed as a non-enumerable global so a page enumerating `window` cannot see it, and
-         * removed again by [trustedClickProbeReadJs].
-         */
-        internal fun trustedClickProbeInstallJs(): String = """
-            (function() {
-                var state = { trusted: 0, listeners: [] };
-                Object.defineProperty(window, '$TRUSTED_CLICK_PROBE', {
-                    value: state, writable: true, configurable: true, enumerable: false
-                });
-                ['mousedown', 'mouseup', 'click'].forEach(function(name) {
-                    var listener = function(event) { if (event.isTrusted) { state.trusted += 1; } };
-                    document.addEventListener(name, listener, true);
-                    state.listeners.push([name, listener]);
-                });
-                return 'installed';
-            })()
-        """.trimIndent()
-
-        /**
-         * Remove the probe installed by [trustedClickProbeInstallJs] and report what it saw:
-         * `"trusted"`, `"none"`, or `"missing"` when the global was gone (a page replaced it).
-         */
-        internal fun trustedClickProbeReadJs(): String = """
-            (function() {
-                var state = window['$TRUSTED_CLICK_PROBE'];
-                if (!state) { return 'missing'; }
-                (state.listeners || []).forEach(function(entry) {
-                    document.removeEventListener(entry[0], entry[1], true);
-                });
-                try { delete window['$TRUSTED_CLICK_PROBE']; } catch (e) { }
-                return state.trusted > 0 ? 'trusted' : 'none';
-            })()
-        """.trimIndent()
-
-        /**
-         * The `function()` body evaluated with `this` bound to a drag element.
-         * Returns the element's viewport center, a stable CSS path that
-         * re-locates the same element from the top document at drag time, and
-         * whether the element lives in a frame (drag coordinates and
-         * `document.elementFromPoint` are frame-relative then, so frame
-         * residents must be rejected explicitly rather than silently mis-dragged).
-         */
-        internal fun dragCenterJs(): String =
-            """
-            function() {
-                if (!(this instanceof Element)) {
-                    return JSON.stringify({ cssPath: '' });
-                }
-                const r = this.getBoundingClientRect();
-                const path = [];
-                let el = this;
-                while (el && el.nodeType === 1) {
-                    let part = el.tagName.toLowerCase();
-                    if (el.id) {
-                        part += '#' + CSS.escape(el.id);
-                        path.unshift(part);
-                        break;
-                    }
-                    if (el.parentElement) {
-                        const sameTag = Array.prototype.filter.call(
-                            el.parentElement.children,
-                            (c) => c.tagName === el.tagName
-                        );
-                        if (sameTag.length > 1) {
-                            part += ':nth-of-type(' + (sameTag.indexOf(el) + 1) + ')';
-                        }
-                    }
-                    path.unshift(part);
-                    el = el.parentElement;
-                }
-                return JSON.stringify({
-                    x: r.left + r.width / 2,
-                    y: r.top + r.height / 2,
-                    cssPath: path.join(' > '),
-                    inFrame: this.ownerDocument !== document,
-                    vw: window.innerWidth,
-                    vh: window.innerHeight,
-                    w: r.width,
-                    h: r.height,
-                    hit: (function() {
-                        var at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-                        return !!(at && (at === this || this.contains(at)));
-                    }).call(this)
-                });
-            }
-            """.trimIndent()
-
-        /**
-         * Whether the element described by [point]'s CSS path is the topmost element at
-         * [point]'s coordinates.
-         *
-         * [dragCenterJs] answers the same question for the element's *centre*, which is where the
-         * element is resolved; a trusted click presses at the jittered hover point instead, so the
-         * test has to be repeated there (see `trustedClickPoint`). Only main-frame elements reach
-         * this probe ([DragCenter.inFrame] is rejected first), so the top document's
-         * `querySelector` resolves the path.
-         */
-        internal fun hitTestJs(point: DragCenter): String = """
-            (function() {
-                var el = null;
-                try { el = document.querySelector('${escapeJsString(point.cssPath)}'); } catch (e) { return 'no-element'; }
-                if (!el) { return 'no-element'; }
-                var at = document.elementFromPoint(${point.x}, ${point.y});
-                return (at && (at === el || el.contains(at))) ? 'hit' : 'miss';
-            })()
-        """.trimIndent()
-
-        /**
-         * Build the drag sequence script executed with `this` bound to the
-         * source element (via CDP `callFunctionOn`).  The target is re-located
-         * by [targetCssPath] and must still be hit by the resolved viewport
-         * point — otherwise the drag fails loudly instead of dispatching on an
-         * unrelated element (occluded by an overlay, `pointer-events: none`,
-         * or moved by an async layout shift).
-         *
-         * All failures are reported before any event is dispatched, so a retry
-         * of the outer RPC block re-runs the sequence idempotently.
-         *
-         * [dropPosition] selects the drop point on the target:
-         *  - `"center"` (legacy): the resolved viewport point ([targetX]/[targetY],
-         *    already jittered by the caller) is used verbatim.
-         *  - `"top"` / `"bottom"`: the drop point is pinned to the live
-         *    top/bottom edge region of the target (`rect.top + 2` /
-         *    `rect.bottom - 2`, read at dispatch time).  Child-index-based
-         *    reorder handlers decide insert-before/insert-after from the drop
-         *    point's y relative to child centers, so the ±2px jitter around a
-         *    center point makes placement a coin flip; an edge-region point
-         *    resolves deterministically (`--at bottom` of an item = insert
-         *    after it, `--at top` = insert before it).  For targets shorter
-         *    than ~5px the edge region is degenerate and the center point is
-         *    kept.  When positioned, two intermediate `dragover` events sweep
-         *    from the source point toward the drop point so handlers that
-         *    track dragenter/dragover transitions observe the approach, and a
-         *    final `dragover` lands exactly on the drop point.
-         *
-         * [delays] must contain exactly 4 randomized inter-event delays (ms)
-         * for `"center"`, or exactly 6 for `"top"`/`"bottom"` (the two extra
-         * delays pace the sweep events).
-         */
-        internal fun buildDragSequenceScript(
-            targetCssPath: String,
-            sourceX: Double,
-            sourceY: Double,
-            targetX: Double,
-            targetY: Double,
-            delays: List<Long>,
-            dropPosition: String = "center",
-        ): String {
-            val positioned = dropPosition == "top" || dropPosition == "bottom"
-            require(if (positioned) delays.size == 6 else delays.size == 4) {
-                "drag sequence requires exactly ${if (positioned) 6 else 4} delays for drop position '$dropPosition'"
-            }
-            val targetJson = pulsarObjectMapper().writeValueAsString(targetCssPath)
-            val positionJson = pulsarObjectMapper().writeValueAsString(dropPosition)
-            // Positioned drops interpolate two sweep dragover events between
-            // the source point and the final drop point.
-            val sweepBlock = if (positioned) """
-                    const sweep = [ { t: 0.34, delay: ${delays[2]} }, { t: 0.67, delay: ${delays[3]} } ];
-                    for (const step of sweep) {
-                        const t = step.t;
-                        const ix = $sourceX + (dropX - $sourceX) * t;
-                        const iy = $sourceY + (dropY - $sourceY) * t;
-                        fire(document.elementFromPoint(ix, iy) || hit, 'dragover', ix, iy);
-                        await sleep(step.delay);
-                    }
-            """.trimIndent() else ""
-            // After dragenter the event pace depends on the drop mode: center
-            // sleeps once before the single dragover; positioned sleeps per
-            // sweep step, then once more before the final dragover.
-            val (dragoverIndex, dropIndex) = if (positioned) 4 to 5 else 2 to 3
-            // CDP Runtime.callFunctionOn requires a *function declaration*, not
-            // an expression — an IIFE is rejected with "Given expression does
-            // not evaluate to a function".  `async function()` + awaitPromise
-            // gives us the same async sequencing inside a valid declaration.
-            return """
-                async function() {
-                    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-                    const source = this;
-                    if (typeof DataTransfer === 'undefined' || typeof DragEvent === 'undefined') {
-                        return JSON.stringify({
-                            ok: false,
-                            error: 'HTML5 drag-and-drop APIs are not available in the current page context'
-                        });
-                    }
-                    const target = document.querySelector($targetJson);
-                    if (!target) {
-                        return JSON.stringify({
-                            ok: false,
-                            error: 'Target element was not found at drag time'
-                        });
-                    }
-                    var dropX = $targetX;
-                    var dropY = $targetY;
-                    if ($positionJson === 'top' || $positionJson === 'bottom') {
-                        const targetRect = target.getBoundingClientRect();
-                        if (targetRect.height > 4) {
-                            dropY = $positionJson === 'bottom' ? targetRect.bottom - 2 : targetRect.top + 2;
-                        }
-                    }
-                    const hit = document.elementFromPoint(dropX, dropY);
-                    // The hit must be the target itself or one of its
-                    // descendants (b.contains(a): the target contains the
-                    // hit).  A hit on an *ancestor* means the target is not
-                    // hittable at that point (pointer-events:none, or it
-                    // moved) — dispatching there would silently drop onto the
-                    // wrong element.
-                    const related = (a, b) => a === b || (!!a && !!b && b.contains(a));
-                    if (!related(hit, target)) {
-                        return JSON.stringify({
-                            ok: false,
-                            error: 'Target element is occluded or moved: the resolved point is covered by another element'
-                        });
-                    }
-                    const dataTransfer = new DataTransfer();
-                    const fire = (element, type, clientX, clientY) => {
-                        const event = new DragEvent(type, {
-                            bubbles: true,
-                            cancelable: true,
-                            composed: true,
-                            dataTransfer,
-                            clientX,
-                            clientY
-                        });
-                        element.dispatchEvent(event);
-                    };
-                    fire(source, 'dragstart', $sourceX, $sourceY);
-                    await sleep(${delays[0]});
-                    fire(hit, 'dragenter', dropX, dropY);
-                    await sleep(${delays[1]});
-            $sweepBlock
-                    fire(hit, 'dragover', dropX, dropY);
-                    await sleep(${delays[dragoverIndex]});
-                    fire(hit, 'drop', dropX, dropY);
-                    await sleep(${delays[dropIndex]});
-                    fire(source, 'dragend', dropX, dropY);
-                    return JSON.stringify({ ok: true });
-                }
-            """.trimIndent()
-        }
-
-        /**
-         * Interpret the `callFunctionOn` result value of a drag script.
-         * Returns null on success, or a user-facing error message.
-         */
-        internal fun dragScriptErrorMessage(result: Any?): String? {
-            val json = result as? String ?: return "Failed to execute drag script"
-            val parsed = runCatching { pulsarObjectMapper().readTree(json) }.getOrNull()
-            if (parsed?.get("ok")?.asBoolean() == true) {
-                return null
-            }
-            return parsed?.get("error")?.asText() ?: "Unknown drag failure"
-        }
-
-        /**
-         * The `function()` body evaluated with `this` bound to an element.
-         * Returns a comparable fingerprint of the element's DOM position
-         * (parent key + child index + sibling count).  The element is bound
-         * via its CDP object id, which stays valid across reparenting, so the
-         * fingerprint can be re-read after a dispatch to verify the element
-         * actually moved.
-         */
-        internal fun dragPositionFingerprintJs(): String =
-            """
-            function() {
-                if (!(this instanceof Element)) {
-                    return JSON.stringify({ ok: false });
-                }
-                const parent = this.parentElement;
-                if (!parent) {
-                    return JSON.stringify({ ok: false });
-                }
-                const kids = Array.prototype.filter.call(parent.children, (c) => c.nodeType === 1);
-                const parentKey = parent.tagName.toLowerCase() + (parent.id ? '#' + parent.id : '');
-                return JSON.stringify({
-                    ok: true,
-                    parentKey: parentKey,
-                    index: kids.indexOf(this),
-                    total: kids.length
-                });
-            }
-            """.trimIndent()
-
-        /**
-         * The `function()` body evaluated with `this` bound to the dragged
-         * element (re-located by its original locator after the drag).  Returns
-         * the element's tag/id and its position among its siblings' parent.
-         */
-        internal fun dragPositionReportJs(): String =
-            """
-            function() {
-                if (!(this instanceof Element)) {
-                    return JSON.stringify({ ok: false });
-                }
-                const parent = this.parentElement;
-                if (!parent) {
-                    return JSON.stringify({ ok: false });
-                }
-                const kids = Array.prototype.filter.call(parent.children, (c) => c.nodeType === 1);
-                return JSON.stringify({
-                    ok: true,
-                    tag: this.tagName.toLowerCase(),
-                    id: this.id || '',
-                    parentTag: parent.tagName.toLowerCase(),
-                    parentId: parent.id || '',
-                    index: kids.indexOf(this),
-                    total: kids.length
-                });
-            }
-            """.trimIndent()
-
-        /**
-         * Render the JSON produced by [dragPositionReportJs] into a
-         * human-readable placement summary, or null when the value is missing,
-         * malformed, or reports `ok: false`.
-         */
-        internal fun parseDragPositionReport(value: Any?): String? {
-            val json = value as? String ?: return null
-            val node = runCatching { pulsarObjectMapper().readTree(json) }.getOrNull() ?: return null
-            if (node.get("ok")?.asBoolean() != true) {
-                return null
-            }
-            val tag = node.get("tag")?.asText()?.takeIf { it.isNotBlank() } ?: "element"
-            val id = node.get("id")?.asText().orEmpty()
-            val parentTag = node.get("parentTag")?.asText()?.takeIf { it.isNotBlank() } ?: "element"
-            val parentId = node.get("parentId")?.asText().orEmpty()
-            val index = node.get("index")?.takeIf { it.isNumber }?.asInt() ?: return null
-            val total = node.get("total")?.takeIf { it.isNumber }?.asInt() ?: return null
-            if (total <= 0 || index < 0 || index >= total) {
-                return null
-            }
-            val self = "$tag${if (id.isNotEmpty()) "#$id" else ""}"
-            val parent = "$parentTag${if (parentId.isNotEmpty()) "#$parentId" else ""}"
-            return "Dropped $self as child ${index + 1} of $total in $parent"
-        }
-
-        // ---------------------------------------------------------------------
-        // Capture annotations: visual information (vi) and the normalized URI
-        //
-        // The runtime materializes `vi` bounding boxes and the capture meta links
-        // only in the HTML it serializes: the boxes live in a WeakMap that
-        // `compute()` fills, the links in `_captureMetaLinks`, and the serializer
-        // injects both while it walks the document.  Every read that skips those
-        // steps therefore loses the annotation silently.  The statuses below let
-        // the driver tell "nothing to do" apart from "nothing that can be done",
-        // so the failure is logged instead of being smuggled into an unannotated
-        // HTML string.
-        // ---------------------------------------------------------------------
 
         /** [viDataStatusJs] status: the document already has vi data, or has it now. */
         internal const val VI_DATA_COMPUTED = "computed"
@@ -1138,134 +410,6 @@ open class Browser4WebDriver(
         internal val fieldSeparatorJsEscape: String =
             "\\u" + VI_DATA_FIELD_SEPARATOR.first().code.toString(16).padStart(4, '0')
 
-        /**
-         * Probe evaluated on the live tab: the vi (visual-information) state of
-         * the document — computing the data when the document has none yet — the
-         * `normalizedURI` currently stored for serialization, and the live
-         * document URL.
-         *
-         * Evaluated as a single CDP call so the check and the computation cannot
-         * be interleaved by a navigation.  The status is one of the `VI_DATA_*`
-         * constants rather than a boolean so the caller can log the difference
-         * between an expected no-op and a real failure; the stored link and the
-         * document URL let the caller decide — without a second round trip —
-         * whether the link has to be (re)stored before serializing.
-         */
-        internal fun viDataStatusJs(): String =
-            """
-            (function () {
-              var u = window.$PULSAR_UTILS_FUNCTION;
-              var url = document.URL || '';
-              if (!u || typeof u.getAnnotatedHTML !== 'function') {
-                return '$VI_DATA_UNAVAILABLE$fieldSeparatorJsEscape$fieldSeparatorJsEscape' + url;
-              }
-              var links = u._captureMetaLinks || {};
-              var stored = links['$CAPTURE_META_LINK_REL'] || '';
-              var status;
-              if (u._viDataComputed === true) {
-                status = '$VI_DATA_COMPUTED';
-              } else if (typeof u.compute !== 'function') {
-                status = '$VI_DATA_UNAVAILABLE';
-              } else if (!document.body || !document.body.firstChild) {
-                status = '$VI_DATA_NOT_READY';
-              } else {
-                try { u.compute(); } catch (e) { /* reported as failed below */ }
-                status = u._viDataComputed === true ? '$VI_DATA_COMPUTED' : '$VI_DATA_FAILED';
-              }
-              return status + '$fieldSeparatorJsEscape' + stored + '$fieldSeparatorJsEscape' + url;
-            })()
-            """.trimIndent()
-
-        /**
-         * JS storing [normalizedUri] as the page URL the annotated serializer
-         * writes into the serialized `<head>`.
-         *
-         * Best effort by construction: the value lands in the runtime's capture
-         * meta links (no DOM mutation), and the serializer emits it only while
-         * serializing, so the live page stays untouched.
-         */
-        internal fun storeCaptureMetaLinkJs(normalizedUri: String): String =
-            """
-            (function () {
-              var u = window.$PULSAR_UTILS_FUNCTION;
-              if (!u) return false;
-              u._captureMetaLinks = u._captureMetaLinks || {};
-              u._captureMetaLinks['$CAPTURE_META_LINK_REL'] = '${escapeJsString(normalizedUri)}';
-              return true;
-            })()
-            """.trimIndent()
-
-        /**
-         * The vi state of the live document as reported by [viDataStatusJs]:
-         * the [status], the page URL currently stored for serialization
-         * ([storedUri], blank when none is stored), and the live document URL
-         * ([documentUrl]).
-         */
-        internal data class ViDataProbe(val status: String, val storedUri: String, val documentUrl: String)
-
-        /**
-         * Parse a [viDataStatusJs] result, or null when the evaluation produced
-         * something unexpected (a truncated or non-string result).
-         */
-        internal fun parseViDataProbe(value: Any?): ViDataProbe? {
-            val text = value as? String ?: return null
-            val parts = text.split(VI_DATA_FIELD_SEPARATOR)
-            if (parts.size != 3) return null
-            return ViDataProbe(parts[0], parts[1], parts[2])
-        }
-
-        /**
-         * Whether a vi failure on [documentUrl] still has to be reported, given
-         * the URL of the last reported failure.  One warning per document keeps
-         * a page that cannot be annotated from flooding the log on every read.
-         */
-        internal fun shouldReportViFailure(lastReportedUrl: String?, documentUrl: String): Boolean =
-            lastReportedUrl != documentUrl
-
-        /**
-         * Whether the HAR timing parts of one entry — [knownMillis], the sum of
-         * its positive parts — are implausible for a request whose total is
-         * [totalMillis].
-         *
-         * The HAR `timings` parts decompose the entry's `time`, so a sum that
-         * dwarfs the total can only be the 1000x unit error of
-         * `HarBuilder.deltaMillis`, never a measurement. The 4x + 100 ms margin
-         * keeps clock skew and rounding out of the decision, and an unknown
-         * total (`-1`, a request that never finished) is never rewritten.
-         */
-        internal fun harTimingsAreInflated(totalMillis: Long, knownMillis: Long): Boolean =
-            totalMillis > 0 && knownMillis > totalMillis * 4 + 100
-
-        /**
-         * One route as [Browser4WebDriver.networkRoute] reports it and as
-         * [Browser4WebDriver.networkRoutes] lists it.
-         *
-         * The action is the point: `--abort` and `--body` routes used to be
-         * echoed as the same `{"routed": pattern}`, so an operator auditing
-         * several routes could not tell them apart.
-         *
-         * @param routes the resulting route count, or null for a listing entry
-         */
-        internal fun routeSummary(
-            urlPattern: String,
-            abort: Boolean,
-            contentType: String?,
-            resourceTypes: List<String>,
-            routes: Int?,
-        ): Map<String, Any?> {
-            val summary = linkedMapOf<String, Any?>(
-                "pattern" to urlPattern,
-                "action" to if (abort) "abort" else "body",
-            )
-            if (contentType != null) {
-                summary["contentType"] = contentType
-            }
-            summary["resourceTypes"] = resourceTypes
-            if (routes != null) {
-                summary["routes"] = routes
-            }
-            return summary
-        }
     }
 
 /**
