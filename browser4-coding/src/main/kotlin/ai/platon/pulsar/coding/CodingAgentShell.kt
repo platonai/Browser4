@@ -5,6 +5,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.Charset
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -19,6 +23,13 @@ import kotlin.io.path.isDirectory
  * development tooling: compilers, build systems, package managers, version control,
  * scripting runtimes, and more. Designed for use in autonomous coding agents that need
  * to write, build, test, and deploy code.
+ *
+ * ## Execution model
+ *
+ * Commands run through `cmd.exe /c` on Windows and `sh -c` elsewhere, so the
+ * command syntax is the platform shell's, not a POSIX one. stdout/stderr are
+ * decoded as strict UTF-8 first and as the OS native encoding second (see
+ * [decodeProcessOutput]), which keeps localized Windows output readable.
  *
  * ## Security Model
  *
@@ -41,6 +52,45 @@ class CodingAgentShell(
         const val MAX_TIMEOUT_SECONDS = 600L
         const val MAX_OUTPUT_CHARS = 200_000
         private val logger = LoggerFactory.getLogger(CodingAgentShell::class.java)
+
+        /**
+         * Charset of the bytes a child process writes to stdout/stderr.
+         *
+         * On Windows `cmd.exe` and its built-ins emit the console code page
+         * (cp936/GBK on a Chinese system) while modern tools they spawn (Maven,
+         * git, python) emit UTF-8. The JVM default charset is UTF-8 since JEP 400
+         * (Java 18+), so decoding a localized `dir` listing with it produced
+         * U+FFFD garbage the agent could not read — it then re-ran the command
+         * with different syntax instead of using the output.
+         *
+         * `native.encoding` is the JVM's record of the OS native encoding; it is
+         * UTF-8 on Linux/macOS, so this only changes Windows behaviour.
+         */
+        private val NATIVE_OUTPUT_CHARSET: Charset = runCatching {
+            val name = System.getProperty("native.encoding")
+                ?: System.getProperty("sun.jnu.encoding")
+            if (name.isNullOrBlank()) StandardCharsets.UTF_8 else Charset.forName(name)
+        }.getOrElse { StandardCharsets.UTF_8 }
+
+        /**
+         * Decode a child process's stdout/stderr bytes.
+         *
+         * Strict UTF-8 when the bytes decode cleanly (Maven, git, python), and
+         * the platform native encoding otherwise (cmd.exe built-ins on a
+         * localized Windows). A leading UTF-8 BOM is stripped.
+         */
+        fun decodeProcessOutput(bytes: ByteArray): String {
+            if (bytes.isEmpty()) return ""
+            val utf8 = runCatching {
+                StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes))
+                    .toString()
+            }.getOrNull()
+            val text = utf8 ?: String(bytes, NATIVE_OUTPUT_CHARSET)
+            return if (text.startsWith('\uFEFF')) text.substring(1) else text
+        }
 
         // ------------------------------------------------------------------
         // Command categories
@@ -833,11 +883,13 @@ class CodingAgentShell(
 
         val process = processBuilder.start()
 
+        // Decode the raw bytes ourselves: the stream's default charset is the JVM
+        // default (UTF-8), which turns cmd.exe's code-page output into U+FFFD.
         val stdoutFuture = CompletableFuture.supplyAsync {
-            process.inputStream.bufferedReader().use { it.readText() }
+            process.inputStream.use { decodeProcessOutput(it.readBytes()) }
         }
         val stderrFuture = CompletableFuture.supplyAsync {
-            process.errorStream.bufferedReader().use { it.readText() }
+            process.errorStream.use { decodeProcessOutput(it.readBytes()) }
         }
 
         val completed = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
@@ -883,7 +935,14 @@ class CodingAgentShell(
         return false
     }
 
-    private fun truncateOutput(output: String, command: String): String {
+    /**
+     * Bound the captured output.
+     *
+     * Cut on code-point boundaries ([SafeText]): a plain `take`/`takeLast` can
+     * split a surrogate pair, and the resulting lone surrogate is not encodable
+     * as UTF-8 — it used to poison every later prompt/trace write of the run.
+     */
+    internal fun truncateOutput(output: String, command: String): String {
         if (output.length <= MAX_OUTPUT_CHARS) return output
         // Compilers, tests and linters put the verdict — and the errors that
         // matter — at the END of the output. Head-only truncation kept the
@@ -891,11 +950,11 @@ class CodingAgentShell(
         if (isDiagnosticOutputCommand(command)) {
             val headLen = DIAGNOSTIC_HEAD_CHARS.coerceAtMost(MAX_OUTPUT_CHARS / 4)
             val tailLen = MAX_OUTPUT_CHARS - headLen
-            return output.take(headLen) +
+            return SafeText.take(output, headLen) +
                 "\n... (output truncated: kept the first $headLen and the last $tailLen of ${output.length} chars) ...\n" +
-                output.takeLast(tailLen)
+                SafeText.takeLast(output, tailLen)
         }
-        return output.take(MAX_OUTPUT_CHARS) + "\n... (output truncated at $MAX_OUTPUT_CHARS chars) ..."
+        return SafeText.take(output, MAX_OUTPUT_CHARS) + "\n... (output truncated at $MAX_OUTPUT_CHARS chars) ..."
     }
 
     private fun formatResult(result: ShellResult): String {

@@ -16,7 +16,7 @@ mvn archetype:generate -DarchetypeGroupId=ai.platon.pulsar \
 mvn -f <artifactId>/pom.xml package   # build the plugin JAR
 ```
 
-Deploy the JAR to the server's `plugins/` directory (or POST it to `http://localhost:18182/api/plugins/install`) and restart — the plugin is auto-discovered. Prerequisites: JDK 17+, Maven 3.9+, and access to the `browser4-pdk` parent POM.
+Deploy the JAR to the server's `plugins/` directory (or POST it to `http://localhost:18182/api/plugins/install`) and restart — the plugin is auto-discovered. Prerequisites: JDK 25+ toolchain (the platform's `provided` classes are Java 25 bytecode; the PDK parent still emits Java 17 bytecode for the plugin JAR itself), Maven 3.9+, and access to the `browser4-pdk` parent POM.
 
 For the full walkthrough — requirements clarification, mount-point implementation, services/config, manifest, tests, build & deploy — see [Step-by-Step Workflow](references/workflow.md).
 

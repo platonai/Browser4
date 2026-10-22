@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.inference.chat
 
+import ai.platon.pulsar.coding.SafeText
 import dev.langchain4j.agent.tool.ToolExecutionRequest
 import dev.langchain4j.data.message.AiMessage
 import dev.langchain4j.data.message.ChatMessage
@@ -100,6 +101,28 @@ class ToolLoopCompressorTest {
         assertTrue(result.text().startsWith("x".repeat(800)))
         assertTrue(result.text().endsWith("x".repeat(400)))
         assertTrue(result.text().length < 3_000)
+    }
+
+    @Test
+    @DisplayName("pruneToolResults cuts on code-point boundaries (no lone surrogate)")
+    fun pruneToolResultsIsSurrogateSafe() {
+        // The emoji pair straddles the 800-char head cut on purpose: a plain
+        // take(800) keeps its high half, and that lone surrogate is not encodable
+        // as UTF-8 (it broke every later prompt/trace write of a real run).
+        val body = "a".repeat(799) + "😀" + "b".repeat(1_000) + "😀" + "c".repeat(1_000)
+        val messages = mutableListOf<ChatMessage>()
+        messages += SystemMessage.from("system")
+        messages += UserMessage.from("instruction")
+        messages += roundMessage(1, body = body)
+
+        assertTrue(compressor().pruneToolResults(messages))
+
+        val pruned = (messages[3] as ToolExecutionResultMessage).text()
+        assertTrue(
+            SafeText.sanitize(pruned) == pruned,
+            "prune left an unpaired surrogate behind: ${pruned.take(20)}"
+        )
+        pruned.toByteArray(Charsets.UTF_8) // must not throw
     }
 
     @Test

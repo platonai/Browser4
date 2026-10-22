@@ -123,6 +123,34 @@ class TaskEnvelopesTest {
         )
     }
 
+    @Test
+    @DisplayName("progress messages map bare and qualified event names identically")
+    fun progressMessagesMapBareAndQualifiedEventNamesIdentically() {
+        listOf("onWillRun", "PerceptiveAgent.onWillRun", "x.y.onWillRun").forEach {
+            assertEquals("Agent starting up", TaskEnvelopes.progressMessage(it))
+        }
+        assertEquals("Task created, waiting to start", TaskEnvelopes.progressMessage("StatefulAgentRunner.created"))
+        assertEquals(
+            "Agent is working", TaskEnvelopes.progressMessage("PerceptiveAgent.onToolExecuted"),
+            "the branch the rest-side copy had lost must resolve for both domains",
+        )
+        assertEquals("Agent observing the page", TaskEnvelopes.progressMessage("InferenceEngine.onWillObserve"))
+    }
+
+    @Test
+    @DisplayName("unknown event names fall back, and substring lookalikes do not mis-map")
+    fun progressMessagesFallBackForUnknownNames() {
+        // Real unmapped event: "onError" is not the exact name of "skill.onSkillError".
+        assertEquals("Agent is working", TaskEnvelopes.progressMessage("skill.onSkillError"))
+        assertEquals(
+            "Task is in progress",
+            TaskEnvelopes.progressMessage("skill.onSkillError", fallback = "Task is in progress"),
+        )
+        // A future event type containing an existing branch's text must not mis-map.
+        assertEquals("Agent is working", TaskEnvelopes.progressMessage("TaskEvents.onWillRunCheckpointExceeded"))
+        assertEquals("Agent is working", TaskEnvelopes.progressMessage("TaskEvents.trustCreatedIn vain"))
+    }
+
     private fun schema(jsonText: String) = ai.platon.pulsar.agentic.model.ToolSpec(
         domain = "crawl",
         method = "status",

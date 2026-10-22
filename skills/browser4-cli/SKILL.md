@@ -320,8 +320,9 @@ browser4-cli skills unpack                  # Unpack bundled skill files to disk
 
 Skill files are unpacked automatically during `browser4-cli install` (and refreshed by `upgrade`);
 unchanged files are skipped, so re-running is cheap. `install` / `upgrade` also copy the bundled
-skills into `~/.agents/skills` so agents (e.g. Codex) load them automatically. Overrides:
-`BROWSER4_SKILLS_DIR`, `BROWSER4_AGENTS_SKILLS_DIR`.
+skills into `~/.agents/skills` so agents (e.g. Codex) load them automatically — only the
+`browser4-cli` skill is synced there by default; use `skills unpack <dest>` to unpack everything.
+Overrides: `BROWSER4_SKILLS_DIR`, `BROWSER4_AGENTS_SKILLS_DIR`.
 
 ## 4. Decision Trees
 
@@ -442,7 +443,7 @@ Proven copy-paste recipes — full walkthroughs in **[quick-patterns.md](referen
 
 **Resilient selectors (PowerCSS):** `div:expr(width > 400 && height > 400)` filters by computed geometry/position/content density instead of class names, so it survives markup changes — usable in any CSS selector and in `htmlsnapshot get` / X-SQL selectors. Operators: [power-dom.md](references/power-dom.md); refs → selectors: [css-selector-bridge.md](references/css-selector-bridge.md).
 
-**AI-powered extraction:** `agent run "<task>"` submits an async task — poll `agent status <id>` and read `agent result <id>`. Both answer the shared task envelope (`{taskId, status, statusCode, message, error, …}`, vocabulary `queued|running|done|failed|cancelled`), so **`status: "done"` is the completion check** (terminal: `done`/`failed`/`cancelled`), and the payload carries the agent's `keyFindings`, `filesChanged` and the `workspace` its deliverables live in. `agent list` shows the same knowledge, refreshed from the backend on every call; `extract` / `summarize` are the synchronous variants. See [agent.md](references/agent.md).
+**AI-powered extraction:** `agent run "<task>"` submits an async task — poll `agent status <id>` and read `agent result <id>`. Both answer the shared task envelope (`{taskId, status, statusCode, message, error, elapsedMs, …}`, vocabulary `queued|running|done|failed|cancelled`), so **`status: "done"` is the completion check** (terminal: `done`/`failed`/`cancelled`), and the payload carries the agent's `keyFindings`, `filesChanged` and the `workspace` its deliverables live in. `elapsedMs` tells a long-running task from one that just started. `agent list` shows the same knowledge, refreshed from the backend on every call; `extract` / `summarize` are the synchronous variants. See [agent.md](references/agent.md).
 
 ## 7. Reference Map
 

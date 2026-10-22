@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.event
 
 import ai.platon.pulsar.agentic.event.detail.DefaultAgentEventHandlers
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
+import ai.platon.pulsar.common.getLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -48,6 +49,8 @@ import kotlin.coroutines.CoroutineContext
  * @see ServerSideAgentEventHandlers for server-side event handling
  */
 object AgentEventBus {
+
+    private val logger = getLogger(AgentEventBus::class)
 
     /**
      * Background coroutine scope for non-blocking event emission.
@@ -257,8 +260,23 @@ object AgentEventBus {
 
     /**
      * Returns the handlers for the current context (per-coroutine override first, then global fallback).
+     *
+     * Known boundary debt (documented, observed — not yet fixed): resolution happens on
+     * the *calling* thread, so events emitted from threads that do not inherit the
+     * coroutine context — driver/CDP callback threads, executor services — resolve no
+     * handlers and the event is dropped when neither the thread-local nor the global
+     * is set. The debug log quantifies how often that happens; the future fix is a
+     * per-task registry keyed by agentId (which every emit function already carries)
+     * instead of thread-based binding.
      */
     private fun currentServerSideAgentEventHandlers(): ServerSideAgentEventHandlers? {
-        return serverSideAgentEventHandlersTL.get() ?: serverSideAgentEventHandlers
+        val resolved = serverSideAgentEventHandlersTL.get() ?: serverSideAgentEventHandlers
+        if (resolved == null) {
+            logger.debug(
+                "Agent event emission dropped: no server-side handlers bound on thread {}",
+                Thread.currentThread().name,
+            )
+        }
+        return resolved
     }
 }

@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.entities
 
 import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
+import ai.platon.pulsar.agentic.tools.TaskEnvelopes
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
@@ -63,6 +64,15 @@ data class CommandStatus(
 
     var message: String? = null, // human-readable status description
 
+    /**
+     * True when the task was cancelled (explicit cancel, runner close, server
+     * shutdown) rather than failing on its own. Kept as an explicit flag because
+     * the persisted row's HTTP-styled code stays `failed`/417 — see
+     * [AgentTaskStatus.cancelled]. [`statusWord`](CommandToolExecutor) maps it
+     * onto the shared `cancelled` vocabulary word on subsequent polls.
+     */
+    var cancelled: Boolean = false,
+
     /** Internal event trace for debugging — concatenated lifecycle event names. */
     var eventTrace: String? = null,
 
@@ -80,6 +90,25 @@ data class CommandStatus(
     val status: String get() = ResourceStatus.getStatusText(statusCode)
     var lastModifiedTime: Instant? = null
     var finishTime: Instant? = null
+    /**
+     * When a worker first picked the task up (agent tasks only; null for page
+     * visits and unknown ids).
+     *
+     * Exposed so the status envelope can report `elapsedMs`: a caller polling a
+     * 50-minute agent run previously had no way to tell it apart from a task
+     * that had been running for two seconds.
+     */
+    var startedTime: Instant? = null
+
+    /**
+     * Live count of tool calls the agent has executed, reported by the engine's
+     * throttled progress events (0 when it reports none).
+     *
+     * It is the only progress signal available while a CLI tool-loop run is in
+     * flight: the step history is written when the run completes, so `processed`
+     * used to stay null for the whole (possibly hour-long) run.
+     */
+    var toolExecutions: Int = 0
 
     /**
      * Indicates whether the task has completed.
@@ -175,22 +204,14 @@ fun CommandStatus.failed(statusCode: Int): CommandStatus {
 
 fun CommandStatus.emitEvent(event: String) {
     this.event = event
+    // A progress event is a status change: refresh the timestamp so
+    // commandStatusFlow/SSE observers actually see it.
+    lastModifiedTime = Instant.now()
     // Keep the internal event trace for debugging separate from the user-facing message.
     eventTrace = if (eventTrace != null) "$eventTrace,$event" else event
-    // Generate a concise human-readable status description.
-    message = when {
-        "created" in event -> "Task created, waiting to start"
-        "onWillRun" in event -> "Agent starting up"
-        "onWillAct" in event -> "Agent planning next action"
-        "onDidAct" in event -> "Agent completed an action"
-        "onWillGenerate" in event -> "Agent generating response"
-        "onDidGenerate" in event -> "Agent response generated"
-        "onError" in event -> "Agent encountered an error"
-        "onDidRun" in event -> "Agent run completed, finalizing"
-        "onWillFail" in event -> "Agent task failing"
-        "onDidFail" in event -> "Agent task failed"
-        else -> "Task is in progress"
-    }
+    // Generate a concise human-readable status description; the exact event-name
+    // mapping is shared with AgentTaskStatus so the two copies cannot drift apart.
+    message = TaskEnvelopes.progressMessage(event, fallback = "Task is in progress")
 }
 
 fun CommandStatus.failed(statusCode: Int, pageStatusCode: Int): CommandStatus {
@@ -239,9 +260,12 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     // Map internal "done" processState to user-facing "completed" in the JSON output.
     status.processState = if (this.processState == "done") "completed" else this.processState
     status.message = this.message
+    status.cancelled = this.cancelled
     status.eventTrace = this.eventTrace
     status.lastModifiedTime = this.lastModifiedTime
     status.finishTime = this.finishTime
+    status.startedTime = this.startedTime
+    status.toolExecutions = this.toolExecutions
     status.workspace = this.workspace
     // The page this task ended on. AgentTaskStatus now carries it (observed from
     // the live page, see DocumentHttpStatus); before that the conversion dropped

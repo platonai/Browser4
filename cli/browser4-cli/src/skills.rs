@@ -124,7 +124,8 @@ pub fn get_skills_dir() -> PathBuf {
 /// Resolve the AI-agent skills directory (`~/.agents/skills`).
 ///
 /// Agents such as Codex load skills from `~/.agents/skills/<skill>/SKILL.md`,
-/// so `browser4-cli install` unpacks the bundled skills there as well.
+/// so `browser4-cli install` syncs the agent skills (see
+/// `AGENT_SYNCED_SKILL_NAMES`) there as well.
 ///
 /// Honours `BROWSER4_AGENTS_SKILLS_DIR` as an override (same validation as
 /// `BROWSER4_SKILLS_DIR`).  Returns `None` only when no override is set and
@@ -153,9 +154,53 @@ pub fn agents_skills_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".agents").join("skills"))
 }
 
+/// Skill names synced into the AI-agent skills directory (`~/.agents/skills`)
+/// by `browser4-cli install` / `upgrade`.
+///
+/// By default only the `browser4-cli` skill is copied there: the other bundled
+/// skills are Browser4-development oriented and would otherwise pollute the
+/// shared agent skill space of every user/agent on the machine.  The full set
+/// still lands in the versioned install directory (`<install_dir>/skills`),
+/// and users can unpack everything explicitly with `browser4-cli skills
+/// unpack <dest>`.
+pub const AGENT_SYNCED_SKILL_NAMES: &[&str] = &["browser4-cli"];
+
+/// Whether `skill_name` is synced into the AI-agent skills directory by
+/// default — see `AGENT_SYNCED_SKILL_NAMES`.
+pub fn is_agent_synced_skill(skill_name: &str) -> bool {
+    AGENT_SYNCED_SKILL_NAMES.contains(&skill_name)
+}
+
+/// Number of bundled skill files that `unpack_agent_skills_to` would write.
+pub fn bundled_agent_skill_file_count() -> usize {
+    SKILL_FILES.iter().filter(|f| is_agent_synced_skill(f.skill_name)).count()
+}
+
 /// Number of bundled skill files.
 pub fn bundled_skill_file_count() -> usize {
     SKILL_FILES.len()
+}
+
+/// Write one embedded skill file to `dest_dir` if its on-disk copy differs
+/// from the bundled content (write-if-changed, so repeated unpacks are cheap
+/// and idempotent).  Returns 1 when a write happened, 0 otherwise.
+fn write_skill_file_if_changed(
+    dest_dir: &std::path::Path,
+    f: &SkillFile,
+) -> Result<usize, String> {
+    let file_path = dest_dir.join(f.rel_path);
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
+    }
+    // Skip files whose on-disk content already matches the bundled copy.
+    match std::fs::read(&file_path) {
+        Ok(existing) if existing == f.content.as_bytes() => return Ok(0),
+        _ => {}
+    }
+    std::fs::write(&file_path, f.content)
+        .map_err(|e| format!("Failed to write {}: {e}", file_path.display()))?;
+    Ok(1)
 }
 
 /// Unpack all bundled skill files to `dest_dir`.
@@ -168,20 +213,26 @@ pub fn bundled_skill_file_count() -> usize {
 pub fn unpack_skills_to(dest_dir: &std::path::Path) -> Result<usize, String> {
     let mut count = 0;
     for f in SKILL_FILES {
-        let file_path = dest_dir.join(&f.rel_path);
-        if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
+        count += write_skill_file_if_changed(dest_dir, f)?;
+    }
+    Ok(count)
+}
+
+/// Unpack only the agent-synced bundled skill files (see
+/// `AGENT_SYNCED_SKILL_NAMES`) to `dest_dir`.
+///
+/// Same write-if-changed, idempotent semantics as `unpack_skills_to`, but
+/// restricted to the agent-synced allowlist — this is what `install` /
+/// `upgrade` copy into `~/.agents/skills`.  Files are never deleted, so
+/// skills written by CLI versions older than this policy stay on disk.
+/// Returns the number of files actually written.
+pub fn unpack_agent_skills_to(dest_dir: &std::path::Path) -> Result<usize, String> {
+    let mut count = 0;
+    for f in SKILL_FILES {
+        if !is_agent_synced_skill(f.skill_name) {
+            continue;
         }
-        // Skip files whose on-disk content already matches the bundled copy.
-        match std::fs::read(&file_path) {
-            Ok(existing) if existing == f.content.as_bytes() => continue,
-            _ => {}
-        }
-        std::fs::write(&file_path, f.content).map_err(|e| {
-            format!("Failed to write {}: {e}", file_path.display())
-        })?;
-        count += 1;
+        count += write_skill_file_if_changed(dest_dir, f)?;
     }
     Ok(count)
 }

@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.advanced.agent
 import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
+import ai.platon.pulsar.agentic.tools.TaskEnvelopes
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PGInstructResult
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.common.ResourceStatus
@@ -72,6 +73,28 @@ data class AgentTaskStatus(
     /** Set when the task reaches a terminal state (done or failed). */
     var finishTime: Instant? = null
 
+    /**
+     * Live count of tool calls the current run has executed.
+     *
+     * Fed from the CLI engine's throttled progress events
+     * (`onToolExecuted` → `metadata["toolExecutions"]`, every
+     * `CLI_TOOL_PROGRESS_EVENT_INTERVAL` calls). The step history is only
+     * written when a run completes, so without this a running CLI task reported
+     * no progress at all and `agent status` could not tell a 50-minute run from
+     * a hung one.
+     */
+    var toolExecutions: Int = 0
+
+    /**
+     * When the task last showed activity: [lastModifiedTime] once it started,
+     * [createdTime] before that.
+     *
+     * The TTL/compaction decisions used `createdTime`, so a long-running task's
+     * latest status row looked stale simply because the task had been created
+     * hours earlier.
+     */
+    fun lastActivity(): Instant = lastModifiedTime ?: createdTime
+
     val isDone: Boolean get() = processState == "done"
 
     /**
@@ -122,6 +145,17 @@ data class AgentTaskStatus(
     var failureReason: String? = null
 
     /**
+     * True when the task was cancelled (by an explicit user cancel, a runner
+     * close, or server shutdown) rather than failing on its own.
+     *
+     * [ResourceStatus] has no HTTP-styled code for "cancelled", so the persisted
+     * row keeps the `failed`/417 shape — this flag is what lets [toCommandStatus]
+     * and the CLI's status word report `cancelled` on later polls, instead of
+     * showing a user-requested cancel as an unexplained task failure.
+     */
+    var cancelled: Boolean = false
+
+    /**
      * The directory this task's tools wrote into (the agent's isolated workspace).
      *
      * Recorded when the task starts so a finished task can hand its caller the place
@@ -131,12 +165,30 @@ data class AgentTaskStatus(
     var workspace: String? = null
 
     companion object {
-        fun notFound(id: String) = AgentTaskStatus(id, ResourceStatus.SC_NOT_FOUND, processState = "done")
+        /**
+         * The internal event trace is a debugging aid but ends up in the JSONL
+         * persistence rows and in every status poll response; a long agent run
+         * emits hundreds of events, so it is capped (kept from the tail — the
+         * most recent events are at the end).
+         */
+        const val EVENT_TRACE_MAX_LENGTH = 512
+
+        fun notFound(id: String) = AgentTaskStatus(
+            id,
+            ResourceStatus.SC_NOT_FOUND,
+            processState = "done",
+            message = "No task found with id '$id'. It may have expired, been cleared, or the backend may have restarted.",
+        )
 
         fun failed(id: String) = AgentTaskStatus(id, ResourceStatus.SC_EXPECTATION_FAILED, processState = "done")
 
         fun failed(id: String, e: Exception): AgentTaskStatus {
-            return AgentTaskStatus(id, statusCode = ResourceStatus.SC_EXPECTATION_FAILED, processState = "done")
+            return AgentTaskStatus(
+                id,
+                statusCode = ResourceStatus.SC_EXPECTATION_FAILED,
+                processState = "done",
+                message = e.message,
+            )
         }
     }
 }
@@ -165,23 +217,21 @@ fun AgentTaskStatus.failed(statusCode: Int): AgentTaskStatus {
 
 fun AgentTaskStatus.emitEvent(event: String) {
     this.event = event
-    // Keep the internal event trace for debugging separate from the user-facing message.
-    eventTrace = if (eventTrace != null) "$eventTrace,$event" else event
-    // Generate a concise human-readable status description instead of the raw event chain.
-    message = when {
-        "created" in event -> "Task created, waiting to start"
-        "onWillRun" in event -> "Agent starting up"
-        "onWillAct" in event -> "Agent planning next action"
-        "onDidAct" in event -> "Agent completed an action"
-        "onToolExecuted" in event -> "Agent is working"
-        "onWillGenerate" in event -> "Agent generating response"
-        "onDidGenerate" in event -> "Agent response generated"
-        "onError" in event -> "Agent encountered an error"
-        "onDidRun" in event -> "Agent run completed, finalizing"
-        "onWillFail" in event -> "Agent task failing"
-        "onDidFail" in event -> "Agent task failed"
-        else -> "Agent is working"
+    // Progress events are status changes: without this bump the SSE status
+    // stream (CommandStatus.refreshed) stayed silent for a whole CLI-agent run —
+    // the message changed but lastModifiedTime did not.
+    lastModifiedTime = Instant.now()
+    // Keep the internal event trace for debugging separate from the user-facing message,
+    // capped so a long run cannot grow the JSONL rows and poll payloads without bound.
+    val newTrace = if (eventTrace != null) "$eventTrace,$event" else event
+    eventTrace = if (newTrace.length > AgentTaskStatus.EVENT_TRACE_MAX_LENGTH) {
+        "...(truncated)" + newTrace.takeLast(AgentTaskStatus.EVENT_TRACE_MAX_LENGTH)
+    } else {
+        newTrace
     }
+    // Generate a concise human-readable status description instead of the raw event chain:
+    // exact event-name lookup, shared with CommandStatus so the two copies cannot drift.
+    message = TaskEnvelopes.progressMessage(event)
 }
 
 fun AgentTaskStatus.done() {
@@ -194,4 +244,36 @@ fun AgentTaskStatus.done() {
 fun AgentTaskStatus.refreshed(lastModifiedTime: Instant): Boolean {
     val modifiedTime = this.lastModifiedTime ?: return false
     return modifiedTime > lastModifiedTime
+}
+
+/**
+ * A detached copy of this status, safe to serialize while the run keeps mutating
+ * the original.
+ *
+ * `data class copy()` only carries the CONSTRUCTOR properties, so the body-declared
+ * timestamps, submitted task, failure reason and workspace were silently reset by
+ * the plain `status.copy()` the compactor used — a compacted task lost its
+ * `startedTime` (and therefore its elapsed time) and its `createdTime` jumped to
+ * "now", extending its TTL. They are copied explicitly here.
+ *
+ * @param includeHistory false for the periodic in-progress snapshots: they only
+ *   need the message/step/counter, and the CLI engine's history is empty until
+ *   completion anyway. The terminal snapshot keeps the history.
+ */
+fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskStatus {
+    val snapshot = copy()
+    snapshot.agentHistory = if (includeHistory) {
+        agentHistory?.let { AgentHistory(it.states.toMutableList()) }
+    } else {
+        null
+    }
+    snapshot.createdTime = createdTime
+    snapshot.startedTime = startedTime
+    snapshot.lastModifiedTime = lastModifiedTime
+    snapshot.finishTime = finishTime
+    snapshot.submittedTask = submittedTask
+    snapshot.failureReason = failureReason
+    snapshot.workspace = workspace
+    snapshot.toolExecutions = toolExecutions
+    return snapshot
 }

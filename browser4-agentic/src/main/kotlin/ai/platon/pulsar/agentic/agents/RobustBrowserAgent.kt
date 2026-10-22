@@ -23,6 +23,7 @@ import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
 import ai.platon.pulsar.chrome.dom.util.DomDebug
+import ai.platon.pulsar.coding.SafeText
 import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.MultiSinkMessageWriter
@@ -217,20 +218,18 @@ internal data class RoundToolRecord(
  * The inner [AgentToolCallLoop] builds its own (local) message list, so tool
  * calls and results die with the round; without this digest the model would
  * re-execute tools it already ran. Keeps the newest [ROUND_DIGEST_RESULTS]
- * records, first line only (<=200 chars), whole digest capped at
- * [ROUND_DIGEST_MAX_CHARS].
+ * records as head+tail excerpts ([ToolResultDigest]) within
+ * [ROUND_DIGEST_MAX_CHARS] — first-line-only entries reduced every
+ * `coding.shell` result to `Session: devshell-N`.
  *
  * Pure logic — no IO — so it is unit-testable without an agent session.
  */
 internal fun cliRoundToolDigest(records: List<RoundToolRecord>): String? {
     if (records.isEmpty()) return null
-    val summaries = records.takeLast(ROUND_DIGEST_RESULTS).map { record ->
-        val firstLine = record.resultText.lineSequence().firstOrNull().orEmpty().trim().take(200)
-        "${record.name} -> $firstLine"
-    }
-    if (summaries.isEmpty()) return null
-    return "This round executed ${records.size} tool(s): " +
-        summaries.joinToString(" | ").take(ROUND_DIGEST_MAX_CHARS)
+    val entries = records.takeLast(ROUND_DIGEST_RESULTS).map { it.name to it.resultText }
+    val digest = ToolResultDigest.digest(entries, ROUND_DIGEST_MAX_CHARS)
+    if (digest.isEmpty()) return null
+    return "This round executed ${records.size} tool(s): $digest"
 }
 
 open class RobustBrowserAgent(
@@ -1277,10 +1276,15 @@ open class RobustBrowserAgent(
                 val estimatedChars = pulsarObjectMapper().writeValueAsString(basePayload).length
                 val payload = basePayload + ("estimatedTokens" to (estimatedChars / 4).coerceAtLeast(1))
                 val path = promptDir.resolve("${AppPaths.fromNow()}.$requestSeq.request.json")
-                Files.writeString(
-                    path,
-                    pulsarObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(payload),
-                )
+                val json = pulsarObjectMapper()
+                    .writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(payload)
+                // A lone surrogate (from truncated model output, a digest cut, an
+                // already-pruned result, ...) is not encodable as UTF-8, and
+                // Files.writeString uses a REPORT encoder: one bad character used
+                // to lose this dump for every later round of the run (the poisoned
+                // message stays in the conversation). Repair it instead.
+                Files.writeString(path, SafeText.sanitize(json))
             } catch (e: Exception) {
                 logger.warn("Failed to write CLI prompt log: {}", e.message)
             }
@@ -2009,27 +2013,17 @@ open class RobustBrowserAgent(
 
     /**
      * Workspace whose git state backs the `filesChanged` cross-check.
-     * `-Dbrowser4.agent.finish.workspace=<dir>` wins; otherwise the enclosing
-     * git work tree of the process working directory.
+     *
+     * `-Dbrowser4.agent.finish.workspace=<dir>` wins; otherwise the agent's own
+     * workspace (the tree its coding tools write into) is used — never the
+     * server's process directory, which is a different, usually clean checkout.
+     * See [resolveFinishGitWorkspace].
      */
-    private fun finishWorkspaceRoot(): Path? {
-        val configured = config.finishWorkspace.takeIf { it.isNotBlank() }
-        val start = if (configured != null) Path.of(configured) else Path.of(System.getProperty("user.dir"))
-        return findGitRoot(start)
-    }
-
-    private fun findGitRoot(start: Path): Path? {
-        var dir: Path? = runCatching { start.toAbsolutePath().normalize() }.getOrNull()
-        var hops = 0
-        while (dir != null && hops < 12) {
-            if (Files.isDirectory(dir.resolve(".git")) || Files.isRegularFile(dir.resolve(".git"))) {
-                return dir
-            }
-            dir = dir.parent
-            hops++
-        }
-        return null
-    }
+    private fun finishWorkspaceRoot(): Path? = resolveFinishGitWorkspace(
+        configured = config.finishWorkspace,
+        agentWorkspace = runCatching { agentWorkspaceDir }.getOrNull(),
+        processDir = Path.of(System.getProperty("user.dir")),
+    )
 
     /**
      * Repository-relative changed paths from `git status --porcelain`.

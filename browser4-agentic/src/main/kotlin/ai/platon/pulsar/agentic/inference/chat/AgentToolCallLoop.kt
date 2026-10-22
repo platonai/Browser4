@@ -348,11 +348,13 @@ class AgentToolCallLoop(
 
     /**
      * Bounded progress digest of the newest tool results for the overflow error:
-     * up to [OVERFLOW_SUMMARY_RESULTS] results, first line only (<=200 chars each),
-     * whole digest capped at [OVERFLOW_SUMMARY_MAX_CHARS].
+     * up to [OVERFLOW_SUMMARY_RESULTS] results, each a head+tail excerpt (see
+     * [ToolResultDigest] — the old first-line-only form reduced every
+     * `coding.shell` result to `Session: devshell-N` and forced a re-run of the
+     * whole round), whole digest capped at [OVERFLOW_SUMMARY_MAX_CHARS].
      */
     private fun overflowProgressSummary(messages: List<ChatMessage>): String {
-        val summaries = messages.filterIsInstance<ToolExecutionResultMessage>()
+        val entries = messages.filterIsInstance<ToolExecutionResultMessage>()
             .takeLast(OVERFLOW_SUMMARY_RESULTS)
             .map { m ->
                 // Reference/diff forms resolve to their original content
@@ -367,11 +369,10 @@ class AgentToolCallLoop(
                 } else {
                     m.text()
                 }
-                val firstLine = text.lineSequence().firstOrNull().orEmpty().trim().take(200)
-                "${m.toolName()} -> $firstLine"
+                m.toolName() to text
             }
-        return if (summaries.isEmpty()) "" else "; results: " +
-            summaries.joinToString(" | ").take(OVERFLOW_SUMMARY_MAX_CHARS)
+        val digest = ToolResultDigest.digest(entries, OVERFLOW_SUMMARY_MAX_CHARS)
+        return if (digest.isEmpty()) "" else "; results: $digest"
     }
 
     /** Best-effort text of any [ChatMessage] for digesting. */

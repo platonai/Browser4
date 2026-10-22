@@ -53,6 +53,41 @@ class DevTaskPlannerOneshotTest {
     }
 
     @Test
+    @DisplayName("the acceptance checklist and testTarget follow the named class, not the edited driver module")
+    fun testBindingFollowsTheNamedClass() {
+        val plan = DevTaskPlanner.plan(
+            "fix cursor positioning in Browser4WebDriver.kt and add a test class FillCursorTest in browser4-rest",
+            ModuleMap.MODULES,
+            mapOf("Browser4WebDriver.kt" to driverPath),
+        )
+
+        // Compiling happens where the code change lands …
+        assertEquals("browser4-core/browser4-browser", plan.steps.first { it.tool == "coding.mvnBuild" }.args["module"])
+        // … but the test runs where the named class lives, and `testTarget` is the
+        // single value every consumer (acceptance, verify) must agree on.
+        assertEquals("browser4-rest", plan.testTarget, "testTarget: ${plan.testTarget}")
+        assertTrue(
+            plan.acceptance.any { it == "test FillCursorTest in browser4-rest" },
+            "acceptance: ${plan.acceptance}",
+        )
+        assertTrue(
+            plan.acceptance.any { it == "compile browser4-core/browser4-browser" },
+            "acceptance: ${plan.acceptance}",
+        )
+    }
+
+    @Test
+    @DisplayName("without a named class the test step (whole module suite) binds the affected module; no signal binds nothing")
+    fun testTargetWithoutTestClass() {
+        val moduleOnly = DevTaskPlanner.plan("fix a bug in browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/ModuleMap.kt",
+            ModuleMap.MODULES)
+        assertEquals("browser4-coding", moduleOnly.testTarget, "testTarget: ${moduleOnly.testTarget}")
+
+        val noSignal = DevTaskPlanner.plan("please improve the overall performance", ModuleMap.MODULES)
+        assertNull(noSignal.testTarget, "testTarget: ${noSignal.testTarget}")
+    }
+
+    @Test
     @DisplayName("without a file index the bare name stays unresolved (caller's I/O is required)")
     fun bareFilenameWithoutIndexStaysBare() {
         val plan = DevTaskPlanner.plan(

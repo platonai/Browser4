@@ -36,6 +36,15 @@ object DevTaskPlanner {
         val testClasses: List<String>,
         /** `browser4-plugins/<name>` mentions that are NOT in the known module list — new modules to scaffold. */
         val newPluginModules: List<String>,
+        /**
+         * The module the **test** step binds to — the module that owns the named
+         * test class, which is not necessarily [modules]' deepest entry (a task
+         * can edit a driver file and add the test elsewhere). Single source of
+         * truth for the rendered test step, the acceptance checklist and the
+         * `verify(testModule=…)` call: running `-Dtest=` in a module that does
+         * not contain the class executes zero tests and exits 0.
+         */
+        val testTarget: String? = null,
         val steps: List<PlanStep>,
         /**
          * Human/machine acceptance checklist the plan must satisfy before the
@@ -102,10 +111,11 @@ object DevTaskPlanner {
         val testClasses = TEST_CLASS_PATTERN.findAll(task).map { it.groupValues[1] }
             .filter { it != "Test" }.distinct().toList()
         val targetModule = selectTargetModule(modules, newPluginModules)
-        val acceptance = buildAcceptance(targetModule, cliCrate, testClasses, driverFiles.firstOrNull())
+        val testTarget = selectTestTarget(modules, explicitModules, newPluginModules, knownModules, testClasses)
+        val acceptance = buildAcceptance(targetModule, testTarget, cliCrate, testClasses, driverFiles.firstOrNull())
         val steps = buildSteps(
-            task, modules, explicitModules, files, driverFiles, testClasses, newPluginModules,
-            knownModules, targetModule, acceptance, hasSignal = files.isNotEmpty() ||
+            task, modules, files, driverFiles, testClasses, newPluginModules,
+            knownModules, targetModule, testTarget, acceptance, hasSignal = files.isNotEmpty() ||
             modules.isNotEmpty() || newPluginModules.isNotEmpty(),
         )
 
@@ -116,6 +126,7 @@ object DevTaskPlanner {
             driverFiles = driverFiles,
             testClasses = testClasses,
             newPluginModules = newPluginModules,
+            testTarget = testTarget,
             steps = steps,
             acceptance = acceptance,
         )
@@ -172,6 +183,31 @@ object DevTaskPlanner {
         (newPluginModules + modules)
             .filter { it != ModuleMap.CLI_CRATE }
             .maxByOrNull { module -> module.count { it == '/' } }
+
+    /**
+     * The module the test step binds to (single source of truth for the rendered
+     * test command, the acceptance checklist and `verify(testModule=…)`).
+     *
+     * Binding priority: the module a class name implies (only when the task
+     * names no module) → the module the task EXPLICITLY names → the deepest
+     * affected module. Without the explicit-module step, a driver file being
+     * edited alongside a test would move the test to the driver's module — and
+     * `mvn test -pl <driver module> -Dtest=<class elsewhere>` then runs *zero*
+     * tests while exiting 0 (`-Dsurefire.failIfNoSpecifiedTests=false` makes
+     * that look green).
+     */
+    private fun selectTestTarget(
+        modules: List<String>,
+        explicitModules: List<String>,
+        newPluginModules: List<String>,
+        knownModules: List<String>,
+        testClasses: List<String>,
+    ): String? {
+        val bindingCandidates = if (modules.isEmpty()) knownModules else emptyList()
+        val testClassBound = testClasses.firstNotNullOfOrNull { inferModuleForTestClass(it, bindingCandidates) }
+        val mentionedTarget = selectTargetModule(explicitModules, newPluginModules)
+        return testClassBound ?: mentionedTarget ?: selectTargetModule(modules, newPluginModules)
+    }
 
     /** Lightweight module inference from a relative path (mirrors the executor's). */
     private fun inferModuleFromPath(file: String): String? {
@@ -241,6 +277,7 @@ object DevTaskPlanner {
      */
     private fun buildAcceptance(
         targetModule: String?,
+        testTarget: String?,
         cliCrate: Boolean,
         testClasses: List<String>,
         trapFile: String?,
@@ -248,8 +285,11 @@ object DevTaskPlanner {
         val items = mutableListOf<String>()
         if (cliCrate) items += "cargo test --bin browser4-cli"
         if (targetModule != null) items += "compile $targetModule"
-        if (targetModule != null && testClasses.isNotEmpty()) {
-            items += "test ${testClasses.joinToString(",")} in $targetModule"
+        // The test item names the module that OWNS the class, not the deepest
+        // compiled one — otherwise the checklist advertises a suite that the
+        // test step does not run (and `-Dtest=` would match nothing there).
+        if (testTarget != null && testClasses.isNotEmpty()) {
+            items += "test ${testClasses.joinToString(",")} in $testTarget"
         }
         items += "validate repo-consistency"
         if (trapFile != null) items += "trapCheck $trapFile"
@@ -263,13 +303,13 @@ object DevTaskPlanner {
     private fun buildSteps(
         task: String,
         modules: List<String>,
-        explicitModules: List<String>,
         files: List<String>,
         driverFiles: List<String>,
         testClasses: List<String>,
         newPluginModules: List<String>,
         knownModules: List<String>,
         targetModule: String?,
+        testTarget: String?,
         acceptance: List<String>,
         hasSignal: Boolean,
     ): List<PlanStep> {
@@ -357,15 +397,8 @@ object DevTaskPlanner {
 
         // 5. Smallest-scope test for the affected module. When the task names a
         //    test class (FooTest), scope with -Dtest=... instead of the whole suite.
-        //    Binding priority: the module a class name implies (only when the task
-        //    names no module) → the module the task EXPLICITLY names → the deepest
-        //    affected module. Without the explicit-module step, a driver file
-        //    being edited alongside a test would move the test to the driver's
-        //    module.
-        val bindingCandidates = if (modules.isEmpty()) knownModules else emptyList()
-        val testClassBound = testClasses.firstNotNullOfOrNull { inferModuleForTestClass(it, bindingCandidates) }
-        val mentionedTarget = selectTargetModule(explicitModules, newPluginModules)
-        val testTarget = testClassBound ?: mentionedTarget ?: targetModule
+        //    The binding is computed once in [selectTestTarget] and shared with
+        //    the acceptance checklist / verify call, so the three cannot drift.
         if (testTarget != null) {
             val testClassArg = testClasses.joinToString(",")
             val command = ModuleMap.mavenTestCommand(testTarget, testClassArg.ifBlank { null })

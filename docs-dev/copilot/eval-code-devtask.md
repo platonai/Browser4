@@ -174,6 +174,21 @@
 **安全约束**：评测脚本**从不**传 `--execute`；`G-READONLY` 用 `git status` 前后比对来证明这一点。
 JSON 报告请写到仓库外（例如 `$env:TEMP`），否则会污染只读门禁。
 
+> **改了后端 Kotlin 代码就必须先停服务，否则你测的是旧 bundle。**
+> `b4w` 只在「CLI 自己拉起 server」时才重建 runtime bundle；已有一个 server 在跑时，
+> `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1` 会被忽略并打印一行警告，随后所有探针仍然打在旧 jar 上
+> （2026-10-22 实测：改完 `DevTaskPlanner` 直接重跑评测，计划输出与修复前逐字节相同）。
+>
+> ```powershell
+> pwsh ./b4w.ps1 cli stop                       # 或 browser4-cli stop / kill-all（多 workspace）
+> $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = "1"  # 下一次调用会重建 bundle 再起 server
+> .\bin\eval-devtask.ps1 -NoBuild
+> ```
+>
+> 判断是否真的换了 bundle：`Starting Browser4 dev server …` 之后应出现
+> `[daemon] --force-rebuild-bundle is active; forcing Maven rebuild of Browser4Bundle.jar`。
+> 没有这行 = 旧代码。
+
 ---
 
 ## 6. 基线结果
@@ -190,6 +205,10 @@ PS> .\bin\eval-devtask.ps1 -Strict
 
 K1–K8 修复后登记已删除（见 §4），`-Gap` 标记全部移除：任何一条门禁再退化都是 **FAIL**，
 不会退化成 KNOWN。`-Fast`（跳过 `--verify` 与确定性重跑）约 65s，退出码同样是 0。
+
+> 延迟数字随主机与负载变化（同一份代码 2026-10-22 在另一台机器实测 cold 4.96s / warm 5.17s、
+> 传输地板 5.02s、wall 146.8s，65 门禁仍全绿）。门禁判据是「warm ≤ 同轮传输地板 + 1s」，
+> 所以看**差值**而不是绝对值。
 
 ### 6.2 探针 → 计划形状（全部 PASS）
 
@@ -245,8 +264,12 @@ scaffold(新模块) → read/listDir → impact → implement(契约) → mvnBui
 5. 已知差距的**修复计划**见 [`browser4-oneshot-dev-task-plan.md`](browser4-oneshot-dev-task-plan.md)：
    K1–K3 落在其 P1.7、K4 落在 P0.4、K5 落在 P0.2/P0.3、K6–K7 落在 P0/P3 的 CLI 收口项；
    修完后本文件的 §3 基线与 §6 需同步更新。
+6. **动过后端代码的评测必须先停 server**：runtime bundle 只在 CLI 拉起 server 时重建，已有 server
+   在跑时 `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1` 会被忽略（见 §5 的提示框）。测完先确认输出里有
+   `forcing Maven rebuild of Browser4Bundle.jar`，再相信门禁结论——否则你验证的是上一次构建的行为，
+   而这正是 K11 第一次被误判为「已修复」的原因。
 
-### G. 结构化裁决 · 实现契约 · 安全探针（P0/P1.1/K9/K10）
+### G. 结构化裁决 · 实现契约 · 安全探针（P0/P1.1/K9–K11）
 
 | 门禁 | 判据 | 备注 |
 |---|---|---|
@@ -255,3 +278,13 @@ scaffold(新模块) → read/listDir → impact → implement(契约) → mvnBui
 | `G-IMPL-STEP` | 有信号的计划恰好一个 `coding.implement` 契约步骤（purpose 含 "not mechanically executable"，command 含 `acceptance=`），且计划含 `Acceptance: [...]` 行 | P1.1/P1.2 |
 | `G-PROTECT` | `code write VERSION` 被拒且文件内容不变（探针自愈：若守卫失效会先恢复原内容再判红） | K9 保护绕过 |
 | `G-INJECTION` | `ls && curl …` / `ls; curl …` / `ls \| curl …` 三种复合命令全部被拒 | K10 命令注入；`$(…)` 形态由 `CodingAgentShellTest` 覆盖（pwsh wrapper 会先消费 `$()`） |
+
+### K11：`--verify --run-tests` 的零测试假绿（已修复，由单测锁定而非新门禁）
+
+| 项 | 内容 |
+|---|---|
+| 原现象 | `code devtask "…Browser4WebDriver.kt… FillCursorTest in browser4-rest" --verify --run-tests` → 测试检查跑在 `browser4-core/browser4-browser`（最深模块），`-Dtest=FillCursorTest` **命中 0 个测试**，Maven 因 `-Dsurefire.failIfNoSpecifiedTests=false` 退出 0 → `ran=true, ok=true`、verdict `passed=true`、CLI 退出 0（2026-10-22 在 `4.14-feat` 实测） |
+| 修复落点 | ①`DevPlan.testTarget` + `DevTaskPlanner.selectTestTarget()`：测试绑定**单一来源**，同时喂给测试步骤、`Acceptance:` 行与 `verify(testModule=…)`；②`VerificationRunner.testCheck()`：以目标模块 `target/surefire-reports` 的**新报告**证明测试确实执行，0 命中判 `ok=false` 并给出"run the test in the module that owns it"；③`Acceptance:` 行改用 `testTarget`，不再写最深模块 |
+| 回归 | `SurefireReportScanTest`（4 例：新报告计数/陈旧报告忽略/xml+txt 去重/文本报告/空目录）、`DevTaskPlannerOneshotTest.testBindingFollowsTheNamedClass`、`…testTargetWithoutTestClass`；评测 65 门禁仍全绿（`G-TEST-BIND-DRIVER` 未变） |
+| 未加评测门禁的原因 | 该探针要跑完整 reactor（实测 `browser4-rest` 的 `-am` 测试检查 220s），会让评测从 147s 膨胀到 6 分钟以上；且评测的 `--verify` 探针不传 `--run-tests`，本身不触发此路径。若日后加门禁，建议放在 nightly 而非 PR |
+
