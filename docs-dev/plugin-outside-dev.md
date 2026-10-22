@@ -61,7 +61,7 @@ browser4-<feature>/
 
 ### 3.1 准备
 
-- JDK 17+、Maven 3.9+
+- JDK 25+ toolchain、Maven 3.9+（平台 `provided` class 为 Java 25 字节码，工具链需 25+；PDK 父 POM 仍将插件 JAR 以 Java 17 字节码输出）
 - 确认目标 PDK 版本已在 Maven Central：
 
   ```bash
