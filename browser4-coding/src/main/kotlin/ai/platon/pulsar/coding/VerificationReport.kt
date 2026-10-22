@@ -2,6 +2,8 @@ package ai.platon.pulsar.coding
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
+import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * One deterministic check inside a [VerificationReport].
@@ -259,6 +261,11 @@ class VerificationRunner(
      *                      `trapCheck` check is recorded as skipped and is *not*
      *                      required (no driver file in the plan is legitimate)
      * @param timeoutSeconds per-check timeout
+     * @param testModule    module the `test` check runs in when it differs from
+     *                      [module] (e.g. the change lands in a driver module but
+     *                      the named test class lives in another one). Defaults to
+     *                      [module]. A `-Dtest=` filter that matches nothing there
+     *                      is a FAILING check, not a green one.
      */
     suspend fun verify(
         shell: CodingAgentShell,
@@ -269,6 +276,7 @@ class VerificationRunner(
         testClasses: List<String> = emptyList(),
         trapCheckFiles: List<String> = emptyList(),
         timeoutSeconds: Long = 300L,
+        testModule: String? = null,
     ): VerificationReport {
         val started = System.currentTimeMillis()
         val requested = buildList {
@@ -280,13 +288,13 @@ class VerificationRunner(
                 if (trapCheckFiles.isNotEmpty()) add("trapCheck")
             }
         }.distinct()
-        logger.info("coding.verify: module={} checks={}", module, requested)
+        logger.info("coding.verify: module={} testModule={} checks={}", module, testModule ?: module, requested)
 
         val results = mutableListOf<VerificationCheck>()
         for (check in requested) {
             results += when (check) {
                 "compile" -> compileCheck(shell, module, timeoutSeconds)
-                "test" -> testCheck(shell, module, testClasses, timeoutSeconds)
+                "test" -> testCheck(shell, fs, testModule ?: module, testClasses, timeoutSeconds)
                 "repo-consistency" -> repoConsistencyCheck(fs)
                 "trapCheck" -> trapCheck(fs, trapCheckFiles)
                 else -> VerificationCheck(
@@ -353,6 +361,7 @@ class VerificationRunner(
 
     private suspend fun testCheck(
         shell: CodingAgentShell,
+        fs: CodingAgentFileSystem,
         module: String?,
         testClasses: List<String>,
         timeoutSeconds: Long,
@@ -384,17 +393,35 @@ class VerificationRunner(
             )
         }
         val result = maven.test(shell, module, testClasses, timeoutSeconds)
+        // `-Dtest=<class>` makes Maven exit 0 when the filter matches nothing, and
+        // the plan adds `-Dsurefire.failIfNoSpecifiedTests=false` so `-am`
+        // upstream modules do not fail for having no match. The two together let a
+        // test check "pass" after executing ZERO tests — e.g. when the class lives
+        // in another module. Execution is therefore proven from what surefire
+        // actually wrote, not from the exit code (plan invariant I6: a gate that
+        // did not really run is never green).
+        val executed = if (filter.isBlank()) null
+        else countFreshSurefireReports(fs.workspaceRoot, module, started)
+        val ok = result.success && (executed == null || executed > 0)
         return VerificationCheck(
             name = "test",
             target = module + if (filter.isBlank()) "" else " [-Dtest=$filter]",
             ran = true,
-            ok = result.success,
+            ok = ok,
             exitCode = result.exitCode,
             durationMs = System.currentTimeMillis() - started,
-            evidence = if (result.success) "exit 0" else
-                "${result.diagnostics.size} diagnostic(s), exit ${result.exitCode}",
-            detail = if (result.success) null else
-                result.diagnosticsSummary(10).ifBlank { lastLines(result.output, 20) },
+            evidence = when {
+                !result.success -> "${result.diagnostics.size} diagnostic(s), exit ${result.exitCode}"
+                executed == null -> "exit 0"
+                executed > 0 -> "exit 0 ($executed test class(es) ran)"
+                else -> "exit 0 but no test matched -Dtest=$filter"
+            },
+            detail = when {
+                !result.success -> result.diagnosticsSummary(10).ifBlank { lastLines(result.output, 20) }
+                ok -> null
+                else -> "the -Dtest=$filter filter matched no test in $module (surefire wrote no report) — " +
+                    "run the test in the module that owns it"
+            },
             diagnostics = result.diagnostics,
         )
     }
@@ -473,4 +500,43 @@ class VerificationRunner(
         val lines = text.lines().filter { it.isNotBlank() }
         return lines.takeLast(count).joinToString("\n").take(2_000)
     }
+}
+
+/**
+ * How many test classes surefire actually executed for [module] since [sinceMillis].
+ *
+ * Surefire writes one `target/surefire-reports/TEST-<class>.xml` (plus a
+ * `<class>.txt` summary) per executed class, so a fresh report is proof that a
+ * test really ran. This is deliberately report-based rather than output-based:
+ * the build runs with `-q`, which suppresses the `Tests run:` lines on success.
+ *
+ * @param workspaceRoot the workspace the module path is relative to (the isolated
+ *   worktree root when workspace isolation is on — reports land there too).
+ * @param module workspace-relative module path, e.g. `browser4-core/browser4-browser`.
+ * @param sinceMillis start of the test run; a small slack absorbs clock/FS
+ *   granularity. Reports older than the run are stale and never counted.
+ * @return the number of distinct executed test classes; 0 when nothing ran.
+ */
+internal fun countFreshSurefireReports(workspaceRoot: Path, module: String, sinceMillis: Long): Int {
+    val reports = runCatching { workspaceRoot.resolve(module).resolve("target").resolve("surefire-reports") }
+        .getOrNull() ?: return 0
+    if (!Files.isDirectory(reports)) return 0
+    val slackMs = 5_000L
+    val fresh = runCatching {
+        Files.walk(reports).use { stream ->
+            stream.filter { Files.isRegularFile(it) }
+                .filter { Files.getLastModifiedTime(it).toMillis() >= sinceMillis - slackMs }
+                .map { it.fileName.toString() }
+                .filter { it.endsWith(".xml") || it.endsWith(".txt") }
+                .toList()
+        }
+    }.getOrDefault(emptyList())
+    if (fresh.isEmpty()) return 0
+    // One XML (or TXT, when the XML report is disabled) file per class; count
+    // classes so a module never reports both of its report files as two tests.
+    val preferred = fresh.filter { it.startsWith("TEST-") && it.endsWith(".xml") }
+    return (preferred.ifEmpty { fresh })
+        .map { it.removePrefix("TEST-").substringBeforeLast('.') }
+        .distinct()
+        .size
 }

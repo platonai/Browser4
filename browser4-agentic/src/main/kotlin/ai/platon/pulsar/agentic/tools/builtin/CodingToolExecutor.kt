@@ -1609,6 +1609,11 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     .maxByOrNull { it.count { c -> c == '/' } }
                     ?: verifyCandidates.firstOrNull()
                 val fileArg = plan.driverFiles.take(1)
+                // The test check must run where the named test class lives — the
+                // planner's binding, not the deepest compiled module. Running
+                // `-Dtest=` elsewhere executes zero tests and Maven still exits 0
+                // (surefire.failIfNoSpecifiedTests=false), i.e. a false green.
+                val testModule = if (moduleOverride.isNullOrBlank()) plan.testTarget else mavenModule
                 val report = verification.verify(
                     shell = shell,
                     fs = fs,
@@ -1621,6 +1626,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     testClasses = plan.testClasses,
                     trapCheckFiles = fileArg,
                     timeoutSeconds = 600,
+                    testModule = testModule,
                 )
                 planText + "\n\n--- Verification ---\n" + (if (json) report.toJson() else report.format())
             }
