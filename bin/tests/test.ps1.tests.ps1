@@ -440,6 +440,7 @@ $testTypeMap = @{
     'skills'        = 'maven'
     'mcp'           = 'maven'
     'mcp-contract'  = 'maven'
+    'verify'        = 'verify'
     'main'          = 'maven-expand'
     'cli'           = 'cli'
     'browser4-cli'  = 'cli'
@@ -486,6 +487,7 @@ Assert-Returns -Label 'Map: e2e → maven' -Actual $testTypeMap['e2e'] -Expected
 Assert-Returns -Label 'Map: rest → maven' -Actual $testTypeMap['rest'] -Expected 'maven'
 Assert-Returns -Label 'Map: skills → maven' -Actual $testTypeMap['skills'] -Expected 'maven'
 Assert-Returns -Label 'Map: mcp → maven' -Actual $testTypeMap['mcp'] -Expected 'maven'
+Assert-Returns -Label 'Map: verify → verify' -Actual $testTypeMap['verify'] -Expected 'verify'
 Assert-Returns -Label 'Map: main → maven-expand' -Actual $testTypeMap['main'] -Expected 'maven-expand'
 Assert-Returns -Label 'Map: cli → cli' -Actual $testTypeMap['cli'] -Expected 'cli'
 Assert-Returns -Label 'Map: rws → rws' -Actual $testTypeMap['rws'] -Expected 'rws'
@@ -508,7 +510,8 @@ function Test-Dispatch {
     $rwsT    = @($InputTypes | Where-Object { $testTypeMap[$_] -eq 'rws' })
     $psT     = @($InputTypes | Where-Object { $testTypeMap[$_] -eq 'ps' })
     $serverT = @($InputTypes | Where-Object { $testTypeMap[$_] -eq 'server' })
-    return [PSCustomObject]@{ Maven = $mavenT; Cli = $cliT; Rws = $rwsT; Ps = $psT; Server = $serverT }
+    $verifyT = @($InputTypes | Where-Object { $testTypeMap[$_] -eq 'verify' })
+    return [PSCustomObject]@{ Maven = $mavenT; Cli = $cliT; Rws = $rwsT; Ps = $psT; Server = $serverT; Verify = $verifyT }
 }
 
 # Single type
@@ -538,6 +541,10 @@ $d = Test-Dispatch 'ps'
 Assert-Returns -Label 'Dispatch ps: ps bucket' -Actual ($d.Ps -join ',') -Expected 'ps'
 Assert-Returns -Label 'Dispatch ps: no maven' -Actual $d.Maven.Count -Expected 0
 Assert-Returns -Label 'Dispatch ps: no cli' -Actual $d.Cli.Count -Expected 0
+
+$d = Test-Dispatch 'verify'
+Assert-Returns -Label 'Dispatch verify: verify bucket' -Actual ($d.Verify -join ',') -Expected 'verify'
+Assert-Returns -Label 'Dispatch verify: no maven' -Actual $d.Maven.Count -Expected 0
 
 Write-Host "━━━ Test type map: main expansion ━━━" -ForegroundColor Cyan
 
@@ -591,7 +598,7 @@ Assert-Returns -Label 'Server alone: no conflict' -Actual $hasConflict2 -Expecte
 Write-Host "━━━ Known test types: completeness ━━━" -ForegroundColor Cyan
 
 $expectedTypes = @(
-    'fast', 'it', 'e2e', 'rest', 'skills', 'mcp', 'mcp-contract', 'main',
+    'fast', 'it', 'e2e', 'rest', 'skills', 'mcp', 'mcp-contract', 'verify', 'main',
     'cli', 'browser4-cli',
     'server', 'mock-site', 'mocksite', 'mocksiteboot',
     'rws', 'ps', 'resume', 'session'
@@ -611,7 +618,7 @@ Assert-Returns -Label 'Map: no extra keys beyond expected' -Actual $extraKeys.Co
 
 # Verify all categories are covered
 $categories = $testTypeMap.Values | Select-Object -Unique | Sort-Object
-$expectedCategories = @('cli', 'maven', 'maven-expand', 'ps', 'resume', 'rws', 'server', 'session')
+$expectedCategories = @('cli', 'maven', 'maven-expand', 'ps', 'resume', 'rws', 'server', 'session', 'verify')
 $missingCategories = $expectedCategories | Where-Object { $_ -notin $categories }
 $extraCategories = $categories | Where-Object { $_ -notin $expectedCategories }
 Assert-Returns -Label 'Map: all categories covered' -Actual $missingCategories.Count -Expected 0
