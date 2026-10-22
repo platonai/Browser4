@@ -196,8 +196,14 @@ class AgentToolManager constructor(
      * A workspace that is already a checkout (the default coding root) and a
      * workspace with no detectable source checkout are left untouched, so
      * ordinary browser sessions pay nothing.
+     *
+     * Idempotent, and called both from the constructor (cheap: it skips an
+     * already-mirrored workspace) and again right before the CLI loop starts —
+     * see [ai.platon.pulsar.agentic.agents.RobustBrowserAgent]: the constructor
+     * may run before the task runner sets `codingMode`, which used to leave a
+     * coding run with an empty working tree.
      */
-    private fun provisionCodingWorkspaceMirror() {
+    internal fun provisionCodingWorkspaceMirror() {
         if (!agent.codingMode) return
         val root = workspaceRoot.toAbsolutePath().normalize()
         if (root == ai.platon.pulsar.coding.CodingWorkspace.workspaceRoot.toAbsolutePath().normalize()) return

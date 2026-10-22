@@ -200,4 +200,38 @@ class CodingAgentFileSystemWritePathTest {
         fs.clearMutations()
         assertTrue(fs.mutationsSnapshot().isEmpty())
     }
+
+    @Test
+    @DisplayName("scratch scripts, tool snapshots and build output are not repository changes")
+    fun nonDeliverablePathsAreNotTracked() = runBlocking {
+        // The coding prompt tells the model to keep helper scripts under .b4scratch/.
+        // Recording them made the finish gate reject a *passing* refactor:
+        // "the run modified 23 file(s) the report does not list: .b4scratch/outline.py, …"
+        val fs = CodingAgentFileSystem(tempDir)
+        fs.writeFile(".b4scratch/outline.py", "print('hi')")
+        fs.writeFile(".browser4/coding-snapshots/x.json", "{}")
+        fs.writeFile("browser4-core/browser4-browser/target/classes/A.class", "x")
+        fs.writeFile("src/main/kotlin/A.kt", "class A")
+
+        assertEquals(
+            listOf("write" to "src/main/kotlin/A.kt"),
+            fs.mutationsSnapshot().map { it.op to it.path },
+            "only repository files may reach the finish gate",
+        )
+    }
+
+    @Test
+    @DisplayName("the non-deliverable classifier matches workspace-relative prefixes")
+    fun nonDeliverableClassifier() {
+        assertTrue(isNonDeliverableMutationPath(".b4scratch/outline.py"))
+        assertTrue(isNonDeliverableMutationPath(".b4scratch"))
+        assertTrue(isNonDeliverableMutationPath(".browser4/coding-snapshots/x.json"))
+        assertTrue(isNonDeliverableMutationPath("target/classes/A.class"))
+        assertTrue(isNonDeliverableMutationPath("browser4-core/browser4-browser/target/x.txt"))
+
+        assertFalse(isNonDeliverableMutationPath("src/main/kotlin/A.kt"))
+        assertFalse(isNonDeliverableMutationPath("pom.xml"))
+        assertFalse(isNonDeliverableMutationPath(".gitignore"))
+        assertFalse(isNonDeliverableMutationPath("browser4-core/browser4-browser/src/main/kotlin/targeted.kt"))
+    }
 }

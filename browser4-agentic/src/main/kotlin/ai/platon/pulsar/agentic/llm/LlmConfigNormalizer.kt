@@ -17,10 +17,16 @@ import java.nio.file.Path
  * This normalizer runs once at application startup, before any session is created:
  *  1. rewrites env-style LLM keys in the enabled properties files to their dotted
  *     equivalents (idempotent — dotted keys and commented lines are left untouched),
- *  2. mirrors them into system properties, which the engine resolves *before* the
- *     file-backed properties (`AbstractRelaxedConfiguration.getUnrelaxed` order:
- *     volatile -> Spring Environment -> System.getProperty -> file), so lookups that
- *     read system properties directly (e.g. `doctor llm-status`) see them too.
+ *  2. mirrors **all** LLM keys it finds — env-style *and* already-dotted — into system
+ *     properties, which the engine resolves *before* the file-backed properties
+ *     (`AbstractRelaxedConfiguration.getUnrelaxed` order: volatile -> Spring
+ *     Environment -> System.getProperty -> file).
+ *
+ * Step 2 used to cover only env-style keys: a file already in the documented dotted
+ * form (`deepseek.api.key=…`) was left entirely to the engine's own file loading. A
+ * rebuilt runtime bundle then answered `No LLM configured` for `agent run` while
+ * `doctor` read the very same file and reported `✓ LLM is configured` — so the
+ * dotted keys now bind through system properties too.
  *
  * Explicit dotted keys already present in a file always win: an env-style duplicate
  * of an already-configured dotted key is skipped, never overwritten.
@@ -31,6 +37,11 @@ object LlmConfigNormalizer {
     /** Env-style prefixes that identify LLM-related keys. */
     private val LLM_KEY_PREFIXES = listOf(
         "LLM_", "DEEPSEEK_", "OPENROUTER_", "VOLCENGINE_", "OPENAI_"
+    )
+
+    /** Dotted provider prefixes the engine resolves (`deepseek.api.key`, …). */
+    private val PROVIDER_KEY_PREFIXES = listOf(
+        "llm.", "deepseek.", "openrouter.", "volcengine.", "openai."
     )
 
     /**
@@ -86,6 +97,11 @@ object LlmConfigNormalizer {
             .toHashSet()
 
         var changed = false
+        // Every provider key this file configures, dotted form -> value. Mirrored
+        // into system properties after the rewrite pass (see the class KDoc: the
+        // engine's lookup order is volatile -> Spring Environment ->
+        // System.getProperty -> file, so a system property is what actually binds).
+        val providerKeys = LinkedHashMap<String, String>()
         val normalized = lines.map { line ->
             val trimmed = line.trim()
             if (trimmed.isEmpty() || trimmed.startsWith("#") || trimmed.startsWith("!")) {
@@ -96,25 +112,36 @@ object LlmConfigNormalizer {
                     line
                 } else {
                     val key = trimmed.substring(0, eq).trim()
+                    val value = trimmed.substring(eq + 1).trim()
                     val dotted = envStyleToDotted(key)
-                    if (dotted == null || dotted == key) {
-                        line
-                    } else if (dotted in dottedKeysInFile) {
-                        // Explicit dotted config wins; leave the env-style line alone.
-                        line
-                    } else {
-                        changed = true
-                        val value = trimmed.substring(eq + 1).trim()
-                        if (System.getProperty(dotted) == null) {
-                            System.setProperty(dotted, value)
-                            logger.info(
-                                "Normalized env-style LLM key {} -> {} (system property)",
-                                key, dotted
-                            )
+                    when {
+                        dotted == null || dotted == key -> {
+                            // Already-dotted provider configuration (`deepseek.api.key=…`):
+                            // this is the documented file format, and it used to be left
+                            // entirely to the engine's own file loading — which a live
+                            // bundle run did NOT honour ("No LLM configured" while doctor
+                            // read the very same file). Mirror it.
+                            if (isProviderKey(key)) providerKeys[key] = value
+                            line
                         }
-                        "$dotted=$value"
+                        dotted in dottedKeysInFile -> {
+                            // Explicit dotted config wins; leave the env-style line alone.
+                            line
+                        }
+                        else -> {
+                            changed = true
+                            providerKeys[dotted] = value
+                            "$dotted=$value"
+                        }
                     }
                 }
+            }
+        }
+
+        providerKeys.forEach { (key, value) ->
+            if (System.getProperty(key) == null) {
+                System.setProperty(key, value)
+                logger.info("Mirrored LLM config {} from {} into system properties", key, path.fileName)
             }
         }
 
@@ -129,6 +156,12 @@ object LlmConfigNormalizer {
                 )
             }
         }
+    }
+
+    /** Dotted provider keys the engine actually looks up (`deepseek.api.key`, …). */
+    private fun isProviderKey(key: String): Boolean {
+        val lower = key.lowercase()
+        return PROVIDER_KEY_PREFIXES.any { lower.startsWith(it) }
     }
 
     private fun envStyleToDotted(key: String): String? {

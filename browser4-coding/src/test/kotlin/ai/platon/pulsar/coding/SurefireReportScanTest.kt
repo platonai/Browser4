@@ -64,4 +64,33 @@ class SurefireReportScanTest {
         Files.createDirectories(root.resolve("m/target/surefire-reports"))
         assertEquals(0, countFreshSurefireReports(root, "m", System.currentTimeMillis() - 60_000))
     }
+
+    @Test
+    @DisplayName("a bare module name resolves to the nested module path that holds the reports")
+    fun bareModuleNameResolvesBeforeCounting() {
+        // Real live failure: coding.verify(module="browser4-browser") ran the tests
+        // (six fresh reports under browser4-core/browser4-browser/target) but scanned
+        // <root>/browser4-browser/target/surefire-reports, found nothing, and reported
+        // "the filter matched no test" — a false red that sent the agent hunting.
+        val nested = "browser4-core/browser4-browser"
+        Files.createDirectories(root.resolve(nested))
+        Files.writeString(root.resolve(nested).resolve("pom.xml"), "<project/>")
+        writeReport(nested, "TEST-ai.platon.pulsar.chrome.Browser4WebDriverTest.xml")
+
+        val selector = resolveTestReportModule(root, "browser4-browser")
+
+        assertEquals(nested, selector)
+        assertEquals(
+            1,
+            countFreshSurefireReports(root, selector, System.currentTimeMillis() - 60_000),
+            "the resolved module path must find the report the maven run wrote",
+        )
+    }
+
+    @Test
+    @DisplayName("an unresolvable module name is reported as given, not silently rewritten")
+    fun unknownModuleKeepsItsName() {
+        assertEquals("no-such-module", resolveTestReportModule(root, "no-such-module"))
+        assertEquals(":browser4-coding", resolveTestReportModule(root, ":browser4-coding"))
+    }
 }

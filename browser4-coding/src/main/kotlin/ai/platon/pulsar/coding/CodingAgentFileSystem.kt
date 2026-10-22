@@ -195,7 +195,14 @@ class CodingAgentFileSystem(
     private fun recordMutation(op: String, path: Path, ok: Boolean) {
         val relative = runCatching { workspaceRoot.relativize(path.toAbsolutePath().normalize()).toString() }
             .getOrElse { path.toString() }
-        mutationLog.addLast(FileMutation(op, relative.replace('\\', '/'), ok))
+        val normalized = relative.replace('\\', '/')
+        // Agent state (scratch scripts, tool snapshots, build output) is not a
+        // repository change: recording it makes the finish gate reject a *successful*
+        // run because its report omits files that were never deliverables (observed:
+        // "the run modified 23 file(s) the report does not list: .b4scratch/outline.py, …"
+        // right after coding.verify passed).
+        if (isNonDeliverableMutationPath(normalized)) return
+        mutationLog.addLast(FileMutation(op, normalized, ok))
         if (mutationCount.incrementAndGet() > MAX_MUTATION_LOG) {
             mutationLog.pollFirst()
         }
@@ -1464,3 +1471,25 @@ class CodingAgentFileSystem(
     }
 }
 
+
+/**
+ * True when a workspace-relative path is agent state rather than a repository
+ * change: scratch scripts (`.b4scratch/…` — the coding prompt tells the model to
+ * keep its helper scripts there), tool snapshots (`.browser4/…`) and Maven build
+ * output (`target/…`).
+ *
+ * These must stay out of the mutation log because that log *is* the finish gate's
+ * evidence: it is compared against the completion report's `filesChanged`, and an
+ * unlisted entry fails the run. A live refactor was rejected with
+ * "the run modified 23 file(s) the report does not list: .b4scratch/outline.py, …"
+ * even though `coding.verify` had just passed — the extra files were the model's
+ * own scratch scripts, never deliverables.
+ */
+internal fun isNonDeliverableMutationPath(relative: String): Boolean {
+    val path = relative.replace('\\', '/').removePrefix("./").trimStart('/')
+    if (path.isEmpty()) return false
+    if (path.startsWith(".b4scratch/") || path == ".b4scratch") return true
+    if (path.startsWith(".browser4/") || path == ".browser4") return true
+    if (path.startsWith("target/") || path.contains("/target/")) return true
+    return false
+}

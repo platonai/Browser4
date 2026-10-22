@@ -16,7 +16,17 @@ class TaskScratchpad(private val maxChars: Int = MemoryConfig.scratchpadMaxChars
 
     companion object {
         private val KEY_PATTERN = Regex("[a-zA-Z0-9_.-]{1,32}")
-        private const val VALUE_MAX_CHARS = 200
+        private val WHITESPACE = Regex("\\s+")
+
+        /**
+         * Per-note cap. The board is re-injected as the tail message of every
+         * round, so a note must stay bounded — but the old 200-char cap cut a
+         * live refactor plan mid-word ("…Target: …Browser4WebDriver.kt (4200
+         * lines, 206KB …) Workspa…"), which is exactly the state the note exists
+         * to carry across a compressed/truncated round. The whole board is still
+         * bounded by [maxChars], evicting the oldest notes.
+         */
+        const val VALUE_MAX_CHARS = 800
     }
 
     /** Write one note; returns a confirmation string (never throws on content). */
@@ -25,11 +35,19 @@ class TaskScratchpad(private val maxChars: Int = MemoryConfig.scratchpadMaxChars
         require(KEY_PATTERN.matches(key)) {
             "Invalid note key '$key' — allowed: 1-32 chars of [a-zA-Z0-9_.-]"
         }
-        val safe = Sanitizer.brief(value, VALUE_MAX_CHARS)
+        val normalized = value.trim().replace(WHITESPACE, " ")
+        val truncated = normalized.length > VALUE_MAX_CHARS
+        val safe = if (truncated) normalized.take(VALUE_MAX_CHARS) else normalized
         entries.remove(key)
         entries[key] = safe
         evict()
-        return "Note saved: $key"
+        // Tell the model when its note did not fit: a silent cut turned a plan into
+        // a dangling fragment it could neither see nor repair.
+        return if (truncated) {
+            "Note saved: $key (truncated from ${normalized.length} to $VALUE_MAX_CHARS chars — keep notes short and structured)"
+        } else {
+            "Note saved: $key"
+        }
     }
 
     @Synchronized

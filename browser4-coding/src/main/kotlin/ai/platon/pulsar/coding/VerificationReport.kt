@@ -392,7 +392,16 @@ class VerificationRunner(
                 detail = if (ok) null else lastLines(result.stdout + "\n" + result.stderr, 20),
             )
         }
-        val result = maven.test(shell, module, testClasses, timeoutSeconds)
+        // Resolve the module selector FIRST: `maven.test` accepts a bare module
+        // directory name (`browser4-browser`) and resolves it to the real,
+        // workspace-relative path (`browser4-core/browser4-browser`) internally.
+        // Counting reports against the unresolved name looked in
+        // `<workspace>/browser4-browser/target/surefire-reports`, which never
+        // exists, so a test run that DID execute classes was reported as "the
+        // filter matched no test" — a false red on a module whose short name is
+        // nested (observed live for browser4-core/browser4-browser).
+        val selector = resolveTestReportModule(fs.workspaceRoot, module)
+        val result = maven.test(shell, selector, testClasses, timeoutSeconds)
         // `-Dtest=<class>` makes Maven exit 0 when the filter matches nothing, and
         // the plan adds `-Dsurefire.failIfNoSpecifiedTests=false` so `-am`
         // upstream modules do not fail for having no match. The two together let a
@@ -401,11 +410,11 @@ class VerificationRunner(
         // actually wrote, not from the exit code (plan invariant I6: a gate that
         // did not really run is never green).
         val executed = if (filter.isBlank()) null
-        else countFreshSurefireReports(fs.workspaceRoot, module, started)
+        else countFreshSurefireReports(fs.workspaceRoot, selector, started)
         val ok = result.success && (executed == null || executed > 0)
         return VerificationCheck(
             name = "test",
-            target = module + if (filter.isBlank()) "" else " [-Dtest=$filter]",
+            target = selector + if (filter.isBlank()) "" else " [-Dtest=$filter]",
             ran = true,
             ok = ok,
             exitCode = result.exitCode,
@@ -419,7 +428,7 @@ class VerificationRunner(
             detail = when {
                 !result.success -> result.diagnosticsSummary(10).ifBlank { lastLines(result.output, 20) }
                 ok -> null
-                else -> "the -Dtest=$filter filter matched no test in $module (surefire wrote no report) — " +
+                else -> "the -Dtest=$filter filter matched no test in $selector (surefire wrote no report) — " +
                     "run the test in the module that owns it"
             },
             diagnostics = result.diagnostics,
@@ -501,6 +510,25 @@ class VerificationRunner(
         return lines.takeLast(count).joinToString("\n").take(2_000)
     }
 }
+
+/**
+ * Resolve a caller-supplied module name to the workspace-relative module path
+ * whose `target/surefire-reports` holds the evidence.
+ *
+ * `coding.verify(module="browser4-browser")` is the call the model makes (a bare
+ * directory name), while the reports land under the nested path
+ * `browser4-core/browser4-browser`. Without this resolution the report scan found
+ * nothing and the test check failed with "the filter matched no test" even though
+ * surefire had just written six fresh reports.
+ *
+ * Falls back to [module] unchanged when it cannot be resolved (unknown module,
+ * artifact-id selector, or an unreadable workspace) so the check still reports
+ * the caller's own spelling instead of a path it invented.
+ */
+internal fun resolveTestReportModule(workspaceRoot: Path, module: String): String =
+    runCatching { resolveModuleSelector(workspaceRoot.toFile(), module) }.getOrNull()
+        ?.takeIf { it.isNotBlank() }
+        ?: module
 
 /**
  * How many test classes surefire actually executed for [module] since [sinceMillis].

@@ -70,7 +70,11 @@ class MemoryToolExecutor(
         toolSpec["read"] = ToolSpec(
             domain = domain, method = "read",
             arguments = listOf(
-                ToolSpec.Arg("taskId", "String", null, "Task whose memory events to read."),
+                // Optional: a bare `memory.read()` means "show me my own task", the
+                // call the model actually makes. Declaring taskId required rejected it
+                // with "Missing parameter 'taskId' for read" (observed in a live run)
+                // even though the current task is always known.
+                ToolSpec.Arg("taskId", "String?", "null", "Task whose memory events to read; defaults to the current task."),
                 ToolSpec.Arg("seq", "Long?", "null", "Centre the window on this event seq."),
                 ToolSpec.Arg("before", "Int", "0", "Events to include before seq."),
                 ToolSpec.Arg("after", "Int", "0", "Events to include after seq."),
@@ -79,9 +83,10 @@ class MemoryToolExecutor(
             outputSchema = ToolResultSchemas.MEMORY_READ,
             description = "Read a bounded window of memory events of one task " +
                 "around the event seq (defaults to the whole task, newest last). " +
-                "Bounded by the configured read window.",
+                "Omit taskId to read the current task. Bounded by the configured read window.",
             examples = listOf(
                 ToolExample(title = "Read a task's events", args = mapOf("taskId" to "<task-id>")),
+                ToolExample(title = "Read the current task", args = emptyMap()),
             ),
         )
         toolSpec["note"] = ToolSpec(
@@ -100,6 +105,13 @@ class MemoryToolExecutor(
                 ToolExample(
                     title = "Remember a conclusion",
                     args = mapOf("key" to "price", "value" to "the product costs 19.99"),
+                ),
+                ToolExample(
+                    title = "Checkpoint the plan before a long tool chain",
+                    args = mapOf(
+                        "key" to "plan",
+                        "value" to "done: member map of the driver; next: extract the script layer into ChromeScripts.kt",
+                    ),
                 ),
             ),
         )
@@ -151,7 +163,13 @@ class MemoryToolExecutor(
     }
 
     private suspend fun handleRead(memory: AgentMemory, args: Map<String, Any?>): String {
-        val taskId = paramString(args, "taskId", "read")!!
+        // Omitted taskId = the task this agent is running right now; a bare
+        // `memory.read()` must never fail for lack of an id the model cannot know.
+        val taskId = paramString(args, "taskId", "read", required = false)
+            ?: memory.currentTaskId
+            ?: throw IllegalArgumentException(
+                "memory.read needs a taskId: no current task is being observed by this agent"
+            )
         val seq = paramLong(args, "seq", "read", required = false)
         val before = paramInt(args, "before", "read", required = false, default = 0) ?: 0
         val after = paramInt(args, "after", "read", required = false, default = 0) ?: 0
