@@ -3,6 +3,9 @@ package ai.platon.pulsar.agentic.agents
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * Tests for the deterministic finish-report rules (plan P0.5): each rejection
@@ -320,5 +323,46 @@ class FinishReportGateTest {
             fabricated.violations.any { it.contains("cannot be parsed") },
             "violations: ${fabricated.violations}",
         )
+    }
+
+    // --- Which work tree backs the filesChanged cross-check -------------------
+
+    @Test
+    @DisplayName("the agent workspace is checked, never the server's process checkout")
+    fun finishWorkspaceIsTheAgentWorkspace(@TempDir tmp: Path) {
+        val repo = Files.createDirectories(tmp.resolve("repo"))
+        Files.createDirectories(repo.resolve(".git"))
+        // The isolated workspace is a copy WITHOUT .git, and the server's process
+        // directory is a different (clean) checkout. Resolving the latter made every
+        // file the agent wrote look fabricated to the strict gate.
+        val workspace = Files.createDirectories(tmp.resolve("agent").resolve("workspace"))
+
+        assertNull(
+            resolveFinishGitWorkspace("", workspace, repo),
+            "a git-less workspace must skip the git rules instead of reading the process repo"
+        )
+    }
+
+    @Test
+    @DisplayName("a configured finish workspace wins over the agent workspace")
+    fun configuredFinishWorkspaceWins(@TempDir tmp: Path) {
+        val repo = Files.createDirectories(tmp.resolve("repo"))
+        Files.createDirectories(repo.resolve(".git"))
+        val workspace = Files.createDirectories(tmp.resolve("agent").resolve("workspace"))
+
+        assertEquals(
+            repo,
+            resolveFinishGitWorkspace(repo.toString(), workspace, tmp),
+            "the explicit -Dbrowser4.agent.finish.workspace must win"
+        )
+    }
+
+    @Test
+    @DisplayName("without a workspace the process directory is still used")
+    fun processDirectoryIsTheLastResort(@TempDir tmp: Path) {
+        val repo = Files.createDirectories(tmp.resolve("repo"))
+        Files.createDirectories(repo.resolve(".git"))
+
+        assertEquals(repo, resolveFinishGitWorkspace("", null, repo))
     }
 }

@@ -3,6 +3,10 @@ package ai.platon.pulsar.coding
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * Tests for [MavenBuildSupport] — the Kotlin/Java compiler-error parser and
@@ -232,6 +236,47 @@ class MavenBuildSupportTest {
         } finally {
             root.toFile().deleteRecursively()
         }
+    }
+
+    @Test
+    @DisplayName("a bare module directory name resolves to its nested reactor path")
+    fun bareModuleNameResolvesToNestedPath(@TempDir tmp: Path) {
+        val repo = tmp.toFile()
+        // browser4-core/browser4-browser — the case from the 2026-10-22 run,
+        // where coding.verify(module="browser4-browser") failed in the reactor.
+        val nested = File(repo, "browser4-core/browser4-browser").apply { assertTrue(mkdirs()) }
+        File(nested, "pom.xml").writeText("<project><artifactId>browser4-browser</artifactId></project>")
+        val top = File(repo, "browser4-coding").apply { assertTrue(mkdirs()) }
+        File(top, "pom.xml").writeText("<project><artifactId>browser4-coding</artifactId></project>")
+
+        assertEquals(
+            "browser4-core/browser4-browser",
+            resolveModuleSelector(repo, "browser4-browser"),
+            "a nested module must be found by its directory name"
+        )
+        assertEquals("browser4-coding", resolveModuleSelector(repo, "browser4-coding"))
+        assertNull(
+            resolveModuleSelector(repo, "no-such-module"),
+            "an unknown module keeps Maven's own error instead of being rewritten"
+        )
+        assertNull(
+            resolveModuleSelector(repo, ":browser4-coding"),
+            "an artifactId selector is already valid and must be left alone"
+        )
+    }
+
+    @Test
+    @DisplayName("the module search prunes build and IDE directories")
+    fun moduleSearchPrunesBuildDirs(@TempDir tmp: Path) {
+        val repo = tmp.toFile()
+        // A look-alike module inside target/ must not be picked up.
+        val ghost = File(repo, "target/browser4-ghost").apply { assertTrue(mkdirs()) }
+        File(ghost, "pom.xml").writeText("<project><artifactId>browser4-ghost</artifactId></project>")
+
+        assertNull(
+            resolveModuleSelector(repo, "browser4-ghost"),
+            "build output is not part of the reactor"
+        )
     }
 }
 

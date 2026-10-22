@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agentic.agents
 
+import ai.platon.pulsar.agentic.inference.chat.ToolResultDigest
+import ai.platon.pulsar.coding.SafeText
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -23,44 +25,83 @@ class CliRoundToolDigestTest {
     }
 
     @Test
-    @DisplayName("digest shows tool name with the first line of its result")
-    fun digestShowsNameAndFirstLine() {
+    @DisplayName("a short result is reproduced in full")
+    fun digestShowsNameAndFullShortResult() {
         val digest = cliRoundToolDigest(
             listOf(RoundToolRecord("coding.read", "first line\nsecond line"))
         )
 
         assertEquals(
-            "This round executed 1 tool(s): coding.read -> first line",
+            "This round executed 1 tool(s): coding.read -> first line\nsecond line",
             digest,
-            "the digest must keep the first line only"
+            "a result under the excerpt budget must not be truncated"
         )
-        assertTrue(digest!!.contains("second line").not(), "the digest must not leak the full result")
     }
 
     @Test
-    @DisplayName("digest keeps the newest records and is bounded")
-    fun digestKeepsNewestAndBounded() {
+    @DisplayName("a long result keeps its head and its tail, not just the first line")
+    fun longResultKeepsHeadAndTail() {
+        val result = "Session: devshell-1\nStatus: FAILED\n--- stdout ---\n" +
+            "HEAD: compiling browser4-browser\n" +
+            "x".repeat(2_000) +
+            "\nTAIL: [ERROR] cannot find symbol"
+
+        val digest = cliRoundToolDigest(listOf(RoundToolRecord("coding.shell", result)))!!
+
+        assertTrue(digest.contains("HEAD: compiling browser4-browser"), "the head must survive: $digest")
+        assertTrue(digest.contains("TAIL: [ERROR] cannot find symbol"), "the tail must survive: $digest")
+        assertTrue(
+            digest.contains("Session: devshell-1").not(),
+            "the constant shell header used to be the entire excerpt: $digest"
+        )
+    }
+
+    @Test
+    @DisplayName("digest keeps the newest records within the budget")
+    fun digestKeepsNewestWithinBudget() {
         val records = (1..20).map {
             RoundToolRecord("coding.shell", "step $it\n" + "x".repeat(10_000))
         }
 
-        val digest = cliRoundToolDigest(records)
+        val digest = cliRoundToolDigest(records)!!
 
-        assertTrue(digest!!.startsWith("This round executed 20 tool(s):"), "count must survive: $digest")
-        assertTrue(digest.contains("coding.shell -> step 15"), "the newest 6 records must be kept: $digest")
-        assertTrue(digest.contains("coding.shell -> step 20"), "the rest of the newest records must be kept: $digest")
-        assertTrue(digest.contains("coding.shell -> step 14").not(), "older records must be dropped: $digest")
+        assertTrue(digest.startsWith("This round executed 20 tool(s):"), "count must survive: $digest")
+        assertTrue(digest.contains("step 20"), "the newest record must survive the budget: $digest")
+        assertTrue(digest.contains("step 17"), "the newest records fill the budget: $digest")
+        assertTrue(digest.contains("step 16").not(), "older records must be dropped: $digest")
         assertTrue(digest.length <= 2_000, "digest must be capped, got ${digest.length}")
     }
 
     @Test
-    @DisplayName("digest truncates an oversized first line to 200 chars")
-    fun digestTruncatesOversizedFirstLine() {
+    @DisplayName("an oversized result is excerpted to head + tail")
+    fun oversizedResultIsExcerpted() {
         val longLine = "y".repeat(1_000)
-        val digest = cliRoundToolDigest(listOf(RoundToolRecord("coding.read", longLine)))
 
-        val rendered = digest!!.substringAfter("coding.read -> ")
-        assertEquals(200, rendered.length, "the first line must be capped at 200 chars")
-        assertEquals("y".repeat(200), rendered)
+        val digest = cliRoundToolDigest(listOf(RoundToolRecord("coding.read", longLine)))!!
+
+        val rendered = digest.substringAfter("coding.read -> ")
+        assertEquals(
+            ToolResultDigest.HEAD_CHARS + ToolResultDigest.TAIL_CHARS + " … ".length,
+            rendered.length,
+            "an excerpt is head + ellipsis + tail"
+        )
+        assertTrue(rendered.startsWith("y") && rendered.endsWith("y"), "both ends must be kept: $rendered")
+        assertTrue(rendered.contains(" … "))
+    }
+
+    @Test
+    @DisplayName("digest cuts never leave an unpaired surrogate behind")
+    fun digestIsSurrogateSafe() {
+        val result = "a".repeat(ToolResultDigest.HEAD_CHARS - 1) + "😀" + "b".repeat(1_000)
+
+        val digest = cliRoundToolDigest(listOf(RoundToolRecord("coding.read", result)))!!
+
+        assertTrue(
+            SafeText.sanitize(digest) == digest,
+            "digest cut left an unpaired surrogate (it breaks every later UTF-8 write)"
+        )
+        // Must not throw; assertTrue also keeps the test body's result Unit, or
+        // JUnit would refuse to run a test whose block returns a ByteArray.
+        assertTrue(digest.toByteArray(Charsets.UTF_8).isNotEmpty(), "digest must stay UTF-8 encodable")
     }
 }

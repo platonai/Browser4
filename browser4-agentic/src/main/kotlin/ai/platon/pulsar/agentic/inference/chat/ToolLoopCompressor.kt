@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.inference.chat
 
+import ai.platon.pulsar.coding.SafeText
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
 import dev.langchain4j.data.message.AiMessage
@@ -145,7 +146,11 @@ class ToolLoopCompressor(
             val text = message.text()
             if (text.length <= pruneThresholdChars) continue
             if (PageViewDeduper.isCompactForm(text)) continue
-            val replacement = text.take(pruneHeadChars) + PRUNE_MARKER + text.takeLast(pruneTailChars)
+            // Code-point-safe cuts: a plain take/takeLast can split an emoji
+            // surrogate pair, and the lone surrogate it leaves behind is not
+            // encodable as UTF-8 (it broke every later prompt/trace write).
+            val replacement = SafeText.take(text, pruneHeadChars) + PRUNE_MARKER +
+                SafeText.takeLast(text, pruneTailChars)
             messages[index] = ToolExecutionResultMessage.from(message.id(), message.toolName(), replacement)
             val before = estimateTokens(text)
             val after = estimateTokens(replacement)
@@ -181,7 +186,8 @@ class ToolLoopCompressor(
             val text = message.text()
             if (text.length <= pruneThresholdChars) continue
             if (PageViewDeduper.isCompactForm(text)) continue
-            val replacement = text.take(pruneHeadChars) + PRUNE_MARKER + text.takeLast(pruneTailChars)
+            val replacement = SafeText.take(text, pruneHeadChars) + PRUNE_MARKER +
+                SafeText.takeLast(text, pruneTailChars)
             total -= estimateTokens(text)
             messages[index] = ToolExecutionResultMessage.from(message.id(), message.toolName(), replacement)
             total += estimateTokens(replacement)

@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.inference.RequestTokenLimiter
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
+import ai.platon.pulsar.coding.SafeText
 import ai.platon.pulsar.external.BrowserChatModel
 import dev.langchain4j.agent.tool.ToolExecutionRequest
 import dev.langchain4j.data.message.AiMessage
@@ -68,10 +69,65 @@ class AgentToolCallLoopTest {
         val error = requireNotNull(response.modelError) { "overflow must set modelError" }
         assertTrue(error.startsWith(AgentToolCallLoop.OVERFLOW_ERROR_PREFIX), error)
         assertTrue(error.contains("; executed: coding.read"), "executed names must survive: $error")
-        // The digest keeps the FIRST line of the newest result — real progress
-        // instead of a bare tool-name list (P0.2-1).
+        // The digest keeps the result's head AND tail — real progress instead of
+        // a bare tool-name list or a single first line (P0.2-1).
         assertTrue(error.contains("; results: coding.read -> first line of the result"), error)
-        assertFalse(error.contains("second line"), "digest must keep the first line only: $error")
+        assertTrue(error.contains("second line"), "short results must be reproduced in full: $error")
+    }
+
+    @Test
+    @DisplayName("overflow digest carries the shell output, not its constant Session header")
+    fun overflowDigestCarriesShellOutput() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val callMessage = AiMessage.from("calling", listOf(toolRequest("c1", name = "coding.shell")))
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } returns chatResponseOf(callMessage)
+        val shellResult = buildString {
+            appendLine("Session: devshell-1")
+            appendLine("Status: FAILED")
+            appendLine("Exit Code: 1")
+            appendLine("Duration: 42ms")
+            appendLine("--- stdout ---")
+            appendLine("compiling module browser4-browser")
+            appendLine("x".repeat(2_000))
+            appendLine("[ERROR] cannot find symbol: method refactor()")
+        }
+        every { coordinator.execute(any()) } returns
+            ToolExecutionResultMessage.from("c1", "coding.shell", shellResult)
+
+        val response = loop(model, coordinator, maxIterations = 1).generate(listOf(UserMessage.from("do it")))
+
+        val error = requireNotNull(response.modelError) { "overflow must set modelError" }
+        assertTrue(error.contains("compiling module browser4-browser"), "the output head must survive: $error")
+        assertTrue(error.contains("[ERROR] cannot find symbol"), "the output tail (diagnostics) must survive: $error")
+        assertFalse(
+            error.contains("Session: devshell-1"),
+            "the constant shell header used to BE the whole excerpt: $error"
+        )
+    }
+
+    @Test
+    @DisplayName("overflow digest never leaves an unpaired surrogate when it cuts an emoji")
+    fun overflowDigestIsSurrogateSafe() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val callMessage = AiMessage.from("calling", listOf(toolRequest("c1", name = "coding.shell")))
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } returns chatResponseOf(callMessage)
+        // The pair straddles the digest's head cut on purpose.
+        val body = "a".repeat(ToolResultDigest.HEAD_CHARS - 1) + "😀" + "b".repeat(1_000)
+        every { coordinator.execute(any()) } returns
+            ToolExecutionResultMessage.from("c1", "coding.shell", "--- stdout ---\n$body")
+
+        val response = loop(model, coordinator, maxIterations = 1).generate(listOf(UserMessage.from("do it")))
+
+        val error = requireNotNull(response.modelError) { "overflow must set modelError" }
+        assertTrue(
+            SafeText.sanitize(error) == error,
+            "digest cut left an unpaired surrogate (it breaks every later UTF-8 write)"
+        )
+        // Must not throw; assertTrue also keeps the test body's result Unit, or
+        // JUnit would refuse to run a test whose block returns a ByteArray.
+        assertTrue(error.toByteArray(Charsets.UTF_8).isNotEmpty(), "digest must stay UTF-8 encodable")
     }
 
     @Test

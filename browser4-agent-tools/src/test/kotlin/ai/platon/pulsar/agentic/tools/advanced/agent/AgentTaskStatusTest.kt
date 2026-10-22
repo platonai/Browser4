@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
+import ai.platon.pulsar.agentic.model.AgentHistory
+import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.common.ResourceStatus
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -110,6 +112,24 @@ class AgentTaskStatusTest {
         assertTrue(second!!.isAfter(first), "lastModifiedTime should advance")
     }
 
+    @Test
+    fun `emitEvent advances lastModifiedTime`() {
+        val status = AgentTaskStatus()
+        status.refresh(ResourceStatus.SC_PROCESSING)
+        val before = status.lastModifiedTime
+
+        Thread.sleep(5)
+        status.emitEvent("onToolExecuted")
+
+        assertEquals("Agent is working", status.message)
+        assertNotNull(status.lastModifiedTime)
+        assertTrue(
+            status.lastModifiedTime!!.isAfter(before),
+            "a progress event is a status change: without the bump the SSE stream " +
+                "stayed silent for the whole run"
+        )
+    }
+
     // -----------------------------------------------------------------
     // processState transitions
     // -----------------------------------------------------------------
@@ -161,5 +181,71 @@ class AgentTaskStatusTest {
     fun `isDone is false when processState is in_progress`() {
         val status = AgentTaskStatus(processState = "in_progress")
         assertFalse(status.isDone)
+    }
+
+    // -----------------------------------------------------------------
+    // lastActivity: TTL is judged by the last write, not creation
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `lastActivity falls back to createdTime before any refresh`() {
+        val status = AgentTaskStatus()
+        assertEquals(status.createdTime, status.lastActivity())
+    }
+
+    @Test
+    fun `lastActivity follows lastModifiedTime after a refresh`() {
+        val status = AgentTaskStatus()
+        val created = status.createdTime
+
+        Thread.sleep(5)
+        status.refresh(ResourceStatus.SC_PROCESSING)
+
+        assertTrue(status.lastActivity().isAfter(created), "lastActivity must move with the latest write")
+        assertEquals(status.lastModifiedTime, status.lastActivity())
+    }
+
+    // -----------------------------------------------------------------
+    // detachedSnapshot: body-declared state must not be reset by copy()
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `detachedSnapshot keeps timestamps, task fields and the live tool counter`() {
+        val status = AgentTaskStatus(processState = "in_progress", statusCode = ResourceStatus.SC_PROCESSING)
+        status.refresh(ResourceStatus.SC_PROCESSING)
+        status.submittedTask = "refactor Browser4WebDriver"
+        status.workspace = "/workspace"
+        status.toolExecutions = 42
+        status.agentHistory = AgentHistory(
+            mutableListOf(AgentState(step = 1, instruction = "refactor", sessionId = "run-1"))
+        )
+
+        val snapshot = status.detachedSnapshot()
+
+        // data class copy() only carries constructor properties: createdTime,
+        // startedTime, lastModifiedTime, submittedTask, workspace and
+        // toolExecutions must be copied explicitly.
+        assertEquals(status.createdTime, snapshot.createdTime)
+        assertEquals(status.startedTime, snapshot.startedTime)
+        assertEquals(status.lastModifiedTime, snapshot.lastModifiedTime)
+        assertEquals("refactor Browser4WebDriver", snapshot.submittedTask)
+        assertEquals("/workspace", snapshot.workspace)
+        assertEquals(42, snapshot.toolExecutions)
+        assertEquals(1, snapshot.agentHistory?.states?.size)
+        assertNotSame(status.agentHistory, snapshot.agentHistory, "the history must be detached")
+    }
+
+    @Test
+    fun `detachedSnapshot without history keeps the progress fields`() {
+        val status = AgentTaskStatus(processState = "in_progress")
+        status.refresh(ResourceStatus.SC_PROCESSING)
+        status.toolExecutions = 7
+        status.agentHistory = AgentHistory(mutableListOf(AgentState(step = 1, instruction = "x")))
+
+        val snapshot = status.detachedSnapshot(includeHistory = false)
+
+        assertNull(snapshot.agentHistory, "periodic snapshots stay small")
+        assertEquals(7, snapshot.toolExecutions)
+        assertEquals(status.startedTime, snapshot.startedTime)
     }
 }

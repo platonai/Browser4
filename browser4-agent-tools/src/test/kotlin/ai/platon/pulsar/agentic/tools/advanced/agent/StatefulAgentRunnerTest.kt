@@ -22,10 +22,12 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class StatefulAgentRunnerTest {
@@ -240,6 +242,70 @@ class StatefulAgentRunnerTest {
             assertNotEquals(ResourceStatus.SC_CREATED, status.pageStatusCode)
         } finally {
             runner.close()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Restore TTL is measured from last activity, not creation
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("restore keeps a long-running task whose last activity is recent")
+    fun restoreKeepsRecentlyActiveTask() {
+        val agent = mockAgent(AgentHistory(), "run-long")
+        val runner1 = StatefulAgentRunner(mockSession(agent))
+        try {
+            // Created three hours ago, still writing progress a minute ago: judging
+            // this row by createdTime would drop the newest state of a live task.
+            val running = AgentTaskStatus(
+                id = "t-long",
+                statusCode = ResourceStatus.SC_PROCESSING,
+                processState = "in_progress",
+            ).apply {
+                createdTime = Instant.now().minusSeconds(3 * 60 * 60)
+                lastModifiedTime = Instant.now().minusSeconds(60)
+                startedTime = createdTime.plusSeconds(5)
+                toolExecutions = 42
+            }
+            runner1.persistence.append(running)
+        } finally {
+            runner1.close()
+        }
+
+        val runner2 = StatefulAgentRunner(mockSession(agent))
+        try {
+            val restored = runner2.getStatus("t-long")
+            assertNotNull(restored, "TTL must be measured from last activity, not creation")
+            assertEquals(42, restored!!.toolExecutions, "the live tool counter survives a restart")
+        } finally {
+            runner2.close()
+        }
+    }
+
+    @Test
+    @DisplayName("restore drops a task with no activity for the TTL")
+    fun restoreDropsStaleTask() {
+        val agent = mockAgent(AgentHistory(), "run-stale")
+        val runner1 = StatefulAgentRunner(mockSession(agent))
+        try {
+            val stale = AgentTaskStatus(
+                id = "t-stale",
+                statusCode = ResourceStatus.SC_PROCESSING,
+                processState = "in_progress",
+            ).apply {
+                createdTime = Instant.now().minusSeconds(3 * 60 * 60)
+                lastModifiedTime = createdTime
+            }
+            runner1.persistence.append(stale)
+        } finally {
+            runner1.close()
+        }
+
+        val runner2 = StatefulAgentRunner(mockSession(agent))
+        try {
+            assertNull(runner2.getStatus("t-stale"), "a task silent for the whole TTL must not revive")
+        } finally {
+            runner2.close()
         }
     }
 }

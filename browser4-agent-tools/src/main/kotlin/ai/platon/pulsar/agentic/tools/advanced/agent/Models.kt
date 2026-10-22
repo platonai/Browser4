@@ -72,6 +72,28 @@ data class AgentTaskStatus(
     /** Set when the task reaches a terminal state (done or failed). */
     var finishTime: Instant? = null
 
+    /**
+     * Live count of tool calls the current run has executed.
+     *
+     * Fed from the CLI engine's throttled progress events
+     * (`onToolExecuted` → `metadata["toolExecutions"]`, every
+     * `CLI_TOOL_PROGRESS_EVENT_INTERVAL` calls). The step history is only
+     * written when a run completes, so without this a running CLI task reported
+     * no progress at all and `agent status` could not tell a 50-minute run from
+     * a hung one.
+     */
+    var toolExecutions: Int = 0
+
+    /**
+     * When the task last showed activity: [lastModifiedTime] once it started,
+     * [createdTime] before that.
+     *
+     * The TTL/compaction decisions used `createdTime`, so a long-running task's
+     * latest status row looked stale simply because the task had been created
+     * hours earlier.
+     */
+    fun lastActivity(): Instant = lastModifiedTime ?: createdTime
+
     val isDone: Boolean get() = processState == "done"
 
     /**
@@ -165,6 +187,10 @@ fun AgentTaskStatus.failed(statusCode: Int): AgentTaskStatus {
 
 fun AgentTaskStatus.emitEvent(event: String) {
     this.event = event
+    // Progress events are status changes: without this bump the SSE status
+    // stream (CommandStatus.refreshed) stayed silent for a whole CLI-agent run —
+    // the message changed but lastModifiedTime did not.
+    lastModifiedTime = Instant.now()
     // Keep the internal event trace for debugging separate from the user-facing message.
     eventTrace = if (eventTrace != null) "$eventTrace,$event" else event
     // Generate a concise human-readable status description instead of the raw event chain.
@@ -194,4 +220,36 @@ fun AgentTaskStatus.done() {
 fun AgentTaskStatus.refreshed(lastModifiedTime: Instant): Boolean {
     val modifiedTime = this.lastModifiedTime ?: return false
     return modifiedTime > lastModifiedTime
+}
+
+/**
+ * A detached copy of this status, safe to serialize while the run keeps mutating
+ * the original.
+ *
+ * `data class copy()` only carries the CONSTRUCTOR properties, so the body-declared
+ * timestamps, submitted task, failure reason and workspace were silently reset by
+ * the plain `status.copy()` the compactor used — a compacted task lost its
+ * `startedTime` (and therefore its elapsed time) and its `createdTime` jumped to
+ * "now", extending its TTL. They are copied explicitly here.
+ *
+ * @param includeHistory false for the periodic in-progress snapshots: they only
+ *   need the message/step/counter, and the CLI engine's history is empty until
+ *   completion anyway. The terminal snapshot keeps the history.
+ */
+fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskStatus {
+    val snapshot = copy()
+    snapshot.agentHistory = if (includeHistory) {
+        agentHistory?.let { AgentHistory(it.states.toMutableList()) }
+    } else {
+        null
+    }
+    snapshot.createdTime = createdTime
+    snapshot.startedTime = startedTime
+    snapshot.lastModifiedTime = lastModifiedTime
+    snapshot.finishTime = finishTime
+    snapshot.submittedTask = submittedTask
+    snapshot.failureReason = failureReason
+    snapshot.workspace = workspace
+    snapshot.toolExecutions = toolExecutions
+    return snapshot
 }
