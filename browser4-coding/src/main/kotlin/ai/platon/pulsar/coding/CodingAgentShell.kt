@@ -47,6 +47,12 @@ class CodingAgentShell(
     private val allowDevTools: Boolean = true,
     private val allowNetwork: Boolean = false,
     private val allowDestructive: Boolean = true,
+    /** v0.3: when false the shell's working directory is constrained to [baseDir]
+     *  by lexical prefix matching (junction-aware, so module subdirectories
+     *  work). When true any path is accepted — same switch as
+     *  [CodingAgentFileSystem.allowExternalAccess] so the two tools stay in
+     *  lockstep. */
+    private val allowExternalAccess: Boolean = false,
 ) {
     companion object {
         const val MAX_TIMEOUT_SECONDS = 600L
@@ -279,10 +285,10 @@ class CodingAgentShell(
         val effectiveTimeout = timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS)
         val sessionId = "devshell-${sessionCounter.incrementAndGet()}"
 
+        // v0.3: resolveWorkingDir now throws on bad paths — we do NOT catch
+        // WorkspaceEscapeException/WorkspaceDirMissingException here; they
+        // must surface to the ToolExecutionCoordinator's [fail] wrapper.
         val dir = resolveWorkingDir(workingDir)
-        if (dir == null) {
-            return "Error: Working directory not found or not accessible."
-        }
 
         return try {
             val result = withContext(Dispatchers.IO) {
@@ -294,6 +300,10 @@ class CodingAgentShell(
             "Error: I/O failure for '$command' — ${e.message ?: ""}"
         } catch (e: SecurityException) {
             "Error: Permission denied for '$command' — ${e.message ?: ""}"
+        } catch (e: WorkspaceEscapeException) {
+            throw e  // v0.3: propagate to caller so [fail] can be emitted
+        } catch (e: WorkspaceDirMissingException) {
+            throw e  // v0.3: propagate
         } catch (e: Exception) {
             logger.warn("Unexpected error executing '$command'", e)
             "Error: Unexpected error executing '$command' — ${e.message ?: ""}"
@@ -320,7 +330,9 @@ class CodingAgentShell(
 
         val effectiveTimeout = timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS)
         val sessionId = "devshell-${sessionCounter.incrementAndGet()}"
-        val dir = resolveWorkingDir(workingDir) ?: canonicalBaseDir.toFile()
+        // v0.3: was `resolveWorkingDir(workingDir) ?: canonicalBaseDir.toFile()` —
+        // the silent fallback hid misconfiguration from the caller. Now we throw.
+        val dir = resolveWorkingDir(workingDir)
 
         return try {
             val result = withContext(Dispatchers.IO) {
@@ -328,6 +340,10 @@ class CodingAgentShell(
             }
             results[sessionId] = result
             result
+        } catch (e: WorkspaceEscapeException) {
+            throw e  // v0.3: propagate
+        } catch (e: WorkspaceDirMissingException) {
+            throw e  // v0.3: propagate
         } catch (e: Exception) {
             ShellResult(sessionId, command, -1, "", e.message ?: "Unknown error", 0)
         }
@@ -486,28 +502,52 @@ class CodingAgentShell(
     }
 
     // ------------------------------------------------------------------
-    // Working directory resolution
+    // Working directory resolution (v0.3 rewrite for lexical containment)
     // ------------------------------------------------------------------
 
-    private fun resolveWorkingDir(workingDir: String?): File? {
-        if (workingDir == null) {
-            val dir = canonicalBaseDir.toFile()
-            if (!dir.exists()) dir.mkdirs()
-            return dir
+    /** Resolve the effective working directory for one shell invocation.
+     *
+     * v0.3 replaces the previous `File?` return with typed exceptions so
+     * callers (S1) can translate them to `[fail]` without matching on strings.
+     * The checks mirror [CodingAgentFileSystem.resolvePath] so the two tools
+     * stay on the same containment policy.
+     *
+     * Rules:
+     * - No argument → canonicalBaseDir (always valid, auto-creates).
+     * - Absolute path → must already exist AND must be lexically inside
+     *   canonicalBaseDir (or allowExternalAccess=true).
+     * - Relative path → resolved against canonicalBaseDir; the resulting
+     *   path must be lexically inside canonicalBaseDir; non-parent directories
+     *   are auto-created (agent is expected to want a new subdir); absolute
+     *   existence is still required for external callers' invariants.
+     *
+     * We do NOT use `toRealPath()`: workspace module roots are junctions whose
+     * real path lands in the source checkout, so a lexical check against
+     * canonicalBaseDir is the only stable one.
+     */
+    private fun resolveWorkingDir(workingDir: String?): File {
+        val raw = workingDir?.takeIf { it.isNotBlank() }?.let { Path.of(it) }
+        val candidate: Path = when {
+            raw == null -> canonicalBaseDir
+            raw.isAbsolute -> raw.normalize()
+            else -> canonicalBaseDir.resolve(raw).normalize()
         }
-
-        val absolutePath = Path.of(workingDir)
-        val resolved = if (absolutePath.isAbsolute) {
-            absolutePath.normalize()
-        } else {
-            canonicalBaseDir.resolve(workingDir).normalize()
+        if (!allowExternalAccess && !candidate.startsWith(canonicalBaseDir)) {
+            throw WorkspaceEscapeException(candidate, canonicalBaseDir)
         }
-
-        val dir = resolved.toFile()
-        if (!dir.exists()) {
-            dir.mkdirs()
+        if (!java.nio.file.Files.exists(candidate)) {
+            // Only auto-create a relative subdirectory — absolute external
+            // paths (and anything rejected above) must already exist.
+            if (raw == null || raw.isAbsolute) {
+                throw WorkspaceDirMissingException(candidate)
+            }
+            runCatching { java.nio.file.Files.createDirectories(candidate) }
+                .onFailure { throw WorkspaceDirMissingException(candidate, it.message) }
         }
-        return if (dir.exists() && dir.isDirectory) dir else null
+        if (!java.nio.file.Files.isDirectory(candidate)) {
+            throw WorkspaceDirMissingException(candidate, "path is not a directory")
+        }
+        return candidate.toFile()
     }
 
     // ------------------------------------------------------------------
@@ -1025,5 +1065,37 @@ class CodingAgentShell(
         }.removeSuffix(", ").ifEmpty { "unknown" }
     }
 }
+
+// ---------------------------------------------------------------------------
+// v0.3 structured exceptions — the shell's typed answer to "where am I allowed
+// to write?" Replaces the previous `null` / silent-fallback ambiguity so
+// S1/S2 callers (CodingToolExecutor, ToolExecutionCoordinator) can emit a
+// stable "[fail]" without string-matching.
+// ---------------------------------------------------------------------------
+
+/** The requested working directory is lexically outside the shell's allowed
+ *  root (and [allowExternalAccess] is false). The message carries both paths
+ *  so the caller can surface a actionable hint. */
+class WorkspaceEscapeException(
+    val requested: Path,
+    val allowedRoot: Path,
+) : IllegalArgumentException(
+    "working directory ${requested.toAbsolutePath().normalize()} is outside the allowed workspace " +
+    "${allowedRoot.toAbsolutePath().normalize()}; set -Dbrowser4.agent.allowExternalAccess=true to bypass"
+)
+
+/** The requested working directory does not exist, is not a directory, or
+ *  could not be created. */
+class WorkspaceDirMissingException(
+    val path: Path,
+    detail: String? = null,
+) : IllegalArgumentException(
+    buildString {
+        append("working directory does not exist: ")
+        append(path.toAbsolutePath().normalize())
+        if (detail != null) append(" (").append(detail).append(')')
+    }
+)
+
 
 

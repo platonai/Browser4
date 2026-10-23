@@ -14725,6 +14725,10 @@ async fn handle_agent_run(
     if tool_params.get("coding").and_then(|v| v.as_bool()) == Some(true) {
         extra["coding"] = serde_json::json!(true);
     }
+    // Fresh-workspace isolation (`agent run --fresh-workspace`).
+    if tool_params.get("freshWorkspace").and_then(|v| v.as_bool()) == Some(true) {
+        extra["freshWorkspace"] = serde_json::json!(true);
+    }
     let result =
         submit_plain_command_with_options(client, base_url, task, true, extra).await?;
 

@@ -192,6 +192,66 @@ class CodingAgentFileSystem(
         mutationCount.set(0)
     }
 
+    /**
+     * Task-lifecycle reset invoked at the start of every CLI-engine task
+     * (coding-run-isolation-design.md §6.2.1).
+     *
+     * Order of operations:
+     * 1. coding task ([archiveDir] != null): move `<workspace>/.browser4/coding-snapshots/`
+     *    into [archiveDir] so previous-task revert snapshots are preserved but no
+     *    longer reachable by `revert`. non-coding task: delete that directory.
+     * 2. clear the in-memory snapshot map, the change counter, and the mutation log.
+     *
+     * This is what makes §8's "second task opens with changeSummary=0" hold and
+     * prevents `revert` from crossing task boundaries. Failures are logged and
+     * swallowed — a reset failure must never block the new task from starting.
+     */
+    fun beginTask(archiveDir: Path?) {
+        runCatching { resetPersistedSnapshots(archiveDir) }
+            .onFailure { logger.warn("beginTask: failed to archive persisted snapshots", it) }
+        snapshots.clear()
+        changeCounter.set(0)
+        clearMutations()
+    }
+
+    private fun resetPersistedSnapshots(archiveDir: Path?) {
+        val snapDir = snapshotDir
+        if (!Files.exists(snapDir)) return
+        if (archiveDir != null) {
+            // Move (same-volume rename) into the archive dir; create parent if needed.
+            runCatching { Files.createDirectories(archiveDir) }
+            val target = archiveDir.resolve("coding-snapshots")
+            runCatching { Files.move(snapDir, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING) }
+                .recoverCatching {
+                    // Cross-volume move fallback: copy + delete.
+                    copyTree(snapDir, target)
+                    deleteTree(snapDir)
+                }
+        } else {
+            deleteTree(snapDir)
+        }
+    }
+
+    private fun copyTree(src: Path, dst: Path) {
+        Files.walk(src).use { paths ->
+            paths.forEach { p ->
+                val rel = src.relativize(p)
+                val target = dst.resolve(rel)
+                if (Files.isDirectory(p)) Files.createDirectories(target)
+                else Files.copy(p, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }
+        }
+    }
+
+    private fun deleteTree(root: Path) {
+        if (!Files.exists(root)) return
+        // We do not follow links: this only ever runs on .browser4/coding-snapshots,
+        // which is a plain directory inside the workspace, never a junction.
+        Files.walk(root)
+            .sorted(Comparator.reverseOrder())
+            .forEach { runCatching { Files.deleteIfExists(it) } }
+    }
+
     private fun recordMutation(op: String, path: Path, ok: Boolean) {
         val relative = runCatching { workspaceRoot.relativize(path.toAbsolutePath().normalize()).toString() }
             .getOrElse { path.toString() }

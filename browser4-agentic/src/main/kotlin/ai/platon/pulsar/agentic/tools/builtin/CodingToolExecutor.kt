@@ -1877,7 +1877,12 @@ class CodingToolExecutor : AbstractToolExecutor() {
 
     /** A coding target whose shell and filesystem are rooted at [root]. */
     private fun targetAt(root: java.nio.file.Path): Target = Target(
-        CodingAgentShell(baseDir = root, allowDestructive = CodingWorkspace.allowDestructive),
+        // v0.3: shell now respects allowExternalAccess for cwd containment
+        CodingAgentShell(
+            baseDir = root,
+            allowDestructive = CodingWorkspace.allowDestructive,
+            allowExternalAccess = CodingWorkspace.allowExternalAccess,
+        ),
         CodingAgentFileSystem(
             workspaceRoot = root,
             allowExternalAccess = CodingWorkspace.allowExternalAccess,

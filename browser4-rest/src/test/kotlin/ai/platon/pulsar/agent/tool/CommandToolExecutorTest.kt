@@ -244,12 +244,12 @@ class CommandToolExecutorTest {
     @DisplayName("run passes an explicit coding flag to the executor")
     fun runForwardsExplicitCodingFlag() {
         runBlocking {
-            `when`(runner.submitPlainCommand("s1", "fix pom.xml", null, null, true)).thenReturn("t-coding")
+            `when`(runner.submitPlainCommand("s1", "fix pom.xml", null, null, true, null)).thenReturn("t-coding")
 
             val taskId = call("run", mapOf("command" to "fix pom.xml", "sessionId" to "s1", "coding" to true))
 
             assertEquals("t-coding", taskId)
-            Mockito.verify(runner).submitPlainCommand("s1", "fix pom.xml", null, null, true)
+            Mockito.verify(runner).submitPlainCommand("s1", "fix pom.xml", null, null, true, null)
         }
     }
 
@@ -257,11 +257,11 @@ class CommandToolExecutorTest {
     @DisplayName("run without the coding flag submits a browser task (the default, never guessed)")
     fun runWithoutCodingFlagIsABrowserTask() {
         runBlocking {
-            `when`(runner.executePlainCommand("s1", "open the page", null, null, null)).thenReturn(status())
+            `when`(runner.executePlainCommand("s1", "open the page", null, null, null, null)).thenReturn(status())
 
             json("run", mapOf("command" to "open the page", "sessionId" to "s1", "async" to false))
 
-            Mockito.verify(runner).executePlainCommand("s1", "open the page", null, null, null)
+            Mockito.verify(runner).executePlainCommand("s1", "open the page", null, null, null, null)
         }
     }
 

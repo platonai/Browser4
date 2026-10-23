@@ -310,10 +310,24 @@ open class RobustBrowserAgent(
      * Per-agent scratch workspace for CLI-engine (browser) tasks. Helper files
      * the model writes via coding.* and b4.run land here — never the backend
      * working directory / repository root (workspace isolation, P1).
+     *
+     * Respects [workspaceDirOverride] (set by the runner for `agent run
+     * --fresh-workspace`); otherwise falls back to `<baseDir>/workspace`.
      */
-    internal val agentWorkspaceDir: Path by lazy {
+    internal val agentWorkspaceDir: Path
+        get() = workspaceDirOverride ?: defaultWorkspaceDir
+
+    private val defaultWorkspaceDir: Path by lazy {
         baseDir.resolve("workspace").also { Files.createDirectories(it) }
     }
+
+    /**
+     * Runtime override of the agent workspace directory, set by the task runner
+     * when the caller requests a fresh, isolated workspace (`agent run
+     * --fresh-workspace`). Cleared in the runner's `finally`.
+     */
+    @Volatile
+    var workspaceDirOverride: Path? = null
 
     /**
      * Test/runtime override of the agent memory root directory (defaults to
@@ -916,8 +930,15 @@ open class RobustBrowserAgent(
             val memorySection = agentMemory.recall.recall(
                 action.action, agentMemory.scope, excludeTaskId = taskId,
             )
+            // §6.2: archive the previous task's deliverables, reset change
+            // tracking (so changeSummary opens at 0), and obtain the inherited
+            // workspace-state block to inject into the system prompt. Safe for
+            // non-coding runs — it only resets the mutation log.
+            val inheritedSection = runCatching {
+                agentToolManager.beginTask(taskId, action.action, codingMode)
+            }.getOrNull().orEmpty()
             var messages: List<ChatMessage> = listOf(
-                SystemMessage.from(cliAgentSystemPrompt() + memorySection),
+                SystemMessage.from(cliAgentSystemPrompt() + inheritedSection + memorySection),
                 UserMessage.from(action.action),
             )
             var textOnlyStreak = 0
@@ -925,9 +946,6 @@ open class RobustBrowserAgent(
             val maxTurns = config.maxSteps.coerceAtLeast(1)
             // A new run starts with no verdict and a full repair budget.
             lastVerificationVerdict = null
-        // A new run starts with a clean mutation log so the finish gate compares
-        // the report against THIS run's writes/deletes only.
-        agentToolManager.codingFs.clearMutations()
             repairLoop.reset()
             logger.info("🚀 cli-agent.start sid={} turns={} instr='{}'",
                 context.sid, maxTurns, Strings.compactInline(action.action, 100))

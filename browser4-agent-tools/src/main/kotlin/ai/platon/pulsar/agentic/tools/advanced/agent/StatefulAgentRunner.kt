@@ -294,9 +294,10 @@ open class StatefulAgentRunner(
         noopLimit: Int? = null,
         engine: RunEngine? = null,
         coding: Boolean? = null,
+        freshWorkspace: Boolean? = null,
     ): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status, noopLimit, engine, coding)
+        execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace)
         return status
     }
 
@@ -315,9 +316,10 @@ open class StatefulAgentRunner(
         noopLimit: Int? = null,
         engine: RunEngine? = null,
         coding: Boolean? = null,
+        freshWorkspace: Boolean? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
-            execute(plainCommand, status, noopLimit, engine, coding)
+            execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace)
         }
         runningJobs[status.id] = job
         job.start()
@@ -379,10 +381,11 @@ open class StatefulAgentRunner(
         noopLimit: Int? = null,
         engine: RunEngine? = null,
         coding: Boolean? = null,
+        freshWorkspace: Boolean? = null,
     ) {
         try {
             runMutex.withLock {
-                executeSerialized(plainCommand, status, noopLimit, engine, coding)
+                executeSerialized(plainCommand, status, noopLimit, engine, coding, freshWorkspace)
             }
         } catch (e: CancellationException) {
             // A task cancelled while queued never reaches executeSerialized — without
@@ -406,6 +409,7 @@ open class StatefulAgentRunner(
         noopLimit: Int? = null,
         engine: RunEngine? = null,
         coding: Boolean? = null,
+        freshWorkspace: Boolean? = null,
     ) {
         val agent = session.companionAgent
 
@@ -446,6 +450,16 @@ open class StatefulAgentRunner(
                 it.codingMode = coding == true
                 if (coding == true) {
                     logger.info("Agent task {} (session={}): coding mode (explicit) — skipping driver health check and page navigation", status.id, session.uuid)
+                }
+                // Fresh-workspace isolation (design §6.6): create a timestamped
+                // workspace dir under the agent's base dir, point both the agent's
+                // workspaceDir and the tool manager's coding shell/fs at it.
+                if (freshWorkspace == true) {
+                    val fresh = it.baseDir.resolve("workspace.fresh.${status.id}")
+                    java.nio.file.Files.createDirectories(fresh)
+                    it.workspaceDirOverride = fresh
+                    it.agentToolManager.rebindWorkspace(fresh)
+                    logger.info("Agent task {} (session={}): fresh workspace at {}", status.id, session.uuid, fresh)
                 }
             }
 
@@ -488,10 +502,10 @@ open class StatefulAgentRunner(
                     AgentEventBus.withServerSideAgentEventHandlers(serverSideAgentEventHandlers) {
                         if (runDispatcher != null) {
                             withContext(runDispatcher) {
-                                executeAgentCommand(plainCommand, status, agent, runHasReturned, startIndex, coding)
+                                executeAgentCommand(plainCommand, status, agent, runHasReturned, startIndex, coding, freshWorkspace)
                             }
                         } else {
-                            executeAgentCommand(plainCommand, status, agent, runHasReturned, startIndex, coding)
+                            executeAgentCommand(plainCommand, status, agent, runHasReturned, startIndex, coding, freshWorkspace)
                         }
                     }
                 } finally {
@@ -524,6 +538,25 @@ open class StatefulAgentRunner(
                 it.noopLimitOverride = null
                 it.runEngineOverride = null
                 it.codingMode = false
+                // Write point 3 (§6.1): record the terminal task state in the
+                // workspace manifest. Done from finally so cancelled/failed runs
+                // are still recorded.
+                val taskStatus = when {
+                    status.cancelled -> ai.platon.pulsar.coding.TaskStatus.CANCELLED
+                    status.failureReason != null -> ai.platon.pulsar.coding.TaskStatus.FAILED
+                    else -> ai.platon.pulsar.coding.TaskStatus.COMPLETE
+                }
+                runCatching { it.agentToolManager.endTask(status.id, taskStatus) }
+                    .onFailure { logger.warn("endTask failed for {}: {}", status.id, it.message) }
+                // Reset the fresh-workspace override (if any) back to the default
+                // workspace so subsequent tasks in this session don't inherit it.
+                if (it.workspaceDirOverride != null) {
+                    val default = it.baseDir.resolve("workspace")
+                    java.nio.file.Files.createDirectories(default)
+                    it.workspaceDirOverride = null
+                    runCatching { it.agentToolManager.rebindWorkspace(default) }
+                        .onFailure { w -> logger.warn("reset workspace failed: {}", w.message) }
+                }
             }
             status.done()
             onStatusChanged(status)
@@ -577,6 +610,7 @@ open class StatefulAgentRunner(
         runHasReturned: AtomicBoolean,
         startIndex: Int,
         coding: Boolean? = null,
+        freshWorkspace: Boolean? = null,
     ) {
         // Record the submitted instruction so callers can verify they're
         // getting results for the right task (prevents cross-talk confusion).

@@ -177,6 +177,7 @@ class UserCommandExecutor(
         noopLimit: Int? = null,
         engine: RunEngine? = null,
         coding: Boolean? = null,
+        freshWorkspace: Boolean? = null,
     ): CommandStatus {
         if (plainCommand.isBlank()) {
             return CommandStatus.failed(ResourceStatus.SC_BAD_REQUEST)
@@ -195,7 +196,7 @@ class UserCommandExecutor(
             ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
         } else {
             ensureAgentRunner(sessionId)
-                .execute(plainCommand, noopLimit = noopLimit, engine = engine, coding = coding)
+                .execute(plainCommand, noopLimit = noopLimit, engine = engine, coding = coding, freshWorkspace = freshWorkspace)
                 .toCommandStatus()
         }
     }
@@ -216,6 +217,7 @@ class UserCommandExecutor(
         noopLimit: Int? = null,
         engine: RunEngine? = null,
         coding: Boolean? = null,
+        freshWorkspace: Boolean? = null,
     ): String {
         val command = plainCommand.trim()
 
@@ -229,7 +231,7 @@ class UserCommandExecutor(
         // CLI engine (the default): always an agent task — no URL shortcut, no
         // normalizer hijack. The agent decides how to reach the page via b4.run.
         if (engine != RunEngine.OBSERVE_ACT) {
-            return submitAgentTask(sessionId, command, noopLimit, engine, coding)
+            return submitAgentTask(sessionId, command, noopLimit, engine, coding, freshWorkspace)
         }
 
         // 2. Single URL with optional parameters — use page visit directly
@@ -251,7 +253,7 @@ class UserCommandExecutor(
             submitPageVisitCommand(sessionId, request, eventHandlers)
         } else {
             // 4. Free-form agent command
-            submitAgentTask(sessionId, command, noopLimit, engine, coding)
+            submitAgentTask(sessionId, command, noopLimit, engine, coding, freshWorkspace)
         }
     }
 
@@ -286,15 +288,16 @@ class UserCommandExecutor(
         noopLimit: Int? = null,
         engine: RunEngine? = null,
         coding: Boolean? = null,
+        freshWorkspace: Boolean? = null,
     ): String {
         val runner = ensureAgentRunner(sessionId)
         val status = runner.create()
         taskOwner[status.id] = "agent"
         logger.info(
-            "Submitting agent task {} (session={}, noopLimit={}, coding={})",
-            status.id, sessionId, noopLimit, coding ?: false
+            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={})",
+            status.id, sessionId, noopLimit, coding ?: false, freshWorkspace ?: false
         )
-        runner.submit(plainCommand, status, noopLimit, engine, coding)
+        runner.submit(plainCommand, status, noopLimit, engine, coding, freshWorkspace)
         return status.id
     }
 

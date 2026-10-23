@@ -452,6 +452,8 @@ class MCPToolController(
         CodingAgentShell(
             baseDir = CodingWorkspace.workspaceRoot,
             allowDestructive = CodingWorkspace.allowDestructive,
+            // v0.3: cwd containment follows CodingAgentFileSystem.allowExternalAccess
+            allowExternalAccess = CodingWorkspace.allowExternalAccess,
         )
     }
     private val standaloneCodingFs: CodingAgentFileSystem by lazy {

@@ -69,6 +69,13 @@ class CommandToolExecutor(
                         "task type is never auto-detected.",
                 ),
                 ToolSpec.Arg(
+                    "freshWorkspace", "Boolean?", "null",
+                    "True runs this task in a fresh, isolated workspace directory " +
+                        "(created under the agent's data dir) instead of the shared workspace. " +
+                        "Use for tasks that must not see or mutate previous tasks' scratch files. " +
+                        "Omit or false uses the default shared workspace.",
+                ),
+                ToolSpec.Arg(
                     "engine", "String?", "null",
                     "Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated.",
                 ),
@@ -214,7 +221,7 @@ class CommandToolExecutor(
             "run" -> {
                 validateArgs(
                     args,
-                    allowed = setOf("command", "async", "noopLimit", "engine", "coding") + SESSION_ARG,
+                    allowed = setOf("command", "async", "noopLimit", "engine", "coding", "freshWorkspace") + SESSION_ARG,
                     required = setOf("command"),
                     functionName
                 )
@@ -235,10 +242,11 @@ class CommandToolExecutor(
                 }?.let { RunEngine.parse(it) }
                 // null (absent) = browser task: explicit opt-in only, never guessed.
                 val coding = paramBool(args, "coding", functionName, required = false, default = null)
+                val freshWorkspace = paramBool(args, "freshWorkspace", functionName, required = false, default = null)
                 if (isAsync) {
-                    service.submitPlainCommand(sessionId, command, noopLimit, engine, coding)
+                    service.submitPlainCommand(sessionId, command, noopLimit, engine, coding, freshWorkspace)
                 } else {
-                    val status = service.executePlainCommand(sessionId, command, noopLimit, engine, coding)
+                    val status = service.executePlainCommand(sessionId, command, noopLimit, engine, coding, freshWorkspace)
                     pulsarObjectMapper().writeValueAsString(status)
                 }
             }

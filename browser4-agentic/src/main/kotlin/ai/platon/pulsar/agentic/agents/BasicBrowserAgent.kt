@@ -48,7 +48,7 @@ open class BasicBrowserAgent constructor(
 
     private val lazyAgentToolManager by lazy {
         toolManagerInitialized.set(true)
-        AgentToolManager(_baseDir, this, workspaceRoot = workspaceRoot).also {
+        AgentToolManager(_baseDir, this, initialWorkspaceRoot = workspaceRoot).also {
             // Inner (native tool-calling loop) executions don't produce outer
             // AgentStates — record them so the finish-report guard can see them.
             it.toolExecutionRecorder = ::recordInnerToolExecution

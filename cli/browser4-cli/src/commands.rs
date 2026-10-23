@@ -4033,6 +4033,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "wait-timeout", description: "Max seconds to block with --wait before giving up (default: 600; the task keeps running server-side after a timeout)", is_bool: false, short: None },
                 OptionDef { name: "noop-limit", description: "Override the consecutive no-op abort threshold (default: 5; long coding tasks benefit from 8-10). Passing --coding is the explicit way to mark an agent task as a coding task", is_bool: false, short: None },
                 OptionDef { name: "coding", description: "Mark the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task, which is the default: task type is never auto-detected", is_bool: true, short: None },
+                OptionDef { name: "fresh-workspace", description: "Run this task in a fresh, isolated workspace directory instead of the shared workspace. Use for tasks that must not see or mutate previous tasks' scratch files", is_bool: true, short: None },
                 OptionDef { name: "engine", description: "Agent execution engine (default: cli; observe-act is the DEPRECATED legacy engine)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -4056,6 +4057,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // signal (absent ⇒ browser task, the default).
                 if get_bool(args, "coding").unwrap_or(false) {
                     p["coding"] = json!(true);
+                }
+                if get_bool(args, "fresh-workspace").unwrap_or(false) {
+                    p["freshWorkspace"] = json!(true);
                 }
                 p["engine"] = json!(get_opt_str(args, "engine").unwrap_or("cli"));
                 p

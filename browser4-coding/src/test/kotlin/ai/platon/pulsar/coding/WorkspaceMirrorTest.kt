@@ -131,4 +131,131 @@ class WorkspaceMirrorTest {
         val repo = repoFixture(listOf("browser4-coding", "browser4-plugins"))
         assertEquals(listOf("browser4-coding", "browser4-plugins"), WorkspaceMirror.reactorModules(repo))
     }
+
+    // ================================================================
+    // v0.3 tests — depth sort, real pom fixture, ProcessRunner timeout
+    // ================================================================
+
+    @Test
+    @DisplayName("v0.3: reactorModules sorts by depth ascending (shallow first)")
+    fun reactorModulesDepthSorted() {
+        // A realistic pattern: parent module declared AFTER a nested child
+        // (which is what triggered the 1-failed noise before v0.3).
+        val repo = repoFixture(listOf(
+            "browser4-tests/pulsar-tests-common",
+            "browser4-plugins",
+            "browser4-plugins/browser4-pageinfo",
+            "browser4-plugins/browser4-standalone-app",
+            "browser4-core",
+            "browser4-tests",
+        ))
+        val result = WorkspaceMirror.reactorModules(repo)
+        // Every shallow entry must come before its deep descendant.
+        for (shallow in result) {
+            for (deep in result) {
+                if (deep.startsWith("$shallow/")) {
+                    assertTrue(result.indexOf(shallow) < result.indexOf(deep)) {
+                        "shallow '$shallow' must come before deep '$deep'"
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("v0.3: mirror with depth-sorted reactor has zero errors for deeply nested fixture")
+    fun depthSortedMirrorNoErrors() {
+        // Build a fixture where deep modules come BEFORE their parent in the pom.
+        val modules = listOf(
+            "browser4-tests/pulsar-tests-common",
+            "browser4-plugins/browser4-pageinfo",
+            "browser4-plugins",
+            "browser4-tests",
+            "browser4-core",
+        )
+        val repo = repoFixture(modules)
+        val ws = workspace()
+        val report = WorkspaceMirror.ensure(ws, repo)
+        assertTrue(report.errors.isEmpty(), "depth-sorted mirror should have zero errors, got: ${report.errors}")
+        assertTrue(report.unavailable.isEmpty(), "unavailable should be empty, got: ${report.unavailable}")
+        // The deepest entry should be readable (parent was created by depth sort).
+        assertTrue(Files.exists(ws.resolve("browser4-tests/pulsar-tests-common/pom.xml")),
+            "nested child pom should be readable after depth-sorted mirror")
+    }
+
+    @Test
+    @DisplayName("v0.3: mirror preserves pre-existing unrelated files (partial mirror idempotent)")
+    fun partialMirrorPreservesUnrelated() {
+        val repo = repoFixture(listOf("browser4-coding", "browser4-rest"))
+        val ws = workspace()
+        // Pre-create an unrelated file the mirror must not delete.
+        Files.writeString(ws.resolve("scratch.txt"), "keep me\n")
+        WorkspaceMirror.ensure(ws, repo)
+        assertTrue(Files.exists(ws.resolve("scratch.txt")), "unrelated pre-existing file must survive mirroring")
+    }
+
+    @Test
+    @DisplayName("v0.3: mirror marks unavailable classified-failures when ProcessRunner returns hung subprocess")
+    fun mklinkTimeoutClassifiesAsTimeout() {
+        // Save default, inject a fake runner whose Process.waitFor(timeout, unit) never returns true, then restore.
+        val original = WorkspaceMirror.processRunner
+        val fakeProcess = object : Process() {
+            override fun waitFor() = 1
+            override fun waitFor(timeout: Long, unit: java.util.concurrent.TimeUnit): Boolean = false
+            override fun exitValue() = 1
+            override fun destroy() {}
+            override fun getInputStream() = java.io.ByteArrayInputStream(ByteArray(0))
+            override fun getErrorStream() = java.io.ByteArrayInputStream(ByteArray(0))
+            override fun getOutputStream() = java.io.ByteArrayOutputStream()
+            override fun isAlive() = true
+        }
+        WorkspaceMirror.processRunner = ProcessRunner { _, _ -> fakeProcess }
+        try {
+            val repo = repoFixture(listOf("browser4-coding"))
+            val ws = workspace()
+            val report = WorkspaceMirror.ensure(ws, repo)
+            assertTrue(report.unavailable.isNotEmpty(), "expected at least one timeout failure")
+            assertTrue(report.unavailable.all { it.kind == MirrorFailureKind.TIMEOUT })
+            assertTrue(report.unavailable.first().detail.contains("hung"))
+        } finally {
+            WorkspaceMirror.processRunner = original
+        }
+    }
+
+    @Test
+    @DisplayName("v0.3: mirror produces errors-only list when ProcessRunner privilege-denies")
+    fun mklinkPrivilegeDeniedClassifiesAsPrivilege() {
+        val original = WorkspaceMirror.processRunner
+        val fakeProcess = object : Process() {
+            override fun waitFor() = 0
+            override fun waitFor(timeout: Long, unit: java.util.concurrent.TimeUnit): Boolean = true
+            override fun exitValue() = 1
+            override fun destroy() {}
+            override fun getInputStream() = java.io.ByteArrayInputStream("You do not have sufficient privilege".toByteArray())
+            override fun getErrorStream() = java.io.ByteArrayInputStream(ByteArray(0))
+            override fun getOutputStream() = java.io.ByteArrayOutputStream()
+            override fun isAlive() = false
+        }
+        WorkspaceMirror.processRunner = ProcessRunner { _, _ -> fakeProcess }
+        try {
+            val repo = repoFixture(listOf("browser4-coding"))
+            val ws = workspace()
+            val report = WorkspaceMirror.ensure(ws, repo)
+            assertTrue(report.unavailable.isNotEmpty(), "expected at least one privilege failure")
+            assertTrue(report.unavailable.all { it.kind == MirrorFailureKind.PRIVILEGE },
+                "all failures should be PRIVILEGE but got: ${report.unavailable.map { it.kind }}")
+        } finally {
+            WorkspaceMirror.processRunner = original
+        }
+    }
+
+    @Test
+    @DisplayName("v0.3: MirrorReport.isHealthy reflects unavailable list")
+    fun mirrorReportHealthyOnlyWhenNoUnavailable() {
+        val repo = repoFixture(listOf("browser4-coding", "browser4-rest"))
+        val ws = workspace()
+        val healthy = WorkspaceMirror.ensure(ws, repo)
+        assertTrue(healthy.isHealthy)
+        assertEquals(0, healthy.unavailable.size)
+    }
 }
