@@ -52,6 +52,11 @@ open class XSQLHyperlink(
                     p.isCanceled || p.protocolStatus.isRetry -> {
                         response.emitEvent("retry")
                         response.message = "Page fetch is being retried: ${p.protocolStatus.reason ?: "transient failure"}"
+                        // The rows (if any) belong to the attempt being retried,
+                        // not to the result the caller will eventually receive.
+                        // Drop them so a later terminal failure cannot publish
+                        // stale data as a success.
+                        hyperlink.resetExtractionForRetry()
                         response.refresh(ResourceStatus.SC_ACCEPTED, p.protocolStatus.minorCode, false)
                     }
 
@@ -108,6 +113,21 @@ open class XSQLHyperlink(
 
     private val logger = getLogger(XSQLHyperlink::class)
 
+    /**
+     * True once [extract] has run for the current load attempt.
+     *
+     * A retried task reuses the same hyperlink and [ScrapeResponse].  Without
+     * this marker [fail] cannot tell rows extracted by an earlier attempt from
+     * rows extracted by the attempt that just ended.
+     */
+    @Volatile
+    private var extractedInCurrentAttempt = false
+
+    private fun resetExtractionForRetry() {
+        extractedInCurrentAttempt = false
+        response.resultSet = emptyList()
+    }
+
     override var args: String? = "-parse ${sql.args}"
     override var eventHandlers = PageEventHandlersFactory.create(
         loadEventHandlers = LoadEventHandlers(this, response),
@@ -115,6 +135,7 @@ open class XSQLHyperlink(
     )
 
     open fun extract(page: WebPage, document: FeaturedDocument) {
+        extractedInCurrentAttempt = true
         try {
             response.emitEvent("extract")
             response.pageContentBytes = page.contentLength.toInt()
@@ -169,6 +190,30 @@ open class XSQLHyperlink(
      * or reports the real failure reason.
      * */
     open fun fail(page: WebPage, pageWasNull: Boolean = false) {
+        // A page whose content arrived is selectable, and the X-SQL has already
+        // run against those bytes by the time the load handlers decide the
+        // outcome.  When this attempt produced rows, the task succeeded and only
+        // the fetch status is worth reporting: forcing 417 here discarded
+        // delivered data and made `swarm --wait` report failure while the
+        // resultSet held the rows it had just been given.
+        //
+        // The extraction marker matters: a retry reuses the response, so rows
+        // left by an earlier attempt must not turn a contentless terminal
+        // failure into a success.
+        val pageHasContent = !pageWasNull && !page.isNil &&
+            (page.contentLength > 0L || page.content != null)
+        val deliveredRows = response.resultSet
+        if (extractedInCurrentAttempt && pageHasContent && !deliveredRows.isNullOrEmpty()) {
+            response.pageContentBytes = page.contentLength.toInt().coerceAtLeast(0)
+            response.pageStatusCode = page.protocolStatus.minorCode
+            response.statusCode = ResourceStatus.SC_OK
+            response.message = "Page fetch ended with protocol status ${page.protocolStatus.minorCode} " +
+                "(${page.protocolStatus.reason ?: "unknown"}), but the X-SQL extracted " +
+                "${deliveredRows.size} row(s) from the content that arrived; the result is usable."
+            complete(page)
+            return
+        }
+
         val status = page.protocolStatus
         val reason = status.reason?.toString()?.takeIf { it.isNotBlank() } ?: "unknown"
         response.pageContentBytes = page.contentLength.toInt().coerceAtLeast(0)
@@ -187,6 +232,8 @@ open class XSQLHyperlink(
             else ->
                 "The page was not fetched (protocol status ${status.minorCode}: $reason)."
         }
+        // A failed task must never expose rows from an earlier attempt.
+        response.resultSet = emptyList()
         complete(page)
     }
 

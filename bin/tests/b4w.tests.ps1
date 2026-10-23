@@ -471,6 +471,10 @@ Write-Host "━━━ Rebuild flag ━━━" -ForegroundColor Cyan
 # Verify the -Rebuild flag is handled via manual $args parsing (no param() block)
 Assert-ContainsString -Label 'Rebuild: param switch defined' -Haystack $srcText -Needle '$Rebuild = $false'
 Assert-ContainsString -Label 'Rebuild: forces rebuild message' -Haystack $srcText -Needle 'Rebuilding browser4-cli'
+Assert-ContainsString -Label 'Rebuild: hashes plugin modules' -Haystack $srcText -Needle 'browser4-plugins'
+Assert-ContainsString -Label 'Rebuild: resolves platform stamp' -Haystack $srcText -Needle 'Get-B4wBackendBundleStampPath'
+Assert-ContainsString -Label 'Rebuild: hashes with -NoBuild -Rebuild' -Haystack $srcText -Needle '!$NoBuild -or $Rebuild'
+Assert-ContainsString -Label 'Rebuild: restores caller force flag' -Haystack $srcText -Needle '$OriginalForceRebuildBundle'
 
 # Verify stale-source auto-detection logic
 Assert-ContainsString -Label 'Rebuild: auto-detect stale sources' -Haystack $srcText -Needle 'Get-ChildItem -Path $SrcDir'

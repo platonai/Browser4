@@ -242,6 +242,13 @@ Crawl completed. 3 pages found.
 
 ## Testing locally with MockSite
 
+> **Prerequisite — Java 25+:** the launcher builds the backend, whose Maven
+> enforcer rejects older JDKs.  If `java -version` reports less than 25, set
+> `JAVA_HOME` first, e.g.
+> `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 ./bin/test.ps1 mock-site`.
+> The launcher pre-checks this and fails fast with the same hint instead of
+> burying a Maven enforcer error several lines deep in the build output.
+
 The mock e-commerce site (`./bin/test.ps1 mock-site`) provides predictable product pages for
 testing crawl extraction without hitting live websites.  A cold start runs a Maven preflight
 (browser4-dependencies, then browser4-rest and ~25 modules) that serves nothing on `:18080` for

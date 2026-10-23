@@ -11597,8 +11597,15 @@ async fn handle_html_snapshot_export(
     .await?;
 
     snapshot::save_binary(&file_path, result.as_bytes()).map_err(|e| describe_io_error(&e))?;
-    cli_println!("Snapshot saved to: {}", file_path.display());
-    json_field("path", json!(file_path.display().to_string()));
+    // Echo the resolved path, not the string the user typed: a script that
+    // changes directory (or a user reading the line later) had to resolve a
+    // relative path against the original CWD by hand.  `absolute` normalizes
+    // without resolving symlinks, so it stays readable on Windows (unlike
+    // `canonicalize`, which yields a \\?\ prefix); fall back to the typed path
+    // if the filesystem cannot resolve it.
+    let resolved_path = std::path::absolute(&file_path).unwrap_or_else(|_| file_path.clone());
+    cli_println!("Snapshot saved to: {}", resolved_path.display());
+    json_field("path", json!(resolved_path.display().to_string()));
 
     Ok(())
 }
@@ -14374,6 +14381,51 @@ async fn verify_press_result(
     }
 }
 
+/// True when the tool's text output is nothing but the JSON array of values the
+/// user just asked to select — the confirmation line below already reports them
+/// (and reports them in the user's own labelling), so the raw array is noise.
+fn is_selected_values_echo(text: &str, expected_value: &str) -> bool {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return false;
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(Value::Array(items)) if !items.is_empty() => {
+            let values: Vec<&str> = match items.iter().map(|item| item.as_str()).collect() {
+                Some(values) => values,
+                None => return false,
+            };
+            values.join(",") == expected_value
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod selected_values_echo_tests {
+    use super::is_selected_values_echo;
+
+    #[test]
+    fn single_selected_value_is_treated_as_echo() {
+        assert!(is_selected_values_echo("[\"sg\"]", "sg"));
+        assert!(is_selected_values_echo(" [\"sg\"]\n", "sg"));
+    }
+
+    #[test]
+    fn multi_select_echo_matches_the_typed_value() {
+        assert!(is_selected_values_echo("[\"sg\",\"de\"]", "sg,de"));
+        assert!(!is_selected_values_echo("[\"sg\",\"de\"]", "sg"));
+    }
+
+    #[test]
+    fn real_output_is_never_swallowed() {
+        assert!(!is_selected_values_echo("✓ Selected 'sg'", "sg"));
+        assert!(!is_selected_values_echo("[\"us\"]", "sg"));
+        assert!(!is_selected_values_echo("[]", "sg"));
+        assert!(!is_selected_values_echo("", "sg"));
+    }
+}
+
 /// Handle `select` command with optional verification and automatic
 /// post-timeout verification.
 async fn handle_select_command(
@@ -14408,7 +14460,10 @@ async fn handle_select_command(
 
     match tool_result {
         Ok(text) => {
-            if !text.is_empty() {
+            // The backend answers a select with the selected values as a JSON
+            // array; echoing it dumped a bare `["sg"]` line into human-readable
+            // output, right above the confirmation that already reports them.
+            if !text.is_empty() && !is_selected_values_echo(&text, expected_value) {
                 cli_println!("{}", text);
             }
 
@@ -14664,6 +14719,11 @@ async fn handle_agent_run(
     let mut extra = serde_json::json!({ "engine": engine });
     if let Some(n) = noop_limit {
         extra["noopLimit"] = serde_json::json!(n);
+    }
+    // Explicit coding flag (`agent run --coding`): the payload key is the opt-in
+    // signal server-side; when it is absent the task is a browser task by default.
+    if tool_params.get("coding").and_then(|v| v.as_bool()) == Some(true) {
+        extra["coding"] = serde_json::json!(true);
     }
     let result =
         submit_plain_command_with_options(client, base_url, task, true, extra).await?;
@@ -15926,7 +15986,7 @@ async fn handle_swarm_submit(
     client: &Client,
     base_url: &str,
     tool_params: &Value,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     // Every invocation gets one batch id; all of its tasks carry it so the batch
     // can be tracked as a unit (`swarm list --batch <id>`).
     let batch_id = resolve_batch_id(tool_params);
@@ -16065,6 +16125,7 @@ async fn handle_swarm_submit(
     }
 
     // Support --wait: poll until all submitted jobs complete
+    let mut unsuccessful = 0usize;
     if tool_params
         .get("wait")
         .and_then(|v| v.as_bool())
@@ -16079,18 +16140,18 @@ async fn handle_swarm_submit(
             })
             .collect();
         if !task_ids.is_empty() {
-            swarm_wait_for_jobs(client, base_url, &task_ids, Some(&batch_id)).await?;
+            unsuccessful = swarm_wait_for_jobs(client, base_url, &task_ids, Some(&batch_id)).await?;
         }
     }
 
-    Ok(())
+    Ok(unsuccessful)
 }
 
 async fn handle_swarm_query(
     client: &Client,
     base_url: &str,
     tool_params: &Value,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     // One batch id per invocation, stamped on every task it submits.
     let batch_id = resolve_batch_id(tool_params);
     let url = tool_params
@@ -16237,6 +16298,7 @@ async fn handle_swarm_query(
     }
 
     // Support --wait: poll until all submitted jobs complete
+    let mut unsuccessful = 0usize;
     if tool_params
         .get("wait")
         .and_then(|v| v.as_bool())
@@ -16251,7 +16313,7 @@ async fn handle_swarm_query(
             })
             .collect();
         if !task_ids.is_empty() {
-            swarm_wait_for_jobs(client, base_url, &task_ids, Some(&batch_id)).await?;
+            unsuccessful = swarm_wait_for_jobs(client, base_url, &task_ids, Some(&batch_id)).await?;
         }
     } else {
         // Without --wait, jobs are submitted asynchronously. The user needs
@@ -16270,7 +16332,7 @@ async fn handle_swarm_query(
         );
     }
 
-    Ok(())
+    Ok(unsuccessful)
 }
 
 /// Map backend swarm status codes to user-friendly lifecycle labels.
@@ -17316,12 +17378,17 @@ fn swarm_status_matches(last_status: &str, wanted: &str) -> bool {
 }
 
 /// Poll a list of swarm task IDs until all complete or timeout.
+///
+/// Returns the number of jobs that did NOT succeed (failed plus still pending
+/// when the wait window expires), so the caller can exit non-zero: a scripted
+/// `swarm query --wait` used to exit 0 while every job had failed, and the
+/// caller had no way to tell.
 async fn swarm_wait_for_jobs(
     client: &Client,
     base_url: &str,
     task_ids: &[String],
     batch_id: Option<&str>,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let total = task_ids.len();
     match batch_id {
         Some(id) => cli_println!(
@@ -17458,7 +17525,7 @@ async fn swarm_wait_for_jobs(
             json_field("succeeded", json!(succeeded));
             json_field("failed", json!(failed));
             json_field("pending_task_ids", json!(pending));
-            return Ok(());
+            return Ok(failed + pending.len());
         }
 
         // Progress report every 30 seconds
@@ -17583,7 +17650,7 @@ fn report_swarm_wait_outcome(
     start: std::time::Instant,
     total: usize,
     batch_id: Option<&str>,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let succeeded: Vec<&String> = task_ids
         .iter()
         .zip(outcomes)
@@ -17681,7 +17748,7 @@ fn report_swarm_wait_outcome(
     if !pending.is_empty() {
         json_field("pending_task_ids", json!(pending));
     }
-    Ok(())
+    Ok(failed.len() + pending.len())
 }
 
 /// Render the aggregate status of a batch, or `None` when the id is not a batch.
@@ -26480,12 +26547,24 @@ async fn handle_status(
     }
 
     // Show installed runtime bundle info (informational only).
+    let dev_mode = daemon::is_dev_mode();
     if let Some(metadata) = daemon::read_installed_browser4_runtime_metadata() {
-        cli_println!(
-            "Installed bundle: {} (at {})",
-            metadata.tag,
-            metadata.installed_at
-        );
+        if dev_mode {
+            // In a checkout the installed bundle is NOT what runs — the daemon
+            // launches the locally built runtime bundle — so label it instead of
+            // printing two bundle versions that look like a contradiction.
+            cli_println!(
+                "Installed bundle: {} (at {}) — used only outside a repository checkout",
+                metadata.tag,
+                metadata.installed_at
+            );
+        } else {
+            cli_println!(
+                "Installed bundle: {} (at {})",
+                metadata.tag,
+                metadata.installed_at
+            );
+        }
         json_field("installed_version", json!(&metadata.tag));
         json_field("installed_at", json!(&metadata.installed_at));
     } else {
@@ -26644,8 +26723,16 @@ async fn handle_status(
             json_field("version_mismatch", json!(false));
         }
     } else if health == "UNREACHABLE" || health == "DOWN" {
-        // Server not reachable — compare against installed bundle as fallback.
-        if let Some(ref metadata) = daemon::read_installed_browser4_runtime_metadata() {
+        if dev_mode {
+            // Comparing against the installed bundle would be misleading in a
+            // checkout: the next command starts the locally built backend, not
+            // that bundle, so there is no mismatch to report.
+            cli_println!(
+                "Backend is not running; in a repository checkout the next command starts the locally built \
+                 backend (rebuild it with 'b4w -Rebuild <command>' after changing backend sources)."
+            );
+            json_field("version_mismatch", json!(false));
+        } else if let Some(ref metadata) = daemon::read_installed_browser4_runtime_metadata() {
             let installed_ver = metadata.tag.trim().trim_start_matches('v');
             if normalize_version(installed_ver) != normalize_version(VERSION.trim()) {
                 cli_println!(
@@ -31020,8 +31107,15 @@ async fn run(
                         .join(", ")
                 )
             };
-            print_help(None);
-            return Err(CliError(ExitCode::Usage, msg));
+            // No full help dump: a typo used to flood the terminal with the
+            // whole command list (printed to stdout, so `cmd > out` captured it
+            // too).  The one-line error names the command and suggests the
+            // closest matches; `--help` is one keystroke away.  The hint rides
+            // on the returned error so the renderer prints it exactly once.
+            return Err(CliError(
+                ExitCode::Usage,
+                format!("{msg}. Run 'browser4-cli help' for the command list."),
+            ));
         }
     };
 
@@ -32040,10 +32134,28 @@ async fn run(
             .await?;
         }
         "swarm-submit" => {
-            handle_swarm_submit(&client, &base_url, &tool_params).await?;
+            let unsuccessful = handle_swarm_submit(&client, &base_url, &tool_params).await?;
+            if unsuccessful > 0 {
+                return Err(CliError(
+                    ExitCode::PartialFailure,
+                    format!(
+                        "{unsuccessful} swarm job(s) did not succeed — see the per-task status above, \
+                         or 'swarm status <id>' for one task."
+                    ),
+                ));
+            }
         }
         "swarm-query" => {
-            handle_swarm_query(&client, &base_url, &tool_params).await?;
+            let unsuccessful = handle_swarm_query(&client, &base_url, &tool_params).await?;
+            if unsuccessful > 0 {
+                return Err(CliError(
+                    ExitCode::PartialFailure,
+                    format!(
+                        "{unsuccessful} swarm job(s) did not succeed — see the per-task status above, \
+                         or 'swarm status <id>' for one task."
+                    ),
+                ));
+            }
         }
         "swarm-status" => {
             handle_swarm_status(&client, &base_url, &tool_params).await?;

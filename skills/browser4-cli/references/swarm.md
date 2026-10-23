@@ -106,6 +106,8 @@ afterwards — no need to remember individual task uuids.
 
 > **Tip:** Use `--wait` to avoid manual polling for short-lived jobs. The CLI prints a progress summary when all jobs reach a terminal state.
 
+> **Exit status:** with `--wait`, exit `0` requires every submitted job to finish successfully. The command exits `6` (`PartialFailure`) when at least one job failed or is still pending after the 5-minute window — a timeout is not reported as success.
+
 > **LoadOptions for real data collection:** crawling almost always needs tuning —
 > `-requireNotBlank '<selector>'` (page-quality gate), `-requireSize`,
 > `-nMaxRetry N` / `-ignoreFailure` (retry control), `-expires 1d` /
@@ -169,6 +171,8 @@ browser4-cli swarm query --sql @query.sql --seed-file ./urls.txt --refresh
 # With --wait: blocks until all jobs finish
 browser4-cli swarm query --sql @query.sql --seed-file ./urls.txt --refresh --wait
 ```
+
+> `--wait` exits `6` (`PartialFailure`) if any job failed or is still pending when the 5-minute window closes; exit `0` means every job succeeded.
 
 Core X-SQL pattern: `SELECT <fn>(dom, <selector>) FROM DOM_LOAD_AND_SELECT(@url, '<scope>');`
 

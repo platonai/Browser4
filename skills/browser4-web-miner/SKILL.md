@@ -27,6 +27,13 @@ Use WebMiner when you have a **folder of downloaded HTML pages** and want to clu
 
 WebMiner runs a three-stage local pipeline: **encode** converts each HTML page into a 69-dimension feature vector, **cluster** groups similar pages with SMILE KMeans (k auto-detected), and **views** renders an interactive HTML report plus Excel spreadsheets. Everything runs locally on your machine — no data leaves it, and no LLM tokens are consumed.
 
+> **Read the console K correctly:** encode works per *page element*, not per
+> page — one 69-dimension vector per node, so `rows=` counts nodes and the
+> reported `k=` counts **node** clusters.  A small corpus therefore prints a
+> large K (`k=67, pages=6, rows=367` is normal, not a bug).  The **views** stage
+> re-aggregates those node clusters into page-level groups, which is what the
+> report shows: cluster count is not a page count.
+
 ## Patterns
 
 ### 1. Full pipeline on a folder of pages

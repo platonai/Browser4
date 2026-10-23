@@ -27,6 +27,18 @@ After installing (`browser4-cli install`), invoke commands directly — the docs
 browser4-cli open --headless <url>
 ```
 
+Working from the repository itself? Use the dev wrapper instead of an installed
+binary — it builds the CLI from source and starts the backend from the checkout
+(`./b4w.sh` on Bash / Git Bash / Linux / macOS, `./b4w.ps1` on PowerShell):
+
+```bash
+./b4w.sh goto <url>          # first run builds the runtime bundle (minutes)
+./b4w.sh -Rebuild status     # force a backend bundle rebuild
+```
+
+See [§8 Installation](#8-installation) for the Java 25+ prerequisite and the
+first-run latency.
+
 > **Windows / Git Bash (MSYS) users.** From Git Bash (or any MSYS2 shell), arguments starting with
 > `/` are rewritten into Windows paths **before** PowerShell starts, so `./b4w.ps1` refuses them (the
 > original value is unrecoverable). Invoke `./b4w.sh <command>`, or prefix
@@ -424,7 +436,7 @@ Proven copy-paste recipes — full walkthroughs in **[quick-patterns.md](referen
 7. **Static Data Extraction** — `get text` / `get attr "<css>"` straight off the live page: every `htmlsnapshot` read captures the active tab itself, so nothing has to be captured first
 8. **Bulk Extraction (X-SQL)** — correlated fields via `--sql @query.sql` with `DOM_LOAD_AND_SELECT(@url, '.product-card')`
 9. **PowerCSS** — `:expr()` visual-feature selectors; full reference in [power-dom.md](references/power-dom.md)
-10. **Agent Task Lifecycle** — `agent run` (async) → `status` → `result`; or `--wait [--wait-timeout]`
+10. **Agent Task Lifecycle** — `agent run` (async) → `status` → `result`; or `--wait [--wait-timeout]`. Task type is browser by default; `--coding` explicitly marks a pure file/build task (never auto-detected)
 11. **Agent Memory** — run-start `## Memory` recall, `memory_note`, `memory_search`/`read`/`forget`, auto-deposit
 12. **Typing text (`type`)** — `type "text" <ref>`; add `--method auto|chars|exec` (requires a target ref): `auto` (default) types short text per-character and switches to a one-shot `execCommand('insertText')` bulk insert for long (>150 chars) or multi-line text on textarea/contenteditable; `chars` forces per-character typing; `exec` forces the bulk insert. `--verify` keeps its strict read-back semantics for tool callers.
 13. **File Upload** — `upload <ref> <file> [file...]` uploads one or more local files to a page file input (`<input type="file">` only); the paths must be readable by the browser process (remote backend: resolved on the backend host). Multi-file, absolute paths, `--no-snapshot` supported; see [upload.md](references/upload.md).
@@ -497,3 +509,27 @@ The bootstrap scripts also install the Browser4 backend (runtime bundle) automat
 Those two subcommands accept only `--tag` and `--force`; to install the CLI **only**, pass
 `--skip-backend` (`-SkipBackend` in PowerShell) to the install script — the CLI forwards that flag
 to the script internally.
+
+### Prerequisites
+
+**Java 25 or newer** is required to build or run the backend server and
+MockSite — the root pom's Maven enforcer rejects older JDKs.  Check with
+`java -version`; if the default JDK is older, point `JAVA_HOME` at a 25+ JDK
+before starting anything (e.g. `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64`).
+Running from a repository checkout also needs **Rust** (`cargo`) for the CLI
+and **Git**.
+
+### Developing from a repository checkout
+
+Use the wrapper instead of an installed binary — it builds the CLI from source
+and starts the locally built backend:
+
+```bash
+./b4w.sh <command>      # Bash / Git Bash / Linux / macOS
+./b4w.ps1 <command>     # PowerShell
+```
+
+The first command in a checkout can take several minutes (Maven bundle build
+plus server start); pass `-Rebuild` to force a backend bundle rebuild after
+changing Kotlin sources.  See [AGENTS.md](../../AGENTS.md) and
+[docs/build-from-source.md](../../docs/build-from-source.md).

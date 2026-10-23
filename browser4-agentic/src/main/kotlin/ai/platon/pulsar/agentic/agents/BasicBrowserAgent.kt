@@ -123,8 +123,10 @@ open class BasicBrowserAgent constructor(
 
     /**
      * Coding mode: the task operates on repository files/build with no browser page
-     * needed. Overridden by [RobustBrowserAgent]; when true, page navigation and
-     * screenshots are skipped so pure coding tasks don't pay browser overhead.
+     * needed. Overridden by [RobustBrowserAgent], which StatefulAgentRunner sets from
+     * the task's EXPLICIT coding flag (`command.run`'s coding argument, the CLI's
+     * `agent run --coding`) — never auto-detected. When true, page navigation and
+     * screenshots are skipped so coding tasks don't pay browser overhead.
      */
     open val codingMode: Boolean get() = false
 

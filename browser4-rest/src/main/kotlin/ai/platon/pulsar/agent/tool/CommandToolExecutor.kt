@@ -62,6 +62,13 @@ class CommandToolExecutor(
                     "Consecutive no-op abort threshold for agent tasks; omit to use the server default.",
                 ),
                 ToolSpec.Arg(
+                    "coding", "Boolean?", "null",
+                    "Explicit task type. True marks the task as a coding task (plain file/build work; " +
+                        "no browser page, no page navigation, no screenshots). Everything else — including " +
+                        "any URL or page interaction — stays a browser task (the default, also when omitted): " +
+                        "task type is never auto-detected.",
+                ),
+                ToolSpec.Arg(
                     "engine", "String?", "null",
                     "Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated.",
                 ),
@@ -72,16 +79,21 @@ class CommandToolExecutor(
                     "When async=false, blocks until done and returns the CommandStatus as JSON. " +
                     "noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. " +
                     "engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; " +
-                    "'observe-act' is the DEPRECATED legacy engine.",
+                    "'observe-act' is the DEPRECATED legacy engine. " +
+                    "coding=true explicitly marks an agent task as a coding task (file/build work, no page); " +
+                    "omitted or false means a browser task — the default, and never auto-detected.",
             help = """
                 command.run(command: String)
-                command.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?)
+                command.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?, coding: Boolean?)
 
                 `command` is a URL to load, a natural-language instruction, or an agent
                 task. With async=true (the default) the call returns a task id and you
                 poll it with `command.status` (JSON status envelope), read the payload
                 with `command.result`, and stop it with `command.cancel`. Pass
                 async=false when you would rather block for the finished status.
+                Pass coding=true for a pure coding task (read/write files, run builds):
+                the agent then works from its coding tool set without a browser page.
+                Tasks are browser tasks unless the caller says otherwise.
             """.trimIndent(),
             examples = listOf(
                 ToolExample(
@@ -197,11 +209,12 @@ class CommandToolExecutor(
         }
 
         return when (functionName) {
-            // command.run(command: String, async?: Boolean = true, noopLimit?: Int = null, engine?: String = null)
+            // command.run(command: String, async?: Boolean = true, noopLimit?: Int = null,
+            //              engine?: String = null, coding?: Boolean = null)
             "run" -> {
                 validateArgs(
                     args,
-                    allowed = setOf("command", "async", "noopLimit", "engine") + SESSION_ARG,
+                    allowed = setOf("command", "async", "noopLimit", "engine", "coding") + SESSION_ARG,
                     required = setOf("command"),
                     functionName
                 )
@@ -220,10 +233,12 @@ class CommandToolExecutor(
                         "Unknown engine '$it': expected 'cli' or 'observe-act' (deprecated)"
                     }
                 }?.let { RunEngine.parse(it) }
+                // null (absent) = browser task: explicit opt-in only, never guessed.
+                val coding = paramBool(args, "coding", functionName, required = false, default = null)
                 if (isAsync) {
-                    service.submitPlainCommand(sessionId, command, noopLimit, engine)
+                    service.submitPlainCommand(sessionId, command, noopLimit, engine, coding)
                 } else {
-                    val status = service.executePlainCommand(sessionId, command, noopLimit, engine)
+                    val status = service.executePlainCommand(sessionId, command, noopLimit, engine, coding)
                     pulsarObjectMapper().writeValueAsString(status)
                 }
             }

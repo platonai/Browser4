@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito
 import org.mockito.Mockito.`when`
 import java.time.Instant
@@ -237,6 +238,51 @@ class CommandToolExecutorTest {
         assertEquals("command_status", policy!!.statusTool)
         assertEquals("command_result", policy.resultTool)
         assertEquals("command_cancel", policy.cancelTool)
+    }
+
+    @Test
+    @DisplayName("run passes an explicit coding flag to the executor")
+    fun runForwardsExplicitCodingFlag() {
+        runBlocking {
+            `when`(runner.submitPlainCommand("s1", "fix pom.xml", null, null, true)).thenReturn("t-coding")
+
+            val taskId = call("run", mapOf("command" to "fix pom.xml", "sessionId" to "s1", "coding" to true))
+
+            assertEquals("t-coding", taskId)
+            Mockito.verify(runner).submitPlainCommand("s1", "fix pom.xml", null, null, true)
+        }
+    }
+
+    @Test
+    @DisplayName("run without the coding flag submits a browser task (the default, never guessed)")
+    fun runWithoutCodingFlagIsABrowserTask() {
+        runBlocking {
+            `when`(runner.executePlainCommand("s1", "open the page", null, null, null)).thenReturn(status())
+
+            json("run", mapOf("command" to "open the page", "sessionId" to "s1", "async" to false))
+
+            Mockito.verify(runner).executePlainCommand("s1", "open the page", null, null, null)
+        }
+    }
+
+    @Test
+    @DisplayName("run declares the coding argument so clients can discover it")
+    fun runDeclaresTheCodingArgument() {
+        val coding = executor.getToolSpecs().getValue("run").arguments.first { it.name == "coding" }
+        val description = coding.description ?: ""
+
+        assertTrue(description.contains("explicit", ignoreCase = true))
+        assertTrue(description.contains("browser", ignoreCase = true))
+    }
+
+    @Test
+    @DisplayName("run rejects a non-boolean coding flag")
+    fun runRejectsNonBooleanCoding() {
+        val ex = assertThrows<IllegalArgumentException> {
+            call("run", mapOf("command" to "task", "sessionId" to "s1", "coding" to "yes"))
+        }
+
+        assertTrue(ex.message!!.contains("coding"), ex.message)
     }
 
     @Test

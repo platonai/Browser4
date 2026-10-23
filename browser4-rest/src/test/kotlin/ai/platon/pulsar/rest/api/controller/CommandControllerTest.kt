@@ -108,7 +108,7 @@ class CommandControllerTest {
     @DisplayName("a plain async submission answers 202 with the same JSON task id")
     fun plainAsyncSubmissionAnswersAcceptedWithJsonTaskId() {
         runBlocking {
-            whenever(executor.submitPlainCommand(any(), any(), anyOrNull(), anyOrNull())).thenReturn("agent-task-9")
+            whenever(executor.submitPlainCommand(any(), any(), anyOrNull(), anyOrNull(), anyOrNull())).thenReturn("agent-task-9")
 
             val response = controller.submitPlainCommand("open the browser", async = true)
 
@@ -130,7 +130,7 @@ class CommandControllerTest {
                 statusCode = ResourceStatus.SC_OK,
                 processState = "completed",
             )
-            whenever(executor.executePlainCommand(any(), any(), anyOrNull(), anyOrNull())).thenReturn(status)
+            whenever(executor.executePlainCommand(any(), any(), anyOrNull(), anyOrNull(), anyOrNull())).thenReturn(status)
 
             val response = controller.submitPlainCommand("open the browser")
 
