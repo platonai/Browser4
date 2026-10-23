@@ -63,7 +63,6 @@ param(
     [switch]$NoWatch,
     [ValidateSet('auto', 'dsh', 'opencode', 'claude', 'kimi', 'codex', 'copilot')]
     [string]$Agent = ""
-    [string]$Agent = ""
 )
 
 $ErrorActionPreference = "Stop"
