@@ -74,6 +74,13 @@ Runs a full CLI smoke test suitable for CI and local development:
 4. Executes the full command cycle: `open` → `goto` → `snapshot` → `type` → `click` → `get` → `eval` → `screenshot` → `wait` → `close` → `kill-all`
 5. Reports pass/fail for each step
 
+The two navigation gates (`open`, `goto`) are retried up to three and two times
+respectively, because a single transient navigation failure on a CI runner used
+to fail the whole release gate even when the same bundle passed on the other
+platforms. `type`/`click` are never retried (they mutate the page). Set
+`BROWSER4_SERVER_LOG_DIR` to keep the server startup logs in a caller-owned
+directory; `release.yml` points it at the path it uploads on failure.
+
 ```shell
 ./smoke-test-runtime-bundle.sh <cli-binary> <bundle-archive> [test-port] [timeout-secs]
 ```

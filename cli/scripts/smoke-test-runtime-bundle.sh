@@ -101,7 +101,12 @@ BUNDLE_TAG="v99.99.99-smoke"
 BUNDLE_DIR="$VERSIONS_DIR/$BUNDLE_TAG"       # versioned_install_dir(tag)
 STATE_DIR="$TEMP_DIR/state"
 WORKSPACE_DIR="$TEMP_DIR/workspace"
-SERVER_LOG_DIR="$TEMP_DIR/server-logs"
+# Honour a caller-provided log directory so CI can upload the logs on failure:
+# release.yml sets BROWSER4_SERVER_LOG_DIR=${{ runner.temp }}/browser4-server-logs
+# and uploads exactly that path.  Overriding it with a directory under $TEMP_DIR
+# made every failed run upload nothing ("No files were found ..."), which is why
+# the v4.14.3 Windows navigation failure had no server log to diagnose.
+SERVER_LOG_DIR="${BROWSER4_SERVER_LOG_DIR:-$TEMP_DIR/server-logs}"
 
 mkdir -p "$BUNDLE_DIR" "$STATE_DIR" "$WORKSPACE_DIR" "$SERVER_LOG_DIR"
 EXTRACT_DIR="$TEMP_DIR/extract"
@@ -180,23 +185,45 @@ HTML
 # fixture.  Backends that tolerate type/click on a missing element let that
 # pass silently; the loud "no element found for selector [#input1]" failure
 # exposed the harness bug on all three platforms.
-python3 -m http.server "$TEST_PORT" --bind 127.0.0.1 --directory "$TEMP_DIR" > /dev/null 2>&1 &
-HTTP_PID=$!
 TEST_URL="http://127.0.0.1:$TEST_PORT/test.html"
 
-# Wait for the HTTP server to actually serve the fixture.  curl -f fails on
-# 4xx/5xx, so a server serving the wrong directory (or not yet ready) cannot
-# silently hand the browser an error page — earlier runs typed into a 404
-# page whenever the interactive commands tolerated a missing element.
-SERVING_OK=""
-for i in $(seq 1 10); do
+# Start (or restart) the fixture server and wait until it actually serves the
+# page.  curl -f fails on 4xx/5xx, so a server serving the wrong directory (or
+# not yet ready) cannot silently hand the browser an error page.
+start_test_server() {
+    python3 -m http.server "$TEST_PORT" --bind 127.0.0.1 --directory "$TEMP_DIR" > /dev/null 2>&1 &
+    HTTP_PID=$!
+    local attempt
+    for attempt in $(seq 1 20); do
+        if curl -sf -o /dev/null "$TEST_URL" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.5
+    done
+    return 1
+}
+
+# A navigation failure can be the fixture server dying mid-run, not a browser
+# problem.  Verify (and if needed restart) it before a retry so the retry tests
+# the browser path instead of repeatedly navigating to a dead port.
+ensure_test_server() {
     if curl -sf -o /dev/null "$TEST_URL" 2>/dev/null; then
-        SERVING_OK=1
-        break
+        return 0
     fi
-    sleep 0.5
-done
-if [ -z "$SERVING_OK" ]; then
+    info "Test fixture is not answering; restarting the test HTTP server..."
+    if [ -n "${HTTP_PID:-}" ] && kill -0 "$HTTP_PID" 2>/dev/null; then
+        kill "$HTTP_PID" 2>/dev/null || true
+        wait "$HTTP_PID" 2>/dev/null || true
+    fi
+    HTTP_PID=""
+    if start_test_server; then
+        info "Test fixture is serving again at $TEST_URL"
+        return 0
+    fi
+    return 1
+}
+
+if ! start_test_server; then
     info "FATAL: test page not served at $TEST_URL (python http.server not serving $TEMP_DIR?)"
     exit 1
 fi
@@ -232,31 +259,76 @@ run_cli() {
 FAILED_STEPS=0
 TOTAL_STEPS=0
 
+# Attempts for the navigation gates (`open`, `goto`).  A single transient
+# navigation failure on a CI runner used to fail the whole release gate even
+# though the same bundle passed on the other two platforms (v4.14.3, Windows
+# x64).  Navigation replaces the document, so replaying it is safe; `type` and
+# `click` mutate the page and are deliberately NOT retried.
+NAVIGATION_ATTEMPTS=3
+RETRY_DELAY_SECS=2
+
+dump_server_logs() {
+    # On first failure, dump the server log if available
+    if [ -d "$SERVER_LOG_DIR" ] && [ -n "$(ls -A "$SERVER_LOG_DIR" 2>/dev/null)" ]; then
+        info "--- server log (last 80 lines) ---"
+        find "$SERVER_LOG_DIR" -type f -name '*.log' -exec tail -80 {} \; 2>/dev/null || true
+    fi
+    # Also check the temp dir for server logs (default location)
+    local default_log_dir="${TMPDIR:-/tmp}/browser4/browser4-cli/tmp/cli"
+    if [ -d "$default_log_dir" ] && [ -n "$(ls -A "$default_log_dir" 2>/dev/null)" ]; then
+        info "--- default server log (last 80 lines) ---"
+        find "$default_log_dir" -type f -name '*.log' -exec tail -80 {} \; 2>/dev/null || true
+    fi
+}
+
+# Put the backend back into a known state before a retry.  A stale session is
+# cleared with `close`; the last retry also restarts the backend with `kill-all`
+# so a wedged server (not just a wedged browser tab) gets a fresh start.
+reset_before_retry() {
+    local attempt="$1"
+    local attempts="$2"
+    if [ "$attempt" -ge $((attempts - 1)) ] && [ "$attempts" -gt 2 ]; then
+        info "restarting the backend before the final attempt..."
+        run_cli kill-all >/dev/null 2>&1 || true
+    else
+        info "closing the failed session before retrying..."
+        run_cli close >/dev/null 2>&1 || true
+    fi
+}
+
 check_step() {
     local label="$1"
-    shift
+    local attempts="$2"
+    shift 2
+    local attempt=1
     TOTAL_STEPS=$((TOTAL_STEPS + 1))
-    echo ""
-    info "--- $label ---"
-    if run_cli "$@" 2>&1; then
-        pass "$label"
-    else
+    while :; do
+        echo ""
+        if [ "$attempts" -gt 1 ]; then
+            info "--- $label (attempt $attempt/$attempts) ---"
+        else
+            info "--- $label ---"
+        fi
+        if run_cli "$@" 2>&1; then
+            pass "$label"
+            return 0
+        fi
+        if [ "$attempt" -lt "$attempts" ]; then
+            info "$label failed (attempt $attempt/$attempts); retrying in ${RETRY_DELAY_SECS}s"
+            reset_before_retry "$attempt" "$attempts"
+            ensure_test_server || true
+            sleep "$RETRY_DELAY_SECS"
+            attempt=$((attempt + 1))
+            continue
+        fi
         fail "$label"
         FAILED_STEPS=$((FAILED_STEPS + 1))
-        # On first failure, dump the server log if available
         if [ "$FAILED_STEPS" -eq 1 ]; then
-            if [ -d "$SERVER_LOG_DIR" ] && [ -n "$(ls -A "$SERVER_LOG_DIR" 2>/dev/null)" ]; then
-                info "--- server log (last 80 lines) ---"
-                find "$SERVER_LOG_DIR" -type f -name '*.log' -exec tail -80 {} \; 2>/dev/null || true
-            fi
-            # Also check the temp dir for server logs (default location)
-            local default_log_dir="${TMPDIR:-/tmp}/browser4/browser4-cli/tmp/cli"
-            if [ -d "$default_log_dir" ] && [ -n "$(ls -A "$default_log_dir" 2>/dev/null)" ]; then
-                info "--- default server log (last 80 lines) ---"
-                find "$default_log_dir" -type f -name '*.log' -exec tail -80 {} \; 2>/dev/null || true
-            fi
+            dump_server_logs
         fi
-    fi
+        # Keep going so one failure reports the state of every step, as before.
+        return 0
+    done
 }
 
 # ---------------------------------------------------------------------------
@@ -264,37 +336,37 @@ check_step() {
 # ---------------------------------------------------------------------------
 
 # 4a. open — starts the server, opens a browser session, navigates to the page
-check_step "open" open "$TEST_URL" --profile-mode SEQUENTIAL --interact-level FASTEST
+check_step "open" "$NAVIGATION_ATTEMPTS" open "$TEST_URL" --profile-mode SEQUENTIAL --interact-level FASTEST
 
 # 4b. goto — navigate to the page (should be a no-op or refresh)
-check_step "goto" goto "$TEST_URL"
+check_step "goto" 2 goto "$TEST_URL"
 
 # 4c. type — fill the input field
-check_step "type" type "hello-smoke" "#input1"
+check_step "type" 1 type "hello-smoke" "#input1"
 
 # 4d. click — click the button
-check_step "click" click "#btn1"
+check_step "click" 1 click "#btn1"
 
 # 4e. snapshot — capture page accessibility tree
-check_step "snapshot" snapshot
+check_step "snapshot" 1 snapshot
 
 # 4f. get text — extract text content from an element
-check_step "get text" get text "#output"
+check_step "get text" 1 get text "#output"
 
 # 4g. eval — execute JavaScript on the page
-check_step "eval" eval "document.title"
+check_step "eval" 1 eval "document.title"
 
 # 4h. screenshot — capture page screenshot
-check_step "screenshot" screenshot
+check_step "screenshot" 1 screenshot
 
 # 4i. wait — wait for an element to be present
-check_step "wait" wait "#output"
+check_step "wait" 1 wait "#output"
 
 # 4j. close — close the active session
-check_step "close" close
+check_step "close" 1 close
 
 # 4k. kill-all — stop the server and clean up
-check_step "kill-all" kill-all
+check_step "kill-all" 1 kill-all
 
 # ---------------------------------------------------------------------------
 # step 5: report
