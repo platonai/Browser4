@@ -138,6 +138,7 @@ open class TextToAction(
                     nextSuggestions = complete.nextSuggestions,
                     gates = complete.gates,
                     filesChanged = complete.filesChanged,
+                    deletedFiles = complete.deletedFiles,
                     problems = complete.problems,
                     modelResponse = modelResponse
                 )

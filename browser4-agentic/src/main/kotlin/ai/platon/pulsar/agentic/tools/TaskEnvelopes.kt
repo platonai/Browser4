@@ -137,4 +137,55 @@ object TaskEnvelopes {
             else -> "failed"
         }
     }
+
+    // -----------------------------------------------------------------
+    // Progress message vocabulary
+    // -----------------------------------------------------------------
+
+    /**
+     * The exact event name (after the last '.') mapped onto the human-readable
+     * progress copy shown while a task is running.
+     *
+     * `AgentTaskStatus.emitEvent` and `CommandStatus.emitEvent` both route
+     * through [progressMessage] so their copies cannot drift apart again — they
+     * already had: the rest-side copy had lost its `onToolExecuted` branch, and
+     * the two fallback sentences differed. Suffix keys are matched exactly on
+     * purpose: event types are namespace-qualified, open-ended strings
+     * (`PerceptiveAgent.onWillRun`, `skill.onSkillError`), and the previous
+     * substring matching would have mis-mapped any future event type that
+     * happens to contain an existing branch's text.
+     */
+    private val EVENT_MESSAGES: Map<String, String> = mapOf(
+        "created" to "Task created, waiting to start",
+        "queued" to "Task queued, waiting to start",
+        "onWillRun" to "Agent starting up",
+        "onDidRun" to "Agent run completed, finalizing",
+        "onWillObserve" to "Agent observing the page",
+        "onDidObserve" to "Agent observed the page",
+        "onWillAct" to "Agent planning next action",
+        "onDidAct" to "Agent completed an action",
+        "onToolExecuted" to "Agent is working",
+        "onWillGenerate" to "Agent generating response",
+        "onDidGenerate" to "Agent response generated",
+        "onWillExtract" to "Agent extracting page data",
+        "onDidExtract" to "Agent extracted page data",
+        "onWillSummarize" to "Agent summarizing the page",
+        "onDidSummarize" to "Agent summarized the page",
+        "onError" to "Agent encountered an error",
+        "onWillFail" to "Agent task failing",
+        "onDidFail" to "Agent task failed",
+    )
+
+    /**
+     * The human-readable progress copy for an event, or [fallback] for event
+     * names that are not yet mapped. `skill.onSkillError` intentionally falls
+     * back: "onError" is not its exact name, and guessing would mislabel skill
+     * lifecycle events as agent failures.
+     *
+     * @param eventType a bare or namespace-qualified event type
+     * @param fallback the caller's generic copy ("Agent is working" for agent
+     *   tasks, "Task is in progress" for command tasks)
+     */
+    fun progressMessage(eventType: String, fallback: String = "Agent is working"): String =
+        EVENT_MESSAGES[eventType.substringAfterLast('.')] ?: fallback
 }

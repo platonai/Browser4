@@ -6,7 +6,7 @@ This guide shows you how to create, build, and deploy a Browser4 plugin as a sta
 
 ### Prerequisites
 
-- JDK 17 or later
+- JDK 25 or later (compiling against the host's `provided` dependencies requires JDK 25+; the plugin JAR itself is still emitted as Java 17 bytecode by the PDK parent)
 - Maven 3.9 or later
 
 ### Create a New Plugin Project

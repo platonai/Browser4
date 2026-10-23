@@ -17,6 +17,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
 import java.util.*
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.time.Duration.Companion.milliseconds
 
 const val AGENT_HISTORY_FILE_NAME = "state-history.jsonl"
@@ -70,7 +71,14 @@ class AgentStateManager(
     // contexts: All execution contexts created during this session
     // Cleaned periodically to max 100 entries to prevent memory leaks
     private val _contexts: MutableList<ExecutionContext> = mutableListOf()
-    private val _stateHistory = AgentHistory()
+    /**
+     * The states list is read concurrently (snapshot copies in [AgentStateManager] /
+     * prompt building / status serialization in StatefulAgentRunner) while the step
+     * loop appends and trims — a plain ArrayList throws ConcurrentModificationException
+     * into exactly those readers. CopyOnWriteArrayList keeps same-step mutation cost
+     * bounded (history is trimmed to maxHistorySize) and makes every read snapshot-safe.
+     */
+    private val _stateHistory = AgentHistory(CopyOnWriteArrayList<AgentState>())
     private val _processTrace = mutableListOf<ProcessTrace>()
 
     val stateHistory: AgentHistory get() = _stateHistory

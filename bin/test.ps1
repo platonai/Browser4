@@ -555,6 +555,8 @@ function Print-Usage {
     Write-Host "  skills      Run skills-focused agentic tests + skills/ document conformance"
     Write-Host "  mcp         Run MCP-focused agentic tests"
     Write-Host "  mcp-contract  Contract gate: tool matrix, docs, lint, validators (agentic + rest)"
+    Write-Host "  verify      Run the code devtask plan-quality evaluation (needs the dev backend)"
+    Write-Host "              forwards -Fast (default), -Strict, -NoBuild, -Json, -Probe=<id,...>"
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
     Write-Host "              (+ skills/ document conformance, methodology M1-M8)"
     Write-Host "  rws         Run real-world scenario tests (requires a mode)"
@@ -583,7 +585,7 @@ function Print-Usage {
     Write-Host "    --silent                    Suppress agent output"
     Write-Host "    --skip-version-check        Skip browser4-cli version check"
     Write-Host "    --timeout <minutes>         Kill each scenario task after N minutes (default: no timeout)"
-    Write-Host "    --agent <name>              Use a specific agent CLI (dsh, claude, kimi, opencode, or codex)"
+    Write-Host "    --agent <name>              Use a specific agent CLI (dsh, opencode, claude, kimi, or codex)"
     Write-Host "    BROWSER4_AGENT=<name>        Env var to set agent globally (same values as --agent)"
     Write-Host "  resume      Resume from the last failed module (-rf)"
     Write-Host "  main    Run all Browser4 main tests (fast, rest, it, e2e)"
@@ -643,7 +645,7 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, ps, rws, resume, session."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, verify, ps, rws, resume, session."
     exit 1
 }
 
@@ -943,6 +945,33 @@ function Invoke-WrapperSmokeTests {
     Write-CommandBanner -Label 'Wrapper exit-code smoke checks completed successfully' -Icon '[PASS]'
 }
 
+function Get-JavaMajorVersion {
+    <#
+    .SYNOPSIS
+        The major version of the JDK the build will actually use.
+    .DESCRIPTION
+        Resolves `java` from JAVA_HOME when set (Maven uses the same JDK),
+        otherwise from PATH, and parses the major version out of
+        `java -version`.  Returns $null when no JDK can be found or the output
+        cannot be parsed — callers must treat that as "unknown", never as
+        "fine".
+    #>
+    $javaExe = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME 'bin/java' } else { 'java' }
+    try {
+        $raw = (& $javaExe -version 2>&1 | Out-String)
+    } catch {
+        return $null
+    }
+    if (-not $raw) { return $null }
+    # Legacy 1.x form ("1.8.0_402") reports the real major in the second group.
+    if ($raw -match 'version "(\d+)(?:\.(\d+))?') {
+        $major = [int]$Matches[1]
+        if ($major -eq 1 -and $Matches[2]) { $major = [int]$Matches[2] }
+        return $major
+    }
+    return $null
+}
+
 function Invoke-MockSiteBoot([string[]]$additionalArgs) {
     $mockSiteModuleDir = Join-Path $repoRoot 'browser4-tests' 'browser4-rest-tests'
     $passThroughArgs = @()
@@ -953,6 +982,28 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
     }
     if (-not (Test-Path $mockSiteModuleDir)) {
         Write-Error "Mock site module not found at $mockSiteModuleDir"
+        exit 1
+    }
+
+    # The backend build enforces JDK 25+ (maven-enforcer RequireJavaVersion in
+    # the root pom).  Without this pre-check the only symptom is a Maven
+    # enforcer error several lines deep in the build output, surfaced here as a
+    # bare "[FAIL] InstallBrowser4Rest failed with exit code 1" — which reads
+    # like a broken repository rather than a wrong JAVA_HOME.
+    $requiredJavaMajor = 25
+    $javaMajor = Get-JavaMajorVersion
+    if ($null -eq $javaMajor -or $javaMajor -lt $requiredJavaMajor) {
+        $found = if ($null -ne $javaMajor) {
+            "JDK $javaMajor"
+        } elseif ($env:JAVA_HOME) {
+            "no java executable under JAVA_HOME=$env:JAVA_HOME"
+        } else {
+            'no JDK on PATH'
+        }
+        Write-Host "[FAIL] MockSite requires JDK $requiredJavaMajor or newer, but found $found." -ForegroundColor Red
+        Write-Host '       Point JAVA_HOME at a JDK 25+ installation and retry, for example:' -ForegroundColor Yellow
+        Write-Host '         $env:JAVA_HOME = "/usr/lib/jvm/java-25-openjdk-amd64"   # Linux' -ForegroundColor DarkGray
+        Write-Host '         $env:JAVA_HOME = "C:\Program Files\Java\jdk-25"        # Windows' -ForegroundColor DarkGray
         exit 1
     }
 
@@ -1137,6 +1188,21 @@ To use a different port:
         $preflightRestLog = Join-Path $script:TestLogDir 'mock-site-preflight-install-rest.log'
         Invoke-KotlinCompileWithRetry -Label 'InstallBrowser4Rest' -PreExecPath $repoRoot `
             -MvnArgs $preflightRestArgs -LogFile $preflightRestLog -ShowMavenOutput:$coldPreflight
+
+        # Phase 3: browser4-rest-tests also depends (test scope) on artifacts
+        #          that are NOT in Maven Central and that "-pl browser4-rest -am"
+        #          never builds: browser4-swarm, browser4-pdk-bom and the pdk
+        #          test plugin.  Without them MockSiteBoot dies with
+        #          "Could not find artifact ai.platon.pulsar:browser4-swarm".
+        #          Install the full default reactor once; the pdk submodules are
+        #          only reachable this way (installing browser4-pdk alone
+        #          installs the aggregator POM, not its children).
+        $preflightPluginArgs = @(
+            'install',
+            '-DskipTests',
+            '-q'
+        )
+        Invoke-KotlinCompileWithRetry -Label 'InstallTestScopePluginDeps' -PreExecPath $repoRoot -MvnArgs $preflightPluginArgs
     }
 
     # 'package spring-boot:run' compiles Kotlin (browser4-rest-tests and its
@@ -3478,7 +3544,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  --silent                  Suppress agent output'
         Write-Host '  --skip-version-check      Skip browser4-cli version check'
         Write-Host '  --timeout <minutes>       Kill each scenario task after N minutes'
-        Write-Host '  --agent <name>            Use a specific agent CLI (dsh, claude, kimi, opencode, or codex)'
+        Write-Host '  --agent <name>            Use a specific agent CLI (dsh, opencode, claude, kimi, or codex)'
         Write-Host '  BROWSER4_AGENT=<name>     Env var to set agent globally (same values as --agent)'
         Write-Host ''
         Write-Host 'Examples:'
@@ -4788,6 +4854,60 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
     }
 }
 
+# ---------------------------------------------------------------------------
+# verify — the verification-authority gate (plan P3.3)
+# ---------------------------------------------------------------------------
+#
+# Runs the `code devtask` plan-quality evaluation (bin/eval-devtask.ps1), which
+# is the end-to-end contract of the verification layer: plan shape, signal
+# binding, the CLI argument contract, `--verify` semantics, determinism and the
+# read-only guarantee. It needs a live backend (the dev wrapper builds/starts
+# it) and it measures latency, so it runs alone.
+function Invoke-VerifyGate([string[]]$additionalArgs) {
+    $evalScript = Join-Path $repoRoot 'bin' 'eval-devtask.ps1'
+    Write-CommandBanner -Label 'Running code devtask plan-quality evaluation...'
+
+    if (-not (Test-Path -LiteralPath $evalScript -PathType Leaf)) {
+        Write-Error "Evaluation script not found at $evalScript"
+        exit 1
+    }
+
+    # Forward the evaluation harness's own switches; default to the fast run so
+    # the local loop stays ~1 minute.
+    $evalArgs = @()
+    foreach ($arg in $additionalArgs) {
+        switch -Regex ($arg) {
+            '^-Fast$'   { $evalArgs += '-Fast' }
+            '^-Strict$' { $evalArgs += '-Strict' }
+            '^-NoBuild$' { $evalArgs += '-NoBuild' }
+            '^-Json$'   { $evalArgs += '-Json' }
+            '^-Probe=(.+)$' { $evalArgs += @('-Probe', $Matches[1]) }
+            default {
+                Write-Error "Unknown argument '$arg' for the verify scope. Supported: -Fast, -Strict, -NoBuild, -Json, -Probe=<id,...>"
+                exit 1
+            }
+        }
+    }
+    if ($evalArgs.Count -eq 0) { $evalArgs = @('-Fast') }
+
+    if ($script:Show) {
+        Write-CommandBanner -Label '[SHOW] Would execute:' -Subtitle "  pwsh $evalScript $($evalArgs -join ' ')"
+        return
+    }
+    if ($script:DryRun) {
+        Write-CommandBanner -Label '[DRY RUN] Executing:' -Subtitle "  pwsh $evalScript $($evalArgs -join ' ')"
+        return
+    }
+
+    & pwsh -NoProfile -File $evalScript @evalArgs
+    $evalExit = $LASTEXITCODE
+    if ($evalExit -ne 0) {
+        Write-CommandBanner -Label "Evaluation failed (exit $evalExit)" -Icon '[FAIL]'
+        exit $evalExit
+    }
+    Write-CommandBanner -Label 'Evaluation passed' -Icon '[PASS]'
+}
+
 # ===================================================================
 # Argument parsing
 # ===================================================================
@@ -4802,6 +4922,7 @@ $testTypeMap = @{
     'skills'        = 'maven'
     'mcp'           = 'maven'
     'mcp-contract'  = 'maven'
+    'verify'        = 'verify'
     'main'          = 'maven-expand'
     'cli'           = 'cli'
     'browser4-cli'  = 'cli'
@@ -4964,6 +5085,7 @@ $cliTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'cli' })
 $rwsTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'rws' })
 $psTests     = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'ps' })
 $launchTargets = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'server' })
+$verifyTests = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'verify' })
 
 # Expand 'main' into its constituent test types (only for maven bucket)
 $expandedMaven = @()
@@ -4980,9 +5102,10 @@ $cliTests = $cliTests | Select-Object -Unique
 $rwsTests = $rwsTests | Select-Object -Unique
 $psTests  = $psTests | Select-Object -Unique
 $launchTargets = $launchTargets | Select-Object -Unique
+$verifyTests = $verifyTests | Select-Object -Unique
 
 # Validate: server must be run by itself
-if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($psTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
+if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($psTests.Count -gt 0) -or ($verifyTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
     Write-Error "mock-site (or server) must be run by itself. Pass any Maven properties after it, for example: test.ps1 mock-site -Dmock.site.port=18080"
     exit 1
 }
@@ -5027,6 +5150,10 @@ if ($psTests.Count -gt 0) {
     $psIsSoleTarget = ($mavenTests.Count -eq 0 -and $cliTests.Count -eq 0 -and
                        $rwsTests.Count -eq 0 -and $launchTargets.Count -eq 0)
     Invoke-PowerShellTests -additionalArgs $additionalArgs -StrictArgs:$psIsSoleTarget
+}
+
+if ($verifyTests.Count -gt 0) {
+    Invoke-VerifyGate -additionalArgs $additionalArgs
 }
 
 if ($launchTargets.Count -gt 0) {

@@ -42,12 +42,14 @@ class SystemToolExecutor(
                 ToolSpec.Arg("summary", "String"),
                 ToolSpec.Arg("keyFindings", "List<String>", "[]"),
                 ToolSpec.Arg("filesChanged", "List<String>", "[]"),
+                ToolSpec.Arg("deletedFiles", "List<String>", "[]"),
                 ToolSpec.Arg("problems", "List<String>", "[]"),
             ),
             returnType = "String",
-            description = "Mark the current task as complete. summary: concise final report; " +
+            description = "Mark the current task as complete. summary: concise final report " +
+                "(include the VERDICT_JSON line verbatim when coding.verify ran); " +
                 "keyFindings: list of key findings; filesChanged: list of files changed; " +
-                "problems: unresolved issues."
+                "deletedFiles: list of files deleted; problems: unresolved issues."
         )
     }
 
@@ -186,7 +188,7 @@ class SystemToolExecutor(
             }
             "taskComplete" -> {
                 validateArgs(
-                    args, allowed = setOf("summary", "keyFindings", "filesChanged", "problems"),
+                    args, allowed = setOf("summary", "keyFindings", "filesChanged", "deletedFiles", "problems"),
                     required = setOf("summary"), functionName
                 )
                 taskComplete(

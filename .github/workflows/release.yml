@@ -1141,6 +1141,38 @@ jobs:
             echo "::endgroup::"
           fi
 
+      - name: Install Chrome for Testing (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # Pin the browser used by the release smoke gate.  The `win25` runner
+          # image moved from Chrome 155.0.8059.40 to 156.0.8078.48 on
+          # 2026-10-21, and v4.14.3's first navigation started failing only on
+          # Windows in that image (the same runtime bundle passed on
+          # Linux/macOS).  The gate must exercise the runtime bundle, not an
+          # unreviewed runner-image browser upgrade.  Fall back to the
+          # preinstalled Chrome when the pinned build cannot be downloaded, so
+          # a download hiccup does not add a new failure mode.
+          CHROME_VERSION="155.0.8059.40"
+          CHROME_ZIP="$RUNNER_TEMP/chrome-for-testing.zip"
+          CHROME_DIR="$RUNNER_TEMP/chrome-for-testing"
+          if curl -fsSL --retry 3 --retry-connrefused \
+              "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/win64/chrome-win64.zip" \
+              -o "$CHROME_ZIP"; then
+            # Pass the paths as argv so MSYS2 converts them for the native
+            # Python (the same pattern the smoke script uses for .zip bundles).
+            python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+              "$CHROME_ZIP" "$CHROME_DIR"
+            # Hand the native CLI a native path even when RUNNER_TEMP is a
+            # POSIX-style value under Git Bash.
+            CHROME_EXE="$(cygpath -w "$CHROME_DIR/chrome-win64/chrome.exe" 2>/dev/null \
+              || echo "$CHROME_DIR/chrome-win64/chrome.exe")"
+            echo "BROWSER4_BROWSER_PATH=$CHROME_EXE" >> "$GITHUB_ENV"
+            echo "Using Chrome for Testing $CHROME_VERSION"
+          else
+            echo "::warning::Could not download Chrome for Testing $CHROME_VERSION; using the runner's Chrome"
+          fi
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:

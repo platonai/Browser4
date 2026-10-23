@@ -368,6 +368,17 @@ File-queue system for task-driven AI workflows (`coworker/`). Task files (Markdo
 ## Definition of Done
 
 - [ ] Build and related tests pass
+- [ ] **Structured gate verdict** — "done" comes from a machine-checkable verdict, not from prose:
+  `coding.verify` (or `browser4-cli code verify --module <m>`) returns
+  `{passed, checks:[{name,ran,ok,exitCode,evidence}]}`, and `passed=false` whenever a check
+  failed **or did not run**. The finish gate rejects a completion report that claims gates which
+  never executed, lists files git does not show as changed, or omits a required gate
+  (`-Dbrowser4.agent.finish.requiredGates=verify,...`; `finishGateCheck=warn` downgrades to logs).
+  It also compares the report against the run's recorded file mutations: a cited `VERDICT_JSON` must
+  match the verdict the run actually recorded, every file the run modified must be listed in
+  `filesChanged`, and claimed deletions must be backed by the run (or by git). Prose is never trusted.
+  A failing verdict is fed back with its diagnostics for `-Dbrowser4.agent.repair.maxRounds` rounds
+  (default 3, `0` disables), then the task fails with the verdict as evidence
 - [ ] No new high-noise logs or warnings
 - [ ] New/changed logic has tests (main path + edge case)
 - [ ] No secrets or private endpoints committed

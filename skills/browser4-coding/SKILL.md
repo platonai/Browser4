@@ -3,7 +3,7 @@ name: browser4-coding
 title: "browser4-coding"
 tier: procedure
 description: "Create and validate Browser4 plugins, skills, JS scripts, and shell scripts; and develop Browser4 ITSELF (self-development): build modules, extract live skeletons, analyze impact, plan dev tasks, and check CDP pitfalls. Use when the user asks to write a Browser4 plugin or skill, write browser JS or build scripts, modify Browser4's own Kotlin/Rust code, or validate repo consistency."
-allowed-tools: coding.scaffold coding.scaffoldFlow coding.scaffoldFromExample coding.validate coding.write coding.read coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.shell coding.mvnBuild coding.ktSymbols coding.ktReferences coding.ktInheritance coding.impact coding.moduleGraph coding.devTask coding.trapCheck coding.protect coding.tokenStats coding.estimateTokens tab.eval tab.console
+allowed-tools: coding.scaffold coding.scaffoldFlow coding.scaffoldFromExample coding.validate coding.write coding.read coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.shell coding.mvnBuild coding.ktSymbols coding.ktReferences coding.ktInheritance coding.impact coding.moduleGraph coding.devTask coding.verify coding.trapCheck coding.protect coding.tokenStats coding.estimateTokens tab.eval tab.console
 ---
 
 # browser4-coding
@@ -111,14 +111,27 @@ Scans the repo's real pom.xml files (module path, artifactId, parent, internal d
 ### `coding.impact(path=...)`
 Which module owns a file, which modules are affected transitively (from the LIVE pom graph), and suggested test commands. **Run before modifying Browser4's own code.**
 
+### `coding.verify(module=..., checks=..., runTests=..., files=..., json=...)` — the completion authority
+Runs the deterministic verification gate and returns a **structured verdict**:
+`{passed, checks:[{name, ran, ok, exitCode, durationMs, evidence, diagnostics}]}`.
+Checks: `compile` (`mvn -pl <module> -am compile`, or `cargo check` for `browser4-cli`), `test`
+(`mvn test`, scoped by `testClasses`), `repo-consistency` (`coding.validate` internals), `trapCheck`
+(`files=`). Default checks: compile + repo-consistency (+ trapCheck when files are given).
+**A check that did not RUN is never green** — an unresolved module or a skipped required check
+fails the verdict. The human summary ends with a machine-readable `VERDICT_JSON: {...}` line;
+`json=true` returns pure JSON. Use this (not your own narrative) when claiming a task is done:
+the finish gate rejects a `success` claim whose gates were not actually run. From the CLI:
+`browser4-cli code verify --module <module> [--checks ...] [--run-tests] [--json]`, which exits
+non-zero when the verdict fails.
+
 ### `coding.mvnBuild(module=..., goals=...)`
-`mvn -pl <module> -am <goals>` with structured Kotlin/Java compiler diagnostics instead of raw logs — the fast, dependency-free alternative to a Kotlin LSP server. Use to check code after edits (goals default `compile`, `skipTests=true`).
+`mvn -pl <module> -am <goals>` with structured Kotlin/Java compiler diagnostics instead of raw logs — the fast, dependency-free alternative to a Kotlin LSP server. Use to check code after edits (goals default `compile`, `skipTests=true`). Diagnostics keep the workspace-relative path plus line/column. `json=true` returns `{module, goals, exitCode, success, timedOut, diagnostics}` instead of the human summary.
 
 ### `coding.ktSymbols` / `coding.ktReferences` / `coding.ktInheritance`
 Zero-dependency Kotlin analysis: symbols (classes/functions/properties), references (`scope='file'` default, or `scope='module'` for a cross-file scan that excludes the declaring file), and the inheritance chain (`ktInheritance(path, className?)` walks the primary supertype across the module's files). Use before refactoring to assess impact without starting a JDTLS server.
 
 ### `coding.devTask(task=..., verify=..., runTests=...)`
-High-level entry: parse a natural-language dev task into an executable plan following the AGENTS.md flow — locate files → impact → mvnBuild compile → smallest-scope tests → trapCheck (driver code) → repo-consistency → commit guidance. Module mentions resolve against the LIVE pom graph when available. `verify=true` runs the fast checks (compile, trapCheck, repo-consistency); `runTests=true` (with verify) also runs the module's test suite — scoped to `-Dtest=<FooTest>` when the task names a test class. `module=` overrides the inferred module.
+High-level entry: parse a natural-language dev task into an executable plan following the AGENTS.md flow — locate files → impact → **implement (agent contract)** → mvnBuild compile → smallest-scope tests → trapCheck (driver code) → repo-consistency → **coding.verify**. The plan ends with an `Acceptance: [...]` checklist; the `coding.implement` step is a contract for an agent (it is printed, never dispatched), and `coding.verify` is the deterministic gate that decides completion. Bare filenames (`Browser4WebDriver.kt`) resolve against the workspace to their owning module; module mentions resolve against the LIVE pom graph when available; aggregator modules are not counted as signals. `verify=true` runs the gate (compile + repo-consistency + trapCheck + tests when `runTests=true`, scoped to `-Dtest=<FooTest>` when the task names a test class). `module=` overrides the inferred module. The test binding (`DevPlan.testTarget`) is the module that **owns the named class** — one value feeds the test step, the `Acceptance:` line and the `verify(testModule=…)` call, so editing a driver file while adding the test elsewhere cannot point `-Dtest=` at the wrong module; a filter that matches no test is a **failing** verdict (`ran=true, ok=false`), never a green one.
 
 ### `coding.trapCheck(path=...)`
 Scan a file for the three known Browser4 CDP pitfalls (AGENTS.md): mouseWheel race (crbug.com/444929150), cursor positioning after focus+click, Input.insertText racing. **Run before editing browser-driver code** (PulsarWebDriver.kt and friends).
@@ -128,10 +141,14 @@ Session-level dynamic file protection: `coding.protect(path="src/Foo.kt", on=tru
 
 ## Shell & Filesystem Tools
 
-- `coding.shell(command, timeoutSeconds?, workingDir?)` — execute allowed dev commands (git/cargo/mvn/npm/python/...)
-- File ops: `read`, `readLines`, `write`, `append`, `replace`, `replaceRegex`, `editLines`, `insertAfter`, `revert`, `delete`, `mkdir`, `copy`, `move`, `stat`, `diff` (myers/patience)
+- `coding.shell(command, timeoutSeconds?, workingDir?)` — execute allowed dev commands (git/cargo/mvn/npm/python/...). The WHOLE command line is validated: every segment split on `&&` `||` `;` `|` `&`, every `$(...)`/backtick substitution, and every inline `sh -c "..."` / `pwsh -Command "..."` / `cmd /c ...` script is checked against the same allow-list. Windows launcher names normalize first (`mvnw.cmd` → `mvnw`).
+- File ops: `read`, `readLines`, `write`, `append`, `replace`, `replaceRegex`, `editLines`, `insertAfter`, `revert`, `delete`, `mkdir`, `copy`, `move`, `stat`, `diff` (myers/patience), `checksum`
+- **Optimistic concurrency**: `coding.checksum(path)` returns `sha256:…`; pass it as `coding.write(path, content, expectedChecksum=…)` and a concurrent edit fails loudly instead of being overwritten. Write snapshots are persisted under `.browser4/coding-snapshots/`, so `coding.revert` still works after a backend restart.
+- **Provisioned agent workspace**: a coding-mode agent run (`browser4-cli agent run "<task>" --coding` — the coding mode is always requested explicitly, never auto-detected) gets the checkout mirrored into its scratch workspace before the first tool call — every `<module>` of the root pom is junctioned/symlinked and `pom.xml`/`mvnw`/`mvnw.cmd`/`.mvn`/`VERSION`/`ROOT.md` are copied (`WorkspaceMirror`), so Maven resolves modules from the first try and the agent never has to repair workspace topology itself.
+- **Resumable execution**: `coding.devTask(execute=true)` records a checkpoint per step under `.browser4/devtask-checkpoints/` and prints its id; after a crash/failure resume it with `coding.resumeDevTask(taskId="dt-…")` (CLI: `browser4-cli code resume <id>`) — completed steps are skipped and a failed isolated run continues inside the worktree it kept.
+- **Transactional workspace** (opt-in, `-Dbrowser4.agent.workspace.isolation=worktree`): `coding.devTask(..., execute=true)` runs its steps inside a `git worktree` under `.browser4/worktrees/`, merges the change back only when every step succeeded, and otherwise discards the worktree — a failed task leaves the developer's working tree untouched.
 - Search: `glob`, `grep` (skip excluded dirs), `languages`
-- **Repo governance protection**: delete/replace/editLines/insertAfter are BLOCKED for VERSION, AGENTS.md, CLAUDE.md, root pom.xml, browser4-dependencies/pom.xml (BOM), .github/workflows/ci.yml — do not try to work around this; ask the user for explicit intent instead. Add session-level protections with `coding.protect(path, on)`.
+- **Repo governance protection**: EVERY write path — write/append/replace/replaceRegex/editLines/insertAfter/copy/move/delete/revert — is BLOCKED for VERSION, AGENTS.md, CLAUDE.md, root pom.xml, browser4-dependencies/pom.xml (BOM), .github/workflows/ci.yml — do not try to work around this; ask the user for explicit intent instead. Add session-level protections with `coding.protect(path, on)`. Writes are atomic (temp file + move) and line-range edits preserve the file's CRLF/LF style.
 - `coding.runCode(language, code)` — sandboxed snippet execution (kotlin/js/python/bash)
 - LSP: `diagnostics(path)`, `symbols(pattern?)`, `references(path, symbol)`, `lspServers` — per-language servers (ts/js/py/rs), started on demand, requires the server installed; degrade gracefully when missing
 - `coding.tokenStats(reset?)` — per-method token usage of coding tool calls so far (calls/errors/input/output tokens, avg/max output); use to audit context-window consumption. `coding.estimateTokens(text)` — heuristic token count of any text before sending it.

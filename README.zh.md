@@ -21,11 +21,12 @@
   - [🌟 项目简介](#-项目简介)
     - [✨ 核心能力](#-核心能力)
   - [快速开始](#快速开始)
+  - [DeepSeek Harness 集成](#deepseek-harness-集成)
   - [🧭 工具选择指南](#-工具选择指南)
     - [如何与页面交互](#如何与页面交互)
     - [如何提取数据](#如何提取数据)
     - [如何批量处理页面](#如何批量处理页面)
-    - [如何把 HTML 转成电子表格——零 Token](#如何把-html-转成电子表格零-token)
+    - [如何把 HTML 转成电子表格——零 LLM Token](#如何把-html-转成电子表格零-llm-token)
   - [📦 安装](#-安装)
   - [💡 面向人的 CLI 指南](#-面向人的-cli-指南)
     - [快速上手](#快速上手)
@@ -44,6 +45,7 @@
   - [📜 文档](#-文档)
   - [🔧 代理配置](#-代理配置---解锁网站访问)
   - [许可证](#许可证)
+  - [友链](#友链)
 <!-- /TOC -->
 
 ## 🌟 项目简介
@@ -145,7 +147,7 @@ browser4-cli frame main
 
 ```
 需要处理多页面？
-├─ 单个列表页（搜索结果页）？→ htmlsnapshot query + DOM_LOAD_AND_SELECT
+├─ 单个列表页（搜索结果页）？→ htmlsnapshot query + LOAD_AND_SELECT
 ├─ 已知 URL 列表（在文件中）？→ crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ 从起始 URL 开始递归抓取？→ crawl <url> --out-link-selector "..." --depth N
 ├─ 需要并行执行（高吞吐）？→ swarm create → swarm query --seed-file ...
@@ -154,12 +156,12 @@ browser4-cli frame main
    → for url in ...; do browser4-cli goto "$url"; ... done
 ```
 
-### 如何把 HTML 转成电子表格——零 Token
+### 如何把 HTML 转成电子表格——零 LLM Token
 
-[WebMiner](https://github.com/platonai/web-miner) 会对下载下来的 HTML 文件做机器学习聚类，生成结构化电子表格和交互式报告——**不消耗 LLM token，全部本地运行。** webminer 是 Browser4 CLI 的一等公民：`browser4-cli webminer install` + `browser4-cli webminer all <html-dir>` 即可跑完整流程，无需 PowerShell。
+[WebMiner](https://github.com/platonai/web-miner) 会对下载下来的 HTML 文件做机器学习聚类，生成结构化电子表格和交互式报告——**不消耗 LLM Token，全部本地运行。** webminer 是 Browser4 CLI 的一等公民：`browser4-cli webminer install` + `browser4-cli webminer all <html-dir>` 即可跑完整流程，无需 PowerShell。
 
 ```
-已经有 HTML 文件，想要结构化数据，而且不想花 token？
+已经有 HTML 文件，想要结构化数据，而且不想花 LLM Token？
 ├─ < 1,000 页（小中规模）？→ WebMiner Free（SMILE ML 引擎）
 │  browser4-cli webminer install
 │  browser4-cli webminer all ./pages/
@@ -401,7 +403,7 @@ browser4-cli wait --load networkidle
 
 | 命令 | 说明 |
 |---|---|
-| `snapshot` | 捕获可访问性树快照。支持 `--boxes`/`--no-boxes`、`-i/--interactive`、`-u/--urls`、`-c/--compact`、`--no-compact`、`-d/--depth`、`-l/--limit`、`-s/--selector`、`--raw`、`--stdout`、`-vp/--viewport`、`--filename`。`--stdout`/`--raw` 输出默认按 2000 行/页截断分页——截断时若 stdout 是管道会追加一行 `# … output truncated: showing N of M lines …` 提示，完整 footer 走 stderr；需要完整树请用 `--all` 或 `--page-size 0`，超大页面建议用 `-v N`/`--depth`/`--selector`/`--no-boxes` 约束。 |
+| `snapshot` | 捕获可访问性树快照。支持 `--boxes`/`--no-boxes`、`-i/--interactive`、`-u/--urls`、`-c/--compact`、`--no-compact`、`-d/--depth`、`--selector`（无短选项——`-s` 是全局 session 标志）、`--raw`、`--stdout`、`-v/--viewport`、`--auto-diff`、`-b/--brief`、`--filename`。`--stdout`/`--raw` 输出默认按 2000 行/页截断分页——截断时若 stdout 是管道会追加一行 `# … output truncated: showing N of M lines …` 提示，完整 footer 走 stderr；需要完整树请用 `--all` 或 `--page-size 0`，超大页面建议用 `-v N`/`--depth`/`--selector`/`--no-boxes` 约束。 |
 | `snapshot grep <pattern>` | 用 grep 风格参数搜索保存的 / 当前 snapshot YAML，例如 `-i`、`-v`、`-c`、`-l`、`-F`、`-w`、`-A`、`-B`、`-C`、`--selector`、`--page`、`--page-size`、`--all`。 |
 | `snapshot list` | 列出保存的快照文件及其时间戳、大小。 |
 | `snapshot clean` | 删除旧快照文件。支持 `--dry-run`。 |
@@ -523,7 +525,7 @@ browser4-cli htmlsnapshot readability --text-only --all
 | `summarize [instruction]` | 总结当前页面内容。支持 `--selector`、`--filename`、`--raw`、`--stdout`。 |
 | `chat <message>` | 发送纯 AI chat 请求，不自动追加浏览器上下文。 |
 | `chat-result <id>` | 获取异步 chat 任务结果。 |
-| `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。 |
+| `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。任务类型默认为浏览器任务；`--coding` 显式标记纯编码任务（不做自动判定） |
 | `agent status <id>` | 查询任务状态——共享状态信封（`status`：queued/running/done/failed/cancelled，另有 `statusCode`、`message` 与 agent 步数）。 |
 | `agent result <id>` | 获取已完成任务的结果：摘要、`keyFindings`、`filesChanged`，以及产物所在的 workspace 目录。 |
 | `agent list` | 列出已跟踪的 agent 任务（状态与 `agent status` 一致，每次调用都会向服务端刷新）；`--clear` 可移除已结束的任务。 |
@@ -596,7 +598,7 @@ browser4-cli network route "**/api/users" --body '{"users":[]}' --content-type a
 | `swarm result <id>` | 获取已完成的 swarm 任务结果。 |
 | `swarm list` | 列出已跟踪的 swarm 任务。 |
 | `swarm close` | 关闭 swarm 会话并释放浏览器资源。 |
-| `crawl [url]` | 从 URL 或 seed file 开始抓取（每个种子必须是绝对 http(s) URL，非法值会在提交前被拒绝）。支持 `--seed-file`、`--sql`、`--sql-stdin`、`--sql-base64`、`--format`、`--output`、`-d/--depth`、`-ol/--out-link-selector`、`-olp/--out-link-pattern`、`-tl/--top-links`、`-a/--args`、`--refresh`、`--parse`、`--expires`、`-p/--priority`、`--page-load-timeout`、`--ignore-url-query`、`--no-norm`、`--readonly`、`-bg/--background`。 |
+| `crawl [url]` | 从 URL 或 seed file 开始抓取（每个种子必须是绝对 http(s) URL，非法值会在提交前被拒绝）。支持 `--seed-file`、`--sql`、`--sql-stdin`、`--sql-base64`、`--format`、`--output`、`-d/--depth`、`-ol/--out-link-selector`、`-olp/--out-link-pattern`、`-tl/--top-links`、`-a/--args`、`--refresh`、`--parse`、`--expires`、`-p/--priority`、`--page-load-timeout`、`--ignore-url-query`、`--no-norm`、`--readonly`、`--args-stdin`、`--parallel`、`--timeout`、`--verbose`、`-bg/--background`。 |
 | `crawl status <id>` | 查询 crawl 任务状态。 |
 | `crawl result <id>` | 获取 crawl 结果。 |
 | `crawl cancel <id>` | 取消运行中的 crawl 任务（检查点会保留，因此之后仍可续传）。 |
@@ -610,6 +612,25 @@ browser4-cli swarm query --seed-file urls.txt --sql @query.sql --refresh
 browser4-cli crawl "https://example.com" --depth 2 --out-link-selector "a[href]"
 browser4-cli crawl list
 browser4-cli crawl resume <task-id>    # 续传被中断的 crawl
+```
+
+#### WebMiner——HTML 转电子表格，零 LLM Token
+
+WebMiner 基于下载到本地的 JAR（`scent-miner.jar`）运行，无需 Browser4 服务端。完整流程见 [如何把 HTML 转成电子表格](#如何把-html-转成电子表格零-llm-token)。
+
+| 命令 | 说明 |
+|---|---|
+| `webminer install [version]` | 下载并安装 webminer 发行版到 `~/.scent/webminer`，校验 SHA-256（GitHub Releases，带 OSS 镜像回退）。支持 `--force`。 |
+| `webminer update` | 将 webminer 更新到最新发行版。 |
+| `webminer version` | 打印已安装的 webminer 版本。 |
+| `webminer uninstall` | 移除已安装的 webminer。 |
+| `webminer run-example` | 运行内置示例。 |
+| `webminer all <html-dir>` | 对一个 HTML 文件目录运行完整 pipeline（encode → cluster → views）。支持 `--max-files`、`--output`、`--resume`。 |
+| `webminer views <result-dir>` | 从已有聚类结果目录重建交互式视图（`<project>.html`、xlsx、json）。 |
+
+```bash
+browser4-cli webminer install
+browser4-cli webminer all ./pages/
 ```
 
 #### 内置 skill 文件 与 已安装运行时 skill
@@ -778,7 +799,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 | `browser4-dependencies` | BOM 与依赖版本对齐 |
 | `browser4-tools` | 运维工具与启动辅助 |
 | `browser4-agentic` | AI agent、MCP 集成、skill 注册 |
-| `browser4-coding` | 编程内核——沙箱 shell/fs、工件脚手架与校验、自身开发工具（47 个 `coding.*` 工具） |
+| `browser4-coding` | 编程内核——沙箱 shell/fs、工件脚手架与校验、自身开发工具（50+ 个 `coding.*` 工具） |
 | `browser4-agent-tools` | 高层 agent 工具：抓取、爬取、有状态页面交互 |
 | `browser4-rest` | Spring Boot REST 层与命令端点 |
 | `browser4-apps/browser4-standalone` | 产品打包——统一启动器（`target/Browser4.jar`） |
@@ -793,14 +814,14 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 
 `browser4-coding` 是轻依赖的编程内核：让 AI agent 既能创建 Browser4 工件，也能**开发 Browser4 自身**。它独立于 `browser4-agentic` 与 `pulsar-common`（仅依赖 SLF4J + Jackson + 协程），可供非 agent 宿主复用；重后端（LSP 服务器、kotlin-compiler-embeddable）仅在运行时探测，默认不加载不下载。
 
-`coding` 域共 **47 个工具**，分四组：
+`coding` 域共 **50+ 个工具**，分四组：
 
 | 分组 | 数量 | 要点 |
 |---|---|---|
-| Shell 与文件系统 | 28 | 沙箱 `coding.shell`（命令白名单）、快照编辑原语 + `revert`、`diff`（Myers/Patience）、仓库治理保护（`coding.protect`） |
-| 工件创作与校验 | 6 | `scaffold`（plugin/skill/js/script）、`scaffoldFlow`（多文件开发流）、`scaffoldFromExample`（反陈旧活模板，目录模式 + 词干派生改名）、`validate`（含 `repo-consistency`） |
-| 自身开发 | 7 | `mvnBuild`（结构化诊断）、`ktSymbols`/`ktReferences`/`ktInheritance`（零依赖 Kotlin 分析）、`impact` + `moduleGraph`（实时 pom 图谱）、`devTask`（AGENTS.md 流程 + 执行）、`trapCheck`（CDP 陷阱） |
-| LSP | 4 | 按需 `diagnostics`/`symbols`/`references`（ts/js/py/rs，服务器缺失时优雅降级） |
+| Shell 与文件系统 | 32 | 沙箱 `coding.shell`（命令白名单）+ `runCode` 代码片段执行、快照编辑原语 + `revert`、`diff`（Myers/Patience）、仓库治理保护（`coding.protect`） |
+| 工件创作与校验 | 5 | `scaffold`（plugin/skill/js/script）、`scaffoldToDir`、`scaffoldFlow`（多文件开发流）、`scaffoldFromExample`（反陈旧活模板，目录模式 + 词干派生改名）、`validate`（含 `repo-consistency`） |
+| 自身开发 | 13 | `mvnBuild`（结构化诊断）、`ktSymbols`/`ktReferences`/`ktInheritance`/`classInfo`（零依赖 Kotlin 分析）、`impact` + `moduleGraph`（实时 pom 图谱）、`devTask` + `resumeDevTask`（AGENTS.md 流程 + 执行）、`verify`（确定性门禁裁决）、`trapCheck`（CDP 陷阱）、`tokenStats`/`estimateTokens`（上下文预算） |
+| LSP | 4 | 按需 `diagnostics`/`symbols`/`references`/`lspServers`（ts/js/py/rs，服务器缺失时优雅降级） |
 
 **通用能力 vs 项目专用**：内核按"机制 vs 数据"分层——diff、沙箱、LSP 客户端、Kotlin 分析、Maven 通道与 pom 图谱扫描均为通用可移植；脚手架、校验器、`ModuleMap`、`CdpTrapCheck` 与治理默认清单编码了 Browser4 约定，复用到其他项目时需重写这一层。
 

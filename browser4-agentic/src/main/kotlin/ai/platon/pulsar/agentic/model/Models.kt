@@ -515,6 +515,12 @@ data class ActionDescription constructor(
      * */
     val filesChanged: List<String>? = null,
     /**
+     * AI: files deleted during the task. Kept apart from [filesChanged] so the
+     * completion gate can cross-check the claim against the run's recorded
+     * deletions (a deleted file never appears in git's changed-file list).
+     * */
+    val deletedFiles: List<String>? = null,
+    /**
      * AI: open problems the task did not resolve.
      * */
     val problems: List<String>? = null,

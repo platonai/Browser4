@@ -76,4 +76,18 @@ object CodingWorkspace {
     /** Whether destructive file operations (delete/move/copy) are permitted. */
     val allowDestructive: Boolean
         get() = System.getProperty("browser4.agent.allowDestructive", "true") != "false"
+
+    /**
+     * Transactional workspace mode (plan P2.1): `off` (default) runs a dev task
+     * directly in the workspace; `worktree` runs it in an isolated git worktree
+     * and merges back on success (rolling back by discarding the worktree).
+     *
+     * Off by default on purpose: isolation changes where build artifacts land and
+     * needs observing before it becomes the default (plan Q3(b)).
+     */
+    val isolationMode: String
+        get() = System.getProperty("browser4.agent.workspace.isolation", "off").trim().lowercase()
+
+    /** Whether [isolationMode] asks for an isolated worktree. */
+    fun isIsolationEnabled(): Boolean = isolationMode in setOf("worktree", "on", "true", "isolated")
 }

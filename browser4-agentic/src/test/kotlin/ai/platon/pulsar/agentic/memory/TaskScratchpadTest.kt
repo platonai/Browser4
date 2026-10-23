@@ -45,13 +45,28 @@ class TaskScratchpadTest {
     }
 
     @Test
-    @DisplayName("value is sanitized (masked and truncated)")
+    @DisplayName("value is sanitized (whitespace collapsed and truncated)")
     fun testValueSanitized() {
         val pad = TaskScratchpad()
         pad.note("k", "  abc  def  ".repeat(60)) // whitespace + length
         val value = pad.get("k")!!
-        assertTrue(value.length <= 200)
+        assertTrue(value.length <= TaskScratchpad.VALUE_MAX_CHARS)
         assertFalse(value.contains("  "))
+    }
+
+    @Test
+    @DisplayName("a note longer than the cap is truncated with an explicit notice")
+    fun testTruncationIsReported() {
+        // The old code cut the value at 200 chars and answered "Note saved: <key>",
+        // so a refactor plan silently turned into a dangling fragment.
+        val pad = TaskScratchpad(maxChars = 10_000)
+        val long = "Target: Browser4WebDriver.kt " + "y".repeat(2_000)
+        val confirmation = pad.note("refactor-state", long)
+
+        assertTrue(confirmation.contains("truncated"), confirmation)
+        assertEquals(TaskScratchpad.VALUE_MAX_CHARS, pad.get("refactor-state")!!.length)
+        // A note that fits is saved verbatim without a truncation notice.
+        assertEquals("Note saved: goal", pad.note("goal", "confirm login flow"))
     }
 
     @Test

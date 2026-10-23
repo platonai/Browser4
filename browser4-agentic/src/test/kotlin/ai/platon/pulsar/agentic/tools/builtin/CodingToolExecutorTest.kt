@@ -992,7 +992,7 @@ class CodingToolExecutorTest {
             val methods = listOf(
                 "shell", "shellOutput", "shellStatus", "shellList", "shellSetEnv",
                 "toolsDetect", "projectType",
-                "read", "readLines", "write", "append", "replace", "delete", "mkdir",
+                "read", "readLines", "write", "append", "replace", "delete", "mkdir", "checksum",
                 "copy", "move", "listDir", "glob", "grep", "stat", "diff",
                 "changeSummary", "languages", "workspaceRoot",
                 "scaffold", "scaffoldToDir",
@@ -1034,7 +1034,7 @@ class CodingToolExecutorTest {
         @DisplayName("getToolSpecs returns 51 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(51, specs.size)
+            assertEquals(54, specs.size)
         }
 
         @Test
@@ -1044,7 +1044,7 @@ class CodingToolExecutorTest {
             val expectedMethods = setOf(
                 "shell", "shellOutput", "shellStatus", "shellList", "shellSetEnv",
                 "toolsDetect", "projectType",
-                "read", "readLines", "write", "append", "replace", "delete", "mkdir",
+                "read", "readLines", "write", "append", "replace", "delete", "mkdir", "checksum",
                 "copy", "move", "listDir", "glob", "grep", "stat", "diff",
                 "changeSummary", "languages", "workspaceRoot",
                 "scaffold", "scaffoldToDir", "validate",
@@ -1052,7 +1052,7 @@ class CodingToolExecutorTest {
                 "diagnostics", "symbols", "references", "lspServers",
                 "runCode", "runCodeLanguages",
                 "mvnBuild", "scaffoldFromExample", "scaffoldFlow", "ktSymbols", "ktReferences", "ktInheritance",
-                "impact", "trapCheck", "devTask", "moduleGraph", "protect",
+                "impact", "trapCheck", "verify", "resumeDevTask", "devTask", "moduleGraph", "protect",
                 "tokenStats", "estimateTokens", "classInfo"
             )
             assertEquals(expectedMethods, specs.keys)
@@ -1132,6 +1132,7 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, realTarget)
+            assertNull(result.exception, "executor failed: ${result.exception}")
             val value = result.value as String
             assertTrue(value.contains("All checks passed"), value)
         }
@@ -1159,6 +1160,7 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, realTarget)
+            assertNull(result.exception, "executor failed: ${result.exception}")
             val value = result.value as String
             assertTrue(value.contains("Root pom version"), value)
             assertTrue(value.contains("does not match VERSION"), value)
@@ -1210,10 +1212,17 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, realTarget)
+            assertNull(result.exception, "executor failed: ${result.exception}")
             val value = result.value as String
             assertTrue(value.contains("Verification"), value)
-            assertTrue(value.contains("mvnBuild compile of browser4-rest"), value)
-            assertTrue(value.contains("All checks passed"), value)
+            assertTrue(value.contains("compile browser4-rest"), value)
+            // The machine verdict is the contract (plan P0.1/P0.2).
+            val verdictJson = ai.platon.pulsar.coding.VerificationReport.extractJson(value)
+            assertNotNull(verdictJson, value)
+            val verdict = com.fasterxml.jackson.databind.ObjectMapper().readTree(verdictJson)
+            assertEquals(true, verdict["passed"].asBoolean(), value)
+            val names = verdict["checks"].map { it["name"].asText() }
+            assertFalse(names.contains("test"), "runTests=false must not run tests: $names")
             assertFalse(value.contains("tests on"), "runTests=false must not run tests")
         }
 
@@ -1242,10 +1251,11 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, realTarget)
+            assertNull(result.exception, "executor failed: ${result.exception}")
             val value = result.value as String
-            assertTrue(value.contains("mvnBuild compile of browser4-plugins/browser4-testprobe"), value)
+            assertTrue(value.contains("compile browser4-plugins/browser4-testprobe"), value)
             assertFalse(
-                value.contains("mvnBuild compile of browser4-core/browser4-protocol"),
+                value.contains("compile browser4-core/browser4-protocol"),
                 "verification must not compile a DEPENDENTS key: $value"
             )
             // runTests captures the actual command line.
@@ -1289,11 +1299,17 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, realTarget)
+            assertNull(result.exception, "executor failed: ${result.exception}")
             val value = result.value as String
-            assertTrue(value.contains("tests on browser4-rest"), value)
+            assertTrue(value.contains("test browser4-rest"), value)
             assertTrue(value.contains("-Dtest=XControllerTest"),
                 "test run must scope to the named test class: $value")
-            assertTrue(value.contains("Tests run: 12"), value)
+            coVerify {
+                shell.executeRaw(
+                    match { it.contains("mvn test") && it.contains("-Dtest=XControllerTest") },
+                    any(), any()
+                )
+            }
         }
 
         @Test
@@ -1325,6 +1341,7 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, realTarget)
+            assertNull(result.exception, "executor failed: ${result.exception}")
             val value = result.value as String
             assertTrue(value.contains("Multi-file skeleton generated"), value)
             assertTrue(value.contains("=== File: pom.xml ==="), value)
@@ -1358,6 +1375,7 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, realTarget)
+            assertNull(result.exception, "executor failed: ${result.exception}")
             val value = result.value as String
             assertTrue(value.contains("Module: browser4-coding"), value)
             assertTrue(value.contains("browser4-agentic"), "dependent must be reported: $value")
@@ -1381,6 +1399,7 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, realTarget)
+            assertNull(result.exception, "executor failed: ${result.exception}")
             val value = result.value as String
             assertTrue(value.contains("Module graph: 1 modules"), value)
             assertTrue(value.contains("browser4-coding"), value)
@@ -1430,6 +1449,7 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, realTarget)
+            assertNull(result.exception, "executor failed: ${result.exception}")
             val value = result.value as String
             assertTrue(value.contains("Caller.kt"), value)
             assertTrue(value.contains("doWork()"), value)
@@ -1455,6 +1475,7 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, realTarget)
+            assertNull(result.exception, "executor failed: ${result.exception}")
             val value = result.value as String
             assertTrue(value.contains("Child → Base"), value)
         }

@@ -25,8 +25,9 @@ data class ObserveParams(
     val logInferenceToFile: Boolean = false,
     val fromAct: Boolean = false,
     /**
-     * True when the task is a pure coding task (CodingTaskDetector) — drives
-     * tiered tool disclosure: coding tools in full, page tools collapsed to a
+     * True when the task was explicitly marked as a coding task (command_run's
+     * coding argument / the CLI's agent run --coding) — never auto-detected.
+     * Drives tiered tool disclosure: coding tools in full, page tools collapsed to a
      * one-line summary (and vice versa for browsing tasks).
      */
     val codingMode: Boolean = false,

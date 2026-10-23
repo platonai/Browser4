@@ -60,9 +60,10 @@
 
 .PARAMETER Agent
     Generate AI release notes using an agent backend. Values: auto (resolve the
-    backend via coworker/scripts/workers/agent.ps1: dsh (preferred), claude,
-    kimi, codex, or gh copilot), or a specific backend name (dsh, claude, kimi,
-    codex, copilot). Without this flag the script uses the raw commit list and
+    backend via coworker/scripts/workers/agent.ps1: dsh (preferred), opencode,
+    claude, kimi, codex, or gh copilot), or a specific backend name (dsh,
+    opencode, claude, kimi, codex, copilot). Without this flag the script uses
+    the raw commit list and
     never invokes an AI agent. A pinned backend overrides $env:BROWSER4_AGENT
     and the config.psd1 backend order for this invocation.
 
@@ -98,7 +99,7 @@ param(
     [switch]$DryRun,
     [switch]$SyncMain,
     [switch]$Force,
-    [ValidateSet('auto', 'dsh', 'claude', 'kimi', 'codex', 'copilot')]
+    [ValidateSet('auto', 'dsh', 'opencode', 'claude', 'kimi', 'codex', 'copilot')]
     [string]$Agent = ""
 )
 

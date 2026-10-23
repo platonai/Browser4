@@ -297,6 +297,96 @@ class XSQLScrapeHyperlinkTest {
         assertEquals(ResourceStatus.SC_EXPECTATION_FAILED, link.response.statusCode)
     }
 
+    @Test
+    @DisplayName("rows from an earlier attempt are dropped when the retry fails")
+    fun retryAfterExtractionDoesNotPublishStaleRows() {
+        val html = "<html><body><h3>title</h3></body></html>"
+        val link = XSQLHyperlink(
+            ScrapeRequest("select t from load_and_select('https://example.com', ':root')"),
+            ScrapeAPIUtils.normalize("select t from load_and_select('https://example.com', ':root')"),
+            sessionThatRuns(resultSetOf(listOf("t"), listOf("title"))),
+        )
+        val page = fetchedPage(html)
+        link.extract(page, document(html))
+        assertEquals(listOf(mapOf("t" to "title")), link.response.resultSet)
+
+        // The attempt is re-queued: its rows are not the task's result.
+        val retryPage = newPage()
+        retryPage.protocolStatus = ProtocolStatus.retry(RetryScope.CRAWL, "privacy context exhausted")
+        retryPage.isFetched = true
+        fireLoaded(link, retryPage)
+
+        assertFalse(link.response.isDone, "A retried task must stay non-terminal")
+        assertEquals(
+            emptyList<Map<String, Any?>>(), link.response.resultSet,
+            "Rows from the attempt being retried must not survive the retry"
+        )
+
+        // The retry budget is exhausted and the final attempt never fetched.
+        fireLoaded(link, GoraWebPage.NIL)
+
+        val response = link.response
+        assertTrue(response.isDone, "A terminal failure must complete the task")
+        assertEquals(ResourceStatus.SC_EXPECTATION_FAILED, response.statusCode)
+        assertEquals(
+            emptyList<Map<String, Any?>>(), response.resultSet,
+            "A failed task must not expose stale rows"
+        )
+        assertTrue(
+            response.message?.contains("never fetched") == true,
+            "The real failure must be reported: ${response.message}"
+        )
+    }
+
+    @Test
+    @DisplayName("rows extracted from content that arrived complete a failed fetch")
+    fun failedFetchWithCurrentRowsCompletesSuccessfully() {
+        val html = "<html><body><h3>title</h3></body></html>"
+        val link = XSQLHyperlink(
+            ScrapeRequest("select t from load_and_select('https://example.com', ':root')"),
+            ScrapeAPIUtils.normalize("select t from load_and_select('https://example.com', ':root')"),
+            sessionThatRuns(resultSetOf(listOf("t"), listOf("title"))),
+        )
+        val page = newPage()
+        page.protocolStatus = ProtocolStatus.failed(ProtocolStatusCodes.SC_REQUEST_TIMEOUT)
+        page.isFetched = true
+        page.prevFetchTime = java.time.Instant.now()
+        page.setByteArrayContent(html.toByteArray())
+
+        link.extract(page, document(html))
+        assertEquals(listOf(mapOf("t" to "title")), link.response.resultSet)
+
+        fireLoaded(link, page)
+
+        val response = link.response
+        assertTrue(response.isDone)
+        assertEquals(ResourceStatus.SC_OK, response.statusCode)
+        assertEquals(listOf(mapOf("t" to "title")), response.resultSet)
+        assertTrue(
+            response.message?.contains("result is usable") == true,
+            "The message must explain why a failed fetch still produced data: ${response.message}"
+        )
+    }
+
+    @Test
+    @DisplayName("complete clears a stale terminal message only for a successful task")
+    fun completeClearsStaleTerminalMessageOnlyOnSuccess() {
+        val successful = hyperlink()
+        successful.response.statusCode = ResourceStatus.SC_OK
+        successful.response.message = "Task timed out: no progress for 120s after a worker picked it up."
+        successful.complete(newPage())
+        assertNull(successful.response.message)
+        assertTrue(successful.response.isDone)
+
+        val failed = hyperlink()
+        val failureMessage = "Task timed out: no progress for 120s after a worker picked it up."
+        failed.response.statusCode = ResourceStatus.SC_REQUEST_TIMEOUT
+        failed.response.message = failureMessage
+        failed.complete(newPage())
+        assertEquals(failureMessage, failed.response.message)
+        assertTrue(failed.response.isDone)
+    }
+
     // -----------------------------------------------------------------
     // The read-only contract of the X-SQL the hyperlink hands to h2
     // -----------------------------------------------------------------

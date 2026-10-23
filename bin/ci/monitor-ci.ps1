@@ -43,8 +43,9 @@
 .PARAMETER Agent
     On workflow failure, dispatch the failure to an AI agent for analysis and
     fixing. Values: auto (resolve the backend via coworker/scripts/workers/
-    agent.ps1: dsh, claude, kimi, codex, or gh copilot — dsh preferred), or a
-    specific backend name (dsh, claude, kimi, codex, copilot). Without this flag
+    agent.ps1: dsh, opencode, claude, kimi, codex, or gh copilot — dsh
+    preferred), or a specific backend name (dsh, opencode, claude, kimi, codex,
+    copilot). Without this flag
     the script only prints extracted error diagnostics and never invokes an AI
     agent. A pinned backend overrides $env:BROWSER4_AGENT for this invocation.
 
@@ -60,7 +61,7 @@ param(
     [string]$remote = "origin",
     [int]$PollIntervalSeconds = 5,
     [switch]$NoWatch,
-    [ValidateSet('auto', 'dsh', 'claude', 'kimi', 'codex', 'copilot')]
+    [ValidateSet('auto', 'dsh', 'opencode', 'claude', 'kimi', 'codex', 'copilot')]
     [string]$Agent = ""
 )
 

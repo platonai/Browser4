@@ -16,6 +16,7 @@ import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -141,9 +142,17 @@ class SwarmControllerTest {
         val controller = newController(sessionManager)
         SwarmFacadeRegistry.instance.unregister()
 
-        assertThrows<SwarmNotInstalledException> {
+        val error = assertThrows<SwarmNotInstalledException> {
             controller.submit("https://example.com")
         }
+        assertTrue(
+            error.message?.contains("mvn install -pl browser4-plugins/browser4-swarm") == true,
+            "The 503 must keep the actionable install recipe: ${error.message}"
+        )
+        assertTrue(
+            error.message?.contains("Failed to mount the swarm facade") == true,
+            "The 503 must distinguish a failed facade registration: ${error.message}"
+        )
     }
 
     @Test

@@ -242,7 +242,7 @@ extensions) are also possible via `open --profile` or PROTOTYPE mode. See
 | Command | Description |
 |---|---|
 | `extract <instruction>` | Extract data from the current page. Without `--schema` the result is always the fixed `{title, content, links}` envelope — the instruction shapes the text inside `content`; pass `--schema` (JSON Schema or `{"fields":[…]}`) to get named top-level fields |
-| `agent run <task>` | Run an autonomous agent task (async, returns task ID). `--wait` blocks for the result; `--wait-timeout <seconds>` tunes the wait window (default 600). |
+| `agent run <task>` | Run an autonomous agent task (async, returns task ID). `--wait` blocks for the result; `--wait-timeout <seconds>` tunes the wait window (default 600). Task type is browser by default; `--coding` explicitly marks a pure file/build task (never auto-detected) |
 | `agent status <id>` | Check a task — the shared status envelope (`status`: `queued`/`running`/`done`/`failed`/`cancelled`, plus `statusCode`, `message` and the agent's step count). `done`/`failed`/`cancelled` are terminal; an unknown id answers `statusCode: 404` with the reason and exits non-zero. |
 | `agent result <id>` | Get a completed task's result: its summary plus the agent's `keyFindings`, `filesChanged`, `problems` and the `workspace` its deliverables live in (a task whose answer is a file is reachable from here). |
 | `agent list` | List tracked agent tasks with the same statuses (refreshed from the backend on every call); `--clear` untracks the finished ones. |
@@ -418,7 +418,7 @@ Details: [Crawl checkpoint & resume](../../docs/crawl-checkpoint-resume.md).
 | `skills get --all` | Output every bundled skill concatenated |
 | `skills path [name]` | Print the skills directory path (or path to a specific skill) |
 
-Skills are AI agent instruction files bundled into the CLI binary at compile time. The bundled content always matches the installed CLI version. Set `BROWSER4_SKILLS_DIR` to override the skills directory path. Skill files are unpacked to the versioned installation directory during `browser4-cli install` and refreshed by `upgrade`; unpacking is idempotent (unchanged files are skipped), so re-running is cheap. `install` / `upgrade` also copy the bundled skills into `~/.agents/skills` so AI agents (e.g. Codex) can load them automatically (override with `BROWSER4_AGENTS_SKILLS_DIR`).
+Skills are AI agent instruction files bundled into the CLI binary at compile time. The bundled content always matches the installed CLI version. Set `BROWSER4_SKILLS_DIR` to override the skills directory path. Skill files are unpacked to the versioned installation directory during `browser4-cli install` and refreshed by `upgrade`; unpacking is idempotent (unchanged files are skipped), so re-running is cheap. `install` / `upgrade` also copy the bundled skills into `~/.agents/skills` so AI agents (e.g. Codex) can load them automatically (override with `BROWSER4_AGENTS_SKILLS_DIR`) — by default only the `browser4-cli` skill is copied there (`skills unpack <dest>` unpacks everything into a directory of your choice).
 
 ### webminer (WebMiner)
 
@@ -506,15 +506,15 @@ Need to extract data from a page?
 
 ```
 Need to process multiple pages?
-├─ Single list page? → htmlsnapshot query with DOM_LOAD_AND_SELECT
+├─ Single list page? → htmlsnapshot query with LOAD_AND_SELECT
 ├─ List of known URLs? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Need parallel execution? → swarm create → swarm query --seed-file ...
 └─ Repeated monitoring? → loop -i 3600 -- eval "..."
 ```
 
-### How to Turn HTML into Spreadsheets — Zero Tokens
+### How to Turn HTML into Spreadsheets — Zero LLM Tokens
 
-[WebMiner](https://github.com/platonai/web-miner) clusters downloaded HTML files into structured spreadsheets via ML — no API keys, no tokens. Free tier (SMILE engine) handles < 1,000 pages; commercial tier (Apache Spark ML) scales to 100K+ pages/day.
+[WebMiner](https://github.com/platonai/web-miner) clusters downloaded HTML files into structured spreadsheets via ML — no API keys, no LLM Tokens. Free tier (SMILE engine) handles < 1,000 pages; commercial tier (Apache Spark ML) scales to 100K+ pages/day.
 
 ```
 browser4-cli webminer install

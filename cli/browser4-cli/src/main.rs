@@ -544,6 +544,8 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "code-mvn",
         "code-run",
         "code-devtask",
+        "code-verify",
+        "code-resume",
         "code-impact",
         "code-workspace",
         "code-javap",
@@ -11595,8 +11597,15 @@ async fn handle_html_snapshot_export(
     .await?;
 
     snapshot::save_binary(&file_path, result.as_bytes()).map_err(|e| describe_io_error(&e))?;
-    cli_println!("Snapshot saved to: {}", file_path.display());
-    json_field("path", json!(file_path.display().to_string()));
+    // Echo the resolved path, not the string the user typed: a script that
+    // changes directory (or a user reading the line later) had to resolve a
+    // relative path against the original CWD by hand.  `absolute` normalizes
+    // without resolving symlinks, so it stays readable on Windows (unlike
+    // `canonicalize`, which yields a \\?\ prefix); fall back to the typed path
+    // if the filesystem cannot resolve it.
+    let resolved_path = std::path::absolute(&file_path).unwrap_or_else(|_| file_path.clone());
+    cli_println!("Snapshot saved to: {}", resolved_path.display());
+    json_field("path", json!(resolved_path.display().to_string()));
 
     Ok(())
 }
@@ -14372,6 +14381,51 @@ async fn verify_press_result(
     }
 }
 
+/// True when the tool's text output is nothing but the JSON array of values the
+/// user just asked to select — the confirmation line below already reports them
+/// (and reports them in the user's own labelling), so the raw array is noise.
+fn is_selected_values_echo(text: &str, expected_value: &str) -> bool {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return false;
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(Value::Array(items)) if !items.is_empty() => {
+            let values: Vec<&str> = match items.iter().map(|item| item.as_str()).collect() {
+                Some(values) => values,
+                None => return false,
+            };
+            values.join(",") == expected_value
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod selected_values_echo_tests {
+    use super::is_selected_values_echo;
+
+    #[test]
+    fn single_selected_value_is_treated_as_echo() {
+        assert!(is_selected_values_echo("[\"sg\"]", "sg"));
+        assert!(is_selected_values_echo(" [\"sg\"]\n", "sg"));
+    }
+
+    #[test]
+    fn multi_select_echo_matches_the_typed_value() {
+        assert!(is_selected_values_echo("[\"sg\",\"de\"]", "sg,de"));
+        assert!(!is_selected_values_echo("[\"sg\",\"de\"]", "sg"));
+    }
+
+    #[test]
+    fn real_output_is_never_swallowed() {
+        assert!(!is_selected_values_echo("✓ Selected 'sg'", "sg"));
+        assert!(!is_selected_values_echo("[\"us\"]", "sg"));
+        assert!(!is_selected_values_echo("[]", "sg"));
+        assert!(!is_selected_values_echo("", "sg"));
+    }
+}
+
 /// Handle `select` command with optional verification and automatic
 /// post-timeout verification.
 async fn handle_select_command(
@@ -14406,7 +14460,10 @@ async fn handle_select_command(
 
     match tool_result {
         Ok(text) => {
-            if !text.is_empty() {
+            // The backend answers a select with the selected values as a JSON
+            // array; echoing it dumped a bare `["sg"]` line into human-readable
+            // output, right above the confirmation that already reports them.
+            if !text.is_empty() && !is_selected_values_echo(&text, expected_value) {
                 cli_println!("{}", text);
             }
 
@@ -14662,6 +14719,15 @@ async fn handle_agent_run(
     let mut extra = serde_json::json!({ "engine": engine });
     if let Some(n) = noop_limit {
         extra["noopLimit"] = serde_json::json!(n);
+    }
+    // Explicit coding flag (`agent run --coding`): the payload key is the opt-in
+    // signal server-side; when it is absent the task is a browser task by default.
+    if tool_params.get("coding").and_then(|v| v.as_bool()) == Some(true) {
+        extra["coding"] = serde_json::json!(true);
+    }
+    // Fresh-workspace isolation (`agent run --fresh-workspace`).
+    if tool_params.get("freshWorkspace").and_then(|v| v.as_bool()) == Some(true) {
+        extra["freshWorkspace"] = serde_json::json!(true);
     }
     let result =
         submit_plain_command_with_options(client, base_url, task, true, extra).await?;
@@ -15924,7 +15990,7 @@ async fn handle_swarm_submit(
     client: &Client,
     base_url: &str,
     tool_params: &Value,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     // Every invocation gets one batch id; all of its tasks carry it so the batch
     // can be tracked as a unit (`swarm list --batch <id>`).
     let batch_id = resolve_batch_id(tool_params);
@@ -16063,6 +16129,7 @@ async fn handle_swarm_submit(
     }
 
     // Support --wait: poll until all submitted jobs complete
+    let mut unsuccessful = 0usize;
     if tool_params
         .get("wait")
         .and_then(|v| v.as_bool())
@@ -16077,18 +16144,18 @@ async fn handle_swarm_submit(
             })
             .collect();
         if !task_ids.is_empty() {
-            swarm_wait_for_jobs(client, base_url, &task_ids, Some(&batch_id)).await?;
+            unsuccessful = swarm_wait_for_jobs(client, base_url, &task_ids, Some(&batch_id)).await?;
         }
     }
 
-    Ok(())
+    Ok(unsuccessful)
 }
 
 async fn handle_swarm_query(
     client: &Client,
     base_url: &str,
     tool_params: &Value,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     // One batch id per invocation, stamped on every task it submits.
     let batch_id = resolve_batch_id(tool_params);
     let url = tool_params
@@ -16235,6 +16302,7 @@ async fn handle_swarm_query(
     }
 
     // Support --wait: poll until all submitted jobs complete
+    let mut unsuccessful = 0usize;
     if tool_params
         .get("wait")
         .and_then(|v| v.as_bool())
@@ -16249,7 +16317,7 @@ async fn handle_swarm_query(
             })
             .collect();
         if !task_ids.is_empty() {
-            swarm_wait_for_jobs(client, base_url, &task_ids, Some(&batch_id)).await?;
+            unsuccessful = swarm_wait_for_jobs(client, base_url, &task_ids, Some(&batch_id)).await?;
         }
     } else {
         // Without --wait, jobs are submitted asynchronously. The user needs
@@ -16268,7 +16336,7 @@ async fn handle_swarm_query(
         );
     }
 
-    Ok(())
+    Ok(unsuccessful)
 }
 
 /// Map backend swarm status codes to user-friendly lifecycle labels.
@@ -17314,12 +17382,17 @@ fn swarm_status_matches(last_status: &str, wanted: &str) -> bool {
 }
 
 /// Poll a list of swarm task IDs until all complete or timeout.
+///
+/// Returns the number of jobs that did NOT succeed (failed plus still pending
+/// when the wait window expires), so the caller can exit non-zero: a scripted
+/// `swarm query --wait` used to exit 0 while every job had failed, and the
+/// caller had no way to tell.
 async fn swarm_wait_for_jobs(
     client: &Client,
     base_url: &str,
     task_ids: &[String],
     batch_id: Option<&str>,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let total = task_ids.len();
     match batch_id {
         Some(id) => cli_println!(
@@ -17456,7 +17529,7 @@ async fn swarm_wait_for_jobs(
             json_field("succeeded", json!(succeeded));
             json_field("failed", json!(failed));
             json_field("pending_task_ids", json!(pending));
-            return Ok(());
+            return Ok(failed + pending.len());
         }
 
         // Progress report every 30 seconds
@@ -17581,7 +17654,7 @@ fn report_swarm_wait_outcome(
     start: std::time::Instant,
     total: usize,
     batch_id: Option<&str>,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let succeeded: Vec<&String> = task_ids
         .iter()
         .zip(outcomes)
@@ -17679,7 +17752,7 @@ fn report_swarm_wait_outcome(
     if !pending.is_empty() {
         json_field("pending_task_ids", json!(pending));
     }
-    Ok(())
+    Ok(failed.len() + pending.len())
 }
 
 /// Render the aggregate status of a batch, or `None` when the id is not a batch.
@@ -22646,20 +22719,24 @@ fn format_agents_skills_sync_message(outcome: SkillsSyncOutcome, agents_dir: &Pa
     }
 }
 
-/// Unpack bundled skill files into the AI-agent skills directory
-/// (`~/.agents/skills`, overridable via `BROWSER4_AGENTS_SKILLS_DIR`).
+/// Copy the agent-synced bundled skill files into the AI-agent skills
+/// directory (`~/.agents/skills`, overridable via `BROWSER4_AGENTS_SKILLS_DIR`).
 ///
-/// Agents such as Codex load skills from there automatically, so `install` /
-/// `upgrade` keep it in sync with the CLI binary's embedded skills.  Like the
-/// versioned-dir sync this is idempotent (write-if-changed).  Returns `Ok(None)`
+/// By default only the `browser4-cli` skill is copied there
+/// (`skills::AGENT_SYNCED_SKILL_NAMES`): the other bundled skills are
+/// Browser4-development oriented and would otherwise pollute the agent skill
+/// space shared with the user.  Agents that want the full set can unpack it
+/// explicitly (`browser4-cli skills unpack <dest>`).  Like the versioned-dir
+/// sync this is idempotent (write-if-changed) and never deletes files, so
+/// skills written by older CLI versions stay on disk.  Returns `Ok(None)`
 /// when no agents directory can be resolved (no override and no home dir).
 fn sync_skills_to_agents_dir() -> Result<Option<(SkillsSyncOutcome, PathBuf)>, String> {
     let Some(agents_dir) = skills::agents_skills_dir() else {
         eprintln!("⚠  Could not resolve the home directory; skipping AI-agent skills install.");
         return Ok(None);
     };
-    let files_total = skills::bundled_skill_file_count();
-    let files_written = skills::unpack_skills_to(&agents_dir)?;
+    let files_total = skills::bundled_agent_skill_file_count();
+    let files_written = skills::unpack_agent_skills_to(&agents_dir)?;
     Ok(Some((
         SkillsSyncOutcome {
             files_written,
@@ -22725,8 +22802,9 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
         }
     }
 
-    // Also install the bundled skills into the AI-agent skills directory
-    // (`~/.agents/skills`) so agents like Codex can load them automatically.
+    // Also copy the agent-synced skills (only the `browser4-cli` skill by
+    // default) into the AI-agent skills directory (`~/.agents/skills`) so
+    // agents like Codex can load them automatically.
     match sync_skills_to_agents_dir() {
         Ok(Some((outcome, agents_dir))) => {
             eprintln!("{}", format_agents_skills_sync_message(outcome, &agents_dir));
@@ -23150,12 +23228,131 @@ async fn handle_code_command(
 
     // --- Call the server directly (no session required) ---
     let result = http::call_tool(client, base_url, tool_name, tool_params.clone()).await?;
+
+    // In --json mode `cli_println!` is suppressed, so expose the tool reply as
+    // an envelope field instead — otherwise `--json` would emit an empty
+    // `output` object for every code command.
+    if json_active() {
+        json_field("result", json_text_or_value(&result));
+    }
+
     if result.trim().is_empty() {
         cli_println!("(no output)");
     } else {
         cli_println!("{}", result);
     }
+
+    // --- Verdict → exit code (plan P0.3) ---
+    // A build/validation/verification that FAILED must not exit 0, otherwise a
+    // CI gate reading only the exit code reports green on a red build (eval
+    // K5). The check is conservative: output without a machine-checkable
+    // verdict (e.g. a mock server) keeps the historical exit-0 behaviour.
+    if let Some(reason) = code_command_failure(command, &result) {
+        return Err(format!("{command} failed — {reason}"));
+    }
     Ok(())
+}
+
+/// Machine-checkable failure signal of a `code ...` command, if any.
+///
+/// Never guesses: each branch keys off text this codebase itself generates
+/// (`mvn -pl ... → exit N`, the `VERDICT_JSON:` line, `✗ Validation failed`),
+/// so an arbitrary tool reply cannot accidentally turn into a failure.
+fn code_command_failure(command: &str, output: &str) -> Option<String> {
+    match command {
+        "code-verify" | "code-devtask" => verification_failure(output),
+        "code-mvn" => maven_failure(output),
+        "code-validate" => validation_failure(output),
+        _ => None,
+    }
+}
+
+/// Prefix of the machine-readable verdict line emitted by `coding.verify`.
+const VERDICT_JSON_PREFIX: &str = "VERDICT_JSON: ";
+
+fn verification_failure(output: &str) -> Option<String> {
+    // Human mode: the verdict is the last VERDICT_JSON line.
+    if let Some(line) = output
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with(VERDICT_JSON_PREFIX))
+    {
+        let json_text = line.trim_start().trim_start_matches(VERDICT_JSON_PREFIX);
+        if let Ok(verdict) = serde_json::from_str::<Value>(json_text) {
+            if verdict.get("passed").and_then(Value::as_bool) == Some(false) {
+                return Some(verdict_failure_reason(&verdict));
+            }
+        }
+    }
+    // `--json` mode: the tool reply IS the verdict object.
+    if let Ok(verdict) = serde_json::from_str::<Value>(output.trim()) {
+        if verdict.get("checks").is_some()
+            && verdict.get("passed").and_then(Value::as_bool) == Some(false)
+        {
+            return Some(verdict_failure_reason(&verdict));
+        }
+    }
+    // `code devtask --execute` stops at the first failing plan step.
+    if output.contains("Stopped at first failure.") {
+        return Some("dev-task plan execution stopped at the first failing step".to_string());
+    }
+    None
+}
+
+fn verdict_failure_reason(verdict: &Value) -> String {
+    verdict
+        .get("failureReason")
+        .and_then(Value::as_str)
+        .filter(|r| !r.is_empty())
+        .unwrap_or("verification verdict is not passed")
+        .to_string()
+}
+
+fn maven_failure(output: &str) -> Option<String> {
+    // Human mode: `mvn -pl <module> -am <goals> → exit <code>`.
+    for line in output.lines() {
+        if let Some(idx) = line.find("→ exit ") {
+            let digits: String = line[idx + "→ exit ".len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '-')
+                .collect();
+            if let Ok(code) = digits.parse::<i32>() {
+                if code != 0 {
+                    return Some(format!("maven build failed with exit {code}"));
+                }
+            }
+        }
+    }
+    // `--json` mode: {"exitCode": N, "timedOut": bool, ...}
+    if let Ok(build) = serde_json::from_str::<Value>(output.trim()) {
+        if build.get("timedOut").and_then(Value::as_bool) == Some(true) {
+            return Some("maven build timed out".to_string());
+        }
+        if let Some(code) = build.get("exitCode").and_then(Value::as_i64) {
+            if code != 0 {
+                return Some(format!("maven build failed with exit {code}"));
+            }
+        }
+    }
+    None
+}
+
+fn validation_failure(output: &str) -> Option<String> {
+    // Human mode: ValidationResult.format() marks failures with `✗ Validation failed`.
+    if output.contains("✗ Validation failed") {
+        return Some("validation failed".to_string());
+    }
+    // `--json` mode: {"valid": false, "errorCount": N, ...}
+    if let Ok(result) = serde_json::from_str::<Value>(output.trim()) {
+        if result.get("valid").and_then(Value::as_bool) == Some(false) {
+            let errors = result
+                .get("errorCount")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            return Some(format!("validation failed with {errors} error(s)"));
+        }
+    }
+    None
 }
 
 /// `profile-import` — import browser personal data via the
@@ -23933,7 +24130,31 @@ impl ToolSpecFetch {
 
 /// Fetch the tool specs from `GET /mcp/tools/specs` with an explicit budget.
 async fn probe_tool_specs_within(base_url: &str, budget: std::time::Duration) -> ToolSpecFetch {
-    let url = format!("{}/mcp/tools/specs", base_url.trim_end_matches('/'));
+    probe_tool_specs_at(base_url, budget, false).await
+}
+
+/// Same probe, also asking for built-in specs that declare usage examples
+/// (`?includeExamples=true`). The `--help --examples` path needs those: the
+/// default payload advertises plugin-declared CLI commands only, so a built-in
+/// command like `code devtask` had no examples to show (eval K7).
+async fn probe_tool_specs_with_examples_within(
+    base_url: &str,
+    budget: std::time::Duration,
+) -> ToolSpecFetch {
+    probe_tool_specs_at(base_url, budget, true).await
+}
+
+async fn probe_tool_specs_at(
+    base_url: &str,
+    budget: std::time::Duration,
+    include_examples: bool,
+) -> ToolSpecFetch {
+    let base = base_url.trim_end_matches('/');
+    let url = if include_examples {
+        format!("{base}/mcp/tools/specs?includeExamples=true")
+    } else {
+        format!("{base}/mcp/tools/specs")
+    };
     let Ok(client) = reqwest::Client::builder().timeout(budget).build() else {
         return ToolSpecFetch::Failed(format!("could not build an HTTP client for {url}"));
     };
@@ -24286,7 +24507,7 @@ fn no_tool_level_examples_reason() -> String {
 /// `Err` carries the reason as a phrase the caller drops into its own message,
 /// so both the one-line report and the built-in fallback can explain themselves.
 async fn build_tool_examples(base_url: &str, tool: &str) -> Result<String, String> {
-    let values = match probe_tool_specs_within(base_url, std::time::Duration::from_secs(2)).await {
+    let values = match probe_tool_specs_with_examples_within(base_url, std::time::Duration::from_secs(2)).await {
         // The request failed (unreachable, timeout, HTTP error, malformed body):
         // only here is "is the backend running?" the honest diagnosis.
         ToolSpecFetch::Failed(reason) => {
@@ -26208,7 +26429,8 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
         }
     }
 
-    // Keep the AI-agent skills directory (`~/.agents/skills`) in sync too.
+    // Keep the AI-agent skills directory (`~/.agents/skills`) in sync too:
+    // only the agent-synced skills (just `browser4-cli` by default).
     match sync_skills_to_agents_dir() {
         Ok(Some((outcome, agents_dir))) => {
             eprintln!("{}", format_agents_skills_sync_message(outcome, &agents_dir));
@@ -26329,12 +26551,24 @@ async fn handle_status(
     }
 
     // Show installed runtime bundle info (informational only).
+    let dev_mode = daemon::is_dev_mode();
     if let Some(metadata) = daemon::read_installed_browser4_runtime_metadata() {
-        cli_println!(
-            "Installed bundle: {} (at {})",
-            metadata.tag,
-            metadata.installed_at
-        );
+        if dev_mode {
+            // In a checkout the installed bundle is NOT what runs — the daemon
+            // launches the locally built runtime bundle — so label it instead of
+            // printing two bundle versions that look like a contradiction.
+            cli_println!(
+                "Installed bundle: {} (at {}) — used only outside a repository checkout",
+                metadata.tag,
+                metadata.installed_at
+            );
+        } else {
+            cli_println!(
+                "Installed bundle: {} (at {})",
+                metadata.tag,
+                metadata.installed_at
+            );
+        }
         json_field("installed_version", json!(&metadata.tag));
         json_field("installed_at", json!(&metadata.installed_at));
     } else {
@@ -26493,8 +26727,16 @@ async fn handle_status(
             json_field("version_mismatch", json!(false));
         }
     } else if health == "UNREACHABLE" || health == "DOWN" {
-        // Server not reachable — compare against installed bundle as fallback.
-        if let Some(ref metadata) = daemon::read_installed_browser4_runtime_metadata() {
+        if dev_mode {
+            // Comparing against the installed bundle would be misleading in a
+            // checkout: the next command starts the locally built backend, not
+            // that bundle, so there is no mismatch to report.
+            cli_println!(
+                "Backend is not running; in a repository checkout the next command starts the locally built \
+                 backend (rebuild it with 'b4w -Rebuild <command>' after changing backend sources)."
+            );
+            json_field("version_mismatch", json!(false));
+        } else if let Some(ref metadata) = daemon::read_installed_browser4_runtime_metadata() {
             let installed_ver = metadata.tag.trim().trim_start_matches('v');
             if normalize_version(installed_ver) != normalize_version(VERSION.trim()) {
                 cli_println!(
@@ -29042,6 +29284,8 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "code-mvn" => Some("code mvn"),
         "code-run" => Some("code run"),
         "code-devtask" => Some("code devtask"),
+        "code-verify" => Some("code verify"),
+        "code-resume" => Some("code resume"),
         "code-impact" => Some("code impact"),
         "code-workspace" => Some("code workspace"),
         "code-javap" => Some("code javap"),
@@ -30867,8 +31111,15 @@ async fn run(
                         .join(", ")
                 )
             };
-            print_help(None);
-            return Err(CliError(ExitCode::Usage, msg));
+            // No full help dump: a typo used to flood the terminal with the
+            // whole command list (printed to stdout, so `cmd > out` captured it
+            // too).  The one-line error names the command and suggests the
+            // closest matches; `--help` is one keystroke away.  The hint rides
+            // on the returned error so the renderer prints it exactly once.
+            return Err(CliError(
+                ExitCode::Usage,
+                format!("{msg}. Run 'browser4-cli help' for the command list."),
+            ));
         }
     };
 
@@ -30911,16 +31162,22 @@ async fn run(
         build_command_args(&raw_parsed, &arg_names, COMMAND_ARG_ALIASES).map_err(|e| e.to_string())?
     };
 
-    // Validate required positional arguments (fast-fail for malformed commands).
-    validate_required_args(cmd_def, &parsed)?;
-    validate_command_semantics(&command, &parsed)?;
     // Reject options the command does not declare: a misplaced or misspelled
     // flag used to be dropped silently (e.g. `htmlsnapshot get --bogus`, or
     // `--limit` on a single-element `get`, which then returned only the first
     // match as if all had been asked for).
+    //
+    // Runs BEFORE the required-positional check on purpose: an unknown option
+    // placed before the task text is parsed as `--opt <value>`, which swallows
+    // the task and surfaces as a confusing "Missing required argument" (eval K6).
+    // Naming the unknown option is the actionable diagnosis.
     args::validate_command_options(&command, &parsed).map_err(|message| {
         CliError(ExitCode::Usage, message)
     })?;
+
+    // Validate required positional arguments (fast-fail for malformed commands).
+    validate_required_args(cmd_def, &parsed)?;
+    validate_command_semantics(&command, &parsed)?;
 
     // Support --json after the command name (e.g. "tab-list --json").  When
     // --json appears before the command it is captured by parse_global_flags;
@@ -31881,10 +32138,28 @@ async fn run(
             .await?;
         }
         "swarm-submit" => {
-            handle_swarm_submit(&client, &base_url, &tool_params).await?;
+            let unsuccessful = handle_swarm_submit(&client, &base_url, &tool_params).await?;
+            if unsuccessful > 0 {
+                return Err(CliError(
+                    ExitCode::PartialFailure,
+                    format!(
+                        "{unsuccessful} swarm job(s) did not succeed — see the per-task status above, \
+                         or 'swarm status <id>' for one task."
+                    ),
+                ));
+            }
         }
         "swarm-query" => {
-            handle_swarm_query(&client, &base_url, &tool_params).await?;
+            let unsuccessful = handle_swarm_query(&client, &base_url, &tool_params).await?;
+            if unsuccessful > 0 {
+                return Err(CliError(
+                    ExitCode::PartialFailure,
+                    format!(
+                        "{unsuccessful} swarm job(s) did not succeed — see the per-task status above, \
+                         or 'swarm status <id>' for one task."
+                    ),
+                ));
+            }
         }
         "swarm-status" => {
             handle_swarm_status(&client, &base_url, &tool_params).await?;
@@ -32557,6 +32832,8 @@ async fn run(
         | "code-stat" | "code-glob" | "code-grep" | "code-mkdir"
         | "code-diff" | "code-changes" | "code-shell" | "code-scaffold"
         | "code-validate" | "code-mvn" | "code-run" | "code-devtask"
+        | "code-verify"
+        | "code-resume"
         | "code-impact" | "code-workspace" | "code-javap" => {
             handle_code_command(
                 &client,
@@ -39968,6 +40245,54 @@ linkGroups:
             original,
             "SKILL.md should be restored to the bundled content"
         );
+    }
+
+    #[test]
+    fn test_unpack_agent_skills_to_filters_to_allowlist() {
+        let tmp = test_temp_dir();
+        let expected = skills::bundled_agent_skill_file_count();
+        assert!(
+            expected > 0,
+            "expected at least one agent-synced bundled skill (browser4-cli)"
+        );
+
+        // First unpack writes exactly the agent-synced files.
+        let first = skills::unpack_agent_skills_to(tmp.path()).expect("first unpack");
+        assert_eq!(
+            first, expected,
+            "first unpack should write only the agent-synced files"
+        );
+
+        // Only allowlisted skill directories may be created.
+        let mut found_dirs = std::collections::BTreeSet::new();
+        for entry in std::fs::read_dir(tmp.path()).expect("read agents skills dir") {
+            let entry = entry.expect("directory entry");
+            if entry.path().is_dir() {
+                found_dirs.insert(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        for dir in &found_dirs {
+            assert!(
+                skills::is_agent_synced_skill(dir),
+                "agents skills dir must only contain agent-synced skills, found: {dir}"
+            );
+        }
+
+        // The count matches the embedded browser4-cli files (the only
+        // allowlisted skill today, asserted independently of layout).
+        let only_allowlisted = skills::AGENT_SYNCED_SKILL_NAMES.len() == 1
+            && skills::AGENT_SYNCED_SKILL_NAMES[0] == "browser4-cli";
+        if only_allowlisted {
+            assert_eq!(
+                expected,
+                skills::skill_files_for("browser4-cli").len(),
+                "total should equal the embedded browser4-cli file count"
+            );
+        }
+
+        // Write-if-changed idempotence also holds for the filtered unpack.
+        let second = skills::unpack_agent_skills_to(tmp.path()).expect("second unpack");
+        assert_eq!(second, 0, "second unpack should skip identical files");
     }
 
     #[test]

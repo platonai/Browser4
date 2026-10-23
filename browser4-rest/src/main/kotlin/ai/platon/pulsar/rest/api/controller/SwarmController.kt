@@ -32,9 +32,18 @@ class SwarmController(
      * The swarm backend is provided by the browser4-swarm plugin through
      * [SwarmFacadeRegistry]. Without the plugin we respond with a clear
      * "not installed" error instead of a partial implementation.
+     *
+     * The message distinguishes the two ways the registry can be empty, since
+     * they need different fixes: the plugin is absent, or it is present but its
+     * facade bean never registered (the plugin logs an ERROR naming the cause).
      */
     private fun facade(): SwarmFacade = SwarmFacadeRegistry.instance.get()
-        ?: throw SwarmNotInstalledException()
+        ?: throw SwarmNotInstalledException(
+            "Swarm backend is not available. Either the browser4-swarm plugin is not installed, or it is " +
+                "installed but failed to register its facade — in that case the backend log contains " +
+                "'Failed to mount the swarm facade' with the underlying error.\n\n" +
+                SwarmNotInstalledException.DEFAULT_MESSAGE
+        )
 
     /**
      * Create or get the swarm session. The swarm session is a special session that can be shared across multiple

@@ -108,22 +108,102 @@ object ModuleGraph {
      * gitignored `.test-sessions/` scratch dir (test-session logs, coworker temp
      * files) which are not reactor modules. The repo-root aggregator pom is
      * keyed as `browser4` (its artifact id).
+     *
+     * The walk prunes those directories *before* descending (plan P1.6): a plain
+     * `Files.walk` used to enumerate every file under `target/`, `.git/` and
+     * `node_modules/` and then filter — seconds of latency per plan call (eval
+     * K8), on a hot path that runs on every `code devtask`.
      */
     fun scanPoms(root: java.nio.file.Path): Map<String, String> {
-        val poms = mutableMapOf<String, String>()
-        java.nio.file.Files.walk(root).use { stream ->
-            stream.filter { java.nio.file.Files.isRegularFile(it) && it.fileName.toString() == "pom.xml" }
-                .filter { !it.toString().contains("\\target\\") && !it.toString().contains("/target/") }
-                .filter { !it.toString().contains("archetype-resources") }
-                .filter { !it.toString().contains("\\docs\\") && !it.toString().contains("/docs/") &&
-                    !it.toString().contains("\\docs-dev\\") && !it.toString().contains("/docs-dev/") }
-                .filter { !it.toString().contains("\\.test-sessions\\") && !it.toString().contains("/.test-sessions/") }
-                .forEach { pom ->
-                    val rel = root.relativize(pom.parent).toString().replace('\\', '/')
-                    poms[if (rel.isEmpty()) "browser4" else rel] = java.nio.file.Files.readString(pom)
-                }
+        return scanPomFiles(root).mapValues { (_, pom) ->
+            runCatching { java.nio.file.Files.readString(pom) }.getOrDefault("")
         }
+    }
+
+    /** Directories never descended into while looking for module poms. */
+    internal val SKIPPED_DIRS = setOf(
+        ".git", "target", "node_modules", "build", "dist", "out",
+        ".gradle", ".idea", ".mvn", ".claude", ".worktrees",
+        ".test-sessions", "docs", "docs-dev", "archetype-resources",
+    )
+
+    /**
+     * Pruned walk for module poms: relative module dir → pom file.
+     * Cheap enough to run on every plan call (tens of files, no reads).
+     */
+    fun scanPomFiles(root: java.nio.file.Path): Map<String, java.nio.file.Path> {
+        val poms = java.util.TreeMap<String, java.nio.file.Path>()
+        java.nio.file.Files.walkFileTree(root, object : java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+            override fun preVisitDirectory(
+                dir: java.nio.file.Path,
+                attrs: java.nio.file.attribute.BasicFileAttributes,
+            ): java.nio.file.FileVisitResult {
+                if (dir != root && dir.fileName?.toString() in SKIPPED_DIRS) {
+                    return java.nio.file.FileVisitResult.SKIP_SUBTREE
+                }
+                return java.nio.file.FileVisitResult.CONTINUE
+            }
+
+            override fun visitFile(
+                file: java.nio.file.Path,
+                attrs: java.nio.file.attribute.BasicFileAttributes,
+            ): java.nio.file.FileVisitResult {
+                if (file.fileName?.toString() == "pom.xml") {
+                    val rel = root.relativize(file.parent).toString().replace('\\', '/')
+                    poms[if (rel.isEmpty()) "browser4" else rel] = file
+                }
+                return java.nio.file.FileVisitResult.CONTINUE
+            }
+
+            override fun visitFileFailed(
+                file: java.nio.file.Path,
+                exc: java.io.IOException,
+            ): java.nio.file.FileVisitResult = java.nio.file.FileVisitResult.CONTINUE
+        })
         return poms
+    }
+
+    /** Last cached scan: the pom signature it was built from plus the graph. */
+    private data class CachedGraph(
+        val signature: List<Pair<String, Long>>,
+        val graph: Graph,
+    )
+
+    private val graphCache = java.util.concurrent.ConcurrentHashMap<String, CachedGraph>()
+
+    /**
+     * Build (or reuse) the module graph for [root], invalidated by the mtime/size
+     * signature of every module pom.
+     *
+     * A workspace edit that touches a pom (a new module, a new dependency edge)
+     * changes the signature and forces a rebuild; nothing else can change the
+     * graph, so an untouched tree is answered from memory. This is what keeps a
+     * warm `code devtask` in the sub-second range (eval K8).
+     */
+    fun cachedGraph(root: java.nio.file.Path): Graph {
+        val key = root.toAbsolutePath().normalize().toString()
+        val files = scanPomFiles(root)
+        val signature = files.map { (rel, path) ->
+            val attrs = runCatching {
+                java.nio.file.Files.readAttributes(path, java.nio.file.attribute.BasicFileAttributes::class.java)
+            }.getOrNull()
+            val stamp = (attrs?.lastModifiedTime()?.toMillis() ?: 0L) * 31 + (attrs?.size() ?: 0L)
+            rel to stamp
+        }
+        graphCache[key]?.let { cached ->
+            if (cached.signature == signature) return cached.graph
+        }
+        val poms = files.mapValues { (_, path) ->
+            runCatching { java.nio.file.Files.readString(path) }.getOrDefault("")
+        }
+        val graph = build(poms)
+        graphCache[key] = CachedGraph(signature, graph)
+        return graph
+    }
+
+    /** Drop the process-wide graph cache (tests, or after a scripted workspace swap). */
+    fun clearCache() {
+        graphCache.clear()
     }
 
     /**

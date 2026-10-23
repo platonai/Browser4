@@ -136,6 +136,8 @@ pub fn public_command_name(name: &str) -> &str {
         "code-mvn" => "code mvn",
         "code-run" => "code run",
         "code-devtask" => "code devtask",
+        "code-verify" => "code verify",
+        "code-resume" => "code resume",
         "code-impact" => "code impact",
         "code-workspace" => "code workspace",
         "code-javap" => "code javap",
@@ -1713,10 +1715,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Requires: an LLM API key configured on the Browser4 backend server (the CLI shell itself does not need the key)."
                 .to_string(),
         );
+        lines.push(
+            "  - Task type: browser by default (never auto-detected). --coding marks a pure coding task (file/build work)."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
             "  browser4-cli agent run \"Open browser4.io and summarize the hero section\""
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Read pom.xml, fix the failing module build\" --coding"
                 .to_string(),
         );
     }
@@ -4122,6 +4132,7 @@ const COMMAND_REFERENCES: &[(&str, &[&str])] = &[
     ("swarm", &["swarm.md"]),
     ("attach", &["attach.md", "browser-modes.md", "browser-state-import.md"]),
     ("open", &["browser-modes.md", "browser-state-import.md"]),
+    ("set", &["emulation.md"]),
     ("loop", &["loop.md"]),
     ("frame", &["frames.md"]),
     ("tab-", &["tabs.md", "tab-management.md"]),

@@ -135,7 +135,7 @@ Returns the **shared task envelope** — the same shape every long-running tool
 
 ```json
 {"taskId":"3b27930e-48bc-4460-aae7-be521f0a9194","status":"running","statusCode":202,
- "message":"Agent planning next action","processed":3,
+ "message":"Agent planning next action","processed":3,"elapsedMs":184512,
  "statusTool":"command_status","resultTool":"command_result","cancelTool":"command_cancel"}
 ```
 
@@ -145,7 +145,8 @@ Returns the **shared task envelope** — the same shape every long-running tool
 | `status` | `queued` \| `running` \| `done` \| `failed` \| `cancelled` — the **only** field to branch on |
 | `statusCode` | The backend's own code (200 done, 404 no such task, 417 failed) |
 | `message` | Human-readable progress while the task is healthy |
-| `processed` | Agent step count, present once steps were recorded |
+| `processed` | Agent progress: the live tool-call count while a CLI tool-loop run is in flight, or the recorded step count once steps were written |
+| `elapsedMs` | How long the task has been running, so a long `running` is distinguishable from a just-started one |
 | `error` | Present only when `status` is `failed` |
 | `statusTool` / `resultTool` / `cancelTool` | The MCP tools a generic client should call next |
 
@@ -222,10 +223,26 @@ browser4-cli summarize --selector "#content"
 |------|-----------|-------------|
 | `--wait` | `agent run` | Block until the task reaches a terminal state, then print the result |
 | `--wait-timeout <secs>` | `agent run` | Wait window in seconds (default 600; env `BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS`) |
+| `--coding` | `agent run` | Explicitly mark the task as a coding task (plain file/build work; no browser page). Omitted (the default) the task is a browser task — task type is never auto-detected |
 | `--json` | `agent status`, `agent result`, `agent list` | Emit the envelope as JSON instead of the human rendering |
 | `--all` | `agent list --clear` | Also untrack tasks that are not finished (they keep running server-side) |
 | `--schema <json>` | `extract` | Enforce a JSON output schema for the extraction |
 | `--selector <css>` | `summarize` | Scope summarization to elements matching a CSS selector |
+
+### Coding tasks (--coding)
+
+Browser is the product's primary mode, so an agent task is a **browser task by
+default** — the CLI does not guess whether the task text "looks like" coding.
+Pass `--coding` only when the task is pure file/build work (read/write files,
+run Maven, scaffold a module) and needs no page:
+
+```bash
+browser4-cli agent run "Read pom.xml, fix the failing module build" --coding
+```
+
+Coding runs skip the driver health check, search-engine navigation and
+screenshots, and the agent starts with the coding tool core; any task
+containing a URL or page interaction stays a browser task regardless.
 
 ## Errors & Recovery
 

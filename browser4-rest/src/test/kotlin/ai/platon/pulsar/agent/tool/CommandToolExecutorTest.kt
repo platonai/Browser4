@@ -3,6 +3,8 @@ package ai.platon.pulsar.agent.tool
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.rest.api.entities.CommandAgentHistory
+import ai.platon.pulsar.rest.api.entities.CommandAgentState
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -12,8 +14,10 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito
 import org.mockito.Mockito.`when`
+import java.time.Instant
 
 /**
  * The command domain must speak the same async contract as crawl: the shared
@@ -45,7 +49,8 @@ class CommandToolExecutorTest {
         statusCode: Int = ResourceStatus.SC_OK,
         processState: String = "done",
         message: String? = null,
-    ) = CommandStatus(id = id, statusCode = statusCode, processState = processState, message = message)
+        cancelled: Boolean = false,
+    ) = CommandStatus(id = id, statusCode = statusCode, processState = processState, message = message, cancelled = cancelled)
 
     @Test
     @DisplayName("a finished command reports done, with no invented progress")
@@ -59,6 +64,48 @@ class CommandToolExecutorTest {
         assertEquals("command_status", envelope["statusTool"])
         assertEquals("command_cancel", envelope["cancelTool"])
         assertFalse(envelope.containsKey("processed"), "no steps recorded means no progress claim")
+    }
+
+    @Test
+    @DisplayName("a running agent task reports elapsed time and its step count")
+    fun runningAgentTaskReportsElapsedAndSteps() {
+        val started = Instant.now().minusSeconds(90)
+        val running = status(
+            statusCode = ResourceStatus.SC_PROCESSING,
+            processState = "in_progress",
+            message = "Agent is working"
+        ).apply {
+            startedTime = started
+            agentHistory = CommandAgentHistory(
+                mutableListOf(CommandAgentState(step = 12), CommandAgentState(step = 13))
+            )
+        }
+        `when`(runner.getStatus("s1", "t1")).thenReturn(running)
+
+        val envelope = json("status", mapOf("id" to "t1", "sessionId" to "s1"))
+
+        assertEquals("running", envelope["status"])
+        assertEquals(2, envelope["processed"], "the agent's step count is the progress signal")
+        val elapsedMs = (envelope["elapsedMs"] as Number).toLong()
+        assertTrue(elapsedMs >= 90_000, "elapsedMs must reflect startedTime, got $elapsedMs")
+    }
+
+    @Test
+    @DisplayName("the live tool-call counter is reported as progress while a CLI run is in flight")
+    fun liveToolExecutionsAreReportedAsProgress() {
+        // A CLI tool-loop run writes its step history only when it completes, so
+        // the tool counter is the only progress signal available mid-run.
+        val running = status(
+            statusCode = ResourceStatus.SC_PROCESSING,
+            processState = "in_progress",
+            message = "Agent is working"
+        ).apply { toolExecutions = 37 }
+        `when`(runner.getStatus("s1", "t1")).thenReturn(running)
+
+        val envelope = json("status", mapOf("id" to "t1", "sessionId" to "s1"))
+
+        assertEquals("running", envelope["status"])
+        assertEquals(37, envelope["processed"], "the tool counter is the only live progress signal")
     }
 
     @Test
@@ -128,6 +175,25 @@ class CommandToolExecutorTest {
     }
 
     @Test
+    @DisplayName("a running synchronous task explains why nothing was cancelled")
+    fun runningSynchronousTaskExplainsWhyNothingWasCancelled() {
+        `when`(runner.cancelAgentTask("y1")).thenReturn(false)
+        `when`(runner.getStatus("s1", "y1")).thenReturn(
+            status(id = "y1", statusCode = ResourceStatus.SC_CREATED, processState = "in_progress")
+        )
+
+        val cancelled = json("cancel", mapOf("id" to "y1", "sessionId" to "s1"))
+
+        assertEquals(false, cancelled["cancelled"])
+        assertEquals("running", cancelled["status"])
+        val reason = cancelled["reason"].toString()
+        assertTrue(
+            reason.contains("synchronous") && reason.contains("no cancellable job"),
+            "the reason must explain the synchronous-run case instead of staying blank: $reason",
+        )
+    }
+
+    @Test
     @DisplayName("the declared outputSchema accepts what the tools produce")
     fun outputSchemaMatchesProduction() {
         `when`(runner.getStatus("s1", "t1")).thenReturn(status())
@@ -149,6 +215,21 @@ class CommandToolExecutorTest {
     }
 
     @Test
+    @DisplayName("a cancelled task reports the cancelled word on later polls, not failed")
+    fun cancelledTaskReportsTheCancelledWord() {
+        `when`(runner.getStatus("s1", "t1")).thenReturn(
+            status(id = "t1", statusCode = ResourceStatus.SC_EXPECTATION_FAILED, message = "Task cancelled", cancelled = true)
+        )
+
+        val envelope = json("status", mapOf("id" to "t1", "sessionId" to "s1"))
+
+        assertEquals("cancelled", envelope["status"], "a user-requested cancel must not look like a task failure")
+        assertEquals(ResourceStatus.SC_EXPECTATION_FAILED, envelope["statusCode"])
+        assertEquals("Task cancelled", envelope["message"])
+        assertFalse(envelope.containsKey("error"), "cancelled is not an error")
+    }
+
+    @Test
     @DisplayName("run declares the full task policy")
     fun runDeclaresTheTaskPolicy() {
         val policy = executor.getToolSpecs().getValue("run").task
@@ -157,6 +238,51 @@ class CommandToolExecutorTest {
         assertEquals("command_status", policy!!.statusTool)
         assertEquals("command_result", policy.resultTool)
         assertEquals("command_cancel", policy.cancelTool)
+    }
+
+    @Test
+    @DisplayName("run passes an explicit coding flag to the executor")
+    fun runForwardsExplicitCodingFlag() {
+        runBlocking {
+            `when`(runner.submitPlainCommand("s1", "fix pom.xml", null, null, true, null)).thenReturn("t-coding")
+
+            val taskId = call("run", mapOf("command" to "fix pom.xml", "sessionId" to "s1", "coding" to true))
+
+            assertEquals("t-coding", taskId)
+            Mockito.verify(runner).submitPlainCommand("s1", "fix pom.xml", null, null, true, null)
+        }
+    }
+
+    @Test
+    @DisplayName("run without the coding flag submits a browser task (the default, never guessed)")
+    fun runWithoutCodingFlagIsABrowserTask() {
+        runBlocking {
+            `when`(runner.executePlainCommand("s1", "open the page", null, null, null, null)).thenReturn(status())
+
+            json("run", mapOf("command" to "open the page", "sessionId" to "s1", "async" to false))
+
+            Mockito.verify(runner).executePlainCommand("s1", "open the page", null, null, null, null)
+        }
+    }
+
+    @Test
+    @DisplayName("run declares the coding argument so clients can discover it")
+    fun runDeclaresTheCodingArgument() {
+        val coding = executor.getToolSpecs().getValue("run").arguments.first { it.name == "coding" }
+        val description = coding.description ?: ""
+
+        assertTrue(description.contains("explicit", ignoreCase = true))
+        assertTrue(description.contains("browser", ignoreCase = true))
+    }
+
+    @Test
+    @DisplayName("run rejects a non-boolean coding flag")
+    fun runRejectsNonBooleanCoding() {
+        val ex = assertThrows<IllegalArgumentException> {
+            call("run", mapOf("command" to "task", "sessionId" to "s1", "coding" to "yes"))
+        }
+
+        assertTrue(ex.message!!.contains("coding"), ex.message)
     }
 
     @Test

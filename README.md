@@ -21,11 +21,12 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
   - [🌟 Introduction](#-introduction)
     - [✨ Key Capabilities](#-key-capabilities)
   - [Quick Start](#quick-start)
+  - [DeepSeek Harness integration](#deepseek-harness-integration)
   - [🧭 Tool Selection Guide](#-tool-selection-guide)
     - [How to Interact with a Page](#how-to-interact-with-a-page)
     - [How to Extract Data](#how-to-extract-data)
     - [How to Process at Scale](#how-to-process-at-scale)
-    - [How to Turn HTML into Spreadsheets — Zero Tokens](#how-to-turn-html-into-spreadsheets--zero-tokens)
+    - [How to Turn HTML into Spreadsheets — Zero LLM Tokens](#how-to-turn-html-into-spreadsheets--zero-llm-tokens)
   - [📦 Installation](#-installation)
   - [💡 CLI Guide for Humans](#-cli-guide-for-humans)
     - [Quick start](#quick-start-1)
@@ -44,6 +45,7 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
   - [📜 Documentation](#-documentation)
   - [🔧 Proxy Configuration](#-proxy-configuration---unblock-website-access)
   - [License](#license)
+  - [Links](#links)
 <!-- /TOC -->
 
 ## 🌟 Introduction
@@ -130,7 +132,7 @@ Need to extract data from a page?
 
 ```
 Need to process multiple pages?
-├─ Single list page (search results)? → htmlsnapshot query with DOM_LOAD_AND_SELECT
+├─ Single list page (search results)? → htmlsnapshot query with LOAD_AND_SELECT
 ├─ List of known URLs (in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
@@ -140,12 +142,12 @@ Need to process multiple pages?
    → for url in ...; do browser4-cli goto "$url"; ... done
 ```
 
-### How to Turn HTML into Spreadsheets — Zero Tokens
+### How to Turn HTML into Spreadsheets — Zero LLM Tokens
 
 [WebMiner](https://github.com/platonai/web-miner) runs ML clustering on downloaded HTML files to produce structured spreadsheets and interactive reports — **no LLM tokens, everything runs locally.** webminer is a first-class Browser4 CLI citizen: `browser4-cli webminer install` + `browser4-cli webminer all <html-dir>` runs the whole pipeline without PowerShell.
 
 ```
-Have HTML files and want structured data — without tokens?
+Have HTML files and want structured data — without LLM Tokens?
 ├─ < 20 pages? → browser4-cli crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ < 1,000 pages (small to medium)? → WebMiner Free (SMILE ML engine)
 │  browser4-cli webminer install
@@ -166,7 +168,7 @@ Have HTML files and want structured data — without tokens?
 
 ## 📦 Installation
 
-Manually installation is optional since your AI agent is smart enough to install it after reading the SKILL.
+Manual installation is optional since your AI agent is smart enough to install it after reading the SKILL.
 
 Install browser4-cli globally using npm (requires Node.js):
 
@@ -394,7 +396,7 @@ browser4-cli wait --load networkidle
 
 | Command | Description |
 |---|---|
-| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`/`--no-boxes`, `-i/--interactive`, `-u/--urls`, `-c/--compact`, `--no-compact`, `-d/--depth`, `-l/--limit`, `-s/--selector`, `--raw`, `--stdout`, `-vp/--viewport`, `--filename`. `--stdout`/`--raw` output is paginated at 2000 lines/page by default — when truncated, stdout (if piped) gets a `# … output truncated: showing N of M lines …` hint and the full footer goes to stderr; use `--all` or `--page-size 0` for the complete tree, and bound very large pages with `-v N`/`--depth`/`--selector`/`--no-boxes`. |
+| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`/`--no-boxes`, `-i/--interactive`, `-u/--urls`, `-c/--compact`, `--no-compact`, `-d/--depth`, `--selector` (no short form — `-s` is the global session flag), `--raw`, `--stdout`, `-v/--viewport`, `--auto-diff`, `-b/--brief`, `--filename`. `--stdout`/`--raw` output is paginated at 2000 lines/page by default — when truncated, stdout (if piped) gets a `# … output truncated: showing N of M lines …` hint and the full footer goes to stderr; use `--all` or `--page-size 0` for the complete tree, and bound very large pages with `-v N`/`--depth`/`--selector`/`--no-boxes`. |
 | `snapshot grep <pattern>` | Search saved/current snapshot YAML with grep-style flags such as `-i`, `-v`, `-c`, `-l`, `-F`, `-w`, `-A`, `-B`, `-C`, `--selector`, `--page`, `--page-size`, `--all`. |
 | `snapshot list` | List saved snapshot files with timestamps and sizes. |
 | `snapshot clean` | Remove old snapshot files. Supports `--dry-run`. |
@@ -516,7 +518,7 @@ These commands require an LLM key.
 | `summarize [instruction]` | Summarize the current page. Supports `--selector`, `--filename`, `--raw`, `--stdout`. |
 | `chat <message>` | Send a plain AI chat request without auto-appended browser context. |
 | `chat-result <id>` | Retrieve the result of an async chat task. |
-| `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. Supports `--wait` (block for the result) and `--wait-timeout <seconds>` (default 600). |
+| `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. Supports `--wait` (block for the result) and `--wait-timeout <seconds>` (default 600). Task type is browser by default; `--coding` explicitly marks a pure file/build task (never auto-detected) |
 | `agent status <id>` | Check a task — the shared status envelope (`status`: queued/running/done/failed/cancelled, plus `statusCode`, `message` and the agent's step count). |
 | `agent result <id>` | Fetch a completed task's result: its summary, `keyFindings`, `filesChanged` and the workspace its deliverables live in. |
 | `agent list` | List tracked agent tasks with the same statuses (refreshed from the backend on every call); `--clear` untracks the finished ones. |
@@ -590,7 +592,7 @@ The `co` prefix is accepted as an alias for `swarm`.
 | `swarm result <id>` | Fetch a completed swarm result. |
 | `swarm list` | List tracked swarm tasks. |
 | `swarm close` | Close the swarm session and release browser resources. |
-| `crawl [url]` | Crawl from a URL or seed file (every seed must be an absolute http(s) URL — a malformed one is refused before the crawl is submitted). Supports `--seed-file`, `--sql`, `--sql-stdin`, `--sql-base64`, `--format`, `--output`, `-d/--depth`, `-ol/--out-link-selector`, `-olp/--out-link-pattern`, `-tl/--top-links`, `-a/--args`, `--refresh`, `--parse`, `--expires`, `-p/--priority`, `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly`, `-bg/--background`. |
+| `crawl [url]` | Crawl from a URL or seed file (every seed must be an absolute http(s) URL — a malformed one is refused before the crawl is submitted). Supports `--seed-file`, `--sql`, `--sql-stdin`, `--sql-base64`, `--format`, `--output`, `-d/--depth`, `-ol/--out-link-selector`, `-olp/--out-link-pattern`, `-tl/--top-links`, `-a/--args`, `--refresh`, `--parse`, `--expires`, `-p/--priority`, `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly`, `--args-stdin`, `--parallel`, `--timeout`, `--verbose`, `-bg/--background`. |
 | `crawl status <id>` | Check crawl task status. |
 | `crawl result <id>` | Fetch crawl results. |
 | `crawl cancel <id>` | Cancel a running crawl (the checkpoint is kept, so it can be resumed). |
@@ -604,6 +606,25 @@ browser4-cli swarm query --seed-file urls.txt --sql @query.sql --refresh
 browser4-cli crawl "https://example.com" --depth 2 --out-link-selector "a[href]"
 browser4-cli crawl list
 browser4-cli crawl resume <task-id>    # continue an interrupted crawl
+```
+
+#### WebMiner — HTML to spreadsheets, zero LLM Tokens
+
+WebMiner runs locally against a downloaded JAR (`scent-miner.jar`) and does not need the Browser4 server. See [How to Turn HTML into Spreadsheets](#how-to-turn-html-into-spreadsheets--zero-llm-tokens) for the full pipeline.
+
+| Command | Description |
+|---|---|
+| `webminer install [version]` | Download and install the webminer release to `~/.scent/webminer`, verifying the SHA-256 checksum (GitHub Releases with an OSS mirror fallback). Supports `--force`. |
+| `webminer update` | Update webminer to the latest release. |
+| `webminer version` | Print the installed webminer version. |
+| `webminer uninstall` | Remove the installed webminer. |
+| `webminer run-example` | Run the bundled example. |
+| `webminer all <html-dir>` | Run the full pipeline (encode → cluster → views) on a directory of HTML files. Supports `--max-files`, `--output`, `--resume`. |
+| `webminer views <result-dir>` | Rebuild the interactive views (`<project>.html`, xlsx, json) from an existing clustering result directory. |
+
+```bash
+browser4-cli webminer install
+browser4-cli webminer all ./pages/
 ```
 
 #### Bundled skill files vs installed runtime skills
@@ -783,7 +804,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 | `browser4-dependencies` | BOM and dependency version alignment                                 |
 | `browser4-tools` | Operational tools and launch helpers                                 |
 | `browser4-agentic` | AI agents, MCP integration, skill registration                       |
-| `browser4-coding` | Programming-agent kernel — sandboxed shell/fs, artifact scaffolding & validation, self-development tools (47 `coding.*` tools) |
+| `browser4-coding` | Programming-agent kernel — sandboxed shell/fs, artifact scaffolding & validation, self-development tools (50+ `coding.*` tools) |
 | `browser4-agent-tools` | High-level agent tools: scraping, crawling, stateful page interaction |
 | `browser4-rest` | Spring Boot REST layer & command endpoints                           |
 | `browser4-apps/browser4-standalone` | Product packaging — unified launcher (`target/Browser4.jar`)         |
@@ -798,14 +819,14 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 
 `browser4-coding` is the dependency-light programming kernel that lets an AI agent create Browser4 artifacts **and** develop Browser4 itself. It is independent of `browser4-agentic` and `pulsar-common` (only SLF4J + Jackson + coroutines), so it can be reused by non-agent hosts. Heavy backends (LSP servers, kotlin-compiler-embeddable) are probed at runtime and never downloaded by default.
 
-The `coding` domain exposes **47 tools** in four groups:
+The `coding` domain exposes **50+ tools** in four groups:
 
 | Group | Count | Highlights |
 |---|---|---|
-| Shell & filesystem | 28 | sandboxed `coding.shell` (command whitelist), snapshot-based edit primitives with `revert`, `diff` (Myers/Patience), repo-governance protection (`coding.protect`) |
-| Artifact creation & validation | 6 | `scaffold` (plugin/skill/js/script), `scaffoldFlow` (multi-file dev-flow), `scaffoldFromExample` (anti-staleness live templates, directory mode + stem-derived renames), `validate` (incl. `repo-consistency`) |
-| Self-development | 7 | `mvnBuild` (structured diagnostics), `ktSymbols`/`ktReferences`/`ktInheritance` (zero-dep Kotlin analysis), `impact` + `moduleGraph` (live pom graph), `devTask` (AGENTS.md flow + execution), `trapCheck` (CDP pitfalls) |
-| LSP | 4 | on-demand `diagnostics`/`symbols`/`references` for ts/js/py/rs (degrades gracefully when a server is missing) |
+| Shell & filesystem | 32 | sandboxed `coding.shell` (command whitelist) + `runCode` snippet execution, snapshot-based edit primitives with `revert`, `diff` (Myers/Patience), repo-governance protection (`coding.protect`) |
+| Artifact creation & validation | 5 | `scaffold` (plugin/skill/js/script), `scaffoldToDir`, `scaffoldFlow` (multi-file dev-flow), `scaffoldFromExample` (anti-staleness live templates, directory mode + stem-derived renames), `validate` (incl. `repo-consistency`) |
+| Self-development | 13 | `mvnBuild` (structured diagnostics), `ktSymbols`/`ktReferences`/`ktInheritance`/`classInfo` (zero-dep Kotlin analysis), `impact` + `moduleGraph` (live pom graph), `devTask` + `resumeDevTask` (AGENTS.md flow + execution), `verify` (deterministic gate verdict), `trapCheck` (CDP pitfalls), `tokenStats`/`estimateTokens` (context budget) |
+| LSP | 4 | on-demand `diagnostics`/`symbols`/`references`/`lspServers` for ts/js/py/rs (degrades gracefully when a server is missing) |
 
 **Generic vs project-specific**: the kernel is layered by *mechanism vs data* — diff, sandbox, LSP client, Kotlin analysis, Maven passthrough and the pom-graph scanner are generic and portable; the scaffolds, validators, `ModuleMap`, `CdpTrapCheck` and the governance defaults encode Browser4 conventions and are the layer to rewrite when reusing the kernel elsewhere.
 

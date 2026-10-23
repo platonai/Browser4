@@ -60,7 +60,8 @@ function Get-AgentCommand {
     }
     $WorkingDirectory = Assert-AgentDirectory -Path $WorkingDirectory -ParameterName 'WorkingDirectory'
 
-    # Get-AgentBackend comes from config.ps1 (dot-sourced above): dsh > claude > kimi > codex > copilot.
+    # Get-AgentBackend comes from config.ps1 (dot-sourced above):
+    # dsh > opencode > claude > kimi > codex > copilot.
     $backend = Get-AgentBackend
 
     switch ($backend) {
@@ -92,6 +93,16 @@ function Get-AgentCommand {
                 throw 'CODEX must include at least an executable'
             }
             $command = $CODEX
+            break
+        }
+        'opencode' {
+            if ($OPENCODE -is [string]) {
+                throw "OPENCODE must be defined as a PowerShell array in $configPath"
+            }
+            if ($OPENCODE.Count -lt 1) {
+                throw 'OPENCODE must include at least an executable'
+            }
+            $command = $OPENCODE
             break
         }
         'dsh' {
@@ -135,19 +146,28 @@ function Get-AgentPromptArgs {
     .SYNOPSIS
         Build the CLI arguments for passing a prompt to the agent backend.
     .DESCRIPTION
-        Single source of truth for per-backend prompt argument patterns.
+        Single source of truth for per-backend prompt slot patterns.
         Used by New-AgentArguments and the stdin redirection path in
         Start-AgentProcess.
 
-        Backend patterns:
-          copilot:  -- -p <prompt>     (requires -- separator before -p)
-          codex:    exec <prompt>      (non-interactive exec mode)
-          dsh:      --profile headless <prompt>  (headless profile; positional task)
-          default:  -p <prompt>        (claude, kimi, and unknown backends)
+        Each config array (DSH/OPENCODE/CLAUDE/KIMI/CODEX/COPILOT) already holds
+        the full startup prefix — executable, subcommand, and backend-owned
+        flags, in the order the CLI requires (subcommand-scoped flags must come
+        after their subcommand).  This function appends ONLY the prompt slot:
 
-        When $Prompt is empty, returns just the flag portion (for stdin redirect).
+          copilot:  -- -p <prompt>     (copilot config ends at the subcommand)
+          claude:   -p <prompt>        (kimi and unknown backends: same)
+          codex:    <prompt>           (config ends with `codex exec [flags]`)
+          opencode: <prompt>           (config ends with `opencode run [flags]`)
+          dsh:      <prompt>           (config ends with `dsh --profile headless`)
+
+        When $Prompt is empty, returns just the flag portion for stdin redirect:
+          claude/kimi/copilot keep `-p` (reads stdin),
+          codex/opencode take nothing (an absent prompt arg + piped stdin means
+          "read the prompt from stdin"),
+          dsh takes `-` (the headless profile's explicit stdin task marker).
     .PARAMETER Backend
-        The agent backend name (claude, kimi, codex, copilot, etc.).
+        The agent backend name (dsh, opencode, claude, kimi, codex, copilot, ...).
     .PARAMETER Prompt
         The prompt text. Pass $null or '' to get just the flag without prompt.
     #>
@@ -165,17 +185,19 @@ function Get-AgentPromptArgs {
             if ($hasPrompt) { return @('--', '-p', $Prompt) } else { return @('--', '-p') }
         }
         'codex' {
-            if ($hasPrompt) { return @('exec', $Prompt) } else { return @('exec') }
+            if ($hasPrompt) { return @($Prompt) } else { return @() }
+        }
+        'opencode' {
+            if ($hasPrompt) { return @($Prompt) } else { return @() }
         }
         'dsh' {
-            # dsh requires an explicit --profile; the headless profile answers one
-            # task, prints the final assistant message, and exits (0 = completed).
-            # The task is a positional argument — dsh has no `run` subcommand and
-            # no --print/stdin mode of its own.
-            if ($hasPrompt) { return @('--profile', 'headless', $Prompt) } else { return @('--profile', 'headless') }
+            # dsh's headless profile takes the task as a trailing positional
+            # argument and answers one task, prints the final assistant message,
+            # and exits (0 = completed).  `-` reads the task from stdin.
+            if ($hasPrompt) { return @($Prompt) } else { return @('-') }
         }
         default {
-            # claude, kimi, opencode, and unknown backends use -p <prompt>
+            # claude, kimi, and unknown backends use -p <prompt>
             if ($hasPrompt) { return @('-p', $Prompt) } else { return @('-p') }
         }
     }
@@ -188,19 +210,27 @@ function Test-AgentPromptViaStdin {
     .DESCRIPTION
         Start-AgentProcess moves the prompt onto stdin on Windows because the
         PowerShell → CreateProcess → cmd.exe chain misparses long or
-        special-character-rich arguments.  Only backends that accept a prompt on
-        stdin may use that path: dsh's headless profile takes its task as one
-        positional argument and rejects a missing/blank task before running, so
-        redirecting its prompt to stdin would fail every invocation.
+        special-character-rich arguments.  All current backends accept a prompt
+        on stdin:
+
+          claude/kimi  → `-p` with no argument reads the prompt from stdin
+          codex        → `exec [flags]` with no prompt argument reads instructions
+                         from piped stdin
+          opencode     → `run [flags]` with no message argument reads the prompt
+                         from piped stdin
+          dsh          → `--profile headless -` reads the task from stdin
+
+        Keep this function as the seam for future backends that (like the old
+        dsh) reject a piped prompt.
     .PARAMETER Backend
-        The agent backend name (claude, kimi, codex, dsh, copilot, ...).
+        The agent backend name (dsh, opencode, claude, kimi, codex, copilot, ...).
     #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$Backend
     )
 
-    return $Backend -ne 'dsh'
+    return $true
 }
 
 function New-AgentArguments {
@@ -349,22 +379,24 @@ function Start-AgentProcess {
     # special-character-rich prompts can be parsed incorrectly at one of
     # these layers, causing -p/--print to appear without its prompt argument.
     # Writing the prompt to a temp file and redirecting stdin avoids this
-    # entire class of bugs: the prompt never touches the command line, and
-    # claude --print reads it from stdin.
+    # entire class of bugs: the prompt never touches the command line, and the
+    # backend reads it from stdin.
     #
-    # dsh is exempt (see Test-AgentPromptViaStdin): its headless profile takes
-    # the task as a positional argument only, so its prompt stays on argv where
-    # ConvertTo-WindowsCommandLineArgument escapes it.
+    # Every current backend reads a piped prompt (see Test-AgentPromptViaStdin):
+    # claude/kimi via a bare `-p`, codex via `exec [flags]` with no prompt arg,
+    # opencode via `run [flags]` with no message arg, and dsh via
+    # `--profile headless -`.  New-AgentArguments reconstructs the argv with the
+    # backend's empty-prompt stdin marker already in place (Get-AgentPromptArgs
+    # with no prompt) — appending it a second time would corrupt the arguments
+    # (dsh: `- -` → "must be the only task argument"; codex: a literal `exec`
+    # leaks into the task text).
     $stdinTempPath = $null
     if ($isWindowsPlatform -and $Prompt -and (Test-AgentPromptViaStdin -Backend $Backend)) {
         $stdinTempPath = [System.IO.Path]::GetTempFileName()
         Set-Content -Path $stdinTempPath -Value $Prompt -Encoding UTF8 -NoNewline
-        # Rebuild arguments without the prompt text, but keep the prompt-flag so
-        # the agent runs in non-interactive mode (reads prompt from stdin).
+        # Rebuild arguments without the prompt text, but keep the backend's
+        # marker so it reads its prompt from stdin in non-interactive mode.
         $arguments = New-AgentArguments -BaseArgs $BaseArgs -Prompt $null -AdditionalArguments $AdditionalArguments -Backend $Backend
-        # Append backend-specific prompt flag (without prompt text) so the backend
-        # knows to read from stdin in non-interactive mode.
-        $arguments += Get-AgentPromptArgs -Backend $Backend -Prompt ''
     }
 
     if ($isWindowsPlatform) {

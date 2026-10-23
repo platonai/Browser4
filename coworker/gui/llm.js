@@ -5,6 +5,11 @@
  * PowerShell agent.ps1 / config.psd1 abstraction:
  *
  *   claude   → `claude -p <prompt> [baseArgs]`
+ *   dsh      → `dsh --profile headless <prompt>` (positional prompt)
+ *   opencode → `opencode run --auto <prompt>` (positional prompt)
+ *   codex    → `codex exec --dangerously-bypass-approvals-and-sandbox
+ *               --ephemeral <prompt>` (positional prompt)
+ *   kimi     → `kimi -p <prompt>`
  *   copilot  → `gh copilot suggest -p <prompt> [baseArgs]`
  *   openai   → `<binary> -p <prompt> [baseArgs]` (generic)
  *   custom   → `<binary> [baseArgs] <prompt>` (fully configurable)
@@ -12,7 +17,9 @@
  * Provider detection order:
  *   1. LLM_PROVIDER env var (explicit selection)
  *   2. config.psd1 file (same file the PowerShell scripts read)
- *   3. Default: 'claude' if config.psd1 has CLAUDE key, otherwise 'copilot'
+ *   3. Default: follows Get-AgentBackend in coworker/scripts/config.ps1
+ *      (dsh the preferred external harness > opencode > claude > kimi >
+ *      codex > copilot)
  *
  * Features (unchanged from previous version):
  *   - Retry with exponential backoff (3 attempts, 1s/2s/4s)
@@ -65,11 +72,20 @@ const PROVIDER_DEFS = {
     baseArgs: [],
     envVars: [],
   },
+  opencode: {
+    binary: 'opencode',
+    promptFlag: '',
+    promptPosition: 'positional', // opencode run --auto "<prompt>"
+    baseArgs: ['run', '--auto'],
+    envVars: [],
+  },
   codex: {
     binary: 'codex',
-    promptFlag: 'exec',
-    promptPosition: 'last',    // codex exec <prompt>
-    baseArgs: ['--dangerously-bypass-approvals-and-sandbox', '--ephemeral'],
+    promptFlag: '',
+    promptPosition: 'positional', // codex exec --flags "<prompt>"
+    // exec-scoped flags MUST stay after `exec` (verified: `codex --ephemeral
+    // exec ...` fails with "unexpected argument '--ephemeral'").
+    baseArgs: ['exec', '--dangerously-bypass-approvals-and-sandbox', '--ephemeral'],
     envVars: [],
   },
   openai: {
@@ -117,8 +133,11 @@ const HEALTH_CACHE_MS = 10000;
 /**
  * Parse a PowerShell .psd1 config file to detect the active AI provider.
  * Follows the same priority as Get-AgentBackend in config.ps1:
- * DSH > CLAUDE > KIMI > CODEX > COPILOT. Extracts the array values for base
- * arguments.
+ * DSH > OPENCODE > CLAUDE > KIMI > CODEX > COPILOT.
+ * Extracts the array values for base arguments.
+ *
+ * Each array holds the full startup prefix (executable + subcommand + owned
+ * flags) — same contract as agent.ps1.
  *
  * Returns: { type, binary, baseArgs } or null if file not found
  */
@@ -134,6 +153,15 @@ function _parsePsd1Config(configPath) {
       const binary = args.length > 0 ? args[0] : 'dsh';
       const baseArgs = args.slice(1);
       return { type: 'dsh', binary, baseArgs };
+    }
+
+    // Check for active OPENCODE block (uncommented)
+    const opencodeMatch = content.match(/^\s*OPENCODE\s*=\s*@\(([\s\S]*?)\)/m);
+    if (opencodeMatch) {
+      const args = _parsePsd1Array(opencodeMatch[1]);
+      const binary = args.length > 0 ? args[0] : 'opencode';
+      const baseArgs = args.slice(1);
+      return { type: 'opencode', binary, baseArgs };
     }
 
     // Check for active CLAUDE block (uncommented)
@@ -243,11 +271,12 @@ function _execFileOpts(overrides) {
  *   6. LLM_PATH env var — explicit binary path
  *   7. LLM_ARGS env var — space-separated base arguments
  *   8. CLAUDE_PATH env var — legacy binary override
- *   9. config.psd1 file — same file the PowerShell scripts read (DSH first)
+ *   9. config.psd1 file — same file the PowerShell scripts read (DSH first,
+ *      then OPENCODE > CLAUDE > KIMI > CODEX > COPILOT)
  *  10. Default: 'dsh' (the preferred external harness)
  *
  * @param {object} opts
- * @param {string} [opts.provider]   - provider type: 'dsh'|'claude'|'kimi'|'codex'|'copilot'|'openai'|'custom'
+ * @param {string} [opts.provider]   - provider type: 'dsh'|'opencode'|'claude'|'kimi'|'codex'|'copilot'|'openai'|'custom'
  * @param {string} [opts.binary]     - path to LLM binary (overrides provider default)
  * @param {string[]} [opts.baseArgs] - additional base arguments
  * @param {string} [opts.tasksRoot]  - path to coworker/tasks/ (for finding config.psd1)
@@ -506,9 +535,10 @@ function _buildArgs(prompt) {
   _ensureProvider();
   const p = _provider;
 
-  // Positional backends (dsh): the prompt is a bare trailing argument with no
-  // flag, and these CLIs reject stdin — so a missing prompt leaves the args
-  // alone rather than appending an empty value.
+  // Positional backends (dsh, opencode, codex): the prompt is a bare trailing
+  // argument with no flag, and these CLIs read the prompt from stdin when it
+  // is piped and no prompt argument is present — so a missing prompt leaves
+  // the args alone rather than appending an empty value.
   if (p.promptPosition === 'positional') {
     return prompt ? [...p.baseArgs, prompt] : [...p.baseArgs];
   }
@@ -573,8 +603,8 @@ function _writePromptFile(prompt) {
 function _invoke(prompt, timeout) {
   _ensureProvider();
 
-  // Positional backends (dsh) take the prompt on argv and reject stdin, so the
-  // temp prompt file + stdin redirect only apply to the flag/stdin styles.
+  // Positional backends (dsh) take the prompt on argv; the temp prompt file +
+  // stdin redirect only apply to the flag/stdin styles.
   const positional = _provider.promptPosition === 'positional';
   const args = positional ? _buildArgs(prompt) : _buildArgs(null);  // null = prompt via stdin
   const promptFile = positional ? null : _writePromptFile(prompt);

@@ -23,6 +23,8 @@ import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
 import ai.platon.pulsar.chrome.dom.util.DomDebug
+import ai.platon.pulsar.coding.SafeText
+import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.Strings
@@ -44,6 +46,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -69,12 +72,19 @@ private val CLI_CORE_DOMAINS = setOf("b4", "system", "memory")
  * disclosure): the daily drivers. The long tail (symbols/references,
  * kt-symbols/kt-references, scaffold family, impact, runCode, lspServers,
  * tokenStats, ...) is reachable via system.listTools / system.exposeTools.
+ *
+ * `readLines`, `verify`, `mvnBuild` and `diagnostics` belong here because the
+ * coding contract itself names them: the system prompt tells the model to
+ * `coding.verify` before finishing, and a refactor of a large file is done with
+ * bounded `coding.readLines` reads. Leaving them out made a live run spend its
+ * first rounds on `system.listTools` / `system.exposeTools` to discover tools
+ * the prompt had just told it to use.
  */
 private val CLI_CORE_CODING_METHODS = setOf(
     "shell", "shellOutput", "shellStatus",
-    "read", "write", "append", "replace", "insertAfter", "editLines", "delete", "mkdir",
+    "read", "readLines", "write", "append", "replace", "insertAfter", "editLines", "delete", "mkdir",
     "listDir", "glob", "grep", "stat", "diff", "changeSummary",
-    "validate", "workspaceRoot", "devTask",
+    "validate", "verify", "mvnBuild", "diagnostics", "workspaceRoot", "devTask",
 )
 
 /**
@@ -139,8 +149,8 @@ internal data class CliEngineToolSet(
  *   [AgentToolManager.getLangChain4jToolRegistry].
  * @param systemSpecs The authoritative system-domain specs from
  *   [SystemToolExecutor.getToolSpecs] (help/skillDoc/taskComplete).
- * @param codingMode True when the task was classified as a pure coding task
- *   (set by the task runner via `CodingTaskDetector` before the run).
+ * @param codingMode True when the task was explicitly marked as a coding task
+ *   (set by the task runner from `command.run`'s `coding` argument before the run).
  * @param coreMethodAllowlist Explicit per-domain method allowlist; when null
  *   the task-adaptive allowlist is used ([CLI_BROWSING_CODING_METHODS] for
  *   browsing tasks, [CLI_CORE_CODING_METHODS] for coding tasks).
@@ -209,26 +219,66 @@ internal data class RoundToolRecord(
 )
 
 /**
+ * Inner tool-loop round cap.
+ *
+ * A coding chain (read → grep → readLines → replace → build → test) is far longer
+ * than a browsing one, and every overflow restarts the round from a *lossy* digest
+ * (tool names + the newest few results, ~2K chars) — the model's own plan is gone.
+ * A live refactor run hit the 40-call cap three times in a row without landing a
+ * single edit, re-mapping the same 4,000-line class each round. Coding rounds
+ * therefore get a higher floor; the outer loop still bounds the whole run.
+ */
+internal fun cliToolLoopMaxIterations(configured: Int, codingMode: Boolean): Int =
+    configured.coerceAtLeast(if (codingMode) 60 else 40)
+
+/** Consecutive rounds without a recorded file mutation before a coding run is told to land an edit. */
+internal const val CLI_CODING_READONLY_ROUND_LIMIT = 2
+
+/**
+ * Directive injected into a coding run that keeps reading without editing.
+ *
+ * Observed live: three refactor runs spent 100-240 tool calls building outlines,
+ * member maps and reference indexes across several rounds and never changed a
+ * file. The prompt already asked for the first edit "as soon as you know the
+ * shape of the code"; the model ignored it. A no-mutation round counter is the
+ * deterministic version of that instruction: after [limit] consecutive rounds
+ * that recorded no file mutation, the next round is told, in the user turn, to
+ * land the edit (or name the blocker) — and the counter restarts, so the nudge is
+ * not spam.
+ *
+ * Progress is read from `CodingAgentFileSystem.mutationsSnapshot()` — the same
+ * source of truth the finish gate uses — not from per-tool bookkeeping: a round
+ * that overflows the inner loop never surfaces its tool records here (measured:
+ * the record-based counter stayed at 0 through three overflowed rounds).
+ *
+ * @return the directive text, or null while the run is still within budget.
+ */
+internal fun codingProgressNudge(readOnlyRounds: Int, limit: Int = CLI_CODING_READONLY_ROUND_LIMIT): String? {
+    if (readOnlyRounds < limit) return null
+    return "You have spent $readOnlyRounds consecutive rounds reading and mapping code without changing a file. " +
+        "Stop surveying: make the first concrete edit now (coding.replace / coding.write / coding.editLines), " +
+        "then run coding.verify on the module. If something genuinely blocks the edit, state exactly what it is."
+}
+
+/**
  * Bounded digest of what ONE outer round actually executed, fed back to the
  * model in the next round's continuation message.
  *
  * The inner [AgentToolCallLoop] builds its own (local) message list, so tool
  * calls and results die with the round; without this digest the model would
  * re-execute tools it already ran. Keeps the newest [ROUND_DIGEST_RESULTS]
- * records, first line only (<=200 chars), whole digest capped at
- * [ROUND_DIGEST_MAX_CHARS].
+ * records as head+tail excerpts ([ToolResultDigest]) within
+ * [ROUND_DIGEST_MAX_CHARS] — first-line-only entries reduced every
+ * `coding.shell` result to `Session: devshell-N`.
  *
  * Pure logic — no IO — so it is unit-testable without an agent session.
  */
 internal fun cliRoundToolDigest(records: List<RoundToolRecord>): String? {
     if (records.isEmpty()) return null
-    val summaries = records.takeLast(ROUND_DIGEST_RESULTS).map { record ->
-        val firstLine = record.resultText.lineSequence().firstOrNull().orEmpty().trim().take(200)
-        "${record.name} -> $firstLine"
-    }
-    if (summaries.isEmpty()) return null
-    return "This round executed ${records.size} tool(s): " +
-        summaries.joinToString(" | ").take(ROUND_DIGEST_MAX_CHARS)
+    val entries = records.takeLast(ROUND_DIGEST_RESULTS).map { it.name to it.resultText }
+    val digest = ToolResultDigest.digest(entries, ROUND_DIGEST_MAX_CHARS)
+    if (digest.isEmpty()) return null
+    return "This round executed ${records.size} tool(s): $digest"
 }
 
 open class RobustBrowserAgent(
@@ -260,10 +310,24 @@ open class RobustBrowserAgent(
      * Per-agent scratch workspace for CLI-engine (browser) tasks. Helper files
      * the model writes via coding.* and b4.run land here — never the backend
      * working directory / repository root (workspace isolation, P1).
+     *
+     * Respects [workspaceDirOverride] (set by the runner for `agent run
+     * --fresh-workspace`); otherwise falls back to `<baseDir>/workspace`.
      */
-    internal val agentWorkspaceDir: Path by lazy {
+    internal val agentWorkspaceDir: Path
+        get() = workspaceDirOverride ?: defaultWorkspaceDir
+
+    private val defaultWorkspaceDir: Path by lazy {
         baseDir.resolve("workspace").also { Files.createDirectories(it) }
     }
+
+    /**
+     * Runtime override of the agent workspace directory, set by the task runner
+     * when the caller requests a fresh, isolated workspace (`agent run
+     * --fresh-workspace`). Cleared in the runner's `finally`.
+     */
+    @Volatile
+    var workspaceDirOverride: Path? = null
 
     /**
      * Test/runtime override of the agent memory root directory (defaults to
@@ -349,9 +413,26 @@ open class RobustBrowserAgent(
     private val noopLimit: Int get() = (noopLimitOverride ?: config.consecutiveNoOpLimit).coerceAtLeast(1)
 
     /**
+     * Repair-round budget for this agent (plan P1.3). Driven by the latest
+     * `coding.verify` verdict observed in the tool results: a failing verdict
+     * spends one round, the diagnostics go back to the model as a user message,
+     * and an exhausted budget fails the task with the verdict as evidence.
+     */
+    private val repairLoop = RepairLoop(config.repairMaxRounds)
+
+    /**
+     * Latest structured verification verdict observed in the tool results of
+     * the current run (null until `coding.verify` has run). Reset per run.
+     */
+    @Volatile
+    private var lastVerificationVerdict: VerificationReport? = null
+
+    /**
      * Coding mode override (see [BasicBrowserAgent.codingMode]): set by
-     * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] when the task is
-     * detected as a pure coding task. Skips the search-engine navigation and screenshots.
+     * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] from the
+     * task's explicit coding flag (`command.run`'s `coding` argument, the CLI's
+     * `agent run --coding`). Never auto-detected. Skips the search-engine
+     * navigation and screenshots.
      */
     @Volatile
     override var codingMode: Boolean = false
@@ -824,6 +905,19 @@ open class RobustBrowserAgent(
             // memory tools undisclosed to the model.
             val taskId = context.sid
             agentMemory.currentTaskId = taskId
+            // Provision the coding workspace mirror HERE, where [codingMode] is
+            // definitely known. The mirror is otherwise attempted when the tool
+            // manager is constructed, and that lazy init can happen BEFORE the task
+            // runner sets codingMode — then a coding run started with an EMPTY
+            // working tree and the model wandered the filesystem looking for the
+            // checkout (observed: three agents in one backend process, only the
+            // first had a mirrored workspace; the coding run listed
+            // `D:\workspace\Browser4\…` and `~/.browser4/workspaces` instead of
+            // reading its own working tree). The call is idempotent.
+            if (codingMode) {
+                runCatching { agentToolManager.provisionCodingWorkspaceMirror() }
+                    .onFailure { logger.warn("Coding workspace mirror failed: {}", it.message) }
+            }
             cliLoopTracer.logEvent("run.start", mapOf("instruction" to action.action))
             // Agent memory: observe the run and inject the recall section
             // (design §5 — static for the whole run, KV prefix preserved).
@@ -836,13 +930,23 @@ open class RobustBrowserAgent(
             val memorySection = agentMemory.recall.recall(
                 action.action, agentMemory.scope, excludeTaskId = taskId,
             )
+            // §6.2: archive the previous task's deliverables, reset change
+            // tracking (so changeSummary opens at 0), and obtain the inherited
+            // workspace-state block to inject into the system prompt. Safe for
+            // non-coding runs — it only resets the mutation log.
+            val inheritedSection = runCatching {
+                agentToolManager.beginTask(taskId, action.action, codingMode)
+            }.getOrNull().orEmpty()
             var messages: List<ChatMessage> = listOf(
-                SystemMessage.from(cliAgentSystemPrompt() + memorySection),
+                SystemMessage.from(cliAgentSystemPrompt() + inheritedSection + memorySection),
                 UserMessage.from(action.action),
             )
             var textOnlyStreak = 0
             var turn = 0
             val maxTurns = config.maxSteps.coerceAtLeast(1)
+            // A new run starts with no verdict and a full repair budget.
+            lastVerificationVerdict = null
+            repairLoop.reset()
             logger.info("🚀 cli-agent.start sid={} turns={} instr='{}'",
                 context.sid, maxTurns, Strings.compactInline(action.action, 100))
 
@@ -861,6 +965,11 @@ open class RobustBrowserAgent(
             // P2-3: system.exposeTools results are carried across rounds via
             // [exposedSpecsThisRun], so the model never has to re-disclose.
             var exposedSpecsThisRun: List<dev.langchain4j.agent.tool.ToolSpecification>? = null
+            // Coding progress enforcement: rounds without a recorded file
+            // mutation. Reset on every round that changes a file (see
+            // [codingProgressNudge]).
+            var readOnlyCodingRounds = 0
+            var mutationsSeen = agentToolManager.codingFs.mutationsSnapshot().size
             while (!isClosed && turn < maxTurns) {
                 val toolsBefore = toolExecutions.get()
                 // Per-round executed-tool records, populated by the loop's
@@ -870,8 +979,19 @@ open class RobustBrowserAgent(
                 // every round (replace-tail — all earlier prefixes stay intact
                 // for KV reuse, and the compressor never touches the tail).
                 val scratchpadText = agentMemory.scratchpad.render()
-                val roundMessages =
+                var roundMessages =
                     if (scratchpadText != null) messages + UserMessage.from(scratchpadText) else messages
+                // Deterministic "stop surveying, start editing" nudge for coding
+                // runs that keep re-mapping the same file across rounds.
+                if (codingMode) {
+                    val nudge = codingProgressNudge(readOnlyCodingRounds)
+                    if (nudge != null) {
+                        logger.info("✋ coding.nudge after {} read-only round(s)", readOnlyCodingRounds)
+                        cliLoopTracer.logEvent("coding.nudge", mapOf("readOnlyRounds" to readOnlyCodingRounds))
+                        roundMessages = roundMessages + UserMessage.from(nudge)
+                        readOnlyCodingRounds = 0
+                    }
+                }
                 val loop = buildCliToolLoop(
                     action.action, completionRef, toolExecutions,
                     initialSpecsOverride = exposedSpecsThisRun,
@@ -884,12 +1004,38 @@ open class RobustBrowserAgent(
                 val response = loop.generate(roundMessages)
                 // P2-3: keep whatever the model exposed on the next round.
                 exposedSpecsThisRun = loop.exposedSpecsSnapshot()
+                // P1.3: remember the newest verification verdict this round
+                // produced — the completion decision and the repair budget are
+                // driven by it, not by the model's own claim.
+                recordVerificationVerdict(roundToolRecords)
                 val completion = completionRef.get()
                 if (completion != null && completion.isDecidedComplete) {
+                    val repair = nextRepairMessage(context)
+                    if (repair != null) {
+                        // The gate failed and the budget allows another round:
+                        // feed the structured diagnostics back and continue the
+                        // loop instead of accepting the completion claim.
+                        messages = messages + UserMessage.from(repair)
+                        turn++
+                        continue
+                    }
                     return completeCliRun(completion, context)
                 }
                 val text = response.content
                 val executed = toolExecutions.get() > toolsBefore
+                // Coding progress: a round that ran tools but recorded no file
+                // mutation counts toward the "stop surveying, edit now" nudge.
+                // The mutation log (not the per-tool records) is the signal: an
+                // overflowed round never surfaces its tool records here.
+                if (codingMode && executed) {
+                    val mutations = agentToolManager.codingFs.mutationsSnapshot().size
+                    if (mutations > mutationsSeen) {
+                        mutationsSeen = mutations
+                        readOnlyCodingRounds = 0
+                    } else {
+                        readOnlyCodingRounds++
+                    }
+                }
                 // Internal tool-loop overflow (maxIterations exhausted) is real
                 // work, not a stall: keep going with a fresh generate() call.
                 val overflow = response.modelError != null
@@ -1013,8 +1159,9 @@ open class RobustBrowserAgent(
             systemSpecs = agentToolManager.system.getToolSpecs().values.toList(),
             initialToolSet = initialToolSet,
             disclosureEnabled = disclosureEnabled,
-            // Task-adaptive initial exposure (see buildCliEngineToolSet): set
-            // by StatefulAgentRunner via CodingTaskDetector before the run.
+            // Explicit per-task coding flag (command_run's coding argument), not
+            // auto-detected: coding tasks get the full coding core for their
+            // initial exposure.
             codingMode = codingMode,
         )
         if (toolSet.usedMode != initialToolSet) {
@@ -1048,8 +1195,10 @@ open class RobustBrowserAgent(
             // Browser tasks routinely exceed the default 12-round internal cap
             // (open → snapshot → type → submit → wait → extract); give the CLI
             // engine a higher ceiling, overflow is handled by the outer loop
-            // (the model resumes from the executed-tools digest).
-            maxIterations = config.toolLoopMaxIterations.coerceAtLeast(40),
+            // (the model resumes from the executed-tools digest). Coding rounds get
+            // a higher floor still: they are cut off mid-chain and restarted from
+            // that (lossy) digest.
+            maxIterations = cliToolLoopMaxIterations(config.toolLoopMaxIterations, codingMode),
             requestTokenLimiter = cta.requestTokenLimiter,
             // P1-1: per-LLM-call timeout — a long multi-tool round keeps
             // progressing; a hung provider call fails fast instead of
@@ -1241,10 +1390,15 @@ open class RobustBrowserAgent(
                 val estimatedChars = pulsarObjectMapper().writeValueAsString(basePayload).length
                 val payload = basePayload + ("estimatedTokens" to (estimatedChars / 4).coerceAtLeast(1))
                 val path = promptDir.resolve("${AppPaths.fromNow()}.$requestSeq.request.json")
-                Files.writeString(
-                    path,
-                    pulsarObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(payload),
-                )
+                val json = pulsarObjectMapper()
+                    .writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(payload)
+                // A lone surrogate (from truncated model output, a digest cut, an
+                // already-pruned result, ...) is not encodable as UTF-8, and
+                // Files.writeString uses a REPORT encoder: one bad character used
+                // to lose this dump for every later round of the run (the poisoned
+                // message stays in the conversation). Repair it instead.
+                Files.writeString(path, SafeText.sanitize(json))
             } catch (e: Exception) {
                 logger.warn("Failed to write CLI prompt log: {}", e.message)
             }
@@ -1603,48 +1757,29 @@ open class RobustBrowserAgent(
 
     /** System prompt for the CLI tool-loop engine: role + resident quick reference + hygiene rules. */
     private fun cliAgentSystemPrompt(): String = buildString {
-        append(
-            """
-            You are a browser automation agent. Drive the browser EXCLUSIVELY through the
-            browser4-cli tool via b4.run(...). A distilled CLI quick reference is embedded
-            below — for full details fetch the bundled SKILL.md on demand with
-            system.skillDoc("SKILL.md") and consult system.skillDoc(name) for topic
-            reference docs.
-            Use coding.* tools for file/workspace work when needed, and system.skillDoc(name)
-            to read reference documents on demand.
-            """.trimIndent()
-        )
-        append("\n\n### CLI Quick Reference (resident)\n\n")
-        // Resident distilled skill: guaranteed present in every request (even
-        // after compression), while the full SKILL.md stays on-demand.
-        append(
-            agentToolManager.system.skillDocStrict("quickstart.md")
-                ?: agentToolManager.system.skillDocMetadata("SKILL.md")
-        )
-        append(
-            """
+        append(CliAgentPrompt.role(codingMode, config.repairMaxRounds, agentWorkspaceDir))
+        // The resident browsing quick reference is what a browsing run needs every
+        // round; a coding run gets its role facts from CliAgentPrompt instead, so it
+        // does not start by reading browser CLI docs (observed waste).
+        if (!codingMode) {
+            append("\n\n### CLI Quick Reference (resident)\n\n")
+            // Resident distilled skill: guaranteed present in every request (even
+            // after compression), while the full SKILL.md stays on-demand.
+            append(
+                agentToolManager.system.skillDocStrict("quickstart.md")
+                    ?: agentToolManager.system.skillDocMetadata("SKILL.md")
+            )
+            append(
+                """
 
-            Load the complete SKILL.md with system.skillDoc("SKILL.md") before the first
-            browser interaction, and use system.skillDoc("<reference>.md") for detailed
-            topic guides (htmlsnapshot, x-sql, snapshot, crawl, swarm, ...) when needed.
-            """.trimIndent()
-        )
-        append(
-            """
-
-            ### Context hygiene
-            - Prefer `snapshot -v 0 --stdout` and targeted `htmlsnapshot get` over full page dumps.
-            - After navigation, take a snapshot before deciding the next action.
-            - Your working directory is ${agentWorkspaceDir}; write helper files
-              (e.g. JS for eval) with relative paths — never create files in the
-              repository root.
-            - When you need to remember something across steps, write it with
-              memory_note (the note stays visible and survives compression).
-              When past tasks might be relevant, search them with memory_search.
-            - When the task is finished, call system.taskComplete(
-              summary=..., keyFindings=[...], filesChanged=[...], problems=[...]).
-            """.trimIndent()
-        )
+                Load the complete SKILL.md with system.skillDoc("SKILL.md") before the first
+                browser interaction, and use system.skillDoc("<reference>.md") for detailed
+                topic guides (htmlsnapshot, x-sql, snapshot, crawl, swarm, ...) when needed.
+                """.trimIndent()
+            )
+        }
+        append("\n\n")
+        append(CliAgentPrompt.hygiene(codingMode, agentWorkspaceDir))
     }
 
     @Deprecated("This is the legacy branch for agent.run(), and will be removed in the further")
@@ -1880,35 +2015,53 @@ open class RobustBrowserAgent(
 
         require(action.isDecidedComplete) { "Required action.isComplete" }
 
-        // ── Finish-report hard validation (design §3.2) ─────────────────────
-        // A completion claim with ZERO executed tool calls is a fabricated
-        // narrative (observed: 35s / 1 step / 0 tool calls "all done"). Reject
-        // it in strict mode so the task fails instead of reporting success.
+        // ── Finish-report hard validation (design §3.2, plan P0.5) ──────────
+        // A completion claim is only as good as the evidence behind it: the rules
+        // live in [FinishReportGate] (deterministic, unit-tested) and this block
+        // only gathers the evidence and applies the verdict.
+        // Under `finishGateCheck=strict` the first violation fails the task;
+        // under `warn` every violation is logged instead.
+        val strict = config.finishGateCheck.equals("strict", ignoreCase = true)
+
         // Two sources: outer states (one per model turn with an executed tool)
         // and inner-loop executions recorded by the tool-calling coordinator.
         val runStates = stateHistory.snapshotFor(context.sessionId).states
         val outerExecuted = runStates.filter { it.toolCallResult != null }
-        val totalExecuted = outerExecuted.size + innerToolExecutionCount
-        if (totalExecuted == 0 && config.finishGateCheck.equals("strict", ignoreCase = true)) {
-            throw IllegalStateException(
-                "Finish report rejected: task completed with zero executed tool calls (false-completion guard)"
-            )
-        }
-        // Gate cross-check: gates claiming `ran:true` should reference tools that
-        // actually executed. Matches against outer states AND inner-loop names
-        // (exact or method-substring); free-form gate names make strict failure
-        // risky, so mismatches warn instead of failing.
         val executedNames = outerExecuted
             .mapNotNull { s -> s.actionDomain?.let { d -> "$d.${s.method}" } }
             .toSet() + innerToolExecutionNames
-        action.gates.orEmpty().filter { it["ran"] == true }.forEach { gate ->
-            val name = gate["name"]?.toString() ?: return@forEach
-            val matched = executedNames.any { it.endsWith(name) || it.contains(name) }
-            if (!matched) {
-                logger.warn(
-                    "⚠ finish.gate sid={} gate='{}' claims ran but no matching tool call executed; executed={}",
-                    sid.take(8), name, executedNames.joinToString(",")
-                )
+        val filesChanged = action.filesChanged.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }
+        val workspace = finishWorkspaceRoot()
+        val gitChanged = workspace?.let { gitChangedFiles(it) }
+        if (workspace != null && gitChanged == null) {
+            logger.debug("finish.report: git unavailable in {} — filesChanged cross-check skipped", workspace)
+        }
+
+        val verdict = FinishReportGate.evaluate(
+            FinishEvidence(
+                executedToolCalls = outerExecuted.size + innerToolExecutionCount,
+                executedToolNames = executedNames,
+                gates = action.gates.orEmpty(),
+                filesChanged = filesChanged,
+                gitChangedFiles = gitChanged,
+                requiredGates = config.finishRequiredGates,
+                claimedDeletedFiles = action.deletedFiles.orEmpty(),
+                recordedMutations = agentToolManager.codingFs.mutationsSnapshot()
+                    .map { "${it.op} ${it.path}" },
+                claimedVerdictJson = extractVerdictJson(action.summary),
+                actualVerdictJson = (lastVerificationVerdict?.toJson() ?: lastInnerVerdictJson),
+                gitDeletedFiles = workspace?.let { gitDeletedFiles(it) },
+            )
+        )
+        verdict.warnings.forEach { warning ->
+            logger.warn("⚠ finish.report sid={} {}", sid.take(8), warning)
+        }
+        if (verdict.violations.isNotEmpty()) {
+            if (strict) {
+                throw IllegalStateException("Finish report rejected: ${verdict.violations.first()}")
+            }
+            verdict.violations.forEach { violation ->
+                logger.warn("⚠ finish.report sid={} {}", sid.take(8), violation)
             }
         }
 
@@ -1940,8 +2093,149 @@ open class RobustBrowserAgent(
         }
     }
 
-    // ─── Final act result & summary ───────────────────────────────────────────
+    // ─── Finish-report evidence helpers ───────────────────────────────────────
 
+    /**
+     * Workspace whose git state backs the `filesChanged` cross-check.
+     *
+     * `-Dbrowser4.agent.finish.workspace=<dir>` wins; otherwise the agent's own
+     * workspace (the tree its coding tools write into) is used — never the
+     * server's process directory, which is a different, usually clean checkout.
+     * See [resolveFinishGitWorkspace].
+     */
+    private fun finishWorkspaceRoot(): Path? = resolveFinishGitWorkspace(
+        configured = config.finishWorkspace,
+        agentWorkspace = runCatching { agentWorkspaceDir }.getOrNull(),
+        processDir = Path.of(System.getProperty("user.dir")),
+    )
+
+    /**
+     * Repository-relative changed paths from `git status --porcelain`.
+     *
+     * @return null when git is unavailable or the call fails — the check is
+     *   skipped rather than failing a task because a host has no git.
+     */
+    /**
+     * The `VERDICT_JSON: {...}` object cited in the report summary, if any.
+     *
+     * The report is asked to paste the verdict verbatim; extracting it here lets
+     * the completion gate compare the citation with the verdict the run actually
+     * recorded instead of trusting the prose.
+     */
+    private fun extractVerdictJson(summary: String?): String? {
+        if (summary.isNullOrBlank()) return null
+        val marker = "VERDICT_JSON:"
+        val at = summary.indexOf(marker)
+        if (at < 0) return null
+        val rest = summary.substring(at + marker.length).trimStart()
+        val start = rest.indexOf('{')
+        if (start < 0) return null
+        val end = rest.lastIndexOf('}')
+        if (end <= start) return null
+        return rest.substring(start, end + 1)
+    }
+
+    private fun gitChangedFiles(workspace: Path): Set<String>? =
+        gitStatus(workspace)?.first
+
+    /** Repository-relative DELETED paths (` D` / `D ` in porcelain), null when git is unavailable. */
+    private fun gitDeletedFiles(workspace: Path): Set<String>? =
+        gitStatus(workspace)?.second
+
+    /**
+     * `git status --porcelain` split into (changed, deleted).
+     *
+     * Deletions are tracked separately: a deleted file is absent from the
+     * changed-file list, so a "deleted X" claim needs its own evidence.
+     */
+    private fun gitStatus(workspace: Path): Pair<Set<String>, Set<String>>? {
+        return try {
+            val process = ProcessBuilder("git", "-C", workspace.toString(), "status", "--porcelain")
+                .redirectErrorStream(true)
+                .start()
+            if (!process.waitFor(15, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                return null
+            }
+            if (process.exitValue() != 0) return null
+            val text = process.inputStream.bufferedReader().use { it.readText() }
+            val changed = linkedSetOf<String>()
+            val deleted = linkedSetOf<String>()
+            text.lineSequence().forEach { line ->
+                if (line.length < 4) return@forEach
+                var path = line.substring(3).trim()
+                // Rename/copy form: "old -> new" — the new path is what exists.
+                if (" -> " in path) path = path.substringAfter(" -> ")
+                val normalized = normalizeRepoPath(path)
+                if (normalized.isEmpty()) return@forEach
+                if (line.startsWith(" D") || line.startsWith("D ") || line.startsWith("DD")) {
+                    deleted += normalized
+                } else {
+                    changed += normalized
+                }
+            }
+            changed to deleted
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun normalizeRepoPath(raw: String): String =
+        raw.trim().trim('"').replace('\\', '/').removePrefix("./").removePrefix("/")
+
+    // ─── Repair loop (plan P1.3) ──────────────────────────────────────────────
+
+    /**
+     * Keep the newest structured verdict from this round's tool results.
+     *
+     * Only results that actually carry a verdict are considered: the
+     * `VERDICT_JSON:` line of the human rendering, or the pure-JSON reply of
+     * `coding.verify(json=true)`.
+     */
+    private fun recordVerificationVerdict(records: List<RoundToolRecord>) {
+        val candidate = records.lastOrNull { record ->
+            record.resultText.contains(VerificationReport.VERDICT_PREFIX) ||
+                (record.name.contains("verify", ignoreCase = true) &&
+                    record.resultText.trimStart().startsWith("{"))
+        } ?: return
+        VerificationReport.parseFromText(candidate.resultText)?.let { lastVerificationVerdict = it }
+    }
+
+    /**
+     * The repair message to inject, or null when the completion may proceed.
+     *
+     * A failing verdict spends one repair round and returns the bounded
+     * feedback (diagnostics included) as a user message. When the budget is
+     * spent while the verdict still fails, the task FAILS with the verdict as
+     * evidence — an exhausted budget is never a silent success (plan P1.3).
+     */
+    private fun nextRepairMessage(context: ExecutionContext): String? {
+        val verdict = lastVerificationVerdict ?: return null
+        val decision = repairLoop.decide(verdict)
+        return when (decision.action) {
+            RepairLoop.Action.RETRY -> {
+                val reason = verdict.failureReason() ?: "verification did not pass"
+                cliLoopTracer.logEvent(
+                    "repair.round",
+                    mapOf("round" to decision.round, "maxRounds" to repairLoop.maxRounds, "reason" to reason),
+                )
+                logger.info(
+                    "🔁 cli-agent.repair.round sid={} round={}/{} reason={}",
+                    context.sid, decision.round, repairLoop.maxRounds, reason,
+                )
+                decision.message
+            }
+
+            RepairLoop.Action.EXHAUSTED -> throw IllegalStateException(
+                "Finish report rejected: verification still fails after " +
+                    "${repairLoop.roundsUsed} repair round(s) — ${verdict.failureReason()}"
+            )
+
+            RepairLoop.Action.PASSED, RepairLoop.Action.DISABLED -> null
+        }
+    }
+
+    // ─── Final act result & summary ───────────────────────────────────────────
     private suspend fun buildFinalActResult(
         instruction: String, cxtIn: ExecutionContext, startTime: Instant, stopReason: StopReason? = null
     ): ActResult {

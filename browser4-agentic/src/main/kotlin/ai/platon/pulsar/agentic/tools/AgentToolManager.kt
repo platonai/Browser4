@@ -28,9 +28,16 @@ import kotlin.time.Duration.Companion.milliseconds
 class AgentToolManager constructor(
     val baseDir: Path,
     val agent: BasicBrowserAgent,
-    val workspaceRoot: Path = CodingWorkspace.workspaceRoot,
+    initialWorkspaceRoot: Path = CodingWorkspace.workspaceRoot,
 ) {
     private val logger = getLogger(AgentToolManager::class)
+
+    /** The active workspace root. Rebindable via [rebindWorkspace] for
+     *  `agent run --fresh-workspace`; [codingShell], [codingFs] and
+     *  [b4CliExecutor] are rebuilt to point at the new root. */
+    @Volatile
+    var workspaceRoot: Path = initialWorkspaceRoot
+        private set
 
     /** Upper bound for polling document.readyState after a navigation-triggering action. */
     private val navigationPollTimeoutMillis = 30_000L
@@ -57,32 +64,18 @@ class AgentToolManager constructor(
     val shell: AgentShell = AgentShell(baseDir)
 
     /** Enhanced coding shell for dev tools (git, cargo, mvn, npm, etc.) */
-    val codingShell: CodingAgentShell = CodingAgentShell(
-        baseDir = workspaceRoot,
-        // Independent/multi-tenant deployments can tighten defaults via system property:
-        // -Dbrowser4.agent.allowDestructive=false denies rm/del/mv/cp/kill etc.
-        allowDestructive = CodingWorkspace.allowDestructive,
-    )
+    var codingShell: CodingAgentShell = buildCodingShell(initialWorkspaceRoot)
+        private set
     /** Enhanced coding file system for full filesystem access */
-    val codingFs: CodingAgentFileSystem = CodingAgentFileSystem(
-        workspaceRoot = workspaceRoot,
-        // Same tightening switch; note delete() additionally hard-protects the
-        // workspace root and VCS directories regardless of this flag.
-        allowExternalAccess = CodingWorkspace.allowExternalAccess,
-        allowDestructive = CodingWorkspace.allowDestructive,
-    )
-    /** Composite target for the coding domain */
-    val codingTarget: CodingToolExecutor.Target by lazy {
-        CodingToolExecutor.Target(codingShell, codingFs)
-    }
+    var codingFs: CodingAgentFileSystem = buildCodingFs(initialWorkspaceRoot)
+        private set
+    /** Composite target for the coding domain. Rebuilt alongside the shell/fs
+     *  on [rebindWorkspace] so tool dispatch always targets the active root. */
+    var codingTarget: CodingToolExecutor.Target = CodingToolExecutor.Target(codingShell, codingFs)
+        private set
     /** CLI tool executor for browser4-cli integration (domain `b4`) */
-    val b4CliExecutor: B4CliToolExecutor = B4CliToolExecutor(
-        // M0: force CLI subprocesses onto THIS backend (BROWSER4_CLI_SERVER) so
-        // the CLI can never auto-start/restart a server. Set by the hosting app
-        // via `browser4.server.url` (system property or configuration).
-        backendBaseUrl = session.sessionConfig.get("browser4.server.url"),
-        defaultWorkingDir = workspaceRoot,
-    )
+    var b4CliExecutor: B4CliToolExecutor = buildB4CliExecutor(initialWorkspaceRoot)
+        private set
 
     val system: SystemToolExecutor = SystemToolExecutor(this)
 
@@ -153,11 +146,11 @@ class AgentToolManager constructor(
      * to count inner-loop executions for the finish-report false-completion
      * guard (design §3.2).
      */
-    var toolExecutionRecorder: ((domain: String, method: String) -> Unit)? = null
+    var toolExecutionRecorder: ((domain: String, method: String, resultText: String?) -> Unit)? = null
 
     /** Notify the recorder (if wired) about one executed tool call. */
-    fun notifyToolExecuted(domain: String, method: String) {
-        toolExecutionRecorder?.invoke(domain, method)
+    fun notifyToolExecuted(domain: String, method: String, resultText: String? = null) {
+        toolExecutionRecorder?.invoke(domain, method, resultText)
     }
 
     /** Cancel all tracked CLI background jobs (agent close). */
@@ -166,6 +159,14 @@ class AgentToolManager constructor(
     }
 
     init {
+        // Self-development runs (coding mode in the CLI tool loop) execute
+        // repository-relative paths inside this agent's scratch workspace. Mirror
+        // the checkout's reactor there ONCE, before the first tool call, so
+        // Maven resolves modules and the agent never has to repair workspace
+        // topology itself (observed: an agent ran `mklink /J` for every module
+        // and deleted/re-created a junction mid-run).
+        provisionCodingWorkspaceMirror()
+
         // Register coding and b4 (browser4-cli) tool specs so they appear in the LLM prompt.
         // The ToolCallSpecificationRenderer merges these dynamically-registered
         // specs alongside the hardcoded ToolSpecification.TOOL_CALL_SPECIFICATION.
@@ -177,6 +178,172 @@ class AgentToolManager constructor(
             "b4",
             b4CliExecutor.getToolSpecs().values.toList()
         )
+    }
+
+    /**
+     * Link the checkout's reactor modules into this agent's scratch workspace
+     * when the agent runs in coding mode (self-development).
+     *
+     * A workspace that is already a checkout (the default coding root) and a
+     * workspace with no detectable source checkout are left untouched, so
+     * ordinary browser sessions pay nothing.
+     *
+     * Idempotent, and called both from the constructor (cheap: it skips an
+     * already-mirrored workspace) and again right before the CLI loop starts —
+     * see [ai.platon.pulsar.agentic.agents.RobustBrowserAgent]: the constructor
+     * may run before the task runner sets `codingMode`, which used to leave a
+     * coding run with an empty working tree.
+     */
+    internal fun provisionCodingWorkspaceMirror() {
+        if (!agent.codingMode) return
+        val root = workspaceRoot.toAbsolutePath().normalize()
+        if (root == ai.platon.pulsar.coding.CodingWorkspace.workspaceRoot.toAbsolutePath().normalize()) return
+        runCatching {
+            val report = ai.platon.pulsar.coding.WorkspaceMirror.ensure(root)
+            if (report.sourceRepo != null) {
+                logger.info("+ Coding workspace mirror: {}", report.summary())
+            }
+            // Write point 1: create the manifest if absent (§6.1). We never
+            // overwrite an existing manifest here — the next task's write points
+            // own state/currentTask/lastTask.
+            val store = ai.platon.pulsar.coding.WorkspaceManifestStore()
+            if (store.read(root) == null) {
+                store.write(root, ai.platon.pulsar.coding.WorkspaceManifest(
+                    workspaceId = agent.uuid.toString(),
+                    agentUuid = agent.uuid.toString(),
+                    engine = "cli",
+                    sourceRepo = report.sourceRepo?.toString(),
+                ))
+            }
+        }.onFailure { e ->
+            logger.warn("Could not provision the coding workspace mirror for {}: {}", root, e.message)
+        }
+    }
+
+    /**
+     * Task-start lifecycle for the agent workspace (§6.2).
+     *
+     * - archives the previous task's deliverables and resets the file system's
+     *   change tracking so this task opens with `changeSummary=0`;
+     * - writes the manifest's `state=active` and `currentTask` (write point 2),
+     *   rotating any leftover `currentTask` to `lastTask` first;
+     * - captures the git baseline for the end-of-task Δgit computation;
+     * - returns the "inherited workspace state" prompt block (or null).
+     *
+     * Safe to call for non-coding tasks too: it only resets the mutation log and
+     * records `coding=false` in the manifest.
+     */
+    fun beginTask(taskId: String, instruction: String, coding: Boolean): String? {
+        val root = workspaceRoot.toAbsolutePath().normalize()
+        val store = ai.platon.pulsar.coding.WorkspaceManifestStore()
+        val lifecycle = ai.platon.pulsar.coding.WorkspaceTaskLifecycle()
+        val existing = runCatching { store.read(root) }.getOrNull()
+        val sourceRepo = existing?.sourceRepo?.let { java.nio.file.Path.of(it) }
+        // Write point 2: rotate leftover currentTask (crash recovery) then set active.
+        runCatching {
+            val base = existing ?: ai.platon.pulsar.coding.WorkspaceManifest(
+                workspaceId = agent.uuid.toString(),
+                agentUuid = agent.uuid.toString(),
+                engine = "cli",
+                sourceRepo = sourceRepo?.toString(),
+            )
+            val rotatedLast = base.currentTask ?: base.lastTask
+            val current = ai.platon.pulsar.coding.TaskSnapshot(
+                taskId = taskId,
+                instruction = instruction.take(ai.platon.pulsar.coding.WorkspaceManifest.MAX_INSTRUCTION_LEN),
+                coding = coding,
+                startedAt = java.time.Instant.now(),
+                baselineCaptured = sourceRepo != null,
+            )
+            store.write(root, base.copy(
+                state = ai.platon.pulsar.coding.WorkspaceState.ACTIVE,
+                currentTask = current,
+                lastTask = rotatedLast,
+            ))
+            // Capture the git baseline for Δgit at task end.
+            if (sourceRepo != null) {
+                gitBaseline = lifecycle.captureGitBaseline(sourceRepo)
+            }
+        }.onFailure { logger.warn("beginTask manifest write failed: {}", it.message) }
+        return runCatching { lifecycle.beginTask(root, taskId, instruction, coding, codingFs) }
+            .onFailure { logger.warn("beginTask archive/reset failed: {}", it.message) }
+            .getOrNull()?.inheritedSummary
+    }
+
+    /**
+     * Task-end lifecycle (write point 3, §6.1): fill the current task snapshot
+     * with terminal status, filesChanged (Δgit ∪ mutation) and mutation count,
+     * then rotate it to `lastTask` and clear `currentTask`.
+     *
+     * Must be called from a `finally` (non-cancellable) so cancelled tasks are
+     * still recorded.
+     */
+    fun endTask(taskId: String, status: ai.platon.pulsar.coding.TaskStatus) {
+        val root = workspaceRoot.toAbsolutePath().normalize()
+        val store = ai.platon.pulsar.coding.WorkspaceManifestStore()
+        val lifecycle = ai.platon.pulsar.coding.WorkspaceTaskLifecycle()
+        runCatching {
+            val m = store.read(root) ?: return@runCatching
+            val cur = m.currentTask ?: return@runCatching
+            val sourceRepo = m.sourceRepo?.let { java.nio.file.Path.of(it) }
+            val mutations = codingFs.mutationsSnapshot().size
+            val deliverables = codingFs.mutationsSnapshot().map { it.path }.toSet()
+            val filesChanged = lifecycle.computeFilesChanged(sourceRepo, gitBaseline, deliverables)
+            val terminal = cur.copy(
+                status = status,
+                endedAt = java.time.Instant.now(),
+                filesChanged = filesChanged,
+                mutations = mutations,
+            )
+            store.write(root, m.copy(
+                state = when (status) {
+                    ai.platon.pulsar.coding.TaskStatus.COMPLETE -> ai.platon.pulsar.coding.WorkspaceState.COMPLETE
+                    ai.platon.pulsar.coding.TaskStatus.CANCELLED -> ai.platon.pulsar.coding.WorkspaceState.CANCELLED
+                    ai.platon.pulsar.coding.TaskStatus.FAILED -> ai.platon.pulsar.coding.WorkspaceState.FAILED
+                },
+                currentTask = null,
+                lastTask = terminal,
+            ))
+            gitBaseline = emptySet()
+        }.onFailure { logger.warn("endTask manifest write failed: {}", it.message) }
+    }
+
+    /** Git status baseline captured at task start; cleared on task end. */
+    private var gitBaseline: Set<String> = emptySet()
+
+    // -- workspace rebinding (fresh-workspace) -----------------------------------
+
+    private fun buildCodingShell(root: Path) = CodingAgentShell(
+        baseDir = root,
+        allowDestructive = CodingWorkspace.allowDestructive,
+        allowExternalAccess = CodingWorkspace.allowExternalAccess,
+    )
+
+    private fun buildCodingFs(root: Path) = CodingAgentFileSystem(
+        workspaceRoot = root,
+        allowExternalAccess = CodingWorkspace.allowExternalAccess,
+        allowDestructive = CodingWorkspace.allowDestructive,
+        persistSnapshots = true,
+    )
+
+    private fun buildB4CliExecutor(root: Path) = B4CliToolExecutor(
+        backendBaseUrl = session.sessionConfig.get("browser4.server.url"),
+        defaultWorkingDir = root,
+    )
+
+    /**
+     * Point the coding tools at a fresh, isolated workspace root. Used by the
+     * task runner when the caller passes `agent run --fresh-workspace`. The
+     * previous [codingShell]/[codingFs]/[b4CliExecutor] are replaced; callers
+     * that read these properties each dispatch see the new instances.
+     */
+    fun rebindWorkspace(root: Path) {
+        workspaceRoot = root
+        codingShell = buildCodingShell(root)
+        codingFs = buildCodingFs(root)
+        codingTarget = CodingToolExecutor.Target(codingShell, codingFs)
+        b4CliExecutor = buildB4CliExecutor(root)
+        logger.info("rebound agent workspace to {}", root)
     }
 
     /**

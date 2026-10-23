@@ -138,9 +138,11 @@ browser4-cli (Rust)                       browser4-rest (Kotlin)                
 ### 3.2 `executeAgentCommand`（`StatefulAgentRunner.kt:353`）
 
 1. `status.submittedTask = plainCommand`；
-2. `CodingTaskDetector.detect()` → 纯编码任务进入 `codingMode`（跳过 driver 健康检查、
-   搜索导航与截图）；否则 `ensureSessionDriverHealthy()` 检测 bound driver，不健康则
-   unbind + close 并让下次 `getOrCreateBoundDriver` 重新拉起浏览器；
+2. 任务类型**显式声明**（2026-10 起）：`executeSerialized` 把 `command_run` 的 `coding`
+   参数写入 `RobustBrowserAgent.codingMode`（CLI 对应 `agent run --coding`）。不显式指定
+   一律视为 browser 任务，**不再做关键词自动判定**（原 `CodingTaskDetector` 已移除）。
+   浏览任务走 `ensureSessionDriverHealthy()` 检测 bound driver，不健康则
+   unbind + close 并让下次 `getOrCreateBoundDriver` 重新拉起浏览器；coding 任务跳过这一步;
 3. 保存用户当前页面 URL（任务结束后恢复现场，`StatefulAgentRunner.kt:382-410`）；
 4. `agent.run(plainCommand)` → `RobustBrowserAgent.run`（`RobustBrowserAgent.kt:354`）：
    `run(task)` → `run(ActionOptions)` → `resolveProblemInCoroutine` →

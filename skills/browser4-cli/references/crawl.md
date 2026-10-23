@@ -242,16 +242,14 @@ Crawl completed. 3 pages found.
 
 ## Testing locally with MockSite
 
-The mock e-commerce site (`./bin/test.ps1 mock-site`) provides predictable product pages for
-testing crawl extraction without hitting live websites.  A cold start runs a Maven preflight
-(browser4-dependencies, then browser4-rest and ~25 modules) that serves nothing on `:18080` for
-about 10–15 minutes — it looks stalled; with cached artifacts the next start is fast.  Don't guess
-product IDs: MockSite exposes a sitemap built for URL discovery, and the bare path
-`http://localhost:18080/ec/dp/` (trailing slash) 404s — product pages need an ID (`/ec/dp/<id>`).
+The mock e-commerce site (`./bin/test.ps1 mock-site`, port `:18080`) provides predictable product
+pages for testing crawl extraction without hitting live websites — it needs **Java 25+** (set
+`JAVA_HOME`) and a cold start serves nothing for 10–15 minutes while Maven preflights (later starts
+are fast, so don't mistake it for a hang).  Setup, the sitemap-driven seed file and the page
+inventory live in [docs/mocksite.md](../../../docs/mocksite.md) — don't guess product IDs, since
+`http://localhost:18080/ec/dp/` (trailing slash) 404s and product pages need an ID (`/ec/dp/<id>`).
 
 ```bash
-curl -s http://localhost:18080/ec/sitemap.xml > map.xml   # all 101 product URLs, 20 categories
-grep -o 'http://localhost:18080/ec/dp/[A-Z0-9]*' map.xml | head -8 > seed-urls.txt
 browser4-cli crawl --seed-file seed-urls.txt --depth 0 --refresh --sql "@extract.sql" --format table
 browser4-cli goto "http://localhost:18080/ec/dp/B0E000001"
 browser4-cli htmlsnapshot inspect                    # element patterns, incl. singleton IDs
@@ -259,15 +257,13 @@ browser4-cli htmlsnapshot inspect                    # element patterns, incl. s
 
 Detail pages (`/ec/dp/…`) use IDs (`#productTitle`, `#product-price`, `#product-features`);
 listing pages (`/ec/b?node=…`) use classes (`.breadcrumbs`, `.product-card`, `.product-title`,
-`.product-price`).
+`.product-price`).  When a selector matches nothing, confirm it with `htmlsnapshot grep --selector`
+or discover it with `htmlsnapshot inspect` before blaming the crawl.
 
 > **Browser vs. raw HTML:** MockSite serves a JavaScript-hydrated variant to browsers (the crawl
 > fetch pipeline) that can differ from the static HTML `curl` receives — e.g. category anchors
 > arrive as `href="#"` and the rendered product list may be a subset.  When debugging link-discovery
 > counts, verify the *browser* DOM with `eval` or `htmlsnapshot inspect`.
-
-> **Tip:** When selectors don't match, use `htmlsnapshot grep --selector` to verify elements exist,
-> or `htmlsnapshot inspect` to discover selectors.  MockSite uses IDs, not classes.
 
 ## URL deduplication
 

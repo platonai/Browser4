@@ -74,6 +74,20 @@ Runs a full CLI smoke test suitable for CI and local development:
 4. Executes the full command cycle: `open` → `goto` → `snapshot` → `type` → `click` → `get` → `eval` → `screenshot` → `wait` → `close` → `kill-all`
 5. Reports pass/fail for each step
 
+The two navigation gates (`open`, `goto`) are retried up to three and two times
+respectively, because a single transient navigation failure on a CI runner used
+to fail the whole release gate even when the same bundle passed on the other
+platforms. `type`/`click` are never retried (they mutate the page). Before every
+retry the whole backend is restarted with `kill-all` (a failed navigation can
+leave a wedged browser, not just a stale session), the script waits for the
+backend port to be released, and the `open` retry adds `--fresh` so it cannot
+reconnect to the failed session. Set `BROWSER4_SERVER_LOG_DIR` to keep the
+server startup logs in a caller-owned directory; `release.yml` points it at the
+path it uploads on failure. The Windows smoke job also pins Chrome for Testing
+155.0.8059.40 via `BROWSER4_BROWSER_PATH`: the `win25` runner image moved to
+Chrome 156 on 2026-10-21, which broke the first localhost navigation while the
+same bundle passed with Chrome 155 and on the other platforms.
+
 ```shell
 ./smoke-test-runtime-bundle.sh <cli-binary> <bundle-archive> [test-port] [timeout-secs]
 ```

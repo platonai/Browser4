@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
@@ -73,6 +74,39 @@ class LlmConfigNormalizerTest {
     }
 
     @Test
+    @DisplayName("an already-dotted config file still binds through system properties")
+    fun testMirrorsDottedKeysIntoSystemProperties() {
+        // A rebuilt runtime bundle failed every `agent run` with "No LLM configured"
+        // while doctor read this very file and reported "LLM is configured": the
+        // documented dotted form was only ever written to the file, never to the
+        // system properties the engine resolves first.
+        writeConf(
+            "application-private.properties",
+            "spring.main.allow-bean-definition-overriding=true\n" +
+                "deepseek.api.key=sk-dotted-key\n" +
+                "deepseek.model.name=deepseek-v4-flash\n" +
+                "deepseek.base.url=https://api.deepseek.com\n"
+        )
+
+        normalize()
+
+        assertEquals("sk-dotted-key", System.getProperty("deepseek.api.key"))
+        assertEquals("deepseek-v4-flash", System.getProperty("deepseek.model.name"))
+        assertEquals("https://api.deepseek.com", System.getProperty("deepseek.base.url"))
+    }
+
+    @Test
+    @DisplayName("non-provider dotted keys are not mirrored")
+    fun testNonProviderDottedKeysAreNotMirrored() {
+        writeConf("app.properties", "spring.datasource.url=jdbc:h2:mem:x\nbrowser4.cli.proxy=\n")
+
+        normalize()
+
+        assertNull(System.getProperty("spring.datasource.url"))
+        assertNull(System.getProperty("browser4.cli.proxy"))
+    }
+
+    @Test
     fun testDottedKeysWinOverEnvStyleDuplicates() {
         val file = writeConf(
             "app.properties",
@@ -83,11 +117,12 @@ class LlmConfigNormalizerTest {
         normalize()
 
         // Explicit dotted key already present: the env-style line must not
-        // overwrite it and must not be mirrored as a system property.
+        // overwrite it, and the mirrored system property must carry the dotted
+        // (file) value — not the env-style duplicate.
         val content = Files.readString(file)
         assertTrue(content.contains("deepseek.api.key=sk-dotted"), content)
         assertTrue(content.contains("DEEPSEEK_API_KEY=sk-env"), content)
-        assertNull(System.getProperty("deepseek.api.key"))
+        assertEquals("sk-dotted", System.getProperty("deepseek.api.key"))
     }
 
     @Test

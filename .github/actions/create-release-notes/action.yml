@@ -52,8 +52,17 @@ runs:
         # 🚀 Browser4 v${{ inputs.version }} Release Notes
 
         **Release Date:** $BUILD_DATE
-        **Java Version:** ${{ inputs.java_version }}
         **Built by:** @${{ github.actor }}
+
+        > ### ☕ Java requirement — depends on how you install
+        >
+        > | Install mode | Java needed? |
+        > |--------------|--------------|
+        > | Self-contained bundle — \`browser4-cli install\` | **None** — the bundle ships its own jlink-built JRE |
+        > | \`browser4-cli\` binaries / \`npm install -g browser4-cli\` | **None** — native binary |
+        > | Standalone \`${{ inputs.jar_name }}\` (\`java -jar\`) | Java **${{ inputs.java_version }}** |
+        > | WebMiner (\`browser4-cli webminer\`) | JDK 17+ — auto-detected (the bundle's JRE also satisfies it) |
+        > | Build from source | JDK **${{ inputs.java_version }}** to compile; JDK 25 enables the JVM AOT cache (JEP 483/515) |
 
         ---
 
@@ -76,7 +85,8 @@ runs:
 
         ### Self-contained install
 
-        Use the CLI to download the matching Browser4 runtime bundle for your platform:
+        Use the CLI to download the matching Browser4 runtime bundle for your platform
+        (ships its own jlink-built JRE — **no Java installation required**):
 
         \`\`\`shell
         browser4-cli install

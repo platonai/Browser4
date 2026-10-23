@@ -10,6 +10,8 @@ import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.common.ResourceStatus
+import java.time.Duration
+import java.time.Instant
 import kotlin.reflect.KClass
 
 /**
@@ -60,6 +62,20 @@ class CommandToolExecutor(
                     "Consecutive no-op abort threshold for agent tasks; omit to use the server default.",
                 ),
                 ToolSpec.Arg(
+                    "coding", "Boolean?", "null",
+                    "Explicit task type. True marks the task as a coding task (plain file/build work; " +
+                        "no browser page, no page navigation, no screenshots). Everything else — including " +
+                        "any URL or page interaction — stays a browser task (the default, also when omitted): " +
+                        "task type is never auto-detected.",
+                ),
+                ToolSpec.Arg(
+                    "freshWorkspace", "Boolean?", "null",
+                    "True runs this task in a fresh, isolated workspace directory " +
+                        "(created under the agent's data dir) instead of the shared workspace. " +
+                        "Use for tasks that must not see or mutate previous tasks' scratch files. " +
+                        "Omit or false uses the default shared workspace.",
+                ),
+                ToolSpec.Arg(
                     "engine", "String?", "null",
                     "Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated.",
                 ),
@@ -70,16 +86,21 @@ class CommandToolExecutor(
                     "When async=false, blocks until done and returns the CommandStatus as JSON. " +
                     "noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. " +
                     "engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; " +
-                    "'observe-act' is the DEPRECATED legacy engine.",
+                    "'observe-act' is the DEPRECATED legacy engine. " +
+                    "coding=true explicitly marks an agent task as a coding task (file/build work, no page); " +
+                    "omitted or false means a browser task — the default, and never auto-detected.",
             help = """
                 command.run(command: String)
-                command.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?)
+                command.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?, coding: Boolean?)
 
                 `command` is a URL to load, a natural-language instruction, or an agent
                 task. With async=true (the default) the call returns a task id and you
                 poll it with `command.status` (JSON status envelope), read the payload
                 with `command.result`, and stop it with `command.cancel`. Pass
                 async=false when you would rather block for the finished status.
+                Pass coding=true for a pure coding task (read/write files, run builds):
+                the agent then works from its coding tool set without a browser page.
+                Tasks are browser tasks unless the caller says otherwise.
             """.trimIndent(),
             examples = listOf(
                 ToolExample(
@@ -195,11 +216,12 @@ class CommandToolExecutor(
         }
 
         return when (functionName) {
-            // command.run(command: String, async?: Boolean = true, noopLimit?: Int = null, engine?: String = null)
+            // command.run(command: String, async?: Boolean = true, noopLimit?: Int = null,
+            //              engine?: String = null, coding?: Boolean = null)
             "run" -> {
                 validateArgs(
                     args,
-                    allowed = setOf("command", "async", "noopLimit", "engine") + SESSION_ARG,
+                    allowed = setOf("command", "async", "noopLimit", "engine", "coding", "freshWorkspace") + SESSION_ARG,
                     required = setOf("command"),
                     functionName
                 )
@@ -210,12 +232,21 @@ class CommandToolExecutor(
                 // null (param absent) must stay null so the agent falls back to
                 // its configured runEngine; RunEngine.parse(null) would force
                 // OBSERVE_ACT and clobber a CLI_TOOL_LOOP config.
-                val engine = paramString(args, "engine", functionName, required = false)
-                    ?.let { RunEngine.parse(it) }
+                val engine = paramString(args, "engine", functionName, required = false)?.also {
+                    // RunEngine.parse silently maps ANY unknown value to the default
+                    // engine — a typo such as "clli" would look accepted and change
+                    // nothing. Fail loudly instead.
+                    require(it.trim().lowercase() in ENGINE_VALUES) {
+                        "Unknown engine '$it': expected 'cli' or 'observe-act' (deprecated)"
+                    }
+                }?.let { RunEngine.parse(it) }
+                // null (absent) = browser task: explicit opt-in only, never guessed.
+                val coding = paramBool(args, "coding", functionName, required = false, default = null)
+                val freshWorkspace = paramBool(args, "freshWorkspace", functionName, required = false, default = null)
                 if (isAsync) {
-                    service.submitPlainCommand(sessionId, command, noopLimit, engine)
+                    service.submitPlainCommand(sessionId, command, noopLimit, engine, coding, freshWorkspace)
                 } else {
-                    val status = service.executePlainCommand(sessionId, command, noopLimit, engine)
+                    val status = service.executePlainCommand(sessionId, command, noopLimit, engine, coding, freshWorkspace)
                     pulsarObjectMapper().writeValueAsString(status)
                 }
             }
@@ -262,6 +293,9 @@ class CommandToolExecutor(
         }
     }
 
+    /** Aliases `RunEngine.parse` recognizes; anything else must be a loud client error. */
+    private val ENGINE_VALUES = setOf("cli", "observe-act", "observe_act", "v1", "legacy")
+
     /**
      * The shared status envelope of a command task.
      *
@@ -274,12 +308,24 @@ class CommandToolExecutor(
      */
     private fun envelopeOf(status: CommandStatus, overrideStatus: String? = null): Map<String, Any> {
         val word = overrideStatus ?: statusWord(status)
+        // Progress signals, best first: the live tool-call counter the engine
+        // reports while a CLI run is in flight, the recorded step history, then the
+        // domain's own instruct results. A page load has none of them, and `null`
+        // stays honest about that.
+        val processed = status.toolExecutions.takeIf { it > 0 }
+            ?: status.agentHistory?.states?.size?.takeIf { it > 0 }
+            ?: status.instructResults.size.takeIf { it > 0 }
+        // How long the task has been running: a poller could previously not tell a
+        // 50-minute run from one that started seconds ago (`agent status` showed
+        // only "running / 102 / Agent is working").
+        val elapsedMs = status.startedTime?.let { started ->
+            Duration.between(started, status.finishTime ?: Instant.now()).toMillis().coerceAtLeast(0)
+        }
         return TaskEnvelopes.of(
             taskId = status.id,
             status = word,
-            // The agent's step count is the only monotonic progress signal the domain
-            // has; a page load does not report one, and `null` is honest about that.
-            processed = status.instructResults.size.takeIf { it > 0 },
+            processed = processed,
+            elapsedMs = elapsedMs,
             // The domain's own code: callers key on 404 to tell "no such task" from a
             // genuine failure without pattern-matching English error text.
             statusCode = status.statusCode,
@@ -294,6 +340,10 @@ class CommandToolExecutor(
 
     /** `CommandStatus` mapped onto the shared status vocabulary. */
     private fun statusWord(status: CommandStatus): String = when {
+        // A cancelled task is done and non-OK, but calling it "failed" turns a
+        // user-requested cancel into an unexplained failure on every later poll —
+        // the flag (set only by explicit cancel/close paths) wins over the code.
+        status.isDone && status.cancelled -> "cancelled"
         status.isDone -> if (status.statusCode == ResourceStatus.SC_OK) "done" else "failed"
         status.processState == "created" -> "queued"
         else -> "running"
@@ -303,15 +353,22 @@ class CommandToolExecutor(
      * Why a cancellation did not happen.
      *
      * The envelope alone cannot distinguish "a live page visit that cannot be
-     * interrupted" from "an agent task that already finished" — both report
-     * `cancelled=false`, and leaving the caller to guess is how a cancel silently
-     * looks like a no-op. A page visit is checked first because it is the case that
-     * is still *running* when the answer is false.
+     * interrupted", "an agent task that already finished", and "a synchronous
+     * run with no cancellable job" — all report `cancelled=false`, and leaving
+     * the caller to guess is how a cancel silently looks like a no-op. A page
+     * visit is checked first because it is the case that is still *running*
+     * when the answer is false.
      */
     private fun cancelReason(cancelled: Boolean, pageVisit: Boolean, status: CommandStatus): Map<String, Any> = when {
         cancelled -> emptyMap()
         pageVisit -> mapOf("reason" to "page visit tasks run to completion and cannot be cancelled")
         status.isDone -> mapOf("reason" to "task already finished")
-        else -> emptyMap()
+        else -> mapOf(
+            "reason" to (
+                "no cancellable job is registered for this id — a synchronous " +
+                    "'command run' cannot be cancelled mid-run; submit it asynchronously " +
+                    "(async=true, the default) if cancelling it matters"
+                )
+        )
     }
 }

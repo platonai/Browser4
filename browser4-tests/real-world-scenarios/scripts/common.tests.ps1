@@ -430,6 +430,7 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Assert-NotContains 'opencode: no --dangerously-skip-permissions' ($script:CapturedArgs -join ' ') `
         '--dangerously-skip-permissions'
     Assert-Equal 'opencode: first arg is run' 'run' $script:CapturedArgs[0]
+    Assert-Equal 'opencode: second arg auto-approves (--auto)' '--auto' $script:CapturedArgs[1]
     Assert-True 'opencode: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'opencode test')
 
     Write-TestGroup 'opencode backend with -Silent flag'
@@ -437,6 +438,7 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Invoke-Agent -Prompt 'opencode silent' -Silent
     Assert-NotContains 'opencode: --silent is never passed' ($script:CapturedArgs -join ' ') '--silent'
     Assert-Equal 'opencode silent: first arg is run' 'run' $script:CapturedArgs[0]
+    Assert-Equal 'opencode silent: second arg is --auto' '--auto' $script:CapturedArgs[1]
     Assert-True 'opencode silent: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'opencode silent')
 
     Write-TestGroup 'codex backend'
@@ -537,13 +539,22 @@ Write-Host '━━━ Get-ScenarioAgent: Backend Detection (opencode, codex, dsh
 
     # dsh (DeepSeek Harness) is the preferred external harness: it must be the
     # FIRST probe in Get-ScenarioAgent, and the no-agent fallback must be dsh.
+    # opencode must be probed between dsh and claude (matching Get-AgentBackend
+    # in coworker/scripts/config.ps1).
     $scenarioAgentMatch = [regex]::Match($commonContent, 'function Get-ScenarioAgent \{[\s\S]*?\n\}')
     $scenarioAgentBody = $scenarioAgentMatch.Value
     $dshProbe = $scenarioAgentBody.IndexOf("Get-Command dsh -ErrorAction SilentlyContinue")
+    $opencodeProbe = $scenarioAgentBody.IndexOf("Get-Command opencode -ErrorAction SilentlyContinue")
     $claudeProbe = $scenarioAgentBody.IndexOf("Get-Command claude -ErrorAction SilentlyContinue")
+    $kimiProbe = $scenarioAgentBody.IndexOf("Get-Command kimi -ErrorAction SilentlyContinue")
+    $codexProbe = $scenarioAgentBody.IndexOf("Get-Command codex -ErrorAction SilentlyContinue")
     Assert-True 'Get-ScenarioAgent found' ($scenarioAgentBody.Length -gt 0)
     Assert-True 'Auto-detection probes dsh first' `
         ($dshProbe -ge 0 -and $claudeProbe -ge 0 -and $dshProbe -lt $claudeProbe)
+    Assert-True 'Auto-detection probes opencode second (dsh > opencode > claude)' `
+        ($opencodeProbe -ge 0 -and $dshProbe -lt $opencodeProbe -and $opencodeProbe -lt $claudeProbe)
+    Assert-True 'Auto-detection probes codex last (before the fallback)' `
+        ($codexProbe -ge 0 -and $kimiProbe -ge 0 -and $codexProbe -gt $kimiProbe)
     Assert-True "Auto-detection falls back to dsh" `
         ($scenarioAgentBody -match "#\s*4\.\s*Fallback\s+return 'dsh'")
 
@@ -554,6 +565,10 @@ Write-Host '━━━ Get-ScenarioAgent: Backend Detection (opencode, codex, dsh
     # opencode legitimately uses `run`; only the dsh branch must not.
     Assert-True 'dsh invocation has no stale run subcommand' `
         ($commonContent -notmatch "'dsh'\s*\{[^}]*'run'")
+    # Regression: opencode headless runs fail closed without --auto — the branch
+    # must pass it right after `run`, before the trailing positional prompt.
+    Assert-True 'opencode invocation runs --auto before the positional prompt' `
+        ($commonContent -match 'return @\(''run'', ''--auto'', \$Prompt\)')
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -576,6 +591,13 @@ Write-Host '━━━ Get-ScenarioAgent: BROWSER4_AGENT Env Var ━━━' -Fore
         $env:BROWSER4_AGENT = 'claude'
         $resolved = Get-ScenarioAgent
         Assert-Equal 'Returns claude' 'claude' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT=opencode returns opencode'
+    try {
+        $env:BROWSER4_AGENT = 'opencode'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns opencode' 'opencode' $resolved
     } finally { $env:BROWSER4_AGENT = $orig }
 
     Write-TestGroup 'BROWSER4_AGENT=kimi returns kimi'

@@ -55,6 +55,9 @@ if ($script:configData.ContainsKey('CLAUDE')) {
 if ($script:configData.ContainsKey('KIMI')) {
     $KIMI = @($script:configData['KIMI'])
 }
+if ($script:configData.ContainsKey('OPENCODE')) {
+    $OPENCODE = @($script:configData['OPENCODE'])
+}
 if ($script:configData.ContainsKey('CODEX')) {
     $CODEX = @($script:configData['CODEX'])
 }
@@ -68,15 +71,16 @@ if ($script:configData.ContainsKey('DSH')) {
 #
 # Priority (highest to lowest):
 #   1. $env:BROWSER4_AGENT — global machine/user override
-#   2. Config arrays in config.psd1: DSH > CLAUDE > KIMI > CODEX
+#   2. Config arrays in config.psd1: DSH > OPENCODE > CLAUDE > KIMI > CODEX
 #   3. Fallback: copilot
 #
-# Valid env var values: dsh, claude, kimi, codex, copilot
+# Valid env var values: dsh, opencode, claude, kimi, codex, copilot
 #
 # dsh (DeepSeek Harness) is the preferred external harness: it is first here and
-# first in the real-world scenario PATH auto-detection (common.ps1).
+# first in the real-world scenario PATH auto-detection (common.ps1).  opencode
+# is the second choice.
 
-$script:KnownAgentBackends = @('dsh', 'claude', 'kimi', 'codex', 'copilot')
+$script:KnownAgentBackends = @('dsh', 'opencode', 'claude', 'kimi', 'codex', 'copilot')
 
 function Get-AgentBackend {
     # ── $env:BROWSER4_AGENT takes precedence over everything ──────────────────
@@ -90,6 +94,7 @@ function Get-AgentBackend {
     }
 
     if ($DSH) { return 'dsh' }
+    if ($OPENCODE) { return 'opencode' }
     if ($CLAUDE) { return 'claude' }
     if ($KIMI) { return 'kimi' }
     if ($CODEX) { return 'codex' }

@@ -112,7 +112,10 @@ install` also unpacks skills into the versioned installation directory, and
 already match the bundled copy are skipped), so re-running is cheap.
 `install` / `upgrade` also copy the bundled skills into `~/.agents/skills`
 (the directory AI agents such as Codex load skills from), overridable via
-`BROWSER4_AGENTS_SKILLS_DIR`.
+`BROWSER4_AGENTS_SKILLS_DIR`.  Only the `browser4-cli` skill is synced there
+by default, keeping the shared agent skill space uncluttered; point an agent
+at the versioned install directory or run `skills unpack <dest>` when the
+full set is wanted.
 
 ### Options
 

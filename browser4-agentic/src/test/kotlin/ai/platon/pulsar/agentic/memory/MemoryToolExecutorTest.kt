@@ -97,6 +97,23 @@ class MemoryToolExecutorTest {
             validator.validate(read, mapOf("taskId" to "t1")),
             "reading a whole task without coarse coordinates is a valid call",
         )
+        assertEquals(
+            emptyList<ToolSpecValidator.Violation>(),
+            validator.validate(read, emptyMap()),
+            "taskId is optional: a bare read() reads the current task",
+        )
+    }
+
+    @Test
+    @DisplayName("read without a taskId reads the current task")
+    fun readDefaultsToCurrentTask() = runBlocking {
+        seed()
+        memory.currentTaskId = "t1"
+        // The live failure was "Missing parameter 'taskId' for read" on a bare
+        // memory.read() — the model asked about its own task and got an error.
+        val result = executor.callFunctionOn("memory", "read", emptyMap(), Any()) as String
+        assertTrue(result.contains("t1"), "bare read should report the current task: $result")
+        assertTrue(result.contains("task_started") || result.contains("taskId"))
     }
 
     @Test

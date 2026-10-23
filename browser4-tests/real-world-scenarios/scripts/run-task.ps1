@@ -54,7 +54,7 @@ param(
 
     # Override the agent CLI to use (dsh, claude, kimi, opencode, or codex).
     # When empty, checks $env:BROWSER4_AGENT, then auto-detects from PATH.
-    # Priority: -Agent > $env:BROWSER4_AGENT > PATH auto-detect (dsh > claude > kimi > opencode > codex).
+    # Priority: -Agent > $env:BROWSER4_AGENT > PATH auto-detect (dsh > opencode > claude > kimi > codex).
     [ValidateSet('', 'dsh', 'claude', 'kimi', 'opencode', 'codex')]
     [string] $Agent = ''
 )

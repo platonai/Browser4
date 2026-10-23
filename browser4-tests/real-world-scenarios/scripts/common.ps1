@@ -2320,9 +2320,9 @@ function Start-NativeCommand {
     # Two prompt styles are supported:
     #   - `-p <prompt>` style (claude, kimi): the argument following -p.
     #   - trailing positional prompt (codex `exec ... <prompt>`, opencode
-    #     `run <prompt>`): the final argument when it is large.  codex and
-    #     opencode read the prompt from stdin when it is piped and no prompt
-    #     argument is present.
+    #     `run --auto <prompt>`): the final argument when it is large.  codex
+    #     and opencode read the prompt from stdin when it is piped and no
+    #     prompt argument is present.
     # dsh is NOT in that list — `dsh --profile headless <task>` takes the task
     # as a positional argument and fails on a missing task, so callers pass
     # -NoStdinRedirect and keep its prompt on the command line.
@@ -3299,7 +3299,7 @@ function Get-ScenarioAgentArgs {
         Each agent CLI has a different invocation pattern:
           claude:   --dangerously-skip-permissions -p <prompt> [--silent]
           kimi:     -p <prompt>
-          opencode: run <prompt>
+          opencode: run --auto <prompt>
           codex:    exec --dangerously-bypass-approvals-and-sandbox --ephemeral <prompt>
           dsh:      --profile headless <prompt>
 
@@ -3334,7 +3334,11 @@ function Get-ScenarioAgentArgs {
             return @('-p', $Prompt)
         }
         'opencode' {
-            return @('run', $Prompt)
+            # run = non-interactive single message; --auto auto-approves
+            # permission requests that are not explicitly denied (headless runs
+            # otherwise fail closed).  Subcommand-scoped flags must come after
+            # `run`; the message is a trailing positional argument.
+            return @('run', '--auto', $Prompt)
         }
         'codex' {
             # exec = non-interactive; --dangerously-bypass-approvals-and-sandbox = auto-approve;
@@ -3363,12 +3367,14 @@ function Get-ScenarioAgent {
         Priority (highest to lowest):
           1. $script:scenarioAgentCli — explicit script-level override
           2. $env:BROWSER4_AGENT — global machine/user override
-          3. Auto-detection from PATH: dsh > claude > kimi > opencode > codex
+          3. Auto-detection from PATH: dsh > opencode > claude > kimi > codex
           4. Fallback: 'dsh'
 
         dsh (DeepSeek Harness) is the preferred external harness: it wins both
         the auto-detection order and the fallback, matching Get-AgentBackend in
-        coworker/scripts/config.ps1.
+        coworker/scripts/config.ps1 (dsh > opencode > claude > kimi > codex).
+        opencode is the designated backup harness — the second choice whenever
+        dsh is unavailable.
 
         Callers may force a backend by setting $script:scenarioAgentCli = 'claude'
         (or 'dsh', 'kimi', 'opencode', 'codex') after dot-sourcing this module.
@@ -3389,11 +3395,11 @@ function Get-ScenarioAgent {
     }
 
     # 3. Auto-detection from PATH — dsh (DeepSeek Harness) is the preferred
-    #    external harness and is probed first.
+    #    external harness and is probed first; opencode is the backup.
     if (Get-Command dsh -ErrorAction SilentlyContinue) { return 'dsh' }
+    if (Get-Command opencode -ErrorAction SilentlyContinue) { return 'opencode' }
     if (Get-Command claude -ErrorAction SilentlyContinue) { return 'claude' }
     if (Get-Command kimi -ErrorAction SilentlyContinue) { return 'kimi' }
-    if (Get-Command opencode -ErrorAction SilentlyContinue) { return 'opencode' }
     if (Get-Command codex -ErrorAction SilentlyContinue) { return 'codex' }
 
     # 4. Fallback
@@ -3403,8 +3409,8 @@ function Get-ScenarioAgent {
 function Invoke-Agent {
     <#
     .SYNOPSIS
-        Invoke the configured agent CLI (dsh, claude, kimi, opencode, or codex) to run
-        a scenario and evaluate browser4-cli usability.
+        Invoke the configured agent CLI (dsh, opencode, claude, kimi, or codex)
+        to run a scenario and evaluate browser4-cli usability.
     .DESCRIPTION
         Runs the agent CLI resolved by Get-ScenarioAgent with the given prompt.
         When -ScenarioName is provided, captures output and writes evaluation
@@ -3418,7 +3424,8 @@ function Invoke-Agent {
           - claude: invoked with --dangerously-skip-permissions -p <prompt>;
             -Silent appends --silent to the CLI arguments.
           - kimi:   -p <prompt>; auto-approves tool calls via -p mode.
-          - opencode: run <prompt>; no permission or --silent flags.
+          - opencode: run --auto <prompt>; --auto auto-approves permission
+            requests (no --silent equivalent).
           - codex:  exec --dangerously-bypass-approvals-and-sandbox <prompt>.
           - dsh:    --profile headless <prompt>; one task, then exit.
     .PARAMETER Prompt
