@@ -15,7 +15,7 @@
 # ═══════════════════════════════════════════════════════════════════
 
 # agent-utils.psm1
-# AI Agent utilities — resolve and invoke AI assistants (dsh, claude, copilot, etc.)
+# AI Agent utilities — resolve and invoke AI assistants (dsh, opencode, claude, copilot, etc.)
 #
 # Provides:
 #   - Get-AiAnalyzer         — resolve the best available AI CLI on PATH
@@ -26,7 +26,8 @@
 #   - Invoke-CopilotAnalysis — backward-compatible wrapper over Invoke-AiAnalysis
 #
 # dsh (DeepSeek Harness) is the preferred external harness and is probed first;
-# claude and copilot are the fallbacks.
+# opencode is the second choice (matching Get-AgentBackend in
+# coworker/scripts/config.ps1); claude and copilot are the fallbacks.
 #
 # Usage:
 #   Import-Module "$PSScriptRoot\agent-utils.psm1" -Force
@@ -43,14 +44,17 @@
 # ============================================================================
 # Module-level state (script-scoped)
 # ============================================================================
-$script:AiAnalyzer = $null  # resolved AI CLI: 'dsh', 'claude', 'copilot', or $null
+$script:AiAnalyzer = $null  # resolved AI CLI: 'dsh', 'opencode', 'claude', 'copilot', or $null
 
 # Ordered list of known AI CLIs to probe, with their display names.
 # dsh first: it is the preferred external harness across the repository.
+# opencode second: the designated backup harness (same order as the coworker
+# backend chain).
 $script:KnownAnalyzers = @(
-    @{ Bin = 'dsh';     Name = 'DSH'      },
-    @{ Bin = 'claude';  Name = 'Claude'   },
-    @{ Bin = 'copilot'; Name = 'Copilot'  }
+    @{ Bin = 'dsh';      Name = 'DSH'      },
+    @{ Bin = 'opencode'; Name = 'OpenCode' },
+    @{ Bin = 'claude';   Name = 'Claude'   },
+    @{ Bin = 'copilot';  Name = 'Copilot'  }
 )
 
 # ============================================================================
@@ -61,11 +65,11 @@ $script:KnownAnalyzers = @(
     Resolve the best available AI CLI on the current PATH.
 
 .DESCRIPTION
-    Probes known AI CLIs in priority order (dsh > claude > copilot) and caches
-    the result so repeated calls never re-scan PATH.
+    Probes known AI CLIs in priority order (dsh > opencode > claude > copilot)
+    and caches the result so repeated calls never re-scan PATH.
 
-    Returns the binary name string ('dsh', 'claude', 'copilot') on success,
-    or $null when no AI CLI is found.
+    Returns the binary name string ('dsh', 'opencode', 'claude', 'copilot') on
+    success, or $null when no AI CLI is found.
 
 .PARAMETER ForceRefresh
     Ignore the cache and re-scan PATH.
@@ -152,12 +156,14 @@ function Test-CopilotAvailable {
       claude:  -p <prompt> --add-dir <promptDir>   prompt flag + extra directory
       copilot: -p <prompt>                         prompt flag
       dsh:     --profile headless <prompt>         positional task, no stdin
+      opencode: run --auto <prompt>                subcommand + auto-approve +
+                                                   trailing positional message
 
     One source of truth: adding a backend is a single branch here instead of a
     change at every invocation site.
 
 .PARAMETER Analyzer
-    The resolved analyzer binary name (dsh, claude, copilot).
+    The resolved analyzer binary name (dsh, opencode, claude, copilot).
 
 .PARAMETER Prompt
     The short prompt handed to the CLI.
@@ -187,6 +193,13 @@ function Get-AiAnalyzerArguments {
             # dsh has no prompt flag and no stdin mode: the headless profile runs
             # one positional task, prints the answer, and exits.
             return @('--profile', 'headless', $Prompt)
+        }
+        'opencode' {
+            # opencode runs one message non-interactively.  Subcommand-scoped
+            # flags must come after `run`; --auto auto-approves permission
+            # requests that are not explicitly denied (headless runs otherwise
+            # fail closed).  The message is a trailing positional argument.
+            return @('run', '--auto', $Prompt)
         }
         'claude' {
             if ($PromptDir) {
@@ -227,8 +240,8 @@ function Get-AiAnalyzerArguments {
     Each file is read with its path as a header.
 
 .PARAMETER Analyzer
-    Force a specific AI CLI ('dsh', 'claude', or 'copilot').  When omitted the
-    best available is auto-detected (dsh first).
+    Force a specific AI CLI ('dsh', 'opencode', 'claude', or 'copilot').  When
+    omitted the best available is auto-detected (dsh first).
 
 .PARAMETER OutputFile
     When provided, the AI response is saved to this file path (UTF-8).
@@ -264,7 +277,7 @@ function Invoke-AiAnalysis {
 
         [string[]]$FilePaths,
 
-        [ValidateSet('dsh', 'claude', 'copilot')]
+        [ValidateSet('dsh', 'opencode', 'claude', 'copilot')]
         [string]$Analyzer = '',
 
         [string]$OutputFile = '',

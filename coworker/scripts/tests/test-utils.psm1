@@ -84,9 +84,10 @@ function Get-AiAnalyzer {
     }
 
     $knownAnalyzers = @(
-        @{ Bin = 'dsh';     Name = 'DSH'      },
-        @{ Bin = 'claude';  Name = 'Claude'   },
-        @{ Bin = 'copilot'; Name = 'Copilot'  }
+        @{ Bin = 'dsh';      Name = 'DSH'      },
+        @{ Bin = 'opencode'; Name = 'OpenCode' },
+        @{ Bin = 'claude';   Name = 'Claude'   },
+        @{ Bin = 'copilot';  Name = 'Copilot'  }
     )
 
     foreach ($entry in $knownAnalyzers) {
@@ -862,13 +863,14 @@ function Invoke-CopilotAnalysis {
 
     # Invoke the best available AI CLI.  When agent-utils is available (repo
     # layout preserved), delegate to it for full feature support.  Otherwise
-    # use the inline fallback that probes dsh/claude/copilot on PATH directly.
+    # use the inline fallback that probes dsh/opencode/claude/copilot on PATH
+    # directly.
     if ($script:AgentUtilsAvailable) {
         $analysisText = Invoke-AgentAiAnalysis -Prompt $fullPrompt -Quiet
     } else {
         $analyzer = Get-AiAnalyzer
         if (-not $analyzer) {
-            Write-Host '  ℹ No AI CLI found on PATH (checked: dsh, claude, copilot) — skipping analysis' -ForegroundColor DarkGray
+            Write-Host '  ℹ No AI CLI found on PATH (checked: dsh, opencode, claude, copilot) — skipping analysis' -ForegroundColor DarkGray
             return $null
         }
         Write-Host "`n🤖 Running AI analysis with $analyzer ..." -ForegroundColor Magenta
@@ -885,6 +887,7 @@ function Invoke-CopilotAnalysis {
                 # Per-backend non-interactive grammar.
                 $analyzerArgs = switch ($analyzer) {
                     'dsh' { @('--profile', 'headless', $shortPrompt) }
+                    'opencode' { @('run', '--auto', $shortPrompt) }
                     'claude' { @('-p', $shortPrompt, '--add-dir', $promptDir) }
                     default { @('-p', $shortPrompt) }
                 }

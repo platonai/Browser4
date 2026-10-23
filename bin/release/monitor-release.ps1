@@ -101,7 +101,7 @@ param(
     [switch]$SkipVersionBump,
     [switch]$NoSyncMain,
     [int]$MaxMonitorMinutes = 0,
-    [ValidateSet('auto', 'dsh', 'claude', 'kimi', 'codex', 'copilot')]
+    [ValidateSet('auto', 'dsh', 'opencode', 'claude', 'kimi', 'codex', 'copilot')]
     [string]$Agent = ""
 )
 

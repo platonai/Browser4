@@ -695,18 +695,21 @@ if (Get-Command New-AgentArguments -ErrorAction SilentlyContinue) {
 Write-Host ''
 Write-Host "━━━ PART 13c: agent.ps1 :: New-AgentArguments (codex) ━━━" -ForegroundColor Cyan
 
+# Codex config arrays carry the full startup prefix (executable + `exec` +
+# exec-scoped flags) since subcommand-scoped flags must come after `exec`.
 if (Get-Command New-AgentArguments -ErrorAction SilentlyContinue) {
-    $args = New-AgentArguments -BaseArgs @('codex') -Prompt 'test' -Backend 'codex'
-    Assert-True -Label 'New-AgentArguments codex: includes exec' `
-        -Condition ($args -contains 'exec')
+    $args = New-AgentArguments -BaseArgs @('codex', 'exec', '--dangerously-bypass-approvals-and-sandbox', '--ephemeral') -Prompt 'test' -Backend 'codex'
+    Assert-True -Label 'New-AgentArguments codex: prompt is trailing positional' `
+        -Condition ($args[-1] -eq 'test')
     Assert-True -Label 'New-AgentArguments codex: no -p flag' `
         -Condition ($args -notcontains '-p')
     Assert-True -Label 'New-AgentArguments codex: no -- separator' `
         -Condition ($args -notcontains '--')
-    Assert-True -Label 'New-AgentArguments codex: includes prompt' `
-        -Condition ($args[-1] -eq 'test')
+    Assert-True -Label 'New-AgentArguments codex: keeps exec-scoped flags after exec' `
+        -Condition (($args -contains 'exec') -and ($args -contains '--ephemeral') -and `
+            ($args.IndexOf('exec') -lt $args.IndexOf('--ephemeral')))
 
-    $args = New-AgentArguments -BaseArgs @('codex') -Prompt 'test' `
+    $args = New-AgentArguments -BaseArgs @('codex', 'exec') -Prompt 'test' `
         -AdditionalArguments @('--allow-all-tools', '--allow-all-paths', '--verbose') -Backend 'codex'
     Assert-False -Label 'New-AgentArguments codex: filters --allow-all-tools' `
         -Condition ($args -contains '--allow-all-tools')
@@ -716,41 +719,158 @@ if (Get-Command New-AgentArguments -ErrorAction SilentlyContinue) {
         -Condition ($args -contains '--verbose')
 }
 
+# PART 13c2: agent.ps1 - New-AgentArguments (opencode backend)
+Write-Host ''
+Write-Host "━━━ PART 13c2: agent.ps1 :: New-AgentArguments (opencode) ━━━" -ForegroundColor Cyan
+
+if (Get-Command New-AgentArguments -ErrorAction SilentlyContinue) {
+    $args = New-AgentArguments -BaseArgs @('opencode', 'run', '--auto') -Prompt 'test' -Backend 'opencode'
+    Assert-True -Label 'New-AgentArguments opencode: prompt is trailing positional' `
+        -Condition ($args[-1] -eq 'test')
+    Assert-True -Label 'New-AgentArguments opencode: keeps run --auto' `
+        -Condition (($args -contains 'run') -and ($args -contains '--auto'))
+    Assert-True -Label 'New-AgentArguments opencode: no -p flag' `
+        -Condition ($args -notcontains '-p')
+    Assert-True -Label 'New-AgentArguments opencode: no -- separator' `
+        -Condition ($args -notcontains '--')
+
+    $args = New-AgentArguments -BaseArgs @('opencode', 'run', '--auto') -Prompt 'test' `
+        -AdditionalArguments @('--allow-all-tools', '--allow-all-paths', '--verbose') -Backend 'opencode'
+    Assert-False -Label 'New-AgentArguments opencode: filters --allow-all-tools' `
+        -Condition ($args -contains '--allow-all-tools')
+    Assert-False -Label 'New-AgentArguments opencode: filters --allow-all-paths' `
+        -Condition ($args -contains '--allow-all-paths')
+    Assert-True -Label 'New-AgentArguments opencode: keeps --verbose' `
+        -Condition ($args -contains '--verbose')
+}
+
+# PART 13d: agent.ps1 - Get-AgentPromptArgs prompt slots (new config contract:
+# config arrays hold the full startup prefix; Get-AgentPromptArgs appends only
+# the prompt slot — or the per-backend stdin marker when the prompt is empty).
+Write-Host ''
+Write-Host "━━━ PART 13d: agent.ps1 :: Get-AgentPromptArgs + Test-AgentPromptViaStdin ━━━" -ForegroundColor Cyan
+
+if (Get-Command Get-AgentPromptArgs -ErrorAction SilentlyContinue) {
+    $args = Get-AgentPromptArgs -Backend 'claude' -Prompt 'test'
+    Assert-Equal -Label 'Get-AgentPromptArgs claude with prompt: -p then prompt' `
+        -Actual ($args -join ' ') -Expected '-p test'
+
+    $args = Get-AgentPromptArgs -Backend 'claude' -Prompt ''
+    Assert-Equal -Label 'Get-AgentPromptArgs claude empty: bare -p (stdin marker)' `
+        -Actual ($args -join ' ') -Expected '-p'
+
+    $args = Get-AgentPromptArgs -Backend 'kimi' -Prompt 'test'
+    Assert-Equal -Label 'Get-AgentPromptArgs kimi with prompt: kimi uses default slot' `
+        -Actual ($args -join ' ') -Expected '-p test'
+
+    $args = Get-AgentPromptArgs -Backend 'codex' -Prompt 'test'
+    Assert-Equal -Label 'Get-AgentPromptArgs codex with prompt: bare positional' `
+        -Actual ($args -join ' ') -Expected 'test'
+
+    $args = Get-AgentPromptArgs -Backend 'codex' -Prompt ''
+    Assert-Equal -Label 'Get-AgentPromptArgs codex empty: nothing (stdin)' `
+        -Actual ($args.Count) -Expected 0
+
+    $args = Get-AgentPromptArgs -Backend 'opencode' -Prompt 'test'
+    Assert-Equal -Label 'Get-AgentPromptArgs opencode with prompt: bare positional' `
+        -Actual ($args -join ' ') -Expected 'test'
+
+    $args = Get-AgentPromptArgs -Backend 'opencode' -Prompt ''
+    Assert-Equal -Label 'Get-AgentPromptArgs opencode empty: nothing (stdin)' `
+        -Actual ($args.Count) -Expected 0
+
+    $args = Get-AgentPromptArgs -Backend 'dsh' -Prompt 'test'
+    Assert-Equal -Label 'Get-AgentPromptArgs dsh with prompt: bare positional task' `
+        -Actual ($args -join ' ') -Expected 'test'
+
+    $args = Get-AgentPromptArgs -Backend 'dsh' -Prompt ''
+    Assert-Equal -Label 'Get-AgentPromptArgs dsh empty: - stdin task marker' `
+        -Actual ($args -join ' ') -Expected '-'
+
+    $args = Get-AgentPromptArgs -Backend 'copilot' -Prompt 'test'
+    Assert-Equal -Label 'Get-AgentPromptArgs copilot with prompt: -- -p prompt' `
+        -Actual ($args -join ' ') -Expected '-- -p test'
+}
+
+if (Get-Command Test-AgentPromptViaStdin -ErrorAction SilentlyContinue) {
+    foreach ($b in 'dsh', 'opencode', 'claude', 'kimi', 'codex', 'copilot') {
+        Assert-True -Label "Test-AgentPromptViaStdin: $b reads stdin" `
+            -Condition (Test-AgentPromptViaStdin -Backend $b)
+    }
+}
+
+# Regression: Start-AgentProcess reconstructs the argv via New-AgentArguments
+# with -Prompt $null on the Windows stdin path.  The empty-prompt slot must
+# appear exactly ONCE — the historical double-append produced `dsh --profile
+# headless - -` ("`-` must be the only task argument") and leaked a literal
+# `exec` into codex task texts.
+if (Get-Command New-AgentArguments -ErrorAction SilentlyContinue) {
+    $args = New-AgentArguments -BaseArgs @('--profile', 'headless') -Prompt $null -Backend 'dsh'
+    Assert-Equal -Label 'New-AgentArguments dsh stdin rebuild: single - marker' `
+        -Actual ($args -join ' ') -Expected '--profile headless -'
+    Assert-Equal -Label 'New-AgentArguments dsh stdin rebuild: hyphen count is 1' `
+        -Actual (($args | Where-Object { $_ -eq '-' }).Count) -Expected 1
+
+    $args = New-AgentArguments -BaseArgs @('run', '--auto') -Prompt $null -Backend 'opencode'
+    Assert-Equal -Label 'New-AgentArguments opencode stdin rebuild: run --auto, no duplicate' `
+        -Actual ($args -join ' ') -Expected 'run --auto'
+
+    $args = New-AgentArguments -BaseArgs @('exec', '--ephemeral') -Prompt $null -Backend 'codex'
+    Assert-Equal -Label 'New-AgentArguments codex stdin rebuild: exec count is 1' `
+        -Actual (($args | Where-Object { $_ -eq 'exec' }).Count) -Expected 1
+    Assert-Equal -Label 'New-AgentArguments codex stdin rebuild: no stray prompt arg' `
+        -Actual ($args -join ' ') -Expected 'exec --ephemeral'
+
+    $args = New-AgentArguments -BaseArgs @('--verbose') -Prompt $null -Backend 'claude'
+    Assert-Equal -Label 'New-AgentArguments claude stdin rebuild: single -p' `
+        -Actual (($args | Where-Object { $_ -eq '-p' }).Count) -Expected 1
+}
+
+# PART 13e: agent.ps1 - Get-AgentBackend resolution order
+
 if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
-    # Save/restore: config.ps1 (dot-sourced via agent.ps1) sets $CLAUDE/$KIMI/$CODEX/$DSH.
+    # Save/restore: config.ps1 (dot-sourced via agent.ps1) sets
+    # $CLAUDE/$KIMI/$OPENCODE/$CODEX/$DSH.
     $savedClaude = $CLAUDE
     $savedKimi = $KIMI
+    $savedOpencode = $OPENCODE
     $savedCodex = $CODEX
     $savedDsh = $DSH
     try {
-        $CLAUDE = @('claude'); $DSH = @('dsh')
-        Assert-Equal -Label 'Get-AgentBackend: dsh wins over claude' `
+        $CLAUDE = @('claude'); $DSH = @('dsh'); $OPENCODE = $null
+        Assert-Equal -Label 'Get-AgentBackend: dsh wins over opencode/claude' `
             -Actual (Get-AgentBackend) -Expected 'dsh'
 
         $DSH = $null
+        $OPENCODE = @('opencode'); $CLAUDE = @('claude')
+        Assert-Equal -Label 'Get-AgentBackend: opencode wins over claude when no dsh' `
+            -Actual (Get-AgentBackend) -Expected 'opencode'
+
+        $OPENCODE = $null
         $CLAUDE = @('claude'); $KIMI = @('kimi')
-        Assert-Equal -Label 'Get-AgentBackend: claude wins over kimi when no dsh' `
+        Assert-Equal -Label 'Get-AgentBackend: claude wins over kimi when no dsh/opencode' `
             -Actual (Get-AgentBackend) -Expected 'claude'
 
         $CLAUDE = $null; $KIMI = @('kimi')
-        Assert-Equal -Label 'Get-AgentBackend: kimi when no dsh/claude' `
+        Assert-Equal -Label 'Get-AgentBackend: kimi when no dsh/opencode/claude' `
             -Actual (Get-AgentBackend) -Expected 'kimi'
 
         $CLAUDE = $null; $KIMI = $null; $CODEX = @('codex')
-        Assert-Equal -Label 'Get-AgentBackend: codex when no dsh/claude/kimi' `
+        Assert-Equal -Label 'Get-AgentBackend: codex when no dsh/opencode/claude/kimi' `
             -Actual (Get-AgentBackend) -Expected 'codex'
 
-        $CLAUDE = $null; $KIMI = $null; $CODEX = $null; $DSH = @('dsh')
-        Assert-Equal -Label 'Get-AgentBackend: dsh when no claude/kimi/codex' `
+        $CLAUDE = $null; $KIMI = $null; $CODEX = $null; $OPENCODE = @('opencode'); $DSH = @('dsh')
+        Assert-Equal -Label 'Get-AgentBackend: dsh when opencode/claude/kimi/codex also set' `
             -Actual (Get-AgentBackend) -Expected 'dsh'
 
-        $CLAUDE = $null; $KIMI = $null; $CODEX = $null; $DSH = $null
+        $CLAUDE = $null; $KIMI = $null; $CODEX = $null; $OPENCODE = $null; $DSH = $null
         Assert-Equal -Label 'Get-AgentBackend: copilot fallback' `
             -Actual (Get-AgentBackend) -Expected 'copilot'
     }
     finally {
         $CLAUDE = $savedClaude
         $KIMI = $savedKimi
+        $OPENCODE = $savedOpencode
         $CODEX = $savedCodex
         $DSH = $savedDsh
     }
@@ -763,7 +883,11 @@ if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
         Assert-Equal -Label 'Get-AgentBackend: BROWSER4_AGENT wins over CLAUDE config' `
             -Actual (Get-AgentBackend) -Expected 'dsh'
 
-        $CLAUDE = $null; $env:BROWSER4_AGENT = 'kimi'
+        $CLAUDE = $null; $env:BROWSER4_AGENT = 'opencode'
+        Assert-Equal -Label 'Get-AgentBackend: BROWSER4_AGENT=opencode' `
+            -Actual (Get-AgentBackend) -Expected 'opencode'
+
+        $env:BROWSER4_AGENT = 'kimi'
         Assert-Equal -Label 'Get-AgentBackend: BROWSER4_AGENT=kimi' `
             -Actual (Get-AgentBackend) -Expected 'kimi'
 
@@ -773,7 +897,7 @@ if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
 
         # Unknown env var falls through to config
         $env:BROWSER4_AGENT = 'nonexistent'
-        $CLAUDE = @('claude'); $KIMI = $null; $CODEX = $null; $DSH = $null
+        $CLAUDE = @('claude'); $KIMI = $null; $CODEX = $null; $OPENCODE = $null; $DSH = $null
         Assert-Equal -Label 'Get-AgentBackend: unknown BROWSER4_AGENT falls through to CLAUDE' `
             -Actual (Get-AgentBackend) -Expected 'claude'
 
@@ -791,6 +915,7 @@ if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
         $env:BROWSER4_AGENT = $savedEnv
         $CLAUDE = $savedClaude
         $KIMI = $savedKimi
+        $OPENCODE = $savedOpencode
         $CODEX = $savedCodex
         $DSH = $savedDsh
     }
@@ -875,8 +1000,8 @@ if (Get-Command Get-CoworkerConfigData -ErrorAction SilentlyContinue) {
     Assert-NotNull -Label 'Get-CoworkerConfigData: returns config data' -Value $configData
     Assert-True -Label 'Get-CoworkerConfigData: has Paths key' `
         -Condition ($configData.ContainsKey('Paths'))
-    Assert-True -Label 'Get-CoworkerConfigData: has a backend key (CLAUDE/KIMI/CODEX/COPILOT)' `
-        -Condition ($configData.ContainsKey('CLAUDE') -or $configData.ContainsKey('KIMI') -or $configData.ContainsKey('COPILOT'))
+    Assert-True -Label 'Get-CoworkerConfigData: has a backend key (DSH/OPENCODE/CLAUDE/KIMI/CODEX/COPILOT)' `
+        -Condition ($configData.ContainsKey('DSH') -or $configData.ContainsKey('OPENCODE') -or $configData.ContainsKey('CLAUDE') -or $configData.ContainsKey('KIMI') -or $configData.ContainsKey('COPILOT'))
 }
 
 # ============================================================================
@@ -1646,8 +1771,8 @@ $configPsd1Path = Join-Path $scriptsDir 'config.psd1'
 if (Test-Path $configPsd1Path) {
     $configData = Import-PowerShellDataFile -Path $configPsd1Path
     Assert-True -Label 'config.psd1: has Paths' -Condition $configData.ContainsKey('Paths')
-    Assert-True -Label 'config.psd1: has at least one backend key (CLAUDE/KIMI/CODEX/COPILOT)' `
-        -Condition ($configData.ContainsKey('CLAUDE') -or $configData.ContainsKey('KIMI') -or $configData.ContainsKey('COPILOT'))
+    Assert-True -Label 'config.psd1: has at least one backend key (DSH/OPENCODE/CLAUDE/KIMI/CODEX/COPILOT)' `
+        -Condition ($configData.ContainsKey('DSH') -or $configData.ContainsKey('OPENCODE') -or $configData.ContainsKey('CLAUDE') -or $configData.ContainsKey('KIMI') -or $configData.ContainsKey('COPILOT'))
     Assert-True -Label 'config.psd1: has Scheduler' -Condition $configData.ContainsKey('Scheduler')
 
     $paths = $configData['Paths']
