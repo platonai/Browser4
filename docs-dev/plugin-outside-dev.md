@@ -14,7 +14,7 @@
 
 | 组件 | 说明 | 位置 |
 |---|---|---|
-| `browser4-pdk` | 独立 parent POM：直接继承 Maven Central 上的 `ai.platon:pulsar-parent`，不依赖 Browser4 聚合 POM；提供 Kotlin + JVM 17 编译配置、`browser4-pdk-bom` 版本管理、Central 发布 profile（GPG + dokka + sources） | `browser4-pdk/pom.xml`（当前版本 `4.14.0-rc.1`） |
+| `browser4-pdk` | 独立 parent POM：直接继承 Maven Central 上的 `ai.platon:pulsar-parent`，不依赖 Browser4 聚合 POM；提供 Kotlin + JVM 17 编译配置、`browser4-pdk-bom` 版本管理、Central 发布 profile（GPG + dokka + sources） | `browser4-pdk/pom.xml`（版本随仓库 `VERSION`，勿在文档中硬编码） |
 | `browser4-plugin-archetype` | 官方 Maven 脚手架 | `browser4-pdk/browser4-plugin-archetype/` |
 | 宿主加载 | `PluginClasspathEnhancer` 启动时扫描 `plugins/` 目录 JAR → Spring Boot 自动发现 `AutoConfiguration.imports` → `PluginManager` 注册 | `browser4-boot/.../plugin/PluginClasspathEnhancer.kt` |
 | REST 安装 | `POST /api/plugins/install`（multipart，`replace` 参数）、`GET /api/plugins`、`DELETE /api/plugins/{name}`；重启生效 | `browser4-rest/.../api/controller/PluginController.kt` |
@@ -69,6 +69,8 @@ browser4-<feature>/
   ```
 
   `<版本>` 与目标宿主同大版本（如宿主 4.14.x → PDK 4.14.x）。
+
+  若 `dependency:get` 失败（Central 上还没有对应版本：SNAPSHOT 宿主通常没有已发布的对应 PDK，稳定版发布前也可能只有 rc），可临时用本地构建代替：`mvn -pl browser4-pdk install`（仅内部验证，不进 CI，见第 7 节风险表）。
 
 ### 3.2 脚手架
 
@@ -142,7 +144,7 @@ curl.exe http://localhost:18182/api/plugins
 
 ### 4.1 ci.yml（push / PR）
 
-- JDK 17 + Maven：`mvn verify`（含单测）
+- JDK 25 + Maven：`mvn verify`（含单测）。工具链必须 25+，与 §3.1 一致 —— `provided` 依赖是 Java 25 字节码，JDK 17 无法编译
 - `verify-plugin` 脚本校验产物 JAR 结构
 
 ### 4.2 release.yml（打 tag `v<版本>` 触发）
@@ -204,8 +206,8 @@ curl.exe http://localhost:18182/api/plugins
 
 ## 8. 参考
 
-- [Plugin Development Guide](../docs-dev/plugin-development.md) — 官方插件开发指南（外部开发流程、API 参考）
-- [Plugin 开发技能](C:\Users\pereg\.dsh\skills\browser4-plugin) — 脚手架、mount 点、测试、部署全流程
+- [Plugin Development Guide](plugin-development.md) — 官方插件开发指南（外部开发流程、API 参考）
+- [Plugin 开发技能](../skills/browser4-plugin/SKILL.md) — 脚手架、mount 点、测试、部署全流程
 - [PluginClasspathEnhancer.kt](../browser4-boot/src/main/kotlin/ai/platon/pulsar/boot/plugin/PluginClasspathEnhancer.kt) — 宿主加载与兼容性检查
 - [PluginController.kt](../browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/controller/PluginController.kt) — 插件 REST API
 - [browser4-pdk/pom.xml](../browser4-pdk/pom.xml) — PDK parent POM（Central 发布 profile）
