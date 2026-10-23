@@ -3,13 +3,17 @@ package ai.platon.pulsar.agentic.tools.advanced.agent
 import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
+import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.api.model.BrowserUseState
 import ai.platon.pulsar.common.ResourceStatus
 import io.mockk.coEvery
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.Runs
+import io.mockk.slot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -414,6 +418,75 @@ class StatefulAgentRunnerTest {
 
             assertEquals(B4Constants.PAGE_STATUS_UNKNOWN, status.pageStatusCode)
             assertNotEquals(ResourceStatus.SC_CREATED, status.pageStatusCode)
+        } finally {
+            runner.close()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Coding vs browser is explicit — never guessed from task text
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * A runner whose agent is a [RobustBrowserAgent] (the runner casts explicitly to it
+     * to apply per-task overrides), recording the coding mode the agent observed while
+     * its task ran.
+     */
+    private fun mockRobustAgent(history: AgentHistory, lastRunSessionId: String?): RobustBrowserAgent {
+        val agent = mockk<RobustBrowserAgent>(relaxed = true)
+        every { agent.stateHistory } returns history
+        every { agent.lastRunSessionId } returns lastRunSessionId
+        return agent
+    }
+
+    @Test
+    @DisplayName("an explicit coding flag is in force while the task runs, reset after")
+    fun explicitCodingFlagIsInForceWhileTheTaskRuns() = runBlocking {
+        val agent = mockRobustAgent(history = AgentHistory(), lastRunSessionId = "run-coding")
+        // Property writes on a relaxed mock are not stored in a backing field —
+        // capture them explicitly so the test can observe the exact assignments
+        // (the last write wins, mirroring real field semantics).
+        val codingWrite = slot<Boolean>()
+        every { agent.codingMode = capture(codingWrite) } just Runs
+        every { agent.codingMode } answers { codingWrite.captured }
+        var codingDuringRun: Boolean? = null
+        coEvery { agent.run(any<String>()) } coAnswers {
+            codingDuringRun = agent.codingMode
+            AgentHistory()
+        }
+        val runner = StatefulAgentRunner(mockSession(agent))
+        try {
+            val status = AgentTaskStatus()
+            runner.execute("fix pom.xml", status, coding = true)
+
+            assertEquals(true, codingDuringRun, "the coding flag must be in force while the agent runs")
+            assertEquals(false, agent.codingMode, "the coding-mode override must reset when the task ends")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("an unset coding flag means a browser task — never guessed from text")
+    fun unsetCodingFlagMeansABrowserTask() = runBlocking {
+        val agent = mockRobustAgent(history = AgentHistory(), lastRunSessionId = "run-browse")
+        val codingWrite = slot<Boolean>()
+        every { agent.codingMode = capture(codingWrite) } just Runs
+        every { agent.codingMode } answers { codingWrite.captured }
+        var codingDuringRun: Boolean? = null
+        coEvery { agent.run(any<String>()) } coAnswers {
+            codingDuringRun = agent.codingMode
+            AgentHistory()
+        }
+        val runner = StatefulAgentRunner(mockSession(agent))
+        try {
+            val status = AgentTaskStatus()
+            // A task that LOOKS like file/build work must still be a browser task
+            // when the caller does not pass the explicit coding flag.
+            runner.execute("read src/main/kotlin/App.kt and write a.md, mvn compile", status)
+
+            assertEquals(false, codingDuringRun, "task text must never trigger coding mode")
+            assertFalse(agent.codingMode)
         } finally {
             runner.close()
         }

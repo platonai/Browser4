@@ -1715,10 +1715,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Requires: an LLM API key configured on the Browser4 backend server (the CLI shell itself does not need the key)."
                 .to_string(),
         );
+        lines.push(
+            "  - Task type: browser by default (never auto-detected). --coding marks a pure coding task (file/build work)."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
             "  browser4-cli agent run \"Open browser4.io and summarize the hero section\""
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Read pom.xml, fix the failing module build\" --coding"
                 .to_string(),
         );
     }

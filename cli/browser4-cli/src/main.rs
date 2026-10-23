@@ -14665,6 +14665,11 @@ async fn handle_agent_run(
     if let Some(n) = noop_limit {
         extra["noopLimit"] = serde_json::json!(n);
     }
+    // Explicit coding flag (`agent run --coding`): the payload key is the opt-in
+    // signal server-side; when it is absent the task is a browser task by default.
+    if tool_params.get("coding").and_then(|v| v.as_bool()) == Some(true) {
+        extra["coding"] = serde_json::json!(true);
+    }
     let result =
         submit_plain_command_with_options(client, base_url, task, true, extra).await?;
 

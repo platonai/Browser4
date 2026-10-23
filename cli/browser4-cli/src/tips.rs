@@ -299,6 +299,9 @@ const TIPS_AGENT: &[Tip] = &[
     Tip {
         text: "`agent run` tasks keep a progressive memory — repeated tasks reuse past selectors and blockers (see the `## Memory` section in the task prompt)",
     },
+    Tip {
+        text: "Task type is browser by default — pass `agent run --coding` to explicitly mark a pure coding task (file/build work, no browser page)",
+    },
 ];
 
 const TIPS_WEBMINER: &[Tip] = &[

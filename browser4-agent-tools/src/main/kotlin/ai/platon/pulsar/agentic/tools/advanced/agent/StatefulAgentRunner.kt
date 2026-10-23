@@ -293,9 +293,10 @@ open class StatefulAgentRunner(
         plainCommand: String,
         noopLimit: Int? = null,
         engine: RunEngine? = null,
+        coding: Boolean? = null,
     ): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status, noopLimit, engine)
+        execute(plainCommand, status, noopLimit, engine, coding)
         return status
     }
 
@@ -313,9 +314,10 @@ open class StatefulAgentRunner(
         status: AgentTaskStatus,
         noopLimit: Int? = null,
         engine: RunEngine? = null,
+        coding: Boolean? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
-            execute(plainCommand, status, noopLimit, engine)
+            execute(plainCommand, status, noopLimit, engine, coding)
         }
         runningJobs[status.id] = job
         job.start()
@@ -376,10 +378,11 @@ open class StatefulAgentRunner(
         status: AgentTaskStatus,
         noopLimit: Int? = null,
         engine: RunEngine? = null,
+        coding: Boolean? = null,
     ) {
         try {
             runMutex.withLock {
-                executeSerialized(plainCommand, status, noopLimit, engine)
+                executeSerialized(plainCommand, status, noopLimit, engine, coding)
             }
         } catch (e: CancellationException) {
             // A task cancelled while queued never reaches executeSerialized — without
@@ -402,6 +405,7 @@ open class StatefulAgentRunner(
         status: AgentTaskStatus,
         noopLimit: Int? = null,
         engine: RunEngine? = null,
+        coding: Boolean? = null,
     ) {
         val agent = session.companionAgent
 
@@ -424,9 +428,9 @@ open class StatefulAgentRunner(
             // already started as if it were still queued.
             persistProgress(status, force = true)
 
-            // Per-task noop tolerance (e.g. `agent run --noop-limit 10`): long coding chains
-            // benefit from a higher limit than the default. A null value resets any stale
-            // override left over from a previous task.
+            // Per-task flags. Explicit values win; a null resets any stale
+            // override left over from a previous task (the companion agent is
+            // shared across tasks).
             (agent as? RobustBrowserAgent)?.let {
                 it.noopLimitOverride = noopLimit
                 if (noopLimit != null) {
@@ -435,6 +439,13 @@ open class StatefulAgentRunner(
                 it.runEngineOverride = engine
                 if (engine != null) {
                     logger.info("Agent task {} (session={}): engine overridden to {}", status.id, session.uuid, engine)
+                }
+                // Explicit coding flag, never auto-detected: the coding flag is
+                // opt-in per call (`command_run`'s coding argument, e.g. the CLI's
+                // agent run --coding). Unset ⇒ browser task.
+                it.codingMode = coding == true
+                if (coding == true) {
+                    logger.info("Agent task {} (session={}): coding mode (explicit) — skipping driver health check and page navigation", status.id, session.uuid)
                 }
             }
 
@@ -477,10 +488,10 @@ open class StatefulAgentRunner(
                     AgentEventBus.withServerSideAgentEventHandlers(serverSideAgentEventHandlers) {
                         if (runDispatcher != null) {
                             withContext(runDispatcher) {
-                                executeAgentCommand(plainCommand, status, agent, runHasReturned, startIndex)
+                                executeAgentCommand(plainCommand, status, agent, runHasReturned, startIndex, coding)
                             }
                         } else {
-                            executeAgentCommand(plainCommand, status, agent, runHasReturned, startIndex)
+                            executeAgentCommand(plainCommand, status, agent, runHasReturned, startIndex, coding)
                         }
                     }
                 } finally {
@@ -565,6 +576,7 @@ open class StatefulAgentRunner(
         agent: PerceptiveAgent,
         runHasReturned: AtomicBoolean,
         startIndex: Int,
+        coding: Boolean? = null,
     ) {
         // Record the submitted instruction so callers can verify they're
         // getting results for the right task (prevents cross-talk confusion).
@@ -574,15 +586,12 @@ open class StatefulAgentRunner(
         // caller at the deliverables instead of leaving them to search app-data.
         status.workspace = (agent as? BasicBrowserAgent)?.workspaceRoot?.toString()
 
-        // Pure coding tasks (file ops / build) don't need a browser page. Switch the
-        // agent into coding mode: no driver health check, no search-engine navigation,
-        // no screenshots — those page steps were the source of the 30s DOM timeouts
-        // that killed coding runs.
-        val codingMode = CodingTaskDetector.detect(plainCommand)
-        (agent as? RobustBrowserAgent)?.codingMode = codingMode
-        if (codingMode) {
-            logger.info("Agent task {} (session={}): coding mode — skipping driver health check and page navigation", status.id, session.uuid)
-        } else {
+        // Coding vs browser is an EXPLICIT per-task choice (browser is the product
+        // default; coding is auxiliary): the keyword-based CodingTaskDetector was
+        // removed. `executeSerialized` already applied the coding flag to the agent
+        // (`codingMode = coding == true`); here only the browser branch resets a
+        // possibly stale bound driver so this task gets a fresh browser.
+        if (coding != true) {
             // A session reuses its bound driver across tasks. If a previous task (or a
             // close-all) shut the browser down, the driver points at a dead browser and
             // the agent would fail every step (DOM settle timeout, browserUseState
