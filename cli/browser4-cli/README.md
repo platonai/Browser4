@@ -242,7 +242,7 @@ extensions) are also possible via `open --profile` or PROTOTYPE mode. See
 | Command | Description |
 |---|---|
 | `extract <instruction>` | Extract data from the current page. Without `--schema` the result is always the fixed `{title, content, links}` envelope — the instruction shapes the text inside `content`; pass `--schema` (JSON Schema or `{"fields":[…]}`) to get named top-level fields |
-| `agent run <task>` | Run an autonomous agent task (async, returns task ID). `--wait` blocks for the result; `--wait-timeout <seconds>` tunes the wait window (default 600). |
+| `agent run <task>` | Run an autonomous agent task (async, returns task ID). `--wait` blocks for the result; `--wait-timeout <seconds>` tunes the wait window (default 600). Task type is browser by default; `--coding` explicitly marks a pure file/build task (never auto-detected) |
 | `agent status <id>` | Check a task — the shared status envelope (`status`: `queued`/`running`/`done`/`failed`/`cancelled`, plus `statusCode`, `message` and the agent's step count). `done`/`failed`/`cancelled` are terminal; an unknown id answers `statusCode: 404` with the reason and exits non-zero. |
 | `agent result <id>` | Get a completed task's result: its summary plus the agent's `keyFindings`, `filesChanged`, `problems` and the `workspace` its deliverables live in (a task whose answer is a file is reachable from here). |
 | `agent list` | List tracked agent tasks with the same statuses (refreshed from the backend on every call); `--clear` untracks the finished ones. |

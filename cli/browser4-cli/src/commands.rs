@@ -4031,7 +4031,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "wait", description: "Block until the agent task completes (default timeout: 600s)", is_bool: true, short: None },
                 OptionDef { name: "wait-timeout", description: "Max seconds to block with --wait before giving up (default: 600; the task keeps running server-side after a timeout)", is_bool: false, short: None },
-                OptionDef { name: "noop-limit", description: "Override the consecutive no-op abort threshold (default: 5; long coding tasks benefit from 8-10)", is_bool: false, short: None },
+                OptionDef { name: "noop-limit", description: "Override the consecutive no-op abort threshold (default: 5; long coding tasks benefit from 8-10). Passing --coding is the explicit way to mark an agent task as a coding task", is_bool: false, short: None },
+                OptionDef { name: "coding", description: "Mark the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task, which is the default: task type is never auto-detected", is_bool: true, short: None },
                 OptionDef { name: "engine", description: "Agent execution engine (default: cli; observe-act is the DEPRECATED legacy engine)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -4050,6 +4051,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                     if let Ok(limit) = n.parse::<i64>() {
                         p["noopLimit"] = json!(limit);
                     }
+                }
+                // Only forward when set: the payload key itself is the opt-in
+                // signal (absent ⇒ browser task, the default).
+                if get_bool(args, "coding").unwrap_or(false) {
+                    p["coding"] = json!(true);
                 }
                 p["engine"] = json!(get_opt_str(args, "engine").unwrap_or("cli"));
                 p
@@ -7139,6 +7145,29 @@ mod tests {
         args.insert("wait-timeout".to_string(), json!("soon"));
         let params = (cmd.tool_params_fn)(&args);
         assert!(params.get("waitTimeout").is_none());
+    }
+
+    #[test]
+    fn test_agent_run_omits_coding_by_default() {
+        // Browser is the default: the payload must not carry the coding key at
+        // all when the caller never passed --coding.
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("go to amazon.com"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("coding").is_none());
+    }
+
+    #[test]
+    fn test_agent_run_forwards_coding_flag() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("read pom.xml and fix the module build"));
+        args.insert("coding".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["coding"], true);
     }
 
     #[test]

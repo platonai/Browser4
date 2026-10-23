@@ -176,6 +176,7 @@ class UserCommandExecutor(
         plainCommand: String,
         noopLimit: Int? = null,
         engine: RunEngine? = null,
+        coding: Boolean? = null,
     ): CommandStatus {
         if (plainCommand.isBlank()) {
             return CommandStatus.failed(ResourceStatus.SC_BAD_REQUEST)
@@ -194,7 +195,7 @@ class UserCommandExecutor(
             ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
         } else {
             ensureAgentRunner(sessionId)
-                .execute(plainCommand, noopLimit = noopLimit, engine = engine)
+                .execute(plainCommand, noopLimit = noopLimit, engine = engine, coding = coding)
                 .toCommandStatus()
         }
     }
@@ -214,6 +215,7 @@ class UserCommandExecutor(
         plainCommand: String,
         noopLimit: Int? = null,
         engine: RunEngine? = null,
+        coding: Boolean? = null,
     ): String {
         val command = plainCommand.trim()
 
@@ -227,7 +229,7 @@ class UserCommandExecutor(
         // CLI engine (the default): always an agent task — no URL shortcut, no
         // normalizer hijack. The agent decides how to reach the page via b4.run.
         if (engine != RunEngine.OBSERVE_ACT) {
-            return submitAgentTask(sessionId, command, noopLimit, engine)
+            return submitAgentTask(sessionId, command, noopLimit, engine, coding)
         }
 
         // 2. Single URL with optional parameters — use page visit directly
@@ -249,7 +251,7 @@ class UserCommandExecutor(
             submitPageVisitCommand(sessionId, request, eventHandlers)
         } else {
             // 4. Free-form agent command
-            submitAgentTask(sessionId, command, noopLimit, engine)
+            submitAgentTask(sessionId, command, noopLimit, engine, coding)
         }
     }
 
@@ -283,12 +285,16 @@ class UserCommandExecutor(
         plainCommand: String,
         noopLimit: Int? = null,
         engine: RunEngine? = null,
+        coding: Boolean? = null,
     ): String {
         val runner = ensureAgentRunner(sessionId)
         val status = runner.create()
         taskOwner[status.id] = "agent"
-        logger.info("Submitting agent task {} (session={}, noopLimit={})", status.id, sessionId, noopLimit)
-        runner.submit(plainCommand, status, noopLimit, engine)
+        logger.info(
+            "Submitting agent task {} (session={}, noopLimit={}, coding={})",
+            status.id, sessionId, noopLimit, coding ?: false
+        )
+        runner.submit(plainCommand, status, noopLimit, engine, coding)
         return status.id
     }
 

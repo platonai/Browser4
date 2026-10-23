@@ -142,8 +142,8 @@ internal data class CliEngineToolSet(
  *   [AgentToolManager.getLangChain4jToolRegistry].
  * @param systemSpecs The authoritative system-domain specs from
  *   [SystemToolExecutor.getToolSpecs] (help/skillDoc/taskComplete).
- * @param codingMode True when the task was classified as a pure coding task
- *   (set by the task runner via `CodingTaskDetector` before the run).
+ * @param codingMode True when the task was explicitly marked as a coding task
+ *   (set by the task runner from `command.run`'s `coding` argument before the run).
  * @param coreMethodAllowlist Explicit per-domain method allowlist; when null
  *   the task-adaptive allowlist is used ([CLI_BROWSING_CODING_METHODS] for
  *   browsing tasks, [CLI_CORE_CODING_METHODS] for coding tasks).
@@ -366,8 +366,10 @@ open class RobustBrowserAgent(
 
     /**
      * Coding mode override (see [BasicBrowserAgent.codingMode]): set by
-     * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] when the task is
-     * detected as a pure coding task. Skips the search-engine navigation and screenshots.
+     * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] from the
+     * task's explicit coding flag (`command.run`'s `coding` argument, the CLI's
+     * `agent run --coding`). Never auto-detected. Skips the search-engine
+     * navigation and screenshots.
      */
     @Volatile
     override var codingMode: Boolean = false
@@ -1048,8 +1050,9 @@ open class RobustBrowserAgent(
             systemSpecs = agentToolManager.system.getToolSpecs().values.toList(),
             initialToolSet = initialToolSet,
             disclosureEnabled = disclosureEnabled,
-            // Task-adaptive initial exposure (see buildCliEngineToolSet): set
-            // by StatefulAgentRunner via CodingTaskDetector before the run.
+            // Explicit per-task coding flag (command_run's coding argument), not
+            // auto-detected: coding tasks get the full coding core for their
+            // initial exposure.
             codingMode = codingMode,
         )
         if (toolSet.usedMode != initialToolSet) {
