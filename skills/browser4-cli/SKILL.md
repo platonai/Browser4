@@ -127,13 +127,11 @@ Refs are **ephemeral** — treat them as single-use handles:
 | **Headless** | `--headless` | No GUI window | **Default for AI agents** — scraping, automation, CI/CD, servers |
 | **Headed** | `--headed` | Visible window | Debugging, demonstration, a human must act, or the one-shot bot-detection retry |
 
-Use `--headed` for exactly three reasons: (1) the user explicitly asks for a visible browser; (2) a human must act on the page (login, CAPTCHA, QR code, 2FA); (3) **anti-bot escalation**.
+**Rule for AI agents: always use `--headless` by default.** Use `--headed` for exactly three reasons: (1) the user **explicitly** asks for a visible browser ("show me the browser", "I want to see", "open visibly", "headed", "watch what happens"); (2) a human must act on the page (login, CAPTCHA, QR code, 2FA) and needs to see it; (3) **anti-bot escalation** (below).
 
 > **Choosing the whole setup** (session × display × browser source — including
 > when to attach to your own browser instead of launching one): see
 > [browser-modes.md](references/browser-modes.md).
-
-**Rule for AI agents: always use `--headless` by default.** Use `--headed` only when the user **explicitly** requests a visible browser ("show me the browser", "I want to see", "open visibly", "headed", "watch what happens"). If user participation in the page interaction is required — e.g., logging in or entering a verification code (CAPTCHA) — open a **headed** browser so the user can see and act on the page.
 
 **Anti-bot escalation — retry once:** when a page looks blocked (CAPTCHA/verification widget, Cloudflare/DataDome/Akamai/PerimeterX challenge, Google `/sorry/`, "unusual traffic" / "access denied"), `close` then `open --headed` **with the same `-s <name>`** so profile and cookies survive, retry the same step **once**, and **tell the user the mode was switched**. If the headed retry is blocked too, stop — the block is fingerprint/IP-level: prefer `attach --cdp` / `attach --extension` (a real logged-in profile), raise `--interact-level`, or report the site as unreachable. GUI-less environments (CI, Docker) degrade `--headed` to headless — say the retry ran headless instead of claiming a visible window. `goto`/`open` run a one-call probe after a successful navigation and print this escalation as an **advisory stderr warning** (naming the signature that fired) when the landed page matches a challenge URL or body marker; the command still succeeds, so act on the warning yourself rather than waiting for a failure (`--json` reports it as `challenge_detected` / `challenge_signature`). The weaker "implausibly empty body" signal (few visible chars and **no iframes** — widget/demo pages are exempt, as are content paths like `/wiki/…`) only advises a retry and a `snapshot` inspection, **not** a mode switch — do not pay a session teardown for that signal alone.
 
@@ -227,32 +225,9 @@ Element commands (`click`, `fill`, `type`, …) resolve CSS selectors against th
 ### Emulation (`set`)
 
 `set geo|offline|headers|media|device` issues CDP emulation commands against the **current tab of the
-session** and prints what it applied (`✓ Geolocation emulated: latitude=31.23, …`) — no read-back command exists.
-
-| Mode | Command (required flags in bold) | Survives `goto` / `reload` | How to undo |
-|------|----------------------------------|-----------------------------|-------------|
-| Geolocation | `set geo --lat <d> --lon <d> [--accuracy <m>]` | yes | `cdp Emulation.clearGeolocationOverride` |
-| Offline | `set offline on\|off` | yes (`off` = normal network) | `set offline off` |
-| Extra headers | `set headers --json '{"X-Api-Key":"abc"}'` | yes | `set headers --json '{}'` |
-| Media | `set media --color-scheme light\|dark\|no-preference` | yes | `--color-scheme no-preference` |
-| Device metrics | `set device --width <px> --height <px> [--dpr <n>] [--mobile]` | yes — re-applied after `goto`; `resize` keeps the scale factor | `cdp Emulation.clearDeviceMetricsOverride` |
-
-- **Device metrics survive navigation and resize.** `goto` re-applies the active emulation after the
-  backend normalises its viewport, and `resize` carries `deviceScaleFactor`/`mobile` forward, so
-  `set device --width 390 --height 844 --dpr 2 --mobile` stands until you clear it or close the tab.
-  Verify from the page: `eval "innerWidth + 'x' + innerHeight + ' dpr ' + devicePixelRatio"`.
-- **Geolocation needs the browser's geolocation service enabled.** `set geo` grants the permission for
-  the page origin (without it `getCurrentPosition()` never settles), but a browser launched with
-  `--disable-geolocation` (the default, so unattended browsers never block on a prompt) has the service
-  off, and a launch flag cannot be undone at run time — relaunch with
-  `browser.launch.disable.geolocation=false` if the position still never resolves.
-- **Inputs are validated:** `--lat`/`--lon`, `--json` and `--width`/`--height` are required for their
-  mode, a mode's own options are rejected on another mode (`set geo --dpr 2`), an unknown mode names
-  the closest valid one, and malformed `--json` headers are refused **without** clearing the active
-  headers. Only `--accuracy` (1) and `--dpr` (1) default. `set device --mobile` only sets the metrics
-  override's mobile flag (`maxTouchPoints` 10): `navigator.userAgent` stays the desktop UA, so a
-  UA-sniffing site sees a desktop browser on a phone-sized viewport. Overrides live on the tab's CDP
-  session, so a new tab/session starts un-emulated; values persist until changed or the session closes.
+session**, prints what it applied, and keeps the override active until you change or clear it
+(`cdp Emulation.clear*Override`); a new tab starts un-emulated. Modes, undo recipes, validation and
+the geolocation caveat: **[emulation.md](references/emulation.md)**.
 
 ## 3. Command Map
 
@@ -277,7 +252,7 @@ session** and prints what it applied (`✓ Geolocation emulated: latitude=31.23,
 | `eval --ref` | Execute JS scoped to a specific element | Element property extraction (text, attrs, styles) | **⚠️ Expression MUST be an arrow function: `element => element.textContent`** |
 | `scrollintoview`, `pushstate`, `highlight` | Element scroll / history / visual highlight (eval-based shortcuts) | Scroll an element into view, push a history entry, outline an element | — |
 | `vitals`, `web-vitals` | Core Web Vitals measurement (LCP, CLS, INP, FCP, TTFB) via injected web-vitals lib | Performance checks on a live page (needs network for CDN) | — |
-| `set geo\|offline\|headers\|media\|device` | CDP emulation: geolocation, offline mode, extra headers, color scheme, device metrics | Emulate locations, networks, devices, and media features | — |
+| `set geo\|offline\|headers\|media\|device` | CDP emulation: geolocation, offline mode, extra headers, color scheme, device metrics | Emulate locations, networks, devices, and media features | [emulation.md](references/emulation.md) |
 | `errors` | Console errors only (alias of `console --min-level error`) | Surface page JS errors fast | — |
 | `extract`, `summarize`, `agent run` | AI-powered extraction | Natural language extraction (needs LLM key). `extract` without `--schema` returns a fixed `{title, content, links}` envelope — the instruction shapes the text inside `content`, and `--schema` is what produces named structured fields | [agent.md](references/agent.md) |
 | `crawl` | Recursive crawling + bulk extraction | Multi-page traversal, seed-file processing | [crawl.md](references/crawl.md) |
@@ -308,21 +283,11 @@ session** and prints what it applied (`✓ Geolocation emulated: latitude=31.23,
 
 ### Refreshing This Skill
 
-The `skills` command retrieves bundled skill content that always matches the installed CLI version. Use it to get current instructions rather than relying on cached copies:
-
-```bash
-browser4-cli skills                         # List all bundled skills
-browser4-cli skills get browser4-cli        # Print this SKILL.md
-browser4-cli skills get browser4-cli --full # Include all reference files
-browser4-cli skills path                    # Print skills directory path
-browser4-cli skills unpack                  # Unpack bundled skill files to disk
-```
-
-Skill files are unpacked automatically during `browser4-cli install` (and refreshed by `upgrade`);
-unchanged files are skipped, so re-running is cheap. `install` / `upgrade` also copy the bundled
-skills into `~/.agents/skills` so agents (e.g. Codex) load them automatically — only the
-`browser4-cli` skill is synced there by default; use `skills unpack <dest>` to unpack everything.
-Overrides: `BROWSER4_SKILLS_DIR`, `BROWSER4_AGENTS_SKILLS_DIR`.
+The `skills` command prints this skill from the installed binary, so it always matches the CLI version:
+`skills get browser4-cli` (add `--full` for every reference file), `skills path`, `skills unpack [dest]`.
+`install` / `upgrade` also sync the bundled `browser4-cli` skill into `~/.agents/skills`. Full command
+family, unpack behaviour and the env overrides (`BROWSER4_SKILLS_DIR`, `BROWSER4_AGENTS_SKILLS_DIR`):
+**[skills.md](references/skills.md)**.
 
 ## 4. Decision Trees
 
@@ -394,36 +359,19 @@ What do you need to do?
 > **Known deviations:** `wait --download` should count only files that appear *after* the call starts,
 > and accept a target filename.
 
-> **Snapshot modes — `-v 0` vs `-i` vs default:**
->
-> | Mode | What it shows | Best for |
-> |------|--------------|----------|
-> | `snapshot` (default) | Full AX tree with all element refs | General exploration, first look at a page |
-> | `snapshot -v 0` | Current visible screen (one screen-height viewport chunk; `-v all` = whole page) | Long pages — read one chunk at a time |
-> | `snapshot -i` | **Interactive-only rendering** — buttons, links, inputs and pointer (`cursor:pointer`) elements, inner text merged into their names so each surviving ref line is a self-contained target. `-i -v <n>` narrows it to one viewport chunk (`-i -v 0` = this screen's interactive elements) | Form-heavy pages, a quick read of the actionable elements |
-> | `htmlsnapshot` | Static HTML (CSS selectors) | Content extraction when you need CSS selectors, not AX refs |
->
-> **`-i` is a strict filter and drops refs you may need:** draggable items
-> (`li[draggable=true]`, `cursor:grab`) and hover-only targets (tooltip spans, `cursor:help`) keep
-> their text as merged lines but **lose their refs**, and with `-v` they vanish from the output
-> entirely. Act on those with refs from the default snapshot or `-v 0` instead: `snapshot -i -v 0
-> --stdout` lists this screen's interactive elements only, while `snapshot -v 0 --stdout` gives the
-> full tree for that screen — draggable and hover-revealed targets included.
->
-> Extending the heuristic to draggable/hover-revealed elements is expected; until it lands, don't use
-> `-i` as the only orientation view before acting. `snapshot --help` documents the same strict filter,
-> but the size tip printed for very large snapshots (and the optional `--show-tip` tip) may still
-> carry the older wording "not a strict filter".
+> **Snapshot modes — `-v 0` vs `-i` vs default:** plain `snapshot` captures the whole-page AX tree;
+> `-v 0` is the screenful currently visible (`-v all` = whole page); `-i` is interactive-only
+> rendering with inner text merged into element names; `htmlsnapshot` gives static HTML read by CSS
+> selector instead of refs. `-i` is a **strict filter** — draggable items and hover-only targets keep
+> their text but **lose their refs** (and vanish entirely under `-v`), so never use it as your only
+> orientation view; per-mode detail and the draggable caveat: [snapshot.md](references/snapshot.md#interactive-mode).
 
 ## 6. Quick Patterns & Deep Dives
 
 Copy-paste pairs for the common flows — form fill, `snapshot grep`, mouse/drag, dialog handling,
-verify-after-interaction, single-field and bulk extraction, PowerCSS, agent tasks:
-
-- [quick-patterns.md](references/quick-patterns.md) — the recipe catalog.
-- [quickstart.md](references/quickstart.md) — the compressed resident quick reference.
-- [decision-trees.md](references/decision-trees.md) — extraction decision trees, expanded.
-- [htmlsnapshot-scenarios.md](references/htmlsnapshot-scenarios.md) — end-to-end walkthroughs; focused variants: [advanced](references/htmlsnapshot-scenarios-advanced.md), [amazon](references/htmlsnapshot-scenarios-amazon.md), [audit](references/htmlsnapshot-scenarios-audit.md), [extraction](references/htmlsnapshot-scenarios-extraction.md).
+verify-after-interaction, single-field and bulk extraction, PowerCSS, agent tasks. Full recipes live in
+**[quick-patterns.md](references/quick-patterns.md)**, the distilled resident reference in
+[quickstart.md](references/quickstart.md); every other document is mapped in [§7](#7-reference-map).
 
 Proven copy-paste recipes — full walkthroughs in **[quick-patterns.md](references/quick-patterns.md)**:
 
@@ -478,6 +426,7 @@ Organized by task — follow the link that matches what you're trying to do:
 
 **Choose how the browser runs:**
 [browser-modes.md](references/browser-modes.md) — session (default / named / swarm) × display (headless / headed / SUPERVISED) × browser source (managed / `attach --cdp` / `attach --extension`), plus the headless→headed escalation when a site blocks the bot, profile mode, interact level, contexts, and their failure modes
+[emulation.md](references/emulation.md) — `set geo|offline|headers|media|device`: what each override does, how to undo it, and the geolocation/mobile caveats
 
 **Manage skills & configuration:**
 [skills.md](references/skills.md) — bundled skill files, backend skill management

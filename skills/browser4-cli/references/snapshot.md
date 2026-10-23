@@ -63,6 +63,25 @@ Every node line has the same shape, so line-based readers and `grep` see a unifo
 - `[ref=…]` is the handle `click` / `fill` / `type` accept; `[box=…]` is the bounding box in CSS pixels (`--no-boxes` drops it).
 - Property lines (`- /url: …`, `- /value: …`) and text children (`- text: …`) are indented under the node they belong to.
 
+## Choosing a Mode
+
+| Mode | What it shows | Best for |
+|------|--------------|----------|
+| `snapshot` (default) | Full AX tree with all element refs | General exploration, first look at a page |
+| `snapshot -v 0` | Current visible screen (one screen-height viewport chunk; `-v all` = whole page) | Long pages — read one chunk at a time |
+| `snapshot -i` | Interactive-only rendering — buttons, links, inputs and pointer (`cursor:pointer`) elements, inner text merged into their names so each surviving ref line is a self-contained target. `-i -v <n>` narrows it to one viewport chunk (`-i -v 0` = this screen's interactive elements) | Form-heavy pages, a quick read of the actionable elements |
+| `htmlsnapshot` | Static HTML (CSS selectors) | Content extraction when you need CSS selectors, not AX refs |
+
+`-i` is a strict filter and drops refs you may need: draggable items (`li[draggable=true]`,
+`cursor:grab`) and hover-only targets (tooltip spans, `cursor:help`) keep their text as merged lines
+but lose their refs, and with `-v` they vanish from the output entirely. Act on those with refs from
+the default snapshot or `-v 0` instead: `snapshot -i -v 0 --stdout` lists this screen's interactive
+elements only, while `snapshot -v 0 --stdout` gives the full tree for that screen — draggable and
+hover-revealed targets included. Extending the heuristic to draggable/hover-revealed elements is
+expected; until it lands, don't use `-i` as the only orientation view before acting. `snapshot
+--help` documents the same strict filter, but the size tip printed for very large snapshots (and the
+optional `--show-tip` tip) may still carry the older wording "not a strict filter".
+
 ## Commands
 
 ```bash

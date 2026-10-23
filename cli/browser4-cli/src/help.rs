@@ -4132,6 +4132,7 @@ const COMMAND_REFERENCES: &[(&str, &[&str])] = &[
     ("swarm", &["swarm.md"]),
     ("attach", &["attach.md", "browser-modes.md", "browser-state-import.md"]),
     ("open", &["browser-modes.md", "browser-state-import.md"]),
+    ("set", &["emulation.md"]),
     ("loop", &["loop.md"]),
     ("frame", &["frames.md"]),
     ("tab-", &["tabs.md", "tab-management.md"]),
