@@ -1184,6 +1184,100 @@ pub async fn get_command_result(
     .await
 }
 
+/// A REST response kept as `(status, body)`.
+///
+/// Most callers only need the body (or an error). A task follower does not:
+/// it must tell "this backend does not serve `/events`" (an older build: fall
+/// back to status polling) from a transient failure (retry). Collapsing both
+/// into a formatted error string would make that decision impossible.
+pub struct RestResponse {
+    pub status: u16,
+    pub body: String,
+}
+
+impl RestResponse {
+    /// True for a 2xx response.
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+
+    /// True when the endpoint itself is absent on this backend (older build).
+    pub fn is_missing_endpoint(&self) -> bool {
+        matches!(self.status, 404 | 405 | 501)
+    }
+}
+
+async fn send_rest_response(request: reqwest::RequestBuilder) -> Result<RestResponse, String> {
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+
+    Ok(RestResponse { status, body })
+}
+
+/// Fetch one page of an agent task's live step log:
+/// `GET /api/commands/{id}/events?after=<after>&limit=<limit>`.
+///
+/// See [`RestResponse`] for why the raw status is returned instead of an error.
+pub async fn get_command_events(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+    after: u64,
+    limit: usize,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(
+        base_url,
+        &format!("/api/commands/{task_id}/events?after={after}&limit={limit}"),
+    );
+    send_rest_response(
+        client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(30)),
+    )
+    .await
+}
+
+/// Queue a steering message for a running agent task:
+/// `POST /api/commands/{id}/input`.
+pub async fn send_command_input(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+    text: &str,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/commands/{task_id}/input"));
+    send_rest_response(
+        client
+            .post(url)
+            .json(&serde_json::json!({ "text": text }))
+            .timeout(std::time::Duration::from_secs(30)),
+    )
+    .await
+}
+
+/// Cancel a command task: `POST /api/commands/{id}/cancel`.
+pub async fn cancel_command_task(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/commands/{task_id}/cancel"));
+    send_rest_response(
+        client
+            .post(url)
+            .timeout(std::time::Duration::from_secs(30)),
+    )
+    .await
+}
+
 /// Execute a batch of CLI-derived operations in a single backend request.
 pub async fn submit_batch_commands(
     client: &Client,

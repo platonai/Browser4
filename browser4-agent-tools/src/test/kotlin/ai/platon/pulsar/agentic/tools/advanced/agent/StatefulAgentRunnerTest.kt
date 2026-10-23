@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.tools.advanced.agent
 
 import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.agentic.agents.AgentRunEvent
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.model.AgentHistory
@@ -19,6 +20,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
@@ -553,6 +555,178 @@ class StatefulAgentRunnerTest {
             assertNull(runner2.getStatus("t-stale"), "a task silent for the whole TTL must not revive")
         } finally {
             runner2.close()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Live step log and steering (the interactive `agent run` data source)
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("create records a created step that a follower can read from cursor 0")
+    fun createRecordsCreatedStep() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+
+            val events = runner.events(status.id)
+            assertEquals(1, events.size)
+            assertEquals(AgentTaskEvent.TYPE_CREATED, events[0].type)
+            assertEquals(1L, events[0].seq)
+
+            // A follower that already consumed seq 1 sees nothing until the run
+            // starts; the cursor must never rewind.
+            assertTrue(runner.events(status.id, afterSeq = 1).isEmpty())
+            assertTrue(runner.events("unknown-task").isEmpty(), "an unknown id must not invent events")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("a failed run ends the log with a task.failed step carrying the reason")
+    fun failedRunRecordsTerminalStep() = runBlocking {
+        val agent = mockAgent(AgentHistory(), "run-1")
+        coEvery { agent.run(any<String>()) } throws IllegalStateException("boom")
+        val runner = StatefulAgentRunner(mockSession(agent))
+        try {
+            val status = runner.execute("do something")
+
+            val events = runner.events(status.id)
+            assertEquals(
+                listOf(AgentTaskEvent.TYPE_CREATED, AgentTaskEvent.TYPE_STARTED, AgentTaskEvent.TYPE_FAILED),
+                events.map { it.type },
+            )
+            assertTrue(events.last().text!!.contains("boom"), "the failure reason must reach the follower: ${events.last()}")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("a cancelled run ends the log with a task.cancelled step")
+    fun cancelledRunRecordsTerminalStep() = runBlocking {
+        val agent = mockAgent(AgentHistory(), "run-1")
+        coEvery { agent.run(any<String>()) } coAnswers {
+            delay(60_000)
+            AgentHistory()
+        }
+        val runner = StatefulAgentRunner(mockSession(agent))
+        try {
+            val status = runner.create()
+            runner.submit("long task", status)
+            withTimeout(5_000) {
+                while (status.startedTime == null) delay(10)
+            }
+
+            assertTrue(runner.cancel(status.id))
+            // The status is marked terminal by cancel() itself; the terminal STEP
+            // comes from the run's finally, so wait for the log, not the status.
+            withTimeout(5_000) {
+                while (runner.events(status.id).none { it.type == AgentTaskEvent.TYPE_CANCELLED }) {
+                    delay(10)
+                }
+            }
+            assertEquals(AgentTaskEvent.TYPE_CANCELLED, runner.events(status.id).last().type)
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("steering messages queue for a live task and drain exactly once")
+    fun steeringQueueDrainsOnce() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+
+            assertTrue(runner.enqueueInput(status.id, "  focus on the tests  "))
+            assertTrue(runner.enqueueInput(status.id, "then stop"))
+            assertEquals(
+                listOf("focus on the tests", "then stop"),
+                runner.drainInputs(status.id),
+            )
+            assertTrue(runner.drainInputs(status.id).isEmpty(), "draining is destructive")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("steering is rejected for a finished, unknown or blank message")
+    fun steeringRejectsDeadTasks() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            status.done()
+
+            assertFalse(runner.enqueueInput(status.id, "too late"), "a finished task has no drainer")
+            assertFalse(runner.enqueueInput("unknown-task", "hello"))
+            assertFalse(runner.enqueueInput(status.id, "   "))
+            assertTrue(runner.drainInputs(status.id).isEmpty())
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("agent-reported steps are sanitized on the way into the event log")
+    fun runEventsAreSanitized() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            runner.recordRunEvent(
+                status.id,
+                AgentRunEvent(
+                    AgentRunEvent.TOOL_CALL,
+                    tool = "fill",
+                    arguments = """{"selector":"input[type=password]","text":"hunter2"}""",
+                    turn = 2,
+                ),
+            )
+            runner.recordRunEvent(
+                status.id,
+                AgentRunEvent(
+                    AgentRunEvent.TOOL_RESULT,
+                    tool = "fill",
+                    ok = false,
+                    durationMs = 42,
+                    text = "fill failed",
+                    turn = 2,
+                ),
+            )
+
+            val events = runner.events(status.id)
+            val call = events.last { it.type == AgentRunEvent.TOOL_CALL }
+            assertFalse(
+                call.arguments!!.contains("hunter2"),
+                "a typed credential must not reach the event log: ${call.arguments}",
+            )
+            assertEquals(2, call.turn)
+
+            val result = events.last { it.type == AgentRunEvent.TOOL_RESULT }
+            assertEquals(false, result.ok)
+            assertEquals(42L, result.durationMs)
+            assertEquals("fill failed", result.text)
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("a terminal task leaves no steering queue behind")
+    fun terminalTaskDoesNotLeakSteeringQueue() = runBlocking {
+        val agent = mockAgent(AgentHistory(), "run-1")
+        coEvery { agent.run(any<String>()) } returns AgentHistory()
+        val runner = StatefulAgentRunner(mockSession(agent))
+        try {
+            val status = runner.execute("finish quickly")
+            // The queue is dropped when the run ends, so a message typed after the
+            // completion can never be drained by a later task of the same session.
+            assertFalse(runner.enqueueInput(status.id, "late"))
+            assertTrue(runner.drainInputs(status.id).isEmpty())
+        } finally {
+            runner.close()
         }
     }
 }

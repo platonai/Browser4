@@ -1719,6 +1719,17 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Task type: browser by default (never auto-detected). --coding marks a pure coding task (file/build work)."
                 .to_string(),
         );
+        lines.push(
+            "  - --follow streams the task's steps (tool calls, model text, slow/failed tools)".to_string(),
+        );
+        lines.push("    and then the result; --ndjson makes every line JSON.".to_string());
+        lines.push(
+            "  - -i opens an interactive session: tasks one after another, and a line typed".to_string(),
+        );
+        lines.push(
+            "    while a task runs steers it at the next model round (/help lists the commands)."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
@@ -1727,6 +1738,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(
             "  browser4-cli agent run \"Read pom.xml, fix the failing module build\" --coding"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Collect the top 5 products\" --follow".to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run -i \"Summarize this page\"".to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Collect the top 5 products\" --follow --ndjson | jq -c ."
                 .to_string(),
         );
     }
@@ -5530,7 +5551,10 @@ mod tests {
         let cmds = all_commands();
         let cmd = cmds.iter().find(|c| c.name == "agent-run").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli agent run <task>"));
+        // `task` is optional at the parser level so `agent run -i` can start an
+        // empty session; the help shows it in the optional form for the same
+        // reason.
+        assert!(help.contains("browser4-cli agent run [task]"));
         assert!(help.contains("autonomous agent task"));
         assert!(help.contains("browser4-cli agent run"));
         assert!(!help.contains("browser4-cli agent-run"));
