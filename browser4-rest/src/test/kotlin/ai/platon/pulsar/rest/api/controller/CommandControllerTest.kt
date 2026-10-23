@@ -1,10 +1,12 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.rest.api.entities.CommandInputRequest
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.CommandSubmitResponse
 import kotlinx.coroutines.runBlocking
@@ -216,6 +218,109 @@ class CommandControllerTest {
         statusCode = ResourceStatus.SC_OK,
         processState = "completed",
     )
+
+    // ---- live step log (`agent run --follow` / `-i`) ------------------------
+
+    @Test
+    @DisplayName("the events endpoint answers the page, its cursor and the terminal flag")
+    fun eventsEndpointAnswersPageCursorAndDoneFlag() {
+        val running = CommandStatus(
+            id = "agent-1",
+            statusCode = ResourceStatus.SC_PROCESSING,
+            processState = "in_progress",
+        )
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-1")).thenReturn(running)
+        whenever(executor.events("agent-1", 2L, 200)).thenReturn(
+            listOf(
+                AgentTaskEvent(seq = 3, type = AgentTaskEvent.TYPE_TOOL_CALL, tool = "coding.read"),
+                AgentTaskEvent(seq = 4, type = AgentTaskEvent.TYPE_MODEL_TEXT, text = "done soon"),
+            )
+        )
+
+        val response = controller.getEvents("agent-1", after = 2, limit = 200)
+
+        assertEquals(HttpStatus.OK, response.statusCode)
+        val body = assertNotNull(response.body)
+        assertEquals("agent-1", body.taskId)
+        assertEquals("running", body.status)
+        assertEquals(false, body.done)
+        assertEquals(4L, body.nextSeq, "the cursor is the last delivered sequence")
+        assertEquals(listOf(3L, 4L), body.events.map { it.seq })
+    }
+
+    @Test
+    @DisplayName("an unknown id is 404; a finished id with no new events keeps the cursor")
+    fun eventsEndpointHandlesUnknownAndEmptyPages() {
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "nope")).thenReturn(null)
+        whenever(executor.events("nope", 0L, 200)).thenReturn(emptyList())
+
+        assertEquals(
+            HttpStatus.NOT_FOUND,
+            controller.getEvents("nope", after = 0, limit = 200).statusCode,
+            "a follower must be able to tell 'unknown id' from 'nothing new'",
+        )
+
+        val finished = CommandStatus(
+            id = "agent-2",
+            statusCode = ResourceStatus.SC_OK,
+            processState = "completed",
+        )
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-2")).thenReturn(finished)
+        whenever(executor.events("agent-2", 7L, 200)).thenReturn(emptyList())
+
+        val body = assertNotNull(controller.getEvents("agent-2", after = 7, limit = 200).body)
+        assertTrue(body.done, "a finished task must stop the follower")
+        assertEquals("done", body.status)
+        assertEquals(7L, body.nextSeq, "an empty page must not rewind the cursor")
+        assertTrue(body.events.isEmpty())
+    }
+
+    @Test
+    @DisplayName("a finished task whose status row expired still reports done from its last event")
+    fun eventsEndpointDerivesDoneFromTheTerminalEvent() {
+        // The status cache expires 2h after its last WRITE while the event log
+        // expires after its last read, so a followed task can outlive its status
+        // row. Reporting `done=false` then would make an uncapped follower poll
+        // forever.
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-3")).thenReturn(null)
+        whenever(executor.events("agent-3", 0L, 200)).thenReturn(
+            listOf(
+                AgentTaskEvent(seq = 1, type = AgentTaskEvent.TYPE_TOOL_CALL, tool = "b4.run"),
+                AgentTaskEvent(seq = 2, type = AgentTaskEvent.TYPE_DONE, text = "finished"),
+            )
+        )
+
+        val body = assertNotNull(controller.getEvents("agent-3", after = 0, limit = 200).body)
+
+        assertTrue(body.done, "a terminal event must stop the follower")
+        assertEquals("done", body.status)
+        assertEquals(2L, body.nextSeq)
+    }
+
+    @Test
+    @DisplayName("steering input is accepted for a live task and reported inline otherwise")
+    fun steeringInputIsAcceptedOrReportedInline() {
+        whenever(executor.sendInput("agent-1", "focus on the tests")).thenReturn(true)
+        whenever(executor.sendInput("agent-2", "too late")).thenReturn(false)
+
+        val accepted = assertNotNull(
+            controller.postInput("agent-1", CommandInputRequest("focus on the tests")).body
+        )
+        assertTrue(accepted.accepted)
+        assertEquals("agent-1", accepted.taskId)
+
+        // "The task finished while the user was typing" is a race, not an error:
+        // the CLI prints the reason and keeps the session open.
+        val rejected = assertNotNull(
+            controller.postInput("agent-2", CommandInputRequest("too late")).body
+        )
+        assertEquals(false, rejected.accepted)
+        assertNotNull(rejected.message)
+
+        val blank = controller.postInput("agent-1", CommandInputRequest("   "))
+        assertEquals(HttpStatus.BAD_REQUEST, blank.statusCode)
+        assertEquals(false, assertNotNull(blank.body).accepted)
+    }
 
     private companion object {
         const val URL = "https://example.com/product/1"

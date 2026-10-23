@@ -3,6 +3,7 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.impl.CachedBrowserChatModel
+import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import java.nio.file.Files
 
 /**
@@ -35,6 +36,17 @@ object LlmStatusReporter {
     const val SOURCE_ENV = "env"
     const val SOURCE_SYSTEM_PROPERTY = "system_property"
     const val SOURCE_CONFIGURATION = "configuration"
+
+    /**
+     * The backend is running against the file-backed test LLM
+     * ([ai.platon.pulsar.skeleton.llm.TestChatModelFactory]).
+     *
+     * It is a real LLM path — no provider key is involved — so the report must
+     * name it. The e2e harness gates every mock-LLM scenario on this exact
+     * value: reporting `null` here made all of them look like "no LLM
+     * configured" and skip themselves.
+     */
+    const val SOURCE_TEST_FILE_BACKED = "test_file_backed"
 
     /** The generic legacy key, checked after every provider key — same order as the SDK. */
     private val LEGACY_API_KEY_NAMES = listOf("LLM_API_KEY")
@@ -122,6 +134,9 @@ object LlmStatusReporter {
         val present = configuredKeys(conf, keyNames)
         val usable = present.filter { it.usable }
         val emptyKeys = present.filterNot { it.usable }.map { it.key }
+        // The file-backed test LLM bypasses provider keys entirely (the factory
+        // hands out a scripted model), so it must be reported before the keys.
+        val testLlmEnabled = runCatching { TestChatModelFactory.isEnabled() }.getOrDefault(false)
 
         // Denied providers never win the auto-detection race, so they must not be
         // reported as the selected key either.
@@ -132,18 +147,18 @@ object LlmStatusReporter {
 
         // Keep the historical generosity: a key present in the backend environment
         // counts as configured even when the factory cannot build a client with it.
-        val configured = factorySaysConfigured || usable.isNotEmpty()
+        val configured = testLlmEnabled || factorySaysConfigured || usable.isNotEmpty()
 
         val explicitProvider = runCatching { conf["llm.provider"] }.getOrNull()?.takeIf { it.isNotBlank() }
 
         // SUPPORTED_API_KEY_NAMES is ordered by detection priority, so the first
         // usable key is the one that wins the auto-detection race.
         val selectedKey = if (explicitProvider == null) competing.firstOrNull()?.key else null
-        val detectedVia = present.map { it.source }.distinct().let { sources ->
-            when {
-                sources.isEmpty() -> null
-                sources.size == 1 -> sources.first()
-                else -> SOURCE_MULTIPLE
+        val detectedVia = when {
+            testLlmEnabled -> SOURCE_TEST_FILE_BACKED
+            present.isEmpty() -> null
+            else -> present.map { it.source }.distinct().let { sources ->
+                if (sources.size == 1) sources.first() else SOURCE_MULTIPLE
             }
         }
 

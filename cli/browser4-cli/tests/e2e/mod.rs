@@ -996,6 +996,15 @@ struct MockBrowser4State {
     next_chat_task_id: usize,
     /// Recorded `POST /api/commands/{id}/cancel` calls (agent cancel).
     agent_cancel_calls: Vec<String>,
+    /// Recorded `POST /api/commands/{id}/input` steering messages: (task id, text).
+    command_input_calls: Vec<(String, String)>,
+    /// Scripted step events per task id, served by `GET /api/commands/{id}/events`.
+    custom_command_events: HashMap<String, Vec<serde_json::Value>>,
+    /// Task ids whose events endpoint keeps reporting `running` until a steering
+    /// input arrives (the interactive-steering scenario).
+    command_events_await_input: Vec<String>,
+    /// When true, the events endpoint answers 404 — an older backend without it.
+    command_events_disabled: bool,
     /// Recorded `/api/config/{key}` REST calls as (method, key, value).
     config_calls: Vec<(String, String, String)>,
 }
@@ -1186,6 +1195,37 @@ impl MockBrowser4Server {
             .insert(task_id.to_string(), response.to_string());
     }
 
+    /// Script the steps `GET /api/commands/{id}/events` serves for [task_id].
+    ///
+    /// The endpoint reports `done` once every scripted event was served (and
+    /// immediately when nothing is scripted), so a follower exits quickly.
+    fn set_command_events(&self, task_id: &str, events: Vec<serde_json::Value>) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_command_events
+            .insert(task_id.to_string(), events);
+    }
+
+    /// Keep [task_id] `running` until a steering input arrives, so a REPL test
+    /// can deterministically type into a live task.
+    fn await_command_input(&self, task_id: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .command_events_await_input
+            .push(task_id.to_string());
+    }
+
+    /// Pretend this backend predates the events endpoint (404), so followers
+    /// exercise their status-polling fallback.
+    fn disable_command_events(&self) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .command_events_disabled = true;
+    }
+
     /// Set a custom response for the `browser_snapshot` tool.  When set, every
     /// `browser_snapshot` call returns this text instead of the default
     /// `"mock snapshot"`.  Call [clear_browser_snapshot_response] to restore
@@ -1290,6 +1330,15 @@ fn mock_plugin_json(requested: &str) -> Option<String> {
                 || *manifest_name == requested
         })
         .map(|(file_name, manifest_name)| mock_plugin_info_json(file_name, manifest_name))
+}
+
+/// The value of query parameter [key] in [path] (`/x?a=1&b=2`), if present.
+fn query_param(path: &str, key: &str) -> Option<String> {
+    let query = path.split_once('?')?.1;
+    query.split('&').find_map(|pair| {
+        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+        (name == key).then(|| value.to_string())
+    })
 }
 
 fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrowser4State>>) {    let Some((method, path, body)) = read_http_request(&mut stream) else {
@@ -1773,6 +1822,121 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 "text/plain; charset=utf-8",
                 &response,
             );
+        }
+        // ---- agent task step log (agent run --follow / -i) ----
+        _ if method == "GET"
+            && route.starts_with("/api/commands/")
+            && route.ends_with("/events") =>
+        {
+            let Some(task_id) = route
+                .strip_prefix("/api/commands/")
+                .and_then(|rest| rest.strip_suffix("/events"))
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+            let after: u64 = query_param(&path, "after")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+
+            let guard = state.lock().expect("mock Browser4 state mutex poisoned");
+            if guard.command_events_disabled {
+                drop(guard);
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            }
+
+            let scripted = guard
+                .custom_command_events
+                .get(task_id)
+                .cloned()
+                .unwrap_or_default();
+            let last_seq = scripted
+                .iter()
+                .filter_map(|event| event.get("seq").and_then(|value| value.as_u64()))
+                .max()
+                .unwrap_or(0);
+            let page: Vec<serde_json::Value> = scripted
+                .iter()
+                .filter(|event| {
+                    event.get("seq").and_then(|value| value.as_u64()).unwrap_or(0) > after
+                })
+                .cloned()
+                .collect();
+            let next_seq = page
+                .last()
+                .and_then(|event| event.get("seq").and_then(|value| value.as_u64()))
+                .unwrap_or(after);
+
+            let steered = guard
+                .command_input_calls
+                .iter()
+                .any(|(id, _)| id == task_id);
+            let await_input = guard
+                .command_events_await_input
+                .iter()
+                .any(|id| id == task_id);
+            let done = if await_input { steered } else { next_seq >= last_seq };
+            // A scripted `task.failed` terminal event makes the task report
+            // `failed`, so a follower's failure path is testable without a
+            // second knob.
+            let failed = scripted.iter().any(|event| {
+                event.get("type").and_then(|value| value.as_str()) == Some("task.failed")
+            });
+            drop(guard);
+
+            let status = if !done {
+                "running"
+            } else if failed {
+                "failed"
+            } else {
+                "done"
+            };
+            let response = serde_json::json!({
+                "taskId": task_id,
+                "status": status,
+                "done": done,
+                "nextSeq": next_seq,
+                "events": page,
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        _ if method == "POST"
+            && route.starts_with("/api/commands/")
+            && route.ends_with("/input") =>
+        {
+            let Some(task_id) = route
+                .strip_prefix("/api/commands/")
+                .and_then(|rest| rest.strip_suffix("/input"))
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+            let text = serde_json::from_str::<serde_json::Value>(
+                String::from_utf8_lossy(&body).as_ref(),
+            )
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("text")
+                        .and_then(|text| text.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .command_input_calls
+                .push((task_id.to_string(), text));
+
+            let response = serde_json::json!({
+                "taskId": task_id,
+                "accepted": true,
+                "message": "queued: the agent sees it at its next model round",
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
         }
         _ if method == "GET"
             && (route.starts_with("/api/x/") || route.starts_with("/api/swarm/"))

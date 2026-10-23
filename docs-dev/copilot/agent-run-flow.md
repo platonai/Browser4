@@ -248,3 +248,23 @@ browser4-cli (Rust)                       browser4-rest (Kotlin)                
 - `sessionId` 缺省 DEFAULT：多会话用户需注意任务归属默认 session；
 - 任务式 noop 上限：长编码链建议 `--noop-limit 8-10`；
 - 单个 session 内任务串行：并行需求用 swarm（独立浏览器上下文）而不是并发 `agent run`。
+
+## 8. 实时事件流与交互式会话（2026-10-23 新增）
+
+`agent run --follow` / `agent run -i` 走同一条链路：**任务级事件日志 + 游标轮询**。
+默认 `agent run` 行为完全不变，只有显式传 `--follow` / `--ndjson` / `-i` 才会消费事件。
+
+| 环节 | 位置 | 说明 |
+|---|---|---|
+| 事件产生 | `RobustBrowserAgent.doRunCliAgentLoop` / `buildCliToolLoop` | 每轮 `round.start`、模型发言 `model.text`、每次工具 `tool.call` / `tool.result`。经 `runEventListener` 回调直连 runner（**不走** `AgentEventBus`：需要顺序、且不给全局事件总线增加高频事件）。 |
+| 事件落地 | `StatefulAgentRunner.recordRunEvent` → `AgentTaskEventLog` | 每任务 1000 条环形缓冲；任务级 Caffeine 缓存（128 个任务 / 120 分钟）；**不写 JSONL**（行集是任务注册表，不是运行日志）。参数/结果截断 240 字符，凭据键名与密码类 selector 的输入脱敏。 |
+| 查询 | `GET /api/commands/{id}/events?after=<seq>&limit=` | 返回 `{taskId,status,done,nextSeq,events[]}`；空页不回退游标；未知 id 404。 |
+| CLI 消费 | `cli/browser4-cli/src/agent_interactive.rs` | 400ms 游标轮询（状态回退 1s）；老后端 404 → 提示一行并退回 `command_status` 轮询；`--ndjson` 每行一个 JSON 对象。 |
+| 插话 | `POST /api/commands/{id}/input` | `StatefulAgentRunner.pendingInputs` 队列；`RobustBrowserAgent.steeringSource` 在每个模型请求前（`AgentToolCallLoop.onBeforeIteration`）与每个外层轮次顶部抽取，注入为 `UserMessage`，因此不需要等整轮结束。 |
+
+关键约束：
+
+- 事件**不持久化**：后端重启后 `agent status/result` 仍可用（磁盘行集），但事件尾丢失；
+- `--follow` 默认**不设超时**（`--wait` 仍默认 600s）；`--wait-timeout` 可给 `--follow` 封顶；
+- Ctrl+C 在 `--follow` / `-i` 中会 **cancel 任务**，不再把任务遗留在服务端；
+- `-s <name>` 现在会作为 `sessionId` 透传给 `command.run`（原先被忽略，任务一律落到 DEFAULT session）。

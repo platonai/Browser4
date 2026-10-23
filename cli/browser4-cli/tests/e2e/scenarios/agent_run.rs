@@ -9,6 +9,336 @@ use crate::*;
 // user-visible output without depending on a real LLM.
 // ---------------------------------------------------------------------------
 
+/// The scripted step log used by the `--follow` scenarios: create → start →
+/// call → slow success → model text → done.
+fn scripted_follow_events(task: &str) -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({"seq": 1, "type": "task.created", "epochMillis": 1}),
+        serde_json::json!({"seq": 2, "type": "task.started", "epochMillis": 2, "text": task}),
+        serde_json::json!({
+            "seq": 3,
+            "type": "tool.call",
+            "epochMillis": 3,
+            "tool": "b4.run",
+            "arguments": "{\"args\":\"goto https://example.com\"}",
+            "turn": 1
+        }),
+        serde_json::json!({
+            "seq": 4,
+            "type": "tool.result",
+            "epochMillis": 4,
+            "tool": "b4.run",
+            "ok": true,
+            "durationMs": 2500,
+            "text": "ok"
+        }),
+        serde_json::json!({
+            "seq": 5,
+            "type": "model.text",
+            "epochMillis": 5,
+            "text": "I have the release notes now."
+        }),
+        serde_json::json!({"seq": 6, "type": "task.done", "epochMillis": 6, "text": "done"}),
+    ]
+}
+
+/// `agent run --follow` streams the task's steps and then prints its result.
+pub(super) fn test_agent_run_follow_streams_steps(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Report the release notes";
+    mock_server.set_command_events("agent-task-1", scripted_follow_events(task));
+    mock_server.set_command_result_response(
+        "agent-task-1",
+        r#"{"summary":"Release notes extracted"}"#,
+    );
+
+    let run_result = run_command(ctx, &["agent", "run", task, "--follow"]);
+    let stdout = &run_result.stdout;
+
+    assert!(
+        stdout.contains("Task submitted: agent-task-1"),
+        "expected the task id in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("#1 b4.run"),
+        "expected the first tool call to stream in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ok in 2.5s"),
+        "a slow tool reports its completion:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("I have the release notes now."),
+        "the model's text streams too:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Agent completed in"),
+        "follow ends with the completion line:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Release notes extracted"),
+        "follow prints the task result:\n{stdout}"
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert_eq!(snapshot.plain_commands, vec![task.to_string()]);
+    assert!(
+        snapshot.command_input_calls.is_empty(),
+        "a one-shot follow must not send steering input: {:?}",
+        snapshot.command_input_calls
+    );
+}
+
+/// `agent run --follow --ndjson` emits one JSON object per line, including the
+/// submission and the final result — never human prose.
+pub(super) fn test_agent_run_follow_ndjson_is_machine_readable(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Report the release notes";
+    mock_server.set_command_events("agent-task-1", scripted_follow_events(task));
+    mock_server.set_command_result_response(
+        "agent-task-1",
+        r#"{"summary":"Release notes extracted"}"#,
+    );
+
+    let run_result = run_command(ctx, &["agent", "run", task, "--follow", "--ndjson"]);
+
+    let mut kinds: Vec<String> = Vec::new();
+    for line in run_result.stdout.lines().filter(|line| !line.trim().is_empty()) {
+        let value: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|error| {
+            panic!("NDJSON mode emitted a non-JSON line ({error}): {line}")
+        });
+        assert_eq!(
+            value.get("taskId").and_then(|v| v.as_str()),
+            Some("agent-task-1"),
+            "every line names the task: {line}"
+        );
+        if let Some(kind) = value.get("type").and_then(|v| v.as_str()) {
+            kinds.push(kind.to_string());
+        }
+    }
+
+    assert!(kinds.contains(&"task.submitted".to_string()), "kinds: {kinds:?}");
+    assert!(kinds.contains(&"tool.call".to_string()), "kinds: {kinds:?}");
+    assert!(kinds.contains(&"task.result".to_string()), "kinds: {kinds:?}");
+    assert!(
+        !run_result.stdout.contains("Task submitted:"),
+        "human prose must not leak into NDJSON:\n{}",
+        run_result.stdout
+    );
+}
+
+/// In `--ndjson` mode the status fallback (an events-less backend) must stay
+/// JSON-only too: a prose progress line would make the stream unparseable.
+pub(super) fn test_agent_run_follow_ndjson_stays_json_in_fallback(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Report the release notes";
+    mock_server.disable_command_events();
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+    mock_server.set_command_result_response("agent-task-1", r#"{"summary":"fallback result"}"#);
+
+    let run_result = run_command(ctx, &["agent", "run", task, "--follow", "--ndjson"]);
+
+    for line in run_result.stdout.lines().filter(|line| !line.trim().is_empty()) {
+        serde_json::from_str::<serde_json::Value>(line).unwrap_or_else(|error| {
+            panic!("the fallback leaked a non-JSON line ({error}): {line}")
+        });
+    }
+    assert!(
+        !run_result.stdout.contains("falling back to status polling"),
+        "the fallback notice is prose and must be silent in NDJSON:\n{}",
+        run_result.stdout
+    );
+    assert!(
+        run_result.stdout.contains("\"type\":\"task.result\""),
+        "the result must still be emitted as a JSON line:\n{}",
+        run_result.stdout
+    );
+}
+
+/// `agent run --follow` falls back to status polling when the backend predates
+/// the events endpoint (404), instead of failing the command.
+pub(super) fn test_agent_run_follow_falls_back_without_events_endpoint(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Report the release notes";
+    mock_server.disable_command_events();
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+    mock_server.set_command_result_response(
+        "agent-task-1",
+        r#"{"summary":"Release notes extracted"}"#,
+    );
+
+    let run_result = run_command(ctx, &["agent", "run", task, "--follow"]);
+    assert!(
+        run_result.stdout.contains("falling back to status polling"),
+        "expected an explicit fallback notice:\n{}",
+        run_result.stdout
+    );
+    assert!(
+        run_result.stdout.contains("Agent completed in"),
+        "the status fallback must still complete the task:\n{}",
+        run_result.stdout
+    );
+    assert!(
+        run_result.stdout.contains("Release notes extracted"),
+        "the result still comes from command_result:\n{}",
+        run_result.stdout
+    );
+}
+
+/// `agent run --follow` turns a terminal failure into a rendered line plus a
+/// non-zero exit, with the backend's real reason.
+pub(super) fn test_agent_run_follow_reports_failure(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Report the release notes";
+    mock_server.set_command_events(
+        "agent-task-1",
+        vec![
+            serde_json::json!({"seq": 1, "type": "task.started", "epochMillis": 1, "text": task}),
+            serde_json::json!({
+                "seq": 2,
+                "type": "tool.result",
+                "epochMillis": 2,
+                "tool": "b4.run",
+                "ok": false,
+                "durationMs": 120,
+                "text": "[fail] the page was blocked"
+            }),
+            serde_json::json!({
+                "seq": 3,
+                "type": "task.failed",
+                "epochMillis": 3,
+                "text": "the page was blocked"
+            }),
+        ],
+    );
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        serde_json::json!({
+            "status": "failed",
+            "statusCode": 417,
+            "isDone": true,
+            "error": "the page was blocked",
+            "message": "the page was blocked",
+        }),
+    );
+
+    let failure = run_command_expecting_failure(
+        ctx,
+        &["agent", "run", task, "--follow"],
+        "Agent task failed: the page was blocked",
+    );
+
+    assert!(
+        failure.stdout.contains("failed after 120ms"),
+        "a failed tool prints its output in-line:\n{}",
+        failure.stdout
+    );
+    assert!(
+        failure.stdout.contains("✖ failed"),
+        "the follower prints its own failure line:\n{}",
+        failure.stdout
+    );
+}
+
+/// `agent run -i` submits a task from stdin, answers /help locally, and exits
+/// cleanly on /quit.
+pub(super) fn test_agent_run_interactive_runs_a_task_and_quits(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_command_result_response("agent-task-1", "interactive result");
+
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i"],
+        "/help\nSummarize the page\n/quit\n",
+    );
+
+    assert!(
+        run_result.stdout.contains("/status"),
+        "/help must list the session commands:\n{}",
+        run_result.stdout
+    );
+    assert!(
+        run_result.stdout.contains("▶ task agent-task-1"),
+        "the typed line must be submitted as a task:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert_eq!(snapshot.plain_commands, vec!["Summarize the page".to_string()]);
+}
+
+/// A line typed while a task runs is a steering message, not a second task.
+pub(super) fn test_agent_run_interactive_steers_running_task(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    // The task stays "running" until an input arrives, so the second stdin line
+    // deterministically reaches a live task.
+    mock_server.await_command_input("agent-task-1");
+
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i"],
+        "Summarize the page\nplease add the tests\n/quit\n",
+    );
+
+    assert!(
+        run_result.stdout.contains("steering queued"),
+        "the CLI must confirm the steering message:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.plain_commands,
+        vec!["Summarize the page".to_string()],
+        "steering must not submit a second task"
+    );
+    assert_eq!(
+        snapshot.command_input_calls,
+        vec![("agent-task-1".to_string(), "please add the tests".to_string())],
+        "the typed line must reach the steering endpoint"
+    );
+}
+
+
 fn completed_status(
     task_id: &str,
     instruction: &str,
