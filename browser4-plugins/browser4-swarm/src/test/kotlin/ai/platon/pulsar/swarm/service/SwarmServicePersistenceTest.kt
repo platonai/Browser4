@@ -193,6 +193,28 @@ class SwarmServicePersistenceTest {
         assertEquals(1, delivered.resultSet?.size, "The delivered rows must survive the close")
     }
 
+    @Test
+    fun `abortPendingTasks aborts a refused task with an empty result set`(@TempDir tempDir: Path) {
+        val service = newService()
+
+        // `refuse()` publishes an empty result set together with 417; that is
+        // not a delivered result and must not keep the task pending forever.
+        val refused = ScrapeResponse(
+            id = "r1",
+            statusCode = ResourceStatus.SC_EXPECTATION_FAILED,
+            pageStatusCode = 200,
+        )
+        refused.resultSet = emptyList()
+        service.responseCache.put("r1", refused)
+
+        val aborted = service.abortPendingTasks("Swarm session was closed; task dropped")
+
+        assertEquals(1, aborted, "A refused task must be aborted")
+        assertTrue(refused.isDone)
+        assertEquals(ResourceStatus.SC_GONE, refused.statusCode)
+        assertTrue(refused.message?.contains("closed") == true, "Message: ${refused.message}")
+    }
+
     // -----------------------------------------------------------------
     // Session replacement aborts pending tasks (issue #577)
     // -----------------------------------------------------------------

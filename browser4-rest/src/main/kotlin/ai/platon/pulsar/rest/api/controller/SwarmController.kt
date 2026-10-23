@@ -41,7 +41,8 @@ class SwarmController(
         ?: throw SwarmNotInstalledException(
             "Swarm backend is not available. Either the browser4-swarm plugin is not installed, or it is " +
                 "installed but failed to register its facade — in that case the backend log contains " +
-                "'Failed to mount the swarm facade' with the underlying error."
+                "'Failed to mount the swarm facade' with the underlying error.\n\n" +
+                SwarmNotInstalledException.DEFAULT_MESSAGE
         )
 
     /**

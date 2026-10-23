@@ -14395,8 +14395,7 @@ fn is_selected_values_echo(text: &str, expected_value: &str) -> bool {
                 Some(values) => values,
                 None => return false,
             };
-            values.len() == 1 && values[0] == expected_value
-                || values.join(",") == expected_value
+            values.join(",") == expected_value
         }
         _ => false,
     }
@@ -31106,9 +31105,12 @@ async fn run(
             // No full help dump: a typo used to flood the terminal with the
             // whole command list (printed to stdout, so `cmd > out` captured it
             // too).  The one-line error names the command and suggests the
-            // closest matches; `--help` is one keystroke away.
-            eprintln!("{msg}. Run 'browser4-cli help' for the command list.");
-            return Err(CliError(ExitCode::Usage, msg));
+            // closest matches; `--help` is one keystroke away.  The hint rides
+            // on the returned error so the renderer prints it exactly once.
+            return Err(CliError(
+                ExitCode::Usage,
+                format!("{msg}. Run 'browser4-cli help' for the command list."),
+            ));
         }
     };
 
@@ -32175,21 +32177,6 @@ async fn run(
             handle_crawl_status(&client, &base_url, &tool_params).await?;
         }
         "crawl-result" => {
-            // `crawl result` prints the task's stored record; there is no
-            // table/CSV rendering of a stored task, so a --format request used
-            // to be accepted and silently dropped.  Say so instead of ignoring.
-            if let Some(format) = parsed.get("format").and_then(|v| v.as_str()) {
-                if !matches!(format, "json" | "raw") {
-                    return Err(CliError(
-                        ExitCode::Usage,
-                        format!(
-                            "crawl result does not support --format {format}: it prints the task's stored record. \
-                             Use 'crawl status <id>' for the one-line summary, or re-run the crawl with \
-                             --format {format} to get formatted extraction output."
-                        ),
-                    ));
-                }
-            }
             handle_crawl_result(&client, &base_url, &tool_params).await?;
         }
         "crawl-cancel" => {

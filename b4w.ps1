@@ -395,6 +395,24 @@ if (!$Rebuild -and !$NoBuild -and (Test-Path $Exe)) {
     }
 }
 
+function Get-B4wBackendBundleStampPath {
+    <#
+    .SYNOPSIS
+        Resolve the runtime bundle's build stamp.
+    .DESCRIPTION
+        The stamp lives under the platform-specific work directory
+        (browser4-bundle-runtime-<os>-<arch>).  Resolving it here keeps the
+        staleness check and the post-rebuild verification on the same path on
+        Windows, Linux and macOS.  Returns $null when no bundle has been built.
+    #>
+    $BundleWorkRoot = Join-Path $ScriptDir 'browser4-apps\browser4-bundle\target\runtime-bundle\_work'
+    Get-ChildItem -Path $BundleWorkRoot -Directory -Filter 'browser4-bundle-runtime-*' -ErrorAction SilentlyContinue |
+        ForEach-Object { Join-Path $_.FullName (Join-Path $_.Name 'runtime-bundle.json') } |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        Sort-Object { (Get-Item -LiteralPath $_).LastWriteTime } -Descending |
+        Select-Object -First 1
+}
+
 # ── Backend staleness check ──────────────────────────────────────────────
 # The CLI binary is rebuilt from source above, but the Browser4 backend runs
 # from a runtime bundle (browser4-apps/browser4-bundle/target/runtime-bundle)
@@ -406,6 +424,16 @@ $ForcedBundleRebuild = $false
 $BackendHashToCache = $null
 $BackendBundleStampPath = $null
 $BackendBundleStampBefore = $null
+# The force flag is only for this invocation's child process.  Save the
+# caller's value so it can be restored afterwards; otherwise running
+# `./b4w.ps1 -Rebuild status` in PowerShell leaves the flag set and every later
+# command force-rebuilds the backend too.
+$OriginalForceRebuildBundle = $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE
+
+# Everything below runs inside try/finally so the caller's force flag is
+# restored on every path, including the many early `exit`s (help, subcommands,
+# install/uninstall) and a failed CLI run.
+try {
 
 # `-Rebuild` must always ask for a bundle rebuild, whatever the cached hash
 # says: the hash only records what the sources looked like, not whether a
@@ -416,14 +444,15 @@ if ($Rebuild) {
     $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = '1'
     $ForcedBundleRebuild = $true
 }
-if (!$NoBuild -and (Test-Path (Join-Path $ScriptDir 'browser4-apps\browser4-bundle'))) {
+if ((!$NoBuild -or $Rebuild) -and (Test-Path (Join-Path $ScriptDir 'browser4-apps\browser4-bundle'))) {
     $BackendHashFile = Join-Path $ScriptDir 'cli\browser4-cli\target\.backend-source-hash'
     $BackendCurrentHash = $null
     try {
         $Hasher2 = [System.Security.Cryptography.SHA256]::Create()
         $BackendDirs = @(
             'browser4-core', 'browser4-agentic', 'browser4-coding',
-            'browser4-rest', 'browser4-boot', 'browser4-agent-tools'
+            'browser4-rest', 'browser4-boot', 'browser4-agent-tools',
+            'browser4-plugins'
         )
         $BackendFiles = foreach ($d in $BackendDirs) {
             @(Get-ChildItem -Path (Join-Path $ScriptDir $d) -Recurse -File -Filter '*.kt' -ErrorAction SilentlyContinue)
@@ -441,6 +470,14 @@ if (!$NoBuild -and (Test-Path (Join-Path $ScriptDir 'browser4-apps\browser4-bund
         # If hashing fails (e.g. permission), skip the staleness check.
     }
     if ($BackendCurrentHash) {
+        # Resolve the stamp before the hash comparison: the post-rebuild check
+        # needs the path even when the hash already matches, and a first build
+        # has no stamp yet (the post-check resolves it again after the build).
+        $BundleStamp = Get-B4wBackendBundleStampPath
+        if ($BundleStamp) {
+            $BackendBundleStampPath = $BundleStamp
+            $BackendBundleStampBefore = (Get-Item -LiteralPath $BundleStamp).LastWriteTime
+        }
         $BackendCachedHash = if (Test-Path $BackendHashFile) { (Get-Content $BackendHashFile -ErrorAction SilentlyContinue).Trim() } else { $null }
         if ($BackendCachedHash -and $BackendCachedHash -eq $BackendCurrentHash) {
             # Backend sources unchanged since the last bundle build — skip.
@@ -452,23 +489,9 @@ if (!$NoBuild -and (Test-Path (Join-Path $ScriptDir 'browser4-apps\browser4-bund
             # running code matches the sources — refresh the cache silently
             # instead of warning.
             $BackendNewestSource = ($BackendFiles | ForEach-Object { $_.LastWriteTime } | Measure-Object -Maximum).Maximum
-            # The stamp lives under a platform-specific work directory
-            # (browser4-bundle-runtime-<os>-<arch>): resolve it instead of
-            # hardcoding the Windows path, which never exists on a Linux or
-            # macOS checkout and made the staleness warning fire on every
-            # command there.
-            $BundleWorkRoot = Join-Path $ScriptDir 'browser4-apps\browser4-bundle\target\runtime-bundle\_work'
-            $BundleStamp = Get-ChildItem -Path $BundleWorkRoot -Directory -Filter 'browser4-bundle-runtime-*' -ErrorAction SilentlyContinue |
-                ForEach-Object { Join-Path $_.FullName (Join-Path $_.Name 'runtime-bundle.json') } |
-                Where-Object { Test-Path -LiteralPath $_ } |
-                Sort-Object { (Get-Item -LiteralPath $_).LastWriteTime } -Descending |
-                Select-Object -First 1
             $BundleFresh = $false
-            if ($BundleStamp) {
-                $BackendBundleStampPath = $BundleStamp
-                $BundleMtime = (Get-Item -LiteralPath $BundleStamp).LastWriteTime
-                $BackendBundleStampBefore = $BundleMtime
-                if ($BundleMtime -gt $BackendNewestSource) { $BundleFresh = $true }
+            if ($BackendBundleStampPath -and $BackendBundleStampBefore -gt $BackendNewestSource) {
+                $BundleFresh = $true
             }
             if ($BundleFresh) {
                 try {
@@ -1236,9 +1259,14 @@ if (Test-Path $Exe) {
 # advanced during this invocation.  Writing it unconditionally after -Rebuild
 # made commands that never start the daemon (help, status, doctor) look like
 # completed rebuilds and silently suppressed every later one.
-if ($ForcedBundleRebuild -and $BackendHashToCache -and $BackendBundleStampPath) {
-    $stampAfter = if (Test-Path -LiteralPath $BackendBundleStampPath) {
-        (Get-Item -LiteralPath $BackendBundleStampPath).LastWriteTime
+if ($ForcedBundleRebuild -and $BackendHashToCache) {
+    # A first build has no stamp before the CLI runs, so resolve it again now.
+    $stampPath = $BackendBundleStampPath
+    if (-not $stampPath) {
+        $stampPath = Get-B4wBackendBundleStampPath
+    }
+    $stampAfter = if ($stampPath -and (Test-Path -LiteralPath $stampPath)) {
+        (Get-Item -LiteralPath $stampPath).LastWriteTime
     } else {
         $null
     }
@@ -1269,3 +1297,12 @@ Set-Location $OriginalCwd
 # Set-Location above do not modify $LASTEXITCODE, so it still holds the
 # CLI's status here.
 exit $CliExitCode
+
+} finally {
+    # Restore the caller's force flag: it belongs to this invocation only.
+    if ($null -eq $OriginalForceRebuildBundle) {
+        Remove-Item Env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE -ErrorAction SilentlyContinue
+    } else {
+        $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = $OriginalForceRebuildBundle
+    }
+}

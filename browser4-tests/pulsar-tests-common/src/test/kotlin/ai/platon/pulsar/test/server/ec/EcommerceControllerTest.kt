@@ -65,6 +65,11 @@ class EcommerceControllerTest {
         assertHtml(resp, HttpStatus.OK)
         assertThat(resp.body).contains("data-category-id=\"1292115012\"")
         assertThat(resp.body).contains("product-")
+        // Tag-qualified selectors must work on both renderers.
+        assertThat(resp.body).contains("<article class=\"product-card\"")
+        assertThat(resp.body).contains("<h2 class=\"product-title\"")
+        assertThat(resp.body).contains("<span class=\"product-price\"")
+        assertThat(resp.body).contains("product-image")
     }
 
     @Test

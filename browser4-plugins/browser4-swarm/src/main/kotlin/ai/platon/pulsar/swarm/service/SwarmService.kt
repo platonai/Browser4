@@ -440,9 +440,18 @@ open class SwarmService(
         // before the terminal transition lands, and aborting inside that window
         // flipped a task the user had just seen as completed (with its rows in
         // hand) to failed with "Swarm session was closed; task dropped".
+        //
+        // Only a successful status proves delivery: a refused extraction also
+        // fills resultSet (with an empty list) and sets SC_EXPECTATION_FAILED,
+        // and must still be aborted instead of surviving the close as pending.
+        fun isDelivered(response: ScrapeResponse): Boolean =
+            !response.isDone && response.resultSet != null &&
+                (response.statusCode == ResourceStatus.SC_OK ||
+                    response.statusCode == ResourceStatus.SC_NO_CONTENT)
+
         val all = responseCache.asMap().entries
-        val pending = all.filter { !it.value.isDone && it.value.resultSet == null }
-        val delivered = all.count { !it.value.isDone && it.value.resultSet != null }
+        val pending = all.filter { !it.value.isDone && !isDelivered(it.value) }
+        val delivered = all.count { isDelivered(it.value) }
 
         for ((id, response) in pending) {
             responseStatusIndex[response.statusCode]?.remove(id)

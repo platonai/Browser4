@@ -950,10 +950,11 @@ function Get-JavaMajorVersion {
     .SYNOPSIS
         The major version of the JDK the build will actually use.
     .DESCRIPTION
-        Resolves `java` through JAVA_HOME first, then PATH, and parses the
-        major version out of `java -version`.  Returns $null when no JDK can be
-        found or the output cannot be parsed — callers must treat that as
-        "unknown", never as "fine".
+        Resolves `java` from JAVA_HOME when set (Maven uses the same JDK),
+        otherwise from PATH, and parses the major version out of
+        `java -version`.  Returns $null when no JDK can be found or the output
+        cannot be parsed — callers must treat that as "unknown", never as
+        "fine".
     #>
     $javaExe = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME 'bin/java' } else { 'java' }
     try {
@@ -992,7 +993,13 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
     $requiredJavaMajor = 25
     $javaMajor = Get-JavaMajorVersion
     if ($null -eq $javaMajor -or $javaMajor -lt $requiredJavaMajor) {
-        $found = if ($null -eq $javaMajor) { 'no JDK on JAVA_HOME or PATH' } else { "JDK $javaMajor" }
+        $found = if ($null -ne $javaMajor) {
+            "JDK $javaMajor"
+        } elseif ($env:JAVA_HOME) {
+            "no java executable under JAVA_HOME=$env:JAVA_HOME"
+        } else {
+            'no JDK on PATH'
+        }
         Write-Host "[FAIL] MockSite requires JDK $requiredJavaMajor or newer, but found $found." -ForegroundColor Red
         Write-Host '       Point JAVA_HOME at a JDK 25+ installation and retry, for example:' -ForegroundColor Yellow
         Write-Host '         $env:JAVA_HOME = "/usr/lib/jvm/java-25-openjdk-amd64"   # Linux' -ForegroundColor DarkGray

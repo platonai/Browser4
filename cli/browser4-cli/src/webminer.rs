@@ -52,10 +52,11 @@ const MODULE_OPENS: &[&str] = &[
     "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
     "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
     "--add-opens=java.base/sun.nio.cs=ALL-UNNAMED",
-    // NOTE: deliberately no `java.base/sun.security.action` — that package left
-    // java.base in JDK 9, so requesting it makes every JVM launch on JDK 21/25
-    // print "WARNING: package sun.security.action not in java.base" as the first
-    // line of an otherwise clean run.
+    // NOTE: deliberately no `java.base/sun.security.action` — that package was
+    // removed from java.base in JDK 25 (JDK 21 still ships it), so requesting it
+    // makes every JVM launch on JDK 25 print
+    // "WARNING: package sun.security.action not in java.base" as the first line
+    // of an otherwise clean run.
     "--add-opens=java.base/sun.util.calendar=ALL-UNNAMED",
     "--add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED",
 ];

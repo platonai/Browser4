@@ -7534,6 +7534,37 @@ fn maven_jar_exists(bundle_module_dir: &Path) -> bool {
     jar.is_file() && jar.metadata().map(|m| m.len() > 4_096).unwrap_or(false)
 }
 
+/// Last [max_lines] lines of [bytes], trimmed, for a bounded Maven failure report.
+fn output_tail(bytes: &[u8], max_lines: usize) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n").trim().to_string()
+}
+
+/// A Maven step failure that names the step and shows the real diagnostic.
+fn maven_failure_message(step: &str, output: &std::process::Output) -> String {
+    let code = output
+        .status
+        .code()
+        .map_or_else(|| "signal".to_string(), |c| c.to_string());
+    let mut message = format!("Maven {step} for browser4-bundle exited with {code}");
+    let stdout = output_tail(&output.stdout, 20);
+    let stderr = output_tail(&output.stderr, 20);
+    if !stderr.is_empty() {
+        message.push_str("\n--- stderr (tail) ---\n");
+        message.push_str(&stderr);
+    }
+    if !stdout.is_empty() {
+        message.push_str("\n--- stdout (tail) ---\n");
+        message.push_str(&stdout);
+    }
+    if stdout.is_empty() && stderr.is_empty() {
+        message.push_str(" (no output)");
+    }
+    message
+}
+
 /// Why dev-mode resolution of the local runtime bundle failed.
 enum LocalBundleFailure {
     /// The on-disk bundle does not match the checkout and the user did not opt
@@ -7689,10 +7720,20 @@ async fn try_build_local_runtime_bundle(
             );
         }
         let mvn_program = resolve_maven_program(root);
-        let mvn_status = tokio::task::spawn_blocking({
+        let mvn_result = tokio::task::spawn_blocking({
             let mvn_program = mvn_program.clone();
             let root = root.to_path_buf();
-            move || {
+            move || -> Result<(), String> {
+                let run = |args: &[&str]| -> std::io::Result<std::process::Output> {
+                    std::process::Command::new(&mvn_program)
+                        .args(args)
+                        .current_dir(&root)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .output()
+                };
+
                 // Clean the code modules before installing.  `install` alone
                 // keeps orphaned .class files in target/classes, so a class
                 // deleted or moved between builds (for example a
@@ -7702,62 +7743,43 @@ async fn try_build_local_runtime_bundle(
                 // "503 Swarm not installed" while the plugin jar was present.
                 // The clean deliberately runs without the bundle profiles so
                 // the bundle's own work directory (its jlink image) survives.
-                let clean_status = std::process::Command::new(&mvn_program)
-                    .args(["clean", "-q", "-DskipTests"])
-                    .current_dir(&root)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::piped())
-                    .status();
-
-                match clean_status {
-                    Ok(status) if status.success() => {}
-                    Ok(status) => return Ok(status),
-                    Err(error) => return Err(error),
+                let clean = run(&["clean", "-q", "-DskipTests"])
+                    .map_err(|e| format!("Failed to run Maven clean for browser4-bundle: {e}"))?;
+                if !clean.status.success() {
+                    return Err(maven_failure_message("clean", &clean));
                 }
 
-                std::process::Command::new(&mvn_program)
-                    .args([
-                        "install",
-                        "-Pall-main-modules,asset-bundle",
-                        "-DskipTests",
-                        // The jar plugin skips repackaging when it thinks nothing
-                        // changed, and it compares the jar against the classes
-                        // *directory* mtime — which does not move when only the
-                        // contents of existing class files change.  Force it, or a
-                        // rebuild can leave a module jar older than the sources it
-                        // was compiled from, and the staleness refusal below would
-                        // never clear no matter how often the user rebuilds.
-                        "-Dmaven.jar.forceCreation=true",
-                        "-q",
-                    ])
-                    .current_dir(&root)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::piped())
-                    .status()
+                let install = run(&[
+                    "install",
+                    "-Pall-main-modules,asset-bundle",
+                    "-DskipTests",
+                    // The jar plugin skips repackaging when it thinks nothing
+                    // changed, and it compares the jar against the classes
+                    // *directory* mtime — which does not move when only the
+                    // contents of existing class files change.  Force it, or a
+                    // rebuild can leave a module jar older than the sources it
+                    // was compiled from, and the staleness refusal below would
+                    // never clear no matter how often the user rebuilds.
+                    "-Dmaven.jar.forceCreation=true",
+                    "-q",
+                ])
+                .map_err(|e| format!("Failed to run Maven install for browser4-bundle: {e}"))?;
+                if !install.status.success() {
+                    return Err(maven_failure_message("package", &install));
+                }
+
+                Ok(())
             }
         })
         .await
         .map_err(|e| LocalBundleFailure::Build(format!("Maven package task panicked: {e}")))?;
 
-        match mvn_status {
-            Ok(status) if status.success() => {
+        match mvn_result {
+            Ok(()) => {
                 maven_ran = true;
             }
-            Ok(status) => {
-                eprintln!(
-                    "Maven package for browser4-bundle exited with {}; falling back to download.",
-                    status
-                        .code()
-                        .map_or_else(|| "signal".to_string(), |c| c.to_string())
-                );
-                return Ok(None);
-            }
-            Err(error) => {
-                eprintln!(
-                    "Failed to run Maven for browser4-bundle ({error}); falling back to download."
-                );
+            Err(message) => {
+                eprintln!("{message}; falling back to download.");
                 return Ok(None);
             }
         }
@@ -13969,6 +13991,38 @@ mod tests {
         create_dir_all(work_dir.join("runtime").join("lib")).unwrap();
         write(work_dir.join("runtime").join("lib").join("jvm.cfg"), "-server").unwrap();
         assert!(existing_runtime_bundle(&lib_dir, &java_path, &work_dir).is_some());
+    }
+
+    #[test]
+    fn output_tail_keeps_the_last_lines_and_trims_blank_edges() {
+        assert_eq!(output_tail(b"one\ntwo\nthree\n", 2), "two\nthree");
+        assert_eq!(output_tail(b"one\ntwo\nthree\n", 10), "one\ntwo\nthree");
+        assert_eq!(output_tail(b"one\ntwo\nthree\n", 0), "");
+        assert_eq!(output_tail(b"\n\n", 5), "");
+    }
+
+    #[test]
+    fn maven_failure_message_names_the_step_and_includes_the_output_tail() {
+        // Actually spawn a failing process: ExitStatus has no public
+        // constructor, and the point is to prove both streams are reported.
+        let output = if cfg!(windows) {
+            Command::new("cmd")
+                .args(["/C", "echo stdout & echo stderr 1>&2 & exit /b 3"])
+                .output()
+                .unwrap()
+        } else {
+            Command::new("sh")
+                .args(["-c", "echo stdout; echo stderr 1>&2; exit 3"])
+                .output()
+                .unwrap()
+        };
+        let message = maven_failure_message("clean", &output);
+        assert!(
+            message.contains("Maven clean for browser4-bundle exited with 3"),
+            "{message}"
+        );
+        assert!(message.contains("stdout"), "{message}");
+        assert!(message.contains("stderr"), "{message}");
     }
 
 }
