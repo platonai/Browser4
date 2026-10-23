@@ -281,19 +281,34 @@ dump_server_logs() {
     fi
 }
 
-# Put the backend back into a known state before a retry.  A stale session is
-# cleared with `close`; the last retry also restarts the backend with `kill-all`
-# so a wedged server (not just a wedged browser tab) gets a fresh start.
+# Wait until `kill-all` has actually released the backend port.  On Windows the
+# JVM and Chrome can outlive the command by a few seconds; reopening against the
+# dying server reproduces the same failure, so a retry that only sleeps can be
+# useless.
+wait_for_server_port_to_close() {
+    local port="${SERVER_URL##*:}"
+    local attempt
+    for attempt in $(seq 1 20); do
+        # `-f` is deliberately not used: any HTTP response means the port is
+        # still owned by the old server.
+        if ! curl -s --connect-timeout 1 -o /dev/null "http://127.0.0.1:$port/" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 0
+}
+
+# Put the backend back into a known state before a retry.  A failed navigation
+# can leave a wedged browser as well as a wedged session, so restart the whole
+# backend (`kill-all`) before every retry, not just the last one; `close` alone
+# only detaches the session and leaves the broken browser process behind.
 reset_before_retry() {
     local attempt="$1"
     local attempts="$2"
-    if [ "$attempt" -ge $((attempts - 1)) ] && [ "$attempts" -gt 2 ]; then
-        info "restarting the backend before the final attempt..."
-        run_cli kill-all >/dev/null 2>&1 || true
-    else
-        info "closing the failed session before retrying..."
-        run_cli close >/dev/null 2>&1 || true
-    fi
+    info "restarting the backend before retry $attempt/$attempts..."
+    run_cli kill-all >/dev/null 2>&1 || true
+    wait_for_server_port_to_close
 }
 
 check_step() {
@@ -301,6 +316,10 @@ check_step() {
     local attempts="$2"
     shift 2
     local attempt=1
+    # Optional extra arguments applied only to a retry.  `open` uses this to
+    # pass `--fresh`, which forces a brand-new session even when the preceding
+    # `close` failed and the stale session is still recorded.
+    local retry_args="${RETRY_EXTRA_ARGS:-}"
     TOTAL_STEPS=$((TOTAL_STEPS + 1))
     while :; do
         echo ""
@@ -309,7 +328,19 @@ check_step() {
         else
             info "--- $label ---"
         fi
-        if run_cli "$@" 2>&1; then
+        local succeeded=0
+        if [ "$attempt" -gt 1 ] && [ -n "$retry_args" ]; then
+            # Word splitting is intentional: retry_args is a flag list.
+            # shellcheck disable=SC2086
+            if run_cli "$@" $retry_args 2>&1; then
+                succeeded=1
+            fi
+        else
+            if run_cli "$@" 2>&1; then
+                succeeded=1
+            fi
+        fi
+        if [ "$succeeded" -eq 1 ]; then
             pass "$label"
             return 0
         fi
@@ -335,8 +366,11 @@ check_step() {
 # step 4: run CLI commands
 # ---------------------------------------------------------------------------
 
-# 4a. open — starts the server, opens a browser session, navigates to the page
-check_step "open" "$NAVIGATION_ATTEMPTS" open "$TEST_URL" --profile-mode SEQUENTIAL --interact-level FASTEST
+# 4a. open — starts the server, opens a browser session, navigates to the page.
+# A retry must not reconnect to the failed session: `--fresh` closes it and
+# creates a new one even if the pre-retry `close` did not clear the CLI state.
+RETRY_EXTRA_ARGS="--fresh" \
+    check_step "open" "$NAVIGATION_ATTEMPTS" open "$TEST_URL" --profile-mode SEQUENTIAL --interact-level FASTEST
 
 # 4b. goto — navigate to the page (should be a no-op or refresh)
 check_step "goto" 2 goto "$TEST_URL"
