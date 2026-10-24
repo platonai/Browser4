@@ -113,6 +113,22 @@ enum class ToolErrorCode(
         "Open a tab in the target browser, then retry attach.",
     ),
 
+    /**
+     * The endpoint answered, but it is not the browser family the requested
+     * channel names — `--cdp msedge` resolved to Chrome, or the reverse.
+     *
+     * Chrome and Edge share the conventional debugging port 9222, so a channel
+     * name picks whichever browser answered first. The check runs **before**
+     * anything is bound: no session, no driver, no tab. Non-retryable because
+     * the same resolution against the same running browsers fails the same way;
+     * the fix is to name the right channel or pass the browser's endpoint.
+     */
+    ENDPOINT_WRONG_BROWSER(
+        false, 409,
+        "Request the channel you meant (`--cdp msedge` / `--cdp chrome`), or pass the target " +
+            "browser's exact --cdp endpoint so the wrong instance cannot be picked.",
+    ),
+
     /** A downstream service failed. */
     UPSTREAM_ERROR(true, 502, "An upstream service failed; retrying may help."),
 
@@ -297,6 +313,13 @@ object ToolErrorMapper {
             "not a chrome devtools" in text -> ToolErrorCode.ENDPOINT_NOT_CDP
             "reachable but has no page targets" in text -> ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS
             "reachable but lists no page target" in text -> ToolErrorCode.ENDPOINT_NO_PAGE_TARGETS
+            // The channel answered with another browser family (`--cdp msedge`
+            // resolved Chrome). Must precede the generic "cdp" rule below: the
+            // refusal message quotes the fix (`--cdp msedge` / `--cdp chrome`),
+            // so text-only classification otherwise reported a retryable CDP_ERROR
+            // for a permanent wrong-browser condition.
+            "different browser family" in text || "wrong browser" in text ->
+                ToolErrorCode.ENDPOINT_WRONG_BROWSER
             // A refused/reset connection is an upstream transport failure, never a
             // browser that rejected a command — it stays UPSTREAM_ERROR, but the
             // rule must be evaluated before the generic "cdp" match to be reached

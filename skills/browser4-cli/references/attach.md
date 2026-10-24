@@ -114,6 +114,7 @@ retry loop cannot spin on them:
 | `ENDPOINT_UNREACHABLE` | 502 | nothing answered at the endpoint (connection refused/reset) |
 | `ENDPOINT_NOT_CDP` | 502 | something answered, but it is not a CDP/DevTools endpoint |
 | `ENDPOINT_NO_PAGE_TARGETS` | 409 | a CDP endpoint with no `page` target to drive |
+| `ENDPOINT_WRONG_BROWSER` | 409 | the endpoint answered as a different browser family than the requested `channel` (e.g. `--cdp msedge` → Chrome); nothing was bound |
 
 **Multi-instance hazard — attaching to a browser another session already drives.** Attaching to a
 browser that a live Browser4 session owns is allowed (it is the documented workflow), but it is
@@ -132,14 +133,60 @@ ownedBySessionId, reboundFromPort, warning?}`.
 - **Extension attach (`--extension`)** prints `Extension connected and healthy!` followed by `Connected browser: Google Chrome 138`. Identity comes from the extension WebSocket handshake User-Agent — Chrome and Edge run the same extension id, and Edge advertises an `Edg/` UA token, so the User-Agent is the only reliable signal.
 - **CDP attach (`--cdp`)** prints `Attached to Google Chrome 138 at http://localhost:9222`. Identity comes from the browser's `GET /json/version` response.
 
-**Channel-mismatch warning:** when the actual browser family conflicts with the requested channel (e.g. `attach --extension msedge` landing on Chrome), the CLI warns immediately with ⚠:
+**Channel identity is enforced, not just warned about.** When an explicitly requested
+channel (`--cdp msedge`, `--extension msedge`) resolves to a browser of a different
+family, the attach **fails**.
+
+For CDP the CLI sends the channel to the backend, which compares it with the product the
+endpoint reports **before binding anything** — no session, no driver, no claimed tab:
 
 ```text
-⚠  Requested channel was 'msedge', but the browser that actually connected is Google Chrome 138 — you may have attached to the WRONG browser, and login state on this browser likely differs.
-   Run `close`, then re-run `browser4-cli attach --extension msedge` and approve the connection in the correct browser.
+Error: [ENDPOINT_WRONG_BROWSER] attach_browser failed: attach refused: channel 'msedge' was
+requested, but endpoint http://localhost:9222 reports Google Chrome (Chrome/155.0.8059.79) — a
+different browser family. Chrome and Edge share the conventional debugging port, so a channel
+name can resolve the wrong browser. Name the channel you meant (`--cdp msedge` / `--cdp chrome`),
+or pass that browser's exact endpoint so the wrong instance cannot be picked.
 ```
 
-Always **check the printed browser** right after attaching — the silent failure mode is driving the wrong profile and later reporting "lost login state".
+For the extension transport the family is only knowable after the relay handshake, so the
+session has already been created when the mismatch is detected — it is then disconnected
+and forgotten:
+
+```text
+Error: Attached to the WRONG browser: the requested channel 'msedge' (extension)
+resolved to a browser that reports Google Chrome 138 (family: chrome).
+The session was disconnected and its local record removed, so no command will drive that browser.
+The connect page was opened in, or answered by, Google Chrome 138. Install and enable the
+Browser4 Extension in Microsoft Edge, then re-run `browser4-cli attach --extension msedge`.
+```
+
+Why a hard failure rather than a warning: Chrome and Edge share the conventional debug
+port 9222, and both run the same Web Store extension id, so a wrong-family bind looks
+exactly like a working one until the session starts reporting missing login state. After a
+refused attach no command can silently drive the wrong browser; the external browser keeps
+running, and re-running the same attach after installing the extension in the right browser
+(or naming the right channel) is the fix — no `close` needed.
+
+With an explicit endpoint (`--cdp http://localhost:9222`, `--cdp 9222`, a WebSocket URL)
+there is no channel to compare against: `Attached to …` names the product that answered,
+and a Brave/Opera/Chromium fork on that endpoint is what you asked for.
+
+**Which browser opens the extension connect page.** `attach --extension <channel>` opens
+the `chrome-extension://…/connect.html` page **only in that channel's own browser** — the
+CLI never falls back to the other family, and never hands the URL to the OS default
+handler, when a channel was requested. It also scans the profiles of that family first
+when resolving a locally loaded (unpacked) extension id, so Chrome's dev-mode id is never
+used to open an Edge connect page. If the requested browser is not installed, the CLI
+says so and prints the URL to open by hand:
+
+```text
+⚠  Could not launch Microsoft Edge — open this URL in Microsoft Edge to authorize the connection:
+  chrome-extension://<id>/connect.html?mcpRelayUrl=...
+```
+
+A bare `attach --extension` (no channel) deliberately uses Chrome first, then Edge, then
+the OS default browser — nothing was requested, so the extension that answers decides.
+The channel recorded for the session is then the **actual** family, not a guess.
 
 **Session listings also show the real browser:**
 
@@ -199,10 +246,31 @@ Also accepts WebSocket URLs (`ws://localhost:9222/devtools/...`), bare ports (`-
 ### 3. Attach to a Remote Browser4 Server
 
 ```bash
-browser4-cli attach --endpoint http://browser4-server:18182 --cdp chrome
+browser4-cli attach --endpoint http://browser4-server:18182
+browser4-cli attach --endpoint http://browser4-server:18182 --cdp http://browser-host:9222
 ```
 
-When `--endpoint` is used alone (without `--cdp`), it switches the CLI to the remote server for subsequent commands.
+When `--endpoint` is used alone (without `--cdp`), it switches the CLI to the remote server for subsequent commands and clears any attach markers left on the slot by a previous attach.
+
+**A channel name and a remote `--endpoint` cannot be combined.** `--cdp chrome` resolves
+a channel on **this** machine (running processes, their debug ports, their
+`DevToolsActivePort` files) and the resolved `http://localhost:<port>` would then be looked
+up on the *server*. The CLI refuses that combination:
+
+```text
+Error: --cdp chrome resolves a channel name on THIS machine, but --endpoint http://browser4-server:18182
+names a server that runs elsewhere: the resolved localhost port would be looked up on the server, not here.
+```
+
+Pass the CDP URL that is reachable **from the server** instead. A loopback `--endpoint`
+(`http://127.0.0.1:18182`, `http://localhost:18182`) is allowed, because then the CLI and
+the server are the same machine and the resolution is valid.
+
+**One transport per invocation.** `--cdp`, `--extension` and `--endpoint` name three
+different transports and are mutually exclusive. `attach --extension msedge --cdp
+http://localhost:9222` is refused rather than letting one flag silently win; the same
+applies to `--extension` + `--endpoint` (the extension relay only talks to the local
+server).
 
 ### 4. Named Sessions
 
@@ -239,16 +307,24 @@ browser4-cli attach --extension msedge
 
 Connect through the Browser4 Chrome Extension installed in the target browser. This is the easiest way to attach: no remote debugging flag or port configuration needed. The extension opens an about:blank tab and relays CDP commands over WebSocket.
 
-**Supported channels:** `chrome` (default), `chrome-canary`, `msedge`, `msedge-dev`.
+**Supported channels:** `chrome` (default), `chrome-beta`, `chrome-dev`, `chrome-canary`, `msedge`, `msedge-beta`, `msedge-dev`, `msedge-canary`. An unknown channel name is refused up front (it would otherwise behave like a default chrome request).
 
-**Locally loaded (unpacked) extension:** an extension loaded with *Load unpacked* gets a path-derived ID instead of the Web Store ID, so the connect page needs that ID. The CLI resolves it automatically by scanning the user-data directories it can see — the `--user-data-dir` of every running Chrome/Edge process first (which covers portable builds and custom profiles), then the conventional per-user locations — for a locally loaded "Browser4 Extension". When that fails (the browser is not running, the extension is not recorded in its profile, several profiles loaded different folders), set the ID explicitly — persistently:
+**Picking the browser:** with a channel, the connect page is opened in **that channel's own
+executable** (Edge Beta → Edge Beta, Chrome Canary → Chrome Canary); there is no
+cross-family and no cross-channel fallback. If that browser is not installed, the CLI
+prints the URL for a manual open in it. Without a channel the order is Chrome → Edge → the
+OS default handler. Whatever browser answers is verified against the requested family (see
+[Verify the Actual Browser After Attach](#verify-the-actual-browser-after-attach)): a
+mismatch fails the attach and disconnects the session.
+
+**Locally loaded (unpacked) extension:** an extension loaded with *Load unpacked* gets a path-derived ID instead of the Web Store ID, so the connect page needs that ID. The CLI resolves it automatically by scanning the user-data directories it can see — the `--user-data-dir` of every running browser process **of the requested family first** (which covers portable builds and custom profiles), then the conventional per-user locations — for a locally loaded "Browser4 Extension". The family order matters: an unpacked id registered in a Chrome profile is meaningless to Edge, so `attach --extension msedge` scans Edge profiles before Chrome's. When resolution fails (the browser is not running, the extension is not recorded in its profile, several profiles loaded different folders), set the ID explicitly — persistently:
 
 ```bash
 browser4-cli config set extension_id <id>   # 32 lowercase alphanumeric characters
 browser4-cli config list                    # shows the effective value
 ```
 
-or per shell with the `BROWSER4_EXTENSION_ID` environment variable, which wins over the config value. Read the id from `chrome://extensions` with Developer mode enabled. Resolution order is: `BROWSER4_EXTENSION_ID` → `config set extension_id` → auto-detected unpacked extension → published Web Store id.
+or per shell with the `BROWSER4_EXTENSION_ID` environment variable, which wins over the config value. Read the id from `chrome://extensions` with Developer mode enabled. Resolution order is: `BROWSER4_EXTENSION_ID` → `config set extension_id` → auto-detected unpacked extension → published Web Store id. Note that one configured id applies to every family: with different unpacked ids in Chrome and Edge, let auto-detection pick per browser rather than setting the config.
 
 **How it works:** The extension finds or opens a small WebSocket relay, and the CLI connects to it. All subsequent commands operate on the extension's active tab. This mode keeps your existing browser tabs and session intact — the browser is not launched by Browser4.
 
@@ -271,7 +347,11 @@ When the env var is set, the CLI appends `&token=...` to the connect page URL �
 - Navigating to `chrome://` internal pages (e.g., `chrome://version/`) may disconnect the extension WebSocket. If the session goes stale, run `close` first, then re-attach with `attach --extension`.
 - When the default (unnamed) session slot is already occupied by another session, `attach --extension` requires `-s <name>` to create a named session.
 - The extension creates a blank tab for the relay — "current page: about:blank" is normal for a freshly attached extension session.
-- Use `--endpoint` together with `--extension` to connect through a remote Browser4 server.
+- A page-triggered `window.open` that the browser's popup blocker refuses (no user gesture) does not create a tab: the
+  relay drops the refused `Page.windowOpen` event, so loading a page with a popup test no longer leaves a stray
+  `about:blank` tab in the attached browser. Popups opened by a real user gesture are unaffected.
+- `--extension` cannot be combined with `--endpoint`: the relay connects to the **local** Browser4 server. Switch servers with `attach --endpoint <url>` on its own, and run the extension attach against the local server.
+- "Timed out waiting for the extension to connect" names the browser the extension must be installed in; `--extension msedge` waiting means the Edge copy, not the Chrome one.
 
 ### 6. Debug a Remote Browser via SSH Tunnel
 
@@ -293,8 +373,8 @@ browser4-cli screenshot --filename remote-state.png
 | Flag | Description |
 |------|-------------|
 | `--cdp <channel\|url\|port>` | Channel name, CDP URL, WebSocket URL, bare port, or `host:port` |
-| `--endpoint <server-url>` | Browser4 server URL; when used alone, switches CLI to that server |
-| `--extension [channel]` | Connect via Browser4 Chrome Extension; optionally specify channel (chrome, chrome-canary, msedge, etc.) |
+| `--endpoint <server-url>` | Browser4 server URL; when used alone, switches CLI to that server. Mutually exclusive with `--extension`; a channel name with a non-loopback `--endpoint` is refused |
+| `--extension [channel]` | Connect via Browser4 Chrome Extension; optionally specify channel (chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary). Mutually exclusive with `--cdp` and `--endpoint` |
 | `-s <name>` | Name for the attached session (for `-s <name>` targeting later) |
 
 ## Errors & Recovery
@@ -303,6 +383,9 @@ browser4-cli screenshot --filename remote-state.png
 |----------|---------|
 | Cannot find target browser | Verify remote debugging is enabled; check the browser is running |
 | No matching channel found | Verify channel name spelling; try a CDP URL or port instead |
+| `Unknown browser channel for --extension: …` | The value must be one of the supported channels. A typo would otherwise behave like a default chrome request |
+| `--cdp`/`--extension`/`--endpoint` "cannot be combined" | One transport per invocation — drop the extra flag |
+| `--cdp <channel>` "resolves a channel name on THIS machine, but --endpoint …" | Pass the CDP URL reachable from the server (`--cdp http://browser-host:9222`), or use the server's loopback URL if it runs on this machine |
 | No CDP endpoint listening | Verify the port is correct and not blocked by a firewall |
 | `CDP endpoint ... is not reachable` | Start the target browser with `--remote-debugging-port` and retry; the endpoint named in the error is not answering |
 | `... is reachable but is not a Chrome DevTools discovery endpoint (GET /json/version → HTTP 404)` | Something answered HTTP but not on the CDP discovery path — any ordinary (non-CDP) web server returns the same 404. One possibility is Chrome's built-in remote debugging (`chrome://inspect/#remote-debugging`); if that is the target, pass its browser-level socket instead: `attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>` (second line of `DevToolsActivePort`), or use `attach --extension` |
@@ -310,7 +393,10 @@ browser4-cli screenshot --filename remote-state.png
 | `CDP endpoint ws://… is not usable over its browser-level WebSocket` | The socket URL is stale or the browser is gone. Re-read the profile's `DevToolsActivePort` (the file survives the browser), or start a browser with `--remote-debugging-port` |
 | `... reachable but has no page targets` / `... it lists no page target` | Open a tab in the target browser, then retry attach — the browser has nothing to navigate yet; `attach --extension` also works |
 | Attached, but the reported page looks wrong | The CLI prints the real current page URL after attach; if it does not match the window you expect, the endpoint pointed at a different browser — target the correct port |
-| Attached to the wrong browser (requested msedge, Chrome connected) | The CLI prints `Connected browser:` / `Attached to …` plus a ⚠ warning when the actual family conflicts with the requested channel — run `close`, then re-run attach with the correct channel and approve it in the correct browser |
+| `[ENDPOINT_WRONG_BROWSER] attach refused: channel 'msedge' …` | The channel resolved a browser of the other family (Chrome and Edge share port 9222). Nothing was bound. Name the channel you meant, or start the target browser with `--remote-debugging-port=<port>` and pass its exact endpoint |
+| `Attached to the WRONG browser: the requested channel 'msedge' …` | Extension transport only: the browser that answered the relay differs from the requested channel. The session was disconnected and its local record removed; the browser keeps running. Install/enable the extension in the requested browser, then re-run the same attach |
+| `Could not launch Microsoft Edge — open this URL in Microsoft Edge …` | The requested browser's executable was not found. Open the printed `chrome-extension://` URL in that browser by hand; the CLI never substitutes the other family |
+| `Timed out waiting for the extension to connect` | Install/enable the Browser4 Extension in the browser named by the message, approve the connection there, and re-run |
 | Attached session went stale after a disconnect | The error states the session was NOT replaced with a new browser — re-run `attach --extension …` / `attach --cdp …` explicitly, then verify with `list` |
 | Extension session goes stale | Run `close` first, then re-attach with `attach --extension`; avoid navigating to chrome:// internal pages |
 | Extension not found / not installed | Install the Browser4 Chrome Extension in the target browser first |

@@ -72,6 +72,12 @@ All four accept `-s <session>` (DEFAULT session otherwise) and `--json`.
   `window new` dispatch), so run `tab-list` after triggering the popup and switch explicitly with
   `tab-select <index>` or `--guid <guid>`. **Note:** whether every popup type is registered in
   `tab-list` is not covered by tests yet — verify on your build.
+  In **extension-attached sessions** the real browser's popup blocker is in charge: a
+  `window.open` the browser refused (no user gesture — the usual page-load "popup test") does
+  **not** create a tab, so no stray `about:blank` appears next to the page you are driving. A
+  popup opened by a real user gesture keeps the normal behaviour and appears in `tab-list`;
+  a managed (headless) browser is launched with `--disable-popup-blocking`, so there the popup
+  really does open.
 - **Extension sessions:** When closing tabs on extension-attached sessions, the backend may report
   an error even though the tab was successfully closed (Chrome's `chrome.tabs.remove` callback can
   fire an error after the tab is already gone). The CLI verifies that the tab was actually removed

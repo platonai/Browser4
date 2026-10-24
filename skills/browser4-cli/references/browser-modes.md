@@ -340,7 +340,11 @@ are left alone.
 - `BROWSER4_EXTENSION_TOKEN` only auto-approves the connect page; it is not a WebSocket credential — do not
   treat it as a security boundary.
 - `--endpoint <server-url>` selects the Browser4 server to run against; it is not a CDP endpoint and cannot be
-  combined with `--extension`.
+  combined with `--extension`. `--cdp` is a different transport too, so it cannot be combined with
+  `--extension` either — one transport per invocation.
+- `--extension <channel>` opens the connect page **only in that channel's browser** and verifies the family that
+  actually answers; Chrome answering an `msedge` request fails the attach and undoes the session instead of
+  driving the wrong browser silently. See [attach.md](attach.md#verify-the-actual-browser-after-attach).
 
 **`SYSTEM_DEFAULT` profile mode is deprecated.** Pointing Browser4 at your everyday browser profile no longer
 works with Chrome ≥143. To act as the logged-in user, use one of the attach paths; to move authentication into

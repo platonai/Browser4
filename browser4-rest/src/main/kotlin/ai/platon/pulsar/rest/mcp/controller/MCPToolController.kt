@@ -618,7 +618,12 @@ class MCPToolController(
             }
         } catch (e: Throwable) {
             logger.error("MCP tool call failed | tool={} | {}", request.tool, e.message, e)
-            ResponseEntity.ok(errorResponse("${request.tool} failed: ${exceptionChainMessage(e)}"))
+            // Classify from the FAILURE, not only from its rendered text: a
+            // CodedFailure (e.g. AttachFailureException with
+            // ENDPOINT_WRONG_BROWSER) already knows its code, and re-inferring
+            // it from prose let an unrelated "cdp" in a hint sentence turn a
+            // wrong-browser refusal into a retryable-sounding CDP_ERROR.
+            ResponseEntity.ok(errorResponse("${request.tool} failed: ${exceptionChainMessage(e)}", e))
         }
     }
 
@@ -999,12 +1004,23 @@ class MCPToolController(
     private fun handleAttachBrowser(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val args = request.arguments ?: emptyMap()
 
-        // Extension-attached sessions (Browser4 Chrome Extension relay)
-        val isExtension = args["extension"]?.let { ext ->
-            ext is Boolean && ext || ext.toString().let { it == "true" || it.isNotBlank() }
-        } ?: false
+        // `extension` selects the relay transport and nothing else. The previous
+        // parse — `ext is Boolean && ext || ext.toString().let { it == "true" || it.isNotBlank() }`
+        // — was true for `extension: false` (the string "false" is not "true" but
+        // IS not-blank) and for `extension: "msedge"` (a channel name quietly
+        // dropped, leaving the default chrome family). Both sent a client that
+        // asked for something else down the extension path.
+        val isExtension = isExtensionTransportFlag(args["extension"])
 
         if (isExtension) {
+            // One transport per call: an extension relay session cannot also be
+            // bound to a CDP endpoint, and silently preferring one of them is
+            // how a session ended up driving a browser the caller never named.
+            require(args["cdpEndpoint"] == null && args["cdpPort"] == null) {
+                "attach_browser: 'extension' and 'cdpEndpoint'/'cdpPort' are different attachment " +
+                    "modes and cannot be combined — pass one of them"
+            }
+
             val channel = (args["channel"] as? String)?.takeIf { it.isNotBlank() }
             val info = sessionManager.createExtensionAttachedSession(
                 channel = channel,
@@ -1028,6 +1044,12 @@ class MCPToolController(
             "attach_browser requires either 'cdpEndpoint' (URL), 'cdpPort' (number), or 'extension' (boolean)"
         }
 
+        // The channel the caller named, if any (`--cdp msedge`). It is checked
+        // against the product the endpoint reports BEFORE the session is bound,
+        // so a channel that resolves another family is refused without creating
+        // a session, a driver or a claimed tab.
+        val requestedChannel = (args["channel"] as? String)?.takeIf { it.isNotBlank() }
+
         val session = sessionManager.createAttachedSession(
             cdpEndpoint = cdpEndpoint,
             cdpPort = cdpPort,
@@ -1036,8 +1058,9 @@ class MCPToolController(
             // every attach onto the single DEFAULT slot, so a second named attach
             // silently rebound the first name's browser.
             capabilities = args.filterKeys {
-                it != "cdpEndpoint" && it != "cdpPort"
-            }.mapValues { it.value?.toString() }
+                it != "cdpEndpoint" && it != "cdpPort" && it != "channel"
+            }.mapValues { it.value?.toString() },
+            expectedChannel = requestedChannel,
         )
 
         logger.info(
@@ -3503,4 +3526,30 @@ internal fun candidatesToJson(
         array.add(obj)
     }
     return array
+}
+
+/**
+ * Parse the `extension` switch of `attach_browser`, which selects the Browser4
+ * Extension relay transport.
+ *
+ * Only a boolean (or its string spelling) may select it. The previous parse
+ * accepted ANY non-blank value, so `extension = false` and `extension =
+ * "msedge"` both created an extension session — the first against the caller's
+ * explicit wish, the second losing the channel name and silently landing on the
+ * default chrome family.
+ *
+ * @throws IllegalArgumentException when the value names something else (e.g. a
+ *   channel), instead of guessing which transport the caller meant.
+ */
+internal fun isExtensionTransportFlag(extensionArg: Any?): Boolean = when (extensionArg) {
+    null -> false
+    is Boolean -> extensionArg
+    else -> when (extensionArg.toString().trim().lowercase()) {
+        "true" -> true
+        "false", "" -> false
+        else -> throw IllegalArgumentException(
+            "attach_browser: 'extension' is a boolean transport switch — pass extension=true " +
+                "together with channel=\"$extensionArg\" to select a browser channel"
+        )
+    }
 }

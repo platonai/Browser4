@@ -263,6 +263,31 @@ class ToolErrorCodeTest {
     }
 
     @Test
+    @DisplayName("a wrong-browser refusal keeps its own non-retryable code")
+    fun wrongBrowserRefusalIsNotACdpError() {
+        // `attach --cdp msedge` resolving a Chrome instance: the refusal quotes
+        // the fix (`--cdp msedge` / `--cdp chrome`), so the generic "cdp" rule
+        // used to answer CDP_ERROR — declared retryable — for a condition that
+        // can never change by retrying.
+        val refusal = "attach_browser failed: attach refused: channel 'msedge' was requested, but " +
+            "endpoint http://localhost:9222 reports Google Chrome (Chrome/155.0.8059.79) — a different " +
+            "browser family. Chrome and Edge share the conventional debugging port, so a channel name " +
+            "can resolve the wrong browser. Name the channel you meant (`--cdp msedge` / `--cdp chrome`)."
+
+        assertEquals(ToolErrorCode.ENDPOINT_WRONG_BROWSER, ToolErrorMapper.classifyMessage(refusal))
+        assertFalse(
+            ToolErrorCode.ENDPOINT_WRONG_BROWSER.retryable,
+            "the same channel against the same browsers resolves the same wrong browser"
+        )
+        // The typed path still wins over the wording, even through a wrapper.
+        val failure = AttachFailureException("attach refused", ToolErrorCode.ENDPOINT_WRONG_BROWSER)
+        assertEquals(
+            ToolErrorCode.ENDPOINT_WRONG_BROWSER,
+            ToolErrorMapper.classify(IllegalStateException("attach_browser failed", failure))
+        )
+    }
+
+    @Test
     @DisplayName("a non-CDP endpoint and a page-less browser get their own codes")
     fun otherEndpointConditionsAreDistinct() {
         assertEquals(

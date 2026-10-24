@@ -4802,7 +4802,12 @@ pub fn find_browser_executable() -> Option<PathBuf> {
 // Browser channel resolution for `attach --cdp <channel>`
 // ---------------------------------------------------------------------------
 
-/// Known browser channels for the `attach --cdp <channel>` command.
+/// The channel names `--cdp <channel>` and `--extension <channel>` accept, as
+/// one string for error messages and help text.
+pub const SUPPORTED_BROWSER_CHANNELS: &str =
+    "chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary";
+
+/// Known browser channels for `attach --cdp <channel>` / `attach --extension <channel>`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BrowserChannel {
     Chrome,
@@ -4881,6 +4886,180 @@ impl std::fmt::Display for BrowserChannel {
         };
         write!(f, "{}", s)
     }
+}
+
+impl BrowserChannel {
+    /// Whether this is the stable release of its family.
+    ///
+    /// Stable channels may fall back to the family's generic executable finder
+    /// (Playwright downloads, snap/flatpak wrappers, custom PATH entries); a
+    /// Beta/Dev/Canary build is a DIFFERENT browser, never a substitute for it.
+    pub fn is_stable(&self) -> bool {
+        matches!(self, BrowserChannel::Chrome | BrowserChannel::MsEdge)
+    }
+
+    /// Browser family this channel belongs to: `"chrome"` or `"edge"`.
+    pub fn family(&self) -> &'static str {
+        match self {
+            BrowserChannel::Chrome
+            | BrowserChannel::ChromeBeta
+            | BrowserChannel::ChromeDev
+            | BrowserChannel::ChromeCanary => "chrome",
+            BrowserChannel::MsEdge
+            | BrowserChannel::MsEdgeBeta
+            | BrowserChannel::MsEdgeDev
+            | BrowserChannel::MsEdgeCanary => "edge",
+        }
+    }
+}
+
+/// Conventional install locations for one channel's executable.
+///
+/// Chromium browsers install every release channel side by side under a
+/// channel-specific product directory, so these are exact paths, not search
+/// hints. Canary builds live in the per-user directory on Windows.
+fn channel_executable_candidates(channel: &BrowserChannel) -> Vec<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let program_files_x86 = r"C:\Program Files (x86)";
+        let program_files = r"C:\Program Files";
+        let local = env::var("LOCALAPPDATA").ok().map(PathBuf::from);
+        let chrome = |dir: &str| {
+            vec![
+                PathBuf::from(format!(r"{program_files}\Google\{dir}\Application\chrome.exe")),
+                PathBuf::from(format!(r"{program_files_x86}\Google\{dir}\Application\chrome.exe")),
+            ]
+        };
+        let edge = |dir: &str| {
+            vec![
+                PathBuf::from(format!(r"{program_files_x86}\Microsoft\{dir}\Application\msedge.exe")),
+                PathBuf::from(format!(r"{program_files}\Microsoft\{dir}\Application\msedge.exe")),
+            ]
+        };
+        match channel {
+            BrowserChannel::Chrome => chrome("Chrome"),
+            BrowserChannel::ChromeBeta => chrome("Chrome Beta"),
+            BrowserChannel::ChromeDev => chrome("Chrome Dev"),
+            BrowserChannel::ChromeCanary => local
+                .map(|base| vec![base.join(r"Google\Chrome SxS\Application\chrome.exe")])
+                .unwrap_or_default(),
+            BrowserChannel::MsEdge => edge("Edge"),
+            BrowserChannel::MsEdgeBeta => edge("Edge Beta"),
+            BrowserChannel::MsEdgeDev => edge("Edge Dev"),
+            BrowserChannel::MsEdgeCanary => local
+                .map(|base| vec![base.join(r"Microsoft\Edge SxS\Application\msedge.exe")])
+                .unwrap_or_default(),
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let apps = "/Applications";
+        match channel {
+            BrowserChannel::Chrome => {
+                vec![PathBuf::from(format!("{apps}/Google Chrome.app/Contents/MacOS/Google Chrome"))]
+            }
+            BrowserChannel::ChromeBeta => {
+                vec![PathBuf::from(format!("{apps}/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta"))]
+            }
+            BrowserChannel::ChromeDev => {
+                vec![PathBuf::from(format!("{apps}/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev"))]
+            }
+            BrowserChannel::ChromeCanary => {
+                vec![PathBuf::from(format!("{apps}/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"))]
+            }
+            BrowserChannel::MsEdge => {
+                vec![PathBuf::from(format!("{apps}/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"))]
+            }
+            BrowserChannel::MsEdgeBeta => {
+                vec![PathBuf::from(format!("{apps}/Microsoft Edge Beta.app/Contents/MacOS/Microsoft Edge Beta"))]
+            }
+            BrowserChannel::MsEdgeDev => {
+                vec![PathBuf::from(format!("{apps}/Microsoft Edge Dev.app/Contents/MacOS/Microsoft Edge Dev"))]
+            }
+            BrowserChannel::MsEdgeCanary => {
+                vec![PathBuf::from(format!("{apps}/Microsoft Edge Canary.app/Contents/MacOS/Microsoft Edge Canary"))]
+            }
+        }
+    }
+    #[cfg(all(target_os = "linux", not(target_os = "macos")))]
+    {
+        match channel {
+            BrowserChannel::Chrome => vec![PathBuf::from("/opt/google/chrome/chrome")],
+            BrowserChannel::ChromeBeta => vec![PathBuf::from("/opt/google/chrome-beta/chrome")],
+            BrowserChannel::ChromeDev => vec![PathBuf::from("/opt/google/chrome-unstable/chrome")],
+            BrowserChannel::ChromeCanary => vec![PathBuf::from("/opt/google/chrome-canary/chrome")],
+            BrowserChannel::MsEdge => vec![PathBuf::from("/opt/microsoft/msedge/msedge")],
+            BrowserChannel::MsEdgeBeta => vec![PathBuf::from("/opt/microsoft/msedge-beta/msedge")],
+            BrowserChannel::MsEdgeDev => vec![PathBuf::from("/opt/microsoft/msedge-dev/msedge")],
+            BrowserChannel::MsEdgeCanary => vec![PathBuf::from("/opt/microsoft/msedge-canary/msedge")],
+        }
+    }
+}
+
+/// PATH names a non-stable channel may be installed under on Linux/macOS.
+fn channel_path_names(channel: &BrowserChannel) -> &'static [&'static str] {
+    match channel {
+        BrowserChannel::ChromeBeta => &["google-chrome-beta"],
+        BrowserChannel::ChromeDev => &["google-chrome-unstable"],
+        BrowserChannel::ChromeCanary => &["google-chrome-canary"],
+        BrowserChannel::MsEdgeBeta => &["microsoft-edge-beta"],
+        BrowserChannel::MsEdgeDev => &["microsoft-edge-dev"],
+        BrowserChannel::MsEdgeCanary => &["microsoft-edge-canary"],
+        // Stable channels have richer finders (Playwright, PATH, install roots).
+        BrowserChannel::Chrome | BrowserChannel::MsEdge => &[],
+    }
+}
+
+/// True when `path` names a file this platform can execute.
+fn is_launchable_file(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(path) {
+            Ok(meta) => meta.is_file() && meta.permissions().mode() & 0o111 != 0,
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
+/// The installed executable of one browser channel, **without crossing
+/// families or channels**.
+///
+/// `attach --extension msedge` opens the connect page by launching Edge with
+/// the `chrome-extension://` URL. Falling back to Chrome (or to the OS default
+/// handler through `cmd /c start`) put that page in a browser the user never
+/// asked for, and the extension there then connected the session to Chrome —
+/// the "requested msedge, got Chrome" confusion. A channel whose own
+/// executable cannot be found therefore resolves to `None` and the caller
+/// prints the URL for a manual open in the right browser.
+///
+/// Stable channels additionally use [find_chrome_executable] /
+/// [find_edge_executable] (Playwright downloads, PATH, custom install roots);
+/// Beta/Dev/Canary only match their own install location.
+pub fn find_browser_executable_for_channel(channel: &str) -> Option<PathBuf> {
+    let ch = BrowserChannel::from_str(channel)?;
+    for candidate in channel_executable_candidates(&ch) {
+        if is_launchable_file(&candidate) {
+            return Some(candidate);
+        }
+    }
+    if ch.is_stable() {
+        return if ch.family() == "edge" {
+            find_edge_executable()
+        } else {
+            find_chrome_executable()
+        };
+    }
+    for name in channel_path_names(&ch) {
+        if let Some(path) = find_in_path(name) {
+            return Some(path);
+        }
+    }
+    None
 }
 
 /// Where a candidate CDP port was discovered (used in diagnostics).
@@ -5058,8 +5237,7 @@ pub fn resolve_channel_to_endpoint(channel: &str) -> Result<String, String> {
     let ch = BrowserChannel::from_str(channel).ok_or_else(|| {
         format!(
             "Unknown browser channel: {channel}. \
-             Supported channels: chrome, chrome-beta, chrome-dev, chrome-canary, \
-             msedge, msedge-beta, msedge-dev, msedge-canary"
+             Supported channels: {SUPPORTED_BROWSER_CHANNELS}"
         )
     })?;
 
@@ -5180,6 +5358,42 @@ pub(crate) fn browser_processes_command_lines(names: &[&str]) -> Vec<String> {
         .map(|line| line.trim().to_string())
         .filter(|line| !line.is_empty())
         .collect()
+}
+
+/// Which browser family a running-browser command line belongs to.
+///
+/// The OS reports the executable path as the first token, so the token's file
+/// stem settles the family: `msedge` / `Microsoft Edge` → Edge,
+/// `chrome` / `chromium` / `google-chrome` → Chrome. Quoted paths break the
+/// first token at the space (`"C:\Program`), which is why the whole line is
+/// searched as a fallback — Edge is checked first there, because an Edge
+/// profile directory may carry `chrome` in its path while an Edge binary is
+/// called `msedge` (or `Microsoft Edge` on macOS).
+pub fn browser_family_of_process_line(line: &str) -> Option<&'static str> {
+    fn stem(token: &str) -> String {
+        let name = token.rsplit(['/', '\\']).next().unwrap_or(token);
+        let name = name.trim_matches('"').to_ascii_lowercase();
+        name.strip_suffix(".exe").unwrap_or(&name).to_string()
+    }
+
+    if let Some(first) = line.split_whitespace().next() {
+        let stem = stem(first);
+        if stem.starts_with("msedge") {
+            return Some("edge");
+        }
+        if stem.starts_with("chrome") || stem.starts_with("chromium") || stem.starts_with("google-chrome") {
+            return Some("chrome");
+        }
+    }
+
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("msedge") || lower.contains("microsoft edge") || lower.contains("microsoft-edge") {
+        Some("edge")
+    } else if lower.contains("chrome") || lower.contains("chromium") {
+        Some("chrome")
+    } else {
+        None
+    }
 }
 
 /// The `--remote-debugging-port=N` value a browser was started with, if any.
@@ -13315,6 +13529,126 @@ mod tests {
         assert_eq!(BrowserChannel::ChromeBeta.to_string(), "chrome-beta");
         assert_eq!(BrowserChannel::MsEdge.to_string(), "msedge");
         assert_eq!(BrowserChannel::MsEdgeCanary.to_string(), "msedge-canary");
+    }
+
+    #[test]
+    fn channel_family_and_stability() {
+        assert_eq!(BrowserChannel::Chrome.family(), "chrome");
+        assert_eq!(BrowserChannel::ChromeBeta.family(), "chrome");
+        assert_eq!(BrowserChannel::MsEdge.family(), "edge");
+        assert_eq!(BrowserChannel::MsEdgeCanary.family(), "edge");
+        // Only the stable channels may fall back to the family-wide finder.
+        assert!(BrowserChannel::Chrome.is_stable());
+        assert!(BrowserChannel::MsEdge.is_stable());
+        assert!(!BrowserChannel::ChromeBeta.is_stable());
+        assert!(!BrowserChannel::MsEdgeDev.is_stable());
+    }
+
+    #[test]
+    fn channel_executable_candidates_never_cross_families_or_channels() {
+        // `attach --extension msedge` used to fall back to Chrome's executable
+        // when Edge was not installed. Every candidate for an Edge channel must
+        // therefore name an Edge install — and a channel-specific one for
+        // Beta/Dev/Canary, so a request never lands on a different release.
+        for channel in [
+            BrowserChannel::Chrome,
+            BrowserChannel::ChromeBeta,
+            BrowserChannel::ChromeDev,
+            BrowserChannel::ChromeCanary,
+        ] {
+            for candidate in channel_executable_candidates(&channel) {
+                let path = candidate.to_string_lossy().to_ascii_lowercase();
+                assert!(
+                    path.contains("chrome") && !path.contains("edge"),
+                    "{channel} candidate must be a Chrome install, got {}",
+                    candidate.display()
+                );
+            }
+        }
+        for channel in [
+            BrowserChannel::MsEdge,
+            BrowserChannel::MsEdgeBeta,
+            BrowserChannel::MsEdgeDev,
+            BrowserChannel::MsEdgeCanary,
+        ] {
+            for candidate in channel_executable_candidates(&channel) {
+                let path = candidate.to_string_lossy().to_ascii_lowercase();
+                assert!(
+                    path.contains("edge") && !path.contains("google"),
+                    "{channel} candidate must be an Edge install, got {}",
+                    candidate.display()
+                );
+            }
+        }
+
+        // The non-stable channels resolve only their own product directory.
+        let beta = channel_executable_candidates(&BrowserChannel::MsEdgeBeta)
+            .into_iter()
+            .map(|p| p.to_string_lossy().to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        assert!(
+            beta.iter().all(|path| path.contains("beta")),
+            "Edge Beta must not resolve the stable install: {beta:?}"
+        );
+    }
+
+    #[test]
+    fn find_browser_executable_for_channel_rejects_unknown_channels() {
+        // An unknown channel must not silently fall back to any browser: the
+        // caller (extension attach) refuses it before this point.
+        assert_eq!(None, find_browser_executable_for_channel("firefox"));
+        assert_eq!(None, find_browser_executable_for_channel(""));
+    }
+
+    #[test]
+    fn browser_family_of_process_line_classifies_running_browsers() {
+        // Windows command lines: the executable may be quoted, and the family
+        // token can be buried behind a space inside the quoted path — the
+        // whole-line fallback has to settle it.
+        assert_eq!(
+            Some("edge"),
+            browser_family_of_process_line(
+                r#""C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=renderer --user-data-dir="C:\Users\me\AppData\Local\Microsoft\Edge\User Data""#
+            )
+        );
+        assert_eq!(
+            Some("chrome"),
+            browser_family_of_process_line(
+                r#""C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer --user-data-dir="C:\Users\me\AppData\Local\Google\Chrome\User Data""#
+            )
+        );
+        // macOS: the binary is called "Microsoft Edge", with no msedge token.
+        assert_eq!(
+            Some("edge"),
+            browser_family_of_process_line(
+                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge --type=renderer"
+            )
+        );
+        assert_eq!(
+            Some("chrome"),
+            browser_family_of_process_line(
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --type=renderer"
+            )
+        );
+        // Linux wrapper names.
+        assert_eq!(
+            Some("edge"),
+            browser_family_of_process_line("/usr/bin/microsoft-edge --type=renderer")
+        );
+        assert_eq!(
+            Some("chrome"),
+            browser_family_of_process_line("/usr/bin/chromium --type=gpu-process")
+        );
+        // The executable token wins over a path that merely contains a family
+        // name: an Edge binary whose profile directory says "chrome" is Edge.
+        assert_eq!(
+            Some("edge"),
+            browser_family_of_process_line(
+                r#"msedge.exe --user-data-dir="D:\Chrome-like\EdgeProfile""#
+            )
+        );
+        assert_eq!(None, browser_family_of_process_line("firefox --new-window"));
+        assert_eq!(None, browser_family_of_process_line(""));
     }
 
     // -------------------------------------------------------------------

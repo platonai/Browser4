@@ -1092,15 +1092,28 @@ fn build_open_session_request(capabilities: Option<Value>, session_name: Option<
 /// `session_id` carries the `-s/--session` name (or "default") so each named
 /// attach resolves to a distinct backend session instead of all sharing the
 /// single DEFAULT slot. Mirrors [build_open_session_request].
-fn build_attach_browser_params(cdp_endpoint: &str, session_id: Option<&str>) -> Value {
+///
+/// `channel` is the browser channel the user named (`--cdp msedge`), or `None`
+/// for a concrete endpoint. The backend compares it with the product the
+/// endpoint reports and refuses a mismatch **before** binding anything, so a
+/// channel that resolves the other family leaves no session or claimed tab.
+fn build_attach_browser_params(
+    cdp_endpoint: &str,
+    session_id: Option<&str>,
+    channel: Option<&str>,
+) -> Value {
     let requested = session_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("default");
-    json!({
+    let mut params = json!({
         "cdpEndpoint": cdp_endpoint,
         "sessionId": requested,
-    })
+    });
+    if let Some(ch) = channel.map(str::trim).filter(|ch| !ch.is_empty()) {
+        params["channel"] = json!(ch);
+    }
+    params
 }
 
 fn build_swarm_create_capabilities(tool_params: &Value) -> Result<Value, String> {
@@ -1320,21 +1333,26 @@ where
                 session_id
             );
             let channel = state.browser_channel.clone();
-            if let Ok(new_id) =
-                auto_reattach_extension(client, base_url, session_name, channel.as_deref()).await
-            {
-                let mut refreshed = read_state(None, session_name);
-                refreshed.session_id = Some(new_id.clone());
-                refreshed.kind = crate::state::SessionKind::ExtensionAttached;
-                refreshed.is_attached = true;
-                refreshed.attach_type = Some("extension".to_string());
-                refreshed.session_name = session_name.map(|s| s.to_string());
-                let _ = write_state(&refreshed, None, session_name);
-                cli_println!(
-                    "Reconnected extension session as {} — resuming command.",
-                    new_id
-                );
-                return action(new_id).await;
+            match auto_reattach_extension(client, base_url, session_name, channel.as_deref()).await {
+                ExtensionReconnect::Reconnected(new_id) => {
+                    let mut refreshed = read_state(None, session_name);
+                    refreshed.session_id = Some(new_id.clone());
+                    refreshed.kind = crate::state::SessionKind::ExtensionAttached;
+                    refreshed.is_attached = true;
+                    refreshed.attach_type = Some("extension".to_string());
+                    refreshed.session_name = session_name.map(|s| s.to_string());
+                    let _ = write_state(&refreshed, None, session_name);
+                    cli_println!(
+                        "Reconnected extension session as {} — resuming command.",
+                        new_id
+                    );
+                    return action(new_id).await;
+                }
+                // A wrong-browser reconnect is not a transient hiccup: the
+                // mismatched session was dropped, so surface it instead of
+                // running the command against a dead session id.
+                ExtensionReconnect::WrongBrowser(message) => return Err(message),
+                ExtensionReconnect::Unavailable => {}
             }
         }
     }
@@ -1759,21 +1777,25 @@ async fn resolve_attached_session_id(
             attached_id
         );
         let channel = state.browser_channel.clone();
-        if let Ok(new_id) =
-            auto_reattach_extension(client, base_url, session_name, channel.as_deref()).await
-        {
-            let mut refreshed = read_state(None, session_name);
-            refreshed.session_id = Some(new_id.clone());
-            refreshed.kind = crate::state::SessionKind::ExtensionAttached;
-            refreshed.is_attached = true;
-            refreshed.attach_type = Some("extension".to_string());
-            refreshed.session_name = session_name.map(|s| s.to_string());
-            let _ = write_state(&refreshed, None, session_name);
-            cli_println!(
-                "Reconnected extension session as {} — resuming command.",
-                new_id
-            );
-            return Ok(new_id);
+        match auto_reattach_extension(client, base_url, session_name, channel.as_deref()).await {
+            ExtensionReconnect::Reconnected(new_id) => {
+                let mut refreshed = read_state(None, session_name);
+                refreshed.session_id = Some(new_id.clone());
+                refreshed.kind = crate::state::SessionKind::ExtensionAttached;
+                refreshed.is_attached = true;
+                refreshed.attach_type = Some("extension".to_string());
+                refreshed.session_name = session_name.map(|s| s.to_string());
+                let _ = write_state(&refreshed, None, session_name);
+                cli_println!(
+                    "Reconnected extension session as {} — resuming command.",
+                    new_id
+                );
+                return Ok(new_id);
+            }
+            // Not a transient drop: the wrong browser answered, the mismatched
+            // session was dropped, and the user must see that.
+            ExtensionReconnect::WrongBrowser(message) => return Err(message),
+            ExtensionReconnect::Unavailable => {}
         }
     }
     Err(stale_attach_message(state, attached_id))
@@ -1995,45 +2017,90 @@ fn resolve_extension_id_from(
 /// profiles keep their user data (next to the program, or wherever
 /// `--user-data-dir` points), which the conventional locations below never
 /// cover. A launcher that injects the flag is picked up too, because the filter
-/// is on the command line, not on the process name alone. Then the conventional
-/// per-user directories follow, the requested family first.
+/// is on the command line, not on the process name alone. Within both groups the
+/// requested family comes first, and a directory is listed once.
 fn unpacked_extension_roots(channel: Option<&str>) -> Vec<std::path::PathBuf> {
     let edge_first = is_edge_channel(channel);
-    let executables: [&str; 2] = if edge_first {
-        ["msedge", "chrome"]
-    } else {
-        ["chrome", "msedge"]
-    };
 
-    let mut process_dirs: Vec<std::path::PathBuf> = Vec::new();
-    for line in crate::daemon::browser_processes_command_lines(&executables) {
-        for dir in crate::daemon::parse_user_data_dirs_from_line(&line) {
-            if !process_dirs.contains(&dir) {
-                process_dirs.push(dir);
+    // Classify the running browsers by FAMILY, not by the order the OS happens
+    // to enumerate them. An unpacked extension gets a path-derived id, so a
+    // Chrome profile scanned first contributed Chrome's id to an
+    // `attach --extension msedge` run: Edge then opened a `chrome-extension://`
+    // page for an extension it does not have, and the attach timed out.
+    //
+    // The match names cover every spelling the platforms use: `msedge` on
+    // Windows/Linux, `microsoft-edge` on Linux, `Microsoft Edge` on macOS.
+    let mut edge_dirs: Vec<std::path::PathBuf> = Vec::new();
+    let mut chrome_dirs: Vec<std::path::PathBuf> = Vec::new();
+    let mut other_dirs: Vec<std::path::PathBuf> = Vec::new();
+    for line in crate::daemon::browser_processes_command_lines(&[
+        "msedge",
+        "chrome",
+        "microsoft edge",
+        "microsoft-edge",
+    ]) {
+        let dirs = crate::daemon::parse_user_data_dirs_from_line(&line);
+        if dirs.is_empty() {
+            continue;
+        }
+        let bucket = match crate::daemon::browser_family_of_process_line(&line) {
+            Some("edge") => &mut edge_dirs,
+            Some("chrome") => &mut chrome_dirs,
+            _ => &mut other_dirs,
+        };
+        for dir in dirs {
+            if !bucket.contains(&dir) {
+                bucket.push(dir);
             }
         }
     }
 
     let (chrome_root, edge_root) = conventional_user_data_roots();
-    unpacked_extension_roots_from(process_dirs, chrome_root, edge_root, edge_first)
+    extension_scan_roots(
+        edge_dirs,
+        chrome_dirs,
+        other_dirs,
+        chrome_root,
+        edge_root,
+        edge_first,
+    )
 }
 
-/// Compose the scan order: what running browsers actually use first, then the
-/// conventional locations with the requested family first. Directories already
-/// contributed by a running process are not repeated.
-fn unpacked_extension_roots_from(
-    process_dirs: Vec<std::path::PathBuf>,
+/// Compose the scan order for a locally loaded extension: the requested
+/// family's running-browser directories first, then the other family's, then
+/// the ones whose executable could not be classified, and finally the
+/// conventional per-user locations in the same family order.
+///
+/// The requested family must win everywhere: the extension id this list
+/// resolves is used to open `chrome-extension://<id>/connect.html` in the
+/// requested browser, so an id belonging to the other family's profile is
+/// useless at best and a wrong-browser attach at worst.
+fn extension_scan_roots(
+    edge_dirs: Vec<std::path::PathBuf>,
+    chrome_dirs: Vec<std::path::PathBuf>,
+    other_dirs: Vec<std::path::PathBuf>,
     chrome_root: Option<std::path::PathBuf>,
     edge_root: Option<std::path::PathBuf>,
     edge_first: bool,
 ) -> Vec<std::path::PathBuf> {
-    let mut roots = process_dirs;
-    let conventional = if edge_first {
-        [edge_root, chrome_root]
+    let (first_dirs, second_dirs) = if edge_first {
+        (edge_dirs, chrome_dirs)
     } else {
-        [chrome_root, edge_root]
+        (chrome_dirs, edge_dirs)
     };
-    for root in conventional.into_iter().flatten() {
+    let (first_root, second_root) = if edge_first {
+        (edge_root, chrome_root)
+    } else {
+        (chrome_root, edge_root)
+    };
+
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    for dir in first_dirs.into_iter().chain(second_dirs).chain(other_dirs) {
+        if !roots.contains(&dir) {
+            roots.push(dir);
+        }
+    }
+    for root in [first_root, second_root].into_iter().flatten() {
         if !roots.contains(&root) {
             roots.push(root);
         }
@@ -2170,35 +2237,53 @@ fn stale_attach_message(state: &CliState, attached_id: &str) -> String {
     msg
 }
 
+/// Outcome of a transparent extension reconnect.
+///
+/// The three cases must stay distinguishable: a best-effort failure keeps the
+/// caller's existing stale-session fallback, while a wrong-browser reconnect is
+/// a decision the user has to see — falling through to "the attached browser
+/// session is no longer reachable" would hide it.
+enum ExtensionReconnect {
+    /// The extension reconnected; the payload is the new session id.
+    Reconnected(String),
+    /// A browser of the wrong family answered. The wrong session was already
+    /// disconnected and forgotten; the payload is the error to surface.
+    WrongBrowser(String),
+    /// Timeout / backend hiccup — nothing was bound.
+    Unavailable,
+}
+
 /// Transparently re-establishes an extension-attached session after it went
 /// stale (service-worker restart, transient WebSocket drop).  Opens the
 /// connect page and polls until the extension reconnects; returns the new
 /// session id on success.
+///
+/// The same wrong-browser guard as `attach --extension` applies: when the
+/// stored session names a channel (e.g. `msedge`) and the reconnected browser
+/// reports another family, the reconnect is refused rather than silently
+/// swapping Chrome in for Edge underneath the user's session.
 async fn auto_reattach_extension(
     client: &Client,
     base_url: &str,
-    _session_name: Option<&str>,
+    session_name: Option<&str>,
     channel: Option<&str>,
-) -> Result<String, String> {
+) -> ExtensionReconnect {
     let mut attach_params = json!({ "extension": true });
     if let Some(ch) = channel {
         attach_params["channel"] = json!(ch);
     }
-    let result = call_tool(client, base_url, "attach_browser", attach_params)
-        .await
-        .map_err(|e| format!("attach_browser failed: {e}"))?;
-    let parsed = serde_json::from_str::<Value>(&result)
-        .map_err(|e| format!("Failed to parse attach_browser response: {e}"))?;
-    let session_id = parsed
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| format!("attach_browser response missing sessionId: {}", &result))?
-        .to_string();
-    let ws_endpoint = parsed
-        .get("wsEndpoint")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "attach_browser response missing wsEndpoint".to_string())?
-        .to_string();
+    let Ok(result) = call_tool(client, base_url, "attach_browser", attach_params).await else {
+        return ExtensionReconnect::Unavailable;
+    };
+    let Ok(parsed) = serde_json::from_str::<Value>(&result) else {
+        return ExtensionReconnect::Unavailable;
+    };
+    let (Some(session_id), Some(ws_endpoint)) = (
+        parsed.get("sessionId").and_then(|v| v.as_str()).map(str::to_string),
+        parsed.get("wsEndpoint").and_then(|v| v.as_str()).map(str::to_string),
+    ) else {
+        return ExtensionReconnect::Unavailable;
+    };
 
     let client_info = json!({"name": "browser4-cli"}).to_string();
     let client_encoded = urlencoding::encode(&client_info);
@@ -2217,22 +2302,36 @@ async fn auto_reattach_extension(
             connect_url.push_str(&urlencoding::encode(&token));
         }
     }
-    let _ = open_url_in_browser(&connect_url, channel);
+    if !open_url_in_browser(&connect_url, channel) {
+        // The reattach is best effort, but the user has to open the page in the
+        // right browser — silently polling a page nobody opened wastes 30s and
+        // can let the OTHER browser's extension reconnect underneath them.
+        eprintln!(
+            "⚠  Could not open the extension connect page in {} — open it there to reconnect:",
+            channel_browser_label(channel)
+        );
+        eprintln!("  {connect_url}");
+    }
 
     let poll_start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(30);
     loop {
         if poll_start.elapsed() >= timeout {
-            return Err(format!(
-                "Timed out waiting for extension to reconnect (session {})",
-                session_id
-            ));
+            return ExtensionReconnect::Unavailable;
         }
         let ready_params = json!({ "sessionId": &session_id });
         if let Ok(ready_result) =
             call_tool(client, base_url, "check_session_ready", ready_params).await
         {
             let ready_parsed = serde_json::from_str::<Value>(&ready_result).ok();
+            let field = |key: &str| {
+                ready_parsed
+                    .as_ref()
+                    .and_then(|v| v.get(key))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            };
             let ready = ready_parsed
                 .as_ref()
                 .and_then(|v| v.get("ready"))
@@ -2244,11 +2343,129 @@ async fn auto_reattach_extension(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             if ready && healthy {
-                return Ok(session_id);
+                if let Some(requested) = channel {
+                    let family = field("browserFamily").unwrap_or_default();
+                    if channel_family_conflict(requested, &family) {
+                        let actual = attach_browser_label(
+                            field("browserName").as_deref(),
+                            field("browserVersion").as_deref(),
+                            Some(&family),
+                        );
+                        let remedy = format!(
+                            "The Browser4 Extension in {} must answer the reconnect. Open the \
+                             connect page in that browser, or re-attach explicitly with \
+                             `browser4-cli attach --extension {requested}`.",
+                            channel_browser_label(Some(requested))
+                        );
+                        return ExtensionReconnect::WrongBrowser(
+                            reject_wrong_browser_attach(
+                                client,
+                                base_url,
+                                session_name,
+                                &session_id,
+                                "extension",
+                                requested,
+                                &actual,
+                                &family,
+                                &remedy,
+                                WrongBrowserCleanup::DisconnectSession,
+                            )
+                            .await,
+                        );
+                    }
+                }
+                return ExtensionReconnect::Reconnected(session_id);
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
+}
+
+/// One `--cdp` / `--endpoint` value: trimmed, with the empty form dropped, so a
+/// padded or empty value cannot slip past the mode validation.
+fn attach_option_value(parsed: &HashMap<String, Value>, key: &str) -> Option<String> {
+    parsed
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// `--extension` normalized for [validate_attach_flags]: `Some("true")` for the
+/// bare flag (the arg parser stores boolean `true`), `Some("<channel>")` when a
+/// channel was given, `None` when the flag is absent.
+fn attach_extension_value(parsed: &HashMap<String, Value>) -> Option<String> {
+    let value = parsed.get("extension")?;
+    if value.as_bool() == Some(true) {
+        return Some("true".to_string());
+    }
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Reject `attach` invocations that name more than one transport, or a channel
+/// that does not exist.
+///
+/// The three transports are `--cdp` (a CDP endpoint), `--extension` (the
+/// Browser4 Extension relay) and `--endpoint` (a remote Browser4 server). The
+/// old code let whichever branch ran first win and silently dropped the other
+/// flags — `attach --extension msedge --cdp http://localhost:9222` created an
+/// extension session and never looked at the endpoint. A channel name is also
+/// resolved on THIS machine, so pairing one with a remote `--endpoint` binds
+/// whatever listens on the SERVER at the resolved port.
+fn validate_attach_flags(
+    cdp_raw: Option<&str>,
+    endpoint_override: Option<&str>,
+    ext_raw: Option<&str>,
+) -> Result<(), String> {
+    if let Some(ext) = ext_raw {
+        if let Some(cdp) = cdp_raw {
+            return Err(format!(
+                "--extension and --cdp are two different connection modes and cannot be combined \
+                 (got --extension {ext} and --cdp {cdp}).\n\
+                 Use `attach --extension <channel>` to connect through the Browser4 Extension, or \
+                 `attach --cdp <url|channel>` to connect over CDP. Drop one of them."
+            ));
+        }
+        if let Some(endpoint) = endpoint_override {
+            return Err(format!(
+                "--extension cannot be combined with --endpoint ({endpoint}): the extension \
+                 connects to the local Browser4 server's WebSocket.\n\
+                 Use `attach --extension <channel>` against the local server, then switch the CLI \
+                 to the remote server with `attach --endpoint <url>` if you need one."
+            ));
+        }
+        // A bare --extension names no channel; a value must be a real one, or a
+        // typo would silently behave like a chrome-family request.
+        if ext != "true" && daemon::BrowserChannel::from_str(ext).is_none() {
+            return Err(format!(
+                "Unknown browser channel for --extension: {ext}\n\
+                 Supported channels: {}\n\
+                 Use a bare --extension to connect the extension in your default browser.",
+                daemon::SUPPORTED_BROWSER_CHANNELS
+            ));
+        }
+    }
+
+    if let (Some(cdp), Some(endpoint)) = (cdp_raw, endpoint_override) {
+        if daemon::BrowserChannel::from_str(cdp).is_some() && !endpoint_host_is_local(endpoint) {
+            return Err(format!(
+                "--cdp {cdp} resolves a channel name on THIS machine, but --endpoint {endpoint} \
+                 names a server that runs elsewhere: the resolved localhost port would be looked up \
+                 on the server, not here.\n\
+                 Pass the browser's CDP URL as reachable FROM the server, e.g. \
+                 `attach --endpoint {endpoint} --cdp http://<browser-host>:9222`.\n\
+                 If the server runs on this machine, use its loopback URL: \
+                 `attach --endpoint http://127.0.0.1:<port> --cdp {cdp}`."
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 async fn handle_attach(
@@ -2259,29 +2476,46 @@ async fn handle_attach(
     parsed_args: &HashMap<String, Value>,
 ) -> Result<(), String> {
     // --cdp value
-    let cdp_raw = parsed_args
-        .get("cdp")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let cdp_value = attach_option_value(parsed_args, "cdp");
+    let cdp_raw = cdp_value.as_deref();
 
     // --endpoint value (overrides base_url for remote Browser4 servers)
-    let endpoint_override = parsed_args
-        .get("endpoint")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let endpoint_value = attach_option_value(parsed_args, "endpoint");
+    let endpoint_override = endpoint_value.as_deref();
 
     // --extension value (optional channel name; bare --extension → "true")
-    let ext_raw: Option<String> = parsed_args.get("extension").and_then(|v| {
-        if v.as_bool() == Some(true) {
-            Some("true".to_string())
-        } else {
-            v.as_str()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        }
-    });
+    let ext_raw = attach_extension_value(parsed_args);
+
+    // The channel explicitly named by `--extension <channel>` (bare
+    // `--extension` names none). Validated right here so a typo cannot silently
+    // behave like a chrome request.
+    let requested_extension_channel: Option<String> = ext_raw
+        .as_deref()
+        .filter(|value| !value.eq_ignore_ascii_case("true"))
+        .map(str::to_string);
+
+    // The channel explicitly named by `--cdp <channel>`; `None` for a URL, a
+    // port or `host:port`, which all name one concrete endpoint.
+    let requested_cdp_channel: Option<String> = cdp_raw
+        .filter(|raw| daemon::BrowserChannel::from_str(raw).is_some())
+        .map(str::to_string);
+
+    // =========================================================================
+    // One connection transport per invocation.
+    //
+    // `--cdp`, `--extension` and `--endpoint` name three different transports.
+    // The old code let whichever branch ran first win — `attach --extension
+    // msedge --cdp http://localhost:9222` created an extension session and
+    // silently dropped the endpoint, which is exactly how a session ended up
+    // driving a browser the user never named. Refusing the combination is the
+    // only unambiguous answer, and it happens BEFORE session bookkeeping so a
+    // rejected invocation cannot evict the unnamed slot or probe a server.
+    // =========================================================================
+    validate_attach_flags(
+        cdp_raw,
+        endpoint_override,
+        ext_raw.as_deref(),
+    )?;
 
     let effective_base_url = if let Some(endpoint) = endpoint_override {
         if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
@@ -2334,21 +2568,10 @@ async fn handle_attach(
     // --extension: connect via the Browser4 Chrome Extension relay
     // =========================================================================
     if ext_raw.is_some() {
-        // --extension is incompatible with --endpoint: the extension connects to
-        // the local Browser4 server's WebSocket, so the backend must be local.
-        if endpoint_override.is_some() {
-            return Err("--extension cannot be combined with --endpoint.\n\
-                 The Chrome Extension connects to the local Browser4 server.\n\
-                 Use --extension alone to connect via the extension relay."
-                .to_string());
-        }
-
-        let ext_val = ext_raw.unwrap(); // safe: checked is_some() above
-        let channel = if ext_val != "true" {
-            Some(ext_val)
-        } else {
-            None::<String>
-        };
+        // Already validated above: --extension never coexists with --cdp or
+        // --endpoint, and a named channel is a known browser channel.
+        let channel = requested_extension_channel.clone();
+        let extension_id = resolve_browser4_extension_id(channel.as_deref());
 
         let mut attach_params = json!({ "extension": true });
         if let Some(ref ch) = channel {
@@ -2380,10 +2603,7 @@ async fn handle_attach(
         let client_encoded = urlencoding::encode(&client_info_str);
         let ws_encoded = urlencoding::encode(&ws_endpoint);
         let mut connect_url = format!(
-            "chrome-extension://{}/connect.html?mcpRelayUrl={}&client={}",
-            resolve_browser4_extension_id(channel.as_deref()),
-            ws_encoded,
-            client_encoded,
+            "chrome-extension://{extension_id}/connect.html?mcpRelayUrl={ws_encoded}&client={client_encoded}",
         );
         // Always request a new blank tab for the session — the extension
         // will create an about:blank page instead of showing the tab picker.
@@ -2409,6 +2629,8 @@ async fn handle_attach(
         state.active_selector = None;
         state.last_mouse_position = None;
         state.kind = crate::state::SessionKind::ExtensionAttached;
+        // The REQUESTED channel only. The browser that actually connects is
+        // verified below and overwrites this when the request named none.
         state.browser_channel = channel.clone();
         state.created_at = Some(Utc::now().to_rfc3339());
         state.last_accessed_at = Some(Utc::now().to_rfc3339());
@@ -2417,21 +2639,45 @@ async fn handle_attach(
         json_field("session_id", json!(&session_id));
         json_field("ws_endpoint", json!(&ws_endpoint));
 
-        let channel_label = channel.as_deref().unwrap_or("chrome");
         cli_println!("Extension session created: {}", session_id);
         cli_println!(
-            "Relay endpoint: {} (browser channel: {})",
+            "Relay endpoint: {} (browser channel: {}, extension: {})",
             ws_endpoint,
-            channel_label
+            channel.as_deref().unwrap_or("default"),
+            extension_id
         );
 
-        // Try to open the connect URL in the default browser.
+        // Open the connect page in the browser the channel names. Without a
+        // channel Chrome, then Edge, then the OS default handler is used — the
+        // extension that answers then decides, and the verified family is
+        // recorded below.
         if has_token {
             cli_println!("Using BROWSER4_EXTENSION_TOKEN for automatic approval.");
         }
         let opened = open_url_in_browser(&connect_url, channel.as_deref());
         if opened {
-            cli_println!("Opened extension connect page in browser.");
+            match channel.as_deref() {
+                Some(ch) => cli_println!(
+                    "Opened the extension connect page in {} ({}).",
+                    channel_browser_label(Some(ch)),
+                    ch
+                ),
+                None => cli_println!(
+                    "Opened the extension connect page — approve the connection in the browser \
+                     that shows it."
+                ),
+            }
+        } else if let Some(ch) = channel.as_deref() {
+            // Never claim the page was opened when the requested browser could
+            // not be launched: the user has to open it in THAT browser, or the
+            // extension in another browser answers first and the session ends
+            // up driving the wrong one.
+            eprintln!(
+                "⚠  Could not launch {} — open this URL in {} to authorize the connection:",
+                channel_browser_label(Some(ch)),
+                channel_browser_label(Some(ch))
+            );
+            cli_println!("  {}", connect_url);
         } else {
             cli_println!("Open this URL to authorize the connection:");
             cli_println!("  {}", connect_url);
@@ -2445,12 +2691,26 @@ async fn handle_attach(
         loop {
             let elapsed = poll_start.elapsed();
             if elapsed >= timeout {
+                let where_to_approve = match channel.as_deref() {
+                    Some(ch) => format!(
+                        "The Browser4 Extension must be installed and enabled in {} — the connect \
+                         page printed above has to be opened in that browser.",
+                        channel_browser_label(Some(ch))
+                    ),
+                    None => "Make sure the Browser4 Chrome Extension is installed and enabled in \
+                             the browser where you approved the connection."
+                        .to_string(),
+                };
                 return Err(format!(
-                    "Timed out waiting for extension to connect after {:.0}s.\n\
-                     Make sure the Browser4 Chrome Extension is installed and you approved the connection.\n\
-                     Session {} is still pending — re-run `attach --extension` to try again.",
+                    "Timed out waiting for the extension to connect after {:.0}s.\n{}\n\
+                     Session {} is still pending — re-run `attach --extension{}` to try again.",
                     elapsed.as_secs(),
-                    session_id
+                    where_to_approve,
+                    session_id,
+                    channel
+                        .as_deref()
+                        .map(|ch| format!(" {ch}"))
+                        .unwrap_or_default()
                 ));
             }
 
@@ -2516,15 +2776,47 @@ async fn handle_attach(
                             elapsed.as_secs()
                         );
                         cli_println!("Connected browser: {actual_browser}");
-                        if mismatch {
-                            cli_println!(
-                                "⚠  Requested channel was '{requested}', but the browser that actually \
-                                 connected is {actual_browser} — you may have attached to the WRONG \
-                                 browser, and login state on this browser likely differs. \
-                                 Run `close`, then re-run `browser4-cli attach --extension {requested}` \
-                                 and approve the connection in the correct browser."
-                            );
+
+                        // A channel was named and a different family answered:
+                        // this is the wrong-browser attach. Refuse it instead
+                        // of leaving a session that drives Chrome while every
+                        // message says Edge — previously the CLI only warned,
+                        // recorded the REQUESTED channel and returned success.
+                        if let Some(requested) = channel.as_deref() {
+                            if mismatch {
+                                let remedy = format!(
+                                    "The connect page was opened in, or answered by, {}. Install and \
+                                     enable the Browser4 Extension in {}, then re-run \
+                                     `browser4-cli attach --extension {requested}`.\n\
+                                     To pin the browser, launch {} yourself and open the printed \
+                                     chrome-extension:// connect URL there.",
+                                    actual_browser,
+                                    channel_browser_label(Some(requested)),
+                                    channel_browser_label(Some(requested)),
+                                );
+                                return Err(reject_wrong_browser_attach(
+                                    client,
+                                    &effective_base_url,
+                                    session_name,
+                                    &session_id,
+                                    "extension",
+                                    requested,
+                                    &actual_browser,
+                                    actual_family,
+                                    &remedy,
+                                    WrongBrowserCleanup::DisconnectSession,
+                                )
+                                .await);
+                            }
+                        } else if let Some(family_channel) = channel_name_for_family(actual_family) {
+                            // Nothing was requested: record what actually
+                            // connected, so `list` and a later re-attach name
+                            // the real browser instead of defaulting to Chrome.
+                            let mut recorded = read_state(None, session_name);
+                            recorded.browser_channel = Some(family_channel.to_string());
+                            let _ = write_state(&recorded, None, session_name);
                         }
+
                         cli_println!("Session ready: {}", session_id);
                         return Ok(());
                     }
@@ -2558,6 +2850,16 @@ async fn handle_attach(
         state.base_url = effective_base_url.clone();
         state.active_selector = None;
         state.last_mouse_position = None;
+        // Switching servers is NOT an attach. Keeping the previous attach
+        // markers made `list` label the slot "CDP: …" / "Extension (…)" and
+        // made the next command fail with "the attached browser session …
+        // is no longer reachable" instead of using the new server's own
+        // sessions.
+        state.kind = crate::state::SessionKind::Browser4Launched;
+        state.is_attached = false;
+        state.attach_type = None;
+        state.cdp_endpoint = None;
+        state.browser_channel = None;
         write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
         json_field("endpoint", json!(&effective_base_url));
@@ -2585,14 +2887,15 @@ async fn handle_attach(
         resolved?
     } else {
         return Err(
-            "attach requires --cdp <url|channel>, --extension, or --endpoint <url>.\n\
+            "attach requires --cdp <url|channel>, --extension [channel], or --endpoint <url> \
+             (one transport per invocation).\n\
              Examples:\n  \
              browser4-cli attach --cdp chrome\n  \
              browser4-cli attach --cdp http://localhost:9222\n  \
              browser4-cli attach --extension\n  \
-             browser4-cli attach --extension chrome-canary\n  \
+             browser4-cli attach --extension msedge\n  \
              browser4-cli attach --endpoint http://browser4-server:18182\n  \
-             browser4-cli attach --endpoint http://remote:18182 --cdp chrome"
+             browser4-cli attach --endpoint http://remote:18182 --cdp http://browser-host:9222"
                 .to_string(),
         );
     };
@@ -2608,7 +2911,11 @@ async fn handle_attach(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("default");
-    let attach_params = build_attach_browser_params(&cdp_endpoint, Some(requested_session_id));
+    let attach_params = build_attach_browser_params(
+        &cdp_endpoint,
+        Some(requested_session_id),
+        requested_cdp_channel.as_deref(),
+    );
 
     let result = call_tool(client, &effective_base_url, "attach_browser", attach_params).await?;
 
@@ -2640,6 +2947,54 @@ async fn handle_attach(
             (result.clone(), None, None, None)
         };
 
+    let actual_browser_label = attach_browser_label(
+        browser_name.as_deref(),
+        browser_version.as_deref(),
+        browser_family.as_deref(),
+    );
+
+    // A channel name (`--cdp msedge`) names a browser FAMILY, not a port: the
+    // resolution above picks the first attachable candidate, and Chrome and
+    // Edge share the conventional port 9222 — so `--cdp msedge` can land on
+    // Chrome. The backend refuses that BEFORE binding (it compares the channel
+    // with the product the endpoint reports, `ENDPOINT_WRONG_BROWSER`); this
+    // check is the fallback for a backend that ignores `channel`, and it only
+    // forgets the session locally because closing a CDP session would close the
+    // tabs it holds. An explicit URL/port is exempt: the user named that
+    // endpoint, and a Brave/Opera/Chromium fork answering on it is what they
+    // asked for.
+    if let Some(requested) = requested_cdp_channel.as_deref() {
+        let family = browser_family.as_deref().unwrap_or("");
+        if channel_family_conflict(requested, family) {
+            let actual = if actual_browser_label.is_empty() {
+                family.to_string()
+            } else {
+                actual_browser_label.clone()
+            };
+            let remedy = format!(
+                "The resolved endpoint {cdp_endpoint} is not a '{requested}' browser; a channel \
+                 name takes the first attachable candidate, and the conventional port is shared \
+                 between Chrome and Edge.\n\
+                 Pin the instance explicitly: start {} with --remote-debugging-port=<port>, then run \
+                 `browser4-cli attach --cdp http://localhost:<port>`.",
+                channel_browser_label(Some(requested))
+            );
+            return Err(reject_wrong_browser_attach(
+                client,
+                &effective_base_url,
+                session_name,
+                &session_id,
+                "cdp",
+                requested,
+                &actual,
+                family,
+                &remedy,
+                WrongBrowserCleanup::ForgetLocally,
+            )
+            .await);
+        }
+    }
+
     // Persist session state for subsequent commands
     let mut state = read_state(None, session_name);
     state.session_name = session_name.map(|s| s.to_string());
@@ -2664,14 +3019,7 @@ async fn handle_attach(
     json_field("session_id", json!(&session_id));
     json_field("cdp_endpoint", json!(&cdp_endpoint));
 
-    let browser_label = match (browser_name, browser_version) {
-        (Some(name), Some(version)) => format!("{name} {version}"),
-        (Some(name), None) => name.to_string(),
-        (None, Some(version)) => {
-            format!("{} {version}", browser_family.unwrap_or_else(|| "browser".to_string()))
-        }
-        (None, None) => String::new(),
-    };
+    let browser_label = actual_browser_label;
     if !browser_label.is_empty() {
         cli_println!("Attached to {} at {}", browser_label, cdp_endpoint);
     } else {
@@ -2730,33 +3078,49 @@ fn is_edge_channel(channel: Option<&str>) -> bool {
 
 /// Try to open a URL in the browser matching the requested attach channel.
 ///
-/// Returns `true` if a browser process was spawned successfully.
+/// Returns `true` only when **that browser** was spawned with the URL. With an
+/// explicit channel there is no cross-family fallback: `attach --extension
+/// msedge` must not hand the connect page to Chrome (or to the OS default
+/// handler, which is often Chrome) just because Edge was not found — the
+/// extension in that browser would then connect the session to the wrong
+/// browser. The caller prints the URL for a manual open instead.
+///
+/// Without a channel nothing was requested, so the previous behavior stands:
+/// Chrome, then Edge, then the platform's default handler.
 fn open_url_in_browser(url: &str, channel: Option<&str>) -> bool {
+    // The channel's own executable, resolved without crossing families.
+    let channel_executable = channel.and_then(crate::daemon::find_browser_executable_for_channel);
+    let candidates: Vec<std::path::PathBuf> = match (channel, channel_executable) {
+        // A requested channel whose browser is not installed: do not substitute.
+        (Some(_), None) => Vec::new(),
+        (Some(_), Some(exe)) => vec![exe],
+        (None, _) => {
+            let mut all: Vec<std::path::PathBuf> = Vec::new();
+            if let Some(chrome) = crate::daemon::find_chrome_executable() {
+                all.push(chrome);
+            }
+            if let Some(edge) = crate::daemon::find_edge_executable() {
+                all.push(edge);
+            }
+            all
+        }
+    };
+
+    for exe in candidates {
+        if let Ok(mut child) = std::process::Command::new(&exe).arg(url).spawn() {
+            // Detach — don't wait for the browser to exit.
+            let _ = child.stdin.take();
+            return true;
+        }
+    }
+
+    // No channel requested: hand the URL to the platform's default handler.
+    if channel.is_some() {
+        return false;
+    }
+
     #[cfg(target_os = "windows")]
     {
-        // Prefer launching the browser matching the requested channel — the
-        // chrome-extension:// protocol handler isn't reliably registered by
-        // Windows, but Chrome/Edge itself handles extension URLs when passed
-        // on the command line.  For `attach --extension msedge` this opens
-        // the connect page in Edge instead of Chrome.
-        let edge_first = is_edge_channel(channel);
-        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-        let edge = crate::daemon::find_edge_executable();
-        let chrome = crate::daemon::find_chrome_executable();
-        if edge_first {
-            if let Some(e) = edge { candidates.push(e); }
-            if let Some(c) = chrome { candidates.push(c); }
-        } else {
-            if let Some(c) = chrome { candidates.push(c); }
-            if let Some(e) = edge { candidates.push(e); }
-        }
-        for exe in candidates {
-            if let Ok(mut child) = std::process::Command::new(&exe).arg(url).spawn() {
-                // Detach — don't wait for the browser to exit.
-                let _ = child.stdin.take();
-                return true;
-            }
-        }
         // Fallback: cmd /c start (escapes & which is a cmd.exe separator).
         let escaped = url.replace("&", "^&");
         std::process::Command::new("cmd")
@@ -2766,33 +3130,21 @@ fn open_url_in_browser(url: &str, channel: Option<&str>) -> bool {
     }
     #[cfg(target_os = "macos")]
     {
-        if is_edge_channel(channel) {
-            // Prefer Microsoft Edge for msedge channels so the connect page
-            // lands in the browser that actually has the extension.
-            if let Some(edge) = crate::daemon::find_edge_executable() {
-                if std::process::Command::new(&edge).arg(url).spawn().is_ok() {
-                    return true;
-                }
-            }
-        }
-        std::process::Command::new("open")
-            .arg(url)
-            .spawn()
-            .is_ok()
+        std::process::Command::new("open").arg(url).spawn().is_ok()
     }
     #[cfg(all(target_os = "linux", not(target_os = "macos")))]
     {
-        if is_edge_channel(channel) {
-            if let Some(edge) = crate::daemon::find_edge_executable() {
-                if std::process::Command::new(&edge).arg(url).spawn().is_ok() {
-                    return true;
-                }
-            }
-        }
-        std::process::Command::new("xdg-open")
-            .arg(url)
-            .spawn()
-            .is_ok()
+        std::process::Command::new("xdg-open").arg(url).spawn().is_ok()
+    }
+}
+
+/// Human-readable name of the browser a channel selects, for messages that
+/// must tell the user WHERE the connect page has to be opened.
+fn channel_browser_label(channel: Option<&str>) -> &'static str {
+    match channel {
+        Some(c) if is_edge_channel(Some(c)) => "Microsoft Edge",
+        Some(_) => "Google Chrome",
+        None => "the default browser",
     }
 }
 
@@ -5655,6 +6007,120 @@ fn channel_family_conflict(requested_channel: &str, actual_family: &str) -> bool
     } else {
         false
     }
+}
+
+/// The channel name that best describes a browser family reported by the
+/// backend, used to record what ACTUALLY connected when the user named no
+/// channel. `None` for families with no single channel (Brave/Opera/Vivaldi).
+fn channel_name_for_family(family: &str) -> Option<&'static str> {
+    match family {
+        "edge" => Some("msedge"),
+        "chrome" => Some("chrome"),
+        _ => None,
+    }
+}
+
+/// `"Google Chrome 141.0.0.0"` (or the best available part of it) from the
+/// identity fields of an `attach_browser` response. Empty when the backend
+/// reported no identity at all (older backend), so callers can stay silent.
+fn attach_browser_label(name: Option<&str>, version: Option<&str>, family: Option<&str>) -> String {
+    match (name, version) {
+        (Some(name), Some(version)) => format!("{name} {version}"),
+        (Some(name), None) => name.to_string(),
+        (None, Some(version)) => format!("{} {version}", family.unwrap_or("browser")),
+        (None, None) => family.unwrap_or("").to_string(),
+    }
+}
+
+/// How to undo a session that bound the wrong browser.
+enum WrongBrowserCleanup {
+    /// Disconnect the relay session. Safe for the extension transport: the
+    /// session only holds the blank relay tab Browser4 had the extension open,
+    /// never one of the user's tabs.
+    DisconnectSession,
+    /// Leave the backend session alone and only forget it locally. Required for
+    /// the CDP transport: closing a CDP-attached session closes the tab(s) it
+    /// holds drivers for — which may be a tab the user was already using — and
+    /// opens a keep-alive `about:blank` tab. The backend refuses a
+    /// wrong-family channel before binding (`ENDPOINT_WRONG_BROWSER`), so this
+    /// path only runs against a backend that ignored the channel.
+    ForgetLocally,
+}
+
+/// Refuse an attach that bound a browser of the wrong family, and undo it.
+///
+/// The [WrongBrowserCleanup] decides what "undo" may touch; the local record is
+/// always removed, so no later command can silently drive the browser the user
+/// did not name. The external browser itself keeps running either way (it was
+/// never ours to close). Returns the error text for the caller to surface — it
+/// names both browsers, what was undone, and what to run instead.
+#[allow(clippy::too_many_arguments)]
+async fn reject_wrong_browser_attach(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+    session_id: &str,
+    mode: &str,
+    requested_channel: &str,
+    actual_browser: &str,
+    actual_family: &str,
+    remedy: &str,
+    cleanup: WrongBrowserCleanup,
+) -> String {
+    let undone = match cleanup {
+        WrongBrowserCleanup::DisconnectSession => {
+            warn_if_session_close_failed(client, base_url, session_id).await;
+            "The session was disconnected and its local record removed, so no command will \
+             drive that browser."
+        }
+        WrongBrowserCleanup::ForgetLocally => {
+            "The session was not recorded locally, so no command will drive that browser; the \
+             browser and its tabs are untouched (the unrecorded backend session is reaped by the \
+             server's idle timeout, or by `close-all`)."
+        }
+    };
+    clear_state(None, session_name);
+    format!(
+        "Attached to the WRONG browser: the requested channel '{requested_channel}' ({mode}) \
+         resolved to a browser that reports {actual_browser} (family: {actual_family}).\n\
+         {undone}\n{remedy}"
+    )
+}
+
+/// Host part of an HTTP(S) URL, without userinfo, port or IPv6 brackets.
+fn url_host(url: &str) -> Option<&str> {
+    let trimmed = url.trim();
+    let (scheme, rest) = trimmed.split_once("://")?;
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host_port = authority.rsplit('@').next()?;
+    if let Some(stripped) = host_port.strip_prefix('[') {
+        // IPv6 literal: [::1]:18182
+        return stripped.split(']').next().filter(|h| !h.is_empty());
+    }
+    let host = host_port.split(':').next()?;
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
+/// Whether an endpoint URL names THIS machine (loopback), which is the only
+/// case where resolving a channel name locally and binding the session through
+/// that endpoint describe the same browser.
+fn endpoint_host_is_local(endpoint: &str) -> bool {
+    let Some(host) = url_host(endpoint) else {
+        return false;
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host == "::1"
+        || host.eq_ignore_ascii_case("0.0.0.0")
+        || host
+            .strip_prefix("127.")
+            .is_some_and(|rest| !rest.is_empty())
 }
 
 /// Compose the human-readable label of the browser reported by
@@ -31344,6 +31810,19 @@ async fn run(
         }
     }
 
+    // Early validation for attach — its three transports are mutually exclusive
+    // and a channel typo must fail before the server is launched (a cold dev
+    // start rebuilds the runtime bundle first). `handle_attach` validates again
+    // because it is the command's own entry point.
+    if command == "attach" {
+        validate_attach_flags(
+            attach_option_value(&parsed, "cdp").as_deref(),
+            attach_option_value(&parsed, "endpoint").as_deref(),
+            attach_extension_value(&parsed).as_deref(),
+        )
+        .map_err(|message| CliError(ExitCode::Usage, message))?;
+    }
+
     // Ensure the Browser4 server is running (for relevant commands).
     //
     // The backend is started (or restarted) **before** any page-dependent
@@ -35729,8 +36208,8 @@ mod tests {
     fn build_attach_browser_params_threads_named_session_id() {
         // Two named attaches must carry distinct session ids so the backend gives
         // them distinct sessions instead of one shared DEFAULT slot.
-        let good = build_attach_browser_params("http://127.0.0.1:2512", Some("good"));
-        let ch = build_attach_browser_params("http://127.0.0.1:1576", Some("ch"));
+        let good = build_attach_browser_params("http://127.0.0.1:2512", Some("good"), None);
+        let ch = build_attach_browser_params("http://127.0.0.1:1576", Some("ch"), None);
         assert_eq!(good["cdpEndpoint"], json!("http://127.0.0.1:2512"));
         assert_eq!(good["sessionId"], json!("good"));
         assert_eq!(ch["sessionId"], json!("ch"));
@@ -35739,12 +36218,37 @@ mod tests {
 
     #[test]
     fn build_attach_browser_params_defaults_to_default_session_id() {
-        let params = build_attach_browser_params("http://127.0.0.1:9222", None);
+        let params = build_attach_browser_params("http://127.0.0.1:9222", None, None);
         assert_eq!(params["sessionId"], json!("default"));
 
         // Blank/whitespace names must not create an oddly-named session.
-        let blank = build_attach_browser_params("http://127.0.0.1:9222", Some("   "));
+        let blank = build_attach_browser_params("http://127.0.0.1:9222", Some("   "), None);
         assert_eq!(blank["sessionId"], json!("default"));
+    }
+
+    #[test]
+    fn build_attach_browser_params_threads_the_requested_channel() {
+        // `--cdp msedge` must tell the backend WHICH family was requested: the
+        // backend compares it with the product the endpoint reports and refuses
+        // a mismatch before binding. A concrete endpoint carries no channel, so
+        // an Edge/Chromium fork answering on it is accepted as asked.
+        let channel = build_attach_browser_params(
+            "http://127.0.0.1:9222",
+            Some("work"),
+            Some("msedge"),
+        );
+        assert_eq!(channel["channel"], json!("msedge"));
+        assert_eq!(channel["cdpEndpoint"], json!("http://127.0.0.1:9222"));
+        assert_eq!(channel["sessionId"], json!("work"));
+
+        let explicit = build_attach_browser_params("http://127.0.0.1:9222", None, None);
+        assert!(explicit.get("channel").is_none());
+
+        // A padded channel is sent trimmed; a blank one is omitted entirely.
+        let padded = build_attach_browser_params("http://127.0.0.1:9222", None, Some(" edge "));
+        assert_eq!(padded["channel"], json!("edge"));
+        let blank = build_attach_browser_params("http://127.0.0.1:9222", None, Some("  "));
+        assert!(blank.get("channel").is_none());
     }
 
     #[test]
@@ -39054,6 +39558,121 @@ linkGroups:
         assert!(!channel_family_conflict("", "chrome"));
         assert!(!channel_family_conflict("msedge", ""));
         assert!(!channel_family_conflict("weird-channel", "chrome"));
+    }
+
+    #[test]
+    fn attach_flags_refuse_mixed_transports_but_accept_one_each() {
+        // One transport per invocation — the documented forms keep working.
+        assert!(validate_attach_flags(Some("chrome"), None, None).is_ok());
+        assert!(validate_attach_flags(Some("http://localhost:9222"), None, None).is_ok());
+        assert!(validate_attach_flags(None, Some("http://server:18182"), None).is_ok());
+        assert!(validate_attach_flags(None, None, Some("true")).is_ok());
+        assert!(validate_attach_flags(None, None, Some("msedge")).is_ok());
+        assert!(validate_attach_flags(None, None, Some("edge")).is_ok());
+        assert!(validate_attach_flags(None, None, Some("msedge-beta")).is_ok());
+
+        // --extension used to win over --cdp and silently drop the endpoint.
+        let err = validate_attach_flags(
+            Some("http://localhost:9222"),
+            None,
+            Some("msedge"),
+        )
+        .expect_err("--extension + --cdp must be refused");
+        assert!(err.contains("two different connection modes"), "{err}");
+        assert!(err.contains("msedge") && err.contains("9222"), "{err}");
+
+        // The extension relay only talks to the local server.
+        let err = validate_attach_flags(None, Some("http://server:18182"), Some("true"))
+            .expect_err("--extension + --endpoint must be refused");
+        assert!(err.contains("cannot be combined with --endpoint"), "{err}");
+
+        // A typo must never behave like a chrome request.
+        let err = validate_attach_flags(None, None, Some("ms-edge"))
+            .expect_err("an unknown extension channel must be refused");
+        assert!(err.contains("Unknown browser channel"), "{err}");
+        assert!(err.contains("msedge"), "the error must list the channels: {err}");
+
+        // A channel name resolves on THIS machine; a remote --endpoint would
+        // look the resolved localhost port up on the server instead.
+        let err = validate_attach_flags(
+            Some("msedge"),
+            Some("http://browser4-server:18182"),
+            None,
+        )
+        .expect_err("a channel name with a remote --endpoint must be refused");
+        assert!(err.contains("resolves a channel name on THIS machine"), "{err}");
+        assert!(err.contains("http://<browser-host>:9222"), "{err}");
+
+        // Same-machine endpoints and explicit CDP URLs are fine.
+        assert!(validate_attach_flags(
+            Some("msedge"),
+            Some("http://127.0.0.1:18182"),
+            None
+        )
+        .is_ok());
+        assert!(validate_attach_flags(
+            Some("msedge"),
+            Some("http://localhost:18182"),
+            None
+        )
+        .is_ok());
+        assert!(validate_attach_flags(
+            Some("http://localhost:9222"),
+            Some("http://browser4-server:18182"),
+            None
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn endpoint_host_is_local_recognizes_loopback_forms_only() {
+        assert!(endpoint_host_is_local("http://localhost:18182"));
+        assert!(endpoint_host_is_local("http://LOCALHOST:18182/"));
+        assert!(endpoint_host_is_local("http://127.0.0.1:18182"));
+        assert!(endpoint_host_is_local("http://127.1.2.3:18182"));
+        assert!(endpoint_host_is_local("http://[::1]:18182"));
+        assert!(!endpoint_host_is_local("http://browser4-server:18182"));
+        assert!(!endpoint_host_is_local("http://192.168.1.10:18182"));
+        assert!(!endpoint_host_is_local("http://localhost.example.com:18182"));
+        // A non-HTTP scheme or a bare host is not an endpoint URL.
+        assert!(!endpoint_host_is_local("ws://localhost:9222"));
+        assert!(!endpoint_host_is_local("localhost:18182"));
+    }
+
+    #[test]
+    fn channel_name_for_family_round_trips_the_known_families() {
+        assert_eq!(Some("msedge"), channel_name_for_family("edge"));
+        assert_eq!(Some("chrome"), channel_name_for_family("chrome"));
+        // Forks have no single channel: the recorded channel stays empty
+        // rather than claiming Chrome.
+        assert_eq!(None, channel_name_for_family("chromium-other"));
+        assert_eq!(None, channel_name_for_family("unknown"));
+        assert_eq!(None, channel_name_for_family(""));
+    }
+
+    #[test]
+    fn attach_browser_label_composes_the_reported_identity() {
+        assert_eq!(
+            "Microsoft Edge 141.0.0.0",
+            attach_browser_label(Some("Microsoft Edge"), Some("141.0.0.0"), Some("edge"))
+        );
+        assert_eq!(
+            "Microsoft Edge",
+            attach_browser_label(Some("Microsoft Edge"), None, Some("edge"))
+        );
+        assert_eq!("edge 141", attach_browser_label(None, Some("141"), Some("edge")));
+        assert_eq!("edge", attach_browser_label(None, None, Some("edge")));
+        // No identity at all (older backend) stays empty so callers can skip it.
+        assert_eq!("", attach_browser_label(None, None, None));
+    }
+
+    #[test]
+    fn channel_browser_label_names_the_family_a_connect_page_must_open_in() {
+        assert_eq!("Microsoft Edge", channel_browser_label(Some("msedge")));
+        assert_eq!("Microsoft Edge", channel_browser_label(Some("msedge-dev")));
+        assert_eq!("Google Chrome", channel_browser_label(Some("chrome")));
+        assert_eq!("Google Chrome", channel_browser_label(Some("chrome-canary")));
+        assert_eq!("the default browser", channel_browser_label(None));
     }
 
     #[test]
@@ -45853,29 +46472,63 @@ linkGroups:
     }
 
     #[test]
-    fn unpacked_extension_roots_prefer_running_browser_dirs_then_the_family_order() {
-        let running = std::path::PathBuf::from("/portable/chrome/profile");
+    fn extension_scan_roots_put_the_requested_family_first() {
+        let edge_running = std::path::PathBuf::from("/portable/edge/profile");
+        let chrome_running = std::path::PathBuf::from("/portable/chrome/profile");
         let chrome_root = std::path::PathBuf::from("/conventional/chrome");
         let edge_root = std::path::PathBuf::from("/conventional/edge");
 
-        // A portable/custom profile found on a command line wins over the
-        // conventional locations.
+        // `--extension msedge`: the Edge profile a running Edge uses wins over        // Chrome's, even though the OS may enumerate Chrome first. This is the
+        // "msedge connect page used Chrome's unpacked extension id" bug.
         assert_eq!(
-            vec![running.clone(), chrome_root.clone(), edge_root.clone()],
-            unpacked_extension_roots_from(
-                vec![running.clone()],
+            vec![
+                edge_running.clone(),
+                chrome_running.clone(),
+                edge_root.clone(),
+                chrome_root.clone()
+            ],
+            extension_scan_roots(
+                vec![edge_running.clone()],
+                vec![chrome_running.clone()],
+                vec![],
+                Some(chrome_root.clone()),
+                Some(edge_root.clone()),
+                true
+            )
+        );
+
+        // Bare `--extension`: Chrome stays first (the documented default).
+        assert_eq!(
+            vec![
+                chrome_running.clone(),
+                edge_running.clone(),
+                chrome_root.clone(),
+                edge_root.clone()
+            ],
+            extension_scan_roots(
+                vec![edge_running.clone()],
+                vec![chrome_running.clone()],
+                vec![],
                 Some(chrome_root.clone()),
                 Some(edge_root.clone()),
                 false
             )
         );
 
-        // The requested family comes first among the conventional roots, and a
-        // directory already contributed by a process is not duplicated.
+        // A portable profile whose executable could not be classified is
+        // scanned after the classified ones, never before the requested family,
+        // and a directory already contributed is not repeated.
         assert_eq!(
-            vec![running.clone(), chrome_root.clone(), edge_root.clone()],
-            unpacked_extension_roots_from(
-                vec![running.clone(), chrome_root.clone()],
+            vec![
+                edge_running.clone(),
+                std::path::PathBuf::from("/other/profile"),
+                edge_root.clone(),
+                chrome_root.clone()
+            ],
+            extension_scan_roots(
+                vec![edge_running.clone()],
+                vec![edge_running.clone()],
+                vec![std::path::PathBuf::from("/other/profile")],
                 Some(chrome_root.clone()),
                 Some(edge_root.clone()),
                 true
@@ -45884,7 +46537,7 @@ linkGroups:
 
         assert_eq!(
             Vec::<std::path::PathBuf>::new(),
-            unpacked_extension_roots_from(vec![], None, None, false)
+            extension_scan_roots(vec![], vec![], vec![], None, None, false)
         );
     }
 
