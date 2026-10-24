@@ -16,7 +16,7 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
         - [How to Interact with a Page](#how-to-interact-with-a-page)
         - [How to Extract Data](#how-to-extract-data)
         - [How to Process at Scale](#how-to-process-at-scale)
-        - [How to Turn HTML into Spreadsheets — Zero Tokens](#how-to-turn-html-into-spreadsheets--zero-tokens)
+        - [How to Turn HTML into Spreadsheets — Zero LLM Tokens](#how-to-turn-html-into-spreadsheets--zero-llm-tokens)
     - [📦 Installation](#-installation)
     - [💡 CLI Guide for Humans](#-cli-guide-for-humans)
         - [Quick start](#quick-start-1)
@@ -116,7 +116,7 @@ Need to extract data from a page?
 
 ```
 Need to process multiple pages?
-├─ Single list page (search results)? → htmlsnapshot query with DOM_LOAD_AND_SELECT
+├─ Single list page (search results)? → htmlsnapshot query with LOAD_AND_SELECT
 ├─ List of known URLs (in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
@@ -125,12 +125,12 @@ Need to process multiple pages?
    → for url in ...; do browser4-cli goto "$url"; ... done
 ```
 
-### How to Turn HTML into Spreadsheets — Zero Tokens
+### How to Turn HTML into Spreadsheets — Zero LLM Tokens
 
 [WebMiner](https://github.com/platonai/web-miner) runs ML clustering on downloaded HTML files to produce structured spreadsheets and interactive reports — **no LLM tokens, everything runs locally.** webminer is a first-class Browser4 CLI citizen (`browser4-cli webminer install` + `all <html-dir>`, no PowerShell needed).
 
 ```
-Have HTML files and want structured data — without tokens?
+Have HTML files and want structured data — without LLM Tokens?
 ├─ < 1,000 pages (small to medium)? → WebMiner Free (SMILE ML engine)
 │  browser4-cli webminer install
 │  browser4-cli webminer all ./pages/
@@ -358,7 +358,7 @@ browser4-cli wait --load networkidle
 
 | Command | Description |
 |---|---|
-| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`/`--no-boxes`, `-i/--interactive`, `-u/--urls`, `-c/--compact`, `--no-compact`, `-d/--depth`, `-l/--limit`, `--selector`, `--raw`, `--stdout`, `-vp/--viewport`, `--filename`. `--stdout`/`--raw` output is paginated at 2000 lines/page by default — when truncated, stdout (if piped) gets a `# … output truncated: showing N of M lines …` hint and the full footer goes to stderr; use `--all` or `--page-size 0` for the complete tree, and bound very large pages with `-v N`/`--depth`/`--selector`/`--no-boxes`. |
+| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`/`--no-boxes`, `-i/--interactive`, `-u/--urls`, `-c/--compact`, `--no-compact`, `-d/--depth`, `--selector`, `--raw`, `--stdout`, `-v/--viewport`, `--auto-diff`, `-b/--brief`, `--filename`. `--stdout`/`--raw` output is paginated at 2000 lines/page by default — when truncated, stdout (if piped) gets a `# … output truncated: showing N of M lines …` hint and the full footer goes to stderr; use `--all` or `--page-size 0` for the complete tree, and bound very large pages with `-v N`/`--depth`/`--selector`/`--no-boxes`. |
 | `snapshot grep <pattern>` | Search saved/current snapshot YAML with grep-style flags such as `-i`, `-v`, `-c`, `-l`, `-F`, `-w`, `-A`, `-B`, `-C`, `--selector`, `--page`, `--page-size`, `--all`. |
 | `snapshot list` | List saved snapshot files with timestamps and sizes. |
 | `snapshot clean` | Remove old snapshot files. Supports `--dry-run`. |
@@ -407,7 +407,7 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 | `htmlsnapshot algorithms` | List installed summary algorithms (built-in `wpsi` plus plugin-contributed ids). No page required. |
 | `htmlsnapshot grep <pattern>` | Search a fresh snapshot's HTML with grep-style flags. Supports `--expires <dur>`. |
 | `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates in a fresh snapshot. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`, `--expires <dur>`. |
-| `htmlsnapshot readability [url]` | Extract the main article with a Readability-style heuristic — no LLM, no selectors, no tokens. Supports `--expires <dur>`. |
+| `htmlsnapshot readability [url]` | Extract the main article with a Readability-style heuristic — no LLM, no selectors, no LLM Tokens. Supports `--expires <dur>`. |
 
 Important rules:
 
@@ -554,7 +554,7 @@ The `co` prefix is accepted as an alias for `swarm`.
 | `swarm result <id>` | Fetch a completed swarm result. |
 | `swarm list` | List tracked swarm tasks. |
 | `swarm close` | Close the swarm session and release browser resources. |
-| `crawl [url]` | Crawl from a URL or seed file. Supports `--seed-file`, `--sql`, `--sql-stdin`, `--sql-base64`, `--format`, `--output`, `-d/--depth`, `-ol/--out-link-selector`, `-olp/--out-link-pattern`, `-tl/--top-links`, `-a/--args`, `--refresh`, `--parse`, `--expires`, `-p/--priority`, `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly`, `-bg/--background`. |
+| `crawl [url]` | Crawl from a URL or seed file. Supports `--seed-file`, `--sql`, `--sql-stdin`, `--sql-base64`, `--format`, `--output`, `-d/--depth`, `-ol/--out-link-selector`, `-olp/--out-link-pattern`, `-tl/--top-links`, `-a/--args`, `--refresh`, `--parse`, `--expires`, `-p/--priority`, `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly`, `--args-stdin`, `--parallel`, `--timeout`, `--verbose`, `-bg/--background`. |
 | `crawl status <id>` | Check crawl task status. |
 | `crawl result <id>` | Fetch crawl results. |
 | `crawl cancel <id>` | Cancel a running crawl. |

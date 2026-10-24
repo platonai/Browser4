@@ -776,19 +776,19 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef {
                     name: "cdp",
-                    description: "CDP endpoint URL (e.g. http://localhost:9222) or channel name. Supported channels: chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary",
+                    description: "CDP endpoint URL (e.g. http://localhost:9222) or channel name. Supported channels: chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary. A channel is verified against the browser that answers: a different family fails the attach instead of driving the wrong browser",
                     is_bool: false,
                     short: None,
                 },
                 OptionDef {
                     name: "endpoint",
-                    description: "Remote Browser4 server endpoint URL (e.g. http://browser4-server:18182)",
+                    description: "Remote Browser4 server endpoint URL (e.g. http://browser4-server:18182). Alone, switches the CLI to that server; cannot be combined with --extension, and a channel name is refused unless the endpoint is loopback",
                     is_bool: false,
                     short: None,
                 },
                 OptionDef {
                     name: "extension",
-                    description: "Connect via the Browser4 Chrome Extension. Optionally specify a channel: chrome (default), chrome-canary, msedge, msedge-dev, etc.",
+                    description: "Connect via the Browser4 Chrome Extension. Optionally specify a channel: chrome (default), chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary. Opens the connect page in that channel's own browser and fails if another browser answers; cannot be combined with --cdp or --endpoint",
                     is_bool: false,
                     short: None,
                 },

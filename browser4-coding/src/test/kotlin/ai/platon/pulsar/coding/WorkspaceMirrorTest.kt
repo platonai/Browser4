@@ -1,6 +1,7 @@
 package ai.platon.pulsar.coding
 
 import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -197,6 +198,13 @@ class WorkspaceMirrorTest {
     @Test
     @DisplayName("v0.3: mirror marks unavailable classified-failures when ProcessRunner returns hung subprocess")
     fun mklinkTimeoutClassifiesAsTimeout() {
+        // mklink is only executed on the Windows junction path; on other
+        // platforms ensure() links symbolically and never consults the
+        // process runner, so the injected hung process would go unused.
+        assumeTrue(
+            System.getProperty("os.name").lowercase().contains("win"),
+            "mklink timeout classification requires the Windows junction path",
+        )
         // Save default, inject a fake runner whose Process.waitFor(timeout, unit) never returns true, then restore.
         val original = WorkspaceMirror.processRunner
         val fakeProcess = object : Process() {
@@ -225,6 +233,13 @@ class WorkspaceMirrorTest {
     @Test
     @DisplayName("v0.3: mirror produces errors-only list when ProcessRunner privilege-denies")
     fun mklinkPrivilegeDeniedClassifiesAsPrivilege() {
+        // Windows-only: the mklink privilege-denied classification is only
+        // reachable via the Windows `cmd /c mklink /J` path (symlink platforms
+        // do not consult the injected process runner).
+        assumeTrue(
+            System.getProperty("os.name").lowercase().contains("win"),
+            "mklink privilege classification requires the Windows junction path",
+        )
         val original = WorkspaceMirror.processRunner
         val fakeProcess = object : Process() {
             override fun waitFor() = 0

@@ -193,8 +193,8 @@
     "domain" : "command",
     "method" : "run",
     "mcpNames" : [ "command_run" ],
-    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, engine: String? = null)",
-    "description" : "Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; 'observe-act' is the DEPRECATED legacy engine.",
+    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, engine: String? = null)",
+    "description" : "Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; 'observe-act' is the DEPRECATED legacy engine. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "command",
@@ -213,6 +213,18 @@
       "required" : false,
       "default" : "null",
       "description" : "Consecutive no-op abort threshold for agent tasks; omit to use the server default."
+    }, {
+      "name" : "coding",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Explicit task type. True marks the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task (the default, also when omitted): task type is never auto-detected."
+    }, {
+      "name" : "freshWorkspace",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "null",
+      "description" : "True runs this task in a fresh, isolated workspace directory (created under the agent's data dir) instead of the shared workspace. Use for tasks that must not see or mutate previous tasks' scratch files. Omit or false uses the default shared workspace."
     }, {
       "name" : "engine",
       "type" : "String?",
@@ -244,7 +256,7 @@
       "pollAfterMs" : 1000
     },
     "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"statusTool\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"pollAfterMs\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
-    "help" : "command.run(command: String)\ncommand.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?)\n\n`command` is a URL to load, a natural-language instruction, or an agent\ntask. With async=true (the default) the call returns a task id and you\npoll it with `command.status` (JSON status envelope), read the payload\nwith `command.result`, and stop it with `command.cancel`. Pass\nasync=false when you would rather block for the finished status."
+    "help" : "command.run(command: String)\ncommand.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?, coding: Boolean?)\n\n`command` is a URL to load, a natural-language instruction, or an agent\ntask. With async=true (the default) the call returns a task id and you\npoll it with `command.status` (JSON status envelope), read the payload\nwith `command.result`, and stop it with `command.cancel`. Pass\nasync=false when you would rather block for the finished status.\nPass coding=true for a pure coding task (read/write files, run builds):\nthe agent then works from its coding tool set without a browser page.\nTasks are browser tasks unless the caller says otherwise."
   }, {
     "domain" : "command",
     "method" : "status",
@@ -986,19 +998,28 @@
       },
       "expectsError" : false,
       "executable" : true
+    }, {
+      "title" : "Checkpoint the plan before a long tool chain",
+      "args" : {
+        "key" : "plan",
+        "value" : "done: member map of the driver; next: extract the script layer into ChromeScripts.kt"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "memory",
     "method" : "read",
     "mcpNames" : [ "memory_read" ],
-    "signature" : "memory.read(taskId: String, seq: Long? = null, before: Int = 0, after: Int = 0)",
-    "description" : "Read a bounded window of memory events of one task around the event seq (defaults to the whole task, newest last). Bounded by the configured read window.",
+    "signature" : "memory.read(taskId: String? = null, seq: Long? = null, before: Int = 0, after: Int = 0)",
+    "description" : "Read a bounded window of memory events of one task around the event seq (defaults to the whole task, newest last). Omit taskId to read the current task. Bounded by the configured read window.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "taskId",
-      "type" : "String",
-      "required" : true,
-      "description" : "Task whose memory events to read."
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Task whose memory events to read; defaults to the current task."
     }, {
       "name" : "seq",
       "type" : "Long?",
@@ -1025,6 +1046,9 @@
       },
       "expectsError" : false,
       "executable" : true
+    }, {
+      "title" : "Read the current task",
+      "expectsError" : false
     } ],
     "outputSchema" : "{\"type\":\"object\",\"required\":[\"taskId\",\"events\"],\"properties\":{\"taskId\":{\"type\":\"string\"},\"events\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"seq\",\"ts\",\"agentUuid\",\"taskId\"],\"properties\":{\"seq\":{\"type\":\"integer\"},\"ts\":{\"type\":\"integer\"},\"agentUuid\":{\"type\":\"string\"},\"taskId\":{\"type\":\"string\"}}}}}}"
   }, {

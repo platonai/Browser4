@@ -527,12 +527,20 @@ class PulsarSessionManager(
      *   the form Chrome's built-in remote debugging publishes in `DevToolsActivePort`).
      * @param cdpPort A CDP port number. Used when [cdpEndpoint] is null.
      * @param capabilities Optional session capabilities.
+     * @param expectedChannel Optional browser channel the caller named (e.g.
+     *   `msedge`). The product reported by the endpoint is compared with the
+     *   channel's family BEFORE anything is bound — a wrong-family endpoint
+     *   ([ToolErrorCode.ENDPOINT_WRONG_BROWSER]) leaves no session, driver or
+     *   tab behind.
      * @return The created managed session with the external browser bound.
+     * @throws AttachFailureException when the endpoint cannot host a session, or
+     *   reports a browser family other than the requested channel's.
      */
     fun createAttachedSession(
         cdpEndpoint: String? = null,
         cdpPort: Int? = null,
         capabilities: Map<String, String?>? = null,
+        expectedChannel: String? = null,
     ): ManagedSession {
         require(cdpEndpoint != null || cdpPort != null) {
             "attach_browser requires either 'cdpEndpoint' (URL) or 'cdpPort' (number)"
@@ -558,6 +566,7 @@ class PulsarSessionManager(
                 capabilities = normalizedCapabilities,
                 port = port,
                 browserWebSocketUrl = browserWebSocketUrl,
+                expectedChannel = expectedChannel,
             )
         }
 
@@ -578,6 +587,14 @@ class PulsarSessionManager(
             // rule inferred from the words "CDP endpoint").
             throw AttachFailureException(failure, attachFailureCode(verification))
         }
+        // The requested channel vs the product that actually answered. Runs
+        // before the session is created and before any driver exists, so a
+        // wrong-browser attach has nothing to undo.
+        requireAttachChannelMatches(
+            requestedChannel = expectedChannel,
+            actualBrowser = verification.browser,
+            endpointDescription = "endpoint $normalizedEndpoint",
+        )
         logger.info(
             "CDP attach verification OK | {} | browser={} | pageTargets={}",
             normalizedEndpoint, verification.browser, verification.pageTargetCount
@@ -739,6 +756,7 @@ class PulsarSessionManager(
         capabilities: Map<String, String?>,
         port: Int,
         browserWebSocketUrl: String,
+        expectedChannel: String? = null,
     ): ManagedSession {
         // Constructing the wrapper must not leak a raw platform exception: the
         // caller needs the endpoint and what to do about it.
@@ -776,6 +794,19 @@ class PulsarSessionManager(
         // Identity comes from Browser.getVersion over the same socket: the CLI
         // cannot infer which browser a socket URL drives.
         val browserIdentity = runCatching { browser.chrome.version.browser }.getOrNull()
+        // Same pre-bind channel check as the HTTP path: a socket URL names one
+        // concrete browser, so a requested channel that disagrees is a mistake
+        // the caller has to see before a session claims it.
+        runCatching {
+            requireAttachChannelMatches(
+                requestedChannel = expectedChannel,
+                actualBrowser = browserIdentity,
+                endpointDescription = "endpoint $browserWebSocketUrl",
+            )
+        }.onFailure { failure ->
+            runCatching { browser.close() }
+            throw failure
+        }
         logger.info(
             "CDP WebSocket attach verification OK | {} | browser={} | pageTargets={}",
             browserWebSocketUrl, browserIdentity, tabs.size
@@ -823,6 +854,23 @@ class PulsarSessionManager(
             sessionId, browserWebSocketUrl, port
         )
         return session
+    }
+
+    /**
+     * Refuse an attach whose requested channel names a different browser family
+     * than the endpoint reports, before anything is bound.
+     *
+     * Runs after verification and before the session is created, so the refusal
+     * leaves no session, no browser wrapper and no claimed tab behind. The
+     * decision itself is in [Companion.channelMismatch] so it is unit-testable.
+     */
+    private fun requireAttachChannelMatches(
+        requestedChannel: String?,
+        actualBrowser: String?,
+        endpointDescription: String,
+    ) {
+        val refusal = channelMismatch(requestedChannel, actualBrowser, endpointDescription) ?: return
+        throw AttachFailureException(refusal, ToolErrorCode.ENDPOINT_WRONG_BROWSER)
     }
 
     /**
@@ -1057,6 +1105,60 @@ class PulsarSessionManager(
             // attach failure to classify; a transport failure after that point is
             // the generic upstream/CDP case.
             else -> ToolErrorCode.CDP_ERROR
+        }
+
+        /**
+         * The browser family a channel name selects: `"edge"`, `"chrome"`, or
+         * null for a name that selects neither (a raw endpoint, a custom name).
+         *
+         * Token-based like the CLI's own channel parser, so `msedge-dev` and
+         * `edge` are Edge while `chrome-canary` is Chrome. The backend does not
+         * import the CLI's channel enum: the wire value is a plain string.
+         */
+        fun channelFamily(channel: String): String? {
+            val lower = channel.trim().lowercase()
+            return when {
+                "edge" in lower -> "edge"
+                "chrome" in lower || "chromium" in lower -> "chrome"
+                else -> null
+            }
+        }
+
+        /**
+         * Why a requested channel does not match the browser that answered, or
+         * `null` when there is nothing to object to.
+         *
+         * Chrome and Edge share the conventional debugging port 9222, so a
+         * channel name can resolve the other family's browser — the attach must
+         * say so instead of binding it. A chrome request accepts Chromium forks
+         * (Brave/Opera/Vivaldi: family `chromium-other`) because there is no
+         * closer channel name for them; an edge request accepts Edge only.
+         *
+         * Pure so the decision is unit-testable without a browser.
+         */
+        fun channelMismatch(
+            requestedChannel: String?,
+            actualBrowser: String?,
+            endpointDescription: String,
+        ): String? {
+            val channel = requestedChannel?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            val requestedFamily = channelFamily(channel) ?: return null
+            val identity = BrowserIdentity.parse(actualBrowser)
+            // No identity reported (an older endpoint, or a socket that refused
+            // Browser.getVersion): nothing was observed, so nothing is refused.
+            if (identity.family == "unknown") return null
+            val matches = if (requestedFamily == "edge") {
+                identity.family == "edge"
+            } else {
+                identity.family != "edge"
+            }
+            if (matches) return null
+            val reported = identity.name ?: identity.family
+            return "attach refused: channel '$channel' was requested, but $endpointDescription " +
+                "reports $reported (${actualBrowser ?: identity.family}) — a different browser family. " +
+                "Chrome and Edge share the conventional debugging port, so a channel name can resolve " +
+                "the wrong browser. Name the channel you meant (`--cdp msedge` / `--cdp chrome`), or " +
+                "pass that browser's exact endpoint so the wrong instance cannot be picked."
         }
 
         /**
@@ -1341,8 +1443,19 @@ class PulsarSessionManager(
     /**
      * Routes an incoming text message from the extension WebSocket to the
      * appropriate [ExtensionChromeService].
+     *
+     * A `Page.windowOpen` event the browser's popup blocker refused is dropped
+     * here: the driver reacts to every window-open event by opening a tab, and
+     * for a refused call that tab is the stray `about:blank` users see next to
+     * the page they are working on (see [ExtensionWindowOpenPolicy]).
      */
     fun routeExtensionMessage(sessionId: String, message: String) {
+        if (ExtensionWindowOpenPolicy.isBlockedWindowOpen(message)) {
+            logger.debug(
+                "Ignoring window.open refused by the browser's popup blocker | sessionId={}", sessionId
+            )
+            return
+        }
         extensionBrowsers[sessionId]?.handleIncomingMessage(message)
     }
 

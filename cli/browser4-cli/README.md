@@ -506,15 +506,15 @@ Need to extract data from a page?
 
 ```
 Need to process multiple pages?
-├─ Single list page? → htmlsnapshot query with DOM_LOAD_AND_SELECT
+├─ Single list page? → htmlsnapshot query with LOAD_AND_SELECT
 ├─ List of known URLs? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Need parallel execution? → swarm create → swarm query --seed-file ...
 └─ Repeated monitoring? → loop -i 3600 -- eval "..."
 ```
 
-### How to Turn HTML into Spreadsheets — Zero Tokens
+### How to Turn HTML into Spreadsheets — Zero LLM Tokens
 
-[WebMiner](https://github.com/platonai/web-miner) clusters downloaded HTML files into structured spreadsheets via ML — no API keys, no tokens. Free tier (SMILE engine) handles < 1,000 pages; commercial tier (Apache Spark ML) scales to 100K+ pages/day.
+[WebMiner](https://github.com/platonai/web-miner) clusters downloaded HTML files into structured spreadsheets via ML — no API keys, no LLM Tokens. Free tier (SMILE engine) handles < 1,000 pages; commercial tier (Apache Spark ML) scales to 100K+ pages/day.
 
 ```
 browser4-cli webminer install

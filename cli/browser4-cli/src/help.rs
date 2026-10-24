@@ -1853,6 +1853,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - --endpoint accepts a remote Browser4 server URL (e.g. http://browser4-server:18182) for distributed setups."
                 .to_string(),
         );
+        lines.push(wrap_text(
+            "  - One transport per invocation: --cdp, --extension and --endpoint cannot be combined. A channel name passed with --endpoint only resolves on THIS machine, so a non-loopback --endpoint is refused (pass the CDP URL reachable from that server instead). `--endpoint` alone switches the CLI to the server and clears any attach markers from the previous slot.",
+            "  ",
+            4,
+        ));
         lines.push(
             "  - When attaching, the current session slot is associated with the external browser."
                 .to_string(),
@@ -1862,9 +1867,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    Supported channels: chrome (default), chrome-canary, msedge, msedge-dev."
+            "    Supported channels: chrome, chrome-beta, chrome-dev, chrome-canary,"
                 .to_string(),
         );
+        lines.push(
+            "                        msedge, msedge-beta, msedge-dev, msedge-canary (chrome is the default)."
+                .to_string(),
+        );
+        lines.push(wrap_text(
+            "  - The extension connect page is opened ONLY in the requested channel's browser (never the other family, never the OS default handler); if that browser cannot be launched the URL is printed for a manual open. The browser that actually answers is read from the extension WebSocket handshake: a different family fails the attach, disconnects the session and drops its local record instead of silently driving the wrong browser.",
+            "  ",
+            4,
+        ));
         lines.push(
             "    Note: Navigating to chrome:// internal pages (chrome://version, chrome://settings, etc.)"
                 .to_string(),
@@ -1880,6 +1894,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         ));
         lines.push(wrap_text(
             "  - After binding, the browser's product is re-read and compared with the probe: if the debugging port changed hands (another instance grabbed it) the attach fails naming both products and every observed page target, instead of silently driving a different browser.",
+            "  ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "  - Channel identity is enforced: `attach --cdp msedge` fails when the resolved endpoint reports a Chrome-family browser, and `attach --extension msedge` fails when Chrome answers the extension relay. Both undo the session (disconnect + forget the local record) and name the browsers they saw — Chrome and Edge share the conventional port 9222, so a family check is the only thing that catches it.",
             "  ",
             4,
         ));
@@ -1902,7 +1921,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli attach --extension chrome-canary".to_string());
         lines.push("  browser4-cli attach --extension msedge".to_string());
         lines.push("  browser4-cli attach --endpoint http://browser4-server:18182".to_string());
-        lines.push("  browser4-cli attach --endpoint http://remote:18182 --cdp chrome".to_string());
+        lines.push("  browser4-cli attach --endpoint http://remote:18182 --cdp http://browser-host:9222".to_string());
         lines.push(String::new());
         lines.push("  # A named session attaches a second browser without touching the unnamed slot".to_string());
         lines.push("  browser4-cli -s scrape attach --cdp chrome".to_string());
