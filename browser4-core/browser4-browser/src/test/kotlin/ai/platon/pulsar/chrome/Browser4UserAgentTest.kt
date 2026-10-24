@@ -146,6 +146,22 @@ class Browser4UserAgentTest {
     }
 
     @Test
+    @DisplayName("applyTo is a no-op on a headed launch")
+    fun applyToIsANoOpOnAHeadedLaunch(@TempDir dir: Path) {
+        // A headed Chrome already reports the reduced `Chrome/<major>.0.0.0` form natively,
+        // and the switch is not free: Chrome empties the client-hint
+        // `navigator.userAgentData.getHighEntropyValues(['fullVersionList'])` whenever
+        // `--user-agent` is on the command line.
+        val options = ChromeOptions().apply { headless = false }
+
+        val applied = Browser4UserAgent.applyTo(options, settingsWith(), fakeChromeInstall(dir))
+
+        assertFalse(applied)
+        assertNull(options.userAgent)
+        assertFalse(options.toList().any { it.startsWith("--user-agent=") }, options.toList().toString())
+    }
+
+    @Test
     @DisplayName("applyTo is a no-op when stealth is disabled")
     fun applyToIsANoOpWhenStealthIsDisabled(@TempDir dir: Path) {
         val options = ChromeOptions().apply { headless = true }
