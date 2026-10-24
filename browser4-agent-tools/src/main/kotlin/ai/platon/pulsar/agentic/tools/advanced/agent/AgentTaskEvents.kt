@@ -31,6 +31,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode
  * @property durationMs tool execution time
  * @property text model text, result preview, or lifecycle message
  * @property turn 1-based outer agent round the step belongs to
+ * @property inputTokens provider-reported input tokens of one model request
+ *   ([TYPE_USAGE] only; `null` when the provider reported no usage at all)
+ * @property outputTokens provider-reported output tokens of one model request
+ * @property totalTokens provider-reported total tokens of one model request
  * */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class AgentTaskEvent(
@@ -43,6 +47,9 @@ data class AgentTaskEvent(
     val durationMs: Long? = null,
     val text: String? = null,
     val turn: Int? = null,
+    val inputTokens: Int? = null,
+    val outputTokens: Int? = null,
+    val totalTokens: Int? = null,
 ) {
     companion object {
         /** The task row was created (queued). */
@@ -66,6 +73,17 @@ data class AgentTaskEvent(
         /** A user steering message was injected into the run. */
         const val TYPE_STEER = "steer"
 
+        /**
+         * One successful model request: the tokens the provider reported for it.
+         *
+         * Emitted once per LLM API call, so the count of these steps is the
+         * honest "how many LLM calls did this run make" — more than the number of
+         * outer rounds whenever a tool-calling round needed several requests.
+         * The token fields may all be `null` (a provider that reports no usage,
+         * a local model): the request still happened, so it is still counted.
+         */
+        const val TYPE_USAGE = "run.usage"
+
         /** The task finished successfully. */
         const val TYPE_DONE = "task.done"
 
@@ -78,12 +96,154 @@ data class AgentTaskEvent(
 }
 
 /**
+ * Aggregate counters of one agent task's run — what the interactive session's
+ * `/stats` command (and `GET /api/commands/{id}/stats`) reports.
+ *
+ * The counters live next to the bounded event log instead of being derived from
+ * its contents: [AgentTaskEventLog] retains only the newest
+ * [AgentTaskEventLog.DEFAULT_CAPACITY] steps, so a client counting the steps it
+ * received from a long coding run would silently undercount every step that fell
+ * out of the buffer. These counters are monotonic for the life of the log.
+ *
+ * Only the CLI agent engine reports [rounds], [modelRequests] and the token
+ * counters; the deprecated observe-act engine emits lifecycle steps only, so
+ * those numbers stay 0 for it.
+ *
+ * @property rounds outer agent rounds: one `round.start` step per round, each of
+ *   which may issue several model requests (a tool-calling round loops)
+ * @property modelRequests successful model requests (`run.usage` steps), i.e.
+ *   how many LLM API calls the run made — context-compaction calls included
+ * @property toolCalls tool calls the model requested (`tool.call` steps, meta
+ *   discovery tools included)
+ * @property toolFailures tool calls that reported failure (`tool.result` with
+ *   `ok=false`)
+ * @property steerMessages user steering messages injected into the run
+ * @property inputTokens summed provider-reported input tokens
+ * @property outputTokens summed provider-reported output tokens
+ * @property totalTokens summed provider-reported total tokens; a provider that
+ *   omits the total is accounted as input + output
+ * @property events every step ever appended (retained plus evicted)
+ * @property droppedEvents steps that fell out of the bounded buffer
+ * @property firstEpochMillis wall-clock time of the first step
+ * @property lastEpochMillis wall-clock time of the newest step
+ * @property toolCounts per-tool call counts, most-called first, capped to
+ *   [MAX_TOOL_BREAKDOWN] entries
+ * */
+data class AgentTaskRunStats(
+    val rounds: Long = 0,
+    val modelRequests: Long = 0,
+    val toolCalls: Long = 0,
+    val toolFailures: Long = 0,
+    val steerMessages: Long = 0,
+    val inputTokens: Long = 0,
+    val outputTokens: Long = 0,
+    val totalTokens: Long = 0,
+    val events: Long = 0,
+    val droppedEvents: Long = 0,
+    val firstEpochMillis: Long? = null,
+    val lastEpochMillis: Long? = null,
+    val toolCounts: Map<String, Long> = emptyMap(),
+) {
+    /**
+     * True when any token counter is non-zero.
+     *
+     * A provider may report no usage at all (a local model, a gateway that drops
+     * the usage block): the run then made [modelRequests] calls but the token
+     * numbers are *unknown*, not zero, and a report must not claim "0 tokens".
+     * */
+    val tokensReported: Boolean
+        get() = inputTokens > 0 || outputTokens > 0 || totalTokens > 0
+
+    companion object {
+        /** How many distinct tools [toolCounts] keeps (the most-called ones). */
+        const val MAX_TOOL_BREAKDOWN = 20
+    }
+}
+
+/**
+ * Mutable accumulator behind [AgentTaskRunStats].
+ *
+ * Kept private to the log so a snapshot can never be mutated by a later step.
+ * */
+private class RunStatsAccumulator {
+    var rounds = 0L
+    var modelRequests = 0L
+    var toolCalls = 0L
+    var toolFailures = 0L
+    var steerMessages = 0L
+    var inputTokens = 0L
+    var outputTokens = 0L
+    var totalTokens = 0L
+    var events = 0L
+    var firstEpochMillis: Long? = null
+    var lastEpochMillis: Long? = null
+    val toolCounts = HashMap<String, Long>()
+
+    fun record(
+        type: String,
+        tool: String?,
+        ok: Boolean?,
+        inputTokens: Int?,
+        outputTokens: Int?,
+        totalTokens: Int?,
+        epochMillis: Long,
+    ) {
+        events++
+        if (firstEpochMillis == null) firstEpochMillis = epochMillis
+        lastEpochMillis = epochMillis
+        when (type) {
+            AgentTaskEvent.TYPE_ROUND -> rounds++
+            AgentTaskEvent.TYPE_TOOL_CALL -> {
+                toolCalls++
+                val name = tool?.takeIf { it.isNotBlank() } ?: "unknown"
+                toolCounts[name] = (toolCounts[name] ?: 0L) + 1L
+            }
+
+            AgentTaskEvent.TYPE_TOOL_RESULT -> if (ok == false) toolFailures++
+            AgentTaskEvent.TYPE_STEER -> steerMessages++
+            AgentTaskEvent.TYPE_USAGE -> {
+                modelRequests++
+                val input = (inputTokens ?: 0).coerceAtLeast(0)
+                val output = (outputTokens ?: 0).coerceAtLeast(0)
+                this.inputTokens += input
+                this.outputTokens += output
+                // A provider that reports only input/output must still be
+                // accounted: `total` is input + output, never "-1"/absent.
+                this.totalTokens += (totalTokens ?: (input + output)).coerceAtLeast(0)
+            }
+        }
+    }
+
+    fun snapshot(dropped: Long): AgentTaskRunStats = AgentTaskRunStats(
+        rounds = rounds,
+        modelRequests = modelRequests,
+        toolCalls = toolCalls,
+        toolFailures = toolFailures,
+        steerMessages = steerMessages,
+        inputTokens = inputTokens,
+        outputTokens = outputTokens,
+        totalTokens = totalTokens,
+        events = events,
+        droppedEvents = dropped,
+        firstEpochMillis = firstEpochMillis,
+        lastEpochMillis = lastEpochMillis,
+        toolCounts = toolCounts.entries
+            .sortedWith(compareByDescending<Map.Entry<String, Long>> { it.value }.thenBy { it.key })
+            .take(AgentTaskRunStats.MAX_TOOL_BREAKDOWN)
+            .associateTo(LinkedHashMap()) { it.key to it.value },
+    )
+}
+
+/**
  * Bounded, thread-safe ring buffer of the events of ONE agent task.
  *
  * Capacity-bounded because a coding run can emit thousands of tool events and
  * nobody replays more than the recent tail: when the buffer is full the oldest
  * event is dropped ([droppedCount] records how many), while [lastSeq] keeps
  * growing so a cursor never stalls.
+ *
+ * The run's aggregate counters ([stats]) are maintained as events are appended,
+ * so they stay exact even after their steps have been evicted.
  *
  * @param capacity maximum number of retained events (default [DEFAULT_CAPACITY])
  * */
@@ -96,6 +256,7 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
     private val events = ArrayDeque<AgentTaskEvent>(minOf(capacity, 256))
     private var nextSeq: Long = 1L
     private var dropped: Long = 0L
+    private val accumulator = RunStatsAccumulator()
 
     /**
      * Append one event, assigning it the next sequence number.
@@ -111,6 +272,9 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
         durationMs: Long? = null,
         text: String? = null,
         turn: Int? = null,
+        inputTokens: Int? = null,
+        outputTokens: Int? = null,
+        totalTokens: Int? = null,
         epochMillis: Long = System.currentTimeMillis(),
     ): AgentTaskEvent {
         val event = AgentTaskEvent(
@@ -123,7 +287,11 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
             durationMs = durationMs,
             text = text,
             turn = turn,
+            inputTokens = inputTokens,
+            outputTokens = outputTokens,
+            totalTokens = totalTokens,
         )
+        accumulator.record(type, tool, ok, inputTokens, outputTokens, totalTokens, epochMillis)
         events.addLast(event)
         while (events.size > capacity) {
             events.removeFirst()
@@ -162,6 +330,15 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
     /** How many events fell out of the buffer. */
     @Synchronized
     fun droppedCount(): Long = dropped
+
+    /**
+     * The run's aggregate counters as of now.
+     *
+     * Exact even for steps the buffer already evicted ([AgentTaskRunStats.events]
+     * counts every append, [AgentTaskRunStats.droppedEvents] the evicted ones).
+     * */
+    @Synchronized
+    fun stats(): AgentTaskRunStats = accumulator.snapshot(dropped)
 
     companion object {
         /** Maximum retained events per task (240-char previews ⇒ ≈1 MB worst case). */

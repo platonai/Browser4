@@ -24,8 +24,8 @@ use reqwest::Client;
 use serde_json::{json, Value};
 
 use crate::http::{
-    cancel_command_task, get_command_events, get_command_result, get_command_status,
-    send_command_input,
+    cancel_command_task, get_command_events, get_command_result, get_command_stats,
+    get_command_status, send_command_input,
 };
 
 /// How often the follower asks for new events while a task is running.
@@ -59,6 +59,9 @@ const RESULT_PREVIEW: usize = 240;
 /// A tool slower than this gets a completion line even when it succeeded.
 const SLOW_TOOL_MS: i64 = 2_000;
 
+/// How many per-tool call counts `/stats` lists.
+const TOP_TOOLS: usize = 5;
+
 // ---------------------------------------------------------------------------
 // Event payloads
 // ---------------------------------------------------------------------------
@@ -75,6 +78,10 @@ struct TaskEvent {
     duration_ms: Option<i64>,
     text: Option<String>,
     turn: Option<i64>,
+    /// Provider-reported tokens of one model request (`run.usage` steps).
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    total_tokens: Option<u64>,
 }
 
 impl TaskEvent {
@@ -104,6 +111,15 @@ impl TaskEvent {
         }
         if let Some(turn) = self.turn {
             obj["turn"] = json!(turn);
+        }
+        if let Some(tokens) = self.input_tokens {
+            obj["inputTokens"] = json!(tokens);
+        }
+        if let Some(tokens) = self.output_tokens {
+            obj["outputTokens"] = json!(tokens);
+        }
+        if let Some(tokens) = self.total_tokens {
+            obj["totalTokens"] = json!(tokens);
         }
         obj
     }
@@ -160,6 +176,9 @@ fn parse_events_page(body: &str) -> Result<EventsPage, String> {
             duration_ms: item.get("durationMs").and_then(|v| v.as_i64()),
             text: string_field(item, "text"),
             turn: item.get("turn").and_then(|v| v.as_i64()),
+            input_tokens: item.get("inputTokens").and_then(|v| v.as_u64()),
+            output_tokens: item.get("outputTokens").and_then(|v| v.as_u64()),
+            total_tokens: item.get("totalTokens").and_then(|v| v.as_u64()),
         });
     }
 
@@ -259,6 +278,182 @@ fn parse_status_progress(body: &str) -> StatusProgress {
         message,
         tools,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Run statistics (`/stats`)
+// ---------------------------------------------------------------------------
+
+/// Aggregate counters of one run — how many LLM calls, tool calls and tokens it
+/// took.
+///
+/// Two sources feed this: the backend's authoritative counters
+/// (`GET /api/commands/{id}/stats`, which counts every step even after it fell
+/// out of the bounded event log) and, against an older backend, the steps this
+/// session observed itself ([RunStats::observe]). The verdict whether a report is
+/// local is carried by [TaskStatsReport::local], never inferred from the numbers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RunStats {
+    /// Outer agent rounds (`round.start` steps).
+    rounds: u64,
+    /// Successful model requests (`run.usage` steps): one per LLM API call.
+    model_requests: u64,
+    tool_calls: u64,
+    tool_failures: u64,
+    steer_messages: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    total_tokens: u64,
+    /// Every step the run emitted (retained plus evicted).
+    events: u64,
+    /// Steps evicted from the backend's bounded buffer.
+    dropped_events: u64,
+    /// Per-tool call counts, unordered until rendered.
+    tool_counts: Vec<(String, u64)>,
+}
+
+impl RunStats {
+    /// Count one observed step, mirroring the backend's aggregation so a local
+    /// fallback report means the same thing as a served one.
+    fn observe(&mut self, event: &TaskEvent) {
+        self.events += 1;
+        match event.kind.as_str() {
+            "round.start" => self.rounds += 1,
+            "tool.call" => {
+                self.tool_calls += 1;
+                let name = event
+                    .tool
+                    .as_deref()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("unknown");
+                match self.tool_counts.iter_mut().find(|(tool, _)| tool == name) {
+                    Some(entry) => entry.1 += 1,
+                    None => self.tool_counts.push((name.to_string(), 1)),
+                }
+            }
+            "tool.result" => {
+                if event.ok == Some(false) {
+                    self.tool_failures += 1;
+                }
+            }
+            "steer" => self.steer_messages += 1,
+            "run.usage" => {
+                self.model_requests += 1;
+                let input = event.input_tokens.unwrap_or(0);
+                let output = event.output_tokens.unwrap_or(0);
+                self.input_tokens += input;
+                self.output_tokens += output;
+                self.total_tokens += event.total_tokens.unwrap_or(input + output);
+            }
+            _ => {}
+        }
+    }
+
+    /// True when the provider reported token counts at all.
+    ///
+    /// A run whose provider omits usage made [Self::model_requests] calls but its
+    /// token numbers are *unknown* — a report must not claim "0 tokens".
+    fn tokens_reported(&self) -> bool {
+        self.input_tokens > 0 || self.output_tokens > 0 || self.total_tokens > 0
+    }
+
+    /// The most-called tools, highest count first (at most [TOP_TOOLS]).
+    fn top_tools(&self, limit: usize) -> Vec<(String, u64)> {
+        let mut tools = self.tool_counts.clone();
+        tools.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        tools.truncate(limit);
+        tools
+    }
+
+    /// The same counters as a JSON object (for `--json` in the interactive
+    /// session).
+    fn to_json(&self, local: bool) -> Value {
+        let counts: serde_json::Map<String, Value> = self
+            .tool_counts
+            .iter()
+            .map(|(tool, count)| (tool.clone(), json!(count)))
+            .collect();
+        json!({
+            "rounds": self.rounds,
+            "modelRequests": self.model_requests,
+            "toolCalls": self.tool_calls,
+            "toolFailures": self.tool_failures,
+            "steerMessages": self.steer_messages,
+            "inputTokens": self.input_tokens,
+            "outputTokens": self.output_tokens,
+            "totalTokens": self.total_tokens,
+            "tokensReported": self.tokens_reported(),
+            "events": self.events,
+            "droppedEvents": self.dropped_events,
+            "toolCounts": counts,
+            "countedLocally": local,
+        })
+    }
+}
+
+/// One task's statistics as reported to the user.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TaskStatsReport {
+    task_id: String,
+    /// The task's status word (`running|done|failed|cancelled|unknown`).
+    status: String,
+    is_done: bool,
+    elapsed_ms: Option<u64>,
+    stats: RunStats,
+    /// True when [Self::stats] was counted by this session instead of served by
+    /// the backend.
+    local: bool,
+}
+
+/// Parse a `GET /api/commands/{id}/stats` body.
+///
+/// Everything is optional for the same reason as [parse_events_page]: a report
+/// must not die on a field the backend stopped sending. A body with no `stats`
+/// object at all is an error (there is nothing to report), which the caller
+/// surfaces as "could not read stats".
+fn parse_task_stats(body: &str) -> Result<TaskStatsReport, String> {
+    let value: Value = serde_json::from_str(body)
+        .map_err(|e| format!("could not parse the stats response as JSON: {e}"))?;
+    let stats = value
+        .get("stats")
+        .filter(|stats| stats.is_object())
+        .ok_or_else(|| "the stats response carries no counters".to_string())?;
+
+    let tool_counts = stats
+        .get("toolCounts")
+        .and_then(|v| v.as_object())
+        .map(|counts| {
+            counts
+                .iter()
+                .map(|(tool, count)| (tool.clone(), count.as_u64().unwrap_or(0)))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(TaskStatsReport {
+        task_id: string_field(&value, "taskId").unwrap_or_default(),
+        status: string_field(&value, "status").unwrap_or_else(|| "unknown".to_string()),
+        is_done: value.get("isDone").and_then(|v| v.as_bool()).unwrap_or(false),
+        elapsed_ms: value.get("elapsedMs").and_then(|v| v.as_u64()),
+        stats: RunStats {
+            rounds: u64_field(stats, "rounds"),
+            model_requests: u64_field(stats, "modelRequests"),
+            tool_calls: u64_field(stats, "toolCalls"),
+            tool_failures: u64_field(stats, "toolFailures"),
+            steer_messages: u64_field(stats, "steerMessages"),
+            input_tokens: u64_field(stats, "inputTokens"),
+            output_tokens: u64_field(stats, "outputTokens"),
+            total_tokens: u64_field(stats, "totalTokens"),
+            events: u64_field(stats, "events"),
+            dropped_events: u64_field(stats, "droppedEvents"),
+            tool_counts,
+        },
+        local: false,
+    })
+}
+
+fn u64_field(value: &Value, key: &str) -> u64 {
+    value.get(key).and_then(|v| v.as_u64()).unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -446,6 +641,108 @@ fn format_duration_ms(duration_ms: i64) -> String {
     }
 }
 
+/// A run's duration: `18.4s` under a minute, `3m12s` under an hour, `1h04m`
+/// above — a coding run can last hours, and `7200.0s` is unreadable.
+fn format_run_duration(duration_ms: u64) -> String {
+    if duration_ms < 60_000 {
+        return format!("{:.1}s", duration_ms as f64 / 1000.0);
+    }
+    let secs = duration_ms / 1_000;
+    if secs < 3_600 {
+        return format!("{}m{:02}s", secs / 60, secs % 60);
+    }
+    let minutes = (secs / 60) % 60;
+    format!("{}h{:02}m", secs / 3_600, minutes)
+}
+
+/// Group digits (`48231` → `48,231`) so a token total is readable at a glance.
+fn format_thousands(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// The human-readable `/stats` block.
+///
+/// A few aligned lines rather than one long sentence: the point of the command is
+/// comparing counters, and terminals wrap at 80–120 columns. Every line is
+/// self-explanatory when copied out of context (a CI log keeps the numbers, not
+/// the layout).
+fn format_stats_report(report: &TaskStatsReport) -> Vec<String> {
+    let header = match report.elapsed_ms {
+        Some(duration_ms) => format!(
+            "{} · {} · {}",
+            report.task_id,
+            report.status,
+            format_run_duration(duration_ms)
+        ),
+        None => format!("{} · {}", report.task_id, report.status),
+    };
+    let stats = &report.stats;
+    let mut lines = vec![header];
+
+    lines.push(format!(
+        "  llm     {} round(s) · {} request(s)",
+        stats.rounds, stats.model_requests
+    ));
+    if stats.tokens_reported() {
+        lines.push(format!(
+            "  tokens  in {} · out {} · total {}",
+            format_thousands(stats.input_tokens),
+            format_thousands(stats.output_tokens),
+            format_thousands(stats.total_tokens)
+        ));
+    } else if stats.model_requests > 0 {
+        // The provider sends no usage block (a local model, a gateway that drops
+        // it): the calls happened, the token numbers are unknown, not zero.
+        lines.push("  tokens  not reported by the provider".to_string());
+    } else {
+        lines.push("  tokens  no model request yet".to_string());
+    }
+
+    let mut tools = format!(
+        "  tools   {} call(s) · {} failed",
+        stats.tool_calls, stats.tool_failures
+    );
+    let top = stats.top_tools(TOP_TOOLS);
+    if !top.is_empty() {
+        let rendered = top
+            .iter()
+            .map(|(tool, count)| format!("{tool} {count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        tools.push_str(&format!(" ({rendered})"));
+    }
+    lines.push(tools);
+
+    let mut steps = format!("  steps   {}", stats.events);
+    if stats.dropped_events > 0 {
+        steps.push_str(&format!(
+            " ({} dropped from the buffer)",
+            stats.dropped_events
+        ));
+    }
+    if stats.steer_messages > 0 {
+        steps.push_str(&format!(" · {} steering message(s)", stats.steer_messages));
+    }
+    lines.push(steps);
+
+    if report.local {
+        lines.push(
+            "  ⚠ counted by this session from the steps it observed — the backend has no \
+             statistics for this task, so a long run may undercount"
+                .to_string(),
+        );
+    }
+    lines
+}
+
 /// `(arguments)` for a tool-call line; empty for `{}` so plumbing stays short.
 fn format_tool_arguments(arguments: &str) -> String {
     let trimmed = arguments.trim();
@@ -492,6 +789,13 @@ struct TaskFollower {
     ndjson: bool,
     started: Instant,
     last_poll: Option<Instant>,
+    /// Steps this follower observed, counted locally.
+    ///
+    /// The fallback behind `/stats`: a backend without the stats endpoint (or one
+    /// whose run log expired) still gets a report, and this session's own tally is
+    /// the only one available. It can undercount — steps evicted before this
+    /// follower reached them are lost — which the report says out loud.
+    observed: RunStats,
 }
 
 impl TaskFollower {
@@ -508,6 +812,7 @@ impl TaskFollower {
             ndjson,
             started,
             last_poll: None,
+            observed: RunStats::default(),
         }
     }
 
@@ -659,6 +964,10 @@ impl TaskFollower {
     }
 
     fn emit(&mut self, event: &TaskEvent) {
+        // Local tally for `/stats` against a backend that serves no counters.
+        // Counted in both output modes: `/stats` must answer the same whether
+        // the steps were rendered or streamed as NDJSON.
+        self.observed.observe(event);
         if self.ndjson {
             let line = event.to_json(&self.task_id).to_string();
             crate::print_stdout_line(&line);
@@ -930,6 +1239,10 @@ struct Repl {
     /// Cursor of the last finished task, so `/events` can show its newest steps
     /// instead of the oldest page.
     last_task_seq: u64,
+    /// Locally counted statistics of the last finished task, kept so `/stats`
+    /// can answer after its follower is gone (the fallback for a backend without
+    /// the stats endpoint).
+    last_local_stats: Option<TaskStatsReport>,
     prompt_pending: bool,
 }
 
@@ -969,6 +1282,7 @@ impl Repl {
             current: None,
             last_task: None,
             last_task_seq: 0,
+            last_local_stats: None,
             prompt_pending: true,
         }
     }
@@ -1054,8 +1368,7 @@ impl Repl {
                             // session alive instead of tearing down the REPL.
                             self.out(&format!("⚠ {error}"));
                             if let Some(follower) = self.current.take() {
-                                self.last_task = Some(follower.task_id);
-                                self.last_task_seq = follower.after;
+                                self.release_current(follower, "unknown", false);
                             }
                             self.prompt_pending = true;
                         }
@@ -1066,8 +1379,7 @@ impl Repl {
                         Some(follower) => {
                             let outcome = cancel_task(&self.client, &self.base_url, &follower.task_id).await;
                             self.out(&format!("⏹ {outcome}"));
-                            self.last_task = Some(follower.task_id);
-                            self.last_task_seq = follower.after;
+                            self.release_current(follower, "cancelled", true);
                             self.prompt_pending = true;
                         }
                         None => break,
@@ -1179,16 +1491,36 @@ impl Repl {
         }
     }
 
+    /// Remember a task whose follower is going away: its id, its cursor, and the
+    /// steps this session counted itself.
+    ///
+    /// The saved tally is what `/stats` answers with when the backend serves no
+    /// counters for the task — without it, a finished task's numbers died with
+    /// its follower.
+    fn release_current(&mut self, follower: TaskFollower, status: &str, is_done: bool) {
+        let elapsed_ms = follower.elapsed().as_millis() as u64;
+        let observed = follower.observed.clone();
+        self.last_task = Some(follower.task_id.clone());
+        self.last_task_seq = follower.after;
+        self.last_local_stats = Some(TaskStatsReport {
+            task_id: follower.task_id,
+            status: status.to_string(),
+            is_done,
+            elapsed_ms: Some(elapsed_ms),
+            stats: observed,
+            local: true,
+        });
+    }
+
     async fn complete_current(&mut self, status: String) -> Result<(), String> {
         let Some(follower) = self.current.take() else {
             return Ok(());
         };
         let task_id = follower.task_id.clone();
-        self.last_task = Some(task_id.clone());
-        self.last_task_seq = follower.after;
+        let elapsed = follower.elapsed();
+        self.release_current(follower, &status, true);
         self.prompt_pending = true;
 
-        let elapsed = follower.elapsed();
         match status.as_str() {
             "done" => {
                 let result = get_command_result(&self.client, &self.base_url, &task_id).await?;
@@ -1236,6 +1568,8 @@ impl Repl {
                 self.out(&format!("session: {session}"));
             }
             "events" => self.print_events(argument).await,
+            // `/stats [task-id]`: no argument means the running (or last) task.
+            "stats" => self.print_stats(argument).await,
             other => self.out(&format!(
                 "unknown command /{other} — type /help for the list"
             )),
@@ -1255,6 +1589,7 @@ impl Repl {
         self.out("  /coding [on|off]   treat following tasks as coding tasks");
         self.out("  /noop-limit <n>    consecutive no-op abort threshold (blank resets)");
         self.out("  /events [n]        raw JSON of the last n steps (default 20)");
+        self.out("  /stats [task-id]   run statistics: LLM rounds/requests, tokens, tool calls");
         self.out("  /quit              leave the session");
         self.out("");
         self.out("Anything else is a task. Type a line while a task runs to steer it.");
@@ -1289,6 +1624,96 @@ impl Repl {
         }
     }
 
+    /// `/stats [task-id]`: what this run cost — LLM rounds and requests, tokens,
+    /// tool calls.
+    ///
+    /// The numbers are the backend's: its counters keep counting steps that have
+    /// already fallen out of the bounded event log, which a client-side tally
+    /// cannot. Against a backend with no stats endpoint the session falls back to
+    /// what it observed itself and labels the report as such.
+    async fn print_stats(&mut self, argument: &str) {
+        let task_id = match argument.trim() {
+            "" => self
+                .current
+                .as_ref()
+                .map(|follower| follower.task_id.clone())
+                .or_else(|| self.last_task.clone()),
+            named => Some(named.to_string()),
+        };
+        let Some(task_id) = task_id else {
+            self.out("no task yet — type a task to start one");
+            return;
+        };
+
+        match get_command_stats(&self.client, &self.base_url, &task_id).await {
+            Ok(response) if response.is_success() => match parse_task_stats(&response.body) {
+                Ok(report) => self.render_stats(report),
+                Err(error) => self.out(&format!("could not read stats of {task_id}: {error}")),
+            },
+            // 404/405/501: an older backend (no stats endpoint) or a run log that
+            // expired. Both leave this session's own tally as the only number.
+            Ok(response) if response.is_missing_endpoint() => self.print_local_stats(&task_id),
+            Ok(response) => self.out(&format!(
+                "could not read stats of {task_id}: HTTP {} {}",
+                response.status,
+                truncate(response.body.trim(), 200)
+            )),
+            Err(error) => self.out(&format!("could not read stats of {task_id}: {error}")),
+        }
+    }
+
+    /// The fallback report: counters this session kept while following the task.
+    ///
+    /// Honest about its limits — steps the session never saw (a task followed from
+    /// its middle, a coding round that outran the poll interval, a backend that
+    /// serves no step log at all) are missing, so the numbers can only undercount.
+    fn print_local_stats(&self, task_id: &str) {
+        let live = self
+            .current
+            .as_ref()
+            .filter(|follower| follower.task_id == task_id)
+            .map(|follower| TaskStatsReport {
+                task_id: follower.task_id.clone(),
+                status: "running".to_string(),
+                is_done: false,
+                elapsed_ms: Some(follower.elapsed().as_millis() as u64),
+                stats: follower.observed.clone(),
+                local: true,
+            });
+        // The saved tally belongs to the LAST task: naming another id must not
+        // report one task's numbers under another task's name.
+        let report = live.or_else(|| {
+            self.last_local_stats
+                .clone()
+                .filter(|report| report.task_id == task_id)
+        });
+
+        match report {
+            Some(report) if report.stats.events > 0 => self.render_stats(report),
+            Some(_) => self.out(&format!(
+                "no run statistics for {task_id}: this backend reports neither counters nor a \
+                 step log, so nothing was observed"
+            )),
+            None => self.out(&format!(
+                "no run statistics for {task_id}: this backend reports none (an older backend, \
+                 a restarted one, or an expired run log)"
+            )),
+        }
+    }
+
+    /// Print a statistics report (human lines, plus the `--json` envelope field).
+    fn render_stats(&self, report: TaskStatsReport) {
+        let mut payload = report.stats.to_json(report.local);
+        payload["taskId"] = json!(report.task_id);
+        payload["status"] = json!(report.status);
+        payload["isDone"] = json!(report.is_done);
+        payload["elapsedMs"] = json!(report.elapsed_ms);
+        for line in format_stats_report(&report) {
+            self.out(&line);
+        }
+        crate::json_field("stats", payload);
+    }
+
     async fn print_result(&mut self) {
         let Some(task_id) = self.last_task.clone() else {
             self.out("no finished task yet");
@@ -1307,7 +1732,9 @@ impl Repl {
         };
         let outcome = cancel_task(&self.client, &self.base_url, &follower.task_id).await;
         self.out(&format!("⏹ {outcome}"));
-        self.last_task = Some(follower.task_id);
+        // Keep the tally: `/stats` on a cancelled task still answers (from the
+        // backend when it has counters, from this session otherwise).
+        self.release_current(follower, "cancelled", true);
         self.prompt_pending = true;
     }
 
@@ -1676,6 +2103,209 @@ mod tests {
         assert_eq!(format_tool_arguments("{}"), "");
         assert_eq!(format_tool_arguments("  "), "");
         assert_eq!(format_tool_arguments(r#"{"a":1}"#), r#"({"a":1})"#);
+    }
+
+    // ---- run statistics (`/stats`) -----------------------------------------
+
+    fn stats_event(kind: &str, tool: Option<&str>, ok: Option<bool>) -> TaskEvent {
+        TaskEvent {
+            seq: 1,
+            kind: kind.to_string(),
+            tool: tool.map(str::to_string),
+            ok,
+            ..Default::default()
+        }
+    }
+
+    fn a_served_stats_report() -> TaskStatsReport {
+        TaskStatsReport {
+            task_id: "t1".to_string(),
+            status: "done".to_string(),
+            is_done: true,
+            elapsed_ms: Some(41_300),
+            stats: RunStats {
+                rounds: 3,
+                model_requests: 11,
+                tool_calls: 39,
+                tool_failures: 2,
+                steer_messages: 1,
+                input_tokens: 48_231,
+                output_tokens: 6_120,
+                total_tokens: 54_351,
+                events: 132,
+                dropped_events: 0,
+                tool_counts: vec![
+                    ("b4.run".to_string(), 12),
+                    ("browser_snapshot".to_string(), 8),
+                ],
+            },
+            local: false,
+        }
+    }
+
+    #[test]
+    fn parse_task_stats_reads_counters_and_the_tool_breakdown() {
+        let body = r#"{
+            "taskId": "t1",
+            "status": "done",
+            "processState": "completed",
+            "isDone": true,
+            "elapsedMs": 41300,
+            "stats": {
+                "rounds": 3, "modelRequests": 11, "toolCalls": 39, "toolFailures": 2,
+                "steerMessages": 1, "inputTokens": 48231, "outputTokens": 6120,
+                "totalTokens": 54351, "events": 132, "droppedEvents": 4,
+                "toolCounts": {"b4.run": 12, "browser_snapshot": 8}
+            }
+        }"#;
+
+        let report = parse_task_stats(body).expect("stats must parse");
+        assert_eq!(report.task_id, "t1");
+        assert_eq!(report.status, "done");
+        assert!(report.is_done);
+        assert_eq!(report.elapsed_ms, Some(41_300));
+        assert!(!report.local, "a served report is not a local tally");
+
+        let stats = &report.stats;
+        assert_eq!(stats.rounds, 3);
+        assert_eq!(stats.model_requests, 11);
+        assert_eq!(stats.tool_calls, 39);
+        assert_eq!(stats.tool_failures, 2);
+        assert_eq!(stats.steer_messages, 1);
+        assert_eq!(stats.input_tokens, 48_231);
+        assert_eq!(stats.output_tokens, 6_120);
+        assert_eq!(stats.total_tokens, 54_351);
+        assert_eq!(stats.events, 132);
+        assert_eq!(stats.dropped_events, 4);
+        assert!(stats.tokens_reported());
+        assert_eq!(
+            stats.top_tools(2),
+            vec![("b4.run".to_string(), 12), ("browser_snapshot".to_string(), 8)]
+        );
+    }
+
+    #[test]
+    fn parse_task_stats_tolerates_missing_fields_but_not_a_counter_less_body() {
+        let report = parse_task_stats(r#"{"taskId":"t2","stats":{}}"#)
+            .expect("an empty counter set is still a report");
+        assert_eq!(report.status, "unknown");
+        assert_eq!(report.stats.rounds, 0);
+        assert!(!report.stats.tokens_reported());
+
+        assert!(
+            parse_task_stats(r#"{"taskId":"t2"}"#).is_err(),
+            "a body with no counters has nothing to report"
+        );
+        assert!(parse_task_stats("<html>oops</html>").is_err());
+    }
+
+    #[test]
+    fn run_stats_observe_mirrors_the_backend_aggregation() {
+        let mut stats = RunStats::default();
+        stats.observe(&stats_event("task.started", None, None));
+        stats.observe(&stats_event("round.start", None, None));
+        stats.observe(&stats_event("tool.call", Some("b4.run"), None));
+        stats.observe(&stats_event("tool.call", Some("b4.run"), None));
+        stats.observe(&stats_event("tool.result", Some("b4.run"), Some(false)));
+        stats.observe(&stats_event("tool.result", Some("b4.run"), Some(true)));
+        stats.observe(&stats_event("steer", None, None));
+        let mut usage = stats_event("run.usage", None, None);
+        usage.input_tokens = Some(100);
+        usage.output_tokens = Some(20);
+        stats.observe(&usage);
+
+        assert_eq!(stats.events, 8);
+        assert_eq!(stats.rounds, 1);
+        assert_eq!(stats.tool_calls, 2);
+        assert_eq!(stats.tool_failures, 1);
+        assert_eq!(stats.steer_messages, 1);
+        assert_eq!(stats.model_requests, 1);
+        assert_eq!(stats.input_tokens, 100);
+        assert_eq!(stats.output_tokens, 20);
+        assert_eq!(
+            stats.total_tokens, 120,
+            "a usage step without a provider total is input + output"
+        );
+        assert_eq!(stats.top_tools(3), vec![("b4.run".to_string(), 2)]);
+    }
+
+    #[test]
+    fn format_stats_report_lists_llm_tokens_and_tools() {
+        let lines = format_stats_report(&a_served_stats_report()).join("\n");
+
+        assert!(lines.contains("t1 · done · 41.3s"), "{lines}");
+        assert!(lines.contains("3 round(s) · 11 request(s)"), "{lines}");
+        assert!(
+            lines.contains("in 48,231 · out 6,120 · total 54,351"),
+            "{lines}"
+        );
+        assert!(
+            lines.contains("39 call(s) · 2 failed (b4.run 12, browser_snapshot 8)"),
+            "{lines}"
+        );
+        assert!(lines.contains("132"), "{lines}");
+        assert!(lines.contains("1 steering message(s)"), "{lines}");
+        assert!(
+            !lines.contains('⚠'),
+            "a served report must never be labelled local:\n{lines}"
+        );
+    }
+
+    #[test]
+    fn format_stats_report_is_honest_about_unknown_tokens_and_local_counts() {
+        let report = TaskStatsReport {
+            task_id: "t1".to_string(),
+            status: "running".to_string(),
+            is_done: false,
+            elapsed_ms: None,
+            stats: RunStats {
+                model_requests: 2,
+                ..Default::default()
+            },
+            local: true,
+        };
+        let lines = format_stats_report(&report).join("\n");
+        assert!(
+            lines.contains("not reported by the provider"),
+            "2 requests with no token counters is 'unknown', not '0':\n{lines}"
+        );
+        assert!(lines.contains("counted by this session"), "{lines}");
+        assert!(lines.contains("t1 · running"), "no duration must not print one:\n{lines}");
+
+        // A queued (or never-inferred) task has made no request at all.
+        let mut queued = report.clone();
+        queued.stats.model_requests = 0;
+        let lines = format_stats_report(&queued).join("\n");
+        assert!(lines.contains("no model request yet"), "{lines}");
+    }
+
+    #[test]
+    fn format_run_duration_scales_to_minutes_and_hours() {
+        assert_eq!(format_run_duration(850), "0.8s");
+        assert_eq!(format_run_duration(18_400), "18.4s");
+        assert_eq!(format_run_duration(192_000), "3m12s");
+        assert_eq!(format_run_duration(3_840_000), "1h04m");
+    }
+
+    #[test]
+    fn format_thousands_groups_digits() {
+        assert_eq!(format_thousands(0), "0");
+        assert_eq!(format_thousands(999), "999");
+        assert_eq!(format_thousands(1_000), "1,000");
+        assert_eq!(format_thousands(54_351), "54,351");
+        assert_eq!(format_thousands(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn task_event_to_json_carries_token_usage() {
+        let mut usage = event("run.usage");
+        usage.input_tokens = Some(120);
+        usage.total_tokens = Some(150);
+
+        let json = usage.to_json("t1");
+        assert_eq!(json["inputTokens"], 120);
+        assert_eq!(json["totalTokens"], 150);
+        assert!(json.get("outputTokens").is_none());
     }
 
     // ---- follower resilience and output modes ------------------------------

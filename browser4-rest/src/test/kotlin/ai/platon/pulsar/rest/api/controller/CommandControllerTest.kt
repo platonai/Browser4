@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.ResourceStatus
@@ -23,6 +24,7 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
+import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -320,6 +322,123 @@ class CommandControllerTest {
         val blank = controller.postInput("agent-1", CommandInputRequest("   "))
         assertEquals(HttpStatus.BAD_REQUEST, blank.statusCode)
         assertEquals(false, assertNotNull(blank.body).accepted)
+    }
+
+    // ---- run statistics (the interactive `/stats` command) ------------------
+
+    @Test
+    @DisplayName("the stats endpoint answers the counters, the status word and the elapsed time")
+    fun statsEndpointAnswersCountersStatusAndElapsed() {
+        val running = CommandStatus(
+            id = "agent-1",
+            statusCode = ResourceStatus.SC_PROCESSING,
+            processState = "in_progress",
+        )
+        // 12s into the run: the elapsed time is measured from `startedTime`, so a
+        // call that has been running for a while does not report 0.
+        running.startedTime = Instant.now().minusSeconds(12)
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-1")).thenReturn(running)
+        whenever(executor.stats("agent-1")).thenReturn(
+            AgentTaskRunStats(
+                rounds = 3,
+                modelRequests = 11,
+                toolCalls = 39,
+                toolFailures = 2,
+                steerMessages = 1,
+                inputTokens = 48_231,
+                outputTokens = 6_120,
+                totalTokens = 54_351,
+                events = 132,
+                toolCounts = linkedMapOf("b4.run" to 12L, "browser_snapshot" to 8L),
+            )
+        )
+
+        val response = controller.getStats("agent-1")
+
+        assertEquals(HttpStatus.OK, response.statusCode)
+        val body = assertNotNull(response.body)
+        assertEquals("agent-1", body.taskId)
+        assertEquals("running", body.status)
+        assertEquals(false, body.isDone)
+        assertTrue(
+            assertNotNull(body.elapsedMs) >= 12_000,
+            "elapsedMs must be measured from startedTime, got ${body.elapsedMs}",
+        )
+        assertEquals(3, body.stats.rounds)
+        assertEquals(11, body.stats.modelRequests)
+        assertEquals(39, body.stats.toolCalls)
+        assertEquals(2, body.stats.toolFailures)
+        assertEquals(54_351, body.stats.totalTokens)
+        assertEquals(12L, body.stats.toolCounts["b4.run"])
+    }
+
+    @Test
+    @DisplayName("a finished task keeps its counters after the status row expires")
+    fun statsEndpointSurvivesAnExpiredStatusRow() {
+        // The status cache expires 2h after its last write while the counters live
+        // in the event log: reporting 404 then would lose the numbers of a run
+        // that just finished.
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-2")).thenReturn(null)
+        whenever(executor.stats("agent-2")).thenReturn(
+            AgentTaskRunStats(rounds = 1, modelRequests = 2, toolCalls = 4, events = 9)
+        )
+
+        val body = assertNotNull(controller.getStats("agent-2").body)
+
+        assertEquals("unknown", body.status, "a gone status row must not be invented")
+        assertEquals(false, body.isDone)
+        assertEquals(2, body.stats.modelRequests)
+    }
+
+    @Test
+    @DisplayName("an id with no run log answers 404")
+    fun statsEndpointIs404ForAnUnknownId() {
+        whenever(executor.stats("nope")).thenReturn(null)
+
+        assertEquals(HttpStatus.NOT_FOUND, controller.getStats("nope").statusCode)
+    }
+
+    @Test
+    @DisplayName("the stats wire shape carries the keys the CLI reads")
+    fun statsWireShapeCarriesTheCliKeys() {
+        // The CLI (`parse_task_stats` in agent_interactive.rs) and the mock
+        // backend used by the CLI e2e both key on these exact names; renaming a
+        // Kotlin property would silently turn every `/stats` report into zeros.
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-1")).thenReturn(
+            CommandStatus(id = "agent-1", statusCode = ResourceStatus.SC_OK, processState = "completed")
+        )
+        whenever(executor.stats("agent-1")).thenReturn(
+            AgentTaskRunStats(
+                rounds = 3,
+                modelRequests = 11,
+                toolCalls = 39,
+                toolFailures = 2,
+                steerMessages = 1,
+                inputTokens = 48_231,
+                outputTokens = 6_120,
+                totalTokens = 54_351,
+                events = 132,
+                toolCounts = linkedMapOf("b4.run" to 12L),
+            )
+        )
+
+        val body = assertNotNull(controller.getStats("agent-1").body)
+        @Suppress("UNCHECKED_CAST")
+        val wire = mapper.readValue(mapper.writeValueAsString(body), Map::class.java) as Map<String, Any?>
+        val stats = wire["stats"] as Map<*, *>
+
+        assertEquals("agent-1", wire["taskId"])
+        assertEquals("done", wire["status"])
+        assertEquals(true, wire["isDone"])
+        assertEquals(3, stats["rounds"])
+        assertEquals(11, stats["modelRequests"])
+        assertEquals(39, stats["toolCalls"])
+        assertEquals(2, stats["toolFailures"])
+        assertEquals(48_231, stats["inputTokens"])
+        assertEquals(6_120, stats["outputTokens"])
+        assertEquals(54_351, stats["totalTokens"])
+        assertEquals(132, stats["events"])
+        assertEquals(mapOf("b4.run" to 12), stats["toolCounts"])
     }
 
     private companion object {

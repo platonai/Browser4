@@ -2,6 +2,7 @@ package ai.platon.pulsar.agent.tool
 
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventLog
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
@@ -360,6 +361,20 @@ class UserCommandExecutor(
             runner.events(id, afterSeq, limit).takeIf { it.isNotEmpty() }
         }
         .orEmpty()
+
+    /**
+     * The run statistics of agent task [id], or `null` when no runner holds a log
+     * for it.
+     *
+     * Probes every session's runner by id, like [events]: the counters live next
+     * to the runner's in-memory event log and only the owning runner has them.
+     * Unlike [events] a stats row with zero steps is meaningful (a task that was
+     * created but never started), so the probe accepts any non-null snapshot.
+     *
+     * @param id task id
+     */
+    fun stats(id: String): AgentTaskRunStats? = agentRunners.values
+        .firstNotNullOfOrNull { runner -> runner.stats(id) }
 
     /**
      * Queue a steering message for the running agent task [id].

@@ -670,6 +670,66 @@ class StatefulAgentRunnerTest {
     }
 
     @Test
+    @DisplayName("the run stats count every reported step, token usage included")
+    fun runStatsCountReportedSteps() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            assertNull(runner.stats("unknown-task"), "an unknown id must not invent a report")
+
+            // A freshly created task already has a log, so `/stats` answers right
+            // after submission instead of 404-ing until the first step.
+            val created = assertNotNull(runner.stats(status.id))
+            assertEquals(1, created.events)
+            assertEquals(0, created.rounds)
+            assertFalse(created.tokensReported)
+
+            runner.recordRunEvent(status.id, AgentRunEvent(AgentRunEvent.ROUND_START, turn = 1))
+            runner.recordRunEvent(
+                status.id,
+                AgentRunEvent(
+                    AgentRunEvent.USAGE,
+                    turn = 1,
+                    inputTokens = 900,
+                    outputTokens = 90,
+                    totalTokens = 990,
+                ),
+            )
+            runner.recordRunEvent(
+                status.id,
+                AgentRunEvent(AgentRunEvent.TOOL_CALL, tool = "coding.read", arguments = "{}", turn = 1),
+            )
+            runner.recordRunEvent(
+                status.id,
+                AgentRunEvent(
+                    AgentRunEvent.TOOL_RESULT,
+                    tool = "coding.read",
+                    ok = false,
+                    durationMs = 5,
+                    text = "nope",
+                    turn = 1,
+                ),
+            )
+            runner.recordRunEvent(status.id, AgentRunEvent(AgentRunEvent.STEER, text = "focus"))
+
+            val stats = assertNotNull(runner.stats(status.id))
+            assertEquals(1, stats.rounds)
+            assertEquals(1, stats.modelRequests)
+            assertEquals(1, stats.toolCalls)
+            assertEquals(1, stats.toolFailures)
+            assertEquals(1, stats.steerMessages)
+            assertEquals(900, stats.inputTokens)
+            assertEquals(90, stats.outputTokens)
+            assertEquals(990, stats.totalTokens)
+            assertTrue(stats.tokensReported)
+            assertEquals(mapOf("coding.read" to 1L), stats.toolCounts)
+            assertEquals(6, stats.events, "task.created plus the five reported steps")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
     @DisplayName("agent-reported steps are sanitized on the way into the event log")
     fun runEventsAreSanitized() {
         val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))

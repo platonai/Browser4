@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.entities
 
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
 
 /**
  * One page of an agent task's live step log: `GET /api/commands/{id}/events`.
@@ -24,6 +25,35 @@ data class CommandEventsResponse(
     val done: Boolean,
     val nextSeq: Long,
     val events: List<AgentTaskEvent> = emptyList(),
+)
+
+/**
+ * The aggregate run statistics of an agent task:
+ * `GET /api/commands/{id}/stats`.
+ *
+ * The question this answers is "what did this run cost me": how many LLM calls,
+ * how many tool calls (and how many failed), and how many tokens the provider
+ * billed. Counters come from the task runner's event log, which counts every
+ * step as it is appended — some steps may already have been evicted from the
+ * bounded buffer, so a client cannot reconstruct these numbers by counting the
+ * events it received.
+ *
+ * @property taskId the task the statistics belong to
+ * @property status the task's status word (`queued|running|done|failed|cancelled`,
+ *   or `unknown` when the status row expired while the counters survived)
+ * @property processState raw process state (`created|in_progress|done`)
+ * @property isDone true when the task reached a terminal state
+ * @property elapsedMs wall-clock run time so far (or the final duration); `null`
+ *   when the task never started
+ * @property stats the counters
+ * */
+data class CommandStatsResponse(
+    val taskId: String,
+    val status: String,
+    val processState: String,
+    val isDone: Boolean,
+    val elapsedMs: Long? = null,
+    val stats: AgentTaskRunStats = AgentTaskRunStats(),
 )
 
 /**

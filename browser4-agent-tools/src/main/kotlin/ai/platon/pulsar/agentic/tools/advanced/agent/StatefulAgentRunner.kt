@@ -313,8 +313,24 @@ open class StatefulAgentRunner(
             durationMs = event.durationMs,
             text = AgentTaskEventSanitizer.preview(event.text),
             turn = event.turn,
+            inputTokens = event.inputTokens,
+            outputTokens = event.outputTokens,
+            totalTokens = event.totalTokens,
         )
     }
+
+    /**
+     * The run's aggregate counters for [id]: rounds, LLM requests, tool calls,
+     * failures, steering messages and token usage.
+     *
+     * Counted by the task's event log rather than derived from the steps a client
+     * happens to have seen, so the numbers stay exact after steps are evicted
+     * from the bounded buffer. `null` when this runner has no log for [id]
+     * (unknown task, a page visit, or the log's idle TTL expired).
+     *
+     * @param id task id
+     * */
+    fun stats(id: String): AgentTaskRunStats? = eventLogs.getIfPresent(id)?.stats()
 
     /**
      * The steps of [id] after [afterSeq], oldest first.

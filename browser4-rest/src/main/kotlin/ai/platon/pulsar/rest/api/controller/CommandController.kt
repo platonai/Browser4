@@ -10,6 +10,7 @@ import ai.platon.pulsar.rest.api.entities.CommandEventsResponse
 import ai.platon.pulsar.rest.api.entities.CommandInputRequest
 import ai.platon.pulsar.rest.api.entities.CommandInputResponse
 import ai.platon.pulsar.rest.api.entities.CommandResult
+import ai.platon.pulsar.rest.api.entities.CommandStatsResponse
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.CommandSubmitResponse
 import ai.platon.pulsar.rest.api.entities.statusWord
@@ -21,6 +22,7 @@ import org.springframework.http.ResponseEntity
 import org.springframework.http.codec.ServerSentEvent
 import org.springframework.web.bind.annotation.*
 import reactor.core.publisher.Flux
+import java.time.Duration
 import java.time.Instant
 
 /**
@@ -313,6 +315,64 @@ class CommandController(
                 // the caller asked with, so the next poll is idempotent.
                 nextSeq = events.lastOrNull()?.seq ?: after,
                 events = events,
+            )
+        )
+    }
+
+    /**
+     * The aggregate run statistics of an agent task: what a run actually cost.
+     *
+     * Answers "how many LLM calls, how many tool calls, how many tokens" for the
+     * interactive session's `/stats` command. The counters are maintained by the
+     * task runner's event log as steps are appended, so they stay exact after
+     * steps fall out of the bounded buffer (a client cannot reconstruct them by
+     * counting events it received).
+     *
+     * `404` means this backend has no log for the id: the task never existed,
+     * belonged to another backend process, or its log's idle TTL expired. The
+     * status row may also be gone while the counters survive — `status` is then
+     * `unknown`, which is why this response carries its own `status`/`isDone`
+     * instead of making the caller fetch the status envelope.
+     *
+     * @param id task id (the same id `agent run` prints)
+     * @param sessionId optional session, used only to find the owning runner
+     * @return `200` + [CommandStatsResponse], `404` when no run log exists
+     * */
+    @GetMapping("/{id}/stats")
+    fun getStats(
+        @PathVariable id: String,
+        @RequestParam(name = "sessionId", required = false) sessionId: String? = null,
+    ): ResponseEntity<CommandStatsResponse> {
+        val effectiveSessionId = SessionResolution.firstNamedOrDefault(sessionId)
+        val stats = commandExecutor.stats(id) ?: return ResponseEntity.notFound().build()
+        val status = commandExecutor.getStatus(effectiveSessionId, id)
+
+        // Elapsed time: the status row is the authority once the task started
+        // (it survives a log eviction and keeps updating while the run is in
+        // flight); the counters' own time span is the fallback when the row is
+        // gone but the log is not.
+        val now = Instant.now()
+        val started = status?.startedTime
+            ?: stats.firstEpochMillis?.let { Instant.ofEpochMilli(it) }
+        val finished = when {
+            status?.isDone == true -> status.finishTime ?: status.lastModifiedTime ?: now
+            status != null -> now
+            else -> stats.lastEpochMillis?.let { Instant.ofEpochMilli(it) }
+        }
+        val elapsedMs = if (started != null) {
+            Duration.between(started, finished ?: now).toMillis().coerceAtLeast(0)
+        } else {
+            null
+        }
+
+        return ResponseEntity.ok(
+            CommandStatsResponse(
+                taskId = id,
+                status = status?.statusWord() ?: STATUS_UNKNOWN,
+                processState = status?.processState ?: STATUS_UNKNOWN,
+                isDone = status?.isDone ?: false,
+                elapsedMs = elapsedMs,
+                stats = stats,
             )
         )
     }

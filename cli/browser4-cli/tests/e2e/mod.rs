@@ -1000,6 +1000,13 @@ struct MockBrowser4State {
     command_input_calls: Vec<(String, String)>,
     /// Scripted step events per task id, served by `GET /api/commands/{id}/events`.
     custom_command_events: HashMap<String, Vec<serde_json::Value>>,
+    /// Scripted run counters per task id, served by `GET /api/commands/{id}/stats`
+    /// (the `stats` object only; the envelope is built by the mock).
+    custom_command_stats: HashMap<String, serde_json::Value>,
+    /// When true, the stats endpoint answers 404 — a backend that predates it.
+    command_stats_disabled: bool,
+    /// Recorded `GET /api/commands/{id}/stats` task ids.
+    command_stats_calls: Vec<String>,
     /// Task ids whose events endpoint keeps reporting `running` until a steering
     /// input arrives (the interactive-steering scenario).
     command_events_await_input: Vec<String>,
@@ -1224,6 +1231,38 @@ impl MockBrowser4Server {
             .lock()
             .expect("mock Browser4 state mutex poisoned")
             .command_events_disabled = true;
+    }
+
+    /// Script the `stats` object `GET /api/commands/{id}/stats` serves for
+    /// [task_id] (the interactive session's `/stats` command).
+    ///
+    /// Only the counters are scripted — the envelope (`taskId`, `status`,
+    /// `isDone`, `elapsedMs`) is built by the mock, so a test states the numbers
+    /// it cares about and nothing else.
+    fn set_command_stats(&self, task_id: &str, stats: serde_json::Value) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_command_stats
+            .insert(task_id.to_string(), stats);
+    }
+
+    /// Pretend this backend predates the stats endpoint (404), so `/stats`
+    /// exercises its local-counting fallback.
+    fn disable_command_stats(&self) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .command_stats_disabled = true;
+    }
+
+    /// Task ids whose run statistics were requested, in order.
+    fn command_stats_calls(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .command_stats_calls
+            .clone()
     }
 
     /// Set a custom response for the `browser_snapshot` tool.  When set, every
@@ -1902,11 +1941,62 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             .to_string();
             write_http_response(&mut stream, "200 OK", "application/json", &response);
         }
+        // ---- agent task run statistics (interactive `/stats`) ----
+        _ if method == "GET"
+            && route.starts_with("/api/commands/")
+            && route.ends_with("/stats") =>
+        {
+            let Some(task_id) = route
+                .strip_prefix("/api/commands/")
+                .and_then(|rest| rest.strip_suffix("/stats"))
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+
+            let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+            if guard.command_stats_disabled {
+                drop(guard);
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            }
+            guard.command_stats_calls.push(task_id.to_string());
+            let stats = guard
+                .custom_command_stats
+                .get(task_id)
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            // The task is done once a scripted terminal step exists — the same
+            // signal the events route derives its `status` from.
+            let done = guard
+                .custom_command_events
+                .get(task_id)
+                .map(|events| {
+                    events.iter().any(|event| {
+                        matches!(
+                            event.get("type").and_then(|value| value.as_str()),
+                            Some("task.done") | Some("task.failed") | Some("task.cancelled")
+                        )
+                    })
+                })
+                .unwrap_or(true);
+            drop(guard);
+
+            let response = serde_json::json!({
+                "taskId": task_id,
+                "status": if done { "done" } else { "running" },
+                "processState": if done { "completed" } else { "in_progress" },
+                "isDone": done,
+                "elapsedMs": 41_300,
+                "stats": stats,
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
         _ if method == "POST"
             && route.starts_with("/api/commands/")
             && route.ends_with("/input") =>
-        {
-            let Some(task_id) = route
+        {            let Some(task_id) = route
                 .strip_prefix("/api/commands/")
                 .and_then(|rest| rest.strip_suffix("/input"))
             else {

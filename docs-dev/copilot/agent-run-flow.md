@@ -261,6 +261,7 @@ browser4-cli (Rust)                       browser4-rest (Kotlin)                
 | 查询 | `GET /api/commands/{id}/events?after=<seq>&limit=` | 返回 `{taskId,status,done,nextSeq,events[]}`；空页不回退游标；未知 id 404。 |
 | CLI 消费 | `cli/browser4-cli/src/agent_interactive.rs` | 400ms 游标轮询（状态回退 1s）；老后端 404 → 提示一行并退回 `command_status` 轮询；`--ndjson` 每行一个 JSON 对象。 |
 | 插话 | `POST /api/commands/{id}/input` | `StatefulAgentRunner.pendingInputs` 队列；`RobustBrowserAgent.steeringSource` 在每个模型请求前（`AgentToolCallLoop.onBeforeIteration`）与每个外层轮次顶部抽取，注入为 `UserMessage`，因此不需要等整轮结束。 |
+| 统计 | `GET /api/commands/{id}/stats` | 返回 `{taskId,status,processState,isDone,elapsedMs,stats{rounds,modelRequests,toolCalls,toolFailures,steerMessages,inputTokens,outputTokens,totalTokens,events,droppedEvents,firstEpochMillis,lastEpochMillis,toolCounts}}`。计数由 `AgentTaskEventLog` 在 `append()` 时累加（`AgentTaskRunStats`），因此环形缓冲淘汰事件后仍然精确；token 来自每轮模型请求的 `run.usage` 事件（`RobustBrowserAgent.onModelResponse` 与压缩调用）。未知 id / 日志过期 404。 |
 
 关键约束：
 

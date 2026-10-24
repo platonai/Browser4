@@ -267,8 +267,13 @@ browser4-cli agent run "Collect the top 5 products" --follow --ndjson | jq -c 's
 {"type":"task.submitted","taskId":"…","task":"Collect the top 5 products"}
 {"taskId":"…","seq":3,"type":"tool.call","epochMillis":1761…,"tool":"b4.run","arguments":"{\"args\":\"goto …\"}","turn":1}
 {"taskId":"…","seq":4,"type":"tool.result","epochMillis":1761…,"tool":"b4.run","ok":true,"durationMs":6200,"text":"…","turn":1}
+{"taskId":"…","seq":5,"type":"run.usage","epochMillis":1761…,"turn":1,"inputTokens":4821,"outputTokens":212,"totalTokens":5033}
 {"taskId":"…","type":"task.result","status":"done","elapsedMs":41300,"result":{"summary":"…"}}
 ```
+
+`run.usage` is one line per model request, carrying the provider's token counts
+(`inputTokens`/`outputTokens`/`totalTokens`, omitted when the provider reports
+none) — the same numbers `/stats` sums.
 
 The visible detail is deliberately bounded: tool arguments and results are
 truncated to ~240 characters, and values whose key names a credential
@@ -313,6 +318,7 @@ Session commands:
 |---|---|
 | `/help` | List the commands |
 | `/status` | Status of the running (or last) task |
+| `/stats [task-id]` | Run statistics: LLM rounds and requests, token usage, tool calls |
 | `/result` | Print the last finished task's result |
 | `/cancel` | Cancel the running task (same as Ctrl+C) |
 | `/new` | Start a new session — the next task gets a fresh agent context |
@@ -321,6 +327,37 @@ Session commands:
 | `/noop-limit <n>` | Consecutive no-op abort threshold (blank resets) |
 | `/events [n]` | Raw JSON of the last n steps (default 20) |
 | `/quit` | Leave the session |
+
+#### `/stats`: what the run cost
+
+```
+agent> /stats
+5b0c3f2a · running · 3m12s
+  llm     3 round(s) · 11 request(s)
+  tokens  in 48,231 · out 6,120 · total 54,351
+  tools   39 call(s) · 2 failed (b4.run 12, browser_snapshot 8)
+  steps   132 · 1 steering message(s)
+```
+
+- **llm**: outer agent `round`s (each may issue several model requests) and the
+  model `request`s themselves — the honest "how many LLM calls" count.
+- **tokens**: what the provider reported, summed per request. `not reported by
+  the provider` means the calls happened but the provider sent no usage block
+  (a local model, a gateway that drops it) — it is not a measured zero.
+- **tools**: tool calls, how many failed, and the most-called tools.
+- **steps**: every step the run emitted; `dropped from the buffer` appears when
+  the backend's bounded step log evicted older steps (the counters still include
+  them).
+
+The numbers come from `GET /api/commands/{id}/stats`, which counts every step as
+it is appended — they stay exact even for steps the step log no longer retains.
+`/stats <task-id>` reports another task of this session. Against a backend
+without that endpoint the report is labelled `counted by this session` and can
+only undercount: it holds the steps this session actually saw.
+
+The counters are reported by the CLI engine (`--engine cli`, the default). The
+deprecated observe-act engine emits lifecycle steps only, so its rounds and
+token counters stay at 0.
 
 An optional task runs immediately: `agent run -i "Summarize this page"`.
 With piped stdin the banner and prompt are omitted, so a harness can drive the

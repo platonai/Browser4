@@ -1730,6 +1730,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    while a task runs steers it at the next model round (/help lists the commands)."
                 .to_string(),
         );
+        lines.push(
+            "  - In the session, /stats reports the run's LLM rounds and requests, token usage"
+                .to_string(),
+        );
+        lines.push(
+            "    and tool calls (served by the backend's run counters; /stats <task-id> for another task)."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
@@ -5557,6 +5565,7 @@ mod tests {
         assert!(help.contains("browser4-cli agent run [task]"));
         assert!(help.contains("autonomous agent task"));
         assert!(help.contains("browser4-cli agent run"));
+        assert!(help.contains("/stats reports the run's LLM rounds"), "{help}");
         assert!(!help.contains("browser4-cli agent-run"));
     }
 

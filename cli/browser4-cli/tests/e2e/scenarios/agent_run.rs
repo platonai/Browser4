@@ -293,6 +293,11 @@ pub(super) fn test_agent_run_interactive_runs_a_task_and_quits(ctx: &mut E2ECtx)
         run_result.stdout
     );
     assert!(
+        run_result.stdout.contains("/stats"),
+        "/help must list the run-statistics command:\n{}",
+        run_result.stdout
+    );
+    assert!(
         run_result.stdout.contains("▶ task agent-task-1"),
         "the typed line must be submitted as a task:\n{}",
         run_result.stdout
@@ -303,8 +308,7 @@ pub(super) fn test_agent_run_interactive_runs_a_task_and_quits(ctx: &mut E2ECtx)
 }
 
 /// A line typed while a task runs is a steering message, not a second task.
-pub(super) fn test_agent_run_interactive_steers_running_task(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
+pub(super) fn test_agent_run_interactive_steers_running_task(ctx: &mut E2ECtx) {    reset_cli_artifacts(ctx);
     let started_at = Instant::now();
     let mock_server = MockBrowser4Server::start();
     ctx.record_step("mock Browser4 server start", started_at.elapsed());
@@ -338,6 +342,62 @@ pub(super) fn test_agent_run_interactive_steers_running_task(ctx: &mut E2ECtx) {
     );
 }
 
+
+/// `/stats` reports what the run cost: LLM rounds and requests, token usage, tool
+/// calls — served by `GET /api/commands/{id}/stats`.
+pub(super) fn test_agent_run_interactive_reports_run_statistics(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_command_result_response("agent-task-1", "interactive result");
+    mock_server.set_command_stats(
+        "agent-task-1",
+        serde_json::json!({
+            "rounds": 3,
+            "modelRequests": 11,
+            "toolCalls": 39,
+            "toolFailures": 2,
+            "steerMessages": 1,
+            "inputTokens": 48231,
+            "outputTokens": 6120,
+            "totalTokens": 54351,
+            "events": 132,
+            "droppedEvents": 0,
+            "toolCounts": {"b4.run": 12, "browser_snapshot": 8},
+        }),
+    );
+
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i"],
+        "Summarize the page\n/stats\n/quit\n",
+    );
+
+    let stdout = &run_result.stdout;
+    assert!(
+        stdout.contains("agent-task-1 · done · 41.3s"),
+        "/stats must head the report with the task, its status and its duration:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("3 round(s) · 11 request(s)"),
+        "/stats must report LLM rounds and model requests:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("in 48,231 · out 6,120 · total 54,351"),
+        "/stats must report token consumption:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("39 call(s) · 2 failed (b4.run 12, browser_snapshot 8)"),
+        "/stats must report tool calls and their breakdown:\n{stdout}"
+    );
+    assert_eq!(
+        mock_server.command_stats_calls(),
+        vec!["agent-task-1".to_string()],
+        "the report must come from the stats endpoint for the running (or last) task"
+    );
+}
 
 fn completed_status(
     task_id: &str,

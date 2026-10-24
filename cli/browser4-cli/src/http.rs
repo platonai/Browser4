@@ -1245,6 +1245,27 @@ pub async fn get_command_events(
     .await
 }
 
+/// Fetch an agent task's aggregate run statistics:
+/// `GET /api/commands/{id}/stats`.
+///
+/// See [`RestResponse`] for why the raw status is returned instead of an error:
+/// a 404 means "this backend has no counters for the task" — either an older
+/// build that predates the endpoint or an expired run log — and the interactive
+/// session answers that with what it counted itself instead of failing.
+pub async fn get_command_stats(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/commands/{task_id}/stats"));
+    send_rest_response(
+        client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(30)),
+    )
+    .await
+}
+
 /// Queue a steering message for a running agent task:
 /// `POST /api/commands/{id}/input`.
 pub async fn send_command_input(

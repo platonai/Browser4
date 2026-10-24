@@ -1274,7 +1274,14 @@ open class RobustBrowserAgent(
             // model request actually carries (exposed set + meta tools), NOT
             // the full registry — the dump must reconstruct the real prompt.
             onBeforeGenerate = { msgs, specs -> cliLoopTracer.logPrompt(msgs, specs) },
-            onModelResponse = { seq, response -> cliLoopTracer.logResponse(seq, response) },
+            // The provider's usage for this request reaches the run's stats as a
+            // `run.usage` step (token accounting for `/stats`): the tracer writes
+            // the same numbers to `cli-usage.jsonl`, but only on disk — a client
+            // following the task had no way to see token consumption at all.
+            onModelResponse = { seq, response ->
+                cliLoopTracer.logResponse(seq, response)
+                emitUsageEvent(response, turn)
+            },
             onToolResult = { req, result, durationMs ->
                 // Live view: one event per executed tool (`agent run --follow`).
                 val resultText = result.text()
@@ -1386,6 +1393,32 @@ open class RobustBrowserAgent(
             runCatching { listener(event) }
                 .onFailure { logger.debug("run event listener failed: {}", it.message) }
         }
+    }
+
+    /**
+     * Report one model request's provider usage as a [AgentRunEvent.USAGE] step.
+     *
+     * One event per successful request (not one per run): a tool-calling round
+     * may issue several requests, and compaction issues its own, so a single
+     * end-of-run total could only be approximated. The token fields stay `null`
+     * when the provider reports no usage — the request is still counted.
+     *
+     * @param response the provider's answer for this request
+     * @param turn 1-based outer round the request belongs to (0 for auxiliary calls)
+     * @param category [AgentRunEvent.USAGE_CATEGORY_COMPACTION] for a compaction call
+     */
+    private fun emitUsageEvent(response: ChatResponse, turn: Int, category: String? = null) {
+        val usage = runCatching { response.tokenUsage() }.getOrNull()
+        emitRunEvent(
+            AgentRunEvent(
+                AgentRunEvent.USAGE,
+                text = category,
+                turn = turn,
+                inputTokens = usage?.inputTokenCount(),
+                outputTokens = usage?.outputTokenCount(),
+                totalTokens = usage?.totalTokenCount(),
+            )
+        )
     }
 
     /**
@@ -1829,6 +1862,9 @@ open class RobustBrowserAgent(
         // P2-5: record the compaction call's usage so token accounting is not
         // blind to the auxiliary summarization requests.
         cliLoopTracer.logCompactionUsage(response)
+        // The same call also reaches the run stats: compaction tokens are part of
+        // what the run consumed, and hiding them made `/stats` under-report.
+        emitUsageEvent(response, turn = 0, category = AgentRunEvent.USAGE_CATEGORY_COMPACTION)
         return response.aiMessage().text() ?: ""
     }
 

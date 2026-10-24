@@ -4040,7 +4040,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "engine", description: "Agent execution engine (default: cli; observe-act is the DEPRECATED legacy engine)", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "Stream the task's steps (tool calls, model text, failures) while waiting, then print the result. Implies waiting; a slow tool or failure is always reported, successful fast tools are not", is_bool: true, short: None },
                 OptionDef { name: "ndjson", description: "With --follow: emit one JSON object per step (NDJSON) for machine consumption instead of human-readable lines", is_bool: true, short: None },
-                OptionDef { name: "interactive", description: "Open an interactive session: run tasks one after another, steer a running task by typing, and use /status, /cancel, /result, /new, /help. Pass an initial task to run it immediately", is_bool: true, short: Some("i") },
+                OptionDef { name: "interactive", description: "Open an interactive session: run tasks one after another, steer a running task by typing, and use /status, /stats, /cancel, /result, /new, /help. Pass an initial task to run it immediately", is_bool: true, short: Some("i") },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_run".to_string(),

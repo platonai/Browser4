@@ -20,8 +20,12 @@ package ai.platon.pulsar.agentic.agents
  * @property arguments the tool's argument JSON, verbatim
  * @property ok tool outcome (`null` for non-tool events)
  * @property durationMs tool execution time
- * @property text model text / steering text
+ * @property text model text / steering text / usage category (`compaction`)
  * @property turn 1-based outer agent round
+ * @property inputTokens provider-reported input tokens of the model request
+ *   ([USAGE] only; `null` when the provider reported no usage)
+ * @property outputTokens provider-reported output tokens of the model request
+ * @property totalTokens provider-reported total tokens of the model request
  * */
 data class AgentRunEvent(
     val type: String,
@@ -31,6 +35,9 @@ data class AgentRunEvent(
     val durationMs: Long? = null,
     val text: String? = null,
     val turn: Int? = null,
+    val inputTokens: Int? = null,
+    val outputTokens: Int? = null,
+    val totalTokens: Int? = null,
 ) {
     companion object {
         /** A new outer round started; a model request is about to be made. */
@@ -47,5 +54,18 @@ data class AgentRunEvent(
 
         /** A user steering message was injected into the run. */
         const val STEER = "steer"
+
+        /**
+         * One successful model request, with the usage the provider reported.
+         *
+         * The task runner counts these as the run's LLM calls and sums their
+         * tokens (see `AgentTaskRunStats`): reporting usage per request keeps the
+         * accounting honest across multi-request rounds and compaction calls,
+         * where a single end-of-run total would have to be guessed.
+         */
+        const val USAGE = "run.usage"
+
+        /** [text] category of a [USAGE] event raised by a compaction model call. */
+        const val USAGE_CATEGORY_COMPACTION = "compaction"
     }
 }

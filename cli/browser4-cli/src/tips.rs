@@ -306,7 +306,7 @@ const TIPS_AGENT: &[Tip] = &[
         text: "`agent run \"<task>\" --follow` streams every tool call and the model's own text; Ctrl+C cancels the task instead of orphaning it",
     },
     Tip {
-        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it",
+        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls",
     },
 ];
 
