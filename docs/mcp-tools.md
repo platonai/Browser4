@@ -295,16 +295,18 @@ call this directly and treat a non-terminal `status` as "not ready".
 ### `command_run`
 
 ```
-command.run(command: String, async: Boolean = true, noopLimit: Int? = null, engine: String? = null)
+command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, engine: String? = null)
 ```
 
-Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; 'observe-act' is the DEPRECATED legacy engine.
+Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; 'observe-act' is the DEPRECATED legacy engine. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `command` | String | yes |  | What to run: a URL to load, a natural-language instruction, or an agent task. Required. |
 | `async` | Boolean | no | true | `true` (default) returns a task id immediately; `false` blocks until the command finishes and returns the CommandStatus JSON. |
 | `noopLimit` | Int? | no | null | Consecutive no-op abort threshold for agent tasks; omit to use the server default. |
+| `coding` | Boolean? | no | null | Explicit task type. True marks the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task (the default, also when omitted): task type is never auto-detected. |
+| `freshWorkspace` | Boolean? | no | null | True runs this task in a fresh, isolated workspace directory (created under the agent's data dir) instead of the shared workspace. Use for tasks that must not see or mutate previous tasks' scratch files. Omit or false uses the default shared workspace. |
 | `engine` | String? | no | null | Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated. |
 
 Returns: `String`
@@ -341,13 +343,16 @@ Examples:
 <details><summary>Full documentation</summary>
 
 command.run(command: String)
-command.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?)
+command.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?, coding: Boolean?)
 
 `command` is a URL to load, a natural-language instruction, or an agent
 task. With async=true (the default) the call returns a task id and you
 poll it with `command.status` (JSON status envelope), read the payload
 with `command.result`, and stop it with `command.cancel`. Pass
 async=false when you would rather block for the finished status.
+Pass coding=true for a pure coding task (read/write files, run builds):
+the agent then works from its coding tool set without a browser page.
+Tasks are browser tasks unless the caller says otherwise.
 
 </details>
 
@@ -1007,18 +1012,19 @@ Returns: `String`
 Examples:
 
 - Remember a conclusion: `{"key": "price", "value": "the product costs 19.99"}`
+- Checkpoint the plan before a long tool chain: `{"key": "plan", "value": "done: member map of the driver; next: extract the script layer into ChromeScripts.kt"}`
 
 ### `memory_read`
 
 ```
-memory.read(taskId: String, seq: Long? = null, before: Int = 0, after: Int = 0)
+memory.read(taskId: String? = null, seq: Long? = null, before: Int = 0, after: Int = 0)
 ```
 
-Read a bounded window of memory events of one task around the event seq (defaults to the whole task, newest last). Bounded by the configured read window.
+Read a bounded window of memory events of one task around the event seq (defaults to the whole task, newest last). Omit taskId to read the current task. Bounded by the configured read window.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `taskId` | String | yes |  | Task whose memory events to read. |
+| `taskId` | String? | no | null | Task whose memory events to read; defaults to the current task. |
 | `seq` | Long? | no | null | Centre the window on this event seq. |
 | `before` | Int | no | 0 | Events to include before seq. |
 | `after` | Int | no | 0 | Events to include after seq. |
