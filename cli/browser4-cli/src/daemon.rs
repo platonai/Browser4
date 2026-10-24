@@ -7077,13 +7077,39 @@ fn bundled_project_version(lib_dir: &Path) -> Option<(String, std::time::SystemT
     newest
 }
 
+/// Top-level project modules whose code ships in the runtime bundle's `lib/`.
+///
+/// Only a module whose jar the bundle actually carries may be listed: one
+/// without a jar is read as "the bundle cannot contain it" and reported stale
+/// forever ([`local_sources_newer_than`]), which would rebuild on every start.
+///
+/// `browser4-plugins` is deliberately absent.  Its jars are assembled into the
+/// bundle's `plugins/` directory — never `lib/` — and plugins are optional,
+/// installed on demand, so editing a plugin must not invalidate the backend.
+/// `browser4-common` is absent too: it lives under `browser4-core/` and is
+/// picked up by the sub-module scan below.
+const BUNDLED_TOP_LEVEL_MODULES: [&str; 5] = [
+    "browser4-rest",
+    "browser4-agentic",
+    "browser4-agent-tools",
+    "browser4-boot",
+    "browser4-coding",
+];
+
 /// Source roots of the modules whose code ships in the runtime bundle, as
 /// `(module name, src/main)` pairs.
 ///
 /// The module name is the artifact id prefix the bundle's `lib/` uses, so each
 /// root can be compared against its own jar.
-fn bundled_module_source_roots(root: &Path) -> Vec<(String, PathBuf)> {
-    let mut modules: Vec<(String, PathBuf)> = ["browser4-rest", "browser4-agentic", "browser4-common"]
+///
+/// Two sources: the declared list above, and the `browser4-core/` sub-modules,
+/// which are *discovered* — so a sub-directory the bundle does not carry (a
+/// test-support or tooling module) is skipped instead of being reported stale
+/// forever: code that never reaches the bundle cannot make it stale.  A module
+/// from the declared list is not filtered: it is supposed to be in the bundle,
+/// so a missing jar really does mean an incomplete build.
+fn bundled_module_source_roots(root: &Path, lib_dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut modules: Vec<(String, PathBuf)> = BUNDLED_TOP_LEVEL_MODULES
         .into_iter()
         .map(|name| (name.to_string(), root.join(name).join("src").join("main")))
         .collect();
@@ -7096,9 +7122,13 @@ fn bundled_module_source_roots(root: &Path) -> Vec<(String, PathBuf)> {
             if !path.is_dir() || !main_src.is_dir() {
                 continue;
             }
-            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-                modules.push((name.to_string(), main_src));
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if module_jar_mtime(lib_dir, name).is_none() {
+                continue;
             }
+            modules.push((name.to_string(), main_src));
         }
     }
 
@@ -7189,7 +7219,7 @@ fn local_sources_newer_than(root: &Path, lib_dir: &Path, newest_jar_mtime: std::
         _ => mtime,
     };
 
-    for (module, source_root) in bundled_module_source_roots(root) {
+    for (module, source_root) in bundled_module_source_roots(root, lib_dir) {
         // A module whose jar is missing from the bundle is either new or was
         // never assembled — either way the bundle cannot be trusted to contain it.
         let Some(jar_mtime) = module_jar_mtime(lib_dir, &module) else {
@@ -7326,11 +7356,34 @@ fn describe_staleness(staleness: &LocalBundleStaleness) -> String {
     }
 }
 
-/// Machine-readable staleness label, used by the `status` / `doctor` report.
+/// Machine-readable staleness labels, used by the `status` / `doctor` report.
+///
+/// The JSON report exposes these labels and tests key on them, so the spelling
+/// is part of the contract.
+const VERSION_MISMATCH_KIND: &str = "version_mismatch";
+const SOURCES_NEWER_THAN_BUNDLE_KIND: &str = "sources_newer_than_bundle";
+
+/// Label for a staleness kind, as exposed by `status` / `doctor`.
 fn staleness_kind(staleness: &LocalBundleStaleness) -> &'static str {
     match staleness {
-        LocalBundleStaleness::VersionMismatch { .. } => "version_mismatch",
-        LocalBundleStaleness::SourcesNewerThanBundle => "sources_newer_than_bundle",
+        LocalBundleStaleness::VersionMismatch { .. } => VERSION_MISMATCH_KIND,
+        LocalBundleStaleness::SourcesNewerThanBundle => SOURCES_NEWER_THAN_BUNDLE_KIND,
+    }
+}
+
+/// What dev mode actually does about a bundle that does not match the checkout,
+/// per staleness kind.
+///
+/// Only a version mismatch is refused; newer sources are rebuilt and served
+/// (see [`decide_local_bundle_action`]).  Rendering the refusal wording for
+/// both kinds told users to rebuild by hand when the next browser command
+/// would have done it anyway — see
+/// `coworker/tasks/issues/draft/20261016-180650-bulk-scale-routing.issues.md` (issue 2).
+fn mismatch_action(kind: &str) -> &'static str {
+    if kind == SOURCES_NEWER_THAN_BUNDLE_KIND {
+        "the next browser command rebuilds and starts it automatically"
+    } else {
+        "dev mode refuses to start"
     }
 }
 
@@ -7358,10 +7411,11 @@ fn runtime_bundle_rebuild_command(root: &Path) -> String {
 
 /// Provenance of the locally assembled dev-mode runtime bundle.
 ///
-/// Dev mode refuses to start against a bundle that does not match the checkout,
-/// and `status` / `doctor` report the same facts so a test run can be audited
-/// after the fact: which backend version actually served it, when that backend
-/// was built, and whether the staleness check was opted out of.
+/// Dev mode never serves a bundle that does not match the checkout silently: a
+/// version mismatch is a hard refusal, newer sources are rebuilt before the
+/// server starts.  `status` / `doctor` report the same facts so a test run can
+/// be audited after the fact: which backend version actually served it, when
+/// that backend was built, and whether the staleness check was opted out of.
 pub struct LocalBundleProvenance {
     /// Assembled runtime directory (`.../_work/<platform>/<platform>`).
     pub work_dir: PathBuf,
@@ -7388,7 +7442,7 @@ impl LocalBundleProvenance {
             Some(kind) if self.allow_stale => {
                 format!("no ({kind}) — allowed by {ALLOW_STALE_BUNDLE_ENV}=1")
             }
-            Some(kind) => format!("no ({kind}) — dev mode refuses to start"),
+            Some(kind) => format!("no ({kind}) — {}", mismatch_action(kind)),
         };
         vec![
             ("Bundle", self.work_dir.display().to_string()),
@@ -13671,6 +13725,115 @@ mod tests {
     }
 
     #[test]
+    fn detect_staleness_skips_core_sub_modules_the_bundle_does_not_carry() {
+        // browser4-core/ is scanned by discovery, so a sub-directory that never
+        // reaches the bundle (test support, tooling) must not be read as stale:
+        // a module without a jar means "cannot be part of the served backend",
+        // and reporting it would rebuild on every start, forever.
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        let src = tmp
+            .path()
+            .join("browser4-core")
+            .join("browser4-tests-support")
+            .join("src")
+            .join("main");
+        create_dir_all(&src).unwrap();
+        let source_file = src.join("Fresh.kt");
+        write(&source_file, "package fresh\n").unwrap();
+        set_newer_than_bundle_jar(&source_file, &lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        assert_eq!(detect_local_bundle_staleness(tmp.path(), &lib_dir), None);
+    }
+
+    #[test]
+    fn detect_staleness_flags_newer_sources_in_every_bundled_top_level_module() {
+        // These modules ship jars in the bundle's lib/ but were missing from the
+        // monitored roots, so an edit there was invisible: dev mode kept serving
+        // the older jar and `status` still reported "Matches checkout: yes".
+        for module in ["browser4-agent-tools", "browser4-boot", "browser4-coding"] {
+            let tmp = test_temp_dir();
+            write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+            let lib_dir = tmp.path().join("lib");
+            // browser4-rest is the sentinel whose jar name carries the bundle's
+            // project version; without it the bundle is "not locally built".
+            write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+            let jar_name = format!("{module}-4.13.13-SNAPSHOT.jar");
+            write_bundle_lib_jar(&lib_dir, &jar_name);
+
+            let src = tmp.path().join(module).join("src").join("main");
+            create_dir_all(&src).unwrap();
+            let source_file = src.join("Fresh.kt");
+            write(&source_file, "package fresh\n").unwrap();
+            set_newer_than_bundle_jar(&source_file, &lib_dir, &jar_name);
+
+            assert_eq!(
+                detect_local_bundle_staleness(tmp.path(), &lib_dir),
+                Some(LocalBundleStaleness::SourcesNewerThanBundle),
+                "a {module} source edit must mark the bundle stale"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_staleness_flags_browser4_common_through_the_core_scan() {
+        // browser4-common is not a top-level module — it lives under
+        // browser4-core/ and is monitored by the sub-module scan there.
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        let jar_name = "browser4-common-4.13.13-SNAPSHOT.jar";
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+        write_bundle_lib_jar(&lib_dir, jar_name);
+
+        let src = tmp
+            .path()
+            .join("browser4-core")
+            .join("browser4-common")
+            .join("src")
+            .join("main");
+        create_dir_all(&src).unwrap();
+        let source_file = src.join("Fresh.kt");
+        write(&source_file, "package fresh\n").unwrap();
+        set_newer_than_bundle_jar(&source_file, &lib_dir, jar_name);
+
+        assert_eq!(
+            detect_local_bundle_staleness(tmp.path(), &lib_dir),
+            Some(LocalBundleStaleness::SourcesNewerThanBundle)
+        );
+    }
+
+    #[test]
+    fn detect_staleness_ignores_plugin_sources() {
+        // Plugin jars are assembled into the bundle's plugins/ directory and are
+        // installed on demand, so a plugin edit must not invalidate the backend.
+        // Monitoring browser4-plugins/* would instead report stale forever: its
+        // jars never reach lib/, and a module without a jar counts as "cannot be
+        // part of the bundle" (see the missing-module test above).
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        let jar_name = "browser4-rest-4.13.13-SNAPSHOT.jar";
+        write_bundle_lib_jar(&lib_dir, jar_name);
+
+        let src = tmp
+            .path()
+            .join("browser4-plugins")
+            .join("browser4-swarm")
+            .join("src")
+            .join("main");
+        create_dir_all(&src).unwrap();
+        let source_file = src.join("Fresh.kt");
+        write(&source_file, "package fresh\n").unwrap();
+        set_newer_than_bundle_jar(&source_file, &lib_dir, jar_name);
+
+        assert_eq!(detect_local_bundle_staleness(tmp.path(), &lib_dir), None);
+    }
+
+    #[test]
     fn a_build_stamp_clears_newer_source_timestamps() {
         let tmp = test_temp_dir();
         write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
@@ -13929,6 +14092,62 @@ mod tests {
             staleness_kind(&LocalBundleStaleness::SourcesNewerThanBundle),
             "sources_newer_than_bundle"
         );
+    }
+
+    /// Provenance with only the staleness inputs under test varied.
+    fn provenance_with_staleness(
+        staleness: Option<&'static str>,
+        allow_stale: bool,
+    ) -> LocalBundleProvenance {
+        let tmp = test_temp_dir();
+        LocalBundleProvenance {
+            work_dir: tmp.path().join("work"),
+            lib_dir: tmp.path().join("work").join("lib"),
+            bundled_version: Some("4.13.13-SNAPSHOT".to_string()),
+            checked_out_version: Some("4.13.14-SNAPSHOT".to_string()),
+            built_at: Some("2026-08-25 09:12:03 +08:00".to_string()),
+            staleness,
+            allow_stale,
+        }
+    }
+
+    #[test]
+    fn report_rows_name_the_action_dev_mode_actually_takes() {
+        // Only a version mismatch refuses to start; newer sources are rebuilt
+        // and served.  Rendering the refusal wording for both kinds pointed
+        // users at a manual rebuild that was never needed (issue 2 of
+        // 20261016-180650-bulk-scale-routing).
+        fn matches_row(staleness: Option<&'static str>, allow_stale: bool) -> String {
+            provenance_with_staleness(staleness, allow_stale)
+                .report_rows()
+                .into_iter()
+                .find(|(label, _)| *label == "Matches checkout")
+                .map(|(_, value)| value)
+                .expect("the status report has a 'Matches checkout' row")
+        }
+
+        assert_eq!(matches_row(None, false), "yes");
+
+        let newer_sources = matches_row(Some(SOURCES_NEWER_THAN_BUNDLE_KIND), false);
+        assert!(
+            newer_sources.starts_with("no (sources_newer_than_bundle)"),
+            "{newer_sources}"
+        );
+        assert!(
+            newer_sources.contains("rebuilds and starts it automatically"),
+            "{newer_sources}"
+        );
+        assert!(!newer_sources.contains("refuses"), "{newer_sources}");
+
+        let version_mismatch = matches_row(Some(VERSION_MISMATCH_KIND), false);
+        assert!(
+            version_mismatch.ends_with("dev mode refuses to start"),
+            "{version_mismatch}"
+        );
+
+        let allowed = matches_row(Some(SOURCES_NEWER_THAN_BUNDLE_KIND), true);
+        assert!(allowed.contains(ALLOW_STALE_BUNDLE_ENV), "{allowed}");
+        assert!(!allowed.contains("rebuilds and starts"), "{allowed}");
     }
 
     #[test]

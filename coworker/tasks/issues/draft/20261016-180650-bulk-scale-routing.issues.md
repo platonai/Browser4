@@ -93,7 +93,7 @@ The staleness check distinguishes two kinds (version_mismatch vs sources_newer_t
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
-- **Notes:**
+- **Notes:** FIXED 2026-10-24 (working tree, branch feat/agent-run-interactive) — 3/3 sub-items addressed. (1) report_rows() now renders the per-kind action through mismatch_action(): sources_newer_than_bundle reads 'the next browser command rebuilds and starts it automatically', and only version_mismatch keeps 'dev mode refuses to start' (test: report_rows_name_the_action_dev_mode_actually_takes). (2) b4w.ps1 no longer demands a manual rebuild: one line says the next backend command rebuilds automatically, printed only for commands that can start the backend (Test-B4wMayStartBackend, mirroring should_ensure_server_running()) and suppressed under -Rebuild; the backend content hash now covers src/main of the bundled modules only and drops browser4-plugins (its jars ship in plugins/, not lib/), so plugin-only or test-only edits no longer announce a rebuild. (3) The dev-mode 'Installed bundle' line was already labelled '— used only outside a repository checkout' and the CLI-vs-installed-bundle warning is gated behind !dev_mode, so no further change was needed (verified with the backend both down and up). Verification: cargo test --bin browser4-cli detect_staleness 10 passed; pwsh bin/tests/b4w.tests.ps1 129/129 passed; live probes — plugin-only and test-only edits keep 'Matches checkout: yes' with no notice, a browser4-agent-tools/src/main edit flips it to stale with the notice.
 
 ---
 

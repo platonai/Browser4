@@ -27169,7 +27169,8 @@ async fn handle_doctor(
     }
 
     // ---- Local Runtime Bundle (dev-mode provenance) ----
-    // The same facts the launcher refuses to start on: which bundle dev mode
+    // The same facts the launcher acts on — a version mismatch refuses to
+    // start, newer sources are rebuilt before serving: which bundle dev mode
     // would serve, when it was built, and whether it matches the checkout.
     if let Some(bundle) = daemon::local_bundle_provenance() {
         cli_println!("");

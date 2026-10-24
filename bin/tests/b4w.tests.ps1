@@ -471,7 +471,12 @@ Write-Host "━━━ Rebuild flag ━━━" -ForegroundColor Cyan
 # Verify the -Rebuild flag is handled via manual $args parsing (no param() block)
 Assert-ContainsString -Label 'Rebuild: param switch defined' -Haystack $srcText -Needle '$Rebuild = $false'
 Assert-ContainsString -Label 'Rebuild: forces rebuild message' -Haystack $srcText -Needle 'Rebuilding browser4-cli'
-Assert-ContainsString -Label 'Rebuild: hashes plugin modules' -Haystack $srcText -Needle 'browser4-plugins'
+# The backend hash must cover exactly what ships in the runtime bundle:
+# `src/main` of the bundled modules, and NOT browser4-plugins (its jars are
+# assembled into the bundle's plugins/ directory, so a plugin edit must not
+# advertise a backend rebuild the launcher never performs).
+Assert-NotContainsString -Label 'Rebuild: does not hash plugin modules' -Haystack $srcText -Needle "'browser4-plugins'"
+Assert-ContainsString -Label 'Rebuild: hashes src/main only' -Haystack $srcText -Needle 'src[\\/]main'
 Assert-ContainsString -Label 'Rebuild: resolves platform stamp' -Haystack $srcText -Needle 'Get-B4wBackendBundleStampPath'
 Assert-ContainsString -Label 'Rebuild: hashes with -NoBuild -Rebuild' -Haystack $srcText -Needle '!$NoBuild -or $Rebuild'
 Assert-ContainsString -Label 'Rebuild: restores caller force flag' -Haystack $srcText -Needle '$OriginalForceRebuildBundle'
@@ -480,6 +485,17 @@ Assert-ContainsString -Label 'Rebuild: restores caller force flag' -Haystack $sr
 Assert-ContainsString -Label 'Rebuild: auto-detect stale sources' -Haystack $srcText -Needle 'Get-ChildItem -Path $SrcDir'
 Assert-ContainsString -Label 'Rebuild: checks Cargo.toml timestamp' -Haystack $srcText -Needle 'Cargo.toml'
 Assert-ContainsString -Label 'Rebuild: checks Cargo.lock timestamp' -Haystack $srcText -Needle 'Cargo.lock'
+
+# The backend staleness notice must describe what dev mode really does — the
+# next backend command rebuilds and starts automatically — and must not print
+# for commands that never start the backend.  `help`/`config`/`status` used to
+# advertise a manual rebuild they never trigger (issue 2 of
+# coworker/tasks/issues/draft/20261016-180650-bulk-scale-routing.issues.md).
+Assert-ContainsString -Label 'Backend notice: gated on backend usage' -Haystack $srcText -Needle 'Test-B4wMayStartBackend'
+Assert-ContainsString -Label 'Backend notice: local commands listed' -Haystack $srcText -Needle "'config', 'config-list'"
+Assert-ContainsString -Label 'Backend notice: automatic rebuild wording' -Haystack $srcText -Needle 'the next backend command rebuilds it automatically'
+Assert-ContainsString -Label 'Backend notice: skipped when -Rebuild forces it' -Haystack $srcText -Needle 'elseif (-not $Rebuild -and (Test-B4wMayStartBackend'
+Assert-NotContainsString -Label 'Backend notice: no manual rebuild instruction' -Haystack $srcText -Needle 'Rebuild with:  $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE'
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: Source script integrity
