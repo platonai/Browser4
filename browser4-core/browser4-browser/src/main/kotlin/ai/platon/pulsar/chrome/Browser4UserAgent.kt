@@ -35,8 +35,9 @@ import java.nio.file.Path
  * lookup that `pulsar-browser` lost actually runs, and applies it at the single point
  * every browser launch funnels through (see `DefaultBrowserFactory`). A launch-time
  * `--user-agent` is the only mechanism that reaches every JavaScript scope of a session
- * (page, iframes, dedicated/shared/service workers) while leaving the client hints intact —
- * a page-world patch would not.
+ * (page, iframes, dedicated/shared/service workers) — a page-world patch would not — and it
+ * is applied to **headless** launches only: a headed Chrome already reports the reduced form
+ * natively, and the switch empties the client-hint `fullVersionList` (see [applyTo]).
  *
  * The value is only ever applied when the program has not already decided one, so an
  * explicit `browser.launch.user.agent` (or a caller-supplied option) always wins.
@@ -92,6 +93,21 @@ object Browser4UserAgent {
      * `HeadlessChrome` token on the wire" holds for session launches, pooled launches and
      * the legacy display-mode launch path alike.
      *
+     * ## Headless only, because the switch is not free
+     *
+     * A headed Chrome already reports the reduced `Chrome/<major>.0.0.0` form natively, so
+     * there is nothing to repair — and passing `--user-agent` anyway breaks a different
+     * consistency: Chrome then drops the user-agent client-hint metadata, and
+     * `navigator.userAgentData.getHighEntropyValues(['fullVersionList'])` returns `[]`
+     * while the low-entropy `brands` list stays populated. Measured on Chrome 155 (Windows,
+     * headless, throwaway profile): no switch → `fullVersionList` carries
+     * `Google Chrome/155.0.8059.x`; with `--user-agent` → `[]`, even when the string is
+     * byte-identical to the native one. `bot-detector.rebrowser.net` reads that list and
+     * rates an empty one "Cannot detect Chrome version" (rating 0.5) — a signal Browser4
+     * would be adding in headed mode for no benefit. Keeping the switch on headless launches
+     * is what removes the one-line `HeadlessChrome` verdict; the empty `fullVersionList` there
+     * is the residual of that trade-off.
+     *
      * @return `true` when [ChromeOptions.userAgent] was set by this call
      */
     fun applyTo(
@@ -101,6 +117,12 @@ object Browser4UserAgent {
     ): Boolean {
         if (!launchOptions.userAgent.isNullOrBlank()) {
             // The program (or a caller) already decided the user agent — never override it.
+            return false
+        }
+
+        if (!launchOptions.headless) {
+            // A headed launch advertises the reduced agent natively; an override here would
+            // only empty the client-hint `fullVersionList` (see the KDoc above).
             return false
         }
 

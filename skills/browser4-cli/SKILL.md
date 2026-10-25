@@ -462,9 +462,11 @@ to the script internally.
 ### Prerequisites
 
 **Java 25 or newer** is required to build or run the backend server and
-MockSite — the root pom's Maven enforcer rejects older JDKs.  Check with
-`java -version`; if the default JDK is older, point `JAVA_HOME` at a 25+ JDK
-before starting anything (e.g. `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64`).
+MockSite — the root pom's Maven enforcer rejects older JDKs.  The `b4w`
+bundle rebuild auto-selects the newest installed JDK 25+ when `JAVA_HOME` is
+unset or points at an older JDK, so `./b4w.sh open` works even when `java` on
+`PATH` is older.  A manual `./mvnw` build still needs a 25+ JDK in `JAVA_HOME`
+(e.g. `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64`).
 Running from a repository checkout also needs **Rust** (`cargo`) for the CLI
 and **Git**.
 

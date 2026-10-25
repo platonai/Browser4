@@ -170,7 +170,34 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
 - Browser4 passes plain `--headless` (never `--headless=new`), forces
   `--disable-blink-features=AutomationControlled`, and leaves user-agent rotation off by default because
   rotation itself is detectable.
-- **The `HeadlessChrome` token is replaced at launch, in every display mode.** A
+- **The page-world stealth payload is conditional on `navigator.webdriver`.** The base
+  library ships a puppeteer-extra-plugin-stealth bundle as the classpath resource
+  `js/stealth.js` and injects it into every document; this module shadows it with the same
+  bundle behind one guard
+  (`browser4-core/browser4-browser/src/main/resources/js/stealth.js`, pinned by
+  `PageWorldStealthPayloadTest`):
+
+  ```js
+  if (navigator.webdriver === true) { …bundle… }
+  ```
+
+  - `navigator.webdriver === true` — a CDP-driven browser (`attach --cdp`, a browser started
+    with a remote-debugging port, Puppeteer/Playwright): the bundle runs and hides the
+    automation flags, chief among them `navigator.webdriver` itself. Its own cost remains
+    (the `Function.prototype.toString` Proxy and the `iframe.contentWindow` evasion are
+    rating-1 findings on `https://bot-detector.rebrowser.net/`'s `nativeTampering`), and that
+    trade is deliberate: hiding `webdriver` is worth more than passing the tampering check.
+  - `navigator.webdriver === false` — a real browser reached through the extension, and every
+    Browser4 launch (which passes `--disable-blink-features=AutomationControlled`): the bundle
+    does nothing. A browser that does not claim to be automated has nothing to hide, and a page
+    world that was never patched cannot be caught tampering. This case scores `nativeTampering`
+    green on the detector above — measured both extension-attached (a real Edge) and managed
+    (headless Browser4 Chrome), because the artifacts worth hiding are fixed natively: the
+    AutomationControlled flag for `navigator.webdriver`, the launch-time `--user-agent` for the
+    `HeadlessChrome` token, and `Emulation.setFocusEmulationEnabled` for focus/visibility.
+
+  Evidence and the reproducing probe live in `docs-dev/copilot/bot-stealth-probes/README.md`.
+- **The `HeadlessChrome` token is replaced at launch, in headless mode.** A
   CDP-driven headless Chrome advertises `HeadlessChrome/<version>` by default; that
   single token fails SannySoft `HEADCHR_UA`, Incolumitas `intoli.userAgent`, BrowserScan's
   aggregate "Robot" badge and deviceandbrowserinfo's `hasBotUserAgent`, and it contradicts
@@ -180,14 +207,24 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
   | Display mode | `navigator.userAgent` |
   |---|---|
   | `--headless` (default) | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36` |
-  | `--headed` | identical — a current desktop Chrome reports the same reduced form natively |
+  | `--headed` | identical, and it is Chrome's own native value |
   | `--supervised` | the same as whichever of the two the supervisor actually starts |
 
   The platform prefix follows the host (`Macintosh; Intel Mac OS X 10_15_7` on macOS,
   `X11; Linux x86_64` elsewhere) and the version is Chrome's reduced form
   (`<major>.0.0.0`). A launch-time `--user-agent` is used deliberately: it is the only
   mechanism that reaches every JavaScript scope of a session — page, iframes,
-  dedicated/shared/service workers — while leaving the client hints intact.
+  dedicated/shared/service workers.
+
+  The switch is added to **headless launches only**. A headed Chrome already reports the
+  reduced form natively, and the switch is not free: whenever `--user-agent` is on the
+  command line, Chrome empties
+  `navigator.userAgentData.getHighEntropyValues(['fullVersionList'])` (the low-entropy
+  `brands` list stays) — measured on Chrome 155, even with a string byte-identical to the
+  native one. rebrowser-bot-detector reads that list and rates an empty one "Cannot detect
+  Chrome version" (0.5), so the headed session keeps the metadata instead of a redundant
+  override. On headless the empty `fullVersionList` is the accepted cost of removing the
+  one-line `HeadlessChrome` verdict.
 
   Tune it with `browser.launch.user.agent` (an explicit string; a `Headless` token in it is
   repaired rather than trusted) or disable the replacement entirely with
@@ -303,7 +340,11 @@ are left alone.
 - `BROWSER4_EXTENSION_TOKEN` only auto-approves the connect page; it is not a WebSocket credential — do not
   treat it as a security boundary.
 - `--endpoint <server-url>` selects the Browser4 server to run against; it is not a CDP endpoint and cannot be
-  combined with `--extension`.
+  combined with `--extension`. `--cdp` is a different transport too, so it cannot be combined with
+  `--extension` either — one transport per invocation.
+- `--extension <channel>` opens the connect page **only in that channel's browser** and verifies the family that
+  actually answers; Chrome answering an `msedge` request fails the attach and undoes the session instead of
+  driving the wrong browser silently. See [attach.md](attach.md#verify-the-actual-browser-after-attach).
 
 **`SYSTEM_DEFAULT` profile mode is deprecated.** Pointing Browser4 at your everyday browser profile no longer
 works with Chrome ≥143. To act as the logged-in user, use one of the attach paths; to move authentication into

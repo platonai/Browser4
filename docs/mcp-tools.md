@@ -24,6 +24,7 @@
 | `ENDPOINT_UNREACHABLE` | no | 502 | Start the target browser with --remote-debugging-port, or point --cdp at the browser that is running, then retry attach. |
 | `ENDPOINT_NOT_CDP` | no | 502 | Point --cdp at the browser's DevTools port (`--remote-debugging-port`), or use `attach --extension` for Chrome's built-in remote debugging. |
 | `ENDPOINT_NO_PAGE_TARGETS` | no | 409 | Open a tab in the target browser, then retry attach. |
+| `ENDPOINT_WRONG_BROWSER` | no | 409 | The endpoint answered as a browser family other than the requested `channel` (e.g. `--cdp msedge` resolved Chrome). Request the channel you meant, or pass that browser's exact endpoint. Nothing was bound — no session, driver or tab. |
 | `UPSTREAM_ERROR` | yes | 502 | An upstream service failed; retrying may help. |
 | `CONFLICT` | yes | 409 | Re-read the resource and retry. |
 | `CANCELLED` | no | 499 | The task was cancelled; submit a new one if still needed. |
