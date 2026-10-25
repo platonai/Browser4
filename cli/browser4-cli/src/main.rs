@@ -26547,15 +26547,6 @@ fn windows_powershell_candidates() -> Vec<String> {
     ]
 }
 
-/// Unix counterpart of [`windows_powershell_candidates`]: there is no
-/// PowerShell to prefer, so the candidate list is empty.  Test-only — the
-/// binary never asks for PowerShell candidates off Windows (the whole
-/// Windows install path is `#[cfg(windows)]`).
-#[cfg(all(not(windows), test))]
-fn windows_powershell_candidates() -> Vec<String> {
-    Vec::new()
-}
-
 /// Arguments for running the downloaded install script under PowerShell.
 ///
 /// `-SkipBackend` stops the script from re-running `browser4-cli install` —

@@ -1622,6 +1622,7 @@ pub fn workspace_app_data_dir() -> Option<PathBuf> {
 
 /// Short, regex-safe token identifying this checkout in a browser command line
 /// (the workspace slug appears in its `--user-data-dir`).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn workspace_match_token() -> Option<String> {
     Some(workspace_state_slug(&dev_workspace_root()?))
 }
@@ -5073,6 +5074,7 @@ enum CdpCandidateSource {
     ProcessFlag,
     /// Another port the browser process listens on — this is how a browser
     /// started with `--remote-debugging-port=0` is discovered.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     ProcessListener,
     /// The channel's conventional debug port.
     DefaultPort,
