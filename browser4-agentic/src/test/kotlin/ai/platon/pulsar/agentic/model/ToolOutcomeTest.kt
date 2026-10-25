@@ -161,6 +161,54 @@ class ToolOutcomeTest {
     }
 
     @Test
+    @DisplayName("render does not repeat the summary line at the start of the body")
+    fun testRenderDoesNotRepeatTheFirstLine() {
+        // `b4.run list` used to render the table header twice: once as the
+        // header summary (built from the first line) and once at the start of
+        // the indented body (the whole output).
+        val firstLine = "Name | Session ID | URL | Status | Connection"
+        val outcome = ToolOutcome.from(
+            result("$firstLine\n(default) | 00209ec9 | about:blank | Ready | Extension"),
+            domain = "b4", method = "run",
+        )
+        assertEquals(firstLine, outcome.summary)
+        val rendered = outcome.render()
+        assertEquals(
+            1,
+            rendered.lines().count { it.contains(firstLine) },
+            "the summary line must appear exactly once:\n$rendered",
+        )
+        assertTrue(
+            rendered.contains("00209ec9"),
+            "the rest of the body must survive the de-duplication:\n$rendered",
+        )
+    }
+
+    @Test
+    @DisplayName("render keeps a body whose text merely resembles a failure summary")
+    fun testRenderKeepsBodyWhenSummaryIsNotAPrefix() {
+        val outcome = ToolOutcome(
+            domain = "coding", method = "read", ok = false,
+            summary = "failed: file not found",
+            body = "src/Missing.kt: no such file",
+        )
+        val rendered = outcome.render()
+        assertTrue(rendered.contains("failed: file not found"))
+        assertTrue(rendered.contains("src/Missing.kt: no such file"))
+    }
+
+    @Test
+    @DisplayName("render drops a body that is only the repeated summary")
+    fun testRenderDropsBodyEqualToSummary() {
+        val outcome = ToolOutcome(
+            domain = "tab", method = "evaluate", ok = true,
+            summary = "OK", body = "OK",
+        )
+        val rendered = outcome.render()
+        assertEquals("tab.evaluate [ok] OK", rendered.trim())
+    }
+
+    @Test
     @DisplayName("resultPreview is bounded and whitespace-collapsed")
     fun testResultPreviewOnAgentState() {
         val evaluate = TcEvaluate(value = "a\nb".repeat(400))

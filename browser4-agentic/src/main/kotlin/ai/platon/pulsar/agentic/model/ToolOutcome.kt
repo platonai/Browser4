@@ -34,11 +34,33 @@ data class ToolOutcome(
     /** Full block for prompt rendering (header + indented body/errors/delta). */
     fun render(): String = buildString {
         appendLine(header)
-        body?.takeIf { it.isNotBlank() }?.let {
-            appendLine(it.trim().prependIndent("  "))
+        body?.takeIf { it.isNotBlank() }?.let { rawBody ->
+            bodyWithoutRepeatedSummary(rawBody)
+                .takeIf { it.isNotBlank() }
+                ?.let { appendLine(it.trim().prependIndent("  ")) }
         }
         errors.forEach { appendLine("- ${it.trim()}".prependIndent("  ")) }
         workspaceDelta?.takeIf { it.isNotBlank() }?.let { appendLine("Δ $it") }
+    }
+
+    /**
+     * Drop a leading copy of [summary] from the body before rendering.
+     *
+     * [summary] is built from the body's first non-blank line, and the body is
+     * the whole (inline-compacted) output — so a result whose first line carries
+     * meaning printed that line twice: once as the header, once at the start of
+     * the indented body.  `b4.run` hits this on every call (its output starts
+     * with the table header), which cost the model tokens and read as a
+     * duplicated result.
+     */
+    private fun bodyWithoutRepeatedSummary(body: String): String {
+        val summary = summary.trim()
+        if (summary.isEmpty()) return body
+        // `Strings.compactInline` truncates a long summary with an ellipsis; the
+        // body still carries the untruncated text, so compare the shared head.
+        val head = if (summary.endsWith("…")) summary.dropLast(1).trimEnd() else summary
+        if (head.isEmpty() || !body.startsWith(head)) return body
+        return body.removePrefix(head).trimStart()
     }
 
     companion object {
