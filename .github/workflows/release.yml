@@ -1208,7 +1208,7 @@ jobs:
             "$BUNDLE_ARCHIVE" 0 300
 
       - name: Upload server logs on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v6
         with:
           name: smoke-test-logs-${{ matrix.artifact_name }}
