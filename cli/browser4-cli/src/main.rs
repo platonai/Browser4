@@ -32,6 +32,7 @@ mod snapshot;
 mod snapshot_diff;
 mod state;
 mod tips;
+mod agent_interactive;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
@@ -619,6 +620,56 @@ fn require_session(session_name: Option<&str>) -> Result<CliState, String> {
         return Err(no_active_session_message());
     }
     Ok(state)
+}
+
+/// The backend session an agent task must run in when the caller named no
+/// session of its own.
+///
+/// `agent run` used to forward `sessionId` only for an explicit `-s`, so the
+/// task landed on the backend's DEFAULT session while every other command used
+/// the CLI's current session.  With an extension-attached browser that meant the
+/// agent had no page in *its* session and launched a second, Browser4-owned
+/// browser the moment it navigated — the exact opposite of the attached session
+/// the user had just connected (`attach --extension msedge`).
+///
+/// Resolution order matches the commands that already forward a session:
+/// the addressed state slot (`-s <name>`, else the unnamed/default slot), then —
+/// when no name was given — the SWARM slot that [`require_session`] documents for
+/// `agent run`.  `None` when nothing is recorded, so a session-less task (for
+/// example `agent run --coding`) submits exactly as before.
+fn resolve_agent_session_id(session_name: Option<&str>) -> Option<String> {
+    resolve_agent_session_id_in(None, session_name)
+}
+
+/// [`resolve_agent_session_id`] against an explicit state directory.
+///
+/// Tests pass the directory directly instead of overriding
+/// `BROWSER4_CLI_STATE_DIR`: process-wide env mutation races every parallel test
+/// that reads state.
+fn resolve_agent_session_id_in(
+    state_dir: Option<&Path>,
+    session_name: Option<&str>,
+) -> Option<String> {
+    fn recorded_id(state: &CliState) -> Option<String> {
+        state
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+    }
+
+    let state = read_state(state_dir, session_name);
+    if let Some(id) = recorded_id(&state) {
+        return Some(id);
+    }
+    if session_name.is_none() {
+        let swarm_state = read_state(state_dir, Some(SWARM_SESSION_ID));
+        if let Some(id) = recorded_id(&swarm_state) {
+            return Some(id);
+        }
+    }
+    None
 }
 
 fn format_session_guidance_message(
@@ -15160,12 +15211,88 @@ async fn verify_select_result(
 // Agent command handlers
 // ---------------------------------------------------------------------------
 
+/// The `command_run` payload fields every `agent run` mode shares.
+///
+/// `sessionId` is forwarded only when the caller named a session (`-s`): agent
+/// tasks used to land in the backend's DEFAULT session no matter what, so two
+/// interactive sessions could not be isolated. The backend's `command.run`
+/// documents `sessionId` as its transport argument, and it defaults to DEFAULT,
+/// so omitting it keeps the previous behaviour.
+fn build_agent_run_extra(
+    engine: &str,
+    noop_limit: Option<i64>,
+    coding: bool,
+    fresh_workspace: bool,
+    session_id: Option<&str>,
+) -> Value {
+    let mut extra = json!({ "engine": engine });
+    if let Some(limit) = noop_limit {
+        extra["noopLimit"] = json!(limit);
+    }
+    if coding {
+        extra["coding"] = json!(true);
+    }
+    if fresh_workspace {
+        extra["freshWorkspace"] = json!(true);
+    }
+    if let Some(session) = session_id.map(str::trim).filter(|s| !s.is_empty()) {
+        extra["sessionId"] = json!(session);
+    }
+    extra
+}
+
+/// Submit one agent task in async mode and return its task id.
+///
+/// Shared by the one-shot forms and the interactive session, so every mode
+/// reports a missing LLM API key the same actionable way instead of leaving the
+/// user with a 180 s HTTP timeout (the backend fails such a task almost
+/// immediately).
+async fn submit_agent_task(
+    client: &Client,
+    base_url: &str,
+    task: &str,
+    extra: Value,
+) -> Result<String, String> {
+    let result = submit_plain_command_with_options(client, base_url, task, true, extra).await?;
+
+    // The async response is a task ID (possibly JSON-quoted)
+    let task_id = result.trim().trim_matches('"').to_string();
+    if task_id.is_empty() {
+        return Err("The backend returned no task id for the submitted task.".to_string());
+    }
+    if let Some(message) =
+        detect_missing_llm_error_for_submitted_agent_task(client, base_url, &task_id).await?
+    {
+        return Err(format_missing_llm_error(&message, "agent run"));
+    }
+
+    Ok(task_id)
+}
+
 async fn handle_agent_run(
     client: &Client,
     base_url: &str,
     tool_params: &Value,
-    _session_name: Option<&str>,
+    session_name: Option<&str>,
 ) -> Result<(), String> {
+    // Interactive session (`agent run -i`): its own loop owns submission and
+    // output, including the optional initial task.
+    if tool_params
+        .get("interactive")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        if tool_params
+            .get("ndjson")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            eprintln!("⚠ --ndjson does not apply to the interactive session (-i); ignoring it");
+        }
+        return agent_interactive::run_interactive(client, base_url, tool_params, session_name)
+            .await;
+    }
+
     let task = tool_params
         .get("task")
         .and_then(|v| v.as_str())
@@ -15175,43 +15302,75 @@ async fn handle_agent_run(
         return Err("Task description is required.".to_string());
     }
 
-    // Optional per-task no-op threshold (long coding chains benefit from 8-10).
-    let noop_limit = tool_params.get("noopLimit").and_then(|v| v.as_i64());
-    // Engine selection (default: cli) — merged into the command_run payload.
-    let engine = tool_params
-        .get("engine")
-        .and_then(|v| v.as_str())
-        .unwrap_or("cli");
-    let mut extra = serde_json::json!({ "engine": engine });
-    if let Some(n) = noop_limit {
-        extra["noopLimit"] = serde_json::json!(n);
-    }
-    // Explicit coding flag (`agent run --coding`): the payload key is the opt-in
-    // signal server-side; when it is absent the task is a browser task by default.
-    if tool_params.get("coding").and_then(|v| v.as_bool()) == Some(true) {
-        extra["coding"] = serde_json::json!(true);
-    }
-    // Fresh-workspace isolation (`agent run --fresh-workspace`).
-    if tool_params.get("freshWorkspace").and_then(|v| v.as_bool()) == Some(true) {
-        extra["freshWorkspace"] = serde_json::json!(true);
-    }
-    let result =
-        submit_plain_command_with_options(client, base_url, task, true, extra).await?;
-
-    // The async response is a task ID (possibly JSON-quoted)
-    let task_id = result.trim().trim_matches('"').to_string();
-    if let Some(message) =
-        detect_missing_llm_error_for_submitted_agent_task(client, base_url, &task_id).await?
+    let follow = tool_params
+        .get("follow")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    // A silently ignored flag is a lie about what the command did.
+    if !follow
+        && tool_params
+            .get("ndjson")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     {
-        return Err(format_missing_llm_error(&message, "agent run"));
+        eprintln!("⚠ --ndjson only affects --follow; ignoring it");
     }
-    cli_println!("Task submitted: {}", task_id);
+
+    // Run the task in the CLI's current session (attached browser / `-s <name>` /
+    // SWARM), not the backend's DEFAULT session. Without this, `agent run` against
+    // an extension-attached browser drove no page at all and started a second
+    // browser on the first navigation; `-s <name>` alone was not enough either,
+    // because the backend only knows the name after the CLI registered it.
+    let resolved_session_id = resolve_agent_session_id(session_name);
+    let extra = build_agent_run_extra(
+        tool_params
+            .get("engine")
+            .and_then(|v| v.as_str())
+            .unwrap_or("cli"),
+        tool_params.get("noopLimit").and_then(|v| v.as_i64()),
+        // Only forward when set: the payload key itself is the opt-in signal
+        // (absent ⇒ browser task, the default).
+        tool_params.get("coding").and_then(|v| v.as_bool()) == Some(true),
+        tool_params
+            .get("freshWorkspace")
+            .and_then(|v| v.as_bool())
+            == Some(true),
+        resolved_session_id.as_deref(),
+    );
+    let task_id = submit_agent_task(client, base_url, task, extra).await?;
+
+    // NDJSON mode is machine output end to end: the submission is a JSON line
+    // too, so a consumer never has to skip prose.
+    let ndjson = follow
+        && tool_params
+            .get("ndjson")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    if ndjson {
+        print_stdout_line(
+            &json!({ "type": "task.submitted", "taskId": task_id, "task": task }).to_string(),
+        );
+    } else {
+        cli_println!("Task submitted: {}", task_id);
+    }
     json_field("task_id", json!(&task_id));
 
     // Persist the task for cross-session tracking in BOTH async and wait
     // modes, so `agent list` always reflects every submitted task — including
     // ones that later time out while the server keeps working on them.
     let _ = track_async_task(&task_id, "agent", task, None);
+
+    // `--follow`: stream the task's steps while waiting. `--wait` stays the
+    // quiet, poll-only form it always was.
+    if follow {
+        let options = agent_interactive::FollowOptions {
+            ndjson,
+            // No default cap: following a task is an explicit "watch it" request,
+            // and `--wait` remains the capped form.
+            wait_timeout: tool_params.get("waitTimeout").and_then(|v| v.as_u64()),
+        };
+        return agent_interactive::follow_task(client, base_url, &task_id, options).await;
+    }
 
     let wait = tool_params
         .get("wait")
@@ -27523,7 +27682,8 @@ async fn handle_doctor(
     }
 
     // ---- Local Runtime Bundle (dev-mode provenance) ----
-    // The same facts the launcher refuses to start on: which bundle dev mode
+    // The same facts the launcher acts on — a version mismatch refuses to
+    // start, newer sources are rebuilt before serving: which bundle dev mode
     // would serve, when it was built, and whether it matches the checkout.
     if let Some(bundle) = daemon::local_bundle_provenance() {
         cli_println!("");
@@ -40506,6 +40666,90 @@ linkGroups:
             json!({ "sessionId": session_id, "baseUrl": "http://127.0.0.1:1" }).to_string(),
         )
         .unwrap();
+    }
+
+    /// `agent run` must submit into the CLI's recorded session, not the backend's
+    /// DEFAULT slot: an extension-attached browser otherwise received no page and
+    /// the agent opened a second, Browser4-owned browser on its first navigation.
+    #[test]
+    fn resolve_agent_session_id_uses_the_recorded_default_session() {
+        let temp = test_temp_dir();
+        let state_dir = temp.path().join("state");
+        write_session_state_file(&state_dir.join("cli-state.json"), "s-default");
+
+        assert_eq!(
+            resolve_agent_session_id_in(Some(&state_dir), None).as_deref(),
+            Some("s-default")
+        );
+    }
+
+    /// `-s <name>` addresses the named slot only; borrowing the unnamed session
+    /// would silently drive the wrong browser.
+    #[test]
+    fn resolve_agent_session_id_prefers_the_named_slot() {
+        let temp = test_temp_dir();
+        let state_dir = temp.path().join("state");
+        write_session_state_file(&state_dir.join("cli-state.json"), "s-default");
+        write_session_state_file(&state_dir.join("sessions").join("work.json"), "s-work");
+
+        assert_eq!(
+            resolve_agent_session_id_in(Some(&state_dir), Some("work")).as_deref(),
+            Some("s-work")
+        );
+    }
+
+    /// A named slot with no recorded state must resolve to nothing — `agent run`
+    /// then submits without a session, as before, instead of hijacking DEFAULT.
+    #[test]
+    fn resolve_agent_session_id_does_not_fall_back_for_a_named_slot() {
+        let temp = test_temp_dir();
+        let state_dir = temp.path().join("state");
+        write_session_state_file(&state_dir.join("cli-state.json"), "s-default");
+        write_session_state_file(&state_dir.join("sessions").join("SWARM.json"), "s-swarm");
+
+        assert_eq!(
+            resolve_agent_session_id_in(Some(&state_dir), Some("missing")),
+            None
+        );
+    }
+
+    /// `require_session` documents that extract / summarize / `agent run` follow
+    /// `swarm create`; the agent path must honour the same fallback.
+    #[test]
+    fn resolve_agent_session_id_falls_back_to_the_swarm_slot() {
+        let temp = test_temp_dir();
+        let state_dir = temp.path().join("state");
+        write_session_state_file(&state_dir.join("sessions").join("SWARM.json"), "s-swarm");
+
+        assert_eq!(
+            resolve_agent_session_id_in(Some(&state_dir), None).as_deref(),
+            Some("s-swarm")
+        );
+    }
+
+    /// No recorded session at all: a session-less (`--coding`) task still submits.
+    #[test]
+    fn resolve_agent_session_id_is_none_without_recorded_state() {
+        let temp = test_temp_dir();
+        let state_dir = temp.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        assert_eq!(resolve_agent_session_id_in(Some(&state_dir), None), None);
+    }
+
+    /// The session id, once resolved, is the payload the backend acts on.
+    #[test]
+    fn build_agent_run_extra_forwards_a_resolved_session_id() {
+        let extra = build_agent_run_extra("cli", None, false, false, Some("s-work"));
+        assert_eq!(extra["sessionId"], json!("s-work"));
+        assert_eq!(extra["engine"], json!("cli"));
+
+        let anonymous = build_agent_run_extra("cli", None, true, false, None);
+        assert!(
+            anonymous.get("sessionId").is_none(),
+            "no session must stay absent, got {anonymous}"
+        );
+        assert_eq!(anonymous["coding"], json!(true));
     }
 
     #[test]

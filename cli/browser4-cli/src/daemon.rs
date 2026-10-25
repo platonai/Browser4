@@ -256,6 +256,15 @@ const INSTALL_LOCK_DIR_NAME: &str = ".install.lock";
 /// Maximum time to wait for a concurrent install/upgrade to finish (seconds).
 const INSTALL_LOCK_TIMEOUT_SECS: u64 = 300;
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
+/// Absolute path of the CLI binary that launched the backend.
+///
+/// `b4.run` resolves `browser4-cli` as a subprocess of the backend, preferring
+/// the copy shipped in the runtime bundle's `bin/`.  A dev bundle can ship a
+/// much older binary than the checkout the user just built — observed as a
+/// 4.14.0-rc.6 CLI panicking on `attach --extension msedge` and connecting a
+/// bare `--extension` to Chrome — so the launcher pins the child to the binary
+/// that started this server.  Read by `CliBinaryResolver`.
+pub const CLI_BIN_ENV: &str = "BROWSER4_CLI_BIN";
 /// When set to `1`, `true`, `yes`, or `on`, forces the CLI to download the
 /// Browser4 runtime bundle from a remote release instead of building it from
 /// a local Browser4 repository checkout.  Useful in environments where
@@ -6999,6 +7008,17 @@ fn command_for_launch_spec(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // Pin the backend's `b4.run` subprocess to THIS binary: the bundled copy can
+    // be older than the checkout (see [CLI_BIN_ENV]), and a version-skewed CLI
+    // drives the wrong browser / fails to parse its own options.  Failure to
+    // resolve our own path is not fatal — the backend then falls back to its
+    // bundle / PATH resolution as before.
+    match std::env::current_exe() {
+        Ok(cli) => {
+            command.env(CLI_BIN_ENV, cli);
+        }
+        Err(e) => eprintln!("Could not resolve the browser4-cli path for the backend: {e}"),
+    }
     Ok(PreparedLaunchCommand {
         command,
         cleanup_dir,
@@ -7293,13 +7313,39 @@ fn bundled_project_version(lib_dir: &Path) -> Option<(String, std::time::SystemT
     newest
 }
 
+/// Top-level project modules whose code ships in the runtime bundle's `lib/`.
+///
+/// Only a module whose jar the bundle actually carries may be listed: one
+/// without a jar is read as "the bundle cannot contain it" and reported stale
+/// forever ([`local_sources_newer_than`]), which would rebuild on every start.
+///
+/// `browser4-plugins` is deliberately absent.  Its jars are assembled into the
+/// bundle's `plugins/` directory — never `lib/` — and plugins are optional,
+/// installed on demand, so editing a plugin must not invalidate the backend.
+/// `browser4-common` is absent too: it lives under `browser4-core/` and is
+/// picked up by the sub-module scan below.
+const BUNDLED_TOP_LEVEL_MODULES: [&str; 5] = [
+    "browser4-rest",
+    "browser4-agentic",
+    "browser4-agent-tools",
+    "browser4-boot",
+    "browser4-coding",
+];
+
 /// Source roots of the modules whose code ships in the runtime bundle, as
 /// `(module name, src/main)` pairs.
 ///
 /// The module name is the artifact id prefix the bundle's `lib/` uses, so each
 /// root can be compared against its own jar.
-fn bundled_module_source_roots(root: &Path) -> Vec<(String, PathBuf)> {
-    let mut modules: Vec<(String, PathBuf)> = ["browser4-rest", "browser4-agentic", "browser4-common"]
+///
+/// Two sources: the declared list above, and the `browser4-core/` sub-modules,
+/// which are *discovered* — so a sub-directory the bundle does not carry (a
+/// test-support or tooling module) is skipped instead of being reported stale
+/// forever: code that never reaches the bundle cannot make it stale.  A module
+/// from the declared list is not filtered: it is supposed to be in the bundle,
+/// so a missing jar really does mean an incomplete build.
+fn bundled_module_source_roots(root: &Path, lib_dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut modules: Vec<(String, PathBuf)> = BUNDLED_TOP_LEVEL_MODULES
         .into_iter()
         .map(|name| (name.to_string(), root.join(name).join("src").join("main")))
         .collect();
@@ -7312,9 +7358,13 @@ fn bundled_module_source_roots(root: &Path) -> Vec<(String, PathBuf)> {
             if !path.is_dir() || !main_src.is_dir() {
                 continue;
             }
-            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-                modules.push((name.to_string(), main_src));
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if module_jar_mtime(lib_dir, name).is_none() {
+                continue;
             }
+            modules.push((name.to_string(), main_src));
         }
     }
 
@@ -7405,7 +7455,7 @@ fn local_sources_newer_than(root: &Path, lib_dir: &Path, newest_jar_mtime: std::
         _ => mtime,
     };
 
-    for (module, source_root) in bundled_module_source_roots(root) {
+    for (module, source_root) in bundled_module_source_roots(root, lib_dir) {
         // A module whose jar is missing from the bundle is either new or was
         // never assembled — either way the bundle cannot be trusted to contain it.
         let Some(jar_mtime) = module_jar_mtime(lib_dir, &module) else {
@@ -7542,11 +7592,34 @@ fn describe_staleness(staleness: &LocalBundleStaleness) -> String {
     }
 }
 
-/// Machine-readable staleness label, used by the `status` / `doctor` report.
+/// Machine-readable staleness labels, used by the `status` / `doctor` report.
+///
+/// The JSON report exposes these labels and tests key on them, so the spelling
+/// is part of the contract.
+const VERSION_MISMATCH_KIND: &str = "version_mismatch";
+const SOURCES_NEWER_THAN_BUNDLE_KIND: &str = "sources_newer_than_bundle";
+
+/// Label for a staleness kind, as exposed by `status` / `doctor`.
 fn staleness_kind(staleness: &LocalBundleStaleness) -> &'static str {
     match staleness {
-        LocalBundleStaleness::VersionMismatch { .. } => "version_mismatch",
-        LocalBundleStaleness::SourcesNewerThanBundle => "sources_newer_than_bundle",
+        LocalBundleStaleness::VersionMismatch { .. } => VERSION_MISMATCH_KIND,
+        LocalBundleStaleness::SourcesNewerThanBundle => SOURCES_NEWER_THAN_BUNDLE_KIND,
+    }
+}
+
+/// What dev mode actually does about a bundle that does not match the checkout,
+/// per staleness kind.
+///
+/// Only a version mismatch is refused; newer sources are rebuilt and served
+/// (see [`decide_local_bundle_action`]).  Rendering the refusal wording for
+/// both kinds told users to rebuild by hand when the next browser command
+/// would have done it anyway — see
+/// `coworker/tasks/issues/draft/20261016-180650-bulk-scale-routing.issues.md` (issue 2).
+fn mismatch_action(kind: &str) -> &'static str {
+    if kind == SOURCES_NEWER_THAN_BUNDLE_KIND {
+        "the next browser command rebuilds and starts it automatically"
+    } else {
+        "dev mode refuses to start"
     }
 }
 
@@ -7574,10 +7647,11 @@ fn runtime_bundle_rebuild_command(root: &Path) -> String {
 
 /// Provenance of the locally assembled dev-mode runtime bundle.
 ///
-/// Dev mode refuses to start against a bundle that does not match the checkout,
-/// and `status` / `doctor` report the same facts so a test run can be audited
-/// after the fact: which backend version actually served it, when that backend
-/// was built, and whether the staleness check was opted out of.
+/// Dev mode never serves a bundle that does not match the checkout silently: a
+/// version mismatch is a hard refusal, newer sources are rebuilt before the
+/// server starts.  `status` / `doctor` report the same facts so a test run can
+/// be audited after the fact: which backend version actually served it, when
+/// that backend was built, and whether the staleness check was opted out of.
 pub struct LocalBundleProvenance {
     /// Assembled runtime directory (`.../_work/<platform>/<platform>`).
     pub work_dir: PathBuf,
@@ -7604,7 +7678,7 @@ impl LocalBundleProvenance {
             Some(kind) if self.allow_stale => {
                 format!("no ({kind}) — allowed by {ALLOW_STALE_BUNDLE_ENV}=1")
             }
-            Some(kind) => format!("no ({kind}) — dev mode refuses to start"),
+            Some(kind) => format!("no ({kind}) — {}", mismatch_action(kind)),
         };
         vec![
             ("Bundle", self.work_dir.display().to_string()),
@@ -8469,7 +8543,7 @@ async fn start_server(
     // Ctrl+C while Spring Boot is still booting, the server survives — and the
     // next command must recognise the port as this workspace's own instead of
     // treating the listener as a neighbour and escalating to the next port.
-    let provisional_pid = resolve_managed_server_pid(child.id());
+    let provisional_pid = resolve_managed_server_pid(child.id(), port);
     register_managed_server_process(
         managed_server_entry(launch_spec, base_url, port, provisional_pid, None),
         None,
@@ -8525,7 +8599,7 @@ async fn start_server(
 
     cleanup_prepared_launch_dir(cleanup_dir.take());
 
-    let managed_pid = resolve_managed_server_pid(child.id());
+    let managed_pid = resolve_managed_server_pid(child.id(), port);
     if managed_pid != provisional_pid {
         // The launcher handed off to the real JVM: replace the claim so the
         // registry points at the process that actually owns the port.
@@ -8819,16 +8893,60 @@ fn default_cli_temp_dir() -> PathBuf {
     path
 }
 
-fn resolve_managed_server_pid(launcher_pid: u32) -> u32 {
+fn resolve_managed_server_pid(launcher_pid: u32, port: u16) -> u32 {
     #[cfg(windows)]
     {
-        resolve_windows_managed_server_pid(launcher_pid).unwrap_or(launcher_pid)
+        // The process that OWNS the listening port is the only authoritative
+        // answer. The descendant heuristic can walk into the JVM's own children
+        // (headless Chrome, helpers), whose pids die while the server keeps
+        // running: the registry then pointed at a dead pid, the port stopped
+        // looking "managed", and the next command allocated the NEXT port —
+        // starting a second backend with its own browser.
+        let port_owner = windows_listening_pid(port);
+        let last_descendant = resolve_windows_managed_server_pid(launcher_pid);
+        pick_managed_server_pid(launcher_pid, port_owner, last_descendant)
     }
 
     #[cfg(not(windows))]
     {
+        let _ = port;
         launcher_pid
     }
+}
+
+/// Choose the pid the managed-process registry should remember.
+///
+/// Precedence: the port owner (authoritative once the server is up), then the
+/// launcher's last descendant (used for the provisional claim, before the port is
+/// bound), then the launcher itself.
+fn pick_managed_server_pid(
+    launcher_pid: u32,
+    port_owner: Option<u32>,
+    last_descendant: Option<u32>,
+) -> u32 {
+    port_owner.or(last_descendant).unwrap_or(launcher_pid)
+}
+
+/// PID of the process listening on [port], or `None` when nothing listens there.
+#[cfg(windows)]
+fn windows_listening_pid(port: u16) -> Option<u32> {
+    let ps_command = format!(
+        r#"
+$conn = Get-NetTCPConnection -State Listen -LocalPort {port} -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if ($null -ne $conn) {{ $conn.OwningProcess }}
+"#
+    );
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_command])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().parse::<u32>().ok())
 }
 
 #[cfg(windows)]
@@ -9441,6 +9559,56 @@ mod tests {
         let root = find_browser4_root().unwrap();
         // println!("{:?}", root);
         assert!(root.join("ROOT.md").exists());
+    }
+
+    /// `b4.run` must execute the CLI that launched this backend, not whatever
+    /// older binary the runtime bundle happens to ship.
+    #[test]
+    fn test_launch_command_pins_the_cli_binary_for_b4_run() {
+        let spec = sample_launch_spec();
+        let prepared = command_for_launch_spec(&spec).unwrap();
+
+        let pinned = prepared
+            .command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new(CLI_BIN_ENV))
+            .and_then(|(_, value)| value)
+            .map(std::path::PathBuf::from)
+            .expect("BROWSER4_CLI_BIN must be set on the backend launch command");
+
+        let current = std::env::current_exe().expect("current exe");
+        let normalize = |p: &std::path::Path| {
+            p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+        };
+        assert_eq!(
+            normalize(&pinned),
+            normalize(&current),
+            "b4.run's CLI must be the binary that launched the backend"
+        );
+    }
+
+    /// The managed-process registry must point at the process that OWNS the
+    /// listening port, not at the launcher's last descendant: once the JVM has
+    /// spawned children (headless Chrome, helpers), that descendant dies, the port
+    /// stops looking "managed", and the next command allocates the NEXT dev port,
+    /// starting a second backend with its own browser.
+    #[test]
+    fn test_managed_server_pid_prefers_the_port_owner() {
+        assert_eq!(
+            pick_managed_server_pid(100, Some(200), Some(300)),
+            200,
+            "the port owner is authoritative"
+        );
+        assert_eq!(
+            pick_managed_server_pid(100, None, Some(300)),
+            300,
+            "before the port is bound the descendant heuristic still applies"
+        );
+        assert_eq!(
+            pick_managed_server_pid(100, None, None),
+            100,
+            "no probe resolves: fall back to the launcher itself"
+        );
     }
 
     #[test]
@@ -14022,6 +14190,115 @@ mod tests {
     }
 
     #[test]
+    fn detect_staleness_skips_core_sub_modules_the_bundle_does_not_carry() {
+        // browser4-core/ is scanned by discovery, so a sub-directory that never
+        // reaches the bundle (test support, tooling) must not be read as stale:
+        // a module without a jar means "cannot be part of the served backend",
+        // and reporting it would rebuild on every start, forever.
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        let src = tmp
+            .path()
+            .join("browser4-core")
+            .join("browser4-tests-support")
+            .join("src")
+            .join("main");
+        create_dir_all(&src).unwrap();
+        let source_file = src.join("Fresh.kt");
+        write(&source_file, "package fresh\n").unwrap();
+        set_newer_than_bundle_jar(&source_file, &lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        assert_eq!(detect_local_bundle_staleness(tmp.path(), &lib_dir), None);
+    }
+
+    #[test]
+    fn detect_staleness_flags_newer_sources_in_every_bundled_top_level_module() {
+        // These modules ship jars in the bundle's lib/ but were missing from the
+        // monitored roots, so an edit there was invisible: dev mode kept serving
+        // the older jar and `status` still reported "Matches checkout: yes".
+        for module in ["browser4-agent-tools", "browser4-boot", "browser4-coding"] {
+            let tmp = test_temp_dir();
+            write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+            let lib_dir = tmp.path().join("lib");
+            // browser4-rest is the sentinel whose jar name carries the bundle's
+            // project version; without it the bundle is "not locally built".
+            write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+            let jar_name = format!("{module}-4.13.13-SNAPSHOT.jar");
+            write_bundle_lib_jar(&lib_dir, &jar_name);
+
+            let src = tmp.path().join(module).join("src").join("main");
+            create_dir_all(&src).unwrap();
+            let source_file = src.join("Fresh.kt");
+            write(&source_file, "package fresh\n").unwrap();
+            set_newer_than_bundle_jar(&source_file, &lib_dir, &jar_name);
+
+            assert_eq!(
+                detect_local_bundle_staleness(tmp.path(), &lib_dir),
+                Some(LocalBundleStaleness::SourcesNewerThanBundle),
+                "a {module} source edit must mark the bundle stale"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_staleness_flags_browser4_common_through_the_core_scan() {
+        // browser4-common is not a top-level module — it lives under
+        // browser4-core/ and is monitored by the sub-module scan there.
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        let jar_name = "browser4-common-4.13.13-SNAPSHOT.jar";
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+        write_bundle_lib_jar(&lib_dir, jar_name);
+
+        let src = tmp
+            .path()
+            .join("browser4-core")
+            .join("browser4-common")
+            .join("src")
+            .join("main");
+        create_dir_all(&src).unwrap();
+        let source_file = src.join("Fresh.kt");
+        write(&source_file, "package fresh\n").unwrap();
+        set_newer_than_bundle_jar(&source_file, &lib_dir, jar_name);
+
+        assert_eq!(
+            detect_local_bundle_staleness(tmp.path(), &lib_dir),
+            Some(LocalBundleStaleness::SourcesNewerThanBundle)
+        );
+    }
+
+    #[test]
+    fn detect_staleness_ignores_plugin_sources() {
+        // Plugin jars are assembled into the bundle's plugins/ directory and are
+        // installed on demand, so a plugin edit must not invalidate the backend.
+        // Monitoring browser4-plugins/* would instead report stale forever: its
+        // jars never reach lib/, and a module without a jar counts as "cannot be
+        // part of the bundle" (see the missing-module test above).
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        let jar_name = "browser4-rest-4.13.13-SNAPSHOT.jar";
+        write_bundle_lib_jar(&lib_dir, jar_name);
+
+        let src = tmp
+            .path()
+            .join("browser4-plugins")
+            .join("browser4-swarm")
+            .join("src")
+            .join("main");
+        create_dir_all(&src).unwrap();
+        let source_file = src.join("Fresh.kt");
+        write(&source_file, "package fresh\n").unwrap();
+        set_newer_than_bundle_jar(&source_file, &lib_dir, jar_name);
+
+        assert_eq!(detect_local_bundle_staleness(tmp.path(), &lib_dir), None);
+    }
+
+    #[test]
     fn a_build_stamp_clears_newer_source_timestamps() {
         let tmp = test_temp_dir();
         write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
@@ -14280,6 +14557,62 @@ mod tests {
             staleness_kind(&LocalBundleStaleness::SourcesNewerThanBundle),
             "sources_newer_than_bundle"
         );
+    }
+
+    /// Provenance with only the staleness inputs under test varied.
+    fn provenance_with_staleness(
+        staleness: Option<&'static str>,
+        allow_stale: bool,
+    ) -> LocalBundleProvenance {
+        let tmp = test_temp_dir();
+        LocalBundleProvenance {
+            work_dir: tmp.path().join("work"),
+            lib_dir: tmp.path().join("work").join("lib"),
+            bundled_version: Some("4.13.13-SNAPSHOT".to_string()),
+            checked_out_version: Some("4.13.14-SNAPSHOT".to_string()),
+            built_at: Some("2026-08-25 09:12:03 +08:00".to_string()),
+            staleness,
+            allow_stale,
+        }
+    }
+
+    #[test]
+    fn report_rows_name_the_action_dev_mode_actually_takes() {
+        // Only a version mismatch refuses to start; newer sources are rebuilt
+        // and served.  Rendering the refusal wording for both kinds pointed
+        // users at a manual rebuild that was never needed (issue 2 of
+        // 20261016-180650-bulk-scale-routing).
+        fn matches_row(staleness: Option<&'static str>, allow_stale: bool) -> String {
+            provenance_with_staleness(staleness, allow_stale)
+                .report_rows()
+                .into_iter()
+                .find(|(label, _)| *label == "Matches checkout")
+                .map(|(_, value)| value)
+                .expect("the status report has a 'Matches checkout' row")
+        }
+
+        assert_eq!(matches_row(None, false), "yes");
+
+        let newer_sources = matches_row(Some(SOURCES_NEWER_THAN_BUNDLE_KIND), false);
+        assert!(
+            newer_sources.starts_with("no (sources_newer_than_bundle)"),
+            "{newer_sources}"
+        );
+        assert!(
+            newer_sources.contains("rebuilds and starts it automatically"),
+            "{newer_sources}"
+        );
+        assert!(!newer_sources.contains("refuses"), "{newer_sources}");
+
+        let version_mismatch = matches_row(Some(VERSION_MISMATCH_KIND), false);
+        assert!(
+            version_mismatch.ends_with("dev mode refuses to start"),
+            "{version_mismatch}"
+        );
+
+        let allowed = matches_row(Some(SOURCES_NEWER_THAN_BUNDLE_KIND), true);
+        assert!(allowed.contains(ALLOW_STALE_BUNDLE_ENV), "{allowed}");
+        assert!(!allowed.contains("rebuilds and starts"), "{allowed}");
     }
 
     #[test]

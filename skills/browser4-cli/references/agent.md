@@ -61,8 +61,15 @@ Use **agent** for natural-language tasks where you describe what you want withou
 ### Where the agent browses, and where it writes
 
 The agent runs **on the backend**, driving the session's own browser through the
-session's bound driver — it is not a second browser you can attach to. Two
-consequences matter in practice:
+session's bound driver — it is not a second browser you can attach to. `agent run`
+targets the CLI's current session: `-s <name>` when given, otherwise the unnamed
+slot — including a browser attached through `attach --extension` / `attach --cdp` —
+and the `swarm create` session when that is the only one recorded. A task submitted
+with no session at all (for example `--coding`) still runs without a browser, as
+before. This matters because the task never gets a browser of its own: if the
+current session is an attached one, the agent drives *that* browser.
+
+Two consequences matter in practice:
 
 - **Its navigation is not visible in your session's tab list.** The backend saves
   the URL you were on before the task and navigates back to it when the task ends,
@@ -217,12 +224,177 @@ browser4-cli summarize "summarize the product reviews"
 browser4-cli summarize --selector "#content"
 ```
 
+## Live Progress and the Interactive Session
+
+`agent run` has three levels of visibility. All three submit the SAME async task;
+they differ only in what the CLI does while it runs.
+
+| Mode | What you see |
+|---|---|
+| `agent run "<task>"` (default) | The task id, immediately. Poll later. |
+| `agent run "<task>" --wait` | A progress line every few seconds, then the result. |
+| `agent run "<task>" --follow` | Every step: tool calls, the model's own text, slow/failed tools, then the result. |
+| `agent run -i` | An interactive session: tasks one after another, steering, `/status`, `/cancel`, … |
+
+### `--follow`: watch the steps
+
+```bash
+browser4-cli agent run "Collect the top 5 products and their prices" --follow
+```
+
+```
+Task submitted: 3b27930e-48bc-4460-aae7-be521f0a9194
+[00:00] ▶ Collect the top 5 products and their prices
+[00:03] #1 b4.run({"args":"goto https://example.com/products"})
+[00:04] #2 browser_snapshot
+[00:09]   ↳ b4.run ok in 6.2s
+[00:12]   💭 The grid shows prices in a second column; I will extract both.
+[00:15] #3 htmlsnapshot_query({"sql":"..."})
+✔ Agent completed in 41.3s:
+{"summary":"Top 5 products extracted", ...}
+```
+
+- One line per tool **call**; a completion line only for a **slow** (>2 s) or
+  **failed** tool, so a 100-tool run stays readable. Failures always print the
+  first ~240 characters of the tool output.
+- `--follow` has **no default timeout** (unlike `--wait`); pass
+  `--wait-timeout <secs>` to bound it. On timeout the CLI exits non-zero and the
+  task keeps running server-side.
+- **Ctrl+C cancels the task** (the same thing `agent cancel <task-id>` does) and
+  exits — it no longer leaves an orphan running in the background.
+
+`--ndjson` turns the same stream into machine output — every stdout line is one
+JSON object, with no human prose:
+
+```bash
+browser4-cli agent run "Collect the top 5 products" --follow --ndjson | jq -c 'select(.type=="tool.call")'
+```
+
+```json
+{"type":"task.submitted","taskId":"…","task":"Collect the top 5 products"}
+{"taskId":"…","seq":3,"type":"tool.call","epochMillis":1761…,"tool":"b4.run","arguments":"{\"args\":\"goto …\"}","turn":1}
+{"taskId":"…","seq":4,"type":"tool.result","epochMillis":1761…,"tool":"b4.run","ok":true,"durationMs":6200,"text":"…","turn":1}
+{"taskId":"…","seq":5,"type":"run.usage","epochMillis":1761…,"turn":1,"inputTokens":4821,"outputTokens":212,"totalTokens":5033}
+{"taskId":"…","type":"task.result","status":"done","elapsedMs":41300,"result":{"summary":"…"}}
+```
+
+`run.usage` is one line per model request, carrying the provider's token counts
+(`inputTokens`/`outputTokens`/`totalTokens`, omitted when the provider reports
+none) — the same numbers `/stats` sums.
+
+The visible detail is deliberately bounded: tool arguments and results are
+truncated to ~240 characters, and values whose key names a credential
+(`password`, `token`, `apiKey`, …) are redacted to `***`. Typed text is redacted
+when its selector names a credential field (`input[type=password]`).
+
+### `agent run -i`: the interactive session
+
+```bash
+browser4-cli agent run -i
+```
+
+```
+agent> Summarize the pricing page
+[00:02] #1 b4.run({"args":"goto https://example.com/pricing"})
+...
+✔ done in 18.4s · 5b0c… 
+{"summary":"…"}
+
+agent> now compare it with the enterprise page
+```
+
+A line typed while a task is running is **steering**, not a new task: it is sent
+to the running task and injected into the agent as a user message at its next
+model round-trip.
+
+```
+agent> Summarize the pricing page
+[00:02] #1 b4.run(...)
+> also include the enterprise tier
+↪ steering queued — the agent sees it at its next model round
+```
+
+Steering is best-effort by design: it lands at the next model round (immediately
+for browser tasks that call a tool per round; possibly after a long tool round
+for coding tasks). If the task finished while you were typing, the CLI says so
+and keeps the session open.
+
+Session commands:
+
+| Command | Effect |
+|---|---|
+| `/help` | List the commands |
+| `/status` | Status of the running (or last) task |
+| `/stats [task-id]` | Run statistics: LLM rounds and requests, token usage, tool calls |
+| `/result` | Print the last finished task's result |
+| `/cancel` | Cancel the running task (same as Ctrl+C) |
+| `/new` | Start a new session — the next task gets a fresh agent context |
+| `/session` | Print the current session id |
+| `/coding [on\|off]` | Treat following tasks as coding tasks |
+| `/noop-limit <n>` | Consecutive no-op abort threshold (blank resets) |
+| `/events [n]` | Raw JSON of the last n steps (default 20) |
+| `/quit` | Leave the session |
+
+#### `/stats`: what the run cost
+
+```
+agent> /stats
+5b0c3f2a · running · 3m12s
+  llm     3 round(s) · 11 request(s)
+  tokens  in 48,231 · out 6,120 · total 54,351
+  tools   39 call(s) · 2 failed (b4.run 12, browser_snapshot 8)
+  steps   132 · 1 steering message(s)
+```
+
+- **llm**: outer agent `round`s (each may issue several model requests) and the
+  model `request`s themselves — the honest "how many LLM calls" count.
+- **tokens**: what the provider reported, summed per request. `not reported by
+  the provider` means the calls happened but the provider sent no usage block
+  (a local model, a gateway that drops it) — it is not a measured zero.
+- **tools**: tool calls, how many failed, and the most-called tools.
+- **steps**: every step the run emitted; `dropped from the buffer` appears when
+  the backend's bounded step log evicted older steps (the counters still include
+  them).
+
+The numbers come from `GET /api/commands/{id}/stats`, which counts every step as
+it is appended — they stay exact even for steps the step log no longer retains.
+`/stats <task-id>` reports another task of this session. Against a backend
+without that endpoint the report is labelled `counted by this session` and can
+only undercount: it holds the steps this session actually saw.
+
+The counters are reported by the CLI engine (`--engine cli`, the default). The
+deprecated observe-act engine emits lifecycle steps only, so its rounds and
+token counters stay at 0.
+
+An optional task runs immediately: `agent run -i "Summarize this page"`.
+With piped stdin the banner and prompt are omitted, so a harness can drive the
+session: `printf 'task one\n/quit\n' | browser4-cli agent run -i`.
+
+### Backend requirements and compatibility
+
+Live steps come from `GET /api/commands/{id}/events` (a per-task in-memory step
+log polled with a sequence cursor), and steering from
+`POST /api/commands/{id}/input`. Both are served by a current backend.
+
+Against an **older backend** the CLI degrades instead of failing:
+
+- `--follow` prints one notice and falls back to status polling — the same
+  progress lines `--wait` shows, then the result;
+- `-i` reports that the backend cannot accept steering input and ignores the
+  typed line (the task keeps running).
+
+The `queued`/`running`/`done`/`failed`/`cancelled` vocabulary and the result
+payload are identical in every mode.
+
 ## Flags
 
 | Flag | Applies to | Description |
 |------|-----------|-------------|
 | `--wait` | `agent run` | Block until the task reaches a terminal state, then print the result |
-| `--wait-timeout <secs>` | `agent run` | Wait window in seconds (default 600; env `BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS`) |
+| `--wait-timeout <secs>` | `agent run` | Wait window in seconds (default 600 for `--wait`; no cap for `--follow`) or a cap for `--follow` |
+| `--follow` | `agent run` | Stream the task's steps while waiting, then print the result. Ctrl+C cancels the task |
+| `--ndjson` | `agent run --follow` | Emit one JSON object per line (submission, every step, the final result) instead of human lines |
+| `-i`, `--interactive` | `agent run` | Open an interactive session (see above); an optional task runs immediately |
 | `--coding` | `agent run` | Explicitly mark the task as a coding task (plain file/build work; no browser page). Omitted (the default) the task is a browser task — task type is never auto-detected |
 | `--json` | `agent status`, `agent result`, `agent list` | Emit the envelope as JSON instead of the human rendering |
 | `--all` | `agent list --clear` | Also untrack tasks that are not finished (they keep running server-side) |

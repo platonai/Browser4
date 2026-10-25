@@ -102,6 +102,48 @@ class CliProcessManagerTest {
     }
 
     @Test
+    @DisplayName("b4.run inherits the checkout's CLI state namespace")
+    fun stateNamespacePassthrough() {
+        // b4.run's cwd is the task workspace, outside the checkout. Without the
+        // invocation dir the child CLI resolved the global ~/.browser4 state, saw
+        // a stale session and re-attached — creating extra sessions and browsers
+        // instead of driving the session it was given.
+        val mgr = CliProcessManager(
+            CliBinaryResolver(explicitPath = pwshPath()),
+            processEnv = mapOf(
+                "PATH" to (System.getenv("PATH") ?: ""),
+                "BROWSER4_CLI_INVOKE_DIR" to "/repo/checkout",
+                "BROWSER4_CLI_STATE_DIR" to "/state/dir",
+            ),
+        )
+
+        val spec = mgr.resolve(CliRunRequest(args = "status"))
+
+        assertTrue(
+            spec.env["BROWSER4_CLI_INVOKE_DIR"] == "/repo/checkout",
+            "invocation dir must reach the CLI: ${spec.env}"
+        )
+        assertTrue(
+            spec.env["BROWSER4_CLI_STATE_DIR"] == "/state/dir",
+            "state dir must reach the CLI: ${spec.env}"
+        )
+    }
+
+    @Test
+    @DisplayName("a production backend does not invent a state namespace")
+    fun stateNamespaceNotInvented() {
+        val mgr = CliProcessManager(
+            CliBinaryResolver(explicitPath = pwshPath()),
+            processEnv = mapOf("PATH" to (System.getenv("PATH") ?: "")),
+        )
+
+        val spec = mgr.resolve(CliRunRequest(args = "status"))
+
+        assertFalse(spec.env.containsKey("BROWSER4_CLI_INVOKE_DIR"), "env: ${spec.env}")
+        assertFalse(spec.env.containsKey("BROWSER4_CLI_STATE_DIR"), "env: ${spec.env}")
+    }
+
+    @Test
     @Tag("Slow")
     @DisplayName("tree kill: grandchild is terminated with the parent")
     fun treeKill() = runBlocking {

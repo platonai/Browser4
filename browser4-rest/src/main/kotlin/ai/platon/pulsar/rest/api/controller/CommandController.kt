@@ -1,13 +1,19 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.rest.api.entities.CommandEventsResponse
+import ai.platon.pulsar.rest.api.entities.CommandInputRequest
+import ai.platon.pulsar.rest.api.entities.CommandInputResponse
 import ai.platon.pulsar.rest.api.entities.CommandResult
+import ai.platon.pulsar.rest.api.entities.CommandStatsResponse
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.CommandSubmitResponse
+import ai.platon.pulsar.rest.api.entities.statusWord
 import ai.platon.pulsar.rest.api.support.SessionResolution
 import ai.platon.pulsar.rest.api.support.toServerSentEvents
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
@@ -16,6 +22,7 @@ import org.springframework.http.ResponseEntity
 import org.springframework.http.codec.ServerSentEvent
 import org.springframework.web.bind.annotation.*
 import reactor.core.publisher.Flux
+import java.time.Duration
 import java.time.Instant
 
 /**
@@ -252,6 +259,164 @@ class CommandController(
     }
 
     /**
+     * The live step log of an agent task — what the task actually did.
+     *
+     * `GET /api/commands/{id}/status` answers "is it still running"; this answers
+     * "what is it doing": one entry per model round, tool call and tool result,
+     * each with a monotonic `seq`. Clients follow a task by calling this with
+     * `?after=<nextSeq>` and stop when `done` is true — a cursor model instead of
+     * SSE, so a follower reconnects naturally and is unaffected by proxies that
+     * buffer responses.
+     *
+     * Events live in memory next to the task status and are bounded (the oldest
+     * fall out first): a task restored after a backend restart has a status but
+     * no events. `after` beyond the retained tail simply returns an empty page
+     * with `nextSeq` unchanged — never an error.
+     *
+     * @param id task id (the same id `agent run` prints)
+     * @param after cursor: only events with a greater `seq` are returned
+     * @param limit page size (clamped to [MAX_EVENTS_PAGE])
+     * @param sessionId optional session, used only to find the owning runner
+     * @return `200` + [CommandEventsResponse], `404` when the id is unknown
+     * */
+    @GetMapping("/{id}/events")
+    fun getEvents(
+        @PathVariable id: String,
+        @RequestParam(name = "after", defaultValue = "0") after: Long,
+        @RequestParam(name = "limit", defaultValue = "200") limit: Int,
+        @RequestParam(name = "sessionId", required = false) sessionId: String? = null,
+    ): ResponseEntity<CommandEventsResponse> {
+        val effectiveSessionId = SessionResolution.firstNamedOrDefault(sessionId)
+        val status = commandExecutor.getStatus(effectiveSessionId, id)
+        val events = commandExecutor.events(id, after, limit.coerceIn(1, MAX_EVENTS_PAGE))
+        if (status == null && events.isEmpty()) {
+            return ResponseEntity.notFound().build()
+        }
+
+        // The status cache expires 2h after its last WRITE while the event log
+        // expires after its last read — so a followed task can keep its log and
+        // lose its status row. Deriving the terminal state from the last terminal
+        // event keeps `done` honest then; reporting `false` forever would make an
+        // uncapped follower poll indefinitely.
+        val terminal = events.lastOrNull { it.type in TERMINAL_EVENT_TYPES }
+        val word = status?.statusWord() ?: when (terminal?.type) {
+            AgentTaskEvent.TYPE_DONE -> STATUS_DONE
+            AgentTaskEvent.TYPE_FAILED -> STATUS_FAILED
+            AgentTaskEvent.TYPE_CANCELLED -> STATUS_CANCELLED
+            else -> STATUS_UNKNOWN
+        }
+
+        return ResponseEntity.ok(
+            CommandEventsResponse(
+                taskId = id,
+                status = word,
+                done = status?.isDone ?: (terminal != null),
+                // An empty page must not move the cursor backwards: report the one
+                // the caller asked with, so the next poll is idempotent.
+                nextSeq = events.lastOrNull()?.seq ?: after,
+                events = events,
+            )
+        )
+    }
+
+    /**
+     * The aggregate run statistics of an agent task: what a run actually cost.
+     *
+     * Answers "how many LLM calls, how many tool calls, how many tokens" for the
+     * interactive session's `/stats` command. The counters are maintained by the
+     * task runner's event log as steps are appended, so they stay exact after
+     * steps fall out of the bounded buffer (a client cannot reconstruct them by
+     * counting events it received).
+     *
+     * `404` means this backend has no log for the id: the task never existed,
+     * belonged to another backend process, or its log's idle TTL expired. The
+     * status row may also be gone while the counters survive — `status` is then
+     * `unknown`, which is why this response carries its own `status`/`isDone`
+     * instead of making the caller fetch the status envelope.
+     *
+     * @param id task id (the same id `agent run` prints)
+     * @param sessionId optional session, used only to find the owning runner
+     * @return `200` + [CommandStatsResponse], `404` when no run log exists
+     * */
+    @GetMapping("/{id}/stats")
+    fun getStats(
+        @PathVariable id: String,
+        @RequestParam(name = "sessionId", required = false) sessionId: String? = null,
+    ): ResponseEntity<CommandStatsResponse> {
+        val effectiveSessionId = SessionResolution.firstNamedOrDefault(sessionId)
+        val stats = commandExecutor.stats(id) ?: return ResponseEntity.notFound().build()
+        val status = commandExecutor.getStatus(effectiveSessionId, id)
+
+        // Elapsed time: the status row is the authority once the task started
+        // (it survives a log eviction and keeps updating while the run is in
+        // flight); the counters' own time span is the fallback when the row is
+        // gone but the log is not.
+        val now = Instant.now()
+        val started = status?.startedTime
+            ?: stats.firstEpochMillis?.let { Instant.ofEpochMilli(it) }
+        val finished = when {
+            status?.isDone == true -> status.finishTime ?: status.lastModifiedTime ?: now
+            status != null -> now
+            else -> stats.lastEpochMillis?.let { Instant.ofEpochMilli(it) }
+        }
+        val elapsedMs = if (started != null) {
+            Duration.between(started, finished ?: now).toMillis().coerceAtLeast(0)
+        } else {
+            null
+        }
+
+        return ResponseEntity.ok(
+            CommandStatsResponse(
+                taskId = id,
+                status = status?.statusWord() ?: STATUS_UNKNOWN,
+                processState = status?.processState ?: STATUS_UNKNOWN,
+                isDone = status?.isDone ?: false,
+                elapsedMs = elapsedMs,
+                stats = stats,
+            )
+        )
+    }
+
+    /**
+     * Steer a running agent task: the message is injected at the agent's next
+     * model round-trip.
+     *
+     * This is the transport behind the interactive `agent run -i` session, where
+     * a line typed while the task runs must change what the agent does next
+     * instead of queueing a second task. `accepted=false` is a normal answer (the
+     * task finished while the user was typing) and is reported inline rather
+     * than as an HTTP error.
+     *
+     * @param id task id
+     * @param request the steering text
+     * @return `200` + [CommandInputResponse]; `400` for a blank text
+     * */
+    @PostMapping("/{id}/input")
+    fun postInput(
+        @PathVariable id: String,
+        @RequestBody request: CommandInputRequest,
+    ): ResponseEntity<CommandInputResponse> {
+        val text = request.text.trim()
+        if (text.isEmpty()) {
+            return ResponseEntity.badRequest()
+                .body(CommandInputResponse(id, accepted = false, message = "text must not be blank"))
+        }
+
+        val accepted = commandExecutor.sendInput(id, text)
+        return ResponseEntity.ok(
+            CommandInputResponse(
+                taskId = id,
+                accepted = accepted,
+                message = if (accepted) {
+                    "queued: the agent sees it at its next model round"
+                } else {
+                    "task is not running or does not accept input"
+                },
+            )
+        )
+    }
+
+    /**
      * Cancel a running/queued agent task by id.
      *
      * Cancelling interrupts the agent loop and marks the task failed with
@@ -291,5 +456,23 @@ class CommandController(
         // expects only JSON data, not the event ID nor the event name.
         return commandExecutor.commandStatusFlow(effectiveSessionId, id)
             .toServerSentEvents(commandExecutor.launchScope(), logger)
+    }
+
+    private companion object {
+        /** Upper bound of one `events` page (`?limit=`). */
+        const val MAX_EVENTS_PAGE = 1000
+
+        /** Status word when the id has events but no resolvable status row. */
+        const val STATUS_UNKNOWN = "unknown"
+        const val STATUS_DONE = "done"
+        const val STATUS_FAILED = "failed"
+        const val STATUS_CANCELLED = "cancelled"
+
+        /** Event types that mean "this task will not produce anything else". */
+        val TERMINAL_EVENT_TYPES = setOf(
+            AgentTaskEvent.TYPE_DONE,
+            AgentTaskEvent.TYPE_FAILED,
+            AgentTaskEvent.TYPE_CANCELLED,
+        )
     }
 }

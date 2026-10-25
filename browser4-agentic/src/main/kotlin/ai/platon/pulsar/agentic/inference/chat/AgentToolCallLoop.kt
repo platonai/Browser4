@@ -141,6 +141,14 @@ class AgentToolCallLoop(
         ToolExecutionResultMessage,
         ToolExecutionResultMessage,
     ) -> Unit = { _, _, _ -> },
+    /**
+     * Called at the very top of every loop iteration with the loop's LIVE
+     * message list, before compression and before the model request. The caller
+     * uses it to inject user steering: a message appended here reaches the next
+     * inference of the SAME round instead of waiting for the round to finish (a
+     * coding round may run up to 60 tool calls).
+     */
+    private val onBeforeIteration: (MutableList<ChatMessage>) -> Unit = {},
 ) {
     private val logger = getLogger(AgentToolCallLoop::class)
 
@@ -195,6 +203,10 @@ class AgentToolCallLoop(
         var overflowRetries = 0
 
         for (iteration in 0 until maxIterations) {
+            // Steering injection point (see [onBeforeIteration]): a user message
+            // appended here is part of the compressed, token-checked context the
+            // model sees on this very round-trip.
+            onBeforeIteration(messages)
             // Automatic context compression: prune over-budget tool results,
             // then compact the oldest rounds into a checkpoint when pressure
             // exceeds the threshold. Keeps the loop's O(N²) re-send cost

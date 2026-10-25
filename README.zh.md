@@ -58,7 +58,7 @@
 * 🧬 **零 Token 提取** — 用 X-SQL + CSS 选择器从实时页面或存储的 HTML 快照中确定性提取；WebMiner 机器学习聚类把 HTML 语料整理成电子表格与报告视图，全程不消耗 LLM Token。
 * 🧠 **混合智能** — 融合 LLM 提取、ML 聚类、X-SQL 与渐进式经验库，复用已习得的选择器与障碍处理经验。
 * ⚡ **高性能架构** — 协程安全、CDP 原生，面向单机每天 10 万～20 万复杂网页访问设计，可经 swarm/crawl 横向扩展。
-* 📦 **企业级自动化平台** — 大规模爬取（swarm/crawl）、批处理/循环任务、有状态会话、插件、运行时 skills、浏览器扩展与 MCP-over-HTTP。
+* 📦 **企业级自动化平台** — 大规模爬取（swarm/crawl）、批处理/循环任务、有状态会话、插件、运行时 skills、浏览器扩展，以及可选的 MCP-over-HTTP 端点。
 * 🛠️ **编程 Agent 内核** — 50+ 个 `coding.*` 工具（沙箱 shell/文件系统、脚手架、校验、自开发），让 Agent 既能构建 Browser4 工件，也能开发 Browser4 本身。
 
 ## 快速开始
@@ -525,7 +525,7 @@ browser4-cli htmlsnapshot readability --text-only --all
 | `summarize [instruction]` | 总结当前页面内容。支持 `--selector`、`--filename`、`--raw`、`--stdout`。 |
 | `chat <message>` | 发送纯 AI chat 请求，不自动追加浏览器上下文。 |
 | `chat-result <id>` | 获取异步 chat 任务结果。 |
-| `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。任务类型默认为浏览器任务；`--coding` 显式标记纯编码任务（不做自动判定） |
+| `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。`--follow` 实时输出每一步（工具调用、模型发言、慢/失败工具）并以结果收尾——Ctrl+C 会取消任务；`--ndjson` 把同一流输出为每行一个 JSON 对象。`-i` 进入交互会话，任务运行中键入的内容会注入该任务（steering）；`/stats` 报告本次运行的 LLM 轮次/请求数、token 消耗与工具调用，`/help` 列出会话命令。任务类型默认为浏览器任务；`--coding` 显式标记纯编码任务（不做自动判定） |
 | `agent status <id>` | 查询任务状态——共享状态信封（`status`：queued/running/done/failed/cancelled，另有 `statusCode`、`message` 与 agent 步数）。 |
 | `agent result <id>` | 获取已完成任务的结果：摘要、`keyFindings`、`filesChanged`，以及产物所在的 workspace 目录。 |
 | `agent list` | 列出已跟踪的 agent 任务（状态与 `agent status` 一致，每次调用都会向服务端刷新）；`--clear` 可移除已结束的任务。 |

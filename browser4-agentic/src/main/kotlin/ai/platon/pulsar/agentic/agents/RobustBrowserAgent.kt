@@ -61,6 +61,18 @@ private const val CLI_CONTINUE_NUDGE =
         "Otherwise continue working with tools. Do not answer in plain text unless you are done."
 /** How often the CLI tool loop emits a liveness event (every N tool executions). */
 private const val CLI_TOOL_PROGRESS_EVENT_INTERVAL = 5
+
+/**
+ * Framing of a user steering message injected mid-run.
+ *
+ * The model sees a steady stream of tool results and nudges; an unframed
+ * sentence could be mistaken for another automatic nudge. The header states the
+ * authority of the message explicitly, so a mid-round injection is obeyed
+ * instead of being treated as commentary.
+ */
+private const val CLI_STEERING_PREFIX =
+    "[User steering — the user sent this while the task is running. Apply it from now on; " +
+        "it overrides the earlier plan.]"
 /** Explicit tool domains exposed to the CLI engine (design v0.2 §4.4; memory §7.1). */
 private val CLI_ENGINE_DOMAINS = setOf("coding", "b4", "system", "memory")
 
@@ -328,6 +340,31 @@ open class RobustBrowserAgent(
      */
     @Volatile
     var workspaceDirOverride: Path? = null
+
+    /**
+     * Live step sink of the current run, set by the task runner
+     * ([ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner]).
+     *
+     * Every model round, tool call and tool result of the CLI engine is reported
+     * here, which is what `agent run --follow` and the interactive REPL render.
+     * `null` (no observer) costs one branch per step. The runner clears it in
+     * its `finally`, like every other per-task override: the companion agent is
+     * shared by all tasks of a session.
+     */
+    @Volatile
+    var runEventListener: ((AgentRunEvent) -> Unit)? = null
+
+    /**
+     * Drain for the current run's user steering messages, set by the task
+     * runner. Whatever the user typed into the interactive session while the
+     * task was running is injected as a user message at the next model
+     * round-trip (see [drainSteering]).
+     *
+     * A lambda rather than the queue itself keeps ownership in the runner, which
+     * also removes the queue when the task ends.
+     */
+    @Volatile
+    var steeringSource: (() -> List<String>)? = null
 
     /**
      * Test/runtime override of the agent memory root directory (defaults to
@@ -972,6 +1009,12 @@ open class RobustBrowserAgent(
             var mutationsSeen = agentToolManager.codingFs.mutationsSnapshot().size
             while (!isClosed && turn < maxTurns) {
                 val toolsBefore = toolExecutions.get()
+                emitRunEvent(AgentRunEvent(AgentRunEvent.ROUND_START, turn = turn + 1))
+                // User steering typed while this task runs (interactive session).
+                // Appended to the durable message list so it survives the next
+                // round's rebuild; the tool loop drains again before every
+                // inference for messages that arrive mid-round.
+                drainSteering { messages = messages + it }
                 // Per-round executed-tool records, populated by the loop's
                 // onToolResult callback and summarized into the continuation.
                 val roundToolRecords = mutableListOf<RoundToolRecord>()
@@ -996,12 +1039,19 @@ open class RobustBrowserAgent(
                     action.action, completionRef, toolExecutions,
                     initialSpecsOverride = exposedSpecsThisRun,
                     toolRecords = roundToolRecords,
+                    turn = turn + 1,
                 )
                 // P1-1: the inference timeout now applies PER LLM CALL inside
                 // AgentToolCallLoop — NOT to the whole round. A round with many
                 // tool calls and long subprocess commands (b4.run up to 600s)
                 // must not be killed mid-progress by a single global budget.
                 val response = loop.generate(roundMessages)
+                // Live view: the model's own words are the most informative
+                // single line of a round (`agent run --follow` prints them).
+                val modelText = response.content
+                if (modelText.isNotBlank()) {
+                    emitRunEvent(AgentRunEvent(AgentRunEvent.MODEL_TEXT, text = modelText, turn = turn + 1))
+                }
                 // P2-3: keep whatever the model exposed on the next round.
                 exposedSpecsThisRun = loop.exposedSpecsSnapshot()
                 // P1.3: remember the newest verification verdict this round
@@ -1150,6 +1200,8 @@ open class RobustBrowserAgent(
         initialSpecsOverride: List<dev.langchain4j.agent.tool.ToolSpecification>? = null,
         /** P1-2: per-round executed-tool records for the continuation digest. */
         toolRecords: MutableList<RoundToolRecord> = mutableListOf(),
+        /** 1-based outer round number this loop serves (event metadata). */
+        turn: Int = 0,
     ): AgentToolCallLoop {
         val conf = session.sessionConfig
         val initialToolSet = conf.get("browser4.agent.toolLoop.initialToolSet") ?: "core"
@@ -1222,8 +1274,27 @@ open class RobustBrowserAgent(
             // model request actually carries (exposed set + meta tools), NOT
             // the full registry — the dump must reconstruct the real prompt.
             onBeforeGenerate = { msgs, specs -> cliLoopTracer.logPrompt(msgs, specs) },
-            onModelResponse = { seq, response -> cliLoopTracer.logResponse(seq, response) },
+            // The provider's usage for this request reaches the run's stats as a
+            // `run.usage` step (token accounting for `/stats`): the tracer writes
+            // the same numbers to `cli-usage.jsonl`, but only on disk — a client
+            // following the task had no way to see token consumption at all.
+            onModelResponse = { seq, response ->
+                cliLoopTracer.logResponse(seq, response)
+                emitUsageEvent(response, turn)
+            },
             onToolResult = { req, result, durationMs ->
+                // Live view: one event per executed tool (`agent run --follow`).
+                val resultText = result.text()
+                emitRunEvent(
+                    AgentRunEvent(
+                        AgentRunEvent.TOOL_RESULT,
+                        tool = req.name(),
+                        ok = !resultText.trimStart().startsWith("[fail]"),
+                        durationMs = durationMs,
+                        text = resultText,
+                        turn = turn,
+                    )
+                )
                 cliLoopTracer.logTool(req, result, durationMs)
                 // P1-2: record executed tools (meta plumbing excluded — it is
                 // neither task progress nor useful context for the model).
@@ -1280,6 +1351,9 @@ open class RobustBrowserAgent(
                 }
             },
             onToolRequest = { name, argsJson ->
+                emitRunEvent(
+                    AgentRunEvent(AgentRunEvent.TOOL_CALL, tool = name, arguments = argsJson, turn = turn)
+                )
                 if (name == taskCompleteName) {
                     runCatching {
                         val completion = TaskCompletion.fromJson(argsJson)
@@ -1300,7 +1374,82 @@ open class RobustBrowserAgent(
                     }.onFailure { logger.warn("cli-agent taskComplete parse failed: {}", it.message) }
                 }
             },
+            // Steering arrives mid-round for the interactive session: inject it
+            // right before the next inference so the model can react within the
+            // current round instead of after it.
+            onBeforeIteration = { innerMessages -> drainSteering { innerMessages.add(it) } },
         )
+    }
+
+    /**
+     * Report one run step to the task runner.
+     *
+     * Observer failures are swallowed on purpose: rendering progress must never
+     * be able to break the run it observes (`StatefulAgentRunner` listens for
+     * every tool call of every task in the session).
+     */
+    private fun emitRunEvent(event: AgentRunEvent) {
+        runEventListener?.let { listener ->
+            runCatching { listener(event) }
+                .onFailure { logger.debug("run event listener failed: {}", it.message) }
+        }
+    }
+
+    /**
+     * Report one model request's provider usage as a [AgentRunEvent.USAGE] step.
+     *
+     * One event per successful request (not one per run): a tool-calling round
+     * may issue several requests, and compaction issues its own, so a single
+     * end-of-run total could only be approximated. The token fields stay `null`
+     * when the provider reports no usage — the request is still counted.
+     *
+     * @param response the provider's answer for this request
+     * @param turn 1-based outer round the request belongs to (0 for auxiliary calls)
+     * @param category [AgentRunEvent.USAGE_CATEGORY_COMPACTION] for a compaction call
+     */
+    private fun emitUsageEvent(response: ChatResponse, turn: Int, category: String? = null) {
+        val usage = runCatching { response.tokenUsage() }.getOrNull()
+        emitRunEvent(
+            AgentRunEvent(
+                AgentRunEvent.USAGE,
+                text = category,
+                turn = turn,
+                inputTokens = usage?.inputTokenCount(),
+                outputTokens = usage?.outputTokenCount(),
+                totalTokens = usage?.totalTokenCount(),
+            )
+        )
+    }
+
+    /**
+     * Drain queued user steering messages into [sink].
+     *
+     * Steering is drained at every model round-trip — at the top of the outer
+     * round, and inside the tool loop before every inference ([AgentToolCallLoop.onBeforeIteration]) —
+     * so a message typed while the agent is mid-round reaches the very next
+     * model request instead of waiting for the round (up to 60 tool calls) to
+     * finish.
+     *
+     * @param sink receives one [UserMessage] carrying all pending lines
+     * @return the number of injected lines (0 when nothing was queued)
+     */
+    private fun drainSteering(sink: (ChatMessage) -> Unit): Int {
+        val lines = runCatching { steeringSource?.invoke() }
+            .getOrNull()
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            .orEmpty()
+        if (lines.isEmpty()) return 0
+
+        val text = lines.joinToString("\n")
+        runCatching { sink(UserMessage.from("$CLI_STEERING_PREFIX\n$text")) }
+            .onFailure { logger.warn("cli-agent.steer injection failed: {}", it.message) }
+        emitRunEvent(AgentRunEvent(AgentRunEvent.STEER, text = text))
+        logger.info(
+            "🧭 cli-agent.steer agent={} lines={} text='{}'",
+            uuid, lines.size, Strings.compactInline(text, 100)
+        )
+        return lines.size
     }
 
     /**
@@ -1713,6 +1862,9 @@ open class RobustBrowserAgent(
         // P2-5: record the compaction call's usage so token accounting is not
         // blind to the auxiliary summarization requests.
         cliLoopTracer.logCompactionUsage(response)
+        // The same call also reaches the run stats: compaction tokens are part of
+        // what the run consumed, and hiding them made `/stats` under-report.
+        emitUsageEvent(response, turn = 0, category = AgentRunEvent.USAGE_CATEGORY_COMPACTION)
         return response.aiMessage().text() ?: ""
     }
 

@@ -9,7 +9,7 @@ import ai.platon.pulsar.agentic.tools.TaskEnvelopes
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.CommandStatus
-import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.rest.api.entities.statusWord
 import java.time.Duration
 import java.time.Instant
 import kotlin.reflect.KClass
@@ -339,15 +339,7 @@ class CommandToolExecutor(
     }
 
     /** `CommandStatus` mapped onto the shared status vocabulary. */
-    private fun statusWord(status: CommandStatus): String = when {
-        // A cancelled task is done and non-OK, but calling it "failed" turns a
-        // user-requested cancel into an unexplained failure on every later poll —
-        // the flag (set only by explicit cancel/close paths) wins over the code.
-        status.isDone && status.cancelled -> "cancelled"
-        status.isDone -> if (status.statusCode == ResourceStatus.SC_OK) "done" else "failed"
-        status.processState == "created" -> "queued"
-        else -> "running"
-    }
+    private fun statusWord(status: CommandStatus): String = status.statusWord()
 
     /**
      * Why a cancellation did not happen.

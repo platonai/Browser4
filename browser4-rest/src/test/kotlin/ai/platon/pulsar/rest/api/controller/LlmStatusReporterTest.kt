@@ -24,6 +24,7 @@ class LlmStatusReporterTest {
 
     private val touchedProperties = listOf(
         "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL_NAME", "OPENAI_BASE_URL", "llm.provider",
+        "browser4.test.llm.responseDir", "browser4.test.llm.responseFile",
     )
 
     @AfterEach
@@ -59,12 +60,46 @@ class LlmStatusReporterTest {
      * a hard-coded "config_file" for environment-provided keys).
      */
     private fun assertDetectedViaIsHonest(report: Map<String, Any?>) {
+        // The file-backed test LLM (enabled through the environment on a machine
+        // that runs the e2e suite) legitimately wins over provider keys — but the
+        // report must still agree that an LLM is configured.
+        if (report["detectedVia"] == LlmStatusReporter.SOURCE_TEST_FILE_BACKED) {
+            assertEquals(
+                true,
+                report["configured"],
+                "a scripted model is a configured LLM; the honesty check must not go blind",
+            )
+            return
+        }
         val sources = configuredKeys(report).map { it["source"] }.distinct()
         when (sources.size) {
             0 -> assertNull(report["detectedVia"])
             1 -> assertEquals(sources.first(), report["detectedVia"])
             else -> assertEquals(LlmStatusReporter.SOURCE_MULTIPLE, report["detectedVia"])
         }
+    }
+
+    @Test
+    @DisplayName("the file-backed test LLM is reported as test_file_backed, not as 'no LLM'")
+    fun fileBackedTestLlmIsReported() {
+        // The e2e harness gates every mock-LLM scenario on exactly this value; a
+        // null here made the whole family skip itself ("backend does not support
+        // file-backed mock LLM responses").
+        System.setProperty("browser4.test.llm.responseDir", "does-not-need-to-exist")
+
+        val report = LlmStatusReporter.report(isolatedConfig())
+
+        assertEquals(true, report["configured"], "a scripted model IS a configured LLM")
+        assertEquals(LlmStatusReporter.SOURCE_TEST_FILE_BACKED, report["detectedVia"])
+
+        System.clearProperty("browser4.test.llm.responseDir")
+        // The mirror property is accepted too (JVM tests enable the mock without
+        // touching the process environment).
+        System.setProperty("browser4.test.llm.responseFile", "does-not-need-to-exist")
+        assertEquals(
+            LlmStatusReporter.SOURCE_TEST_FILE_BACKED,
+            LlmStatusReporter.report(isolatedConfig())["detectedVia"],
+        )
     }
 
     @Test

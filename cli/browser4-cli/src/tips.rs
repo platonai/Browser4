@@ -302,6 +302,12 @@ const TIPS_AGENT: &[Tip] = &[
     Tip {
         text: "Task type is browser by default — pass `agent run --coding` to explicitly mark a pure coding task (file/build work, no browser page)",
     },
+    Tip {
+        text: "`agent run \"<task>\" --follow` streams every tool call and the model's own text; Ctrl+C cancels the task instead of orphaning it",
+    },
+    Tip {
+        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls",
+    },
 ];
 
 const TIPS_WEBMINER: &[Tip] = &[
