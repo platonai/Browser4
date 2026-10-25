@@ -30,6 +30,28 @@ class LlmStatusReporterTest {
     @AfterEach
     fun cleanUp() {
         touchedProperties.forEach { System.clearProperty(it) }
+        candidateKeyNames().forEach { System.clearProperty(it) }
+    }
+
+    /** The provider keys the report inspects, plus the generic legacy key. */
+    private fun candidateKeyNames(): List<String> =
+        (ChatModelFactory.SUPPORTED_API_KEY_NAMES + "LLM_API_KEY").distinct()
+
+    /**
+     * Blank every key that the process environment exports but [keep] excludes.
+     *
+     * Denying a provider only stops it from *winning* the auto-detection race: a
+     * key that is present but denied still counts as "configured" (the historical
+     * generosity callers rely on).  A developer machine that exports a real key
+     * would therefore make "not configured" unobservable, so the exported keys are
+     * pinned to an empty value in the system-property layer — the configuration
+     * then reads a blank value instead of falling back to the environment.
+     */
+    private fun blankExportedKeys(vararg keep: String) {
+        candidateKeyNames()
+            .filterNot { it in keep }
+            .filter { !System.getenv(it).isNullOrBlank() }
+            .forEach { System.setProperty(it, "") }
     }
 
     /**
@@ -193,6 +215,10 @@ class LlmStatusReporterTest {
     @DisplayName("report should say not configured when no key is usable")
     fun reportShouldSayNotConfigured() {
         System.setProperty("OPENAI_API_KEY", "")
+        // A key exported by the developer's shell is *present*, and a present key
+        // counts as configured even when its provider is denied — pin it blank so
+        // that "nothing is usable" is what the report actually sees.
+        blankExportedKeys("OPENAI_API_KEY")
         val conf = isolatedConfig("OPENAI_API_KEY")
 
         val report = LlmStatusReporter.report(conf)
