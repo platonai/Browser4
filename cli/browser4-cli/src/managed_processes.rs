@@ -243,7 +243,7 @@ fn shutdown_managed_server_processes_matching(
             continue;
         }
 
-        if !is_browser4_server_process(pid) {
+        if !is_registered_browser4_server_process(pid, proc.port) {
             // PID may have been reused by a non-Browser4 process; treat as stale.
             result.missing_pids.push(pid);
             continue;
@@ -315,8 +315,15 @@ pub fn stop_browser4_server_forcibly() -> ForceStopBrowser4ServerResult {
 }
 
 fn stop_browser4_server_with_fallback_force_kill() -> ShutdownResult {
+    // Snapshot the sweep ports *before* `stop_browser4_server` rewrites the
+    // registry: it drops entries whose pid it cannot recognise, and the
+    // fallback must still sweep the ports those entries recorded.  Without the
+    // snapshot a live-but-unrecognised backend lost its registry entry and the
+    // sweep fell back to the default ports only, leaving the backend running
+    // (the Windows smoke retry then reconnected to the same wedged server).
+    let ports = managed_server_ports_for_sweep();
     let mut shutdown = stop_browser4_server(true);
-    let fallback_result = force_kill_all_browser4_server_processes();
+    let fallback_result = force_kill_all_browser4_server_processes(&ports);
     merge_shutdown_with_fallback_server_kill(&mut shutdown, &fallback_result);
     shutdown.fallback_killed_server_pids = fallback_result.killed_pids.clone();
     shutdown
@@ -843,13 +850,13 @@ fn find_browser4_server_processes() -> Vec<u32> {
     pids
 }
 
-fn force_kill_all_browser4_server_processes() -> ServerKillResult {
+fn force_kill_all_browser4_server_processes(ports: &[u16]) -> ServerKillResult {
     // Command-line pattern matching misses servers launched via @argfile or
     // with a bundle start script. Add a port-based sweep: any java process
     // still LISTENING on a managed port (or the default 8182) IS a Browser4
     // server for the purposes of `stop`.
     let mut pids = find_browser4_server_processes();
-    pids.extend(find_java_pids_listening_on_ports(&managed_server_ports_for_sweep()));
+    pids.extend(find_java_pids_listening_on_ports(ports));
     force_stop_pids(pids)
 }
 
@@ -1089,6 +1096,26 @@ fn is_browser4_server_process(pid: u32) -> bool {
         && process_command_line(pid)
             .map(|command_line| command_line_matches_browser4_server(&command_line))
             .unwrap_or(false)
+}
+
+/// True when [pid] is the live backend a registry entry recorded for [port].
+///
+/// A bundle server is launched as `java @argfile`.  Once the launcher removes
+/// that argfile the command line carries no Browser4 marker any more, so
+/// [`is_browser4_server_process`] cannot recognise it — by design, not because
+/// the pid was reused.  The port the CLI wrote into the registry is the
+/// authoritative identity then: a pid that still owns that listening port IS
+/// our backend.
+fn is_registered_browser4_server_process(pid: u32, port: u16) -> bool {
+    is_browser4_server_process(pid) || pid_owns_port(pid, port)
+}
+
+/// True when [pid] currently owns a LISTENING socket on [port].
+///
+/// The port scan is the same cross-platform one the force-kill sweep uses; it
+/// is a read-only check and never signals the process.
+fn pid_owns_port(pid: u32, port: u16) -> bool {
+    port > 0 && find_java_pids_listening_on_ports(&[port]).contains(&pid)
 }
 
 fn find_pulsar_browser_processes() -> Vec<u32> {
@@ -1591,6 +1618,35 @@ mod tests {
                 "the port scan should attribute port {port} to this process: {unverified:?}"
             );
         }
+    }
+
+    /// A backend launched as `java @argfile` loses every Browser4 marker from
+    /// its command line when the launcher removes the argfile, so the port the
+    /// registry recorded is the only identity left.  A pid that still owns that
+    /// port must count as live; treating it as a stale/reused pid made
+    /// `kill-all` delete the entry and leave the backend running.
+    #[test]
+    fn test_registered_server_process_is_live_when_it_owns_the_recorded_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let pid = std::process::id();
+
+        // This test process is not a JVM, so the command-line marker check can
+        // never be what makes the positive assertion below pass.
+        assert!(!is_browser4_server_process(pid));
+
+        // The OS port scan is not available on every image (it needs netstat
+        // and, on unix, permission to see other pids).  Only assert the
+        // positive case when the scan can attribute the port at all.
+        if find_java_pids_listening_on_ports(&[port]).contains(&pid) {
+            assert!(pid_owns_port(pid, port));
+            assert!(is_registered_browser4_server_process(pid, port));
+        }
+
+        // A port this process does not own must not make a foreign pid live.
+        let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let other_port = other.local_addr().unwrap().port();
+        assert!(!is_registered_browser4_server_process(u32::MAX - 1, other_port));
     }
 
     #[test]
