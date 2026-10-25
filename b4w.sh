@@ -40,10 +40,16 @@
 # b4w.sh delegates to b4w.ps1 with `pwsh -File`, forwarding each argument as
 # its own argv element ("$@").  b4w.ps1 deliberately declares NO param()
 # block, so PowerShell collects every token (including dash-prefixed flags
-# like --sql, --stdout, -v and -i) in $args and passes them to the CLI
-# untouched — no single-quote wrapping or Invoke-Expression dance is needed,
-# unlike the older `pwsh -Command "& script 'a' 'b'"` approach this script
-# previously used.
+# like --sql, --stdout, -v and -i) in $args and passes them to the CLI as argv
+# — no quoting round-trip, no re-parse.
+#
+# What this wrapper guarantees, and what it does not: MSYS path conversion is
+# disabled (above), so '/'-leading values survive.  It does NOT escape or
+# preserve anything special about `$`, backticks or `$(...)` — those are the
+# invoking shell's business, and by the time bash hands the argv element over
+# the text is literal.  (An earlier version of this header claimed the
+# wrapper "quotes args safely for pwsh"; the re-parse that made that claim
+# misleading lived in b4w.ps1 and is gone.)
 #
 # `pwsh -File` also makes the PowerShell process exit with the exact exit
 # code that b4w.ps1 propagates from browser4-cli (usage errors exit 2, tool
@@ -65,6 +71,13 @@ if [ -n "$MSYS2_ARG_CONV_EXCL" ]; then
     :
 else
     export MSYS2_ARG_CONV_EXCL='*'
+fi
+
+# Tell browser4-cli how the user invoked it, so its hints quote a command that
+# can be pasted back (`./b4w.sh list`) instead of the resolved binary
+# (`browser4-cli.exe list`).  b4w.ps1 only fills this in when it is unset.
+if [ -z "$BROWSER4_CLI_INVOKE_HINT" ]; then
+    export BROWSER4_CLI_INVOKE_HINT='./b4w.sh'
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

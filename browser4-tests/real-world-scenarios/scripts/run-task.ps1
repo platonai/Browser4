@@ -146,7 +146,16 @@ try {
     # receives the caller's intent.
     $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
 
-    Invoke-Agent @invokeParams
+    $agentExitCode = Invoke-Agent @invokeParams
+
+    # A dead or failed agent run must fail the task.  Without this the scenario
+    # runner reports PASS for a run that never did any work (the agent exits 1
+    # in ~0 s, the raw capture holds one error line, and run-tests.ps1 counts it
+    # green).  Exit code 124 is preserved so the runner still maps it to TIMEOUT.
+    if ($null -ne $agentExitCode -and $agentExitCode -ne 0) {
+        Write-Host "Agent exited with non-zero code: $agentExitCode" -ForegroundColor Red
+        exit $agentExitCode
+    }
 } catch {
     Write-Host "ERROR: run-task.ps1 failed: $_" -ForegroundColor Red
     exit 1

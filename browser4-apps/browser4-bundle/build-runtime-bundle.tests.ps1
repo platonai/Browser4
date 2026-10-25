@@ -1370,6 +1370,54 @@ Assert-Equal -Label 'int: parsed metadata runtimeDirectoryName' `
 Write-Host ''
 
 # ═══════════════════════════════════════════════════════════════════
+# browser4-cli bundling staleness
+#
+# A bundle that only rebuilt when the binary was MISSING shipped a stale
+# 4.14.0-rc.6 CLI inside a 4.14.4 bundle; the agent's `b4.run` then panicked on
+# `attach --extension msedge` and sent a bare `--extension` to Chrome.
+# ═══════════════════════════════════════════════════════════════════
+Write-Host 'Testing browser4-cli bundling staleness...' -ForegroundColor Cyan
+
+$cliStaleDir = New-TempDir 'cli-stale'
+$cliSrcDir = Join-Path $cliStaleDir 'src'
+New-Item -ItemType Directory -Path $cliSrcDir -Force | Out-Null
+$cliMainRs = Join-Path $cliSrcDir 'main.rs'
+Set-Content -LiteralPath $cliMainRs -Value 'fn main() {}' -Encoding UTF8
+$cliCargo = Join-Path $cliStaleDir 'Cargo.toml'
+Set-Content -LiteralPath $cliCargo -Value "[package]`nname = 'browser4-cli'" -Encoding UTF8
+
+$sourceTime = [datetime]::UtcNow.AddMinutes(-10)
+(Get-Item -LiteralPath $cliMainRs).LastWriteTimeUtc = $sourceTime
+(Get-Item -LiteralPath $cliCargo).LastWriteTimeUtc = $sourceTime.AddMinutes(-5)
+
+$resolvedSourceTime = Get-Browser4CliSourceTimestamp -CliSourceDir $cliStaleDir
+Assert-Equal -Label 'cli-stale: newest source wins over Cargo.toml' `
+    -Actual $resolvedSourceTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss') `
+    -Expected $sourceTime.ToString('yyyy-MM-ddTHH:mm:ss')
+
+$emptyCliDir = New-TempDir 'cli-empty'
+Assert-True -Label 'cli-stale: no sources reports MinValue' `
+    -Condition ((Get-Browser4CliSourceTimestamp -CliSourceDir $emptyCliDir) -eq [datetime]::MinValue)
+
+$cliBinary = Join-Path $cliStaleDir 'browser4-cli.exe'
+Assert-True -Label 'cli-stale: missing binary needs a build' `
+    -Condition (Test-Browser4CliBinaryNeedsRebuild -BinaryPath $cliBinary -SourceTimestamp $sourceTime)
+
+Set-Content -LiteralPath $cliBinary -Value '' -Encoding ASCII
+(Get-Item -LiteralPath $cliBinary).LastWriteTimeUtc = $sourceTime.AddMinutes(-20)
+Assert-True -Label 'cli-stale: binary older than sources needs a rebuild' `
+    -Condition (Test-Browser4CliBinaryNeedsRebuild -BinaryPath $cliBinary -SourceTimestamp $sourceTime)
+
+(Get-Item -LiteralPath $cliBinary).LastWriteTimeUtc = $sourceTime.AddMinutes(5)
+Assert-True -Label 'cli-stale: binary newer than sources is reused' `
+    -Condition (-not (Test-Browser4CliBinaryNeedsRebuild -BinaryPath $cliBinary -SourceTimestamp $sourceTime))
+
+Assert-True -Label 'cli-stale: unknown source time never forces a rebuild' `
+    -Condition (-not (Test-Browser4CliBinaryNeedsRebuild -BinaryPath $cliBinary -SourceTimestamp ([datetime]::MinValue)))
+
+Write-Host ''
+
+# ═══════════════════════════════════════════════════════════════════
 # Cleanup
 # ═══════════════════════════════════════════════════════════════════
 try {

@@ -794,14 +794,84 @@ set "MAIN_CLASS=$mainClass"
 
 <#
 .SYNOPSIS
+    Newest timestamp among the browser4-cli sources that end up in the binary.
+
+.DESCRIPTION
+    Mirrors the staleness check `b4w.ps1` uses for the debug binary: the CLI's
+    Rust sources plus Cargo.toml/Cargo.lock.  Returns [datetime]::MinValue when
+    the directory has no sources (nothing to compare against).
+
+.PARAMETER CliSourceDir
+    The `cli/browser4-cli` directory.
+#>
+function Get-Browser4CliSourceTimestamp {
+    param(
+        [Parameter(Mandatory)][string]$CliSourceDir
+    )
+
+    $newest = [datetime]::MinValue
+    $candidates = @()
+
+    $srcDir = Join-Path $CliSourceDir 'src'
+    if (Test-Path -LiteralPath $srcDir) {
+        $candidates += @(Get-ChildItem -Path $srcDir -Recurse -File -Filter '*.rs' -ErrorAction SilentlyContinue)
+    }
+    foreach ($name in @('Cargo.toml', 'Cargo.lock')) {
+        $path = Join-Path $CliSourceDir $name
+        if (Test-Path -LiteralPath $path) {
+            $candidates += @(Get-Item -LiteralPath $path)
+        }
+    }
+
+    foreach ($item in $candidates) {
+        if ($item.LastWriteTimeUtc -gt $newest) { $newest = $item.LastWriteTimeUtc }
+    }
+    return $newest
+}
+
+<#
+.SYNOPSIS
+    True when the browser4-cli binary must be (re)built from source.
+
+.DESCRIPTION
+    A bundle that only rebuilt when the binary was MISSING copied whatever stale
+    release build sat in `target/release` — observed as a 4.14.0-rc.6 CLI shipped
+    inside a 4.14.4 bundle, which then panicked on `attach --extension msedge`
+    and sent a bare `--extension` to Chrome.  Comparing timestamps keeps the
+    bundled CLI aligned with the sources it was built from.
+
+    A missing binary always needs a build; an unknown source timestamp never
+    forces one (nothing to compare, build only when the binary is absent).
+
+.PARAMETER BinaryPath
+    The candidate binary (usually `target/release/browser4-cli[.exe]`).
+
+.PARAMETER SourceTimestamp
+    Result of [Get-Browser4CliSourceTimestamp].
+#>
+function Test-Browser4CliBinaryNeedsRebuild {
+    param(
+        [Parameter(Mandatory)][string]$BinaryPath,
+        [Parameter(Mandatory)][datetime]$SourceTimestamp
+    )
+
+    if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) { return $true }
+    if ($SourceTimestamp -le [datetime]::MinValue) { return $false }
+
+    $binaryTime = (Get-Item -LiteralPath $BinaryPath).LastWriteTimeUtc
+    return ($binaryTime -lt $SourceTimestamp)
+}
+
+<#
+.SYNOPSIS
 Bundle the browser4-cli binary into the runtime bundle's bin/ directory.
 
 .DESCRIPTION
-Uses a prebuilt release binary when present, otherwise builds one with cargo
-(best effort).  When neither is possible the bundle is still produced — the
-CliBinaryResolver falls back to PATH / auto-install.  This guarantees the
-SKILL.md tool surface is available on a fresh machine that only has the
-bundle (design §4.2/§4.3).
+Uses a prebuilt release binary when it is NEWER than the CLI sources, otherwise
+builds one with cargo (best effort).  When neither is possible the bundle is
+still produced — the CliBinaryResolver falls back to PATH / auto-install.  This
+guarantees the SKILL.md tool surface is available on a fresh machine that only
+has the bundle (design §4.2/§4.3).
 #>
 function Install-Browser4Cli([string]$bundleDirectory) {
     $binDirectory = Join-Path $bundleDirectory 'bin'
@@ -809,13 +879,26 @@ function Install-Browser4Cli([string]$bundleDirectory) {
     $cliSourceDir = Join-Path $PSScriptRoot (Join-Path '..' (Join-Path '..' (Join-Path 'cli' 'browser4-cli')))
     $releaseBinary = Join-Path $cliSourceDir (Join-Path 'target' (Join-Path 'release' $cliExeName))
 
-    if (-not (Test-Path -LiteralPath $releaseBinary -PathType Leaf)) {
+    $sourceTimestamp = Get-Browser4CliSourceTimestamp -CliSourceDir $cliSourceDir
+    $needsBuild = Test-Browser4CliBinaryNeedsRebuild -BinaryPath $releaseBinary -SourceTimestamp $sourceTimestamp
+
+    if ($needsBuild) {
         $cargo = Get-Command cargo -ErrorAction SilentlyContinue
         if (-not $cargo) {
-            Write-Warning "No browser4-cli release binary and no cargo found; the bundle will not ship a CLI binary."
+            if (Test-Path -LiteralPath $releaseBinary -PathType Leaf) {
+                Write-Warning ("browser4-cli sources are newer than the release binary but cargo is not " +
+                    "available; the bundle ships the STALE $cliExeName. Run 'cargo build --release' in " +
+                    "cli/browser4-cli, or pass -SkipCli.")
+            } else {
+                Write-Warning "No browser4-cli release binary and no cargo found; the bundle will not ship a CLI binary."
+            }
             return
         }
-        Write-Host "Building browser4-cli release binary (first bundle build may take a while)..." -ForegroundColor Cyan
+        if (Test-Path -LiteralPath $releaseBinary -PathType Leaf) {
+            Write-Host "browser4-cli sources changed since the release binary was built; rebuilding..." -ForegroundColor Cyan
+        } else {
+            Write-Host "Building browser4-cli release binary (first bundle build may take a while)..." -ForegroundColor Cyan
+        }
         Push-Location $cliSourceDir
         try {
             & $cargo.Source build --release

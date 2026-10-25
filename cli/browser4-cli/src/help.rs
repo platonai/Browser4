@@ -527,6 +527,9 @@ pub fn generate_help() -> String {
     lines.push("    crawl <url> --out-link-selector \"...\" --depth 1 --sql @query.sql".to_string());
     lines.push("  Parallel extraction:".to_string());
     lines.push("    swarm create  →  swarm query --sql @q.sql --seed-file urls.txt  →  swarm result <id>".to_string());
+    lines.push("  Use my own browser (no new browser, no CDP port):".to_string());
+    lines.push("    attach --extension <edge|chrome>          # needs the Browser4 extension from the Web Store".to_string());
+    lines.push("    →  goto <url>  →  ...  →  disconnect      # drives the tab it opened; your own tabs stay".to_string());
 
     // Category index — which `--help <category>` targets exist
     lines.extend(category_index_lines());
@@ -1712,11 +1715,54 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - Session binding: the task runs in this CLI's CURRENT session — `-s <name>` when"
+                .to_string(),
+        );
+        lines.push(
+            "    given, otherwise the unnamed slot, including a browser attached with"
+                .to_string(),
+        );
+        lines.push(
+            "    `attach --extension`/`--cdp`. It never falls back to the backend's DEFAULT session."
+                .to_string(),
+        );
+        lines.push(
+            "    The `Task submitted:` line echoes that session id and connection, so a run cannot"
+                .to_string(),
+        );
+        lines.push(
+            "    silently land somewhere else. Use `goto`, not `open`: `open` deliberately starts a"
+                .to_string(),
+        );
+        lines.push(
+            "    new session when the current one is an attached/extension session."
+                .to_string(),
+        );
+        lines.push(
             "  - Requires: an LLM API key configured on the Browser4 backend server (the CLI shell itself does not need the key)."
                 .to_string(),
         );
         lines.push(
             "  - Task type: browser by default (never auto-detected). --coding marks a pure coding task (file/build work)."
+                .to_string(),
+        );
+        lines.push(
+            "  - --follow streams the task's steps (tool calls, model text, slow/failed tools)".to_string(),
+        );
+        lines.push("    and then the result; --ndjson makes every line JSON.".to_string());
+        lines.push(
+            "  - -i opens an interactive session: tasks one after another, and a line typed".to_string(),
+        );
+        lines.push(
+            "    while a task runs steers it at the next model round (/help lists the commands)."
+                .to_string(),
+        );
+        lines.push(
+            "  - In the session, /stats reports the run's LLM rounds and requests, token usage"
+                .to_string(),
+        );
+        lines.push(
+            "    and tool calls (served by the backend's run counters; /stats <task-id> for another task)."
                 .to_string(),
         );
         lines.push(String::new());
@@ -1727,6 +1773,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(
             "  browser4-cli agent run \"Read pom.xml, fix the failing module build\" --coding"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Collect the top 5 products\" --follow".to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run -i \"Summarize this page\"".to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Collect the top 5 products\" --follow --ndjson | jq -c ."
                 .to_string(),
         );
     }
@@ -5549,9 +5605,13 @@ mod tests {
         let cmds = all_commands();
         let cmd = cmds.iter().find(|c| c.name == "agent-run").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli agent run <task>"));
+        // `task` is optional at the parser level so `agent run -i` can start an
+        // empty session; the help shows it in the optional form for the same
+        // reason.
+        assert!(help.contains("browser4-cli agent run [task]"));
         assert!(help.contains("autonomous agent task"));
         assert!(help.contains("browser4-cli agent run"));
+        assert!(help.contains("/stats reports the run's LLM rounds"), "{help}");
         assert!(!help.contains("browser4-cli agent-run"));
     }
 

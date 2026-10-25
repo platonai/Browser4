@@ -464,6 +464,53 @@ class AgentToolCallLoopTest {
     }
 
     @Test
+    @DisplayName("onBeforeIteration can inject a message that reaches the very next model request")
+    fun onBeforeIterationInjectsIntoTheNextRequest() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val calls = AiMessage.from("calling", listOf(toolRequest("c1")))
+        val finalMessage = AiMessage.from("done")
+        // ChatRequest keeps a REFERENCE to the live message list, so the test must
+        // copy what the provider would actually see at capture time.
+        val seenUserTexts = mutableListOf<List<String>>()
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } answers {
+            val request = firstArg<ChatRequest>()
+            seenUserTexts += request.messages()
+                .filterIsInstance<UserMessage>()
+                .map { it.singleText() }
+            if (seenUserTexts.size == 1) chatResponseOf(calls) else chatResponseOf(finalMessage)
+        }
+        every { coordinator.execute(any()) } returns
+            ToolExecutionResultMessage.from("c1", "coding.read", "ok")
+
+        val hookCalls = AtomicInteger()
+        val loop = AgentToolCallLoop(
+            model = model,
+            toolSpecifications = emptyList(),
+            coordinator = coordinator,
+            maxIterations = 3,
+            onBeforeIteration = { messages ->
+                if (hookCalls.incrementAndGet() == 2) {
+                    messages.add(UserMessage.from("[steering] stop surveying and edit"))
+                }
+            },
+        )
+
+        loop.generate(listOf(UserMessage.from("do it")))
+
+        assertEquals(2, hookCalls.get(), "the hook runs before every model request")
+        assertEquals(2, seenUserTexts.size, "two model requests")
+        assertTrue(
+            seenUserTexts[0].none { it.contains("stop surveying") },
+            "nothing is injected before the first request: ${seenUserTexts[0]}",
+        )
+        assertTrue(
+            seenUserTexts[1].any { it.contains("stop surveying") },
+            "a message injected by the hook must be part of the very next request: ${seenUserTexts[1]}",
+        )
+    }
+
+    @Test
     @DisplayName("onToolExecuted fires once per executed tool")
     fun onToolExecutedFiresPerTool() = runBlocking {
         val model = mockk<BrowserChatModel>()

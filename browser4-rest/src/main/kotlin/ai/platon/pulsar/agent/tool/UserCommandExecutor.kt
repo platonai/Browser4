@@ -1,5 +1,8 @@
 package ai.platon.pulsar.agent.tool
 
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventLog
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
@@ -339,6 +342,60 @@ class UserCommandExecutor(
     fun isPageVisitTask(id: String): Boolean = taskOwner[id] == "page"
 
     /**
+     * The live step log of agent task [id] after [afterSeq], oldest first.
+     *
+     * Probes every session's runner by id, like [cancelAgentTask]: the event log
+     * is in memory and only the runner that owns the task has it. An empty list
+     * means "no new steps" or "this task never had a log" (unknown id, a page
+     * visit, or a backend restart) — [getStatus] is what distinguishes them.
+     *
+     * @param afterSeq cursor: return events with a strictly greater sequence
+     * @param limit maximum events in this page
+     */
+    fun events(
+        id: String,
+        afterSeq: Long = 0L,
+        limit: Int = AgentTaskEventLog.DEFAULT_PAGE_LIMIT,
+    ): List<AgentTaskEvent> = agentRunners.values
+        .firstNotNullOfOrNull { runner ->
+            runner.events(id, afterSeq, limit).takeIf { it.isNotEmpty() }
+        }
+        .orEmpty()
+
+    /**
+     * The run statistics of agent task [id], or `null` when no runner holds a log
+     * for it.
+     *
+     * Probes every session's runner by id, like [events]: the counters live next
+     * to the runner's in-memory event log and only the owning runner has them.
+     * Unlike [events] a stats row with zero steps is meaningful (a task that was
+     * created but never started), so the probe accepts any non-null snapshot.
+     *
+     * @param id task id
+     */
+    fun stats(id: String): AgentTaskRunStats? = agentRunners.values
+        .firstNotNullOfOrNull { runner -> runner.stats(id) }
+
+    /**
+     * Queue a steering message for the running agent task [id].
+     *
+     * The message reaches the agent at its next model round-trip. A task that
+     * already finished, a page visit, or an unknown id is rejected — nothing
+     * would ever drain its queue.
+     *
+     * @return true when a live agent task accepted the message
+     */
+    fun sendInput(id: String, text: String): Boolean {
+        val accepted = agentRunners.values.any { runner -> runner.enqueueInput(id, text) }
+        if (accepted) {
+            logger.info("Queued steering message for agent task {}", id)
+        } else {
+            logger.debug("Agent task {} is not accepting input", id)
+        }
+        return accepted
+    }
+
+    /**
      * Look up a command status by task ID.
      *
      * Uses [taskOwner] to route directly to the right executor.  Falls back to
@@ -360,8 +417,17 @@ class UserCommandExecutor(
         val status = when (owner) {
             "page" -> ensurePageVisitor(sessionId).getStatus(id)?.toCommandStatus()
                 ?: fallbackAgentStatus(sessionId, id)
-            "agent" -> ensureAgentRunner(sessionId).getStatus(id)?.toCommandStatus()
-                ?: fallbackPageStatus(sessionId, id)
+                ?: probeAllRunners(id)
+            "agent" -> {
+                // Probe the EXISTING runners first, then the page visitors, then
+                // disk. Deliberately no `ensureAgentRunner(sessionId)` here: that
+                // call creates a session (and its runner plus compaction job) as a
+                // side effect, so a follower polling a `-s work` task without
+                // repeating the session used to materialize a DEFAULT session.
+                probeAllRunners(id)
+                    ?: fallbackPageStatus(sessionId, id)
+                    ?: StatefulAgentRunner.statusFromDisk(id)?.toCommandStatus()
+            }
             else -> {
                 // Unknown owner (stale taskOwner after a restart, or a task created by a
                 // previous instance): probe every existing runner and visitor, then fall
@@ -369,7 +435,7 @@ class UserCommandExecutor(
                 // (and therefore a session) as a side effect of a status poll — polling
                 // a just-unknown id with an arbitrary session id grew the session and
                 // runner maps (each runner also spawns a periodic compaction job).
-                agentRunners.values.firstNotNullOfOrNull { it.getStatus(id)?.toCommandStatus() }
+                probeAllRunners(id)
                     ?: pageVisitors.values.firstNotNullOfOrNull { it.getStatus(id)?.toCommandStatus() }
                     ?: StatefulAgentRunner.statusFromDisk(id)?.toCommandStatus()
             }
@@ -382,6 +448,10 @@ class UserCommandExecutor(
 
         return status
     }
+
+    /** The task's status from whichever runner owns it, whatever session was named. */
+    private fun probeAllRunners(id: String): CommandStatus? =
+        agentRunners.values.firstNotNullOfOrNull { it.getStatus(id)?.toCommandStatus() }
 
     private fun fallbackPageStatus(sessionId: String, id: String): CommandStatus? {
         if (!pageVisitors.containsKey(sessionId)) return null

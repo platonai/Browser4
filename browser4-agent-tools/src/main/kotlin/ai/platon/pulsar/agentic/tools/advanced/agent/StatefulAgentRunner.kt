@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.advanced.agent
 import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
+import ai.platon.pulsar.agentic.agents.AgentRunEvent
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
@@ -25,6 +26,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -87,6 +89,35 @@ open class StatefulAgentRunner(
 
     /** Currently queued/running task jobs by task id (for [cancel]). */
     private val runningJobs = ConcurrentHashMap<String, Job>()
+
+    /**
+     * Bounded per-task step logs: what the task actually DID, as opposed to
+     * [statusCache]'s coarse `processState`.
+     *
+     * Served by `GET /api/commands/{id}/events` (the CLI's `agent run --follow`
+     * and the interactive `agent run -i` REPL). In memory only — the JSONL row
+     * set is a task registry, and persisting a thousand events per task would
+     * dwarf it. A task evicted from this cache still answers `agent status` /
+     * `agent result`; its live event tail is simply gone.
+     */
+    private val eventLogs: Cache<String, AgentTaskEventLog> = Caffeine.newBuilder()
+        .maximumSize(EVENT_LOG_CACHE_SIZE)
+        .expireAfterAccess(EVENT_LOG_TTL_MINUTES, TimeUnit.MINUTES)
+        .build()
+
+    /**
+     * Steering messages the interactive session typed while its task runs,
+     * keyed by task id. Drained at every model round-trip by
+     * [RobustBrowserAgent.steeringSource] and removed when the task ends.
+     *
+     * Only messages for a *live* task are accepted ([enqueueInput]); a task id
+     * that already finished is rejected so a stale terminal id cannot grow the
+     * map forever.
+     */
+    private val pendingInputs = ConcurrentHashMap<String, ConcurrentLinkedQueue<String>>()
+
+    /** Guards [pendingInputs] so an enqueue can never race a drain (see [enqueueInput]). */
+    private val inputLock = Any()
 
     /**
      * Shared per process: all runners write the same global JSONL file, so they
@@ -247,8 +278,120 @@ open class StatefulAgentRunner(
         statusCache.put(status.id, status)
         persistence.append(status)
         status.emitEvent("StatefulAgentRunner.created")
-        logger.debug("Created agent task status {} (session={})", status.id, session.uuid)
+        // The live step log starts here, not when the run starts: a follower may
+        // attach while the task is still queued (behind another task of the
+        // session) and must see that it exists.
+        recordLifecycle(status, AgentTaskEvent.TYPE_CREATED)
+        logger.debug("Created agent task status {} (agentSession={})", status.id, session.uuid)
         return status
+    }
+
+    /**
+     * The task's live step log; created on first use and kept bounded by
+     * [eventLogs] (capacity + idle TTL), never persisted.
+     */
+    private fun eventLog(taskId: String): AgentTaskEventLog =
+        eventLogs.get(taskId) { AgentTaskEventLog() }
+
+    /** Append one of the runner's own lifecycle steps for [status]. */
+    private fun recordLifecycle(status: AgentTaskStatus, type: String, text: String? = null) {
+        eventLog(status.id).append(type, text = AgentTaskEventSanitizer.preview(text))
+    }
+
+    /**
+     * Translate one agent-reported step into the task's event log.
+     *
+     * `internal` (not private) so the runner's tests can exercise the
+     * sanitize-on-the-way-in wiring without a real agent run.
+     */
+    internal fun recordRunEvent(taskId: String, event: AgentRunEvent) {
+        eventLog(taskId).append(
+            type = event.type,
+            tool = event.tool,
+            arguments = AgentTaskEventSanitizer.arguments(event.tool, event.arguments),
+            ok = event.ok,
+            durationMs = event.durationMs,
+            text = AgentTaskEventSanitizer.preview(event.text),
+            turn = event.turn,
+            inputTokens = event.inputTokens,
+            outputTokens = event.outputTokens,
+            totalTokens = event.totalTokens,
+        )
+    }
+
+    /**
+     * The run's aggregate counters for [id]: rounds, LLM requests, tool calls,
+     * failures, steering messages and token usage.
+     *
+     * Counted by the task's event log rather than derived from the steps a client
+     * happens to have seen, so the numbers stay exact after steps are evicted
+     * from the bounded buffer. `null` when this runner has no log for [id]
+     * (unknown task, a page visit, or the log's idle TTL expired).
+     *
+     * @param id task id
+     * */
+    fun stats(id: String): AgentTaskRunStats? = eventLogs.getIfPresent(id)?.stats()
+
+    /**
+     * The steps of [id] after [afterSeq], oldest first.
+     *
+     * Empty when the task is unknown, has not emitted anything after the cursor,
+     * or its log has been evicted — the caller distinguishes those cases with
+     * the task status, which outlives the log.
+     *
+     * @param afterSeq cursor: return events with a strictly greater sequence
+     * @param limit maximum events in this page
+     */
+    fun events(
+        id: String,
+        afterSeq: Long = 0L,
+        limit: Int = AgentTaskEventLog.DEFAULT_PAGE_LIMIT,
+    ): List<AgentTaskEvent> = eventLogs.getIfPresent(id)?.eventsAfter(afterSeq, limit) ?: emptyList()
+
+    /**
+     * Queue a steering [text] for the running task [id].
+     *
+     * The message is injected into the agent at its next model round-trip (see
+     * [RobustBrowserAgent.steeringSource]); a task that already finished is
+     * rejected, because nothing will ever drain its queue.
+     *
+     * @return true when the task is live in this runner and the message was queued
+     */
+    fun enqueueInput(id: String, text: String): Boolean {
+        val message = text.trim()
+        if (message.isEmpty()) return false
+        val status = statusCache.getIfPresent(id) ?: return false
+        if (status.isDone) return false
+        // Enqueue and drain take the same lock: an `add` racing a drain could land
+        // on a queue the drain had already detached, losing the message.
+        synchronized(inputLock) {
+            pendingInputs.computeIfAbsent(id) { ConcurrentLinkedQueue() }.add(message)
+        }
+        logger.info(
+            "Queued steering message for agent task {} (agentSession={}, {} chars)",
+            id, session.uuid, message.length
+        )
+        return true
+    }
+
+    /**
+     * Drain the steering messages queued for [id].
+     *
+     * Called by the agent on every model round-trip. Draining is destructive —
+     * the agent reports the returned lines as one injected message, and an empty
+     * list means "nothing new".
+     */
+    fun drainInputs(id: String): List<String> {
+        val drained = ArrayList<String>(1)
+        synchronized(inputLock) {
+            val queue = pendingInputs[id] ?: return emptyList()
+            while (true) {
+                val next = queue.poll() ?: break
+                drained += next
+            }
+            if (queue.isEmpty()) pendingInputs.remove(id, queue)
+        }
+        return drained
     }
 
     private fun onStatusChanged(status: AgentTaskStatus) {
@@ -336,6 +479,11 @@ open class StatefulAgentRunner(
                 status.failureReason = status.failureReason ?: CANCELLED_MESSAGE
                 status.message = status.message ?: CANCELLED_MESSAGE
                 persistence.append(status)
+                // A follower attached to this task must see it end, even though
+                // its coroutine never ran (the finally of executeSerialized did
+                // not fire).
+                pendingInputs.remove(status.id)
+                recordLifecycle(status, AgentTaskEvent.TYPE_CANCELLED, status.failureReason)
             }
         }
         return job
@@ -349,7 +497,7 @@ open class StatefulAgentRunner(
      */
     fun cancel(id: String): Boolean {
         val job = runningJobs.remove(id) ?: return false
-        logger.info("Cancelling agent task {} (session={})", id, session.uuid)
+        logger.info("Cancelling agent task {} (agentSession={})", id, session.uuid)
         // Mark the status BEFORE cancelling the job: the coroutine may be waiting on
         // [runMutex] or not yet scheduled, in which case nothing inside it can mark
         // the status terminal. Idempotent with executeSerialized's own marking.
@@ -431,6 +579,7 @@ open class StatefulAgentRunner(
             // "in progress" immediately so a restart cannot revive a task that had
             // already started as if it were still queued.
             persistProgress(status, force = true)
+            recordLifecycle(status, AgentTaskEvent.TYPE_STARTED, plainCommand)
 
             // Per-task flags. Explicit values win; a null resets any stale
             // override left over from a previous task (the companion agent is
@@ -438,18 +587,18 @@ open class StatefulAgentRunner(
             (agent as? RobustBrowserAgent)?.let {
                 it.noopLimitOverride = noopLimit
                 if (noopLimit != null) {
-                    logger.info("Agent task {} (session={}): noop limit overridden to {}", status.id, session.uuid, noopLimit)
+                    logger.info("Agent task {} (agentSession={}): noop limit overridden to {}", status.id, session.uuid, noopLimit)
                 }
                 it.runEngineOverride = engine
                 if (engine != null) {
-                    logger.info("Agent task {} (session={}): engine overridden to {}", status.id, session.uuid, engine)
+                    logger.info("Agent task {} (agentSession={}): engine overridden to {}", status.id, session.uuid, engine)
                 }
                 // Explicit coding flag, never auto-detected: the coding flag is
                 // opt-in per call (`command_run`'s coding argument, e.g. the CLI's
                 // agent run --coding). Unset ⇒ browser task.
                 it.codingMode = coding == true
                 if (coding == true) {
-                    logger.info("Agent task {} (session={}): coding mode (explicit) — skipping driver health check and page navigation", status.id, session.uuid)
+                    logger.info("Agent task {} (agentSession={}): coding mode (explicit) — skipping driver health check and page navigation", status.id, session.uuid)
                 }
                 // Fresh-workspace isolation (design §6.6): create a timestamped
                 // workspace dir under the agent's base dir, point both the agent's
@@ -459,8 +608,13 @@ open class StatefulAgentRunner(
                     java.nio.file.Files.createDirectories(fresh)
                     it.workspaceDirOverride = fresh
                     it.agentToolManager.rebindWorkspace(fresh)
-                    logger.info("Agent task {} (session={}): fresh workspace at {}", status.id, session.uuid, fresh)
+                    logger.info("Agent task {} (agentSession={}): fresh workspace at {}", status.id, session.uuid, fresh)
                 }
+                // Live step feed and steering for THIS task. Cleared in the finally
+                // below: the companion agent outlives the task and is shared by
+                // every other caller of the session.
+                it.runEventListener = { event -> recordRunEvent(status.id, event) }
+                it.steeringSource = { drainInputs(status.id) }
             }
 
             // Create and wire up ServerSideAgentEventHandlers for this command
@@ -487,13 +641,13 @@ open class StatefulAgentRunner(
                                 status.toolExecutions = it.toInt()
                             }
                             persistProgress(status)
-                            logger.debug("Collected event {} for agent task {} (session={})", event.eventType, status.id, session.uuid)
+                            logger.debug("Collected event {} for agent task {} (agentSession={})", event.eventType, status.id, session.uuid)
                         }
                     } catch (e: CancellationException) {
                         logger.debug("Event collector cancelled for agent task {}", status.id)
                         throw e
                     } catch (e: Exception) {
-                        logger.error("Error collecting events for agent task {} (session={})", status.id, session.uuid, e)
+                        logger.error("Error collecting events for agent task {} (agentSession={})", status.id, session.uuid, e)
                     }
                 }
 
@@ -526,7 +680,7 @@ open class StatefulAgentRunner(
             status.message = CANCELLED_MESSAGE
             throw e
         } catch (e: Throwable) {
-            logger.error("Failed to execute agent command: {} (session={})", plainCommand, session.uuid, e)
+            logger.error("Failed to execute agent command: {} (agentSession={})", plainCommand, session.uuid, e)
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
             status.failureReason = "${e.javaClass.simpleName}: ${e.message}"
             status.message = e.message
@@ -538,6 +692,12 @@ open class StatefulAgentRunner(
                 it.noopLimitOverride = null
                 it.runEngineOverride = null
                 it.codingMode = false
+                // Detach this task's live feed and steering queue: the companion
+                // agent is shared, and a stale listener would keep reporting into
+                // a finished task's log (and a stale steering source would drain
+                // another task's messages).
+                it.runEventListener = null
+                it.steeringSource = null
                 // Write point 3 (§6.1): record the terminal task state in the
                 // workspace manifest. Done from finally so cancelled/failed runs
                 // are still recorded.
@@ -560,6 +720,15 @@ open class StatefulAgentRunner(
             }
             status.done()
             onStatusChanged(status)
+            // Close the live feed: the terminal step is what makes a follower
+            // stop, and the steering queue can never be drained after this point.
+            pendingInputs.remove(status.id)
+            val terminalType = when {
+                status.cancelled -> AgentTaskEvent.TYPE_CANCELLED
+                status.failureReason != null -> AgentTaskEvent.TYPE_FAILED
+                else -> AgentTaskEvent.TYPE_DONE
+            }
+            recordLifecycle(status, terminalType, status.failureReason ?: status.message)
         }
     }
 
@@ -755,9 +924,12 @@ open class StatefulAgentRunner(
                 status.failureReason = "Runner closed"
                 status.message = "Agent task aborted: runner closed"
                 persistence.append(status)
+                pendingInputs.remove(id)
+                recordLifecycle(status, AgentTaskEvent.TYPE_CANCELLED, status.failureReason)
             }
         }
         runningJobs.clear()
+        pendingInputs.clear()
 
         // Best-effort wait for in-flight coroutines to finish marking their
         // statuses; a non-cooperative coroutine cannot block shutdown forever.
@@ -766,8 +938,9 @@ open class StatefulAgentRunner(
         }
 
         statusCache.invalidateAll()
+        eventLogs.invalidateAll()
         liveInstances.remove(this)
-        logger.info("StatefulAgentRunner closed (session={})", session.uuid)
+        logger.info("StatefulAgentRunner closed (agentSession={})", session.uuid)
     }
 
     companion object {
@@ -798,8 +971,18 @@ open class StatefulAgentRunner(
         /** Max cached task statuses per runner (see the status cache's KDoc). */
         const val STATUS_CACHE_SIZE = 1_000L
 
-        /** Minimum spacing between in-progress status snapshots (see [persistProgress]). */
+        /** Min spacing between in-progress status snapshots (see [persistProgress]). */
         const val PROGRESS_PERSIST_INTERVAL_MS = 10_000L
+
+        /**
+         * Max tasks whose live step logs stay in memory (see the `eventLogs`
+         * field): 128 × at most 1000 events is a few tens of MB worst case, and
+         * the whole point of the log is the task the user is WATCHING.
+         */
+        const val EVENT_LOG_CACHE_SIZE = 128L
+
+        /** Idle minutes after which a task's step log is dropped. */
+        const val EVENT_LOG_TTL_MINUTES = 120L
 
         /**
          * Persistence file size above which the 5-minute maintenance pass rewrites

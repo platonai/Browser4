@@ -146,7 +146,7 @@ Valid categories: `generic`, `browser4`, `real-world`, `mock-site`, `all` (defau
 
 ## Available tasks
 
-47 task files covering all browser4-cli commands documented in the SKILL reference plus the 5 built-in Browser4 plugins.
+50 task files covering all browser4-cli commands documented in the SKILL reference plus the 5 built-in Browser4 plugins.
 
 ### Real-World — Generic (`tasks/real-world/generic/`)
 
@@ -168,7 +168,7 @@ evaluate other browser automation agents (Playwright, Puppeteer, Selenium, etc.)
 
 ### Real-World — Browser4 Specific (`tasks/real-world/browser4/`)
 
-18 scenarios (13 feature scenarios plus the 5 plugin scenarios listed below)
+21 scenarios (16 feature scenarios plus the 5 plugin scenarios listed below)
 exercising browser4-unique features (X-SQL, crawl, agent, loop, htmlsnapshot,
 attach, named sessions, auto-diff).
 
@@ -187,6 +187,9 @@ attach, named sessions, auto-diff).
 | `loop-monitoring.md` | httpbin.org | Loop in plain-text/shell/subcommand modes, named loops, pause/resume/stop |
 | `attach-remote-debug.md` | Chrome/Edge CDP | Attach to running Chrome/Edge via CDP, capture state |
 | `attach-failure-boundaries.md` | Chrome CDP | Attach failure modes: unreachable endpoint fails loudly, page-less endpoint is an error, real current page reported, random-port discovery via channel |
+| `extension-attach-single-connection.md` | Edge + Browser4 Extension | `attach --extension msedge` reuses the running Edge: one session, no Browser4-launched browser, no `:9222`, repeat attach refused, `disconnect` leaves the browser running |
+| `agent-run-session-hygiene.md` | Edge + Browser4 Extension | `agent run` (no `-s`) runs in the attached session: `command_run session=<id>` in the backend log, one handshake, no new session/browser, page restored afterwards |
+| `backend-browser-footprint.md` | Headless Chrome | Default backend start: no `:8088` MCP server and no extra headless Chrome, exactly one browser per session, next command reuses the same backend port/pid |
 
 ### Real-World — Plugin Scenarios (`tasks/real-world/browser4/plugin-*.md`)
 

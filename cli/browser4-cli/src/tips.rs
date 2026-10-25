@@ -302,6 +302,12 @@ const TIPS_AGENT: &[Tip] = &[
     Tip {
         text: "Task type is browser by default — pass `agent run --coding` to explicitly mark a pure coding task (file/build work, no browser page)",
     },
+    Tip {
+        text: "`agent run \"<task>\" --follow` streams every tool call and the model's own text; Ctrl+C cancels the task instead of orphaning it",
+    },
+    Tip {
+        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls",
+    },
 ];
 
 const TIPS_WEBMINER: &[Tip] = &[
@@ -321,10 +327,16 @@ const TIPS_WEBMINER: &[Tip] = &[
 
 const TIPS_ATTACH: &[Tip] = &[
     Tip {
+        text: "Use `attach --extension edge` (or chrome) to drive the browser you already have open — no CDP port, no second browser",
+    },
+    Tip {
         text: "Use `attach --cdp chrome` to connect to your regular Chrome with all your logins intact",
     },
     Tip {
         text: "Use `attach --cdp msedge` to connect to Microsoft Edge via CDP",
+    },
+    Tip {
+        text: "`attach` prints the session tab it drives, and `disconnect` names the tab it released",
     },
 ];
 

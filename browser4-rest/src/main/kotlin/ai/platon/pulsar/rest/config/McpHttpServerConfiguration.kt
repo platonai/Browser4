@@ -23,9 +23,17 @@ import org.springframework.context.event.EventListener
 /**
  * Auto-configuration for the MCP-over-HTTP server.
  *
- * When `mcp.http.enabled` is `true` (the default), this configuration
- * starts an embedded Ktor HTTP server that exposes Browser4's browser
- * automation tools via the standard MCP **stateless Streamable HTTP** protocol.
+ * When `mcp.http.enabled` is `true` (**opt-in; the default is `false`**), this
+ * configuration starts an embedded Ktor HTTP server that exposes Browser4's
+ * browser automation tools via the standard MCP **stateless Streamable HTTP**
+ * protocol on port 8088.
+ *
+ * It is off by default because enabling it has a real startup cost: the server
+ * eagerly acquires an agent session (below), and creating that session launches a
+ * browser — so an always-on endpoint added one headless browser to *every*
+ * backend start, even for CLI-only workflows that never speak MCP-over-HTTP (the
+ * CLI talks to the REST dispatcher on `server.port`). MCP clients that need the
+ * standard endpoint opt in explicitly.
  *
  * ## How it works
  *
@@ -38,11 +46,11 @@ import org.springframework.context.event.EventListener
  *
  * ## Configuration
  *
- * These keys are read as **JVM system properties** (`-D` flags), not from
- * `application.properties`:
+ * These keys are read from the Spring environment — a JVM system property
+ * (`-D` flag) is the usual way to set them:
  *
  * ```
- * -Dmcp.http.enabled=true        # enable/disable (default: true)
+ * -Dmcp.http.enabled=true        # opt in (default: false — the server is off)
  * -Dmcp.http.port=8088           # listen port (default: 8088)
  * -Dmcp.http.host=0.0.0.0        # bind host (default: 0.0.0.0)
  * -Dmcp.http.headless=false      # run Chrome in headless mode (default: false)
@@ -68,7 +76,8 @@ import org.springframework.context.event.EventListener
  *
  * ## Clients
  *
- * Any MCP-compatible client can connect:
+ * Any MCP-compatible client can connect (after opting in):
+ *
  * - Claude Desktop: configure `mcpServers` with a `url` pointing to
  *   `http://host:8088/mcp` (streamable-http transport)
  * - Cursor / Windsurf: same URL in their MCP server configuration
@@ -83,7 +92,7 @@ import org.springframework.context.event.EventListener
  * exits on context refresh (`spring.context.exit=onRefresh`).
  */
 @Configuration
-@ConditionalOnProperty(name = ["mcp.http.enabled"], havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(name = ["mcp.http.enabled"], havingValue = "true", matchIfMissing = false)
 @ConditionalOnProperty(name = ["browser4.aot.training"], havingValue = "false", matchIfMissing = true)
 class McpHttpServerConfiguration(
     /**

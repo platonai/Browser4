@@ -43,6 +43,57 @@ pub(super) fn test_agent_run_live_or_missing_llm_key(ctx: &mut E2ECtx) {
     }
 }
 
+/// The live step stream against a REAL backend: the file-backed model drives
+/// two rounds, and `--follow` renders the events the backend actually emits
+/// (`GET /api/commands/{id}/events` → CLI renderer).
+pub(super) fn test_agent_run_mock_llm_follow_streams_steps(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let scenario = "test_e2e_agent_run_mock_llm_follow_streams_steps";
+    let fixture_url = ctx.interactive_url();
+    write_file_backed_llm_responses(
+        ctx,
+        scenario,
+        &[
+            &format!(
+                r#"{{"text":"step 1: open","toolCalls":[{{"id":"t1","name":"cli_run","arguments":{{"args":"open {fixture_url}"}}}}]}}"#
+            ),
+            r#"{"text":"continuing after tool"}"#,
+            r#"{"text":"follow stream completed"}"#,
+        ],
+    );
+
+    let result = run_command(
+        ctx,
+        &[
+            "agent",
+            "run",
+            "Open the fixture page and report it",
+            "--follow",
+        ],
+    );
+
+    assert!(
+        result.stdout.contains("Task submitted:"),
+        "Expected the task id in:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("#1 "),
+        "The backend's first tool call must stream as a step line:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("Agent completed in"),
+        "Expected the follow mode completion line:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("follow stream completed"),
+        "Expected the scripted final report:\n{}",
+        result.stdout
+    );
+}
+
 /// Multi-step CLI-engine agent run backed by FileBackedChatModel: two real
 /// `cli.run` tool calls followed by a plain-text final report.
 pub(super) fn test_agent_run_mock_llm_multi_step_cli_tools(ctx: &mut E2ECtx) {

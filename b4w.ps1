@@ -413,6 +413,57 @@ function Get-B4wBackendBundleStampPath {
         Select-Object -First 1
 }
 
+function Test-B4wMayStartBackend {
+    <#
+    .SYNOPSIS
+        True when this invocation can start or talk to the Browser4 backend.
+    .DESCRIPTION
+        The backend staleness notice only makes sense for commands that will
+        actually launch the backend: dev mode detects "sources newer than the
+        bundle" and rebuilds before serving, so the notice warns about a
+        multi-minute wait.  Printing it for `help`, `config get`,
+        `--version`, `status` or the wrapper's own subcommands
+        (coworker/sc/test/build/b4w) warns about a rebuild those commands never
+        trigger.
+
+        The list names only commands that are certain to stay local; anything
+        unrecognized keeps the notice, because hiding a heads-up about a slow
+        rebuild is worse than printing one extra line.  Kept in sync with the
+        exclusions of `should_ensure_server_running()` in
+        cli/browser4-cli/src/main.rs.
+    .PARAMETER CliArgs
+        Arguments as received by the wrapper, before subcommand routing.
+    #>
+    param([string[]] $CliArgs)
+
+    if (-not $CliArgs -or $CliArgs.Count -eq 0) { return $false }
+
+    $i = 0
+    # `b4w -- <cmd>` and `b4w cli <cmd>` both name the command after the prefix.
+    if ($CliArgs[$i] -eq '--' -or $CliArgs[$i] -eq '--%') { $i++ }
+    if ($i -lt $CliArgs.Count -and $CliArgs[$i] -eq 'cli') { $i++ }
+    # `b4w` (bare) or `b4w cli` (bare) print help instead of running anything.
+    if ($i -ge $CliArgs.Count) { return $false }
+
+    $LocalCommands = @(
+        # Wrapper-level help and version.
+        'help', '--help', '-h', 'version', '--version', '-V',
+        # Wrapper subcommands — routed before the CLI binary runs.
+        'coworker', 'sc', 'test', 'build', 'b4w',
+        # CLI commands that never start the backend.
+        'config', 'config-list', 'config-get', 'config-set', 'config-delete',
+        'status', 'doctor', 'doctor-log', 'doctor-metrics', 'doctor-status',
+        'stop', 'install', 'uninstall', 'upgrade',
+        'list', 'close', 'close-all', 'disconnect', 'kill-all', 'session-default',
+        'skills', 'skills-list', 'skills-get', 'skills-path', 'skills-unpack',
+        'snapshot-list', 'snapshot-clean',
+        'agent-list', 'agent-cancel', 'crawl-list', 'swarm-list',
+        'webminer', 'webminer-install', 'webminer-update', 'webminer-version',
+        'webminer-uninstall', 'webminer-run-example', 'webminer-all', 'webminer-views'
+    )
+    return -not ($LocalCommands -contains $CliArgs[$i])
+}
+
 # ── Backend staleness check ──────────────────────────────────────────────
 # The CLI binary is rebuilt from source above, but the Browser4 backend runs
 # from a runtime bundle (browser4-apps/browser4-bundle/target/runtime-bundle)
@@ -451,11 +502,20 @@ if ((!$NoBuild -or $Rebuild) -and (Test-Path (Join-Path $ScriptDir 'browser4-app
         $Hasher2 = [System.Security.Cryptography.SHA256]::Create()
         $BackendDirs = @(
             'browser4-core', 'browser4-agentic', 'browser4-coding',
-            'browser4-rest', 'browser4-boot', 'browser4-agent-tools',
-            'browser4-plugins'
+            'browser4-rest', 'browser4-boot', 'browser4-agent-tools'
         )
+        # Only `src/main` is backend code: test sources are not compiled into the
+        # runtime bundle, so hashing them announced a rebuild that never came
+        # (the CLI's own staleness check walks `src/main` only).
+        #
+        # `browser4-plugins` is deliberately absent: plugin jars are assembled
+        # into the bundle's `plugins/` directory — never `lib/` — and plugins are
+        # optional, installed on demand, so a plugin edit must not advertise a
+        # backend rebuild the launcher never performs.  Keep this list in sync
+        # with BUNDLED_TOP_LEVEL_MODULES in cli/browser4-cli/src/daemon.rs.
         $BackendFiles = foreach ($d in $BackendDirs) {
-            @(Get-ChildItem -Path (Join-Path $ScriptDir $d) -Recurse -File -Filter '*.kt' -ErrorAction SilentlyContinue)
+            @(Get-ChildItem -Path (Join-Path $ScriptDir $d) -Recurse -File -Filter '*.kt' -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match '[\\/]src[\\/]main[\\/]' })
         }
         $BackendFiles += @(Get-Item (Join-Path $ScriptDir 'pom.xml'), (Join-Path $ScriptDir 'VERSION') -ErrorAction SilentlyContinue | Where-Object { $_ })
         $BackendFiles = @($BackendFiles | Sort-Object FullName -Unique)
@@ -498,10 +558,13 @@ if ((!$NoBuild -or $Rebuild) -and (Test-Path (Join-Path $ScriptDir 'browser4-app
                     New-Item -Path (Split-Path $BackendHashFile -Parent) -ItemType Directory -Force -ErrorAction SilentlyContinue > $null
                     $BackendCurrentHash | Out-File -FilePath $BackendHashFile -Encoding ascii -NoNewline
                 } catch { }
-            } else {
-                Write-Host 'Backend sources changed since the runtime bundle was last built.' -ForegroundColor Yellow
-                Write-Host 'Rebuild with:  $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = "1"; b4w <command>' -ForegroundColor Yellow
-                Write-Host '  (or pass -Rebuild to b4w to force the rebuild automatically)' -ForegroundColor DarkGray
+            } elseif (-not $Rebuild -and (Test-B4wMayStartBackend -CliArgs $RemainingArgs)) {
+                # Dev mode rebuilds by itself: the next command that needs the
+                # backend sees sources newer than the bundle and runs Maven
+                # before serving.  Demanding a manual rebuild here contradicted
+                # both that behaviour and `status`, and saying it for `help` /
+                # `config` advertised a rebuild those commands never trigger.
+                Write-Host 'Backend sources are newer than the runtime bundle; the next backend command rebuilds it automatically (a few minutes).' -ForegroundColor DarkGray
             }
         }
         if ($Rebuild) { $BackendHashToCache = $BackendCurrentHash }
@@ -669,8 +732,14 @@ if ($CliArgs -and $CliArgs[0] -eq 'sc') {
     $TestScript = Join-Path $ScriptDir 'bin\test.ps1'
     $ScArgs = if ($CliArgs.Count -gt 1) { @($CliArgs[1..($CliArgs.Count - 1)]) } else { @() }
     if ($ScArgs) {
-        $safeArgs = ($ScArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
-        Invoke-Expression "& '$TestScript' -- rws sc $safeArgs"
+        # bin/test.ps1 HAS a param() block, so a bare `-i` would be bound to
+        # -InformationAction before the script sees it.  Passing each token as a
+        # single-quoted literal keeps it a positional string value.  This is safe
+        # for the data: a single-quoted PowerShell string expands nothing — `$`,
+        # backticks and `$(...)` stay literal — and doubling the internal `'`
+        # round-trips the exact text.
+        $ScLiterals = ($ScArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
+        Invoke-Expression "& '$TestScript' -- rws sc $ScLiterals"
     } else {
         # No args → launch the interactive scenario picker
         & $TestScript rws sc --interactive
@@ -680,17 +749,14 @@ if ($CliArgs -and $CliArgs[0] -eq 'sc') {
 
 # ── Subcommand: test ──────────────────────────────────────────────────────
 # Delegates to bin/test.ps1, forwarding all remaining arguments.
-# Uses Invoke-Expression with "--" instead of splatting (@TestArgs) so that
-# PowerShell's parser consumes the "--" as an end-of-parameters marker.
-# This prevents short flags like -i (ambiguous between -InformationAction
-# and -InformationVariable) from triggering common-parameter binding in the
-# target script's CmdletBinding block.
+# Same reason as `sc`: the target declares CmdletBinding, so flags must arrive
+# as positional string values (see the comment there).
 if ($CliArgs -and $CliArgs[0] -eq 'test') {
     $TestScript = Join-Path $ScriptDir 'bin\test.ps1'
     $TestArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
     if ($TestArgs) {
-        $safeArgs = ($TestArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
-        Invoke-Expression "& '$TestScript' -- $safeArgs"
+        $TestLiterals = ($TestArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
+        Invoke-Expression "& '$TestScript' -- $TestLiterals"
     } else {
         & $TestScript
     }
@@ -703,8 +769,8 @@ if ($CliArgs -and $CliArgs[0] -eq 'build') {
     $BuildScript = Join-Path $ScriptDir 'bin\build.ps1'
     $BuildArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
     if ($BuildArgs) {
-        $safeArgs = ($BuildArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
-        Invoke-Expression "& '$BuildScript' -- $safeArgs"
+        $BuildLiterals = ($BuildArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
+        Invoke-Expression "& '$BuildScript' -- $BuildLiterals"
     } else {
         & $BuildScript
     }
@@ -1227,27 +1293,34 @@ if ($CliArgs[0] -eq 'cli') {
     $CliArgs = $CliArgs[1..$CliArgs.Length]
 }
 
-# Build a quoted argument list to prevent PowerShell from interpreting
-# dash-prefixed CLI flags (-v, -i, --sql, -Ex*, etc.) as its own
-# parameters.  Without this, PowerShell resolves -v to -Verbose (common
-# parameter), -i clashes with -InformationAction, and other flag-like
-# tokens can be consumed before reaching the CLI binary.
-# See also: b4w.sh for bash → pwsh passthrough handling.
-$SafeArgs = foreach ($a in $CliArgs) {
-    # Double-quote each argument and escape internal double quotes.
-    '"' + ($a -replace '"', '""') + '"'
+# Forward the arguments as argv.
+#
+# This used to build a quoted string and run it through Invoke-Expression,
+# which sent every argument through a SECOND PowerShell parse: `$VAR` was
+# expanded, `$(...)` was EXECUTED, and a backtick escape was interpreted — so
+# `agent run 'first run `browser4-cli list`'` reached the CLI with a U+0008
+# backspace in place of the backtick+b, and a task containing $(...) ran shell
+# code.  Splatting an array of already-parsed tokens cannot do that: the
+# dash-prefixed CLI flags below are plain arguments of a native command (no
+# parameter binder involved, because this script declares no param() block),
+# and pwsh 7.3+'s standard quoting keeps spaces, quotes, `$`, backticks and
+# empty strings intact.
+#
+# BROWSER4_CLI_INVOKE_HINT tells the CLI how the user actually invoked it, so
+# hints print `./b4w.ps1 list` instead of the resolved `browser4-cli.exe list`.
+if (-not $env:BROWSER4_CLI_INVOKE_HINT) {
+    $env:BROWSER4_CLI_INVOKE_HINT = './b4w.ps1'
 }
-$SafeArgsStr = $SafeArgs -join ' '
 
 if (Test-Path $Exe) {
-    if ($SafeArgs) {
-        Invoke-Expression "& `"$Exe`" $SafeArgsStr"
+    if ($CliArgs) {
+        & $Exe @CliArgs
     } else {
         & $Exe
     }
 } else {
-    if ($SafeArgs) {
-        Invoke-Expression "cargo run --manifest-path `"$Manifest`" -- $SafeArgsStr"
+    if ($CliArgs) {
+        & cargo run --manifest-path $Manifest -- @CliArgs
     } else {
         cargo run --manifest-path $Manifest
     }

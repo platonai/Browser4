@@ -219,6 +219,24 @@ fun CommandStatus.failed(statusCode: Int, pageStatusCode: Int): CommandStatus {
     return this
 }
 
+/**
+ * The task's status mapped onto the shared, user-facing vocabulary
+ * (`queued|running|done|failed|cancelled`).
+ *
+ * One implementation for every consumer: the MCP `command_status` envelope and
+ * the REST `GET /api/commands/{id}/events` answer must agree, or a follower
+ * would stop polling on a word the poller never shows.
+ * */
+fun CommandStatus.statusWord(): String = when {
+    // A cancelled task is done and non-OK, but calling it "failed" turns a
+    // user-requested cancel into an unexplained failure on every later poll —
+    // the flag (set only by explicit cancel/close paths) wins over the code.
+    isDone && cancelled -> "cancelled"
+    isDone -> if (statusCode == ResourceStatus.SC_OK) "done" else "failed"
+    processState == "created" -> "queued"
+    else -> "running"
+}
+
 fun CommandStatus.addInstructResult(result: InstructResult) {
     instructResults.add(result)
 

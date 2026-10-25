@@ -815,7 +815,10 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "close",
-            description: "Close the browser",
+            // On an attached session `close` detaches: it releases the tab(s)
+            // the session drove and never terminates the user's browser.  The
+            // old "Close the browser" wording read like it would kill Edge.
+            description: "Close the current session (attached browsers detach; the external browser keeps running)",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,
@@ -3702,7 +3705,10 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "stop",
-            description: "Gracefully stop the Browser4 server",
+            // Development mode force-stops this checkout's backends (not a
+            // graceful drain) and then closes the browsers they launched;
+            // production keeps the graceful notify + global browser sweep.
+            description: "Stop this workspace's backend and the browsers it launched",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,
@@ -4023,18 +4029,24 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "agent-run",
-            description: "Run an autonomous agent task (async, returns task ID)",
+            description: "Run an autonomous agent task (async, returns task ID). With --follow it streams the task's steps; with -i it opens an interactive session",
             category: Category::Agent,
             hidden: false,
             batch_supported: false,
-            args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
+            // Optional because `-i` may start an empty session (tasks then come
+            // from stdin); the non-interactive form still rejects a missing task
+            // with "Task description is required.".
+            args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute (optional when starting with -i)", optional: true }],
             options: &[
                 OptionDef { name: "wait", description: "Block until the agent task completes (default timeout: 600s)", is_bool: true, short: None },
-                OptionDef { name: "wait-timeout", description: "Max seconds to block with --wait before giving up (default: 600; the task keeps running server-side after a timeout)", is_bool: false, short: None },
+                OptionDef { name: "wait-timeout", description: "Max seconds to block with --wait (default: 600) or to follow with --follow (default: no cap). The task keeps running server-side after a timeout", is_bool: false, short: None },
                 OptionDef { name: "noop-limit", description: "Override the consecutive no-op abort threshold (default: 5; long coding tasks benefit from 8-10). Passing --coding is the explicit way to mark an agent task as a coding task", is_bool: false, short: None },
                 OptionDef { name: "coding", description: "Mark the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task, which is the default: task type is never auto-detected", is_bool: true, short: None },
                 OptionDef { name: "fresh-workspace", description: "Run this task in a fresh, isolated workspace directory instead of the shared workspace. Use for tasks that must not see or mutate previous tasks' scratch files", is_bool: true, short: None },
                 OptionDef { name: "engine", description: "Agent execution engine (default: cli; observe-act is the DEPRECATED legacy engine)", is_bool: false, short: None },
+                OptionDef { name: "follow", description: "Stream the task's steps (tool calls, model text, failures) while waiting, then print the result. Implies waiting; a slow tool or failure is always reported, successful fast tools are not", is_bool: true, short: None },
+                OptionDef { name: "ndjson", description: "With --follow: emit one JSON object per step (NDJSON) for machine consumption instead of human-readable lines", is_bool: true, short: None },
+                OptionDef { name: "interactive", description: "Open an interactive session: run tasks one after another, steer a running task by typing, and use /status, /stats, /cancel, /result, /new, /help. Pass an initial task to run it immediately", is_bool: true, short: Some("i") },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_run".to_string(),
@@ -4060,6 +4072,17 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if get_bool(args, "fresh-workspace").unwrap_or(false) {
                     p["freshWorkspace"] = json!(true);
+                }
+                // CLI-side modes: consumed by handle_agent_run, never sent to
+                // the backend (`command.run` rejects undeclared arguments).
+                if get_bool(args, "follow").unwrap_or(false) {
+                    p["follow"] = json!(true);
+                }
+                if get_bool(args, "ndjson").unwrap_or(false) {
+                    p["ndjson"] = json!(true);
+                }
+                if get_bool(args, "interactive").unwrap_or(false) {
+                    p["interactive"] = json!(true);
                 }
                 p["engine"] = json!(get_opt_str(args, "engine").unwrap_or("cli"));
                 p

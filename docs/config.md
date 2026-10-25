@@ -393,6 +393,21 @@ docker run -d -p 18182:18182 `
 
   > For `DEFAULT`, `SYSTEM_DEFAULT`, and `PROTOTYPE` browser contexts, there is **no limit**.
 
+* **`mcp.http.enabled`** *(default: `false`)*
+  Opt-in **MCP-over-HTTP** endpoint (`POST /mcp`, default port `8088`, standard Streamable HTTP) for MCP clients such as Claude Desktop or Cursor. The CLI does **not** need it — it talks to the REST dispatcher on `server.port`.
+
+  It stays off by default because enabling it binds a second endpoint **and eagerly acquires an agent session when the backend starts**, which launches a browser even when no MCP client ever connects. Enable it only when an MCP-over-HTTP client is actually configured:
+
+  ```bash
+  # bundle / standalone backend
+  java -Dmcp.http.enabled=true -Dmcp.http.port=8088 -jar Browser4.jar
+
+  # backend started by the CLI
+  BROWSER4_SERVER_OPTS="-Dmcp.http.enabled=true" browser4-cli open
+  ```
+
+  Related keys: `mcp.http.port` (default `8088`), `mcp.http.host` (default `0.0.0.0`), `mcp.http.headless` (default `false`), `mcp.http.allowedHosts`, `mcp.http.dnsRebindingProtection`.
+
 * **`browser.display.mode`** (`GUI` | `HEADLESS` | `SUPERVISED`)
   Controls how the browser is displayed:
 

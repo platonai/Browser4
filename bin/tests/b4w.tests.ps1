@@ -453,15 +453,24 @@ $restoredDir = Get-Location
 Assert-Returns -Label 'CWD restore: same directory after build --help' -Actual $restoredDir.Path -Expected $originalDir.Path
 
 # ═══════════════════════════════════════════════════════════════════
-# TESTS: Safe argument quoting
+# TESTS: Argument passing
 # ═══════════════════════════════════════════════════════════════════
-Write-Host "━━━ Safe argument quoting ━━━" -ForegroundColor Cyan
+Write-Host "━━━ Argument passing ━━━" -ForegroundColor Cyan
 
-# Verify the safe-args quoting logic by checking the source code
+# Two different targets need two different techniques:
+#  - the CLI binary is a NATIVE command. Splatting an array of parsed tokens
+#    (`& $Exe @CliArgs`) cannot be re-parsed, so values arrive verbatim. This is
+#    the fix for the 2026-10-25 double-parse bug, where `$(1+1)` was EXECUTED
+#    and `` `t `` became a tab before the CLI ever saw them.
+#  - bin/test.ps1 / build.ps1 / sc are POWERSHELL scripts with param() blocks:
+#    a bare `-i` binds to -InformationAction there, so those tokens must arrive
+#    as single-quoted string literals. Single quotes expand nothing, so the data
+#    is still safe.
 $srcText = Get-Content $B4wPs1Path -Raw
-Assert-ContainsString -Label 'Safe args: uses Invoke-Expression' -Haystack $srcText -Needle 'Invoke-Expression'
-Assert-ContainsString -Label 'Safe args: single-quotes each arg' -Haystack $srcText -Needle '.Replace'
-Assert-ContainsString -Label "Safe args: escapes internal single quotes" -Haystack $srcText -Needle "''"
+Assert-ContainsString -Label 'Args: CLI invocation splats argv' -Haystack $srcText -Needle '& $Exe @CliArgs'
+Assert-NotContainsString -Label 'Args: CLI invocation no longer joins a SafeArgs string' -Haystack $srcText -Needle '$SafeArgsStr'
+Assert-ContainsString -Label 'Args: script delegation single-quotes each arg' -Haystack $srcText -Needle '$_.Replace('
+Assert-ContainsString -Label 'Args: script delegation doubles internal single quotes' -Haystack $srcText -Needle "''"
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: Rebuild flag logic
@@ -471,7 +480,12 @@ Write-Host "━━━ Rebuild flag ━━━" -ForegroundColor Cyan
 # Verify the -Rebuild flag is handled via manual $args parsing (no param() block)
 Assert-ContainsString -Label 'Rebuild: param switch defined' -Haystack $srcText -Needle '$Rebuild = $false'
 Assert-ContainsString -Label 'Rebuild: forces rebuild message' -Haystack $srcText -Needle 'Rebuilding browser4-cli'
-Assert-ContainsString -Label 'Rebuild: hashes plugin modules' -Haystack $srcText -Needle 'browser4-plugins'
+# The backend hash must cover exactly what ships in the runtime bundle:
+# `src/main` of the bundled modules, and NOT browser4-plugins (its jars are
+# assembled into the bundle's plugins/ directory, so a plugin edit must not
+# advertise a backend rebuild the launcher never performs).
+Assert-NotContainsString -Label 'Rebuild: does not hash plugin modules' -Haystack $srcText -Needle "'browser4-plugins'"
+Assert-ContainsString -Label 'Rebuild: hashes src/main only' -Haystack $srcText -Needle 'src[\\/]main'
 Assert-ContainsString -Label 'Rebuild: resolves platform stamp' -Haystack $srcText -Needle 'Get-B4wBackendBundleStampPath'
 Assert-ContainsString -Label 'Rebuild: hashes with -NoBuild -Rebuild' -Haystack $srcText -Needle '!$NoBuild -or $Rebuild'
 Assert-ContainsString -Label 'Rebuild: restores caller force flag' -Haystack $srcText -Needle '$OriginalForceRebuildBundle'
@@ -480,6 +494,17 @@ Assert-ContainsString -Label 'Rebuild: restores caller force flag' -Haystack $sr
 Assert-ContainsString -Label 'Rebuild: auto-detect stale sources' -Haystack $srcText -Needle 'Get-ChildItem -Path $SrcDir'
 Assert-ContainsString -Label 'Rebuild: checks Cargo.toml timestamp' -Haystack $srcText -Needle 'Cargo.toml'
 Assert-ContainsString -Label 'Rebuild: checks Cargo.lock timestamp' -Haystack $srcText -Needle 'Cargo.lock'
+
+# The backend staleness notice must describe what dev mode really does — the
+# next backend command rebuilds and starts automatically — and must not print
+# for commands that never start the backend.  `help`/`config`/`status` used to
+# advertise a manual rebuild they never trigger (issue 2 of
+# coworker/tasks/issues/draft/20261016-180650-bulk-scale-routing.issues.md).
+Assert-ContainsString -Label 'Backend notice: gated on backend usage' -Haystack $srcText -Needle 'Test-B4wMayStartBackend'
+Assert-ContainsString -Label 'Backend notice: local commands listed' -Haystack $srcText -Needle "'config', 'config-list'"
+Assert-ContainsString -Label 'Backend notice: automatic rebuild wording' -Haystack $srcText -Needle 'the next backend command rebuilds it automatically'
+Assert-ContainsString -Label 'Backend notice: skipped when -Rebuild forces it' -Haystack $srcText -Needle 'elseif (-not $Rebuild -and (Test-B4wMayStartBackend'
+Assert-NotContainsString -Label 'Backend notice: no manual rebuild instruction' -Haystack $srcText -Needle 'Rebuild with:  $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE'
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: Source script integrity
@@ -642,8 +667,28 @@ $output = pwsh -NoProfile -Command "& '$b4wAbs' sc --help *>&1" *>&1 | Out-Strin
 Assert-ContainsString -Label 'Flags: b4w sc --help (passthrough)' -Haystack $output -Needle 'Usage:'
 
 # sc subcommand with short flag
+
 $output = pwsh -NoProfile -Command "& '$b4wAbs' sc -i *>&1" *>&1 | Out-String
 Assert-NotNull -Label 'Flags: b4w sc -i (no crash)' -Value $output
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: argv fidelity — the wrapper must not re-parse values
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ argv fidelity: no second parse ━━━" -ForegroundColor Cyan
+
+# An unknown command makes the CLI echo the token verbatim, which gives a
+# session-free probe of exactly what reached the binary. Before the fix these
+# tokens were silently altered by b4w.ps1's Invoke-Expression: `$(1+1)` was
+# evaluated to 2, and `` `t `` became a TAB character.
+$output = pwsh -NoProfile -Command "& '$b4wAbs' 'X`$(1+1)Y' *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'argv: $(...) is passed through literally' -Haystack $output -Needle 'X$(1+1)Y'
+Assert-NotContainsString -Label 'argv: $(...) is not evaluated' -Haystack $output -Needle "X2Y"
+
+# A backtick escape in the value must survive (the second parse turned `` `t ``
+# into a tab, which is how an agent task text lost its backtick in a 2026-10-25
+# scenario run).
+$output = pwsh -NoProfile -Command "& '$b4wAbs' 'A``tB' *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'argv: backtick escape survives' -Haystack $output -Needle 'A`tB'
 
 # ═══════════════════════════════════════════════════════════════════
 # Summary
