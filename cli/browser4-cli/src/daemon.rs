@@ -6313,10 +6313,30 @@ fn collect_jvm_opts_and_program_args() -> (Vec<String>, Vec<String>) {
     // fails it returns None and the shared root is used (pre-existing
     // behaviour).  Placed before BROWSER4_SERVER_OPTS so an explicit
     // -Dapp.data.dir from the user still wins.
-    if let Some(app_data) = workspace_app_data_dir() {
+    let workspace_app_data = workspace_app_data_dir();
+    if let Some(app_data) = &workspace_app_data {
         jvm_opts.push(format!(
             "-Dapp.data.dir={}",
             normalize_jvm_windows_path_text(&app_data.to_string_lossy())
+        ));
+    }
+
+    // Development mode: scope the SDK temp tree — and with it the browser
+    // context directories — to the same per-checkout root.  `AppPaths.CONTEXT_
+    // BASE_DIR` is `PROC_TMP_DIR/context`, and both temp dirs are derived from
+    // `AppContext.APP_TMP_DIR`, which reads `app.tmp.base.dir` before falling
+    // back to `java.io.tmpdir`.  Without this, every checkout shares
+    // `%TEMP%\browser4-<user>\context`, which carried two real defects: a second
+    // backend discovered the first one's Chrome on that user-data-dir, reused
+    // it, added tabs to it and resolved DEFAULT to the same session UUID
+    // (cross-checkout profile/logins sharing is a hazard, not a feature), and a
+    // leaked browser could never be attributed to the checkout that launched
+    // it.  Placed before BROWSER4_SERVER_OPTS so an explicit
+    // -Dapp.tmp.base.dir from the user still wins.
+    if let Some(app_data) = &workspace_app_data {
+        jvm_opts.push(format!(
+            "-Dapp.tmp.base.dir={}",
+            normalize_jvm_windows_path_text(&app_data.join("tmp").to_string_lossy())
         ));
     }
 
@@ -8864,6 +8884,16 @@ fn server_startup_log_path(
         .join(format!("browser4-server-{kind}-port{port}-{timestamp}.log"))
 }
 
+/// Directory holding this CLI's backend launcher logs (`browser4-server-*.log`).
+///
+/// The launcher writes the log even when the JVM never reaches its web server,
+/// so it is the only record of a start that failed — which is exactly when
+/// `doctor log` has no backend to ask.  Honours `BROWSER4_SERVER_LOG_DIR`, then
+/// falls back to the per-user CLI temp dir used by development checkouts.
+pub fn backend_log_dir() -> PathBuf {
+    server_startup_log_dir(None)
+}
+
 fn browser4_cli_temp_root_dir() -> PathBuf {
     env::temp_dir().join("browser4").join("browser4-cli")
 }
@@ -9647,6 +9677,51 @@ mod tests {
         assert!(
             jvm_opts.iter().any(|o| *o == expected),
             "expected {expected} in jvm opts: {jvm_opts:?}"
+        );
+    }
+
+    #[test]
+    fn test_collect_jvm_opts_scopes_the_sdk_temp_tree_to_the_workspace() {
+        let _env_guard = lock_env_mutex();
+        let prev_server_opts = env::var(BROWSER4_SERVER_OPTS_ENV).ok();
+        unsafe {
+            env::set_var(BROWSER4_SERVER_OPTS_ENV, "-Dapp.tmp.base.dir=/custom/tmp");
+        }
+        let (jvm_opts, _) = collect_jvm_opts_and_program_args();
+        unsafe {
+            match prev_server_opts {
+                Some(v) => env::set_var(BROWSER4_SERVER_OPTS_ENV, v),
+                None => env::remove_var(BROWSER4_SERVER_OPTS_ENV),
+            }
+        }
+
+        // Development mode off (or preparation failed) — nothing to scope.
+        let Some(app_data) = workspace_app_data_dir() else {
+            return;
+        };
+        let expected = format!(
+            "-Dapp.tmp.base.dir={}",
+            normalize_jvm_windows_path_text(&app_data.join("tmp").to_string_lossy())
+        );
+        let auto = jvm_opts
+            .iter()
+            .position(|o| *o == expected)
+            .unwrap_or_else(|| {
+                panic!("expected {expected} in jvm opts: {jvm_opts:?}");
+            });
+
+        // `AppPaths.CONTEXT_BASE_DIR` derives from this property, so scoping it
+        // is what keeps two checkouts from sharing `%TEMP%/browser4-<user>` —
+        // and therefore from reusing each other's Chrome and session UUID.
+        // The user's BROWSER4_SERVER_OPTS value comes last: Java keeps the last
+        // -D for a key, so an explicit override still wins.
+        let user_override = jvm_opts
+            .iter()
+            .position(|o| o == "-Dapp.tmp.base.dir=/custom/tmp")
+            .expect("user -Dapp.tmp.base.dir must be present");
+        assert!(
+            auto < user_override,
+            "injected app.tmp.base.dir must precede the user override: {jvm_opts:?}"
         );
     }
 

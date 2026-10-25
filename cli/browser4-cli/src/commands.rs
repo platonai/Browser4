@@ -3705,7 +3705,10 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "stop",
-            description: "Gracefully stop the Browser4 server",
+            // Development mode force-stops this checkout's backends (not a
+            // graceful drain) and then closes the browsers they launched;
+            // production keeps the graceful notify + global browser sweep.
+            description: "Stop this workspace's backend and the browsers it launched",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,

@@ -2,11 +2,11 @@ package ai.platon.pulsar.rest.config
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agentic.context.AgenticContext
+import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.api.service.ConversationService
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
-import java.nio.file.Path
 
 @Configuration
 class CommandServiceConfig {
@@ -14,9 +14,14 @@ class CommandServiceConfig {
     @Bean(destroyMethod = "close")
     fun sessionManager(agenticContext: AgenticContext): PulsarSessionManager {
         // Persist the display-name → session-id mapping so named sessions
-        // keep their identity across backend restarts.  Lives next to the
-        // CLI state under ~/.browser4 (shared convention of this project).
-        val registryFile = Path.of(System.getProperty("user.home"), ".browser4", "session-registry.json")
+        // keep their identity across backend restarts.  Lives in the app data
+        // root: `~/.browser4/session-registry.json` for a production install,
+        // `<workspace state>/app-data/session-registry.json` inside a checkout.
+        // The registry used to be pinned to `~/.browser4` unconditionally, so
+        // every development backend resolved `DEFAULT` (and every name) to the
+        // same session UUID — the second half of the cross-checkout sharing
+        // that let one backend drive another one's browser.
+        val registryFile = AppPaths.DATA_DIR.resolve("session-registry.json")
         return PulsarSessionManager(agenticContext, registryFile = registryFile)
     }
 
