@@ -2160,9 +2160,10 @@ function Start-NativeCommand {
         command exited (default 10).
 
     .PARAMETER NoStdinRedirect
-        Keep an oversized prompt on the command line.  Needed by backends whose
-        CLI refuses stdin (dsh), where redirecting the prompt would strip the
-        only task argument and fail the run.
+        Keep an oversized prompt on the command line.  For a backend whose CLI
+        refuses stdin, where redirecting the prompt would strip the only task
+        argument and fail the run.  No backend currently needs this: dsh,
+        opencode, codex, kimi and claude all read a piped prompt.
 
     .EXAMPLE
         Start-NativeCommand -FilePath 'claude' -ArgumentList @('-p', $prompt) `
@@ -2316,16 +2317,15 @@ function Start-NativeCommand {
     $stdinRedirectPath = $null
 
     # On Windows, redirect large prompts via stdin to avoid CreateProcess
-    # command-line length limits (~32 KiB, or ~8191 with legacy cmd.exe).
+    # command-line length limits (~32 KiB, or ~8191 with legacy cmd.exe — the npm
+    # `.cmd` wrapper shims route through cmd.exe, so an oversized argv kills the
+    # run before the agent starts).
     # Two prompt styles are supported:
     #   - `-p <prompt>` style (claude, kimi): the argument following -p.
-    #   - trailing positional prompt (codex `exec ... <prompt>`, opencode
-    #     `run --auto <prompt>`): the final argument when it is large.  codex
-    #     and opencode read the prompt from stdin when it is piped and no
-    #     prompt argument is present.
-    # dsh is NOT in that list — `dsh --profile headless <task>` takes the task
-    # as a positional argument and fails on a missing task, so callers pass
-    # -NoStdinRedirect and keep its prompt on the command line.
+    #   - trailing positional prompt (dsh `--profile headless <task>`, codex
+    #     `exec ... <prompt>`, opencode `run --auto <prompt>`): the final
+    #     argument when it is large.  All of them read the prompt from stdin when
+    #     it is piped and no prompt argument is present.
     if ($isWindowsPlatform -and -not $NoStdinRedirect) {
         $promptValue = $null
         $promptIsPositional = $false
@@ -2371,8 +2371,8 @@ function Start-NativeCommand {
             foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
         }
     } elseif ($isWindowsPlatform) {
-        # -NoStdinRedirect: the prompt must stay on argv (dsh's headless app
-        # rejects a missing task), so pass every argument and let .NET escape it.
+        # -NoStdinRedirect: the caller knows this backend cannot take its prompt
+        # on stdin, so pass every argument and let .NET escape it.
         foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
     } else {
         # Unix: no command-line length concerns — pass all arguments directly.
@@ -3406,6 +3406,104 @@ function Get-ScenarioAgent {
     return 'dsh'
 }
 
+function Get-AgentEvaluationVerdict {
+    <#
+    .SYNOPSIS
+        Decide whether a completed agent report declares the scenario a failure.
+    .DESCRIPTION
+        The agent's process exit code only says that it finished writing its
+        report; it does not say whether the scenario it evaluated succeeded.  A
+        harness round that could not run a single command (the nested agent's
+        sandbox failed to provision, every shell call was refused) still scored
+        PASS, because the agent exited 0 after writing
+        `completionStatus: "Failed — …" / successRate: "0%"`.
+
+        This helper reads the LAST real assessment in the output — the prompt's
+        own template block is skipped — and reports a failure when either:
+
+          - `completionStatus` starts with "Failed", or
+          - `successRate` is 0 (or "0%").
+
+        "Partially Successful", a missing assessment and unparseable output all
+        count as *not* a failure: this gate exists to catch a report that
+        plainly says the run failed, not to grade reports.
+    .PARAMETER Content
+        The raw agent output (the same text that is written to the capture file).
+    .OUTPUTS
+        Hashtable with keys: IsFailure (bool), CompletionStatus (string),
+        SuccessRate (string), Reason (string).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Content
+    )
+
+    $verdict = @{
+        IsFailure        = $false
+        CompletionStatus = ''
+        SuccessRate      = ''
+        Reason           = ''
+    }
+
+    $normalized = $Content -replace '\r\n', "`n"
+    $blockMatches = [regex]::Matches($normalized, '(?s)```json\s*\n(.*?)```')
+
+    $status = ''
+    $rate   = ''
+    foreach ($blockMatch in $blockMatches) {
+        $jsonStr = $blockMatch.Groups[1].Value.Trim()
+        if (-not $jsonStr) { continue }
+
+        $assessment = $null
+        try {
+            $data = $jsonStr | ConvertFrom-Json -ErrorAction Stop
+            if ($data -and $data.assessment) {
+                $assessment = @{
+                    completionStatus = [string]$data.assessment.completionStatus
+                    successRate      = [string]$data.assessment.successRate
+                }
+            }
+        } catch {
+            $assessment = $null
+        }
+        if (-not $assessment) {
+            # Hybrid/malformed block: salvage the two fields the verdict needs.
+            $partial = ConvertFrom-PartialAssessment -JsonText $jsonStr
+            if ($partial) {
+                $assessment = @{
+                    completionStatus = [string]$partial['completionStatus']
+                    successRate      = [string]$partial['successRate']
+                }
+            }
+        }
+        if (-not $assessment) { continue }
+
+        $cs = [string]$assessment['completionStatus']
+        $sr = [string]$assessment['successRate']
+
+        # The prompt embeds its own JSON template with placeholder assessment text.
+        if ($cs -like '*describe the overall task outcome*') { continue }
+        if (-not $cs -and -not $sr) { continue }
+
+        # LAST real assessment wins (an agent may emit intermediate drafts).
+        if ($cs) { $status = $cs }
+        if ($sr) { $rate = $sr }
+    }
+
+    $verdict.CompletionStatus = $status
+    $verdict.SuccessRate      = $rate
+
+    if ($status -match '^\s*failed\b') {
+        $verdict.IsFailure = $true
+        $verdict.Reason    = "the evaluation reports completionStatus '$status'"
+    } elseif ($rate -match '^\s*0\s*%?\s*$') {
+        $verdict.IsFailure = $true
+        $verdict.Reason    = "the evaluation reports successRate '$rate'"
+    }
+
+    return $verdict
+}
+
 function Invoke-Agent {
     <#
     .SYNOPSIS
@@ -3443,6 +3541,14 @@ function Invoke-Agent {
         Maximum seconds to wait for the agent to complete.  0 (default) means
         no timeout.  On timeout the process is killed and exit code 124 is
         returned (matching the Unix `timeout` command convention).
+    .OUTPUTS
+        The agent's exit code, plus two values this function decides itself:
+
+          - 3 — the agent exited 0 but its report says the scenario failed
+                (`completionStatus: "Failed …"` or `successRate: "0%"`).
+          - 124 — the agent timed out.
+
+        Callers (run-task.ps1, run-tests.ps1) treat any non-zero code as FAIL.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -3527,11 +3633,13 @@ function Invoke-Agent {
         FilePath     = $agent
         ArgumentList = $agentArgs
     }
-    # dsh reads its task from a positional argument and rejects stdin, so its
-    # prompt must stay on the command line even when it is long.
-    if ($agent -eq 'dsh') {
-        $startParams['NoStdinRedirect'] = $true
-    }
+    # Every backend — dsh included — may take its oversized prompt via stdin:
+    # `dsh --profile headless` with no positional task reads the task from stdin
+    # (verified against the npm .cmd and .ps1 shims).  Keeping dsh's prompt on
+    # argv instead broke every scenario on Windows: `dsh` resolves to the npm
+    # `dsh.cmd` wrapper, which routes through cmd.exe's ~8191-character limit,
+    # so the 16-17 KB scenario prompts failed with "The command line is too
+    # long." before dsh ever started.
     if ($captureFile) {
         $startParams['CaptureFile'] = $captureFile
     }
@@ -3546,11 +3654,13 @@ function Invoke-Agent {
     $exitCode = Start-NativeCommand @startParams
 
     # ── Post-processing (only when capture was requested) ───────────────────
+    # The agent's exit code is returned so callers can fail the scenario: a
+    # dead agent run must never look like a pass.
     if (-not $captureFile) {
         if ($exitCode -ne 0) {
             $host.UI.WriteErrorLine("Agent exited with non-zero code: $exitCode")
         }
-        return
+        return $exitCode
     }
 
     # Read back the captured output (written incrementally by Start-NativeCommand)
@@ -3564,7 +3674,7 @@ function Invoke-Agent {
 
     if ([string]::IsNullOrWhiteSpace($capturedOutput)) {
         Write-Host "  WARNING: No output captured from agent (file: $captureFile)" -ForegroundColor Yellow
-        return
+        return $exitCode
     }
 
     # ── Client-side diagnostics: host environment, not agent findings ────────
@@ -3628,10 +3738,37 @@ function Invoke-Agent {
         Write-Host "    Re-running the scenario may produce a complete capture." -ForegroundColor DarkGray
     }
 
-    # Write to the issues draft directory
+    # ── Issues draft: only for a run that actually finished ─────────────────
+    # A failed agent run leaves one error line in the capture.  Writing that
+    # into the issues draft produced junk "evaluation" files (one aborted
+    # `rws sc` round emitted three such .issues.json/.issues.md pairs), and the
+    # draft directory is the input to the issue triage workflow.  The raw
+    # capture is already on disk, so point at it instead.
     if ($ScenarioName) {
-        Write-IssuesToDraft -ScenarioName $ScenarioName -Content $capturedOutput
+        if ($exitCode -eq 0) {
+            Write-IssuesToDraft -ScenarioName $ScenarioName -Content $capturedOutput
+        } else {
+            Write-Host "  Not writing an issues draft: the agent exited $exitCode without completing the evaluation." -ForegroundColor Yellow
+            Write-Host "    Raw agent output: $captureFile" -ForegroundColor DarkGray
+        }
     }
+
+    # ── Evaluation verdict: a completed run can still declare failure ────────
+    # Exit code 3 means "the agent finished and its report says the scenario
+    # failed".  The agent's own exit code cannot express that: the nested-agent
+    # round that could not run one command scored its run "Failed / 0%" and
+    # still exited 0, so `rws sc` reported PASS.  run-tests.ps1 turns any
+    # non-zero, non-124 code into FAIL.
+    if ($exitCode -eq 0) {
+        $verdict = Get-AgentEvaluationVerdict -Content $capturedOutput
+        if ($verdict.IsFailure) {
+            Write-Host "  Evaluation verdict: FAILED — $($verdict.Reason)" -ForegroundColor Red
+            Write-Host '    The agent exited 0 but its report says the scenario failed.' -ForegroundColor DarkGray
+            $exitCode = 3
+        }
+    }
+
+    return $exitCode
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
