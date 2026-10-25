@@ -732,8 +732,14 @@ if ($CliArgs -and $CliArgs[0] -eq 'sc') {
     $TestScript = Join-Path $ScriptDir 'bin\test.ps1'
     $ScArgs = if ($CliArgs.Count -gt 1) { @($CliArgs[1..($CliArgs.Count - 1)]) } else { @() }
     if ($ScArgs) {
-        $safeArgs = ($ScArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
-        Invoke-Expression "& '$TestScript' -- rws sc $safeArgs"
+        # bin/test.ps1 HAS a param() block, so a bare `-i` would be bound to
+        # -InformationAction before the script sees it.  Passing each token as a
+        # single-quoted literal keeps it a positional string value.  This is safe
+        # for the data: a single-quoted PowerShell string expands nothing — `$`,
+        # backticks and `$(...)` stay literal — and doubling the internal `'`
+        # round-trips the exact text.
+        $ScLiterals = ($ScArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
+        Invoke-Expression "& '$TestScript' -- rws sc $ScLiterals"
     } else {
         # No args → launch the interactive scenario picker
         & $TestScript rws sc --interactive
@@ -743,17 +749,14 @@ if ($CliArgs -and $CliArgs[0] -eq 'sc') {
 
 # ── Subcommand: test ──────────────────────────────────────────────────────
 # Delegates to bin/test.ps1, forwarding all remaining arguments.
-# Uses Invoke-Expression with "--" instead of splatting (@TestArgs) so that
-# PowerShell's parser consumes the "--" as an end-of-parameters marker.
-# This prevents short flags like -i (ambiguous between -InformationAction
-# and -InformationVariable) from triggering common-parameter binding in the
-# target script's CmdletBinding block.
+# Same reason as `sc`: the target declares CmdletBinding, so flags must arrive
+# as positional string values (see the comment there).
 if ($CliArgs -and $CliArgs[0] -eq 'test') {
     $TestScript = Join-Path $ScriptDir 'bin\test.ps1'
     $TestArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
     if ($TestArgs) {
-        $safeArgs = ($TestArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
-        Invoke-Expression "& '$TestScript' -- $safeArgs"
+        $TestLiterals = ($TestArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
+        Invoke-Expression "& '$TestScript' -- $TestLiterals"
     } else {
         & $TestScript
     }
@@ -766,8 +769,8 @@ if ($CliArgs -and $CliArgs[0] -eq 'build') {
     $BuildScript = Join-Path $ScriptDir 'bin\build.ps1'
     $BuildArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
     if ($BuildArgs) {
-        $safeArgs = ($BuildArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
-        Invoke-Expression "& '$BuildScript' -- $safeArgs"
+        $BuildLiterals = ($BuildArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
+        Invoke-Expression "& '$BuildScript' -- $BuildLiterals"
     } else {
         & $BuildScript
     }
@@ -1290,27 +1293,34 @@ if ($CliArgs[0] -eq 'cli') {
     $CliArgs = $CliArgs[1..$CliArgs.Length]
 }
 
-# Build a quoted argument list to prevent PowerShell from interpreting
-# dash-prefixed CLI flags (-v, -i, --sql, -Ex*, etc.) as its own
-# parameters.  Without this, PowerShell resolves -v to -Verbose (common
-# parameter), -i clashes with -InformationAction, and other flag-like
-# tokens can be consumed before reaching the CLI binary.
-# See also: b4w.sh for bash → pwsh passthrough handling.
-$SafeArgs = foreach ($a in $CliArgs) {
-    # Double-quote each argument and escape internal double quotes.
-    '"' + ($a -replace '"', '""') + '"'
+# Forward the arguments as argv.
+#
+# This used to build a quoted string and run it through Invoke-Expression,
+# which sent every argument through a SECOND PowerShell parse: `$VAR` was
+# expanded, `$(...)` was EXECUTED, and a backtick escape was interpreted — so
+# `agent run 'first run `browser4-cli list`'` reached the CLI with a U+0008
+# backspace in place of the backtick+b, and a task containing $(...) ran shell
+# code.  Splatting an array of already-parsed tokens cannot do that: the
+# dash-prefixed CLI flags below are plain arguments of a native command (no
+# parameter binder involved, because this script declares no param() block),
+# and pwsh 7.3+'s standard quoting keeps spaces, quotes, `$`, backticks and
+# empty strings intact.
+#
+# BROWSER4_CLI_INVOKE_HINT tells the CLI how the user actually invoked it, so
+# hints print `./b4w.ps1 list` instead of the resolved `browser4-cli.exe list`.
+if (-not $env:BROWSER4_CLI_INVOKE_HINT) {
+    $env:BROWSER4_CLI_INVOKE_HINT = './b4w.ps1'
 }
-$SafeArgsStr = $SafeArgs -join ' '
 
 if (Test-Path $Exe) {
-    if ($SafeArgs) {
-        Invoke-Expression "& `"$Exe`" $SafeArgsStr"
+    if ($CliArgs) {
+        & $Exe @CliArgs
     } else {
         & $Exe
     }
 } else {
-    if ($SafeArgs) {
-        Invoke-Expression "cargo run --manifest-path `"$Manifest`" -- $SafeArgsStr"
+    if ($CliArgs) {
+        & cargo run --manifest-path $Manifest -- @CliArgs
     } else {
         cargo run --manifest-path $Manifest
     }

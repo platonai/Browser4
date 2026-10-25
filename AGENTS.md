@@ -109,7 +109,7 @@ binary), the following applies.
 | Shell | Command | Notes |
 |-------|---------|-------|
 | PowerShell (Windows) | `./b4w.ps1 <command>` | Primary dev wrapper; builds from source if needed |
-| Git Bash (Windows) | `./b4w.sh <command>` | Quotes args automatically for pwsh safety |
+| Git Bash (Windows) | `./b4w.sh <command>` | Disables MSYS path conversion; forwards args as argv |
 | Git Bash (alt) | `pwsh ./b4w.ps1 <command>` | Direct PowerShell invocation |
 | Linux / macOS | `./b4w.sh <command>` | Same script works cross-platform |
 | Any (installed) | `browser4-cli <command>` | After `browser4-cli install` |
