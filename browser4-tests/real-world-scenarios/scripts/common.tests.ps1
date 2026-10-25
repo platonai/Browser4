@@ -375,16 +375,25 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
 
     function Get-ScenarioAgent { return $testAgentCli }
 
+    # The mock declares every parameter Invoke-Agent may splat, so an unexpected
+    # parameter fails loudly instead of being silently dropped.  NoStdinRedirect
+    # is captured rather than ignored: forcing it for a backend is what broke
+    # dsh on Windows (cmd.exe's ~8191-char limit killed every 16-17 KB prompt).
+    $script:CapturedNoStdinRedirect = $null
+    $script:MockExitCode = 0
+
     function Start-NativeCommand {
         param(
             [string]$FilePath,
             [string[]]$ArgumentList,
             [string]$CaptureFile,
-            [int]$TimeoutSeconds
+            [int]$TimeoutSeconds,
+            [switch]$NoStdinRedirect
         )
 
         $script:CapturedArgs = $ArgumentList
-        return 0
+        $script:CapturedNoStdinRedirect = [bool]$NoStdinRedirect
+        return $script:MockExitCode
     }
 
     Write-TestGroup 'base arguments (without -Silent)'
@@ -471,6 +480,12 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Assert-Equal 'dsh: second arg selects the headless profile' 'headless' $script:CapturedArgs[1]
     Assert-True 'dsh: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'dsh test')
     Assert-True 'dsh: no stale `run` subcommand' (-not ($script:CapturedArgs -contains 'run'))
+    # Regression: `dsh` used to force -NoStdinRedirect, keeping the 16-17 KB
+    # scenario prompt on argv.  On Windows `dsh` resolves to the npm `.cmd`
+    # shim, which routes through cmd.exe's ~8191-character limit, so every task
+    # died in 0 s with "The command line is too long." before dsh started.
+    Assert-True 'dsh: does not force the prompt onto argv (-NoStdinRedirect)' `
+        ($script:CapturedNoStdinRedirect -eq $false)
 
     Write-TestGroup 'dsh backend with -Silent flag'
     $script:CapturedArgs = $null
@@ -480,7 +495,219 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Assert-Equal 'dsh silent: second arg selects the headless profile' 'headless' $script:CapturedArgs[1]
     Assert-True 'dsh silent: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'dsh silent')
 
+    # ── Regression: a dead agent run must be reportable as a failure ─────────
+    # Invoke-Agent used to return nothing, so run-task.ps1 (which never had the
+    # value anyway) exited 0 and run-tests.ps1 reported PASS for an agent that
+    # failed in 1.5 s without doing any work.
+    Write-TestGroup 'Invoke-Agent returns the agent exit code'
+    $testAgentCli = 'dsh'
+    $script:MockExitCode = 0
+    $okRc = Invoke-Agent -Prompt 'dsh ok'
+    $script:MockExitCode = 7
+    $failRc = Invoke-Agent -Prompt 'dsh failing'
+    $script:MockExitCode = 0
+    Assert-Equal 'success code is 0' 0 $okRc
+    Assert-Equal 'failure code is propagated' 7 $failRc
+
     # Clean up the mocks so they do not leak.
+    Remove-Item function:Start-NativeCommand -ErrorAction SilentlyContinue
+    Remove-Item function:Get-ScenarioAgent -ErrorAction SilentlyContinue
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 7c: Invoke-Agent — issues draft only for a completed evaluation
+# ═══════════════════════════════════════════════════════════════════════════════
+# Regression: a run where the agent never started captured one error line and
+# still wrote it into the issues draft directory, which feeds issue triage.  An
+# aborted `rws sc` round produced three meaningless .issues.json/.issues.md
+# pairs.  The draft is now written only when the agent exited 0.
+
+Write-Host ''
+Write-Host '━━━ Invoke-Agent: Issues Draft Gate ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    $draftDirBackup = $script:IssuesDraftDir
+    $tempRoot  = Join-Path ([System.IO.Path]::GetTempPath()) ("b4-draft-{0}" -f ([guid]::NewGuid().ToString('N')))
+    $tempDraft = Join-Path $tempRoot 'draft'
+    $tempCapture = Join-Path $tempRoot 'capture.md'
+    [void][System.IO.Directory]::CreateDirectory($tempRoot)
+    $script:IssuesDraftDir = $tempDraft
+
+    $script:MockExit = 0
+    $script:MockBody = "### A. Task Result`n`nok"
+    function Get-ScenarioAgent { return 'dsh' }
+    function Start-NativeCommand {
+        param(
+            [string]$FilePath,
+            [string[]]$ArgumentList,
+            [string]$CaptureFile,
+            [int]$TimeoutSeconds,
+            [switch]$NoStdinRedirect
+        )
+        [System.IO.File]::WriteAllText(
+            $CaptureFile, $script:MockBody, [System.Text.UTF8Encoding]::new($false)
+        )
+        return $script:MockExit
+    }
+
+    Write-TestGroup 'a failed run writes no issues draft'
+    $script:MockExit = 1
+    $failRc = Invoke-Agent -Prompt 'p' -ScenarioName 'failing-run' -OutputFile $tempCapture
+    Assert-Equal 'exit code is still propagated' 1 $failRc
+    Assert-True 'no draft directory was created' (-not (Test-Path -LiteralPath $tempDraft))
+    Assert-True 'the raw capture is kept for diagnosis' `
+        ((Get-Content -LiteralPath $tempCapture -Raw) -match 'Task Result')
+
+    Write-TestGroup 'a completed run still writes the issues draft'
+    $script:MockExit = 0
+    $okRc = Invoke-Agent -Prompt 'p' -ScenarioName 'passing-run' -OutputFile $tempCapture
+    Assert-Equal 'exit code is 0' 0 $okRc
+    $draftFiles = @(Get-ChildItem -LiteralPath $tempDraft -File -ErrorAction SilentlyContinue)
+    Assert-True 'a draft was written' ($draftFiles.Count -gt 0)
+    Assert-True 'the draft is a .issues.json' `
+        (@($draftFiles | Where-Object { $_.Name -like '*.issues.json' }).Count -eq 1)
+
+    Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    $script:IssuesDraftDir = $draftDirBackup
+    Remove-Item function:Start-NativeCommand -ErrorAction SilentlyContinue
+    Remove-Item function:Get-ScenarioAgent -ErrorAction SilentlyContinue
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 7d: Get-AgentEvaluationVerdict / exit code 3
+# ═══════════════════════════════════════════════════════════════════════════════
+# Regression: `rws sc` scored PASS for a round the agent itself reported as
+# "Failed — 0%", because PASS/FAIL only looked at the agent's exit code and the
+# agent exits 0 after writing its report.
+
+Write-Host ''
+Write-Host '━━━ Agent Evaluation Verdict ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    $failedReport = @'
+Some prose above the block.
+
+```json
+{
+  "issues": [
+    {
+      "title": "Sandbox blocked every command",
+      "severity": "High",
+      "category": "Reliability",
+      "reproduction": "b4w.ps1 help",
+      "expected": "help output",
+      "actual": "SetNamedSecurityInfoW failed (Win32 5)",
+      "rootCause": "sandbox provisioning denied",
+      "codePointer": "",
+      "suggestion": "- report it"
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Failed — no command could run",
+    "successRate": "0%",
+    "issuesFound": 1,
+    "majorBlockers": "sandbox",
+    "mostConfusingAspects": "",
+    "mostValuableImprovements": "",
+    "usabilityRating": 1
+  }
+}
+```
+'@
+
+    # A genuinely partial report: the status is not "Failed" AND work got done,
+    # so the 0%-success rule must not fire either.
+    $partialReport = $failedReport.
+        Replace('Failed — no command could run', 'Partially Successful').
+        Replace('"successRate": "0%"', '"successRate": "65%"')
+    $templateReport = $failedReport.Replace(
+        'Failed — no command could run',
+        'Successful / Partially Successful / Failed — describe the overall task outcome'
+    )
+    $draftThenFinal = @'
+First draft:
+
+```json
+{ "issues": [{"title":"t","severity":"Low","category":"UX","reproduction":"r","expected":"e","actual":"a","rootCause":"rc","codePointer":"","suggestion":"- s"}],
+  "assessment": { "completionStatus": "Failed — intermediate", "successRate": "0%" } }
+```
+
+Final answer:
+
+```json
+{ "issues": [],
+  "assessment": { "completionStatus": "Successful", "successRate": "90%" } }
+```
+'@
+    $noAssessment = '### A. Task Result`n`nno json here'
+
+    Write-TestGroup 'a report that says Failed is a failure'
+    $v = Get-AgentEvaluationVerdict -Content $failedReport
+    Assert-True 'IsFailure is true' $v.IsFailure
+    Assert-Contains 'reason quotes the status' $v.Reason 'Failed — no command could run'
+
+    Write-TestGroup 'Partially Successful is not a failure'
+    Assert-True 'IsFailure is false' (-not (Get-AgentEvaluationVerdict -Content $partialReport).IsFailure)
+
+    Write-TestGroup 'the prompt template block is ignored'
+    Assert-True 'template text is not a failure' (-not (Get-AgentEvaluationVerdict -Content $templateReport).IsFailure)
+
+    Write-TestGroup 'the last real assessment wins'
+    $last = Get-AgentEvaluationVerdict -Content $draftThenFinal
+    Assert-True 'intermediate failure is overridden by the final success' (-not $last.IsFailure)
+    Assert-Equal 'final status is used' 'Successful' $last.CompletionStatus
+
+    Write-TestGroup 'missing assessment is not a failure'
+    Assert-True 'no assessment means no verdict' (-not (Get-AgentEvaluationVerdict -Content $noAssessment).IsFailure)
+
+    Write-TestGroup 'successRate 0% alone is a failure'
+    $zeroRate = '```json
+{ "assessment": { "completionStatus": "", "successRate": "0%" } }
+```'
+    $zr = Get-AgentEvaluationVerdict -Content $zeroRate
+    Assert-True 'IsFailure is true' $zr.IsFailure
+    Assert-Contains 'reason quotes the rate' $zr.Reason 'successRate'
+
+    # ── Wiring: Invoke-Agent turns that verdict into exit code 3 ────────────
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("b4-verdict-{0}" -f ([guid]::NewGuid().ToString('N')))
+    [void][System.IO.Directory]::CreateDirectory($tempRoot)
+    $tempCapture = Join-Path $tempRoot 'capture.md'
+    $draftDirBackup = $script:IssuesDraftDir
+    $script:IssuesDraftDir = Join-Path $tempRoot 'draft'
+
+    $script:MockBody = $failedReport
+    function Get-ScenarioAgent { return 'dsh' }
+    function Start-NativeCommand {
+        param(
+            [string]$FilePath,
+            [string[]]$ArgumentList,
+            [string]$CaptureFile,
+            [int]$TimeoutSeconds,
+            [switch]$NoStdinRedirect
+        )
+        [System.IO.File]::WriteAllText(
+            $CaptureFile, $script:MockBody, [System.Text.UTF8Encoding]::new($false)
+        )
+        return 0
+    }
+
+    Write-TestGroup 'Invoke-Agent exits 3 for a completed-but-failed evaluation'
+    $rc = Invoke-Agent -Prompt 'p' -ScenarioName 'failed-evaluation' -OutputFile $tempCapture
+    Assert-Equal 'exit code is 3' 3 $rc
+
+    Write-TestGroup 'Invoke-Agent keeps 0 for a passing evaluation'
+    $script:MockBody = $partialReport
+    $rc = Invoke-Agent -Prompt 'p' -ScenarioName 'partial-evaluation' -OutputFile $tempCapture
+    Assert-Equal 'exit code is 0' 0 $rc
+
+    Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    $script:IssuesDraftDir = $draftDirBackup
     Remove-Item function:Start-NativeCommand -ErrorAction SilentlyContinue
     Remove-Item function:Get-ScenarioAgent -ErrorAction SilentlyContinue
 }
@@ -1418,6 +1645,14 @@ Write-Host '━━━ run-task.ps1 Timeout Parameter ━━━' -ForegroundColor
     Write-TestGroup 'Writes capture file path to marker for parent monitoring'
     $hasMarker = $scriptContent -match '\.current-capture-path'
     Assert-True 'Writes .current-capture-path marker file' $hasMarker
+
+    # A run where the agent never executed used to exit 0, so run-tests.ps1
+    # reported "[OK] <scenario> (PASS) -- 1.5s" for a task that did nothing.
+    Write-TestGroup 'Propagates the agent exit code to the scenario runner'
+    $hasAgentExitCapture = $scriptContent -match '\$agentExitCode\s*=\s*Invoke-Agent\s+@invokeParams'
+    Assert-True 'captures the Invoke-Agent return value' $hasAgentExitCapture
+    $hasAgentExit = $scriptContent -match 'exit\s+\$agentExitCode'
+    Assert-True 'exits with the agent exit code (124 stays TIMEOUT)' $hasAgentExit
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -67,10 +67,24 @@ result. It is only visible in (a) the backend log's `command_run … session=` i
 
 ### B. Run the documented one-shot form — no `-s`
 
-5. Submit the task exactly as a user would:
-   `browser4-cli agent run "Open https://example.com in the current session and report the page title." --follow`
+5. Submit the task with the navigation command named explicitly — spoon-feeding
+   the command is intentional here: this scenario pins *where `agent run` binds
+   the task*, not which command the agent prefers:
+   `browser4-cli agent run "In the current session, run `goto https://example.com` (do NOT use `open`; it creates a new session for an attached browser) and report the page title." --follow`
    - MUST complete successfully and report `Example Domain`.
    - Record the task id.
+   - Why the wording matters — two measurements on 2026-10-25:
+     - `agent run "Open https://example.com in the current session …"` → the agent
+       ran `open --headless`, and `open` — with or without `--headless` —
+       deliberately creates a *new* Browser4 session when the current one is an
+       attached/extension session (`Session '<id>' is an attached/extension
+       session. Creating a new Browser4 session.`). Step 9 then fails on the
+       footprint even though the task ran fine.
+     - `agent run "Navigate the current session to https://example.com …"` → the
+       agent *still* ran `open --headless` and even explained afterwards that
+       `-s <SESSION_ID>` would have been needed. Rewording alone is not enough.
+     So name `goto`, and forbid `open`, or step 9 measures the agent's command
+     choice instead of the runner's session binding.
 
 ### C. The task ran in the attached session
 
@@ -104,12 +118,17 @@ result. It is only visible in (a) the backend log's `command_run … session=` i
 ### E. The agent's own CLI saw the same session
 
 13. In the task, the agent's `b4.run` calls execute a child `browser4-cli`. Ask
-    the agent to run `status` first (e.g. a task like
-    `"Run browser4-cli status, then open https://example.com in the current
-    session and report the title"`), then verify the run's tool trace / result:
-    `status` MUST report `Connection: Extension (Microsoft Edge …)`, which is only
+    the agent to run `list` first (e.g. a task like
+    `"Run browser4-cli list, then navigate the current session to
+    https://example.com and report the title"`), then verify the run's tool trace
+    / result: `list` MUST show `SESSION_ID` with a `Connection` of
+    `Extension (Microsoft Edge …)`, which is only
     possible when the child CLI resolves the same checkout state namespace as the
-    parent (`BROWSER4_CLI_INVOKE_DIR` passthrough).
+    parent (`BROWSER4_CLI_INVOKE_DIR` passthrough). Read the connection from
+    `list`: it is the authoritative multi-namespace view (one row per session,
+    with the namespace when `--all` is used). `status` also prints a `Session`
+    block with `Connection` for the addressed slot, so it can corroborate the
+    value — it is just not the command that lists sessions.
 14. If the agent attempted `attach --extension` on its own, it MUST have been
     refused (`An unnamed session already exists`); `browser4-cli list` MUST NOT
     show a new session for that attempt.
@@ -127,7 +146,7 @@ result. It is only visible in (a) the backend log's `command_run … session=` i
   root process appear while the task runs.
 - The task succeeds from the attached browser, the pre-task page is restored, and
   the session is still usable afterwards.
-- The agent's `b4.run status` inside the task reports the extension connection
+- The agent's `b4.run list` inside the task reports the extension connection
   (not an empty/default session).
 - Any new browser, new session id, missing `command_run session=`, or second
   handshake is a regression: record the exact command, the log lines, and the
