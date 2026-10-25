@@ -453,15 +453,24 @@ $restoredDir = Get-Location
 Assert-Returns -Label 'CWD restore: same directory after build --help' -Actual $restoredDir.Path -Expected $originalDir.Path
 
 # ═══════════════════════════════════════════════════════════════════
-# TESTS: Safe argument quoting
+# TESTS: Argument passing
 # ═══════════════════════════════════════════════════════════════════
-Write-Host "━━━ Safe argument quoting ━━━" -ForegroundColor Cyan
+Write-Host "━━━ Argument passing ━━━" -ForegroundColor Cyan
 
-# Verify the safe-args quoting logic by checking the source code
+# Two different targets need two different techniques:
+#  - the CLI binary is a NATIVE command. Splatting an array of parsed tokens
+#    (`& $Exe @CliArgs`) cannot be re-parsed, so values arrive verbatim. This is
+#    the fix for the 2026-10-25 double-parse bug, where `$(1+1)` was EXECUTED
+#    and `` `t `` became a tab before the CLI ever saw them.
+#  - bin/test.ps1 / build.ps1 / sc are POWERSHELL scripts with param() blocks:
+#    a bare `-i` binds to -InformationAction there, so those tokens must arrive
+#    as single-quoted string literals. Single quotes expand nothing, so the data
+#    is still safe.
 $srcText = Get-Content $B4wPs1Path -Raw
-Assert-ContainsString -Label 'Safe args: uses Invoke-Expression' -Haystack $srcText -Needle 'Invoke-Expression'
-Assert-ContainsString -Label 'Safe args: single-quotes each arg' -Haystack $srcText -Needle '.Replace'
-Assert-ContainsString -Label "Safe args: escapes internal single quotes" -Haystack $srcText -Needle "''"
+Assert-ContainsString -Label 'Args: CLI invocation splats argv' -Haystack $srcText -Needle '& $Exe @CliArgs'
+Assert-NotContainsString -Label 'Args: CLI invocation no longer joins a SafeArgs string' -Haystack $srcText -Needle '$SafeArgsStr'
+Assert-ContainsString -Label 'Args: script delegation single-quotes each arg' -Haystack $srcText -Needle '$_.Replace('
+Assert-ContainsString -Label 'Args: script delegation doubles internal single quotes' -Haystack $srcText -Needle "''"
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: Rebuild flag logic
@@ -658,8 +667,28 @@ $output = pwsh -NoProfile -Command "& '$b4wAbs' sc --help *>&1" *>&1 | Out-Strin
 Assert-ContainsString -Label 'Flags: b4w sc --help (passthrough)' -Haystack $output -Needle 'Usage:'
 
 # sc subcommand with short flag
+
 $output = pwsh -NoProfile -Command "& '$b4wAbs' sc -i *>&1" *>&1 | Out-String
 Assert-NotNull -Label 'Flags: b4w sc -i (no crash)' -Value $output
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: argv fidelity — the wrapper must not re-parse values
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ argv fidelity: no second parse ━━━" -ForegroundColor Cyan
+
+# An unknown command makes the CLI echo the token verbatim, which gives a
+# session-free probe of exactly what reached the binary. Before the fix these
+# tokens were silently altered by b4w.ps1's Invoke-Expression: `$(1+1)` was
+# evaluated to 2, and `` `t `` became a TAB character.
+$output = pwsh -NoProfile -Command "& '$b4wAbs' 'X`$(1+1)Y' *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'argv: $(...) is passed through literally' -Haystack $output -Needle 'X$(1+1)Y'
+Assert-NotContainsString -Label 'argv: $(...) is not evaluated' -Haystack $output -Needle "X2Y"
+
+# A backtick escape in the value must survive (the second parse turned `` `t ``
+# into a tab, which is how an agent task text lost its backtick in a 2026-10-25
+# scenario run).
+$output = pwsh -NoProfile -Command "& '$b4wAbs' 'A``tB' *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'argv: backtick escape survives' -Haystack $output -Needle 'A`tB'
 
 # ═══════════════════════════════════════════════════════════════════
 # Summary
