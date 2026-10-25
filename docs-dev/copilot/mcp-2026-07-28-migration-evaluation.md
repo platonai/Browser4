@@ -70,7 +70,8 @@
 - `Browser4MCPServer.kt`：基于 `io.modelcontextprotocol.kotlin.sdk`（`kotlin-sdk 0.8.1`，声明协议版本 **2025-06-18**），只注册 tools 能力，从 `AgentToolManager` 动态发现 executor/spec 生成工具；handler 用 `addTool(...) { request -> ... }` 单参 lambda。
 - `McpHttpServer.kt`：Ktor CIO + SSE，`GET /mcp/sse` 建流 → 每个连接一个 `SseServerTransport`（`ConcurrentHashMap<sessionId, transport>`）→ `POST /mcp/message?sessionId=...` 路由 → `server.createSession(transport)`。
   - 这是 **HTTP+SSE 传输**（2025-03-26 时代形态），2026-07-28 正式弃用。
-- `McpHttpServerConfiguration.kt`（browser4-rest）：`mcp.http.enabled=true`（默认）时在 `ApplicationReadyEvent` 后启动，绑定 8088；获取一个 `BasicBrowserAgent` 会话（即 MCP server 全局绑定单一浏览器会话）。
+- `McpHttpServerConfiguration.kt`（browser4-rest）：`mcp.http.enabled=true` 时在 `ApplicationReadyEvent` 后启动，绑定 8088；获取一个 `BasicBrowserAgent` 会话（即 MCP server 全局绑定单一浏览器会话）。
+  > 更新（2026-10-25）：默认值已改为 **关闭**（`matchIfMissing = false`）——启用它会为后端启动凭空拉起一个浏览器。需要标准端点的 MCP 客户端用 `-Dmcp.http.enabled=true` 显式开启，见 [docs/config.md](../../docs/config.md)。
 
 ### 3.2 自定义 RPC —— `MCPToolController`（Spring，端口 8182，路径 `/mcp`）
 
