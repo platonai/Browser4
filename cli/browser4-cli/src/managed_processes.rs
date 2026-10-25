@@ -153,6 +153,23 @@ pub struct ShutdownResult {
     pub forced_pids: Vec<u32>,
     pub remaining_pids: Vec<u32>,
     pub fallback_killed_server_pids: Vec<u32>,
+    /// True when the stop path tried a graceful shutdown before forcing.
+    ///
+    /// `forced_pids` is populated on both paths — a `force` stop forces every
+    /// pid immediately — so the list alone cannot tell "forced after the grace
+    /// window expired" from "forced on purpose".  `stop` is the force-by-design
+    /// path (see [`stop_workspace_servers_forcibly`]) and only the plugin
+    /// warm-restart path asks for a graceful attempt first; without this flag
+    /// `stop` reported a graceful timeout that never happened.
+    pub graceful_attempted: bool,
+}
+
+impl ShutdownResult {
+    /// True when at least one process was force-killed *after* a real grace
+    /// window expired (not because the caller asked for a force stop).
+    pub fn forced_after_graceful_timeout(&self) -> bool {
+        self.graceful_attempted && !self.forced_pids.is_empty()
+    }
 }
 
 /// Result of force-killing Browser4 Chrome processes.
@@ -262,6 +279,7 @@ fn shutdown_managed_server_processes_matching(
         }
 
         graceful_stop(pid);
+        result.graceful_attempted = true;
         if wait_for_exit(pid, timeout_ms, poll_interval_ms) {
             result.stopped_pids.push(pid);
             continue;
@@ -776,6 +794,142 @@ fn orphan_browser_scan_script() -> String {
     )
 }
 
+/// Browser root processes that were launched by one of `server_pids`.
+///
+/// `stop` is workspace scoped on purpose — it must never sweep a browser that
+/// belongs to another checkout (that is what `kill-all` is for).  It must,
+/// however, close the browsers *this workspace's* backend launched: a
+/// force-killed backend cannot close them itself, and the Chrome root keeps the
+/// now-dead backend pid as its parent, so no later component can attribute it.
+/// That leak was reproduced on 2026-10-25 (`open --headless` then `stop` left a
+/// `PULSAR_CHROME` root whose parent was the stopped backend).
+///
+/// Attribution is by parent pid: the backend starts Chrome directly, so a
+/// session browser's root `PPID` is the backend pid.  Command lines are matched
+/// the same way [`find_unique_pulsar_browser_processes`] matches them.
+pub fn find_browser_roots_launched_by(server_pids: &[u32]) -> Vec<u32> {
+    if server_pids.is_empty() {
+        return Vec::new();
+    }
+
+    let mut pids = Vec::new();
+
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+
+        let Ok(output) = Command::new("ps").args(["-eo", "pid=,args="]).output() else {
+            return pids;
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            let Some((pid_text, args)) = trimmed.split_once(char::is_whitespace) else {
+                continue;
+            };
+            let Ok(pid) = pid_text.trim().parse::<u32>() else {
+                continue;
+            };
+            if !args.contains("PULSAR_CHROME") {
+                continue;
+            }
+            if args.contains("--type=") {
+                continue;
+            }
+            // Resolve the parent with a second, cheap query: `ps` cannot print
+            // ppid and args on one portable format string.
+            let Ok(ppid_output) = Command::new("ps")
+                .args(["-o", "ppid=", "-p", &pid.to_string()])
+                .output()
+            else {
+                continue;
+            };
+            let ppid_text = String::from_utf8_lossy(&ppid_output.stdout);
+            let Ok(ppid) = ppid_text.trim().parse::<u32>() else {
+                continue;
+            };
+            if server_pids.contains(&ppid) {
+                pids.push(pid);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+
+        let pid_list = server_pids
+            .iter()
+            .map(|pid| pid.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        // One unfiltered CIM query (ParentProcessId is not an indexable filter
+        // for a set membership test) and in-memory matching, matching the
+        // single-round-trip style used elsewhere in this module.
+        let ps_command = format!(
+            r#"
+            $serverPids = @({pid_list})
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object {{
+                    $_.Name -in @('chrome.exe','chromium.exe','msedge.exe') -and
+                    $serverPids -contains [uint32]$_.ParentProcessId -and
+                    -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+                    (
+                        $_.CommandLine -match 'PULSAR_CHROME' -or
+                        $_.CommandLine -match 'browser4[\\/]browser[\\/]chrome' -or
+                        $_.CommandLine -match 'browser4-apps'
+                    )
+                }} |
+                Select-Object -ExpandProperty ProcessId
+            "#
+        );
+        if let Ok(output) = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_command])
+            .output()
+        {
+            pids.extend(parse_pid_list(&output.stdout));
+        }
+    }
+
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+/// Close the browsers the given backends launched, waiting briefly for the
+/// process trees to disappear.  See [`find_browser_roots_launched_by`].
+pub fn kill_browsers_launched_by(server_pids: &[u32]) -> BrowserKillResult {
+    const KILL_TIMEOUT_MS: u64 = 10_000;
+    const WAIT_AFTER_KILL_MS: u64 = 500;
+    const SWEEP_DELAY_MS: u64 = 250;
+
+    let mut result = BrowserKillResult::default();
+    if server_pids.is_empty() {
+        return result;
+    }
+
+    let start = std::time::Instant::now();
+    loop {
+        let pids = find_browser_roots_launched_by(server_pids);
+        if pids.is_empty() {
+            break;
+        }
+        result.killed_pids.extend(pids.iter().copied());
+        bulk_force_stop_browser_processes(&pids);
+        wait_for_exit_all(&pids, WAIT_AFTER_KILL_MS, 100);
+
+        if start.elapsed() >= std::time::Duration::from_millis(KILL_TIMEOUT_MS) {
+            break;
+        }
+        sleep(std::time::Duration::from_millis(SWEEP_DELAY_MS));
+    }
+
+    result.killed_pids.sort_unstable();
+    result.killed_pids.dedup();
+    result.remaining_pids = find_browser_roots_launched_by(server_pids);
+    result
+}
+
 /// Kill multiple browser processes in a single bulk operation.
 /// On Windows, uses `taskkill /F /PID ...` with all PIDs so the
 /// process trees are torn down together, reducing orphan risk.
@@ -1167,7 +1321,8 @@ pub fn managed_server_ports(registry_path: Option<&Path>) -> Vec<u16> {
     ports
 }
 
-/// Force-stop every backend this workspace started, wherever it landed.
+/// Force-stop every backend this workspace started, wherever it landed, and
+/// close the browsers those backends launched.
 ///
 /// Development mode uses this instead of the global `stop`: a workspace may own
 /// more than one port over time (an explicit `--server` URL, a re-allocation
@@ -1176,10 +1331,13 @@ pub fn managed_server_ports(registry_path: Option<&Path>) -> Vec<u16> {
 /// backend on the resolved URL that the registry does not know about (started
 /// by hand, or by an older CLI version).
 ///
-/// Deliberately skips the global browser sweep: browsers belong to whichever
-/// workspace launched them, and `kill-all` remains the hammer for a full
-/// cross-workspace cleanup.
-pub fn stop_workspace_servers_forcibly(extra_port: Option<u16>) -> ShutdownResult {
+/// The *global* browser sweep stays out of this path: browsers belong to
+/// whichever workspace launched them, and `kill-all` remains the hammer for a
+/// full cross-workspace cleanup.  The browsers these backends launched are a
+/// different matter — a force-killed backend cannot close them, and leaving
+/// them behind strands a `PULSAR_CHROME` root whose parent no longer exists
+/// (see [`find_browser_roots_launched_by`]).
+pub fn stop_workspace_servers_forcibly(extra_port: Option<u16>) -> ForceStopBrowser4ServerResult {
     let mut ports = managed_server_ports(None);
     if let Some(port) = extra_port.filter(|port| *port > 0) {
         if !ports.contains(&port) {
@@ -1187,7 +1345,7 @@ pub fn stop_workspace_servers_forcibly(extra_port: Option<u16>) -> ShutdownResul
         }
     }
     if ports.is_empty() {
-        return ShutdownResult::default();
+        return ForceStopBrowser4ServerResult::default();
     }
 
     let mut shutdown = ShutdownResult::default();
@@ -1199,7 +1357,18 @@ pub fn stop_workspace_servers_forcibly(extra_port: Option<u16>) -> ShutdownResul
     let fallback = force_kill_browser4_server_processes_on_ports(&ports);
     merge_shutdown_with_fallback_server_kill(&mut shutdown, &fallback);
     shutdown.fallback_killed_server_pids = fallback.killed_pids.clone();
-    shutdown
+
+    let mut server_pids = shutdown.stopped_pids.clone();
+    server_pids.extend(shutdown.forced_pids.iter().copied());
+    server_pids.extend(shutdown.fallback_killed_server_pids.iter().copied());
+    server_pids.sort_unstable();
+    server_pids.dedup();
+    let browser_kill = kill_browsers_launched_by(&server_pids);
+
+    ForceStopBrowser4ServerResult {
+        shutdown,
+        browser_kill,
+    }
 }
 
 /// Fold [other] into [target], de-duplicating the PID lists.
@@ -1208,9 +1377,8 @@ fn merge_shutdown_results(target: &mut ShutdownResult, other: ShutdownResult) {
     target.missing_pids.extend(other.missing_pids);
     target.forced_pids.extend(other.forced_pids);
     target.remaining_pids.extend(other.remaining_pids);
-    target
-        .fallback_killed_server_pids
-        .extend(other.fallback_killed_server_pids);
+    target.fallback_killed_server_pids.extend(other.fallback_killed_server_pids);
+    target.graceful_attempted = target.graceful_attempted || other.graceful_attempted;
 
     dedup_sort_u32(&mut target.stopped_pids);
     dedup_sort_u32(&mut target.missing_pids);
@@ -1789,6 +1957,19 @@ mod tests {
     }
 
     #[test]
+    fn test_browser_attribution_by_server_pid_is_empty_without_server_pids() {
+        // Attribution is the whole safety property of the development `stop`:
+        // with no server pid there is nothing this workspace can claim, so the
+        // scoped sweep must be a no-op instead of falling back to the global
+        // browser scan (which would kill a neighbouring checkout's browser).
+        assert!(find_browser_roots_launched_by(&[]).is_empty());
+
+        let kill = kill_browsers_launched_by(&[]);
+        assert!(kill.killed_pids.is_empty());
+        assert!(kill.remaining_pids.is_empty());
+    }
+
+    #[test]
     fn test_expand_windows_argfile_reads_java_argfile() {
         let tmp = test_temp_dir();
         let argfile = tmp.path().join("java-args.txt");
@@ -2305,6 +2486,7 @@ mod tests {
             forced_pids: vec![1001],
             remaining_pids: vec![2001],
             fallback_killed_server_pids: vec![],
+            graceful_attempted: false,
         };
         let fallback = ServerKillResult {
             killed_pids: vec![2001, 3001],
@@ -2326,6 +2508,7 @@ mod tests {
             forced_pids: vec![],
             remaining_pids: vec![5001, 5002],
             fallback_killed_server_pids: vec![],
+            graceful_attempted: false,
         };
         let fallback = ServerKillResult {
             killed_pids: vec![5002],
@@ -2335,6 +2518,50 @@ mod tests {
         merge_shutdown_with_fallback_server_kill(&mut shutdown, &fallback);
 
         assert_eq!(shutdown.remaining_pids, vec![5001, 5003]);
+    }
+
+    // -----------------------------------------------------------------------
+    // forced_after_graceful_timeout — the message must match what happened
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_forced_stop_without_grace_does_not_claim_a_graceful_timeout() {
+        // `stop` and `kill-all` force every pid immediately (force = true), so
+        // the pids land in forced_pids without a grace window ever running.
+        // Reporting "after graceful timeout" for them was the bug.
+        let forced_only = ShutdownResult {
+            stopped_pids: vec![2101],
+            forced_pids: vec![2101],
+            ..Default::default()
+        };
+        assert!(
+            !forced_only.forced_after_graceful_timeout(),
+            "a force-by-design stop must not claim a graceful timeout"
+        );
+    }
+
+    #[test]
+    fn test_forced_after_graceful_timeout_is_reported_only_for_escalation() {
+        let escalated = ShutdownResult {
+            stopped_pids: vec![2201],
+            forced_pids: vec![2201],
+            graceful_attempted: true,
+            ..Default::default()
+        };
+        assert!(
+            escalated.forced_after_graceful_timeout(),
+            "a force kill after a real grace window must be reported"
+        );
+
+        let graceful_ok = ShutdownResult {
+            stopped_pids: vec![2301],
+            graceful_attempted: true,
+            ..Default::default()
+        };
+        assert!(
+            !graceful_ok.forced_after_graceful_timeout(),
+            "a graceful stop that finished inside the window reports nothing"
+        );
     }
 
     // -----------------------------------------------------------------------

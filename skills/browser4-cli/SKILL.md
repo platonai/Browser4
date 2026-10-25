@@ -335,7 +335,7 @@ What do you need to do?
 
 > **`wait --load networkidle` is not "the page is ready".** It proves only that the network went quiet: a page whose results are computed by page JS after load (dashboards, bot-detection verdicts), or fetched by a long-running XHR, can still be empty when it reports success — and the CLI now says so. For result pages, poll the result element first (`wait "<result-selector>"`, or `eval --wait-selector <css>`); treat `wait --load networkidle` as a network-settling extra step.
 
-> **Sandboxed environments:** the backend writes its logs inside the runtime bundle, so a workspace-only sandbox makes `open`/`goto` hang until the startup timeout with `Access denied` (see the startup log path under `🧾 Details`). Fix before the first launch: point `BROWSER4_RUNTIME_DIR` and `BROWSER4_CLI_STATE_DIR` at writable directories.
+> **Sandboxed environments:** the launcher writes the backend log to `BROWSER4_SERVER_LOG_DIR` when set, otherwise `%TEMP%/browser4/browser4-cli/tmp/cli/` (`$TMPDIR` on Unix) — the runtime bundle only supplies jars — so a sandbox that blocks that directory makes `open`/`goto` hang until the startup timeout with `Access denied` (see the startup log path under `🧾 Details`). `browser4-cli doctor log` lists those launcher logs even when the backend is down. Fix before the first launch: point `BROWSER4_RUNTIME_DIR`, `BROWSER4_SERVER_LOG_DIR` and `BROWSER4_CLI_STATE_DIR` at writable directories.
 
 > **`get` value contract:** a matched element returns its value — or `""` when the attribute/property is absent; `null` means the selector matched nothing; an unresolvable `eN` ref fails with an explicit error.
 

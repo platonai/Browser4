@@ -6198,7 +6198,7 @@ fn log_shutdown_result(action: &str, result: &ShutdownResult) {
         cli_println!("Already stopped Browser4 process(es): {}", pids.join(", "));
     }
 
-    if !result.forced_pids.is_empty() && action == "Stopped" {
+    if result.forced_after_graceful_timeout() && action == "Stopped" {
         let pids: Vec<String> = result.forced_pids.iter().map(|p| p.to_string()).collect();
         cli_println!(
             "Forced Browser4 process(es) after graceful timeout: {}",
@@ -28107,12 +28107,14 @@ async fn handle_stop(base_url: &str) -> Result<(), String> {
     }
     eprintln!();
 
-    let shutdown_result = if workspace_scoped {
+    let stop_result = if workspace_scoped {
         stop_workspace_servers_forcibly(local_port)
     } else {
-        stop_browser4_server_forcibly().shutdown
+        stop_browser4_server_forcibly()
     };
-    finalize_global_cleanup("Stopped", &shutdown_result, true);
+    let shutdown_result = &stop_result.shutdown;
+    let workspace_browser_kill = &stop_result.browser_kill;
+    finalize_global_cleanup("Stopped", shutdown_result, true);
 
     // Reclaim browsers whose backend was killed without closing them. The workspace
     // stop above deliberately leaves browsers alone (another workspace may own one),
@@ -28120,27 +28122,25 @@ async fn handle_stop(base_url: &str) -> Result<(), String> {
     // backend: left behind, the launcher reuses it by user-data-dir, and a stale
     // browser newer than the driver poisons every later session (2026-10-28: 169
     // orphaned Chrome processes, every navigation failing with `createDevTools`).
-    let browser_kill = kill_orphaned_browser_processes();
-    if !browser_kill.killed_pids.is_empty() {
-        let pids: Vec<String> = browser_kill
+    let orphan_kill = kill_orphaned_browser_processes();
+    if !orphan_kill.killed_pids.is_empty() {
+        let pids: Vec<String> = orphan_kill
             .killed_pids
             .iter()
             .map(|p| p.to_string())
             .collect();
         cli_println!(
             "Reclaimed {} orphaned Browser4 browser process(es): {}",
-            browser_kill.killed_pids.len(),
+            orphan_kill.killed_pids.len(),
             pids.join(", ")
         );
     }
-    if !browser_kill.remaining_pids.is_empty() {
+    if !orphan_kill.remaining_pids.is_empty() {
         cli_println!(
             "warning: {} orphaned Browser4 browser process(es) survived the sweep",
-            browser_kill.remaining_pids.len()
+            orphan_kill.remaining_pids.len()
         );
     }
-    json_field("browser_pids_killed", json!(browser_kill.killed_pids));
-    json_field("browser_pids_remaining", json!(browser_kill.remaining_pids));
 
     let server_was_running = !(shutdown_result.stopped_pids.is_empty()
         && shutdown_result.missing_pids.is_empty()
@@ -28149,8 +28149,50 @@ async fn handle_stop(base_url: &str) -> Result<(), String> {
     json_field("server_was_running", json!(server_was_running));
     json_field("server_pids", json!(shutdown_result.stopped_pids));
     json_field("server_port", json!(local_port));
+    // Both sweeps report into one field: the browsers this workspace's backends
+    // launched, plus any orphan left under the shared temp root.
+    let mut browser_killed = orphan_kill.killed_pids.clone();
+    browser_killed.extend(workspace_browser_kill.killed_pids.iter().copied());
+    browser_killed.sort_unstable();
+    browser_killed.dedup();
+    let mut browser_remaining = orphan_kill.remaining_pids.clone();
+    browser_remaining.extend(workspace_browser_kill.remaining_pids.iter().copied());
+    browser_remaining.sort_unstable();
+    browser_remaining.dedup();
+    json_field("browser_pids_killed", json!(browser_killed));
+    json_field("browser_pids_remaining", json!(browser_remaining));
 
     eprintln!();
+
+    // A force-stopped backend cannot close the browsers it launched, so this
+    // path does it — otherwise a stopped workspace strands a headless
+    // `PULSAR_CHROME` root whose parent pid no longer exists, and no later
+    // command can attribute it back to this checkout.
+    if !workspace_browser_kill.killed_pids.is_empty() {
+        let pids: Vec<String> = workspace_browser_kill
+            .killed_pids
+            .iter()
+            .map(u32::to_string)
+            .collect();
+        cli_println!(
+            "Closed {} browser process(es) launched by this workspace's backend(s): {}",
+            workspace_browser_kill.killed_pids.len(),
+            pids.join(", ")
+        );
+    }
+    if !workspace_browser_kill.remaining_pids.is_empty() {
+        let pids: Vec<String> = workspace_browser_kill
+            .remaining_pids
+            .iter()
+            .map(u32::to_string)
+            .collect();
+        eprintln!(
+            "⚠  {} browser process(es) of this workspace survived the stop: {} — \
+             retry `browser4-cli stop` or use `browser4-cli kill-all`.",
+            workspace_browser_kill.remaining_pids.len(),
+            pids.join(", ")
+        );
+    }
 
     if !shutdown_result.fallback_killed_server_pids.is_empty() {
         let pids: Vec<String> = shutdown_result
@@ -29988,8 +30030,59 @@ async fn handle_doctor_log(
                 json_field("log_files", data);
             }
             Err(e) => {
-                cli_println!("  (server not running or log listing unavailable: {})", e);
+                // The backend cannot list its logs when it is not running — and
+                // that is precisely when a user needs them ("the start failed,
+                // where is the log?").  Fall back to the launcher logs on disk
+                // and name the directory that was searched.
+                let dir = daemon::backend_log_dir();
+                cli_println!("  (backend not reachable: {})", e);
+                cli_println!("");
+                cli_println!("  Local launcher logs in {}:", dir.display());
+                let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+                    .map(|entries| {
+                        entries
+                            .flatten()
+                            .map(|entry| entry.path())
+                            .filter(|path| {
+                                path.extension().and_then(|ext| ext.to_str()) == Some("log")
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                files.sort();
+                let mut shown = 0usize;
+                for path in files.iter().rev().take(10) {
+                    let metadata = std::fs::metadata(path).ok();
+                    let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+                    let modified = metadata
+                        .and_then(|m| m.modified().ok())
+                        .map(|time| {
+                            chrono::DateTime::<chrono::Local>::from(time)
+                                .format("%Y-%m-%d %H:%M:%S")
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| "unknown".to_string());
+                    cli_println!(
+                        "  {:<55} {:>10}  {:>20}",
+                        path.file_name()
+                            .map(|name| name.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "?".to_string()),
+                        size,
+                        modified
+                    );
+                    shown += 1;
+                }
+                if shown == 0 {
+                    cli_println!("  (no launcher logs found there)");
+                } else {
+                    cli_println!("");
+                    cli_println!(
+                        "  The newest file is the record of the last start — open it directly; \
+                         it exists even when the backend never listened."
+                    );
+                }
                 json_field("log_files", json!(null));
+                json_field("log_dir", json!(dir.to_string_lossy()));
             }
         }
         return Ok(());

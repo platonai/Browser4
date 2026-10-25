@@ -20,11 +20,12 @@ they keep port `18182` and the flat `~/.browser4` layout.
 |---|---|---|
 | Backend port | `18182` | first free port from **`8282`** upward |
 | CLI state, sessions, config | `~/.browser4/` | `~/.browser4/workspaces/<checkout>-<hash>/` |
-| Backend app data (`-Dapp.data.dir`) | `~/.browser4` | `<state dir>/app-data/` — browser profiles (`--user-data-dir`), H2/WebDB data, agent memory, logs |
+| Backend app data (`-Dapp.data.dir`) | `~/.browser4` | `<state dir>/app-data/` — H2/WebDB data, agent memory, logs, the session-name registry |
+| Browser context profiles (`-Dapp.tmp.base.dir`) | `%TEMP%/browser4-<user>/context` (`$TMPDIR` on Unix) | `<state dir>/app-data/tmp/` — the `context/groups/{default,named}/PULSAR_CHROME/cx.*` browser profiles |
 | Browser prototype | `~/.browser4/browser/chrome/prototype` | linked (junction/symlink) to the global prototype |
 | LLM config (`config/conf-enabled`) | `~/.browser4/config` | linked (junction/symlink) into the workspace app data |
 | AOT cache | shared | per checkout — no cross-checkout invalidation |
-| `stop` | every managed backend | **only this checkout's** backends |
+| `stop` | every managed backend + its browsers | **only this checkout's** backends, plus the browsers **they** launched |
 
 ## Quick Index
 
@@ -61,9 +62,19 @@ across Rust releases. `config set server …` therefore cannot leak into a
 neighbouring workspace.
 
 The backend is launched with `-Dapp.data.dir=<state dir>/app-data`, which is
-what makes browser profiles, H2/WebDB data, agent memory and logs
-workspace-private: two workspaces can run **headed** browsers at the same time
-(the default `browser.profile.mode=DEFAULT` profile is per workspace here).
+what makes H2/WebDB data, agent memory, logs and the session-name registry
+(`app-data/session-registry.json`) workspace-private.
+
+The browser context tree is scoped the same way, through
+`-Dapp.tmp.base.dir=<state dir>/app-data/tmp`: the SDK derives
+`AppPaths.CONTEXT_BASE_DIR` from that temp root, so
+`context/groups/{default,named}/PULSAR_CHROME/cx.*` lands under this checkout.
+Without it every checkout shared `%TEMP%/browser4-<user>/context`, and a second
+backend discovered the first one's Chrome on that user-data directory, **reused
+it**, added tabs to it and resolved `DEFAULT` to the same session UUID. Sharing
+browser profiles and logins across checkouts is a hazard, not a feature: two
+workspaces can now run **headed** browsers at the same time (the default
+`browser.profile.mode=DEFAULT` profile is per workspace here).
 
 A running backend holds those H2 databases, browser profiles and agent memory
 open inside that `app-data` directory, so deleting it is a **hard reset** of the
@@ -81,14 +92,26 @@ Two things stay deliberately global, linked into the workspace app data root:
   is copied from. A workspace that cannot link it simply keeps its own.
 
 Session browser profiles are never shared — keeping those private is the point
-of the isolation.
+of the isolation, and `-Dapp.tmp.base.dir` is what enforces it (see
+[State and App Data](#state-and-app-data)).
+
+Backend logs are written by the **launcher**, not by the app-data tree:
+`BROWSER4_SERVER_LOG_DIR` when set, otherwise
+`%TEMP%/browser4/browser4-cli/tmp/cli/` (`browser4-server-jar-port<port>-*.log`).
+That file exists even when the JVM never reached its web server, so it is the
+only record of a failed start — `browser4-cli doctor log` lists it when the
+backend is unreachable.
 
 ## Stopping Backends
 
 `browser4-cli stop` is workspace-scoped in development mode: it stops the
 backends this checkout registered (plus the resolved loopback port), and leaves
-other workspaces running. `browser4-cli kill-all` remains the global hammer that
-clears every managed backend and browser, across workspaces.
+other workspaces running. It also closes the browsers **those** backends
+launched — a force-stopped backend cannot do it, and the `PULSAR_CHROME` root
+keeps pointing at a parent pid that no longer exists, so nothing later could
+attribute it to this checkout. Browsers belonging to another workspace are
+never touched. `browser4-cli kill-all` remains the global hammer that clears
+every managed backend and browser, across workspaces.
 
 ## Escape Hatches
 
