@@ -7934,18 +7934,33 @@ async fn try_build_local_runtime_bundle(
             );
         }
         let mvn_program = resolve_maven_program(root);
+        // The root pom's Maven enforcer requires JDK 25+, but the ambient
+        // `java` on PATH is often an older JRE (e.g. 17).  Resolve a suitable
+        // JDK explicitly instead of inheriting it, or the rebuild dies with an
+        // enforcer error that reads like a broken checkout.
+        let build_jdk = match crate::java::find_build_jdk() {
+            Ok(home) => home,
+            Err(message) => return Err(LocalBundleFailure::Build(message)),
+        };
+        eprintln!(
+            "Building the Browser4 runtime bundle with JDK {}.",
+            build_jdk.display()
+        );
         let mvn_result = tokio::task::spawn_blocking({
             let mvn_program = mvn_program.clone();
+            let build_jdk = build_jdk.clone();
             let root = root.to_path_buf();
             move || -> Result<(), String> {
                 let run = |args: &[&str]| -> std::io::Result<std::process::Output> {
-                    std::process::Command::new(&mvn_program)
+                    let mut command = std::process::Command::new(&mvn_program);
+                    command
                         .args(args)
                         .current_dir(&root)
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::piped())
-                        .stderr(std::process::Stdio::piped())
-                        .output()
+                        .stderr(std::process::Stdio::piped());
+                    crate::java::set_java_home(&mut command, &build_jdk);
+                    command.output()
                 };
 
                 // Clean the code modules before installing.  `install` alone

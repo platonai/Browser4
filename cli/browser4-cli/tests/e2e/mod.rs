@@ -4577,8 +4577,8 @@ fn ensure_browser4_runtime_bundle_prebuilt(force_rebuild: bool) {
             if force_rebuild { "rebuild forced." } else { "not found." }
         );
         let mvn = resolve_maven_program_for_root(&root);
-        let started = Instant::now();
-        let status = Command::new(&mvn)
+        let mut mvn_command = Command::new(&mvn);
+        mvn_command
             .args([
                 "install",
                 "-Pall-main-modules,asset-bundle",
@@ -4588,8 +4588,19 @@ fn ensure_browser4_runtime_bundle_prebuilt(force_rebuild: bool) {
             .current_dir(&root)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .status();
+            .stderr(Stdio::piped());
+        match browser4_cli::java::find_build_jdk() {
+            Ok(jdk_home) => browser4_cli::java::set_java_home(&mut mvn_command, &jdk_home),
+            Err(error) => {
+                if force_rebuild {
+                    panic!("[e2e pre-build] --force-rebuild-bundle: {error}");
+                }
+                eprintln!("[e2e pre-build] {error}; falling back to daemon-side build.");
+                return;
+            }
+        }
+        let started = Instant::now();
+        let status = mvn_command.status();
 
         match status {
             Ok(s) if s.success() => {
