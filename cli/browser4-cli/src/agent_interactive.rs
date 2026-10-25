@@ -1227,6 +1227,12 @@ struct Repl {
     client: Client,
     base_url: String,
     session_name: Option<String>,
+    /// The CLI's recorded session id for generation 0 (see
+    /// [`crate::resolve_agent_session_id`]).  Kept separate from
+    /// [`Self::session_name`] because the state holds the id the backend really
+    /// allocated, while `-s <name>` may still be a name the backend never saw —
+    /// forwarding the name then created a second session (and a second browser).
+    initial_session_id: Option<String>,
     generation: u32,
     engine: String,
     noop_limit: Option<i64>,
@@ -1272,6 +1278,7 @@ impl Repl {
             client: client.clone(),
             base_url: base_url.to_string(),
             session_name: session_name.map(str::to_string),
+            initial_session_id: None,
             generation: 0,
             engine,
             noop_limit,
@@ -1287,9 +1294,23 @@ impl Repl {
         }
     }
 
-    /// The session this turn submits to: the user's `-s` name, or a derived one
-    /// after `/new`.
+    /// Pin the generation-0 session to the CLI's recorded session id.
+    ///
+    /// Kept out of [`Repl::new`] so tests (and `/new`) never depend on whatever
+    /// session happens to be recorded on this machine.
+    fn with_initial_session(mut self, initial_session_id: Option<String>) -> Self {
+        self.initial_session_id = initial_session_id;
+        self
+    }
+
+    /// The session this turn submits to: the CLI's recorded session id for the
+    /// first generation, else the user's `-s` name or a derived one after `/new`.
     fn session_id(&self) -> Option<String> {
+        if self.generation == 0 {
+            if let Some(id) = &self.initial_session_id {
+                return Some(id.clone());
+            }
+        }
         match &self.session_name {
             Some(name) if self.generation == 0 => Some(name.clone()),
             Some(name) => Some(format!("{name}-{}", self.generation)),
@@ -1868,7 +1889,10 @@ pub async fn run_interactive(
         .get("task")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    // The first turn runs in the CLI's current session (attached browser / `-s`
+    // slot / SWARM); `/new` derives a fresh generation instead.
     Repl::new(client, base_url, params, session_name)
+        .with_initial_session(crate::resolve_agent_session_id(session_name))
         .run(initial_task)
         .await
 }
@@ -1883,6 +1907,35 @@ mod tests {
             kind: kind.to_string(),
             ..Default::default()
         }
+    }
+
+    /// The interactive turn submits to the CLI's recorded session id (the
+    /// attached browser), not to the `-s` name the backend may never have seen.
+    #[test]
+    fn interactive_session_prefers_the_recorded_session_id() {
+        let client = Client::new();
+        let params = serde_json::json!({});
+        let mut repl = Repl::new(&client, "http://127.0.0.1:1", &params, None)
+            .with_initial_session(Some("s-attached".to_string()));
+        assert_eq!(repl.session_id().as_deref(), Some("s-attached"));
+
+        // `/new` derives a fresh generation name instead of reusing the attached
+        // session, so the original browser is never overwritten.
+        repl.new_session();
+        assert_eq!(repl.session_id().as_deref(), Some("interactive-1"));
+    }
+
+    /// Without a recorded session the interactive form keeps its old behaviour:
+    /// generation 0 submits session-less, and `-s <name>` submits the name.
+    #[test]
+    fn interactive_session_keeps_the_previous_behaviour_without_state() {
+        let client = Client::new();
+        let params = serde_json::json!({});
+        let anonymous = Repl::new(&client, "http://127.0.0.1:1", &params, None);
+        assert_eq!(anonymous.session_id(), None);
+
+        let named = Repl::new(&client, "http://127.0.0.1:1", &params, Some("work"));
+        assert_eq!(named.session_id().as_deref(), Some("work"));
     }
 
     #[test]

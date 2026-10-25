@@ -256,6 +256,15 @@ const INSTALL_LOCK_DIR_NAME: &str = ".install.lock";
 /// Maximum time to wait for a concurrent install/upgrade to finish (seconds).
 const INSTALL_LOCK_TIMEOUT_SECS: u64 = 300;
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
+/// Absolute path of the CLI binary that launched the backend.
+///
+/// `b4.run` resolves `browser4-cli` as a subprocess of the backend, preferring
+/// the copy shipped in the runtime bundle's `bin/`.  A dev bundle can ship a
+/// much older binary than the checkout the user just built — observed as a
+/// 4.14.0-rc.6 CLI panicking on `attach --extension msedge` and connecting a
+/// bare `--extension` to Chrome — so the launcher pins the child to the binary
+/// that started this server.  Read by `CliBinaryResolver`.
+pub const CLI_BIN_ENV: &str = "BROWSER4_CLI_BIN";
 /// When set to `1`, `true`, `yes`, or `on`, forces the CLI to download the
 /// Browser4 runtime bundle from a remote release instead of building it from
 /// a local Browser4 repository checkout.  Useful in environments where
@@ -6997,6 +7006,17 @@ fn command_for_launch_spec(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // Pin the backend's `b4.run` subprocess to THIS binary: the bundled copy can
+    // be older than the checkout (see [CLI_BIN_ENV]), and a version-skewed CLI
+    // drives the wrong browser / fails to parse its own options.  Failure to
+    // resolve our own path is not fatal — the backend then falls back to its
+    // bundle / PATH resolution as before.
+    match std::env::current_exe() {
+        Ok(cli) => {
+            command.env(CLI_BIN_ENV, cli);
+        }
+        Err(e) => eprintln!("Could not resolve the browser4-cli path for the backend: {e}"),
+    }
     Ok(PreparedLaunchCommand {
         command,
         cleanup_dir,
@@ -8506,7 +8526,7 @@ async fn start_server(
     // Ctrl+C while Spring Boot is still booting, the server survives — and the
     // next command must recognise the port as this workspace's own instead of
     // treating the listener as a neighbour and escalating to the next port.
-    let provisional_pid = resolve_managed_server_pid(child.id());
+    let provisional_pid = resolve_managed_server_pid(child.id(), port);
     register_managed_server_process(
         managed_server_entry(launch_spec, base_url, port, provisional_pid, None),
         None,
@@ -8562,7 +8582,7 @@ async fn start_server(
 
     cleanup_prepared_launch_dir(cleanup_dir.take());
 
-    let managed_pid = resolve_managed_server_pid(child.id());
+    let managed_pid = resolve_managed_server_pid(child.id(), port);
     if managed_pid != provisional_pid {
         // The launcher handed off to the real JVM: replace the claim so the
         // registry points at the process that actually owns the port.
@@ -8856,16 +8876,60 @@ fn default_cli_temp_dir() -> PathBuf {
     path
 }
 
-fn resolve_managed_server_pid(launcher_pid: u32) -> u32 {
+fn resolve_managed_server_pid(launcher_pid: u32, port: u16) -> u32 {
     #[cfg(windows)]
     {
-        resolve_windows_managed_server_pid(launcher_pid).unwrap_or(launcher_pid)
+        // The process that OWNS the listening port is the only authoritative
+        // answer. The descendant heuristic can walk into the JVM's own children
+        // (headless Chrome, helpers), whose pids die while the server keeps
+        // running: the registry then pointed at a dead pid, the port stopped
+        // looking "managed", and the next command allocated the NEXT port —
+        // starting a second backend with its own browser.
+        let port_owner = windows_listening_pid(port);
+        let last_descendant = resolve_windows_managed_server_pid(launcher_pid);
+        pick_managed_server_pid(launcher_pid, port_owner, last_descendant)
     }
 
     #[cfg(not(windows))]
     {
+        let _ = port;
         launcher_pid
     }
+}
+
+/// Choose the pid the managed-process registry should remember.
+///
+/// Precedence: the port owner (authoritative once the server is up), then the
+/// launcher's last descendant (used for the provisional claim, before the port is
+/// bound), then the launcher itself.
+fn pick_managed_server_pid(
+    launcher_pid: u32,
+    port_owner: Option<u32>,
+    last_descendant: Option<u32>,
+) -> u32 {
+    port_owner.or(last_descendant).unwrap_or(launcher_pid)
+}
+
+/// PID of the process listening on [port], or `None` when nothing listens there.
+#[cfg(windows)]
+fn windows_listening_pid(port: u16) -> Option<u32> {
+    let ps_command = format!(
+        r#"
+$conn = Get-NetTCPConnection -State Listen -LocalPort {port} -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if ($null -ne $conn) {{ $conn.OwningProcess }}
+"#
+    );
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_command])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().parse::<u32>().ok())
 }
 
 #[cfg(windows)]
@@ -9478,6 +9542,56 @@ mod tests {
         let root = find_browser4_root().unwrap();
         // println!("{:?}", root);
         assert!(root.join("ROOT.md").exists());
+    }
+
+    /// `b4.run` must execute the CLI that launched this backend, not whatever
+    /// older binary the runtime bundle happens to ship.
+    #[test]
+    fn test_launch_command_pins_the_cli_binary_for_b4_run() {
+        let spec = sample_launch_spec();
+        let prepared = command_for_launch_spec(&spec).unwrap();
+
+        let pinned = prepared
+            .command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new(CLI_BIN_ENV))
+            .and_then(|(_, value)| value)
+            .map(std::path::PathBuf::from)
+            .expect("BROWSER4_CLI_BIN must be set on the backend launch command");
+
+        let current = std::env::current_exe().expect("current exe");
+        let normalize = |p: &std::path::Path| {
+            p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+        };
+        assert_eq!(
+            normalize(&pinned),
+            normalize(&current),
+            "b4.run's CLI must be the binary that launched the backend"
+        );
+    }
+
+    /// The managed-process registry must point at the process that OWNS the
+    /// listening port, not at the launcher's last descendant: once the JVM has
+    /// spawned children (headless Chrome, helpers), that descendant dies, the port
+    /// stops looking "managed", and the next command allocates the NEXT dev port,
+    /// starting a second backend with its own browser.
+    #[test]
+    fn test_managed_server_pid_prefers_the_port_owner() {
+        assert_eq!(
+            pick_managed_server_pid(100, Some(200), Some(300)),
+            200,
+            "the port owner is authoritative"
+        );
+        assert_eq!(
+            pick_managed_server_pid(100, None, Some(300)),
+            300,
+            "before the port is bound the descendant heuristic still applies"
+        );
+        assert_eq!(
+            pick_managed_server_pid(100, None, None),
+            100,
+            "no probe resolves: fall back to the launcher itself"
+        );
     }
 
     #[test]

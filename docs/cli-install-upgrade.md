@@ -491,6 +491,8 @@ to PowerShell's `Invoke-WebRequest` which uses the WinINET proxy stack.
 |---|---|
 | `BROWSER4_RUNTIME_DIR` | Override the runtime data directory |
 | `BROWSER4_CLI_STATE_DIR` | Override the CLI session state directory |
+| `BROWSER4_CLI_INVOKE_DIR` | Directory the CLI searches upward from to find the Browser4 checkout (which selects the per-checkout state namespace); defaults to the CLI's working directory. The agent's `b4.run` tool forwards it to its child CLI, whose own working directory is a task workspace outside the checkout |
+| `BROWSER4_CLI_BIN` | Absolute path of the `browser4-cli` binary the backend runs for `b4.run`; set by the launcher to the binary that started the server, so the agent never executes an older copy from the runtime bundle |
 | `BROWSER4_RELEASES_BASE_URL` | Single-source download URL (bypasses mirrors and locale detection) |
 | `BROWSER4_MIRRORS_CONFIG` | Path to custom `mirrors.json` |
 | `BROWSER4_CLI_MIRROR_CHECK_TIMEOUT_SECS` | Mirror TCP reachability timeout in seconds (default: `5`) |

@@ -45,7 +45,7 @@ Use **attach** to connect to an already-running browser instead of launching a n
 
 ## How It Works
 
-`attach` resolves the target browser in layers, then verifies the CDP endpoint before binding the session. All subsequent commands (`snapshot`, `click`, `screenshot`, etc.) operate on the attached browser's tabs.
+`attach` resolves the target browser in layers, then verifies the CDP endpoint before binding the session. All subsequent commands (`snapshot`, `click`, `screenshot`, `agent run`, etc.) operate on the attached browser's tabs — `agent run` inherits the session, so the task drives the attached browser instead of starting another one.
 
 ### Endpoint resolution (channel name)
 

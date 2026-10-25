@@ -15,17 +15,22 @@ class CliUnavailableException(message: String) : IllegalStateException(message)
  *
  * Resolution order (M0/design §4.2):
  * 1. explicit path (configuration);
- * 2. bundled binary (next to the app / `bin/`);
- * 3. PATH lookup;
- * 4. repo dev wrapper (`b4w.ps1` / `b4w.sh`) when the working directory is
+ * 2. `BROWSER4_CLI_BIN` — the binary that launched this backend (the CLI sets it
+ *    when it spawns the server, so `b4.run` never executes a different, older
+ *    build than the user just ran);
+ * 3. bundled binary (next to the app / `bin/`);
+ * 4. PATH lookup;
+ * 5. repo dev wrapper (`b4w.ps1` / `b4w.sh`) when the working directory is
  *    inside a Browser4 source tree;
- * 5. otherwise fail loudly with install guidance (auto-install is a later
+ * 6. otherwise fail loudly with install guidance (auto-install is a later
  *    milestone — never silently degrade).
  *
  * The resolved binary is version-probed once and cached.
  */
 class CliBinaryResolver(
     private val explicitPath: Path? = null,
+    /** Process environment; injectable so tests do not mutate the JVM's own. */
+    private val env: Map<String, String> = System.getenv(),
 ) {
     private val logger = getLogger(this)
     private val versionCache = ConcurrentHashMap<Path, String>()
@@ -34,6 +39,16 @@ class CliBinaryResolver(
         explicitPath?.let { p ->
             if (Files.exists(p)) return p.toAbsolutePath()
             logger.warn("Configured browser4-cli path does not exist: {}", p)
+        }
+
+        // The CLI that launched this backend pins its own path. A dev runtime
+        // bundle can ship a much older `bin/browser4-cli.exe` than the checkout
+        // the user just built; executing that one panicked on
+        // `attach --extension <channel>` and sent a bare `--extension` to Chrome.
+        envLookup(CLI_BIN_ENV)?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
+            val configured = Path.of(raw)
+            if (Files.isRegularFile(configured)) return configured.toAbsolutePath()
+            logger.warn("{} points at a missing browser4-cli binary: {}", CLI_BIN_ENV, raw)
         }
 
         // ALWAYS return an absolute path: the shell invocation builds
@@ -106,10 +121,14 @@ class CliBinaryResolver(
     }
 
     private fun envLookup(name: String): String? {
-        val env = System.getenv()
         return env.entries.firstOrNull { it.key.equals(name, ignoreCase = isWindows) }?.value
     }
 
     private val isWindows: Boolean
         get() = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+
+    private companion object {
+        /** Mirrors `CLI_BIN_ENV` in the Rust CLI's `daemon.rs`. */
+        const val CLI_BIN_ENV = "BROWSER4_CLI_BIN"
+    }
 }

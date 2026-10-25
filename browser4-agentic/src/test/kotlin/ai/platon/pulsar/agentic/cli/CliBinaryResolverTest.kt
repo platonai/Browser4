@@ -72,4 +72,53 @@ class CliBinaryResolverTest {
             assertTrue(resolved != missing, "missing explicit path must not be returned")
         }
     }
+
+    @Test
+    @DisplayName("BROWSER4_CLI_BIN (the launching CLI) wins over the bundled binary")
+    fun testLauncherPinnedBinaryWins() {
+        // `bin/browser4-cli.exe` exists in the module dir during a surefire run
+        // on some setups; the pin must win regardless of it.
+        val pinned = tempDir.resolve(if (isWindows()) "browser4-cli.exe" else "browser4-cli")
+        Files.writeString(pinned, "")
+
+        val resolved = CliBinaryResolver(
+            env = mapOf("BROWSER4_CLI_BIN" to pinned.toString())
+        ).resolve()
+
+        assertEquals(pinned.toAbsolutePath(), resolved)
+    }
+
+    @Test
+    @DisplayName("a BROWSER4_CLI_BIN that no longer exists is ignored, never returned")
+    fun testMissingLauncherPinnedBinaryIsIgnored() {
+        val missing = tempDir.resolve("removed.exe")
+
+        val resolved = runCatching {
+            CliBinaryResolver(env = mapOf("BROWSER4_CLI_BIN" to missing.toString())).resolve()
+        }.getOrNull()
+
+        if (resolved != null) {
+            assertTrue(resolved.isAbsolute)
+            assertTrue(resolved != missing, "missing ${'$'}BROWSER4_CLI_BIN must not be returned")
+        }
+    }
+
+    @Test
+    @DisplayName("explicit configuration still beats BROWSER4_CLI_BIN")
+    fun testExplicitPathBeatsLauncherPinnedBinary() {
+        val explicit = tempDir.resolve("explicit-cli.exe")
+        val pinned = tempDir.resolve("pinned-cli.exe")
+        Files.writeString(explicit, "")
+        Files.writeString(pinned, "")
+
+        val resolved = CliBinaryResolver(
+            explicitPath = explicit,
+            env = mapOf("BROWSER4_CLI_BIN" to pinned.toString()),
+        ).resolve()
+
+        assertEquals(explicit.toAbsolutePath(), resolved)
+    }
+
+    private fun isWindows() =
+        System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 }

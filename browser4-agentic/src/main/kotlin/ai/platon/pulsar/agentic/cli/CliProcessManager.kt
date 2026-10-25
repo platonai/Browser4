@@ -65,6 +65,8 @@ data class CliProcessConfig(
 class CliProcessManager(
     private val resolver: CliBinaryResolver = CliBinaryResolver(),
     private val config: CliProcessConfig = CliProcessConfig(),
+    /** Process environment; injectable so tests do not mutate the JVM's own. */
+    private val processEnv: Map<String, String> = System.getenv(),
 ) {
     private val logger = getLogger(this)
 
@@ -392,7 +394,7 @@ class CliProcessManager(
     private fun quoteForShell(path: String): String = "'" + path.replace("'", "''") + "'"
 
     private fun buildWhitelistedEnv(backendBaseUrl: String?): Map<String, String> {
-        val base = System.getenv()
+        val base = processEnv
         // Case-insensitive lookup (Windows env keys preserve original casing).
         fun pick(vararg names: String): String? = names.firstNotNullOfOrNull { n ->
             base.entries.firstOrNull { it.key.equals(n, ignoreCase = isWindows) }?.value
@@ -428,6 +430,16 @@ class CliProcessManager(
         // the CLI subprocess or the connect page opens against the wrong ID.
         pick("BROWSER4_EXTENSION_ID")?.let { env["BROWSER4_EXTENSION_ID"] = it }
         pick("BROWSER4_EXTENSION_TOKEN")?.let { env["BROWSER4_EXTENSION_TOKEN"] = it }
+        // State-namespace passthrough. b4.run's cwd is the task workspace, which
+        // lives outside the checkout, so the child CLI used the global
+        // `~/.browser4` state instead of this checkout's namespace: it saw a stale
+        // session and the agent re-attached (extra sessions, extra browsers)
+        // rather than driving the session it was given. The invocation dir pins
+        // the checkout root the namespace is derived from; the state dir is an
+        // explicit relocation. Neither is invented when the backend lacks them —
+        // a production install keeps its flat `~/.browser4` layout.
+        pick("BROWSER4_CLI_INVOKE_DIR")?.let { env["BROWSER4_CLI_INVOKE_DIR"] = it }
+        pick("BROWSER4_CLI_STATE_DIR")?.let { env["BROWSER4_CLI_STATE_DIR"] = it }
         return env
     }
 

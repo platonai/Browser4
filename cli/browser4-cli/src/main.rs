@@ -622,6 +622,56 @@ fn require_session(session_name: Option<&str>) -> Result<CliState, String> {
     Ok(state)
 }
 
+/// The backend session an agent task must run in when the caller named no
+/// session of its own.
+///
+/// `agent run` used to forward `sessionId` only for an explicit `-s`, so the
+/// task landed on the backend's DEFAULT session while every other command used
+/// the CLI's current session.  With an extension-attached browser that meant the
+/// agent had no page in *its* session and launched a second, Browser4-owned
+/// browser the moment it navigated — the exact opposite of the attached session
+/// the user had just connected (`attach --extension msedge`).
+///
+/// Resolution order matches the commands that already forward a session:
+/// the addressed state slot (`-s <name>`, else the unnamed/default slot), then —
+/// when no name was given — the SWARM slot that [`require_session`] documents for
+/// `agent run`.  `None` when nothing is recorded, so a session-less task (for
+/// example `agent run --coding`) submits exactly as before.
+fn resolve_agent_session_id(session_name: Option<&str>) -> Option<String> {
+    resolve_agent_session_id_in(None, session_name)
+}
+
+/// [`resolve_agent_session_id`] against an explicit state directory.
+///
+/// Tests pass the directory directly instead of overriding
+/// `BROWSER4_CLI_STATE_DIR`: process-wide env mutation races every parallel test
+/// that reads state.
+fn resolve_agent_session_id_in(
+    state_dir: Option<&Path>,
+    session_name: Option<&str>,
+) -> Option<String> {
+    fn recorded_id(state: &CliState) -> Option<String> {
+        state
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+    }
+
+    let state = read_state(state_dir, session_name);
+    if let Some(id) = recorded_id(&state) {
+        return Some(id);
+    }
+    if session_name.is_none() {
+        let swarm_state = read_state(state_dir, Some(SWARM_SESSION_ID));
+        if let Some(id) = recorded_id(&swarm_state) {
+            return Some(id);
+        }
+    }
+    None
+}
+
 fn format_session_guidance_message(
     title: &str,
     command_hint: Option<&str>,
@@ -15266,6 +15316,12 @@ async fn handle_agent_run(
         eprintln!("⚠ --ndjson only affects --follow; ignoring it");
     }
 
+    // Run the task in the CLI's current session (attached browser / `-s <name>` /
+    // SWARM), not the backend's DEFAULT session. Without this, `agent run` against
+    // an extension-attached browser drove no page at all and started a second
+    // browser on the first navigation; `-s <name>` alone was not enough either,
+    // because the backend only knows the name after the CLI registered it.
+    let resolved_session_id = resolve_agent_session_id(session_name);
     let extra = build_agent_run_extra(
         tool_params
             .get("engine")
@@ -15279,7 +15335,7 @@ async fn handle_agent_run(
             .get("freshWorkspace")
             .and_then(|v| v.as_bool())
             == Some(true),
-        session_name,
+        resolved_session_id.as_deref(),
     );
     let task_id = submit_agent_task(client, base_url, task, extra).await?;
 
@@ -40619,6 +40675,90 @@ linkGroups:
             json!({ "sessionId": session_id, "baseUrl": "http://127.0.0.1:1" }).to_string(),
         )
         .unwrap();
+    }
+
+    /// `agent run` must submit into the CLI's recorded session, not the backend's
+    /// DEFAULT slot: an extension-attached browser otherwise received no page and
+    /// the agent opened a second, Browser4-owned browser on its first navigation.
+    #[test]
+    fn resolve_agent_session_id_uses_the_recorded_default_session() {
+        let temp = test_temp_dir();
+        let state_dir = temp.path().join("state");
+        write_session_state_file(&state_dir.join("cli-state.json"), "s-default");
+
+        assert_eq!(
+            resolve_agent_session_id_in(Some(&state_dir), None).as_deref(),
+            Some("s-default")
+        );
+    }
+
+    /// `-s <name>` addresses the named slot only; borrowing the unnamed session
+    /// would silently drive the wrong browser.
+    #[test]
+    fn resolve_agent_session_id_prefers_the_named_slot() {
+        let temp = test_temp_dir();
+        let state_dir = temp.path().join("state");
+        write_session_state_file(&state_dir.join("cli-state.json"), "s-default");
+        write_session_state_file(&state_dir.join("sessions").join("work.json"), "s-work");
+
+        assert_eq!(
+            resolve_agent_session_id_in(Some(&state_dir), Some("work")).as_deref(),
+            Some("s-work")
+        );
+    }
+
+    /// A named slot with no recorded state must resolve to nothing — `agent run`
+    /// then submits without a session, as before, instead of hijacking DEFAULT.
+    #[test]
+    fn resolve_agent_session_id_does_not_fall_back_for_a_named_slot() {
+        let temp = test_temp_dir();
+        let state_dir = temp.path().join("state");
+        write_session_state_file(&state_dir.join("cli-state.json"), "s-default");
+        write_session_state_file(&state_dir.join("sessions").join("SWARM.json"), "s-swarm");
+
+        assert_eq!(
+            resolve_agent_session_id_in(Some(&state_dir), Some("missing")),
+            None
+        );
+    }
+
+    /// `require_session` documents that extract / summarize / `agent run` follow
+    /// `swarm create`; the agent path must honour the same fallback.
+    #[test]
+    fn resolve_agent_session_id_falls_back_to_the_swarm_slot() {
+        let temp = test_temp_dir();
+        let state_dir = temp.path().join("state");
+        write_session_state_file(&state_dir.join("sessions").join("SWARM.json"), "s-swarm");
+
+        assert_eq!(
+            resolve_agent_session_id_in(Some(&state_dir), None).as_deref(),
+            Some("s-swarm")
+        );
+    }
+
+    /// No recorded session at all: a session-less (`--coding`) task still submits.
+    #[test]
+    fn resolve_agent_session_id_is_none_without_recorded_state() {
+        let temp = test_temp_dir();
+        let state_dir = temp.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        assert_eq!(resolve_agent_session_id_in(Some(&state_dir), None), None);
+    }
+
+    /// The session id, once resolved, is the payload the backend acts on.
+    #[test]
+    fn build_agent_run_extra_forwards_a_resolved_session_id() {
+        let extra = build_agent_run_extra("cli", None, false, false, Some("s-work"));
+        assert_eq!(extra["sessionId"], json!("s-work"));
+        assert_eq!(extra["engine"], json!("cli"));
+
+        let anonymous = build_agent_run_extra("cli", None, true, false, None);
+        assert!(
+            anonymous.get("sessionId").is_none(),
+            "no session must stay absent, got {anonymous}"
+        );
+        assert_eq!(anonymous["coding"], json!(true));
     }
 
     #[test]

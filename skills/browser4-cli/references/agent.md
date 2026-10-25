@@ -61,8 +61,15 @@ Use **agent** for natural-language tasks where you describe what you want withou
 ### Where the agent browses, and where it writes
 
 The agent runs **on the backend**, driving the session's own browser through the
-session's bound driver — it is not a second browser you can attach to. Two
-consequences matter in practice:
+session's bound driver — it is not a second browser you can attach to. `agent run`
+targets the CLI's current session: `-s <name>` when given, otherwise the unnamed
+slot — including a browser attached through `attach --extension` / `attach --cdp` —
+and the `swarm create` session when that is the only one recorded. A task submitted
+with no session at all (for example `--coding`) still runs without a browser, as
+before. This matters because the task never gets a browser of its own: if the
+current session is an attached one, the agent drives *that* browser.
+
+Two consequences matter in practice:
 
 - **Its navigation is not visible in your session's tab list.** The backend saves
   the URL you were on before the task and navigates back to it when the task ends,
