@@ -327,10 +327,16 @@ const TIPS_WEBMINER: &[Tip] = &[
 
 const TIPS_ATTACH: &[Tip] = &[
     Tip {
+        text: "Use `attach --extension edge` (or chrome) to drive the browser you already have open — no CDP port, no second browser",
+    },
+    Tip {
         text: "Use `attach --cdp chrome` to connect to your regular Chrome with all your logins intact",
     },
     Tip {
         text: "Use `attach --cdp msedge` to connect to Microsoft Edge via CDP",
+    },
+    Tip {
+        text: "`attach` prints the session tab it drives, and `disconnect` names the tab it released",
     },
 ];
 

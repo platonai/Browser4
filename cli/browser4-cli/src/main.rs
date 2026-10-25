@@ -709,8 +709,22 @@ fn cli_binary_name() -> String {
         .unwrap_or_else(|| "browser4-cli".to_string())
 }
 
+/// How the user actually invoked the CLI, for copy-pasteable hints.
+///
+/// `argv[0]` names the resolved binary — `browser4-cli.exe` under the
+/// development wrappers — which is not what the user typed and not what they
+/// can paste back.  The wrappers export `BROWSER4_CLI_INVOKE_HINT`
+/// (`./b4w.ps1`, `./b4w.sh`); prefer it, and fall back to the binary name.
+fn cli_invocation_hint() -> String {
+    std::env::var("BROWSER4_CLI_INVOKE_HINT")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(cli_binary_name)
+}
+
 fn no_active_session_message() -> String {
-    let bin = cli_binary_name();
+    let bin = cli_invocation_hint();
     format_session_guidance_message(
         "Session required",
         None,
@@ -720,6 +734,25 @@ fn no_active_session_message() -> String {
             "after tab operations, use `goto <url>` to restore the active page.",
             &format!("check available sessions with `{bin} list`."),
         ],
+    )
+}
+
+/// Message for `close` / `disconnect` when there is nothing to close.
+///
+/// These commands are no-ops without a session, so they must not print the
+/// error-styled "Session required" block: it suggested `open`/`goto`, which do
+/// not apply, and named a binary the user never typed.  A no-op still exits 0
+/// (closing an already-closed session is idempotent), but the output has to
+/// look like the no-op it is.
+fn no_session_to_close_message(command: &str) -> String {
+    let bin = cli_invocation_hint();
+    format!(
+        "Nothing to {command}: this CLI context has no active session.\n\
+         \n\
+         💡 What to try\n  \
+         - check what this CLI knows about with `{bin} list`.\n  \
+         - attach a running browser with `{bin} attach --extension <edge|chrome>`.\n  \
+         - start a managed session with `{bin} open <url>`."
     )
 }
 
@@ -795,9 +828,8 @@ fn check_unnamed_slot_free(
         return Err(format!(
             "An unnamed session already exists: {existing_id}\n\
              An unnamed session already drives a browser, so a second attach must not displace it.\n\
-             Name your sessions with `-s <name>` instead, e.g.:\n  \
-             browser4-cli -s myname attach --cdp chrome\n\
-             Or run `browser4-cli close` to end the current unnamed session first."
+             Name your sessions with `-s <name>` instead, or run `browser4-cli close` to end the \
+             current unnamed session first."
         ));
     }
     Ok(())
@@ -2602,14 +2634,16 @@ async fn handle_attach(
                 existing_state.session_id.as_deref().unwrap_or("?")
             );
         } else {
-            let hint = if parsed_args.get("extension").is_some() {
-                "browser4-cli -s <name> attach --extension"
-            } else if parsed_args.get("cdp").is_some() {
-                // Same restriction as --extension, and attach.md documents the
-                // pattern this way (114038#6).
-                "browser4-cli -s <name> attach --cdp chrome"
+            // The example must repeat the transport the user just tried: a
+            // repeat `attach --extension msedge` used to be answered with a
+            // `--cdp chrome` example, i.e. a debug-port path an extension user
+            // deliberately avoided (and one their browser does not serve).
+            let hint = if let Some(channel) = requested_extension_channel.as_deref() {
+                format!("browser4-cli -s <name> attach --extension {channel}")
+            } else if parsed_args.get("extension").is_some() {
+                "browser4-cli -s <name> attach --extension".to_string()
             } else {
-                "browser4-cli -s <name> attach --cdp <url|channel>"
+                "browser4-cli -s <name> attach --cdp <url|channel>".to_string()
             };
             return Err(format!("{e}\nHint: {hint}"));
         }
@@ -2869,6 +2903,23 @@ async fn handle_attach(
                         }
 
                         cli_println!("Session ready: {}", session_id);
+                        // attach.md promises the target page's real identity;
+                        // the extension path used to stop at the session id, so
+                        // a user could not tell which tab the agent would drive
+                        // (and could not check afterwards what a disconnect
+                        // released).  Best effort: the tab list needs the relay
+                        // that just came up.
+                        if let Some(tab) =
+                            session_tab_identity(client, &effective_base_url, &session_id).await
+                        {
+                            let guid = format_guid_display(tab.guid.as_deref());
+                            cli_println!(
+                                "Session tab: {guid} ({}) — the only tab this session drives.",
+                                tab.url
+                            );
+                            json_field("session_tab_guid", json!(guid));
+                            json_field("session_tab_url", json!(&tab.url));
+                        }
                         return Ok(());
                     }
                     if ready && !healthy {
@@ -3940,6 +3991,13 @@ fn report_managed_close(report: &Option<Value>) {
     json_field("browser_terminated", json!(terminated));
     json_field("browser_termination", json!(termination));
     json_field("profile_cleanup", json!(field("profileCleanup")));
+    // Teardown failures the backend could not turn into an exception: without
+    // this the CLI reported a clean close while a resource leaked.
+    let warnings = close_report_warnings(report.as_ref());
+    for warning in &warnings {
+        eprintln!("⚠  {warning}");
+    }
+    json_field("close_warnings", json!(warnings));
 
     match terminated {
         Some(true) => cli_println!("Session closed. Browser terminated."),
@@ -3975,6 +4033,18 @@ fn report_managed_close(report: &Option<Value>) {
     }
 }
 
+/// Outcome of one best-effort `close_session` call.
+///
+/// The backend usually answers with plain text, so "accepted" and "returned a
+/// structured report" are different facts: a detach that succeeded must not be
+/// reported as unconfirmed just because there is no JSON to parse.
+struct CloseAttempt {
+    /// The backend accepted the call (it no longer holds the session).
+    accepted: bool,
+    /// The structured report, when the backend answered with JSON.
+    report: Option<Value>,
+}
+
 /// Best-effort close of an existing backend session.
 ///
 /// Reports a warning when the backend cannot confirm the close, so the user
@@ -3984,7 +4054,7 @@ async fn warn_if_session_close_failed(
     client: &Client,
     base_url: &str,
     session_id: &str,
-) -> Option<Value> {
+) -> CloseAttempt {
     match call_tool(
         client,
         base_url,
@@ -3993,7 +4063,10 @@ async fn warn_if_session_close_failed(
     )
     .await
     {
-        Ok(raw) => serde_json::from_str(&raw).ok(),
+        Ok(raw) => CloseAttempt {
+            accepted: true,
+            report: serde_json::from_str(&raw).ok(),
+        },
         Err(err) => {
             eprintln!(
                 "⚠  Warning: the backend could not confirm closing session {}: {}",
@@ -4002,31 +4075,140 @@ async fn warn_if_session_close_failed(
             eprintln!(
                 "   The session may still be running — retry `close` or use `close-all` to clean up."
             );
-            None
+            CloseAttempt {
+                accepted: false,
+                report: None,
+            }
         }
     }
+}
+
+/// The tab an extension session is driving, read from the backend *before* the
+/// session is closed.  Prefers the active tab, falls back to the first one.
+async fn session_tab_identity(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+) -> Option<TabInfo> {
+    let raw = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": session_id, "action": "list" }),
+    )
+    .await
+    .ok()?;
+    let tabs = parse_tab_list(&raw);
+    tabs.iter()
+        .find(|tab| tab.active)
+        .cloned()
+        .or_else(|| tabs.into_iter().next())
+}
+
+/// Report an extension-session detach in terms of what actually happened:
+/// the browser family that was attached (Edge is not Chrome), the tab the
+/// session drove, and the fact that the user's own tabs are untouched.
+fn report_extension_detach(
+    command: &str,
+    state: &CliState,
+    session_tab: Option<&TabInfo>,
+    close_attempt: &CloseAttempt,
+) {
+    let label = channel_browser_label(state.browser_channel.as_deref());
+    let verb = if command == "disconnect" {
+        "Disconnected from"
+    } else {
+        "Detached from"
+    };
+    match session_tab {
+        Some(tab) => {
+            let guid = format_guid_display(tab.guid.as_deref());
+            cli_println!(
+                "{verb} {label} (extension). Session tab {guid} ({}) released.",
+                tab.url
+            );
+            json_field("session_tab_guid", json!(guid));
+            json_field("session_tab_url", json!(&tab.url));
+        }
+        None => {
+            cli_println!("{verb} {label} (extension).");
+            json_field("session_tab_guid", json!(null));
+            json_field("session_tab_url", json!(null));
+        }
+    }
+    cli_println!(
+        "Your own browser tabs and the extension stay active. Re-attach with `attach --extension`."
+    );
+    json_field("browser_retained", json!(true));
+    json_field("connection", json!(format!("Extension ({label})")));
+
+    // "The backend accepted the close" is not the same as "the tab is gone":
+    // the extension transport may still fail the tab removal internally (the
+    // `closeTab` CancellationException race).  Say which one we know, and send
+    // the user to the log when we know neither.
+    let warnings = close_report_warnings(close_attempt.report.as_ref());
+    let confirmed = close_attempt.accepted && warnings.is_empty();
+    if !confirmed {
+        eprintln!(
+            "⚠  The backend did not confirm the detach; the session tab above may still be open \
+             (check `browser4-cli doctor log` if it lingers)."
+        );
+        for warning in &warnings {
+            eprintln!("   {warning}");
+        }
+    }
+    json_field("tab_close_confirmed", json!(confirmed));
+    json_field("close_warnings", json!(warnings));
+}
+
+/// Non-fatal teardown failures the backend reported for a close.
+fn close_report_warnings(report: Option<&Value>) -> Vec<String> {
+    report
+        .and_then(|report| report.get("warnings"))
+        .and_then(|warnings| warnings.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn handle_close(
     client: &Client,
     base_url: &str,
     session_name: Option<&str>,
+    command: &str,
 ) -> Result<(), String> {
     // `close` is intentionally scoped to one browser session. Global Browser4
     // server shutdown and PULSAR_CHROME cleanup belong to `close-all`/`kill-all`.
     let state = read_state(None, session_name);
     let Some(session_id) = get_session_id_for_close(&state).map(str::to_string) else {
         clear_state(None, session_name);
-        eprintln!("{}", no_active_session_message());
+        // A no-session close is a no-op, not an error: keep exit 0, but do not
+        // dress it up as the error-styled "Session required" block, whose
+        // open/goto advice does not apply here.
+        eprintln!("{}", no_session_to_close_message(command));
         json_field("session_id", json!(null));
         json_field("closed", json!(false));
+        json_field("session_was_active", json!(false));
         return Ok(());
     };
     json_field("session_id", json!(&session_id));
     let is_attached = state.kind.is_attached();
+    let is_extension = state.kind == crate::state::SessionKind::ExtensionAttached;
+    // Name the tab this session drives *before* closing it: once the session is
+    // gone the relay is gone, and the user has no way to tell which tab the
+    // detach released.  Best effort — a backend hiccup must not block the close.
+    let session_tab = if is_extension {
+        session_tab_identity(client, base_url, &session_id).await
+    } else {
+        None
+    };
     // Ignore errors — session might already be closed (the warning is printed
     // by warn_if_session_close_failed so the user is not left in the dark).
-    let close_report = warn_if_session_close_failed(client, base_url, &session_id).await;
+    let close_attempt = warn_if_session_close_failed(client, base_url, &session_id).await;
     clear_state(None, session_name);
     // A named managed session loses its profile directory with its session id,
     // so a later `open -s <name>` cannot restore anything: leave a note for that
@@ -4036,9 +4218,8 @@ async fn handle_close(
         state::remember_closed_session_in(&state::resolve_default_state_dir(), name, &session_id);
     }
     if is_attached {
-        if state.kind == crate::state::SessionKind::ExtensionAttached {
-            cli_println!("Disconnected from Browser4 Chrome Extension. Your browser tabs and the extension remain active. Re-attach with `attach --extension`.");
-            json_field("browser_retained", json!(true));
+        if is_extension {
+            report_extension_detach(command, &state, session_tab.as_ref(), &close_attempt);
         } else {
             // The backend closes the tab(s) the session drove; a headed Chrome
             // exits when its last window closes, so do NOT promise the browser
@@ -4070,7 +4251,7 @@ async fn handle_close(
             json_field("browser_retained", json!(retained));
         }
     } else {
-        report_managed_close(&close_report);
+        report_managed_close(&close_attempt.report);
     }
     json_field("closed", json!(true));
     Ok(())
@@ -15269,6 +15450,34 @@ async fn submit_agent_task(
     Ok(task_id)
 }
 
+/// Session an agent task was bound to, plus that session's connection label.
+///
+/// The label comes from the CLI state slot that supplied the id — the addressed
+/// slot first, then the SWARM slot, mirroring [`resolve_agent_session_id_in`].
+/// The connection is `None` when no slot matches the id (a stale record), so the
+/// caller never prints a label that describes a different session.
+fn agent_task_binding(
+    session_id: Option<&str>,
+    session_name: Option<&str>,
+) -> Option<(String, Option<String>)> {
+    let session_id = session_id?;
+    let addressed = read_state(None, session_name);
+    let state = if addressed.session_id.as_deref() == Some(session_id) {
+        Some(addressed)
+    } else {
+        let swarm = read_state(None, Some(SWARM_SESSION_ID));
+        if swarm.session_id.as_deref() == Some(session_id) {
+            Some(swarm)
+        } else {
+            None
+        }
+    };
+    Some((
+        session_id.to_string(),
+        state.map(|state| connection_label_full(&state, None)),
+    ))
+}
+
 async fn handle_agent_run(
     client: &Client,
     base_url: &str,
@@ -15339,6 +15548,12 @@ async fn handle_agent_run(
     );
     let task_id = submit_agent_task(client, base_url, task, extra).await?;
 
+    // Say which session the task was bound to.  A silent submission is exactly
+    // what hid the 2026-10-25 regression: the task executed in the backend's
+    // DEFAULT session (opening a second browser) while the CLI kept reporting
+    // the attached Edge, and only the backend log showed the difference.
+    let binding = agent_task_binding(resolved_session_id.as_deref(), session_name);
+
     // NDJSON mode is machine output end to end: the submission is a JSON line
     // too, so a consumer never has to skip prose.
     let ndjson = follow
@@ -15348,12 +15563,40 @@ async fn handle_agent_run(
             .unwrap_or(false);
     if ndjson {
         print_stdout_line(
-            &json!({ "type": "task.submitted", "taskId": task_id, "task": task }).to_string(),
+            &json!({
+                "type": "task.submitted",
+                "taskId": task_id,
+                "sessionId": resolved_session_id,
+                "connection": binding.as_ref().and_then(|(_, connection)| connection.clone()),
+                "task": task,
+            })
+            .to_string(),
         );
     } else {
-        cli_println!("Task submitted: {}", task_id);
+        match &binding {
+            Some((session_id, Some(connection))) => cli_println!(
+                "Task submitted: {} (session={}, {})",
+                task_id,
+                session_id,
+                connection
+            ),
+            Some((session_id, None)) => cli_println!(
+                "Task submitted: {} (session={}; the connection is unknown to this CLI state)",
+                task_id,
+                session_id
+            ),
+            None => cli_println!(
+                "Task submitted: {} (no session — a session-less task)",
+                task_id
+            ),
+        }
     }
     json_field("task_id", json!(&task_id));
+    json_field("session_id", json!(resolved_session_id));
+    json_field(
+        "session_connection",
+        json!(binding.as_ref().and_then(|(_, connection)| connection.clone())),
+    );
 
     // Persist the task for cross-session tracking in BOTH async and wait
     // modes, so `agent list` always reflects every submitted task — including
@@ -32057,7 +32300,7 @@ async fn run(
             .await?;
         }
         "close" | "disconnect" => {
-            handle_close(&client, &base_url, global.session_name.as_deref()).await?;
+            handle_close(&client, &base_url, global.session_name.as_deref(), command).await?;
         }
         "close-all" => {
             handle_close_all(&client, &base_url).await?;

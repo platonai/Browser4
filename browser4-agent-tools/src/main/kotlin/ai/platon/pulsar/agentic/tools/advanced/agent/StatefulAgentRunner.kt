@@ -282,7 +282,7 @@ open class StatefulAgentRunner(
         // attach while the task is still queued (behind another task of the
         // session) and must see that it exists.
         recordLifecycle(status, AgentTaskEvent.TYPE_CREATED)
-        logger.debug("Created agent task status {} (session={})", status.id, session.uuid)
+        logger.debug("Created agent task status {} (agentSession={})", status.id, session.uuid)
         return status
     }
 
@@ -368,7 +368,7 @@ open class StatefulAgentRunner(
             pendingInputs.computeIfAbsent(id) { ConcurrentLinkedQueue() }.add(message)
         }
         logger.info(
-            "Queued steering message for agent task {} (session={}, {} chars)",
+            "Queued steering message for agent task {} (agentSession={}, {} chars)",
             id, session.uuid, message.length
         )
         return true
@@ -497,7 +497,7 @@ open class StatefulAgentRunner(
      */
     fun cancel(id: String): Boolean {
         val job = runningJobs.remove(id) ?: return false
-        logger.info("Cancelling agent task {} (session={})", id, session.uuid)
+        logger.info("Cancelling agent task {} (agentSession={})", id, session.uuid)
         // Mark the status BEFORE cancelling the job: the coroutine may be waiting on
         // [runMutex] or not yet scheduled, in which case nothing inside it can mark
         // the status terminal. Idempotent with executeSerialized's own marking.
@@ -587,18 +587,18 @@ open class StatefulAgentRunner(
             (agent as? RobustBrowserAgent)?.let {
                 it.noopLimitOverride = noopLimit
                 if (noopLimit != null) {
-                    logger.info("Agent task {} (session={}): noop limit overridden to {}", status.id, session.uuid, noopLimit)
+                    logger.info("Agent task {} (agentSession={}): noop limit overridden to {}", status.id, session.uuid, noopLimit)
                 }
                 it.runEngineOverride = engine
                 if (engine != null) {
-                    logger.info("Agent task {} (session={}): engine overridden to {}", status.id, session.uuid, engine)
+                    logger.info("Agent task {} (agentSession={}): engine overridden to {}", status.id, session.uuid, engine)
                 }
                 // Explicit coding flag, never auto-detected: the coding flag is
                 // opt-in per call (`command_run`'s coding argument, e.g. the CLI's
                 // agent run --coding). Unset ⇒ browser task.
                 it.codingMode = coding == true
                 if (coding == true) {
-                    logger.info("Agent task {} (session={}): coding mode (explicit) — skipping driver health check and page navigation", status.id, session.uuid)
+                    logger.info("Agent task {} (agentSession={}): coding mode (explicit) — skipping driver health check and page navigation", status.id, session.uuid)
                 }
                 // Fresh-workspace isolation (design §6.6): create a timestamped
                 // workspace dir under the agent's base dir, point both the agent's
@@ -608,7 +608,7 @@ open class StatefulAgentRunner(
                     java.nio.file.Files.createDirectories(fresh)
                     it.workspaceDirOverride = fresh
                     it.agentToolManager.rebindWorkspace(fresh)
-                    logger.info("Agent task {} (session={}): fresh workspace at {}", status.id, session.uuid, fresh)
+                    logger.info("Agent task {} (agentSession={}): fresh workspace at {}", status.id, session.uuid, fresh)
                 }
                 // Live step feed and steering for THIS task. Cleared in the finally
                 // below: the companion agent outlives the task and is shared by
@@ -641,13 +641,13 @@ open class StatefulAgentRunner(
                                 status.toolExecutions = it.toInt()
                             }
                             persistProgress(status)
-                            logger.debug("Collected event {} for agent task {} (session={})", event.eventType, status.id, session.uuid)
+                            logger.debug("Collected event {} for agent task {} (agentSession={})", event.eventType, status.id, session.uuid)
                         }
                     } catch (e: CancellationException) {
                         logger.debug("Event collector cancelled for agent task {}", status.id)
                         throw e
                     } catch (e: Exception) {
-                        logger.error("Error collecting events for agent task {} (session={})", status.id, session.uuid, e)
+                        logger.error("Error collecting events for agent task {} (agentSession={})", status.id, session.uuid, e)
                     }
                 }
 
@@ -680,7 +680,7 @@ open class StatefulAgentRunner(
             status.message = CANCELLED_MESSAGE
             throw e
         } catch (e: Throwable) {
-            logger.error("Failed to execute agent command: {} (session={})", plainCommand, session.uuid, e)
+            logger.error("Failed to execute agent command: {} (agentSession={})", plainCommand, session.uuid, e)
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
             status.failureReason = "${e.javaClass.simpleName}: ${e.message}"
             status.message = e.message
@@ -940,7 +940,7 @@ open class StatefulAgentRunner(
         statusCache.invalidateAll()
         eventLogs.invalidateAll()
         liveInstances.remove(this)
-        logger.info("StatefulAgentRunner closed (session={})", session.uuid)
+        logger.info("StatefulAgentRunner closed (agentSession={})", session.uuid)
     }
 
     companion object {

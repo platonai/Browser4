@@ -815,7 +815,10 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "close",
-            description: "Close the browser",
+            // On an attached session `close` detaches: it releases the tab(s)
+            // the session drove and never terminates the user's browser.  The
+            // old "Close the browser" wording read like it would kill Edge.
+            description: "Close the current session (attached browsers detach; the external browser keeps running)",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,

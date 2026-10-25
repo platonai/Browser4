@@ -413,7 +413,7 @@ class StatefulPageVisitor(
 
     override fun close() {
         statusCache.invalidateAll()
-        logger.info("StatefulPageVisitor closed (session={})", session.uuid)
+        logger.info("StatefulPageVisitor closed (agentSession={})", session.uuid)
     }
 }
 

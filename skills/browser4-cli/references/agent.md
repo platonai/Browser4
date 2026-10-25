@@ -71,6 +71,17 @@ current session is an attached one, the agent drives *that* browser.
 
 Two consequences matter in practice:
 
+- **The submission echoes the binding, and so does the backend log.** The CLI
+  prints `Task submitted: <id> (session=<sid>, <connection>)` — or
+  `(no session — a session-less task)` — so you can see which session the task
+  actually landed in without reading logs. `--json` carries `session_id` and
+  `session_connection`; `--ndjson` puts `sessionId`/`connection` on the
+  `task.submitted` line. When you do need the log, the authoritative lines are
+  `tool.call start … tool=command_run session=<browser session>` and
+  `Submitting agent task <task-id> (session=<browser session>)`; both must carry
+  the session id the CLI reported. Lines from the runner that name the agent's
+  own session use `agentSession=` — a second, unrelated UUID (the agentic
+  session), never the browser session, so do not read it as a mismatch.
 - **Its navigation is not visible in your session's tab list.** The backend saves
   the URL you were on before the task and navigates back to it when the task ends,
   so `tab-list`, `page-info` and `snapshot` keep showing your own page and the

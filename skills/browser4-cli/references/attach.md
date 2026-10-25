@@ -427,4 +427,6 @@ browser4-cli close       # or: browser4-cli disconnect
 > alive over HTTP, and a browser that was already closed obviously cannot survive —
 > in those cases `close` says so instead of claiming the browser is still running.
 
-The `disconnect` alias is available as a more accurate command name for attached sessions, but it's identical to `close` in behavior.
+The `disconnect` alias is available as a more accurate command name for attached sessions, but it's identical to `close` in behavior. Both report the tab they released: the CLI reads the session's tab (`guid` + URL) **before** closing — afterwards the relay is gone and the tab can no longer be named — prints `Detached from / Disconnected from <browser> (extension). Session tab <guid> (<url>) released.`, and exposes `session_tab_guid`, `session_tab_url` and `tab_close_confirmed` in `--json`.
+
+`tab_close_confirmed` is the honest bit: the backend accepting the close is not proof the tab is gone, because removing the session tab detaches the debugger, which cancels the pending `chrome.tabs.remove` request (`closeTab … CancellationException`). The backend treats that specific race as a successful detach (debug-level log) and reports anything else as a close warning, which the CLI prints. So `tab_close_confirmed: false` + a warning means *check the tab*, not *the disconnect failed*.
