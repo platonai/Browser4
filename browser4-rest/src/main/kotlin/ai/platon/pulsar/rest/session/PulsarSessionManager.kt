@@ -1962,6 +1962,10 @@ class PulsarSessionManager(
         var processReport: ProcessTerminationReport? = null
         var profileReport: ProfileCleanupReport? = null
         var sharedWith: List<String> = emptyList()
+        // Non-fatal failures the caller must surface: the session record is
+        // removed before the resource teardown, so swallowing these made a
+        // failed close look like a clean one.
+        val warnings = mutableListOf<String>()
 
         try {
             val pulsarSession = session.agenticSession
@@ -2024,7 +2028,25 @@ class PulsarSessionManager(
             logger.info("---- Deleted session `{}` and released resources", resolvedId)
             // logger.info("----------------------DELETE MANAGED SESSION END---------------------------")
         } catch (e: Exception) {
-            logger.error("Error closing session {}: {}", resolvedId, e.message, e)
+            val chain = exceptionChainText(e)
+            val message = e.message ?: e.javaClass.simpleName
+            if (session.kind == SessionKind.EXTENSION_ATTACHED && isExtensionDetachRace(chain)) {
+                // Removing an extension session's tab detaches the debugger, and
+                // that detach cancels the pending `chrome.tabs.remove` future, so
+                // a NORMAL disconnect surfaced as "closeTab timed out or failed …
+                // CancellationException".  The detach is the success signal: log
+                // it at debug and keep the session close successful.
+                logger.debug(
+                    "Extension session {} detached; the tab close raced the debugger detach: {}",
+                    resolvedId, message
+                )
+            } else {
+                // Anything else is a real failure the caller must hear about —
+                // the session record is already gone, so a silent catch here
+                // would report success for a close that left resources behind.
+                logger.error("Error closing session {}: {}", resolvedId, message, e)
+                warnings += "closing the session resources failed: $message"
+            }
         }
 
         // The browser this session LAUNCHED is ours to reap: closeBrowser() asks
@@ -2068,7 +2090,33 @@ class PulsarSessionManager(
             process = processReport,
             profile = profileReport,
             sharedWith = sharedWith,
+            warnings = warnings.toList(),
         )
+    }
+
+    /**
+     * `Throwable javaClass+message` for the first few causes, so a transport
+     * failure can be classified without matching on one library's message shape.
+     */
+    private fun exceptionChainText(e: Throwable): String = buildString {
+        var current: Throwable? = e
+        var depth = 0
+        while (current != null && depth < 6) {
+            append(current.javaClass.simpleName).append(' ').append(current.message.orEmpty()).append(" | ")
+            current = current.cause
+            depth++
+        }
+    }
+
+    /**
+     * True for the benign extension-detach race described in [closeSession]:
+     * the session tab's removal detaches the debugger, which cancels the pending
+     * `chrome.tabs.remove` request (`closeTab … CancellationException`).
+     */
+    private fun isExtensionDetachRace(chain: String): Boolean {
+        val lower = chain.lowercase()
+        return "closetab" in lower &&
+            ("cancellationexception" in lower || "detached" in lower)
     }
 
     /**
@@ -2382,6 +2430,10 @@ data class SessionBrowserFacts(
  * @property sharedWith the live sessions that were still driving the same attached
  *   browser, so this close detached instead of tearing that browser down. Empty
  *   for a close that owned its browser outright.
+ * @property warnings non-fatal failures during teardown (e.g. a resource that
+ *   could not be released). Empty for a clean close. The benign extension
+ *   detach race is not a warning: it is the expected outcome of removing the
+ *   session tab.
  */
 data class SessionCloseReport(
     val sessionId: String,
@@ -2389,6 +2441,7 @@ data class SessionCloseReport(
     val process: ProcessTerminationReport? = null,
     val profile: ProfileCleanupReport? = null,
     val sharedWith: List<String> = emptyList(),
+    val warnings: List<String> = emptyList(),
 ) {
     /**
      * Whether this close left a browser running that other sessions still drive,

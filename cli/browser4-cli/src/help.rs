@@ -527,6 +527,9 @@ pub fn generate_help() -> String {
     lines.push("    crawl <url> --out-link-selector \"...\" --depth 1 --sql @query.sql".to_string());
     lines.push("  Parallel extraction:".to_string());
     lines.push("    swarm create  →  swarm query --sql @q.sql --seed-file urls.txt  →  swarm result <id>".to_string());
+    lines.push("  Use my own browser (no new browser, no CDP port):".to_string());
+    lines.push("    attach --extension <edge|chrome>          # needs the Browser4 extension from the Web Store".to_string());
+    lines.push("    →  goto <url>  →  ...  →  disconnect      # drives the tab it opened; your own tabs stay".to_string());
 
     // Category index — which `--help <category>` targets exist
     lines.extend(category_index_lines());
@@ -1709,6 +1712,30 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Notes:".to_string());
         lines.push(
             "  - Agent tasks are available only via the spaced `agent <subcommand>` form."
+                .to_string(),
+        );
+        lines.push(
+            "  - Session binding: the task runs in this CLI's CURRENT session — `-s <name>` when"
+                .to_string(),
+        );
+        lines.push(
+            "    given, otherwise the unnamed slot, including a browser attached with"
+                .to_string(),
+        );
+        lines.push(
+            "    `attach --extension`/`--cdp`. It never falls back to the backend's DEFAULT session."
+                .to_string(),
+        );
+        lines.push(
+            "    The `Task submitted:` line echoes that session id and connection, so a run cannot"
+                .to_string(),
+        );
+        lines.push(
+            "    silently land somewhere else. Use `goto`, not `open`: `open` deliberately starts a"
+                .to_string(),
+        );
+        lines.push(
+            "    new session when the current one is an attached/extension session."
                 .to_string(),
         );
         lines.push(

@@ -68,13 +68,27 @@ re-attach instruction.
 
 Two consequences matter in practice:
 
-- **Its navigation is not visible in your session's tab list.** The backend restores
-  the URL you were on when the task ends, so `tab-list`, `page-info` and `snapshot`
-  keep showing your own page and the agent's pages never appear there. Observe the
-  work through `agent status` (step count and message) and its artifacts.
-- **Its deliverables are files, not always fields.** "Extract X" usually writes the
-  data into the task's own **workspace**; `agent result` names it (`workspace`) and
-  lists the files the agent reported (`filesChanged`):
+- **The submission echoes the binding, and so does the backend log.** The CLI
+  prints `Task submitted: <id> (session=<sid>, <connection>)` — or
+  `(no session — a session-less task)` — so you can see which session the task
+  actually landed in without reading logs. `--json` carries `session_id` and
+  `session_connection`; `--ndjson` puts `sessionId`/`connection` on the
+  `task.submitted` line. When you do need the log, the authoritative lines are
+  `tool.call start … tool=command_run session=<browser session>` and
+  `Submitting agent task <task-id> (session=<browser session>)`; both must carry
+  the session id the CLI reported. Lines from the runner that name the agent's
+  own session use `agentSession=` — a second, unrelated UUID (the agentic
+  session), never the browser session, so do not read it as a mismatch.
+- **Its navigation is not visible in your session's tab list.** The backend saves
+  the URL you were on before the task and navigates back to it when the task ends,
+  so `tab-list`, `page-info` and `snapshot` keep showing your own page and the
+  agent's intermediate pages never appear there. Observe its work through
+  `agent status` (step count and message) and through the artifacts it reports.
+- **Its deliverables are files, not always fields.** When a task says "extract X",
+  the agent usually writes the data into a file under its own per-task **workspace**
+  and returns a short summary. `agent result` names that directory (`workspace`) and
+  lists the files the agent reported (`filesChanged`), so the deliverable is
+  reachable without searching the backend's app-data tree by hand:
 
 ```bash
 browser4-cli agent result <task-id>
