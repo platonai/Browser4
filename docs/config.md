@@ -552,10 +552,11 @@ instead of being dropped):
 | Property | Default | Description |
 |---|---|---|
 | `captcha.auto.solve.enabled` | `true` | Master switch; set to `false` to disable even when JAR is present |
-| `captcha.service.provider` | `CAPSOLVER` | Primary solving service: `CAPSOLVER`, `TWO_CAPTCHA`, `ANTI_CAPTCHA` |
+| `captcha.service.provider` | `CAPSOLVER` | Primary solving service: `CAPSOLVER`, `TWO_CAPTCHA`, `ANTI_CAPTCHA`, `SOLVECHA` |
 | `captcha.capsolver.api.key` | (none) | API key for CapSolver |
 | `captcha.twocaptcha.api.key` | (none) | API key for 2Captcha |
 | `captcha.anticaptcha.api.key` | (none) | API key for Anti-Captcha |
+| `captcha.solvecha.api.key` | (none) | API key for Solvecha (image and text CAPTCHAs only) |
 | `captcha.solve.timeout.seconds` | `120` | Max wait for a solution |
 | `captcha.poll.interval.ms` | `1000` | Interval between solver **status** polls |
 | `captcha.detect.poll.interval.ms` | `250` | Interval between detection passes while a `captcha.detect(waitMillis=…)` call waits for a widget to render |

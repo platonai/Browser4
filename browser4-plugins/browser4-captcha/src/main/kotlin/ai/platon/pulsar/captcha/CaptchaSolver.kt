@@ -19,7 +19,7 @@ package ai.platon.pulsar.captcha
  * Interface for CAPTCHA solving service providers.
  *
  * Implementations handle communication with external CAPTCHA solving APIs
- * such as CapSolver, 2Captcha, and Anti-Captcha.
+ * such as CapSolver, 2Captcha, Anti-Captcha, and Solvecha.
  */
 interface CaptchaSolver {
     /** The service provider this solver represents */
