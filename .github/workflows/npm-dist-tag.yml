@@ -1,0 +1,103 @@
+name: npm Dist-Tag
+
+# Manual repair/advance of a release dist-tag.
+#
+# The normal path is automatic: release.yml and release-cli.yml run
+# `cli/scripts/sync-npm-dist-tag.sh` after every published release, and
+# prereleases move `next` through `npm publish --tag next`. This workflow
+# exists for the case that motivated it: v4.15.1 shipped with `next` still
+# pointing at 4.14.0-rc.9, and re-running the whole release pipeline just to
+# move a tag is both slow and risky.
+#
+#   gh workflow run npm-dist-tag.yml -f version=4.15.1 -f dry_run=true   # preview
+#   gh workflow run npm-dist-tag.yml -f version=4.15.1                   # apply
+#
+# Uses the NPM_TOKEN repository secret; the script refuses to point a tag at a
+# version that is not on npm and never moves a tag backward (a maintenance
+# patch must not displace a newer prerelease).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to point the dist-tag at (must already be published)'
+        required: true
+        type: string
+      package:
+        description: 'npm package name'
+        required: true
+        default: 'browser4-cli'
+        type: string
+      dist_tag:
+        description: 'Dist-tag to move'
+        required: true
+        default: 'next'
+        type: string
+      dry_run:
+        description: 'Preview only (no registry change)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: npm-dist-tag-${{ github.event.inputs.dist_tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+
+      - name: Show dist-tags before
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE: ${{ github.event.inputs.package }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Dist-tags before"
+            echo '```json'
+            npm view "$PACKAGE" dist-tags --json
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Sync dist-tag
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE: ${{ github.event.inputs.package }}
+          VERSION: ${{ github.event.inputs.version }}
+          DIST_TAG: ${{ github.event.inputs.dist_tag }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          args=(--package "$PACKAGE" --version "$VERSION" --tag "$DIST_TAG")
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          bash cli/scripts/sync-npm-dist-tag.sh "${args[@]}"
+
+      - name: Show dist-tags after
+        if: always()
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE: ${{ github.event.inputs.package }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Dist-tags after"
+            echo '```json'
+            npm view "$PACKAGE" dist-tags --json
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
