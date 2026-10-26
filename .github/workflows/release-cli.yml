@@ -501,7 +501,11 @@ jobs:
       # `next` tracks the newest published version: prereleases move it through
       # `npm publish --tag next`, and a stable release must move it forward too
       # (never backward, so a maintenance patch cannot displace a newer rc).
+      # Advisory: dist-tag writes need npm trusted-publishing dist-tag
+      # permission, which publishing itself does not need -- a failure here must
+      # not fail the release.
       - name: Keep npm 'next' dist-tag current
+        continue-on-error: true
         if: needs.prepare.outputs.dry_run != 'true'
         shell: bash
         run: |

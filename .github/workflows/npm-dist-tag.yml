@@ -12,9 +12,18 @@ name: npm Dist-Tag
 #   gh workflow run npm-dist-tag.yml -f version=4.15.1 -f dry_run=true   # preview
 #   gh workflow run npm-dist-tag.yml -f version=4.15.1                   # apply
 #
-# Uses the NPM_TOKEN repository secret; the script refuses to point a tag at a
-# version that is not on npm and never moves a tag backward (a maintenance
-# patch must not displace a newer prerelease).
+# Authentication is OIDC (trusted publishing), not a long-lived token: the
+# repository publishes npm through OIDC and has no valid NPM_TOKEN.  Two npm
+# side prerequisites, both on the package's Trusted publishing settings
+# (npmjs.com -> browser4-cli -> Settings):
+#
+#   1. a configuration whose workflow filename is `npm-dist-tag.yml`, matching
+#      this repository, and
+#   2. "Allow npm dist-tag" enabled on it (off by default; token-free dist-tag
+#      operations landed 2026-09-30).
+#
+# Without them the run fails with an authentication error and changes nothing;
+# the same tag can always be moved with an interactive `npm login`.
 on:
   workflow_dispatch:
     inputs:
@@ -44,6 +53,12 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
+
+env:
+  # Default registry, set explicitly so the OIDC exchange has a target without
+  # an empty `_authToken=${NODE_AUTH_TOKEN}` placeholder in .npmrc.
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
 
 jobs:
   sync:
@@ -58,11 +73,17 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
+
+      - name: Use an npm CLI that can move dist-tags through OIDC
+        run: |
+          set -euo pipefail
+          # OIDC dist-tag support needs npm 11.21.0+ (or 12.2.0+); the runner
+          # image still ships 11.19.x, which fails with E401 before trying OIDC.
+          npm install -g npm@latest
+          npm --version
 
       - name: Show dist-tags before
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PACKAGE: ${{ github.event.inputs.package }}
         run: |
           set -euo pipefail
@@ -75,7 +96,6 @@ jobs:
 
       - name: Sync dist-tag
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PACKAGE: ${{ github.event.inputs.package }}
           VERSION: ${{ github.event.inputs.version }}
           DIST_TAG: ${{ github.event.inputs.dist_tag }}
@@ -91,13 +111,12 @@ jobs:
       - name: Show dist-tags after
         if: always()
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PACKAGE: ${{ github.event.inputs.package }}
         run: |
           set -euo pipefail
           {
             echo "### Dist-tags after"
             echo '```json'
-            npm view "$PACKAGE" dist-tags --json
+            npm view "$PACKAGE" dist-tags --json || echo '(read failed)'
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"

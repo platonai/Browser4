@@ -192,18 +192,27 @@ ignore it, and v4.15.1 shipped with `next` still on `4.14.0-rc.9` — so
 
 - `release.yml` and `release-cli.yml` run
   `cli/scripts/sync-npm-dist-tag.sh` after each published release, moving `next`
-  forward for a stable version.
+  forward for a stable version. The step is **advisory** (`continue-on-error`):
+  a dist-tag pointer must never fail a release and skip the GitHub release.
 - The script only moves the tag **forward**: a 4.15.x maintenance patch leaves a
   newer `4.16.0-rc.1` in place, and it refuses to tag a version that is not on
   npm.
+- Publish credentials do not cover tags. This repo publishes with **npm trusted
+  publishing (OIDC)** and has no valid long-lived `NPM_TOKEN`, so a tag write
+  needs `id-token: write` plus **"Allow npm dist-tag"** enabled on the package's
+  trusted-publishing configuration (off by default since the token-free dist-tag
+  support landed on 2026-09-30; npm CLI 11.21+ / 12.2+ required).
 - For a tag that drifted without a new publish, run the **npm Dist-Tag** workflow
-  (`.github/workflows/npm-dist-tag.yml`), which uses the `NPM_TOKEN` secret:
+  (`.github/workflows/npm-dist-tag.yml`). It needs its own trusted-publishing
+  configuration, matching that workflow filename:
 
   ```bash
   gh workflow run npm-dist-tag.yml -f version=4.15.1 -f dry_run=true   # preview
   gh workflow run npm-dist-tag.yml -f version=4.15.1                   # apply
   ```
 
+  With an interactive npm session the same move is
+  `npm dist-tag add browser4-cli@4.15.1 next`.
 - Tests: `bash cli/scripts/tests/sync-npm-dist-tag.tests.sh` (runs in `ci.yml`).
 
 ### `download-release-assets.ps1`

@@ -1389,7 +1389,13 @@ jobs:
       # rc (v4.15.1 shipped with `next` still on 4.14.0-rc.9). The script only
       # moves it forward, so a maintenance patch cannot drag `next` back off a
       # newer prerelease published by the upcoming release.
+      #
+      # Advisory on purpose: moving a dist-tag needs credentials this job does
+      # not otherwise use (npm trusted publishing must opt into dist-tag
+      # operations). A failure here must never fail the job -- that would skip
+      # publish-github-release and lose the whole release over a tag pointer.
       - name: Keep npm 'next' dist-tag current
+        continue-on-error: true
         shell: bash
         run: |
           bash cli/scripts/sync-npm-dist-tag.sh \
