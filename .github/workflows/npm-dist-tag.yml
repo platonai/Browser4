@@ -122,6 +122,8 @@ jobs:
           VERSION: ${{ github.event.inputs.version }}
           DIST_TAG: ${{ github.event.inputs.dist_tag }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
+          # npm reports why the OIDC token exchange failed only at verbose level.
+          NPM_CONFIG_LOGLEVEL: verbose
         run: |
           set -euo pipefail
           args=(--package "$PACKAGE" --version "$VERSION" --tag "$DIST_TAG")
@@ -129,6 +131,28 @@ jobs:
             args+=(--dry-run)
           fi
           bash cli/scripts/sync-npm-dist-tag.sh "${args[@]}"
+
+      - name: Explain an OIDC exchange failure
+        if: failure()
+        run: |
+          set -uo pipefail
+          log_file="$(ls -t "$HOME/.npm/_logs"/*debug-0.log 2>/dev/null | head -n 1 || true)"
+          if [ -z "$log_file" ]; then
+            echo "No npm debug log found."
+            exit 0
+          fi
+          echo "### npm OIDC / auth lines (${log_file##*/})"
+          echo '```'
+          sed -E 's/(npm_[A-Za-z0-9]{20,})/npm_<redacted>/g; s/(Bearer )[A-Za-z0-9._-]+/\1<redacted>/g' "$log_file" \
+            | grep -Ei 'oidc|trusted|exchange|dist-tag|401|403|404' | tail -n 30 || true
+          echo '```'
+          {
+            echo "### npm OIDC / auth lines"
+            echo '```'
+            sed -E 's/(npm_[A-Za-z0-9]{20,})/npm_<redacted>/g' "$log_file" \
+              | grep -Ei 'oidc|trusted|exchange' | tail -n 20 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Show dist-tags after
         if: always()
