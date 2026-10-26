@@ -154,6 +154,13 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+          # npm answers 404 "package not found" when the OIDC identity matches no
+          # trusted publisher configuration -- the package obviously exists, so
+          # the message means "this workflow is not trusted", not "typo".
+          if grep -q 'package not found' "$log_file" 2>/dev/null; then
+            echo "::error::npm matched no trusted publisher configuration for this workflow. On npmjs.com add one for repository platonai/Browser4, workflow filename 'npm-dist-tag.yml' (file name only), and tick 'Allow npm dist-tag'. See the header of this workflow."
+          fi
+
       - name: Show dist-tags after
         if: always()
         env:
