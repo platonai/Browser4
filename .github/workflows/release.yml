@@ -340,6 +340,11 @@ jobs:
         shell: bash
         run: bash cli/scripts/tests/wait-for-oss-sync.tests.sh
 
+      - name: Run sync-npm-dist-tag.tests.sh
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash cli/scripts/tests/sync-npm-dist-tag.tests.sh
+
       - name: Run install-browser4-cli.tests.ps1
         if: runner.os == 'Windows'
         shell: pwsh
@@ -1378,6 +1383,18 @@ jobs:
           bash cli/scripts/wait-for-npm-version.sh \
             "${{ steps.cli_publish_check.outputs.package_name }}" \
             "${{ steps.cli_publish_check.outputs.cli_version }}"
+
+      # `next` tracks the newest published version. Prereleases move it through
+      # `npm publish --tag next`; stable releases used to leave it on the last
+      # rc (v4.15.1 shipped with `next` still on 4.14.0-rc.9). The script only
+      # moves it forward, so a maintenance patch cannot drag `next` back off a
+      # newer prerelease published by the upcoming release.
+      - name: Keep npm 'next' dist-tag current
+        shell: bash
+        run: |
+          bash cli/scripts/sync-npm-dist-tag.sh \
+            --package "${{ steps.cli_publish_check.outputs.package_name }}" \
+            --version "${{ steps.cli_publish_check.outputs.cli_version }}"
 
       - name: npm publish summary
         if: always()

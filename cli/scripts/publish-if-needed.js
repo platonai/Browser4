@@ -62,6 +62,38 @@ function main() {
   const isPrerelease = prePublishDecision.cliVersion.includes('-');
   const tagFlag = isPrerelease ? '--tag next' : '';
   runCommand(`npm publish ${tagFlag}`);
+
+  // Keep `next` from sticking to the last prerelease: a stable publish to
+  // `latest` must move it forward too. Delegate to the same script release.yml
+  // runs, so there is one implementation of "only move forward, never point a
+  // tag at a version that is not on npm".
+  if (!isPrerelease) {
+    if (hasBash()) {
+      runCommand(
+        `bash scripts/sync-npm-dist-tag.sh --package ${prePublishDecision.packageName} --version ${prePublishDecision.cliVersion}`
+      );
+    } else {
+      console.log(
+        `Skipping npm dist-tag sync for 'next': bash is not available on this machine. ` +
+        `Move it with scripts/sync-npm-dist-tag.sh in Git Bash, or run the "npm Dist-Tag" workflow ` +
+        `(gh workflow run npm-dist-tag.yml -f version=${prePublishDecision.cliVersion}).`
+      );
+    }
+  }
+}
+
+/**
+ * Whether a bash shell is available for the dist-tag sync helper.
+ *
+ * @returns {boolean}
+ */
+function hasBash() {
+  try {
+    execSync('bash --version', { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 main();

@@ -498,6 +498,17 @@ jobs:
             "${{ steps.check.outputs.package_name }}" \
             "${{ steps.check.outputs.cli_version }}"
 
+      # `next` tracks the newest published version: prereleases move it through
+      # `npm publish --tag next`, and a stable release must move it forward too
+      # (never backward, so a maintenance patch cannot displace a newer rc).
+      - name: Keep npm 'next' dist-tag current
+        if: needs.prepare.outputs.dry_run != 'true'
+        shell: bash
+        run: |
+          bash cli/scripts/sync-npm-dist-tag.sh \
+            --package "${{ steps.check.outputs.package_name }}" \
+            --version "${{ steps.check.outputs.cli_version }}"
+
       - name: Publish summary
         if: always()
         shell: bash

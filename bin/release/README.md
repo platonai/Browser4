@@ -179,6 +179,33 @@ actually trigger and monitor.
 .\bin\release\monitor-release.ps1 -Apply -NoWatch -MaxMonitorMinutes 90
 ```
 
+### npm dist-tags
+
+`latest` tracks stable releases; `next` is the prerelease channel
+(`npm publish --tag next`). The invariant is:
+
+> `next` points at the newest published version, prerelease or stable.
+
+Without that rule `next` goes stale: prereleases move it, stable releases used to
+ignore it, and v4.15.1 shipped with `next` still on `4.14.0-rc.9` — so
+`npm install -g browser4-cli@next` installed an rc older than `latest`.
+
+- `release.yml` and `release-cli.yml` run
+  `cli/scripts/sync-npm-dist-tag.sh` after each published release, moving `next`
+  forward for a stable version.
+- The script only moves the tag **forward**: a 4.15.x maintenance patch leaves a
+  newer `4.16.0-rc.1` in place, and it refuses to tag a version that is not on
+  npm.
+- For a tag that drifted without a new publish, run the **npm Dist-Tag** workflow
+  (`.github/workflows/npm-dist-tag.yml`), which uses the `NPM_TOKEN` secret:
+
+  ```bash
+  gh workflow run npm-dist-tag.yml -f version=4.15.1 -f dry_run=true   # preview
+  gh workflow run npm-dist-tag.yml -f version=4.15.1                   # apply
+  ```
+
+- Tests: `bash cli/scripts/tests/sync-npm-dist-tag.tests.sh` (runs in `ci.yml`).
+
 ### `download-release-assets.ps1`
 
 Downloads all assets from a GitHub release for `platonai/Browser4`.
