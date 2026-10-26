@@ -46,6 +46,11 @@ on:
         required: false
         default: false
         type: boolean
+      use_token:
+        description: 'Authenticate with the NPM_TOKEN secret instead of OIDC'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: npm-dist-tag-${{ github.event.inputs.dist_tag }}
@@ -81,6 +86,23 @@ jobs:
           # image still ships 11.19.x, which fails with E401 before trying OIDC.
           npm install -g npm@latest
           npm --version
+
+      # Fallback for when npm trusted publishing has not opted into dist-tag
+      # operations: a granular token in NPM_TOKEN. Off by default so the
+      # token-free path is the one that runs.
+      - name: Configure token authentication
+        if: inputs.use_token
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "::error::use_token was requested but NPM_TOKEN is empty." >&2
+            exit 1
+          fi
+          printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$HOME/.npmrc"
+          chmod 600 "$HOME/.npmrc"
+          echo "Using token authentication from NPM_TOKEN."
 
       - name: Show dist-tags before
         env:

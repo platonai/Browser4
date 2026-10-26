@@ -211,6 +211,10 @@ ignore it, and v4.15.1 shipped with `next` still on `4.14.0-rc.9` — so
   gh workflow run npm-dist-tag.yml -f version=4.15.1                   # apply
   ```
 
+  If the npm trust settings cannot be changed, refresh the `NPM_TOKEN` secret
+  with a granular read/write token and add `-f use_token=true`; the workflow
+  then writes that token to `~/.npmrc` instead of using OIDC.
+
   With an interactive npm session the same move is
   `npm dist-tag add browser4-cli@4.15.1 next`.
 - Tests: `bash cli/scripts/tests/sync-npm-dist-tag.tests.sh` (runs in `ci.yml`).

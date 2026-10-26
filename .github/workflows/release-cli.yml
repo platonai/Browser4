@@ -509,6 +509,9 @@ jobs:
         if: needs.prepare.outputs.dry_run != 'true'
         shell: bash
         run: |
+          # npm 11.21+ is required for OIDC dist-tag operations; the runner
+          # image still ships 11.19.
+          npm install -g npm@latest
           bash cli/scripts/sync-npm-dist-tag.sh \
             --package "${{ steps.check.outputs.package_name }}" \
             --version "${{ steps.check.outputs.cli_version }}"
