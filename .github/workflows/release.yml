@@ -1653,7 +1653,10 @@ jobs:
       - smoke-test-runtime-bundle
       - publish-cli-npm
       - publish-github-release
-    if: failure()
+    # `cancelled()` counts as a failed release too: v4.15.0 was cancelled by the
+    # Windows smoke job's 20-minute timeout, and a bare `failure()` skipped this
+    # report — the half-published release was then reported nowhere.
+    if: failure() || cancelled()
     runs-on: ubuntu-latest
     permissions:
       contents: read
