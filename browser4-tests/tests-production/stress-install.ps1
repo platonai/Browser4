@@ -204,15 +204,9 @@ function Invoke-Cli {
             if ($sw.Elapsed.TotalMilliseconds -gt $timeoutMs) {
                 $timeoutOccurred = $true
                 Write-Host "       TIMEOUT after ${timeoutSecs}s — killing process tree" -ForegroundColor Red
-                try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-                try {
-                    $children = Get-CimInstance Win32_Process |
-                        Where-Object { $_.ParentProcessId -eq $proc.Id } |
-                        ForEach-Object { $_.ProcessId }
-                    foreach ($cp in $children) {
-                        Stop-Process -Id $cp -Force -ErrorAction SilentlyContinue
-                    }
-                } catch {}
+                # Native tree kill: a WMI child sweep here can hang for minutes
+                # on a loaded machine and swallow the timeout entirely.
+                try { Stop-ProcessTree -Id $proc.Id } catch {}
                 if (-not $proc.HasExited) { $proc.Kill() }
                 break
             }
@@ -266,16 +260,24 @@ function Invoke-Cli {
 
     $exitCode = $procExitCode
     if ($timeoutOccurred) {
+        $out.Add("TIMEOUT after ${timeoutSecs}s — process tree killed")
         $null = $global:FailureMessages.Add("       TIMEOUT: $desc (${timeoutSecs}s)")
+        # This script's own summary is driven by TestFailed alone, so a timed-out
+        # command must count here as well as in the structured report.
         $global:TestFailed++
     }
 
     # Register with test-utils for structured logging and copilot analysis.
+    # The timeout flag (not a -1 sentinel) is what marks the command as failed:
+    # a killed invocation never produced an outcome, and the log now says so.
     $statusObj = Register-CliResult -Label $desc -ExitCode $exitCode -OutputLines ($out.ToArray()) `
-        -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timeoutOccurred) { -1 } else { 0 })
+        -Elapsed $sw.Elapsed -ExpectedExitCode 0 -TimedOut:$timeoutOccurred -TimeoutSecs $timeoutSecs
     Write-Host ($statusObj | Format-List | Out-String)
 
-    if ($exitCode -ne 0) {
+    if ($timeoutOccurred) {
+        # Already recorded above; a -99 exit code is a harness sentinel, not a
+        # CLI result, so it must not be reported as "exit=-99".
+    } elseif ($exitCode -ne 0) {
         $msg = "CLI command failed (exit=$exitCode): $desc"
         Write-Host "       FAIL: $msg" -ForegroundColor Red
         $null = $global:FailureMessages.Add("       FAIL: $msg`nOutput:`n$($out -join "`n")")

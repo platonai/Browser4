@@ -365,6 +365,47 @@ function Clear-Browser4Port {
 }
 
 # ============================================================================
+# Public: kill a process together with its children
+# ============================================================================
+<#
+.SYNOPSIS
+    Terminate a test-spawned process tree without touching WMI.
+
+.DESCRIPTION
+    Used when a CLI invocation exceeds its deadline.  The obvious
+    "Stop-Process + Get-CimInstance Win32_Process | Where ParentProcessId"
+    recipe runs a full WMI enumeration inside the timeout path — on a machine
+    where WMI is slow (or already wedged by the very command being killed) the
+    harness then hangs instead of reporting the timeout, and no command log is
+    ever written.
+
+    `taskkill /F /T` (Windows) tears the tree down natively, and `kill -9` on
+    Unix.  Both return quickly and never enumerate WMI.
+
+.PARAMETER Id
+    Root PID of the tree to kill.
+#>
+function Stop-ProcessTree {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [int]$Id
+    )
+
+    if ($Id -le 0) { return }
+
+    $isWin = (Get-Variable -Name 'IsWindows' -ErrorAction SilentlyContinue) -and $IsWindows
+    if (-not $isWin) { $isWin = ($env:OS -eq 'Windows_NT') }
+
+    if ($isWin) {
+        # /T includes children (the CLI's own PowerShell/Java helpers).
+        & taskkill /F /T /PID $Id 2>$null | Out-Null
+    } else {
+        & kill -9 $Id 2>$null
+    }
+}
+
+# ============================================================================
 # Public: run a CLI command and capture everything
 # ============================================================================
 <#
@@ -575,13 +616,23 @@ function Invoke-TrackedCli {
     }
 
     # --- Determine status ---
+    #
+    # A timeout is always a failure: the command never produced an outcome.
+    # `ExpectedExitCode -1` is the documented "any exit code is acceptable"
+    # sentinel.  The old code substituted -1 for the expectation *and then
+    # compared it to the -99 timeout sentinel*, so every timed-out command
+    # logged the impossible pair "EXIT CODE -99 / EXPECTED -1" and no caller
+    # could tell a timeout from an exit-code mismatch.
     if ($PassThruOnly) {
         $passed = $true
+    } elseif ($timedOut) {
+        $passed = $false
+    } elseif ($ExpectedExitCode -eq -1) {
+        $passed = $true
     } else {
-        $effectiveExpected = if ($timedOut) { -1 } else { $ExpectedExitCode }
-        $passed = ($exitCode -eq $effectiveExpected)
+        $passed = ($exitCode -eq $ExpectedExitCode)
     }
-    $status = if ($passed) { 'PASS' } else { 'FAIL' }
+    $status = if ($timedOut) { 'TIMEOUT' } elseif ($passed) { 'PASS' } else { 'FAIL' }
 
     # --- Write log file ---
     $outputText = $output -join "`n"
@@ -619,6 +670,7 @@ $outputText
         LogFile   = $logFile
         StartTime = $startTime
         TimedOut  = $timedOut
+        TimeoutSecs = if ($timedOut) { $effectiveTimeout } else { 0 }
     }
     $null = $script:CommandLogs.Add($statusObj)
 
@@ -630,12 +682,13 @@ $outputText
     $icon = if ($passed) { '✅' } else { '❌' }
     $color = if ($passed) { 'Green' } else { 'Red' }
     if ($timedOut) {
-        Write-Host "  $icon $status $('{0:F1}s' -f $elapsed.TotalSeconds)  TIMEOUT ${effectiveTimeout}s  $cmdLabel" -ForegroundColor Red
+        Write-Host "  ❌ TIMEOUT after ${effectiveTimeout}s ($('{0:F1}s' -f $elapsed.TotalSeconds) elapsed)  $cmdLabel" -ForegroundColor Red
+        Write-Host "       process tree killed — a timeout never counts as a pass  📄 $logFile" -ForegroundColor Red
     } else {
         Write-Host "  $icon $status $('{0:F1}s' -f $elapsed.TotalSeconds)  $cmdLabel" -ForegroundColor $color
-    }
-    if (-not $passed) {
-        Write-Host "       exit=$exitCode expected=$ExpectedExitCode  📄 $logFile" -ForegroundColor Red
+        if (-not $passed) {
+            Write-Host "       exit=$exitCode expected=$ExpectedExitCode  📄 $logFile" -ForegroundColor Red
+        }
     }
 
     # Emit the output object so callers can pipe/inspect
@@ -664,7 +717,17 @@ $outputText
     How long the command took.
 
 .PARAMETER ExpectedExitCode
-    Exit code considered a pass (default: 0).
+    Exit code considered a pass (default: 0).  Use -1 for "any exit code is
+    acceptable" (e.g. a command whose non-zero exit is the expected outcome of
+    the scenario).
+
+.PARAMETER TimedOut
+    Set when the invocation was killed at its deadline.  A timeout is always
+    recorded as a failure, whatever [ExpectedExitCode] says.
+
+.PARAMETER TimeoutSecs
+    The deadline that was exceeded, in seconds.  Only meaningful with
+    -TimedOut.
 #>
 function Register-CliResult {
     param(
@@ -677,7 +740,11 @@ function Register-CliResult {
 
         [timespan]$Elapsed,
 
-        [int]$ExpectedExitCode = 0
+        [int]$ExpectedExitCode = 0,
+
+        [switch]$TimedOut,
+
+        [int]$TimeoutSecs = 0
     )
 
     $script:CommandIndex++
@@ -687,10 +754,26 @@ function Register-CliResult {
     $logName = "cmd_{0:D4}_{1}.log" -f $idx, $safeName
     $logFile = Join-Path $script:LogDir $logName
 
-    $passed = ($ExitCode -eq $ExpectedExitCode)
-    $status = if ($passed) { 'PASS' } else { 'FAIL' }
+    # A killed invocation never produced an outcome, so it can never pass.
+    # `-1` is the documented "any exit code is acceptable" sentinel.
+    if ($TimedOut) {
+        $passed = $false
+    } elseif ($ExpectedExitCode -eq -1) {
+        $passed = $true
+    } else {
+        $passed = ($ExitCode -eq $ExpectedExitCode)
+    }
+    $status = if ($TimedOut) { 'TIMEOUT' } elseif ($passed) { 'PASS' } else { 'FAIL' }
 
-    $outputText = ($OutputLines -join "`n") | Out-String
+    $outputText = ($OutputLines -join "`n")
+    if ($TimedOut) {
+        $outputText = "$outputText`nTIMEOUT after ${TimeoutSecs}s — process tree killed"
+    }
+    $outputText = $outputText | Out-String
+
+    # Only present on timeout: keeps normal logs unchanged and makes the
+    # killer explicit in the persisted log instead of a bare EXIT CODE -99.
+    $timeoutLine = if ($TimedOut) { "`nTIMEOUT     : True (${TimeoutSecs}s)" } else { '' }
 
     $logEntry = @"
 ================================================================================
@@ -698,7 +781,7 @@ COMMAND     : $Label
 CLI BINARY  : $(Get-CliBin)
 ELAPSED     : $('{0:F1}' -f $Elapsed.TotalSeconds)s
 EXIT CODE   : $ExitCode
-EXPECTED    : $ExpectedExitCode
+EXPECTED    : $ExpectedExitCode${timeoutLine}
 STATUS      : $status
 ================================================================================
 STDOUT / STDERR:
@@ -721,6 +804,8 @@ $outputText
         Passed    = $passed
         LogFile   = $logFile
         StartTime = Get-Date
+        TimedOut  = [bool]$TimedOut
+        TimeoutSecs = $TimeoutSecs
     }
     $null = $script:CommandLogs.Add($statusObj)
 
@@ -792,6 +877,10 @@ function Write-FailureReport {
                 exitCode = $_.ExitCode
                 expected = $_.Expected
                 elapsed  = [math]::Round($_.Elapsed, 1)
+                # Distinguishes "failed" from "did not finish": a timed-out
+                # command was killed, so its exit code carries no meaning.
+                timedOut = [bool]$_.TimedOut
+                timeoutSecs = $(if ($_.TimedOut) { $_.TimeoutSecs } else { 0 })
                 logFile  = $_.LogFile
             }
         })
@@ -1008,6 +1097,10 @@ function Finish-TestSession {
     if ($total -gt 0) {
         Write-Host "`n  ── COMMAND DETAIL ──" -ForegroundColor DarkGray
         foreach ($cmd in $script:CommandLogs) {
+            if ($cmd.TimedOut) {
+                Write-Host ("  ❌ TIMEOUT {0,7:F1}s  {1}" -f $cmd.Elapsed, $cmd.Command) -ForegroundColor Red
+                continue
+            }
             $icon = if ($cmd.Passed) { '✅' } else { '❌' }
             $color = if ($cmd.Passed) { 'Green' } else { 'Red' }
             Write-Host ("  $icon exit={0,-4} {1,7:F1}s  {2}" -f $cmd.ExitCode, $cmd.Elapsed, $cmd.Command) -ForegroundColor $color
@@ -1019,7 +1112,11 @@ function Finish-TestSession {
         Write-Host "`n  ── FAILURE DETAILS ──" -ForegroundColor Red
         foreach ($f in $script:Failures) {
             Write-Host "  ❌ $($f.Command)" -ForegroundColor Red
-            Write-Host "     Exit code : $($f.ExitCode) (expected $($f.Expected))" -ForegroundColor Red
+            if ($f.TimedOut) {
+                Write-Host "     Result    : TIMEOUT after $($f.TimeoutSecs)s — process tree killed" -ForegroundColor Red
+            } else {
+                Write-Host "     Exit code : $($f.ExitCode) (expected $($f.Expected))" -ForegroundColor Red
+            }
             Write-Host "     Elapsed   : $('{0:F1}s' -f $f.Elapsed)" -ForegroundColor Red
             Write-Host "     Log file  : $($f.LogFile)" -ForegroundColor DarkGray
             Write-Host ''
@@ -1315,6 +1412,7 @@ function Get-TestUrl {
 Export-ModuleMember -Function @(
     'Start-TestSession',
     'Clear-Browser4Port',
+    'Stop-ProcessTree',
     'Invoke-TrackedCli',
     'Register-CliResult',
     'Invoke-CopilotAnalysis',

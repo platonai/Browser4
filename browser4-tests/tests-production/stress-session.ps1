@@ -94,10 +94,15 @@ function Invoke-Cli {
     $sw = [Diagnostics.Stopwatch]::StartNew()
 
     # Per-command timeout.  open / goto wait for page load (≤ 2 min);
-    # everything else must finish within 30 s.
+    # kill-all tears down the JVM plus every browser process, which this
+    # scenario itself documents at ~26 s on an idle machine — and the released
+    # binary measured 32.3 s on a loaded one, so the old flat 30 s deadline
+    # killed a cleanup that was still making progress.  It gets the same
+    # 2-minute budget as a page load.
     $cmdName = $args[0]
     $timeoutSecs = if ($cmdName -in @('open', 'goto')) { 120 }
                    elseif ($cmdName -in @('install', 'upgrade')) { 900 }
+                   elseif ($cmdName -eq 'kill-all') { 120 }
                    else { 30 }
 
     # Resolve the actual executable — on Windows the CLI may be a .cmd
@@ -193,15 +198,11 @@ function Invoke-Cli {
             if ($sw.Elapsed.TotalMilliseconds -gt $timeoutMs) {
                 $timeoutOccurred = $true
                 Write-Host "       TIMEOUT after ${timeoutSecs}s — killing process tree" -ForegroundColor Red
-                try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-                try {
-                    $children = Get-CimInstance Win32_Process |
-                        Where-Object { $_.ParentProcessId -eq $proc.Id } |
-                        ForEach-Object { $_.ProcessId }
-                    foreach ($cp in $children) {
-                        Stop-Process -Id $cp -Force -ErrorAction SilentlyContinue
-                    }
-                } catch {}
+                # taskkill /T kills the tree natively.  The previous
+                # Stop-Process + Get-CimInstance child sweep ran a full WMI
+                # enumeration *inside the timeout path*, so it could hang for
+                # minutes and the timeout was never reported at all.
+                try { Stop-ProcessTree -Id $proc.Id } catch {}
                 if (-not $proc.HasExited) { $proc.Kill() }
                 break
             }
@@ -260,10 +261,17 @@ function Invoke-Cli {
         $msg = "CLI command timed out after ${timeoutSecs}s: $desc"
         Write-Host "       FAIL: $msg" -ForegroundColor Red
         $null = $global:FailureMessages.Add("       FAIL: $msg")
-        $global:TestFailed++
+        # The CLI timeout is registered as a *command* failure below (with an
+        # explicit timeout marker) — not also as an assertion failure.  Counting
+        # it in both places made one timeout read as "1 assertion failed" AND
+        # "1 CLI command failed" in the same run.
         $global:LastCliSucceeded = $false
+        # Persist the reason in the log itself: without this the log showed the
+        # impossible pair "EXIT CODE -99 / EXPECTED -1" and nothing about the
+        # deadline that was actually exceeded.
+        $out.Add("TIMEOUT after ${timeoutSecs}s — process tree killed")
         $null = Register-CliResult -Label $label -ExitCode $exitCode -OutputLines ($out.ToArray()) `
-            -Elapsed $sw.Elapsed -ExpectedExitCode -1
+            -Elapsed $sw.Elapsed -ExpectedExitCode 0 -TimedOut -TimeoutSecs $timeoutSecs
         if ($sw.Elapsed.TotalSeconds -ge 5) {
             Write-Host "       took $([math]::Round($sw.Elapsed.TotalSeconds, 1))s" -ForegroundColor DarkGray
         }
@@ -271,7 +279,7 @@ function Invoke-Cli {
     }
 
     $null = Register-CliResult -Label $label -ExitCode $exitCode -OutputLines ($out.ToArray()) `
-        -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timeoutOccurred) { -1 } elseif ($toleratedExit) { $exitCode } else { 0 })
+        -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($toleratedExit) { $exitCode } else { 0 })
 
     if ($toleratedExit) {
         # Registered against its own exit code, so test-utils does not count it
@@ -415,9 +423,11 @@ function Get-SessionDataRows {
 function Assert-SessionCount {
     param([int]$Expected, [string]$Context)
     # When the last CLI command failed, dependent list/snapshot checks are
-    # skipped so we don't flood the report with cascading failures.
+    # skipped so we don't flood the report with cascading failures.  The skip
+    # is recorded: an unevaluated assertion must never look like a pass.
     if (-not $global:LastCliSucceeded) {
         Write-Host "    ⏭ session count check SKIPPED (previous CLI failure)  ($Context)" -ForegroundColor DarkYellow
+        $null = $global:SkippedChecks.Add("session count == $Expected ($Context) — not evaluated: previous CLI command failed")
         return $false
     }
     try {
@@ -447,6 +457,7 @@ function Assert-SnapshotContains {
     param([string]$Keyword, [string]$Context)
     if (-not $global:LastCliSucceeded) {
         Write-Host "    ⏭ snapshot check SKIPPED (previous CLI failure)  ($Context)" -ForegroundColor DarkYellow
+        $null = $global:SkippedChecks.Add("snapshot contains '$Keyword' ($Context) — not evaluated: previous CLI command failed")
         return $false
     }
     try {
