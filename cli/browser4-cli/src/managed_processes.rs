@@ -302,14 +302,19 @@ pub fn stop_browser4_server_forcibly() -> ForceStopBrowser4ServerResult {
     // materialise during the grace period.  Any stragglers are killed and
     // folded into the result.
     let final_extra = find_unique_pulsar_browser_processes();
-    if !final_extra.is_empty() {
+    if final_extra.is_empty() {
+        // The post-sweep (a moment earlier) already proved there is nothing
+        // left and the merged result carries that verdict, so the extra full
+        // process scan this used to run bought nothing but latency.
+        result.browser_kill.remaining_pids.clear();
+    } else {
         bulk_force_stop_browser_processes(&final_extra);
         std::thread::sleep(std::time::Duration::from_millis(1000));
         result.browser_kill.killed_pids.extend(final_extra.iter().copied());
         result.browser_kill.killed_pids.sort_unstable();
         result.browser_kill.killed_pids.dedup();
+        result.browser_kill.remaining_pids = find_unique_pulsar_browser_processes();
     }
-    result.browser_kill.remaining_pids = find_unique_pulsar_browser_processes();
 
     result
 }
@@ -373,39 +378,55 @@ where
     KillBrowsers: Fn() -> BrowserKillResult,
     SleepAfter: FnOnce(),
 {
+    // Phase timings are printed because `kill-all` is budgeted by callers (the
+    // acceptance suite gives it a deadline); without them a slow phase is
+    // indistinguishable from a hang in the captured log.
+    let total_started = std::time::Instant::now();
+
     // Force-kill path should still attempt browser cleanup even if earlier steps panic.
     eprintln!("  [1/5] Notifying reachable servers to close all sessions ...");
+    let step_started = std::time::Instant::now();
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(notify_close_all));
+    eprintln!(
+        "        done ({:.1}s)",
+        step_started.elapsed().as_secs_f64()
+    );
 
     // Pre-sweep catches already-orphaned browser processes before server shutdown.
     eprintln!("  [2/5] Scanning for orphaned browser processes (pre-sweep) ...");
+    let step_started = std::time::Instant::now();
     let pre_browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&kill_browsers))
         .unwrap_or_else(|_| BrowserKillResult::default());
     eprintln!(
-        "        Found {} browser process(es), killed {}",
+        "        Found {} browser process(es), killed {} ({:.1}s)",
         pre_browser_kill.killed_pids.len() + pre_browser_kill.remaining_pids.len(),
-        pre_browser_kill.killed_pids.len()
+        pre_browser_kill.killed_pids.len(),
+        step_started.elapsed().as_secs_f64()
     );
 
     eprintln!("  [3/5] Stopping Browser4 server processes ...");
+    let step_started = std::time::Instant::now();
     let shutdown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop_server))
         .unwrap_or_else(|_| ShutdownResult::default());
     eprintln!(
-        "        Stopped {}, already stopped {}, forced {}, still running {}",
+        "        Stopped {}, already stopped {}, forced {}, still running {} ({:.1}s)",
         shutdown.stopped_pids.len(),
         shutdown.missing_pids.len(),
         shutdown.forced_pids.len(),
-        shutdown.remaining_pids.len()
+        shutdown.remaining_pids.len(),
+        step_started.elapsed().as_secs_f64()
     );
 
     // Post-sweep catches browsers that spawn late during shutdown.
     eprintln!("  [4/5] Scanning for remaining browser processes (post-sweep) ...");
+    let step_started = std::time::Instant::now();
     let post_browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&kill_browsers))
         .unwrap_or_else(|_| BrowserKillResult::default());
     eprintln!(
-        "        Found {} browser process(es), killed {}",
+        "        Found {} browser process(es), killed {} ({:.1}s)",
         post_browser_kill.killed_pids.len() + post_browser_kill.remaining_pids.len(),
-        post_browser_kill.killed_pids.len()
+        post_browser_kill.killed_pids.len(),
+        step_started.elapsed().as_secs_f64()
     );
     let browser_kill = merge_browser_kill_results(pre_browser_kill, post_browser_kill);
 
@@ -416,10 +437,20 @@ where
         || !browser_kill.remaining_pids.is_empty();
     if has_activity {
         eprintln!("  [5/5] Waiting for processes to exit ...");
+        let step_started = std::time::Instant::now();
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(sleep_after));
+        eprintln!(
+            "        done ({:.1}s)",
+            step_started.elapsed().as_secs_f64()
+        );
     } else {
         eprintln!("  [5/5] No processes to wait for, skipping.");
     }
+
+    eprintln!(
+        "        cleanup finished in {:.1}s",
+        total_started.elapsed().as_secs_f64()
+    );
 
     ForceStopBrowser4ServerResult {
         shutdown,
@@ -580,6 +611,13 @@ pub fn kill_all_browsers() -> BrowserKillResult {
         }
 
         std::thread::sleep(sweep_delay);
+    }
+
+    // Nothing was ever found: the first scan proved the machine is clean, so
+    // the unconditional final sweep below would only repeat the same expensive
+    // process scan.
+    if result.killed_pids.is_empty() {
+        return result;
     }
 
     result.killed_pids.sort_unstable();
@@ -806,6 +844,23 @@ fn command_line_matches_browser4_server(command_line: &str) -> bool {
         || normalized.contains("browser4/runtime/")
 }
 
+/// One PowerShell round-trip: every `java`/`javaw` pid together with its
+/// command line, emitted as JSON.
+///
+/// The former flow listed the pids first and then queried the name *and* the
+/// command line of every java process separately (`is_java_process` +
+/// `process_command_line`): `1 + 2N` PowerShell launches per sweep.  On a
+/// developer machine with a dozen JVMs (IDE, Gradle, Kotlin daemons) that alone
+/// pushed `kill-all` past its acceptance-test deadline.  JSON keeps command
+/// lines that contain tabs, quotes or spaces intact.
+#[cfg(windows)]
+const WINDOWS_JAVA_PROCESS_SNAPSHOT_PS: &str = r#"
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^(java|javaw)\.exe$' } |
+        Select-Object ProcessId, CommandLine |
+        ConvertTo-Json -Compress
+"#;
+
 fn find_browser4_server_processes() -> Vec<u32> {
     let mut pids = Vec::new();
 
@@ -826,24 +881,64 @@ fn find_browser4_server_processes() -> Vec<u32> {
     #[cfg(windows)]
     {
         use std::process::Command;
-        // Enumerate java/javaw processes and let `is_browser4_server_process`
-        // decide using the (argfile-expanded) command line.  The server is
-        // launched via `@argfile` when the enumerated classpath is too long for
-        // the Windows CreateProcess command-line limit, so matching must not
-        // rely on the main class appearing in the raw CommandLine string.
-        let ps_command = r#"
-            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -match '^(java|javaw)\.exe$' } |
-                Select-Object -ExpandProperty ProcessId
-        "#;
+        // Single snapshot: pid + command line for every JVM, filtered in Rust.
+        // Matching must not rely on the main class appearing in the raw
+        // command line — a bundle server is launched via `@argfile`, so the
+        // argfile is expanded before the comparison.
         if let Ok(output) = Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", ps_command])
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                WINDOWS_JAVA_PROCESS_SNAPSHOT_PS,
+            ])
             .output()
         {
-            pids.extend(parse_pid_list(&output.stdout));
+            pids.extend(parse_java_process_snapshot(&String::from_utf8_lossy(
+                &output.stdout,
+            )));
         }
-        pids.retain(|&pid| is_browser4_server_process(pid));
     }
+
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+/// Keep the pids whose command line matches a Browser4 backend.
+///
+/// `ConvertTo-Json` emits a bare object for a single process and an array for
+/// several, so both shapes are accepted.  Argfile expansion has to happen here:
+/// a bundle server is launched as `java @argfile` and the launcher deletes the
+/// argfile once the JVM is up, which leaves the main class invisible in the raw
+/// command line.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_java_process_snapshot(stdout: &str) -> Vec<u32> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+        return Vec::new();
+    };
+    let entries: Vec<&Value> = match &value {
+        Value::Array(items) => items.iter().collect(),
+        Value::Object(_) => vec![&value],
+        _ => return Vec::new(),
+    };
+
+    let mut pids: Vec<u32> = entries
+        .into_iter()
+        .filter_map(|entry| {
+            let pid = u32::try_from(entry.get("ProcessId")?.as_u64()?).ok()?;
+            let command_line = entry
+                .get("CommandLine")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            let expanded = expand_windows_argfile(command_line.to_string());
+            command_line_matches_browser4_server(&expanded).then_some(pid)
+        })
+        .collect();
 
     pids.sort_unstable();
     pids.dedup();
@@ -1784,6 +1879,56 @@ mod tests {
         assert_eq!(parse_pid_list(stdout), vec![123, 456, 789]);
     }
 
+    /// The batched snapshot may only select real Browser4 backends: a plain
+    /// `java -cp app.jar Main` must never become a kill target.
+    #[test]
+    fn test_parse_java_process_snapshot_keeps_only_browser4_servers() {
+        let json = r#"[
+            {"ProcessId": 10, "CommandLine": "\"C:/Java/bin/java.exe\" -jar D:/browser4/Browser4.jar --server.port=8182"},
+            {"ProcessId": 11, "CommandLine": "\"C:/Java/bin/java.exe\" -cp app.jar com.example.Main"},
+            {"ProcessId": 12, "CommandLine": null},
+            {"ProcessId": 13, "CommandLine": "\"D:/runtime/bin/java.exe\" -cp D:/lib/* ai.platon.pulsar.apps.Browser4BundleApplicationKt"}
+        ]"#;
+
+        assert_eq!(parse_java_process_snapshot(json), vec![10, 13]);
+    }
+
+    /// `ConvertTo-Json` emits a bare object when exactly one process matches.
+    #[test]
+    fn test_parse_java_process_snapshot_accepts_single_object() {
+        let json = r#"{"ProcessId": 42, "CommandLine": "java -jar C:/apps/Browser4.jar"}"#;
+        assert_eq!(parse_java_process_snapshot(json), vec![42]);
+    }
+
+    #[test]
+    fn test_parse_java_process_snapshot_rejects_garbage() {
+        assert!(parse_java_process_snapshot("").is_empty());
+        assert!(parse_java_process_snapshot("   \r\n").is_empty());
+        assert!(parse_java_process_snapshot("not json").is_empty());
+        assert!(parse_java_process_snapshot("7").is_empty());
+        assert!(parse_java_process_snapshot("[null]").is_empty());
+    }
+
+    /// A bundle server is launched as `java @argfile`; the argfile is deleted
+    /// once the JVM is up, so matching has to read it while it still exists.
+    #[test]
+    fn test_parse_java_process_snapshot_expands_argfile() {
+        let tmp = test_temp_dir();
+        let argfile = tmp.path().join("java-args.txt");
+        fs::write(
+            &argfile,
+            "-cp\nC:\\browser4\\lib\\*\nai.platon.pulsar.apps.Browser4BundleApplicationKt\n",
+        )
+        .unwrap();
+        let command_line = format!("\"C:\\\\Java\\\\bin\\\\java.exe\" @{}", argfile.display());
+        let json = format!(
+            r#"[{{"ProcessId": 99, "CommandLine": {}}}]"#,
+            serde_json::to_string(&command_line).unwrap()
+        );
+
+        assert_eq!(parse_java_process_snapshot(&json), vec![99]);
+    }
+
     #[test]
     fn test_collect_browser_marker_pid_entries_discovers_nested_markers() {
         let tmp = test_temp_dir();
@@ -2165,6 +2310,14 @@ mod tests {
             }
         "#;
         assert_powershell_syntax_valid("exhaustive-detection", ps_command);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_powershell_java_process_snapshot_command_is_syntactically_valid() {
+        // The JVM sweep now relies on a single snapshot query; a syntax error
+        // here would silently kill nothing, so validate the exact command.
+        assert_powershell_syntax_valid("java-process-snapshot", WINDOWS_JAVA_PROCESS_SNAPSHOT_PS);
     }
 
     #[test]
