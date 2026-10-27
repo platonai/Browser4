@@ -11480,6 +11480,48 @@ fn resolve_file_path_with_root_fallback(file_path: &str) -> Result<std::path::Pa
     ))
 }
 
+/// Resolve and validate a local upload path without interpreting glob syntax.
+fn resolve_upload_file_path(file_path: &str) -> Result<std::path::PathBuf, String> {
+    let path = std::path::Path::new(file_path);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("upload: cannot determine current directory: {error}"))?
+            .join(path)
+    };
+    let error = |reason: &str| format!("upload: {reason}; resolved: {}", absolute.display());
+
+    let resolved = std::fs::canonicalize(&absolute).map_err(|cause| {
+        let reason = match cause.kind() {
+            std::io::ErrorKind::NotFound => "file does not exist",
+            std::io::ErrorKind::PermissionDenied => "file is not accessible (permission denied)",
+            _ => "file cannot be resolved",
+        };
+        error(reason)
+    })?;
+    let metadata = std::fs::metadata(&resolved).map_err(|cause| {
+        let reason = match cause.kind() {
+            std::io::ErrorKind::NotFound => "file does not exist",
+            std::io::ErrorKind::PermissionDenied => "file is not accessible (permission denied)",
+            _ => "file cannot be accessed",
+        };
+        error(reason)
+    })?;
+    if !metadata.is_file() {
+        return Err(error("path is not a regular file"));
+    }
+    std::fs::File::open(&resolved).map_err(|cause| {
+        let reason = match cause.kind() {
+            std::io::ErrorKind::PermissionDenied => "file is not readable (permission denied)",
+            _ => "file cannot be opened for reading",
+        };
+        error(reason)
+    })?;
+
+    Ok(resolved)
+}
+
 /// Base64-decode the SQL string if `--sql-base64` was passed.
 /// Supports two modes:
 ///   1. `--sql-base64 <base64-query>` — the value is read directly from the option.
@@ -31846,22 +31888,18 @@ async fn run(
             ));
         }
         if is_local {
-            let mut missing: Vec<String> = Vec::new();
+            let mut errors: Vec<String> = Vec::new();
             let mut canonicalized: Vec<String> = Vec::new();
             for p in &paths {
-                match std::fs::canonicalize(p) {
+                match resolve_upload_file_path(p) {
                     Ok(c) => canonicalized.push(c.to_string_lossy().into_owned()),
-                    Err(_) => missing.push(p.clone()),
+                    Err(error) => errors.push(error),
                 }
             }
-            if !missing.is_empty() {
+            if !errors.is_empty() {
                 return Err(CliError(
                     ExitCode::Usage,
-                    format!(
-                        "upload: file(s) not found or not readable on this machine: {}. \
-                         The browser process reads files on the host running the backend — in local mode that is this machine.",
-                        missing.join(", ")
-                    ),
+                    errors.join("\n"),
                 ));
             }
             tool_params["paths"] = json!(canonicalized);
@@ -34576,6 +34614,43 @@ mod tests {
             .prefix("main-")
             .tempdir_in(&root)
             .unwrap()
+    }
+
+    #[test]
+    fn upload_paths_with_brackets_are_treated_as_literal_files() {
+        let dir = test_temp_dir();
+        let file = dir.path().join("[asin]_[field]_[description].xlsx");
+        std::fs::write(&file, b"fixture").unwrap();
+
+        assert_eq!(
+            resolve_upload_file_path(&file.to_string_lossy()).unwrap(),
+            std::fs::canonicalize(file).unwrap()
+        );
+    }
+
+    #[test]
+    fn missing_upload_path_reports_resolved_path_and_specific_reason() {
+        let dir = test_temp_dir();
+        let file = dir.path().join("[asin]_[field].xlsx");
+        let error = resolve_upload_file_path(&file.to_string_lossy()).unwrap_err();
+
+        assert!(error.contains("file does not exist"), "got: {error}");
+        assert!(
+            error.contains(&format!("resolved: {}", file.display())),
+            "got: {error}"
+        );
+    }
+
+    #[test]
+    fn upload_directory_is_rejected_as_non_file() {
+        let dir = test_temp_dir();
+        let error = resolve_upload_file_path(&dir.path().to_string_lossy()).unwrap_err();
+
+        assert!(error.contains("path is not a regular file"), "got: {error}");
+        assert!(
+            error.contains(&format!("resolved: {}", dir.path().display())),
+            "got: {error}"
+        );
     }
 
     /// The Windows build must reserve a Linux-sized main-thread stack.
@@ -48282,4 +48357,3 @@ linkGroups:
         assert!(find_msys_mangled_arg(&args).is_none());
     }
 }
-

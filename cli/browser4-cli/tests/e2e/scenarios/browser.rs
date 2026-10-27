@@ -1146,11 +1146,18 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     let missing_result = run_command_expecting_failure(
         ctx,
         &["upload", "#file-input", &missing_path.to_string_lossy()],
-        "not found or not readable",
+        "file does not exist",
     );
     assert_ne!(
         missing_result.exit_code, 0,
         "upload of a missing file must fail:\n{}",
+        missing_result.stderr
+    );
+    assert!(
+        missing_result
+            .stderr
+            .contains(&format!("resolved: {}", missing_path.display())),
+        "missing-file error should show the resolved path:\n{}",
         missing_result.stderr
     );
 
