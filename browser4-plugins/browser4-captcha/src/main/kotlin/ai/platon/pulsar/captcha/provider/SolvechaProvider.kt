@@ -138,6 +138,13 @@ open class SolvechaProvider(
             val body = mapOf("clientKey" to apiKey, "taskId" to taskId)
             val response = postJson<Map<String, Any?>>("$baseUrl/getTaskResult", body)
 
+            val errorId = response["errorId"]?.toString()?.toIntOrNull() ?: 0
+            if (errorId != 0) {
+                val errorDesc = response["errorDescription"]?.toString()
+                    ?: response["errorCode"]?.toString() ?: "Solvecha error $errorId"
+                throw IllegalStateException(errorDesc)
+            }
+
             when (val status = response["status"]?.toString() ?: "processing") {
                 "ready" -> {
                     @Suppress("UNCHECKED_CAST")
@@ -166,10 +173,19 @@ open class SolvechaProvider(
             .build()
 
         return with(httpClient) {
-            val response = newCall(request).await()
-            response.body?.use { body ->
-                json.readValue(body.string())
-            } ?: throw IllegalStateException("Empty response from $url")
+            newCall(request).await().use { response ->
+                val text = response.body?.string()
+                    ?: throw IllegalStateException("Empty response from $url")
+                if (!response.isSuccessful) {
+                    // Solvecha answers API errors (e.g. a wrong key) with a 4xx status and a JSON
+                    // body that carries errorId/errorDescription; keep those so callers see the reason.
+                    val apiError = runCatching { json.readValue<Map<String, Any?>>(text) }.getOrNull()
+                    if (apiError?.get("errorId") == null) {
+                        throw IllegalStateException("HTTP ${response.code} from $url")
+                    }
+                }
+                json.readValue(text)
+            }
         }
     }
 

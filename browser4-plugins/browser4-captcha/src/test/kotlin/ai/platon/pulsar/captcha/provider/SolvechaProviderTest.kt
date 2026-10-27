@@ -40,7 +40,10 @@ class SolvechaProviderTest {
     private val seenPaths = mutableListOf<String>()
     private val seenBodies = mutableListOf<String>()
 
-    private fun provider(vararg replies: String): SolvechaProvider {
+    private fun provider(vararg replies: String): SolvechaProvider =
+        providerWithCodes(*replies.map { 200 to it }.toTypedArray())
+
+    private fun providerWithCodes(vararg replies: Pair<Int, String>): SolvechaProvider {
         val queue = ArrayDeque(replies.toList())
         val interceptor = Interceptor { chain ->
             val req = chain.request()
@@ -48,12 +51,13 @@ class SolvechaProviderTest {
             val buffer = okio.Buffer()
             req.body?.writeTo(buffer)
             seenBodies += buffer.readUtf8()
+            val (code, reply) = queue.removeFirst()
             Response.Builder()
                 .request(req)
                 .protocol(Protocol.HTTP_1_1)
-                .code(200)
-                .message("OK")
-                .body(queue.removeFirst().toResponseBody("application/json".toMediaType()))
+                .code(code)
+                .message(if (code == 200) "OK" else "Error")
+                .body(reply.toResponseBody("application/json".toMediaType()))
                 .build()
         }
         return SolvechaProvider(
@@ -114,6 +118,37 @@ class SolvechaProviderTest {
         assertEquals(CaptchaStatus.FAILED, solution.status)
         assertEquals("Invalid key", solution.error)
         assertEquals(CaptchaServiceProvider.SOLVECHA, solution.provider)
+    }
+
+    @Test
+    fun `fails at once on a getTaskResult error`() = runBlocking {
+        val solution = provider(
+            """{"errorId":0,"taskId":"t1"}""",
+            """{"errorId":12,"errorCode":"ERROR_CAPTCHA_UNSOLVABLE","errorDescription":"Unsolvable"}"""
+        ).solve(imageRequest)
+
+        assertEquals(CaptchaStatus.FAILED, solution.status)
+        assertEquals("Unsolvable", solution.error)
+        assertEquals(listOf("/createTask", "/getTaskResult"), seenPaths)
+    }
+
+    @Test
+    fun `keeps the API error of a 401 reply`() = runBlocking {
+        val solution = providerWithCodes(
+            401 to """{"errorId":1,"errorCode":"ERROR_KEY_DENIED_ACCESS","errorDescription":"The clientKey is missing or wrong."}"""
+        ).solve(imageRequest)
+
+        assertEquals(CaptchaStatus.FAILED, solution.status)
+        assertEquals("The clientKey is missing or wrong.", solution.error)
+    }
+
+    @Test
+    fun `rejects a non-JSON error reply without echoing the body`() = runBlocking {
+        val solution = providerWithCodes(502 to "<html>Bad Gateway secret-ish body</html>").solve(imageRequest)
+
+        assertEquals(CaptchaStatus.FAILED, solution.status)
+        assertTrue(solution.error!!.startsWith("HTTP 502"), solution.error)
+        assertFalse(solution.error!!.contains("Bad Gateway"), solution.error)
     }
 
     @Test
