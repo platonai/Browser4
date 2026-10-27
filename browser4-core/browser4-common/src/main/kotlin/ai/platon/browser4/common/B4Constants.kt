@@ -83,6 +83,30 @@ object B4Constants {
     const val PROFILE_PATH_CAPABILITY = "profilePath"
 
     /**
+     * The capability that tells a session **whether it may launch a browser**.
+     *
+     * Absent means "own browser" — the session may launch (lazily) when a page is
+     * first needed. See [BROWSER_LAUNCH_POLICY_ATTACHED] for the other case.
+     */
+    const val ATTACHED_CAPABILITY = "attached"
+
+    /**
+     * The session-level browser launch policy (`browser.launch.policy`), derived
+     * from the [ATTACHED_CAPABILITY] capability.
+     *
+     * Sessions attached to an external browser over CDP or the extension relay
+     * ([BROWSER_LAUNCH_POLICY_ATTACHED]) must **never** launch a browser of their
+     * own: the browser belongs to the user, and a silently launched Chrome would
+     * be a second, unrelated browser next to the one the user attached. When no
+     * browser is bound yet, the session fails loudly instead (the attach is still
+     * connecting, or it disconnected).
+     */
+    const val BROWSER_LAUNCH_POLICY = "browser.launch.policy"
+
+    /** [BROWSER_LAUNCH_POLICY] value for a session bound to an external browser. */
+    const val BROWSER_LAUNCH_POLICY_ATTACHED = "attached"
+
+    /**
      * The session-level browser profile path, set from the `profilePath`
      * capability (e.g. `open --profile <path>`). When present, the session's
      * browser launches with this directory as the Chrome user data dir

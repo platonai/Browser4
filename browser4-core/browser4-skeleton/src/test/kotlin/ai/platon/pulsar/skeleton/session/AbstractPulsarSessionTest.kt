@@ -1,13 +1,19 @@
 package ai.platon.pulsar.skeleton.session
 
+import ai.platon.browser4.common.B4Constants.BROWSER_LAUNCH_POLICY
+import ai.platon.browser4.common.B4Constants.BROWSER_LAUNCH_POLICY_ATTACHED
 import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_PATH
+import ai.platon.pulsar.common.IllegalApplicationStateException
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_DISPLAY_MODE
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.skeleton.PulsarSettings
+import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
+import io.mockk.mockk
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -135,6 +141,48 @@ class AbstractPulsarSessionTest {
         val sessionConfig = VolatileConfig(false)
         PulsarSettings.parse(emptyMap()).overrideConfiguration(sessionConfig)
         assertNull(sessionConfig[BROWSER_PROFILE_PATH])
+    }
+
+    // ------------------------------------------------------------------
+    // Browser launch policy: an attached session (CDP / extension relay) must
+    // never launch a browser of its own — createBoundDriver fails loudly instead
+    // of starting a second, unrelated browser next to the one the user attached.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `attached capability sets the attached browser launch policy`() {
+        val sessionConfig = VolatileConfig(false)
+        PulsarSettings.parse(mapOf("attached" to true)).overrideConfiguration(sessionConfig)
+        assertEquals(BROWSER_LAUNCH_POLICY_ATTACHED, sessionConfig[BROWSER_LAUNCH_POLICY])
+    }
+
+    @Test
+    fun `owned session leaves the browser launch policy unset`() {
+        val absent = VolatileConfig(false)
+        PulsarSettings.parse(emptyMap()).overrideConfiguration(absent)
+        assertNull(absent[BROWSER_LAUNCH_POLICY], "An owned session must be allowed to launch lazily")
+
+        val explicitFalse = VolatileConfig(false)
+        PulsarSettings.parse(mapOf("attached" to false)).overrideConfiguration(explicitFalse)
+        assertNull(explicitFalse[BROWSER_LAUNCH_POLICY])
+    }
+
+    @Test
+    fun `attached session refuses to launch a browser`() {
+        // The core "never a second browser" guard: an attached session (CDP /
+        // extension relay) whose browser is not connected must fail loudly instead
+        // of launching a replacement Chrome.
+        val context = mockk<AbstractPulsarContext>(relaxed = true)
+        val sessionConfig = VolatileConfig(false)
+        PulsarSettings.parse(mapOf("attached" to true)).overrideConfiguration(sessionConfig)
+        val session = BasicPulsarSession(context, sessionConfig)
+
+        val failure = assertFailsWith<IllegalApplicationStateException> {
+            session.getOrCreateBoundDriver()
+        }
+        val message = failure.message.orEmpty()
+        assertTrue(message.contains("attached"), "explain why no browser is launched: $message")
+        assertTrue(message.contains("attach --extension"), "name the recovery command: $message")
     }
 
     // ------------------------------------------------------------------

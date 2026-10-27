@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.inference
 
+import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.AgentConfig
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.inference.detail.PageStateTracker
@@ -58,6 +59,28 @@ class AgentStateManagerTest {
                 ObserveElement(toolCall = ToolCall("tab", "click", mutableMapOf("selector" to "#go")))
             )
         )
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // True lazy launch: describing the page must never create a browser
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("browser state is DUMMY and no driver is created when none is bound yet")
+    fun browserStateIsDummyWithoutCreatingADriver() = runBlocking {
+        every { agent.codingMode } returns false
+        val session = mockk<AgenticSession>(relaxed = true)
+        every { session.boundDriver } returns null
+        every { agent.session } returns session
+        // Any page description would have to create the driver through this getter.
+        // Lazy launch means building a context must not touch it at all.
+        every { agent.activeDriver } throws AssertionError(
+            "building browser state must not create a driver"
+        )
+
+        val state = stateManager.getAgentState("instr", 1, sessionId = "s-lazy")
+
+        assertEquals(BrowserUseState.DUMMY, state.browserUseState)
     }
 
     // ─────────────────────────────────────────────────────────────────────

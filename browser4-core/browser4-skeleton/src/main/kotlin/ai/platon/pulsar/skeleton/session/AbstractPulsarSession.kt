@@ -12,6 +12,8 @@ import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
 import ai.platon.browser4.common.B4Constants.BROWSER_CONTEXT_DIR
+import ai.platon.browser4.common.B4Constants.BROWSER_LAUNCH_POLICY
+import ai.platon.browser4.common.B4Constants.BROWSER_LAUNCH_POLICY_ATTACHED
 import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
@@ -292,6 +294,34 @@ abstract class AbstractPulsarSession(
         return context.capture(normURL, driver)
     }
 
+    /**
+     * Refuse to launch a browser for a session that is **attached to an external
+     * browser** (CDP attach or the extension relay).
+     *
+     * Such a session owns no browser: the browser belongs to the user, and a
+     * browser launched here would be a second, unrelated window next to the one
+     * the user attached — the exact failure a lazy launch must not introduce.
+     * Called only from [createBoundDriver] *after* an already-bound browser was
+     * considered, so an attached session with a live browser is unaffected; the
+     * failure only happens while no external browser is bound (the attach is
+     * still connecting, or it disconnected).
+     *
+     * @throws IllegalApplicationStateException when this session may not launch
+     */
+    private fun requireSessionMayLaunchBrowser() {
+        val policy = sessionConfig[BROWSER_LAUNCH_POLICY]?.toString()
+        if (policy != BROWSER_LAUNCH_POLICY_ATTACHED) {
+            return
+        }
+        throw IllegalApplicationStateException(
+            "This session is attached to an external browser and that browser is not connected, " +
+                "so Browser4 will not launch a replacement browser (a new Chrome would be a " +
+                "second browser next to the one you attached). Reconnect it with " +
+                "`browser4-cli attach --extension [<channel>]` or " +
+                "`browser4-cli attach --cdp <endpoint>`, then retry."
+        )
+    }
+
     override fun createBoundDriver(): WebDriver {
         synchronized(context) {
             // A browser may already be bound to this session — e.g. after
@@ -322,6 +352,12 @@ abstract class AbstractPulsarSession(
             val contextDir = sessionConfig[BROWSER_CONTEXT_DIR]?.toString()?.takeIf { it.isNotBlank() }
             val profilePath = sessionConfig[BROWSER_PROFILE_PATH]?.toString()?.takeIf { it.isNotBlank() }
             val mode = BrowserProfileMode.fromString(sessionConfig[BROWSER_CONTEXT_MODE])
+            // An attached session (CDP attach / extension relay) must NEVER launch a
+            // browser of its own: the browser belongs to the user, and a silently
+            // launched Chrome would appear as a second, unrelated browser next to the
+            // one that was attached. With no browser bound yet the attach is still
+            // connecting (or has disconnected) — fail loudly instead of replacing it.
+            requireSessionMayLaunchBrowser()
             // An explicit `open --profile <path>` wins over the session's
             // computed context dir — see resolveLaunchProfileSource.  Named
             // sessions always carry a context dir, so checking profilePath first

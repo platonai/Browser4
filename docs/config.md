@@ -396,7 +396,7 @@ docker run -d -p 18182:18182 `
 * **`mcp.http.enabled`** *(default: `false`)*
   Opt-in **MCP-over-HTTP** endpoint (`POST /mcp`, default port `8088`, standard Streamable HTTP) for MCP clients such as Claude Desktop or Cursor. The CLI does **not** need it — it talks to the REST dispatcher on `server.port`.
 
-  It stays off by default because enabling it binds a second endpoint **and eagerly acquires an agent session when the backend starts**, which launches a browser even when no MCP client ever connects. Enable it only when an MCP-over-HTTP client is actually configured:
+  It stays off by default because enabling it binds a second endpoint **and eagerly acquires an agent session when the backend starts**. That acquisition no longer launches a browser — browser launch is lazy and happens on the first tool call that needs a page — but it still costs a session and its tool manager on every start, so enable it only when an MCP-over-HTTP client is actually configured:
 
   ```bash
   # bundle / standalone backend
@@ -427,6 +427,19 @@ docker run -d -p 18182:18182 `
 * **`browser.enabled`** *(default: `true`)*
   Enables the built-in `browser4-browser` runtime plugin wiring.
   Set `browser.enabled=false` to disable browser runtime beans.
+
+* **Lazy browser launch (session behaviour, no key to set)**
+  Creating a session — including the agent session created for `agent run`, `open`
+  or `chat` — does **not** launch a browser. The browser is started by the first
+  page tool that actually needs one (`tab.*`, page-bound plugin tools, a `b4.run`
+  navigation that has no attached browser). A task that never asks for a page
+  (`agent run --coding`, a `b4.*` task driving an already-attached browser) runs
+  with no browser process at all.
+
+  Sessions **attached** to an external browser (`attach --cdp`, `attach --extension`)
+  carry `browser.launch.policy=attached` and never launch a browser of their own:
+  while the attached browser is not connected, a page tool fails with an actionable
+  error instead of silently starting a second Chrome. Re-attach to recover.
 
 * **`crawl.autoResume`** *(default: `false`)*
   Whether a crawl that was **running when the backend process died** is resumed

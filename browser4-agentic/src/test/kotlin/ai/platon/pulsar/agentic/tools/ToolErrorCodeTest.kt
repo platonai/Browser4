@@ -288,6 +288,22 @@ class ToolErrorCodeTest {
     }
 
     @Test
+    @DisplayName("an unconnected attached browser reports an unhealthy session, not a CDP error")
+    fun unconnectedAttachedBrowserIsNotACdpError() {
+        // The lazy-launch guard refuses to start a replacement browser for an
+        // attached session. Its message names the re-attach fix (`attach --cdp …`),
+        // so the generic "cdp" rule would report a retryable CDP_ERROR and invite
+        // the identical call, which cannot succeed until the user re-attaches.
+        val refusal = "browser_navigate failed: This session is attached to an external browser and " +
+            "that browser is not connected, so Browser4 will not launch a replacement browser " +
+            "(a new Chrome would be a second browser next to the one you attached). Reconnect it " +
+            "with `browser4-cli attach --extension [<channel>]` or " +
+            "`browser4-cli attach --cdp <endpoint>`, then retry."
+
+        assertEquals(ToolErrorCode.SESSION_UNHEALTHY, ToolErrorMapper.classifyMessage(refusal))
+    }
+
+    @Test
     @DisplayName("a non-CDP endpoint and a page-less browser get their own codes")
     fun otherEndpointConditionsAreDistinct() {
         assertEquals(

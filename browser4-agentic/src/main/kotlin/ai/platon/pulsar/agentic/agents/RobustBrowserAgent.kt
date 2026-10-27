@@ -2101,15 +2101,20 @@ open class RobustBrowserAgent(
     private suspend fun buildExecutionContextForStep(
         action: ActionOptions, event: String, ctxIn: ExecutionContext
     ): ExecutionContext {
-        // P4.5 lazy browser launch: coding tasks must not bind a driver (or
-        // navigate) until the model explicitly calls a page tool — activeDriver
-        // is a lazily-creating getter, so skip it entirely in coding mode.
+        // TRUE LAZY LAUNCH: building a step context must not create (launch) a
+        // browser. Coding tasks skip the page entirely; every other task uses the
+        // driver only when it is ALREADY bound (`session.boundDriver` — not the
+        // creating `activeDriver` getter). With no page attached the step context
+        // carries DUMMY browser state (see AgentStateManager.getBrowserUseState),
+        // and the first real page tool binds the driver.
         if (!codingMode) {
-            val driver = activeDriver
-            val url = driver.url()
-            if (url.isBlank() || url == "about:blank") {
-                val searchURL = SearchEngineSelector.selectBest()
-                driver.navigate(searchURL)
+            val driver = session.boundDriver
+            if (driver != null) {
+                val url = driver.url()
+                if (url.isBlank() || url == "about:blank") {
+                    val searchURL = SearchEngineSelector.selectBest()
+                    driver.navigate(searchURL)
+                }
             }
         }
 

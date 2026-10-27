@@ -116,6 +116,13 @@ retry loop cannot spin on them:
 | `ENDPOINT_NO_PAGE_TARGETS` | 409 | a CDP endpoint with no `page` target to drive |
 | `ENDPOINT_WRONG_BROWSER` | 409 | the endpoint answered as a different browser family than the requested `channel` (e.g. `--cdp msedge` → Chrome); nothing was bound |
 
+**An attached session never launches a browser of its own.** While the attached browser is not
+connected — the extension has not approved yet, its WebSocket dropped, or the CDP endpoint died — a
+page tool fails with `SESSION_UNHEALTHY` and the re-attach command instead of starting a second
+Chrome next to yours. Browser launch is lazy anyway: creating a session (including the agent session
+behind `agent run`) opens no browser until a tool actually needs a page, so `agent run` against an
+attached browser never adds a window of its own.
+
 **Multi-instance hazard — attaching to a browser another session already drives.** Attaching to a
 browser that a live Browser4 session owns is allowed (it is the documented workflow), but it is
 reported rather than silent: a warning names the owning session, the attach response carries

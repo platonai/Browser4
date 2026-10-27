@@ -320,6 +320,13 @@ object ToolErrorMapper {
             // for a permanent wrong-browser condition.
             "different browser family" in text || "wrong browser" in text ->
                 ToolErrorCode.ENDPOINT_WRONG_BROWSER
+            // An attached session (CDP attach / extension relay) whose browser is
+            // not connected has no browser of its own and refuses to launch one —
+            // the session is unusable until the user re-attaches. The message
+            // quotes the fix (`attach --cdp …` / `attach --extension`), so the
+            // generic "cdp" rule below would report a retryable CDP_ERROR and
+            // invite the identical call that cannot succeed yet.
+            "attached to an external browser" in text -> ToolErrorCode.SESSION_UNHEALTHY
             // A refused/reset connection is an upstream transport failure, never a
             // browser that rejected a command — it stays UPSTREAM_ERROR, but the
             // rule must be evaluated before the generic "cdp" match to be reached

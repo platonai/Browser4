@@ -656,10 +656,11 @@ pub async fn submit_plain_command_with_options(
             payload[k] = v.clone();
         }
     }
-    // Async agent submission (`agent run`) creates the session's companion
-    // agent on first use, which can exceed the default 30s HTTP timeout —
-    // the server returns the task ID only after that warm-up. Use a longer
-    // override so valid submissions are not reported as HTTP timeouts.
+    // Async agent submission (`agent run`) does first-use work on the server
+    // (session creation, companion agent + tool-manager init) that can exceed the
+    // default 30s HTTP timeout on a cold backend. The browser itself is launched
+    // lazily — not during submission — but the first-use setup still justifies a
+    // longer override so valid submissions are not reported as HTTP timeouts.
     if async_mode {
         call_tool_with_timeout_override(client, base_url, "command_run", payload, Some(180)).await
     } else {

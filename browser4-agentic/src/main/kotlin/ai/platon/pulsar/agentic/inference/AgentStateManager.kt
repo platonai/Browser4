@@ -523,6 +523,17 @@ class AgentStateManager(
             return BrowserUseState.DUMMY
         }
 
+        // TRUE LAZY LAUNCH: describing a page must not create (and therefore
+        // launch) a browser. `driver` is a creating getter, so building the very
+        // first context of a task would otherwise start a default browser before
+        // the model has done anything — exactly the eager launch this path must
+        // not have. No bound driver means no page is attached yet (a `b4.*`/CLI
+        // task, a coding-like task, or an attach that is still connecting): report
+        // DUMMY and let the first page tool bind the driver.
+        if (agent.session.boundDriver == null) {
+            return BrowserUseState.DUMMY
+        }
+
         pageStateTracker.waitForDOMSettle()
 
         val snapshotOptions = SnapshotOptions(

@@ -33,6 +33,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
+import org.mockito.ArgumentCaptor
 import org.mockito.Mockito
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
@@ -397,6 +398,30 @@ class PulsarSessionManagerTest {
         verify(agenticContext, times(1)).createSession(
             Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
         )
+
+        // The session must be marked "attached", so its (lazy) driver creation can
+        // never launch a replacement browser next to the user's browser while the
+        // extension is not connected.
+        val settingsCaptor = ArgumentCaptor.forClass(PulsarSettings::class.java)
+        verify(agenticContext).createSession(settingsCaptor.capture() ?: PulsarSettings())
+        assertEquals(
+            true, settingsCaptor.value.attached,
+            "An extension-attached session must never launch a browser of its own"
+        )
+    }
+
+    @Test
+    fun ownedSessionMayLaunchABrowser() {
+        // The counterpart of the attached-session guard: a Browser4-launched
+        // session owns its browser, so the lazy launch policy must not be attached.
+        sessionManager.getOrCreateSession(mapOf("sessionId" to "owned-session"))
+
+        val settingsCaptor = ArgumentCaptor.forClass(PulsarSettings::class.java)
+        verify(agenticContext).createSession(settingsCaptor.capture() ?: PulsarSettings())
+        assertNotEquals(
+            true, settingsCaptor.value.attached,
+            "An owned session must be allowed to launch its browser (lazily)"
+        )
     }
 
     @Test
@@ -607,6 +632,15 @@ class PulsarSessionManagerTest {
             assertSame(session, fetched, "Attached session must never be recreated")
             verify(agenticContext, times(1)).createSession(
                 Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
+            )
+
+            // A CDP-attached session references the user's browser and must never
+            // launch one of its own (lazy launch must not add a second window).
+            val settingsCaptor = ArgumentCaptor.forClass(PulsarSettings::class.java)
+            verify(agenticContext).createSession(settingsCaptor.capture() ?: PulsarSettings())
+            assertEquals(
+                true, settingsCaptor.value.attached,
+                "A CDP-attached session must never launch a browser of its own"
             )
         } finally {
             server.stop(0)

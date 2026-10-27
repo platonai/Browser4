@@ -30,10 +30,12 @@ import java.util.concurrent.CountDownLatch
  *
  * ## Display mode (headless by default)
  *
- * The browser opens **headless by default**; use `--headed` to opt into a
- * visible window. This mirrors the CLI (`open --headless` is the default,
- * `open --headed` opts in) and the shipped server-wide default
- * `browser.display.mode=HEADLESS`.
+ * The session is created at startup, but the browser is launched **lazily**, on
+ * the first tool call that needs a page — starting this server alone opens no
+ * browser. When a browser does open it is **headless by default**; use
+ * `--headed` to opt into a visible window. This mirrors the CLI
+ * (`open --headless` is the default, `open --headed` opts in) and the shipped
+ * server-wide default `browser.display.mode=HEADLESS`.
  *
  * Why the default matters here:
  *

@@ -9,7 +9,10 @@ import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.CapabilityTypes.*
 import ai.platon.pulsar.common.config.MutableConfig
+import ai.platon.browser4.common.B4Constants.ATTACHED_CAPABILITY
 import ai.platon.browser4.common.B4Constants.BROWSER_CONTEXT_DIR
+import ai.platon.browser4.common.B4Constants.BROWSER_LAUNCH_POLICY
+import ai.platon.browser4.common.B4Constants.BROWSER_LAUNCH_POLICY_ATTACHED
 import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.core.api.PulsarSettings
 
@@ -55,6 +58,15 @@ data class PulsarSettings(
     val profilePath: String? = null,
     val contextDir: String? = null,
     val label: String? = null,
+    /**
+     * True when this session is attached to an **external** browser (CDP attach or
+     * the extension relay) and therefore must never launch a browser of its own.
+     *
+     * Carried into the session config as `browser.launch.policy=attached`; absent
+     * (the default) means the session owns its browser and may launch lazily when a
+     * page is first needed.
+     */
+    val attached: Boolean? = null,
 ) {
     fun overrideSystemProperties() {
         overrideConfigurationInternal(null)
@@ -71,6 +83,14 @@ data class PulsarSettings(
         }
         contextDir?.takeIf { it.isNotBlank() }?.let {
             conf?.set(BROWSER_CONTEXT_DIR, it) ?: System.setProperty(BROWSER_CONTEXT_DIR, it)
+        }
+        // Attached sessions (CDP / extension relay) never launch a browser of their
+        // own — an unconnected attach must fail loudly instead of silently starting
+        // a second, unrelated Chrome. Only `true` writes the policy; absent/false
+        // keeps the session's default "may launch" behaviour.
+        attached?.takeIf { it }?.let {
+            conf?.set(BROWSER_LAUNCH_POLICY, BROWSER_LAUNCH_POLICY_ATTACHED)
+                ?: System.setProperty(BROWSER_LAUNCH_POLICY, BROWSER_LAUNCH_POLICY_ATTACHED)
         }
         when(displayMode) {
             DisplayMode.HEADLESS -> headless(conf)
@@ -96,6 +116,7 @@ data class PulsarSettings(
             val profileMode = capabilities?.get("profileMode")?.toString()?.let { BrowserProfileMode.fromString(it) }
             val profilePath = capabilities?.get("profilePath")?.toString()?.takeIf { it.isNotBlank() }
             val contextDir = capabilities?.get("contextDir")?.toString()?.takeIf { it.isNotBlank() }
+            val attached = capabilities?.get(ATTACHED_CAPABILITY)?.toString()?.toBooleanStrictOrNull()
 
             return PulsarSettings(
                 spa = spa,
@@ -106,6 +127,7 @@ data class PulsarSettings(
                 profilePath = profilePath,
                 contextDir = contextDir,
                 interactSettings = interactSettings ?: InteractSettings.create(interactLevel ?: InteractLevel.DEFAULT),
+                attached = attached,
             )
         }
 

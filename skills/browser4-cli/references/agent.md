@@ -69,6 +69,14 @@ with no session at all (for example `--coding`) still runs without a browser, as
 before. This matters because the task never gets a browser of its own: if the
 current session is an attached one, the agent drives *that* browser.
 
+The browser is launched **lazily**: submitting a task opens no browser at all. It
+starts on the first tool call that actually needs a page, so a task that drives an
+attached browser through `b4.run` (for example
+`b4.run("attach --extension msedge")` followed by `b4.run("goto …")`) opens **no
+additional browser** — only the one you attached. An attached session whose browser
+is not connected never falls back to a fresh Chrome; the page tool fails with a
+re-attach instruction instead.
+
 Two consequences matter in practice:
 
 - **Its navigation is not visible in your session's tab list.** The backend saves

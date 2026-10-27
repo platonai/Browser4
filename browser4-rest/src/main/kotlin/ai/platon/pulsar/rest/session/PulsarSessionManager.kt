@@ -16,6 +16,7 @@ import ai.platon.pulsar.chrome.session.ProfileCleanup
 import ai.platon.pulsar.chrome.session.ProfileCleanupReport
 import ai.platon.pulsar.chrome.session.SessionProfileReaper
 import ai.platon.pulsar.common.AppPaths
+import ai.platon.browser4.common.B4Constants.ATTACHED_CAPABILITY
 import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_MODE
 import ai.platon.browser4.common.B4Constants.CONTEXT_DIR_CAPABILITY
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
@@ -501,7 +502,17 @@ class PulsarSessionManager(
         capabilities: Map<String, String?>,
         kind: SessionKind = SessionKind.BROWSER4_LAUNCHED,
     ): ManagedSession {
-        val settings = PulsarSettings.parse(capabilities)
+        // Ownership decides whether the session may ever launch a browser. An
+        // attached session (CDP / extension relay) references a browser the user
+        // already runs, so it must never start one of its own — the capability is
+        // carried into the session config as `browser.launch.policy=attached` (see
+        // [ai.platon.browser4.common.B4Constants.BROWSER_LAUNCH_POLICY]).
+        val launchCapabilities = if (kind.ownsBrowser) {
+            capabilities
+        } else {
+            capabilities + (ATTACHED_CAPABILITY to "true")
+        }
+        val settings = PulsarSettings.parse(launchCapabilities)
         val agenticSession = agenticContext.createSession(settings)
 
         return ManagedSession(

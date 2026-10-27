@@ -283,6 +283,7 @@ See [CI stabilization notes](docs-dev/copilot/ci-stabilization-4.13.x.md) before
 - Config files: `application.properties` → `application-*.properties` → `application-private.properties` (git-ignored, secrets here or env vars)
 - Key properties: `openrouter.api.key`, `browser.profile.mode` (DEFAULT|SYSTEM_DEFAULT|SEQUENTIAL|TEMPORARY), `browser.display.mode` (GUI|HEADLESS|SUPERVISED)
 - Display mode precedence: session capabilities (`headed` / `displayMode`, e.g. from `open --headed`/`--headless`) override the server-wide `browser.display.mode` default at browser launch (`AbstractPulsarSession.createBoundDriver`); server default applies only when the session has no display preference
+- Lazy browser launch: creating a session (including the companion agent behind `agent run` / `open` / `chat`) never launches a browser — the first tool call that needs a page does (`BasicBrowserAgent.activeDriver` / `AgentToolManager.driver`). `AgentStateManager.getBrowserUseState` returns `BrowserUseState.DUMMY` while no driver is bound instead of creating one. Sessions attached over CDP or the extension relay carry `browser.launch.policy=attached` (from `PulsarSettings.attached`) and never launch a browser of their own: while the attached browser is not connected, driver creation fails loudly with a re-attach instruction (`AbstractPulsarSession.createBoundDriver`)
 - LLM providers configured via env vars: `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `VOLCENGINE_API_KEY`, `OPENAI_API_KEY`
 
 ## Development Patterns

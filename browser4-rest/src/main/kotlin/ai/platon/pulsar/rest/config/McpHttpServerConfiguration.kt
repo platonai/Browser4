@@ -29,11 +29,12 @@ import org.springframework.context.event.EventListener
  * protocol on port 8088.
  *
  * It is off by default because enabling it has a real startup cost: the server
- * eagerly acquires an agent session (below), and creating that session launches a
- * browser — so an always-on endpoint added one headless browser to *every*
- * backend start, even for CLI-only workflows that never speak MCP-over-HTTP (the
- * CLI talks to the REST dispatcher on `server.port`). MCP clients that need the
- * standard endpoint opt in explicitly.
+ * eagerly acquires an agent session and its tool manager (below) on every backend
+ * start, even for CLI-only workflows that never speak MCP-over-HTTP (the CLI talks
+ * to the REST dispatcher on `server.port`). The session's browser is **not**
+ * launched by this acquisition — launch is lazy and happens on the first tool call
+ * that actually needs a page — so an idle endpoint no longer costs a Chrome
+ * process. MCP clients that need the standard endpoint opt in explicitly.
  *
  * ## How it works
  *
@@ -67,7 +68,8 @@ import org.springframework.context.event.EventListener
  * ## Session acquisition
  *
  * The session is acquired from the Spring-wired [AgenticContext] so the
- * session browser launches through the server-wide configuration
+ * session browser — launched lazily, on the first tool call that needs a page —
+ * uses the server-wide configuration
  * (`browser.display.mode`, which ships as HEADLESS). Using
  * `AgenticContexts.getOrCreateSession(...)` here instead created a throwaway
  * `StaticAgenticContext` whose configuration does not carry the server
@@ -87,7 +89,7 @@ import org.springframework.context.event.EventListener
  * During the CLI's JVM AOT cache training run (`-Dbrowser4.aot.training=true`,
  * see `ensure_aot_cache_trained` in `cli/browser4-cli`), this configuration is
  * skipped entirely: the eager [mcpHttpServer] bean would otherwise create an
- * agent session — and with it launch a browser — just to record class loading.
+ * agent session and its tool manager just to record class loading.
  * The training run then boots the Spring context with the minimal surface and
  * exits on context refresh (`spring.context.exit=onRefresh`).
  */

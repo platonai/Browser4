@@ -89,7 +89,7 @@
 | 4.2 | 提示词隔离 | `PromptBuilder.kt:311-323, :663-750` | codingMode 跳过 Browser State/Viewport/ARIA 三段，替换一行：「当前无页面上下文；如需网页信息，请显式调用 tab.navigate/ariaSnapshot/textContent/eval」 | 单测：请求消息断言无 `## Browser State` |
 | 4.3 | 响应模板免填 | 响应解析/模板 | codingMode 下 `screenshotContentSummary/currentPageContentSummary` 不要求填写（N/A） | 单测 |
 | 4.4 | 历史切片 | `StatefulAgentRunner.kt:332` 附近；`BasicBrowserAgent.kt:126` | 每任务新 sessionId；history 渲染用 `snapshotFor(sessionId)`；与 P3.2① 联动封死假完成 | 单测：新任务 history 不含旧任务状态 |
-| 4.5 | 浏览器惰性启动（二期，可拆分） | `RobustBrowserAgent.kt:505-521` | codingMode 不预启动浏览器；模型调用 `tab.*` 时按需绑定 driver | 集成测试 |
+| 4.5 | ✅ 浏览器惰性启动（真懒启动） | `AgenticSession.kt`（`createCompanionAgent`）、`AgentStateManager.getBrowserUseState`、`RobustBrowserAgent.buildExecutionContextForStep`、`AbstractPulsarSession.createBoundDriver` | 创建会话/companion agent 不再绑定或启动浏览器；首个真正需要页面的工具才按需绑定 driver。附加会话（`attach --cdp` / `--extension`，`browser.launch.policy=attached`）永不自行启动浏览器，未连接时明确报错 | 单测：无 driver 时零创建 + 附加会话携带策略 |
 
 **验收**：编码任务请求无页面信息段、全程无 DOM settle 日志；调用 `tab.navigate` 后才出现页面状态。
 
@@ -149,7 +149,7 @@ P0 → P2 → P5（P5.1 必须等 P1+P2 就绪，避免默认模式下裸奔）
 | P1 | ✅ `AgentState.resultPreview`；新 `ToolOutcome` 信封（按工具裁剪）；`DefaultHistoryRenderStrategy` 新增「### Tool Outcomes」+ result 字段；`buildPrevToolCallResultMessage` 信封化；`ToolExecutionCoordinator` 信封化；`AgentToolCallLoop` 迭代上限 12 + 超限附已执行清单；text-only 保险丝 |
 | P2 | ✅ 披露补齐（browser.newTab/listTabs、agent.observe/run）；`renderTiered` 分层披露（coding 任务折叠页面域，浏览任务折叠开发域，full 平铺回退），经 ObserveParams→PromptBuilder 全链注入 |
 | P3 | ✅ 完成 schema 增 gates/filesChanged/problems；`ModelObserveResponseComplete`/`ActionDescription`/`AgentState` 贯通；runner 硬校验：**0 工具调用拒绝 completed（strict）** + gate 交叉校验（warn） |
-| P4 | ✅ `AgentStateManager.getBrowserUseState` codingMode 短路 DUMMY（无 settle/快照/tabs）；`PromptBuilder` codingMode 跳过 Browser State/Viewport/ARIA 注入；**prompt 历史按 sessionId 切片**（消除跨任务污染）；响应模板免填与浏览器惰性启动为后续项 |
+| P4 | ✅ `AgentStateManager.getBrowserUseState` codingMode 短路 DUMMY（无 settle/快照/tabs）；`PromptBuilder` codingMode 跳过 Browser State/Viewport/ARIA 注入；**prompt 历史按 sessionId 切片**（消除跨任务污染）；P4.5 真懒启动已落地（见 4.5）；响应模板免填为后续项 |
 | P5 | ✅ `ToolExposeMode` 默认 TOOL_CALLING（text/chat 显式可选）；供应商不支持原生工具时自动降级 TEXT（warn 一次） |
 | P6 | ✅ 全量回归 988 测试 0 失败（含新增 ToolOutcomeTest/ToolExposeModeTest + 渲染器/披露扩展）；bundle 重建；wordcount 回归任务 **81 秒完成**，模型如实报告四门禁实测结果；假完成守卫实战拦截 1 次伪造完成 |
 
@@ -163,4 +163,4 @@ P0 → P2 → P5（P5.1 必须等 P1+P2 就绪，避免默认模式下裸奔）
 | 单请求输入 | 峰值 90k token | 收尾 summary 聊天 4,937 字符 |
 | 编码任务页面注入 | `## Browser State`(about:blank) 每步注入 | codingMode 一行提示替代 |
 
-**遗留/后续项**：P4.3 响应模板免填、P4.5 浏览器惰性启动（二期）；P2.4 原生 specs 分层过滤；gate 名与内层工具调用的精确匹配（当前 warn 级）。回退开关：`-Dbrowser4.agent.toolDisclosure=full`、`-Dbrowser4.agent.finishGateCheck=warn`、`-Dagent.tool.expose.mode=text`、`-Dbrowser4.agent.textOnlyStallLimit=0`。
+**遗留/后续项**：P4.3 响应模板免填；P2.4 原生 specs 分层过滤；gate 名与内层工具调用的精确匹配（当前 warn 级）。回退开关：`-Dbrowser4.agent.toolDisclosure=full`、`-Dbrowser4.agent.finishGateCheck=warn`、`-Dagent.tool.expose.mode=text`、`-Dbrowser4.agent.textOnlyStallLimit=0`。
