@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.pulsar.agentic.llm.Browser4ProviderRegistry
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.external.ChatModelFactory
 import org.junit.jupiter.api.AfterEach
@@ -24,6 +25,7 @@ class LlmStatusReporterTest {
 
     private val touchedProperties = listOf(
         "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL_NAME", "OPENAI_BASE_URL", "llm.provider",
+        "llm.provider.config.path",
         "browser4.test.llm.responseDir", "browser4.test.llm.responseFile",
     )
 
@@ -209,6 +211,37 @@ class LlmStatusReporterTest {
         assertEquals(true, report["configured"])
         assertEquals("llm.provider=openai", report["selectedBy"])
         assertNull(report["selectedKey"])
+    }
+
+    @Test
+    @DisplayName("report should follow Browser4's own registry instead of the base library's order")
+    fun reportShouldFollowBrowser4RegistryOrder() {
+        // Browser4 ships its own provider registry (config/llm/providers.json) and
+        // puts OpenAI before Groq; the base library's built-in list puts Groq first.
+        // A report built from the built-in order would name a "selected key" the
+        // engine never uses, which is exactly the misreport this test pins down.
+        val configDir = java.nio.file.Files.createTempDirectory("b4-status-registry")
+        try {
+            val registry = Browser4ProviderRegistry.install(configDir)
+            assertNotNull(registry, "the packaged registry must be installable")
+
+            System.setProperty("OPENAI_API_KEY", "test-openai-key-12345")
+            System.setProperty("GROQ_API_KEY", "test-groq-key-12345")
+            val conf = isolatedConfig("OPENAI_API_KEY", "GROQ_API_KEY")
+
+            val report = LlmStatusReporter.report(conf)
+
+            assertEquals("OPENAI_API_KEY", report["selectedKey"])
+            val warning = report["warning"] as String?
+            assertNotNull(warning)
+            assertTrue(
+                warning!!.contains("OPENAI_API_KEY"),
+                "the warning must name the key that actually wins: $warning"
+            )
+        } finally {
+            System.clearProperty("llm.provider.config.path")
+            configDir.toFile().deleteRecursively()
+        }
     }
 
     @Test

@@ -33,10 +33,11 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 > block, add the key, then restart the backend. The template never overwrites an existing file.
 >
 > ⚠️ Configure **exactly one** provider. When several provider keys are present only one is
-> used — the first in the built-in detection order, in which `openai` comes *after* the
-> dedicated providers such as `deepseek`. `doctor` now prints which key won
-> (`Selected key`) and the model the backend will request (`Active model`); if they are not
-> yours, remove the other key or add `llm.provider.deny.list=deepseek`. See
+> used — the first in Browser4's provider order (declared in
+> `browser4-core/browser4-resources/src/main/resources/config/llm/providers.json`), where a
+> leftover `deepseek` key wins over `openai` and `openai` wins over `groq`. `doctor` prints
+> which key won (`Selected key`) and the model the backend will request (`Active model`); if
+> they are not yours, remove the other key or add `llm.provider.deny.list=deepseek`. See
 > [LLM configuration](../../../docs/config.md#which-provider-is-used).
 
 If no valid LLM key is configured, `agent run` fails fast with a clear error.

@@ -27468,7 +27468,7 @@ fn render_llm_status_lines(llm_info: &Value) -> Vec<String> {
     let selected_by = llm_info.get("selectedBy").and_then(|v| v.as_str());
     match (selected_key, selected_by) {
         (Some(key), _) => lines.push(format!(
-            "  Selected key: {} (first in the built-in priority list)",
+            "  Selected key: {} (first in the priority list)",
             key
         )),
         (None, Some(by)) if by.starts_with("llm.provider=") => {
