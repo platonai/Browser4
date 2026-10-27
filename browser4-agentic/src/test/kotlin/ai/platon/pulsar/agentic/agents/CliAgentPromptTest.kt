@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agentic.agents
 
+import ai.platon.pulsar.coding.AccessPreset
+import ai.platon.pulsar.coding.AgentAccessPolicy
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
@@ -118,5 +120,46 @@ class CliAgentPromptTest {
             assertTrue(hygiene.contains("VERDICT_JSON"), hygiene)
             assertTrue(hygiene.contains("filesChanged"), hygiene)
         }
+    }
+
+    @Test
+    @DisplayName("a restricted preset adds the permissions block, full does not")
+    fun permissionsBlockFollowsThePolicy() {
+        // FULL is the default and must keep the prompt byte-for-byte what it was: the block is
+        // added only when it changes what the model may do.
+        val full = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy())
+        assertFalse(full.contains("### Permissions"), full)
+
+        val read = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy(preset = AccessPreset.READ))
+        assertTrue(read.contains("### Permissions"), read)
+        assertTrue(read.contains("access preset 'read'"), read)
+        // The point of the block: the model must not retry a structural refusal.
+        assertTrue(read.contains("do NOT retry"), read)
+        assertTrue(read.contains("coding.permissions"), read)
+        assertFalse(read.contains("run the project build"), read)
+        assertFalse(read.contains("run shell commands"), read)
+    }
+
+    @Test
+    @DisplayName("the permissions block reports what the policy actually grants, including auto-approval")
+    fun permissionsBlockReflectsAutoApproval() {
+        // `read` + a `write` ceiling grants file mutation and — because the build requires the
+        // narrower `read-build` preset — the project build. The prompt must say so: it is the
+        // ground truth the model plans against.
+        val policy = AgentAccessPolicy(preset = AccessPreset.READ, autoApproveUpTo = AccessPreset.WRITE)
+        val prompt = CliAgentPrompt.hygiene(true, workspace, policy)
+
+        assertTrue(prompt.contains("write workspace files"), prompt)
+        assertTrue(prompt.contains("run the project build"), prompt)
+        assertFalse(prompt.contains("run shell commands"), prompt)
+        assertTrue(prompt.contains("Automatic approval is on up to 'write'"), prompt)
+    }
+
+    @Test
+    @DisplayName("denyTools alone is enough to warn a full-preset run")
+    fun permissionsBlockAppearsForDenyTools() {
+        val policy = AgentAccessPolicy(preset = AccessPreset.FULL, denyTools = setOf("coding.shell"))
+        val prompt = CliAgentPrompt.hygiene(true, workspace, policy)
+        assertTrue(prompt.contains("### Permissions"), prompt)
     }
 }

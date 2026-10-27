@@ -268,9 +268,12 @@ enum class FailureCategory(
                 anyWordIn(msg, "login", "sign in", "log in", "authenticate",
                     "unauthorized", "401", "403", "access denied", "forbidden") -> AUTH_REQUIRED
 
-                // Permission
-                anyWordIn(msg, "permission denied", "not allowed", "insufficient",
-                    "elevated access", "admin only") -> PERMISSION_DENIED
+                // Permission. `permission_denied` is the machine-readable refusal prefix the
+                // coding access policy emits (`PERMISSION_DENIED | code=… | tool=…`); without it a
+                // structural refusal was classified UNKNOWN and never surfaced as a permission
+                // problem.
+                anyWordIn(msg, "permission denied", "permission_denied", "not permitted",
+                    "not allowed", "insufficient", "elevated access", "admin only") -> PERMISSION_DENIED
 
                 // Overlay
                 anyWordIn(msg, "overlay", "modal", "popup", "dialog", "cookie",

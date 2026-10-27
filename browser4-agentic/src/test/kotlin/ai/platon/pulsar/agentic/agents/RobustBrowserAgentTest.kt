@@ -4,6 +4,8 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.api.model.BrowserUseState
+import ai.platon.pulsar.coding.AccessPreset
+import ai.platon.pulsar.coding.AgentAccessPolicy
 import dev.langchain4j.agent.tool.ToolSpecification as LangChain4jToolSpec
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
@@ -174,6 +176,24 @@ class RobustBrowserAgentTest {
         assertTrue(initial.contains("b4_run"), "fallback restores the default core set")
         assertTrue(initial.contains("system_taskComplete"))
         assertTrue(toolSet.disclosureSpecs.isNotEmpty())
+    }
+
+    @Test
+    @DisplayName("a denied coding method never reaches any view, so exposeTools cannot revive it")
+    fun deniedCodingMethodStaysOutOfEveryView() {
+        val policy = AgentAccessPolicy(preset = AccessPreset.READ_BUILD)
+        val toolSet = buildCliEngineToolSet(
+            cliRegistry, systemSpecs, "core",
+            disclosureEnabled = true, codingMode = true, policy = policy,
+        )
+        // E4: the filter runs before the initial selection and the disclosure pool.
+        assertFalse(toolSet.registry.containsKey("coding_shell"), "denied method must not be resolvable")
+        assertFalse(names(toolSet.initialSpecs).contains("coding_shell"))
+        assertFalse(names(toolSet.disclosureSpecs).contains("coding_shell"))
+        assertFalse(names(toolSet.specs).contains("coding_shell"))
+        // Mutation is denied too, reads survive.
+        assertFalse(toolSet.registry.containsKey("coding_write"))
+        assertTrue(toolSet.registry.containsKey("coding_read"))
     }
 
     @Test

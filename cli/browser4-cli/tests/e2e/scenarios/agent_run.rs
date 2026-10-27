@@ -822,3 +822,211 @@ pub(super) fn test_agent_run_forwards_engine_and_noop_limit(ctx: &mut E2ECtx) {
         command_call.arguments
     );
 }
+
+/// `--access` is a per-task grant: it must reach `command_run` untouched, so the
+/// backend can apply (and later reset) exactly the preset the user asked for.
+pub(super) fn test_agent_run_forwards_access_preset(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Report the failing module";
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+    mock_server.set_command_result_response(
+        "agent-task-1",
+        r#"{"summary":"Only browser4-rest fails"}"#,
+    );
+
+    let run_result = run_command(
+        ctx,
+        &["agent", "run", task, "--coding", "--access", "read-build"],
+    );
+    assert!(
+        run_result.stdout.contains("Task submitted: agent-task-1"),
+        "expected task submission in:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert_eq!(
+        command_call.arguments["access"],
+        serde_json::json!("read-build"),
+        "command_run payload should forward the access preset: {:?}",
+        command_call.arguments
+    );
+    assert_eq!(
+        command_call.arguments["coding"],
+        serde_json::json!(true),
+        "coding must still be forwarded alongside access: {:?}",
+        command_call.arguments
+    );
+}
+
+/// Without `--access` the payload must carry no `access` key at all — an explicit
+/// `null`/`"full"` would overwrite the server-wide `browser4.agent.access`.
+pub(super) fn test_agent_run_omits_access_when_absent(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Read the changelog";
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+
+    let run_result = run_command(ctx, &["agent", "run", task, "--coding"]);
+    assert!(
+        run_result.stdout.contains("Task submitted: agent-task-1"),
+        "expected task submission in:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert!(
+        command_call.arguments.get("access").is_none(),
+        "an omitted --access must not appear in the payload (the backend default applies): {:?}",
+        command_call.arguments
+    );
+}
+
+/// In an interactive session the preset applies to the tasks typed later, not
+/// just to the invocation — the same grant, one payload each.
+pub(super) fn test_agent_run_interactive_forwards_access_preset(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_command_result_response("agent-task-1", "interactive result");
+
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i", "--coding", "--access", "read"],
+        "Report the failing module\n/quit\n",
+    );
+    assert!(
+        run_result.stdout.contains("▶ task agent-task-1"),
+        "the typed line must be submitted as a task:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert_eq!(
+        command_call.arguments["access"],
+        serde_json::json!("read"),
+        "the interactive session must carry its access preset: {:?}",
+        command_call.arguments
+    );
+}
+
+/// `--auto-approve` is a per-task ceiling: it must reach `command_run` untouched
+/// so the backend can widen (and later reset) exactly the grants the user allowed.
+pub(super) fn test_agent_run_forwards_auto_approve_ceiling(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Fix the failing test";
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+    mock_server.set_command_result_response("agent-task-1", r#"{"summary":"Fixed"}"#);
+
+    let run_result = run_command(
+        ctx,
+        &[
+            "agent",
+            "run",
+            task,
+            "--coding",
+            "--access",
+            "read-build",
+            "--auto-approve",
+            "write",
+        ],
+    );
+    assert!(
+        run_result.stdout.contains("Task submitted: agent-task-1"),
+        "expected task submission in:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert_eq!(
+        command_call.arguments["autoApprove"],
+        serde_json::json!("write"),
+        "command_run payload should forward the automatic approval ceiling: {:?}",
+        command_call.arguments
+    );
+    assert_eq!(
+        command_call.arguments["access"],
+        serde_json::json!("read-build"),
+        "the ceiling must not replace the preset it widens: {:?}",
+        command_call.arguments
+    );
+}
+
+/// The interactive session keeps the ceiling for every task typed later.
+pub(super) fn test_agent_run_interactive_forwards_auto_approve_ceiling(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_command_result_response("agent-task-1", "interactive result");
+
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i", "--coding", "--auto-approve", "full"],
+        "Fix the failing test\n/quit\n",
+    );
+    assert!(
+        run_result.stdout.contains("▶ task agent-task-1"),
+        "the typed line must be submitted as a task:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert_eq!(
+        command_call.arguments["autoApprove"],
+        serde_json::json!("full"),
+        "the interactive session must carry its ceiling: {:?}",
+        command_call.arguments
+    );
+}

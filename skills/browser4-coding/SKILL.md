@@ -139,6 +139,55 @@ Scan a file for the three known Browser4 CDP pitfalls (AGENTS.md): mouseWheel ra
 ### `coding.protect(path=..., on=...)`
 Session-level dynamic file protection: `coding.protect(path="src/Foo.kt", on=true)` blocks delete/replace/editLines/insertAfter on that exact file; `on=false` removes it; `coding.protect()` lists dynamic protections. Repo-governance defaults (VERSION/AGENTS.md/CLAUDE.md/root pom/BOM/CI) are always protected and cannot be unprotected.
 
+## Permissions (access presets)
+
+A run's `coding.*` surface is decided by one access preset — the single source of truth consumed
+by the file system, the shell, the tool registry and the MCP direct-call path:
+
+| Preset | Read | Write files | `mvnBuild`/`verify`/`validate` | `shell*` / `runCode` |
+|---|---|---|---|---|
+| `full` *(default)* | ✓ | ✓ | ✓ | ✓ |
+| `write` | ✓ | ✓ | ✓ | ✗ |
+| `read-build` | ✓ | ✗ | ✓ | ✗ |
+| `read` | ✓ | ✗ | ✗ | ✗ |
+
+- Server default: `-Dbrowser4.agent.access=<preset>` (unknown values log and fall back to `full`).
+- Per task: `browser4-cli agent run "<task>" --coding --access <preset>`; the preset is applied
+  inside the task's lock and reset when the task ends, so tasks never inherit each other's grants.
+- Automatic approval: `-Dbrowser4.agent.autoApprove=<preset>` (server) or
+  `--auto-approve <preset>` (per task) raises a **ceiling** — a call the preset refuses is granted
+  when the preset that grants it is no wider than the ceiling (`read-build` → build; `write` →
+  mutation and, being narrower, the build; `full` → mutation, build and shell). Off by default.
+  `denyTools`, protected directories/files and credential paths are never approved; each approval is
+  audited `AUTO_APPROVED`.
+- `coding.permissions()` reports the active preset, the workspace, what is allowed, every denied
+  method and the current protections. Call it after a refusal instead of retrying the same call
+  with different syntax.
+- A refused call is a failed **step**, not a failed task, and its text is machine-readable:
+  `PERMISSION_DENIED | code=… | tool=… | detail=… | hint=…` (`TOOL_DENIED`, `READ_ONLY`,
+  `EXEC_DISABLED`, `COMMAND_NOT_ALLOWED`, `PROTECTED_PATH`, `SENSITIVE_PATH`,
+  `PATH_OUTSIDE_WORKSPACE`, `COMMAND_PATH_DENIED`).
+
+Relations that hold regardless of preset:
+
+- `read-build`/`read` refuse file mutation at the file-system layer too (`write`, `append`,
+  `replace`, `replaceRegex`, `editLines`, `insertAfter`, `revert`, `delete`, `mkdir`, `copy`,
+  `move`) and refuse the mutating `coding.protect(path, on)` form; the listing form still works.
+- `.browser4` (the agent's own snapshots/checkpoints/worktrees) and `.github/workflows` are
+  protected as whole subtrees; `VERSION`, `AGENTS.md`, `CLAUDE.md`, the root `pom.xml`, the BOM and
+  `.github/workflows/ci.yml` are protected files. The **file tools** refuse to write them and the
+  **shell** refuses any command that names them — including a redirection target
+  (`echo x > .browser4/…`) and a protected `workingDir` — so `coding.shell` is not a way around the
+  guard. A write through a link inside the workspace is judged by the link's real path.
+- `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud` and `~/.browser4` are never readable: the file
+  tools refuse them (real-path checked, so a link inside the workspace cannot reach them) and the
+  shell refuses command arguments naming them in every spelling we can expand (`~`, `$VAR`,
+  `${VAR}`, `$env:VAR`, `%VAR%`), including inside a quoted command substitution
+  (`echo "$(cat ~/.ssh/id_rsa)"`). `-Dbrowser4.agent.shell.pathGuard=off` disables only the
+  credential **argument** check — the protected subtrees stay enforced.
+- The presets bound what the model can *spell*. They are not an OS sandbox: `read-build` and above
+  run the repository's own build (Maven plugins, npm scripts), which executes project code.
+
 ## Shell & Filesystem Tools
 
 - `coding.shell(command, timeoutSeconds?, workingDir?)` — execute allowed dev commands (git/cargo/mvn/npm/python/...). The WHOLE command line is validated: every segment split on `&&` `||` `;` `|` `&`, every `$(...)`/backtick substitution, and every inline `sh -c "..."` / `pwsh -Command "..."` / `cmd /c ...` script is checked against the same allow-list. Windows launcher names normalize first (`mvnw.cmd` → `mvnw`).

@@ -23,6 +23,7 @@ import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
 import ai.platon.pulsar.chrome.dom.util.DomDebug
+import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.SafeText
 import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.common.AppPaths
@@ -166,6 +167,11 @@ internal data class CliEngineToolSet(
  * @param coreMethodAllowlist Explicit per-domain method allowlist; when null
  *   the task-adaptive allowlist is used ([CLI_BROWSING_CODING_METHODS] for
  *   browsing tasks, [CLI_CORE_CODING_METHODS] for coding tasks).
+ * @param policy The access policy that decides which methods exist at all. Methods the policy
+ *   denies are removed from the registry *before* the initial selection and before the disclosure
+ *   pool is built, so `system.listTools` / `system.exposeTools` cannot bring them back — the
+ *   initial exposure and the disclosure pool are two views of one filtered list. Under the default
+ *   [AgentAccessPolicy.serverDefault] (`FULL`) nothing is filtered.
  */
 internal fun buildCliEngineToolSet(
     allRegistry: Map<String, ToolSpec>,
@@ -175,6 +181,7 @@ internal fun buildCliEngineToolSet(
     codingMode: Boolean = false,
     coreDomains: Set<String> = CLI_CORE_DOMAINS,
     coreMethodAllowlist: Map<String, Set<String>>? = null,
+    policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
 ): CliEngineToolSet {
     // Task-adaptive coding allowlist; explicit allowlists (callers/tests) win.
     val effectiveAllowlist = coreMethodAllowlist
@@ -185,10 +192,22 @@ internal fun buildCliEngineToolSet(
     // (only system.help), plus the executor's authoritative system specs
     // (help/skillDoc/taskComplete). Duplicates collapse on the sanitized
     // tool name, keeping the first occurrence (the registry's merged help).
+    //
+    // The access policy is applied here, on the single list every later view is
+    // derived from: the initial set, the disclosure registry and the `listTools`
+    // listing. Filtering only the initial selection would leave `exposeTools`
+    // able to re-enable a denied method (plan P0-2/E4).
+    //
+    // `system.*` is outside the filter: the policy governs the coding surface, and a
+    // `denyTools=["*"]` that removed `system.taskComplete` would leave the run with no way to
+    // finish at all (the model would report completion by prose, which the finish gate rejects).
     val cliDomainSpecs = (
-        allRegistry.values.filter { it.domain in CLI_ENGINE_DOMAINS && it.domain != "system" } +
+        allRegistry.values
+            .filter { it.domain in CLI_ENGINE_DOMAINS && it.domain != "system" }
+            .filter { policy.allowsTool(it.domain, it.method) } +
             systemSpecs
-        ).distinctBy { ToolSpecificationConverter.toolName(it.domain, it.method) }
+        )
+        .distinctBy { ToolSpecificationConverter.toolName(it.domain, it.method) }
     val registry = ToolSpecificationConverter.toRegistry(cliDomainSpecs)
     val specs = ToolSpecificationConverter.toToolSpecifications(cliDomainSpecs)
 
@@ -1260,6 +1279,9 @@ open class RobustBrowserAgent(
             // auto-detected: coding tasks get the full coding core for their
             // initial exposure.
             codingMode = codingMode,
+            // Per-task policy: a method the preset forbids never enters the registry, so
+            // `system.exposeTools` can only ever return `unknown` for it (E4).
+            policy = agentToolManager.accessPolicy,
         )
         if (toolSet.usedMode != initialToolSet) {
             logger.warn(
@@ -1981,7 +2003,10 @@ open class RobustBrowserAgent(
             )
         }
         append("\n\n")
-        append(CliAgentPrompt.hygiene(codingMode, agentWorkspaceDir))
+        // The per-task policy, not the server default: `agent run --access read` must tell the
+        // model about its boundaries in the first round, and a `--access full` task running on a
+        // backend configured for `read` must not be told it is restricted.
+        append(CliAgentPrompt.hygiene(codingMode, agentWorkspaceDir, agentToolManager.accessPolicy))
     }
 
     @Deprecated("This is the legacy branch for agent.run(), and will be removed in the further")

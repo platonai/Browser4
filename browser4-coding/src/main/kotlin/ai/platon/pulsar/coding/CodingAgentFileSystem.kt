@@ -53,6 +53,18 @@ class CodingAgentFileSystem(
      */
     private val protectedFiles: Set<String> = DEFAULT_PROTECTED_FILES,
     /**
+     * Directories whose whole subtree the agent must never modify. Defaults to the agent's own
+     * bookkeeping directory and the CI workflow directory; see [DEFAULT_PROTECTED_DIRS].
+     */
+    private val protectedDirs: Set<String> = DEFAULT_PROTECTED_DIRS,
+    /**
+     * Directories outside the workspace that are never readable or writable, even with
+     * [allowExternalAccess]. Home-relative entries (`~/.ssh`) are expanded against `user.home`.
+     * Paths inside the workspace root are exempt, so a workspace that itself lives under
+     * `~/.browser4` (the `--fresh-workspace` case) stays fully accessible.
+     */
+    private val sensitivePaths: Set<String> = DEFAULT_SENSITIVE_PATHS,
+    /**
      * Persist write snapshots under `<workspace>/.browser4/coding-snapshots/`
      * so `revert`/`diff` survive a backend restart (plan P2.3). The directory is
      * git-ignored. Off by default so tests and throw-away workspaces stay
@@ -60,6 +72,13 @@ class CodingAgentFileSystem(
      * enables it.
      */
     private val persistSnapshots: Boolean = false,
+    /**
+     * When true every mutator (`write`/`append`/`replace`/`editLines`/`insertAfter`/`delete`/
+     * `mkdir`/`copy`/`move`/`revert`/`protect`) refuses up front with a structured error. This is
+     * the lowest layer of the access policy, so a `read`/`read-build` preset cannot be bypassed by
+     * a caller that reached the file system directly.
+     */
+    private val readOnly: Boolean = false,
 ) {
     companion object {
         const val MAX_READ_SIZE_BYTES = 5 * 1024 * 1024L // 5 MB
@@ -98,6 +117,38 @@ class CodingAgentFileSystem(
             "pom.xml",          // root aggregator pom — module registration lives here
             "browser4-dependencies/pom.xml", // BOM
             ".github/workflows/ci.yml",
+        )
+
+        /**
+         * Directories whose entire subtree the agent must never modify.
+         *
+         * - `.browser4` holds the agent's own bookkeeping: file snapshots (the undo history behind
+         *   `revert`/`diff`), dev-task checkpoints (trusted by `resumeDevTask`) and isolated git
+         *   worktrees. A model that could write here could delete its own undo history or forge a
+         *   checkpoint, so the whole subtree is off limits to the tools — the tools write to it
+         *   through their own direct file APIs, not through [writeFile]/[delete].
+         * - `.github/workflows` holds CI definitions; a single edited file changes what runs on
+         *   every push. The explicit file entry above is kept for readability.
+         */
+        val DEFAULT_PROTECTED_DIRS: Set<String> = setOf(
+            ".browser4",
+            ".github/workflows",
+        )
+
+        /**
+         * Locations outside the workspace that hold credentials or the agent's own configuration
+         * and must never be read or written by the tools, even when [allowExternalAccess] is on.
+         *
+         * This is a second line of defence: with `allowExternalAccess=false` (the default) these
+         * paths are already unreachable, so the set mainly matters when external access is enabled
+         * explicitly, and it is the same set the shell uses for its argument-path guard.
+         */
+        val DEFAULT_SENSITIVE_PATHS: Set<String> = setOf(
+            "~/.ssh",
+            "~/.aws",
+            "~/.gnupg",
+            "~/.config/gcloud",
+            "~/.browser4",
         )
 
         /** Directories skipped by recursive searches by default. */
@@ -281,7 +332,7 @@ class CodingAgentFileSystem(
      * when [allowExternalAccess] is true.
      */
     suspend fun readFile(path: String, encoding: Charset = StandardCharsets.UTF_8): String {
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("File not found: $path")
         if (resolved.isDirectory()) return errorResult("Path is a directory: $path")
         if (Files.size(resolved) > MAX_READ_SIZE_BYTES) {
@@ -314,7 +365,7 @@ class CodingAgentFileSystem(
         endLine: Int = -1,
         maxChars: Int = DEFAULT_MAX_OUTPUT_CHARS,
     ): String {
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("File not found: $path")
 
         return try {
@@ -353,7 +404,8 @@ class CodingAgentFileSystem(
         createSnapshot: Boolean = true,
         expectedChecksum: String? = null,
     ): String {
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        mutationViolation()?.let { return errorResult(it) }
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (resolved.isDirectory()) return errorResult("Cannot write to a directory: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
         expectedChecksum?.let { expected ->
@@ -385,7 +437,8 @@ class CodingAgentFileSystem(
      * torn tail on crash.
      */
     suspend fun appendFile(path: String, content: String): String {
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        mutationViolation()?.let { return errorResult(it) }
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (resolved.isDirectory()) return errorResult("Cannot append to a directory: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
 
@@ -412,8 +465,9 @@ class CodingAgentFileSystem(
         newStr: String,
         count: Int = -1, // -1 = replace all
     ): String {
+        mutationViolation()?.let { return errorResult(it) }
         if (oldStr.isEmpty()) return errorResult("Cannot replace empty string")
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("File not found: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
 
@@ -465,8 +519,9 @@ class CodingAgentFileSystem(
         replacement: String,
         count: Int = -1,
     ): String {
+        mutationViolation()?.let { return errorResult(it) }
         if (regex.isEmpty()) return errorResult("Cannot replace empty regex")
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("File not found: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
 
@@ -522,10 +577,11 @@ class CodingAgentFileSystem(
         endLine: Int,
         content: String,
     ): String {
+        mutationViolation()?.let { return errorResult(it) }
         if (startLine < 1 || endLine < startLine) {
             return errorResult("Invalid line range: start=$startLine end=$endLine (1-based, start <= end)")
         }
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("File not found: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
 
@@ -559,8 +615,9 @@ class CodingAgentFileSystem(
      * Insert [content] after the line containing [anchor] (substring match on first hit).
      */
     suspend fun insertAfterInFile(path: String, anchor: String, content: String): String {
+        mutationViolation()?.let { return errorResult(it) }
         if (anchor.isEmpty()) return errorResult("Anchor must not be empty")
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("File not found: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
 
@@ -598,7 +655,8 @@ class CodingAgentFileSystem(
      * see tracked files.
      */
     suspend fun revert(path: String): String {
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        mutationViolation()?.let { return errorResult(it) }
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         val snapshot = snapshots[resolved] ?: loadPersistedSnapshot(resolved)
             ?: return errorResult("No snapshot available for revert: $path")
         snapshots.putIfAbsent(resolved, snapshot)
@@ -637,7 +695,7 @@ class CodingAgentFileSystem(
      * Get file or directory information.
      */
     fun fileInfo(path: String): String {
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("Not found: $path")
 
         return try {
@@ -668,8 +726,9 @@ class CodingAgentFileSystem(
      * - version-control directories (.git/.svn/.hg) can never be deleted recursively
      */
     suspend fun delete(path: String, recursive: Boolean = false): String {
+        mutationViolation()?.let { return errorResult(it) }
         if (!allowDestructive) return errorResult("Destructive operations disabled")
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("Not found: $path")
 
         // Governance protection: never delete repo-critical files.
@@ -766,7 +825,11 @@ class CodingAgentFileSystem(
      * Create a directory (and parents if needed).
      */
     suspend fun mkdir(path: String): String {
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        mutationViolation()?.let { return errorResult(it) }
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
+        // A directory under a protected subtree is a write like any other — without this the tools
+        // could shape (and later reason about) the agent's own bookkeeping tree.
+        protectionViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             withContext(Dispatchers.IO) {
@@ -782,6 +845,7 @@ class CodingAgentFileSystem(
      * Copy a file or directory.
      */
     suspend fun copy(source: String, dest: String): String {
+        mutationViolation()?.let { return errorResult(it) }
         if (!allowDestructive) return errorResult("Destructive operations disabled")
         val src = resolvePath(source) ?: return errorResult("Source not resolved: $source")
         val dst = resolvePath(dest) ?: return errorResult("Dest not resolved: $dest")
@@ -810,6 +874,7 @@ class CodingAgentFileSystem(
      * Move/rename a file or directory.
      */
     suspend fun move(source: String, dest: String): String {
+        mutationViolation()?.let { return errorResult(it) }
         if (!allowDestructive) return errorResult("Destructive operations disabled")
         val src = resolvePath(source) ?: return errorResult("Source not resolved: $source")
         val dst = resolvePath(dest) ?: return errorResult("Dest not resolved: $dest")
@@ -841,7 +906,7 @@ class CodingAgentFileSystem(
      * List files in a directory (relative to workspace root).
      */
     suspend fun listDir(path: String = ".", maxDepth: Int = 1): String {
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("Not found: $path")
         if (!resolved.isDirectory()) return errorResult("Not a directory: $path")
 
@@ -996,7 +1061,7 @@ class CodingAgentFileSystem(
         ignoreCase: Boolean = false,
         maxResults: Int = 500,
     ): String {
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("Not found: $path")
 
         val regex = try {
@@ -1112,7 +1177,7 @@ class CodingAgentFileSystem(
      *                  code moves and repeated boilerplate).
      */
     suspend fun diff(path: String, algorithm: String = "myers"): String {
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         val snapshot = snapshots[resolved] ?: return "No snapshot available for diff: $path"
 
         val current = try {
@@ -1241,6 +1306,7 @@ class CodingAgentFileSystem(
         val resolved = if (p.isAbsolute) {
             if (!allowExternalAccess && !p.startsWith(canonicalRoot)) {
                 logger.warn("External path access denied: $path")
+                PermissionAudit.record("coding.fs", PermissionAudit.CODE_PATH_OUTSIDE_WORKSPACE)
                 return null
             }
             p.normalize()
@@ -1251,10 +1317,41 @@ class CodingAgentFileSystem(
         // Security: prevent path traversal outside workspace when external access disabled
         if (!allowExternalAccess && !resolved.startsWith(canonicalRoot)) {
             logger.warn("Path traversal blocked: $path resolves to $resolved")
+            PermissionAudit.record("coding.fs", PermissionAudit.CODE_PATH_OUTSIDE_WORKSPACE)
+            return null
+        }
+
+        // Security: credential locations stay off limits even when external access is enabled.
+        // The workspace exemption is decided on the REAL path as well, because a link inside the
+        // workspace can point into a credential location (`--fresh-workspace` mirrors module
+        // junctions, and a checkout may contain symlinks). Deciding on the lexical path alone let
+        // `<workspace>/link/id_rsa` read a private key.
+        if (isSensitiveLocation(resolved)) {
+            logger.warn("Sensitive path access denied: $path resolves to $resolved")
+            PermissionAudit.record("coding.fs", PermissionAudit.CODE_SENSITIVE_PATH)
             return null
         }
 
         return resolved
+    }
+
+    /** Home-expanded [sensitivePaths], resolved once per instance. */
+    private val sensitiveRoots: List<Path> by lazy { SensitivePaths.roots(sensitivePaths) }
+
+    /**
+     * Whether [candidate] must be refused as a credential location.
+     *
+     * A path that is inside the workspace *and* whose real path is still inside it is the agent's
+     * own tree and therefore exempt — a `--fresh-workspace` workspace lives under `~/.browser4`, so
+     * treating the whole tree as sensitive would make every file tool call fail. A path that is
+     * inside the workspace only lexically, while the link resolves elsewhere, is *not* exempt.
+     */
+    private fun isSensitiveLocation(candidate: Path): Boolean {
+        val real = runCatching { if (Files.exists(candidate)) candidate.toRealPath() else null }.getOrNull()
+        if (candidate.startsWith(canonicalRoot) && (real == null || real.startsWith(canonicalRoot))) {
+            return false
+        }
+        return SensitivePaths.isSensitive(candidate, sensitiveRoots)
     }
 
     private fun snapshotFile(path: Path) {
@@ -1447,12 +1544,50 @@ class CodingAgentFileSystem(
 
 
     /**
+     * Structured refusal when the access policy forbids source mutation ([readOnly]).
+     *
+     * Checked before path resolution so the caller learns the *policy* reason instead of a
+     * generic "path not resolved" message.
+     */
+    private fun mutationViolation(): String? = if (readOnly) {
+        PermissionAudit.denied(
+            tool = "coding.fs",
+            code = PermissionAudit.CODE_READ_ONLY,
+            detail = "file mutations are disabled by the access policy (read-only workspace)",
+            hint = "re-run with access=full or access=write to edit the workspace",
+        )
+    } else null
+
+    /**
+     * Refusal text for a path the policy would not resolve.
+     *
+     * [resolvePath] records the precise cause ([PermissionAudit.CODE_PATH_OUTSIDE_WORKSPACE] or
+     * [PermissionAudit.CODE_SENSITIVE_PATH]) because only it knows which branch refused; this only
+     * formats the message the caller hands back.
+     */
+    private fun unresolvedPath(path: String): String = PermissionAudit.format(
+        tool = "coding.fs",
+        code = PermissionAudit.CODE_PATH_DENIED,
+        detail = "path '$path' is outside the workspace, in a sensitive location, or protected",
+        hint = "use a workspace-relative path; paths outside the workspace require " +
+            "-Dbrowser4.agent.allowExternalAccess=true, and credential locations stay refused either way",
+    )
+
+    /**
      * Reject destructive ops on repo-governance files (VERSION, AGENTS.md, poms, ...)
      * or session-dynamically protected files ([protect]).
      * Returns an error string when the resolved path is protected, else null.
+     *
+     * The relative path is computed from the REAL path when that still lands inside the workspace,
+     * so a link inside the workspace pointing at `.browser4` or `.github/workflows` cannot be used
+     * to write into the protected subtree. A module junction resolves outside the workspace and is
+     * therefore judged by its lexical path — writing through it is the documented
+     * `--fresh-workspace` behaviour.
      */
     private fun protectionViolation(resolved: Path): String? {
-        val rel = canonicalRoot.relativize(resolved).toString().replace('\\', '/')
+        val real = runCatching { if (Files.exists(resolved)) resolved.toRealPath() else null }.getOrNull()
+        val effective = if (real != null && real.startsWith(canonicalRoot)) real else resolved
+        val rel = canonicalRoot.relativize(effective).toString().replace('\\', '/')
         val protected = protectedFiles.any { p ->
             // Exact relative path, or basename match for single-file governance
             // entries (VERSION, AGENTS.md, CLAUDE.md). pom.xml is matched only by
@@ -1460,10 +1595,24 @@ class CodingAgentFileSystem(
             if (p == "pom.xml" || p.contains('/')) p == rel
             else rel.substringAfterLast('/') == p
         } || dynamicProtected.contains(rel)
-        return if (protected) {
-            "File is protected: $rel — delete/replace blocked. " +
-                "Use explicit intent, human review, or coding.protect(path=..., on=false) for dynamic protections."
-        } else null
+        val protectedDir = protectedDirs.firstOrNull { d -> rel == d || rel.startsWith("$d/") }
+        return when {
+            protectedDir != null -> PermissionAudit.denied(
+                tool = "coding.fs",
+                code = PermissionAudit.CODE_PROTECTED_PATH,
+                detail = "path '$rel' is inside protected directory '$protectedDir' — write/delete blocked; " +
+                    "the agent must not edit its own bookkeeping or CI definitions",
+                hint = "choose a path outside '$protectedDir'",
+            )
+            protected -> PermissionAudit.denied(
+                tool = "coding.fs",
+                code = PermissionAudit.CODE_PROTECTED_PATH,
+                detail = "file '$rel' is protected — delete/replace blocked",
+                hint = "change a different file, or ask the operator to adjust the protected set " +
+                    "(coding.protect(path=..., on=false) removes a dynamic protection only)",
+            )
+            else -> null
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1485,7 +1634,8 @@ class CodingAgentFileSystem(
      * @return confirmation message
      */
     fun protect(path: String, on: Boolean = true): String {
-        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        mutationViolation()?.let { return errorResult(it) }
+        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         val rel = canonicalRoot.relativize(resolved).toString().replace('\\', '/')
         return if (on) {
             if (dynamicProtected.add(rel)) "✓ Protected $rel from destructive operations (session)"

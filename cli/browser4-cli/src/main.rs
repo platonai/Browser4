@@ -15223,6 +15223,8 @@ fn build_agent_run_extra(
     noop_limit: Option<i64>,
     coding: bool,
     fresh_workspace: bool,
+    access: Option<&str>,
+    auto_approve: Option<&str>,
     session_id: Option<&str>,
 ) -> Value {
     let mut extra = json!({ "engine": engine });
@@ -15234,6 +15236,16 @@ fn build_agent_run_extra(
     }
     if fresh_workspace {
         extra["freshWorkspace"] = json!(true);
+    }
+    // Only forward when set: absent means "use the server-wide
+    // `browser4.agent.access` default", not "full".
+    if let Some(preset) = access.map(str::trim).filter(|s| !s.is_empty()) {
+        extra["access"] = json!(preset);
+    }
+    // Absent means the server-wide `browser4.agent.autoApprove` default, which is
+    // off — an explicit key must never be synthesized here.
+    if let Some(ceiling) = auto_approve.map(str::trim).filter(|s| !s.is_empty()) {
+        extra["autoApprove"] = json!(ceiling);
     }
     if let Some(session) = session_id.map(str::trim).filter(|s| !s.is_empty()) {
         extra["sessionId"] = json!(session);
@@ -15335,6 +15347,8 @@ async fn handle_agent_run(
             .get("freshWorkspace")
             .and_then(|v| v.as_bool())
             == Some(true),
+        tool_params.get("access").and_then(|v| v.as_str()),
+        tool_params.get("autoApprove").and_then(|v| v.as_str()),
         resolved_session_id.as_deref(),
     );
     let task_id = submit_agent_task(client, base_url, task, extra).await?;
@@ -40740,16 +40754,46 @@ linkGroups:
     /// The session id, once resolved, is the payload the backend acts on.
     #[test]
     fn build_agent_run_extra_forwards_a_resolved_session_id() {
-        let extra = build_agent_run_extra("cli", None, false, false, Some("s-work"));
+        let extra = build_agent_run_extra("cli", None, false, false, None, None, Some("s-work"));
         assert_eq!(extra["sessionId"], json!("s-work"));
         assert_eq!(extra["engine"], json!("cli"));
 
-        let anonymous = build_agent_run_extra("cli", None, true, false, None);
+        let anonymous = build_agent_run_extra("cli", None, true, false, None, None, None);
         assert!(
             anonymous.get("sessionId").is_none(),
             "no session must stay absent, got {anonymous}"
         );
         assert_eq!(anonymous["coding"], json!(true));
+    }
+
+    /// `--access` is only forwarded when set: an absent key means "server
+    /// default", and a blank value must not become a preset id.
+    #[test]
+    fn build_agent_run_extra_forwards_only_a_non_blank_access_preset() {
+        let read_build = build_agent_run_extra("cli", None, false, false, Some("read-build"), None, None);
+        assert_eq!(read_build["access"], json!("read-build"));
+
+        let absent = build_agent_run_extra("cli", None, false, false, None, None, None);
+        assert!(absent.get("access").is_none(), "got {absent}");
+
+        let blank = build_agent_run_extra("cli", None, false, false, Some("   "), None, None);
+        assert!(blank.get("access").is_none(), "got {blank}");
+    }
+
+    /// `--auto-approve` follows the same contract: only a non-blank ceiling is
+    /// forwarded, because an absent key means "server default", which is off.
+    #[test]
+    fn build_agent_run_extra_forwards_only_a_non_blank_auto_approve_ceiling() {
+        let ceiling =
+            build_agent_run_extra("cli", None, false, false, Some("read"), Some("write"), None);
+        assert_eq!(ceiling["access"], json!("read"));
+        assert_eq!(ceiling["autoApprove"], json!("write"));
+
+        let absent = build_agent_run_extra("cli", None, false, false, Some("read"), None, None);
+        assert!(absent.get("autoApprove").is_none(), "got {absent}");
+
+        let blank = build_agent_run_extra("cli", None, false, false, None, Some("  "), None);
+        assert!(blank.get("autoApprove").is_none(), "got {blank}");
     }
 
     #[test]

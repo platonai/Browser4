@@ -1,11 +1,14 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.coding.AccessPreset
+import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.ArtifactScaffolds
 import ai.platon.pulsar.coding.ArtifactValidator
 import ai.platon.pulsar.coding.CdpTrapCheck
 import ai.platon.pulsar.coding.CodeRunner
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
+import ai.platon.pulsar.coding.CodingComponents
 import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.coding.DevFlowScaffolds
 import ai.platon.pulsar.coding.DevTaskCheckpoint
@@ -21,11 +24,13 @@ import ai.platon.pulsar.coding.ModuleMap
 import ai.platon.pulsar.coding.RepoConsistencyReporter
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.TokenEstimator
+import ai.platon.pulsar.coding.ToolAccessDeniedException
 import ai.platon.pulsar.coding.CodingTokenStats
 import ai.platon.pulsar.coding.ValidationResult
 import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.coding.VerificationRunner
 import ai.platon.pulsar.coding.WorkspaceIsolation
+import ai.platon.pulsar.coding.WorkspaceMirror
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.model.TcEvaluate
@@ -156,13 +161,45 @@ class CodingToolExecutor : AbstractToolExecutor() {
     }
 
     /**
-     * Composite target that bundles the enhanced shell and filesystem.
+     * Composite target that bundles the enhanced shell, the filesystem and the access policy.
      * Registered as a custom target in [AgentToolManager].
+     *
+     * Two shells are needed because `read-build` must run the project build while the model-facing
+     * shell is disabled ([CodingComponents.buildShell]): [buildShell] backs
+     * `mvnBuild`/`verify`/`devTask`, [shell] backs `coding.shell*`. Under [AccessPreset.FULL] they
+     * are the same instance, exactly as before the policy existed.
      */
     data class Target(
         val shell: CodingAgentShell,
         val fs: CodingAgentFileSystem,
+        /** The policy every dispatch of this target consults (E3 gate). */
+        val policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
+        /** Internal build shell; `null` under [AccessPreset.READ]. Defaults to [shell]. */
+        val buildShell: CodingAgentShell? = shell,
     )
+
+    companion object {
+        /**
+         * Builds a [Target] rooted at [root] under [policy].
+         *
+         * Single construction point for the three agent entry paths (`AgentToolManager`,
+         * `CodingToolExecutor.targetAt`, `MCPToolController`). The FULL profile keeps one shell
+         * instance for both the model-facing and the build role.
+         */
+        fun target(
+            root: java.nio.file.Path,
+            policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
+            persistSnapshots: Boolean = false,
+        ): Target {
+            val shell = CodingComponents.shell(root, policy)
+            return Target(
+                shell = shell,
+                fs = CodingComponents.fs(root, policy, persistSnapshots),
+                policy = policy,
+                buildShell = CodingComponents.buildShell(root, policy, modelShell = shell),
+            )
+        }
+    }
 
     init {
         // --- Shell methods ---
@@ -215,6 +252,16 @@ class CodingToolExecutor : AbstractToolExecutor() {
             arguments = emptyList(),
             returnType = "String",
             description = "Detect the project type (rust, maven, node, etc.)"
+        )
+        toolSpec["permissions"] = ToolSpec(
+            domain = domain, method = "permissions",
+            arguments = emptyList(),
+            returnType = "String",
+            description = "Report what this run is allowed to read, write and execute: active preset, " +
+                "workspace root, whether external paths/network/destructive operations are permitted, " +
+                "which coding methods are denied, which files are protected, and whether the workspace " +
+                "is mirrored/isolated. Call this before planning work when a tool call was refused — " +
+                "it tells you which route is still allowed instead of guessing."
         )
 
         // --- File system methods ---
@@ -808,8 +855,27 @@ class CodingToolExecutor : AbstractToolExecutor() {
         require(functionName.isNotBlank()) { "Function name must not be blank" }
         require(receiver is Target) { "Target must be CodingToolExecutor.Target" }
 
+        // E3 — the single method-level allowlist. Single calls, batch steps and MCP direct calls
+        // all end up here, so a denied method cannot be reached through any of them.
+        receiver.policy.denial(this.domain, functionName)?.let { throw it }
+
+        // `coding.protect` is listed as a READ method because its no-argument form only lists the
+        // current protections, but the form that carries a `path` edits them — so it needs the
+        // file-mutation grant as well. Without this, a read-only preset could still widen its own
+        // protection set (and, with `on=false`, drop a protection another layer relies on).
+        if (functionName == "protect" && args.containsKey("path")) {
+            receiver.policy.mutationDenial(this.domain, functionName)?.let { throw it }
+        }
+
         val shell = receiver.shell
         val fs = receiver.fs
+        val policy = receiver.policy
+
+        // Build entry points (`mvnBuild`/`verify`/`validate`/`devTask`) run through the build shell:
+        // under a preset that forbids execution it is a separate, build-only instance, so
+        // `read-build` can still compile the project while `coding.shell` stays disabled. Under
+        // `full` it *is* [shell], so session env and history behave exactly as before.
+        val buildShell = receiver.buildShell ?: shell
 
         return when (functionName) {
             // --- Shell ---
@@ -846,6 +912,10 @@ class CodingToolExecutor : AbstractToolExecutor() {
             "projectType" -> {
                 validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
                 "Project type: ${shell.detectProjectType()}"
+            }
+            "permissions" -> {
+                validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
+                describePermissions(policy, fs)
             }
 
             // --- File System ---
@@ -1061,7 +1131,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
                 val json = paramBool(args, "json", functionName, required = false, default = false) ?: false
                 val result = mavenBuild.build(
-                    shell = shell,
+                    shell = buildShell,
                     module = module,
                     goals = goals,
                     skipTests = skipTests,
@@ -1246,24 +1316,27 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 if (!verify) return generated
 
                 // verify=true: run the type-appropriate build/test check after generating.
+                // All of it goes through the build shell, so the check works under
+                // `read-build`/`write` where the model-facing shell is disabled.
                 val verification: String = when (type) {
                     "b4-cli-command" -> {
                         // Rust CLI side first (fast), then the Kotlin backend compiles.
-                        val cargo = shell.executeRaw("cargo test --bin browser4-cli", timeoutSeconds = 300)
+                        val cargo = buildShell.executeRaw("cargo test --bin browser4-cli", timeoutSeconds = 300)
                         val cargoLine = if (cargo.exitCode == 0) "✓ cargo test --bin browser4-cli" else
                             "✗ cargo test failed (exit ${cargo.exitCode})"
-                        "$cargoLine\n${mavenBuild.format(mavenBuild.build(shell, "browser4-rest", "compile", true, 300))}"
+                        "$cargoLine\n${mavenBuild.format(mavenBuild.build(buildShell, "browser4-rest", "compile", true, 300))}"
                     }
                     "agent-tool" -> {
                         val module = name.removePrefix("browser4-").let { "browser4-plugins/browser4-$it" }
                         val pluginDir = if (name.startsWith("browser4-")) "browser4-plugins/$name" else ""
-                        val buildLine = mavenBuild.format(mavenBuild.build(shell, module, "compile", true, 300))
+                        val buildLine = mavenBuild.format(mavenBuild.build(buildShell, module, "compile", true, 300))
                         val validateLine = if (pluginDir.isNotEmpty()) {
                             ArtifactValidator.validatePlugin(pluginDir).format()
                         } else "plugin dir not resolved"
                         "$buildLine\n$validateLine"
                     }
-                    "rest-endpoint" -> mavenBuild.format(mavenBuild.build(shell, "browser4-rest", "compile", true, 300))
+                    "rest-endpoint" ->
+                        mavenBuild.format(mavenBuild.build(buildShell, "browser4-rest", "compile", true, 300))
                     else -> "No automated verification for type '$type' — verify manually."
                 }
                 generated + "\n\n--- Verification ---\n$verification"
@@ -1531,7 +1604,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
                 val json = paramBool(args, "json", functionName, required = false, default = false) ?: false
                 val report = verification.verify(
-                    shell = shell,
+                    shell = buildShell,
                     fs = fs,
                     module = module,
                     checks = checks,
@@ -1615,7 +1688,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 // (surefire.failIfNoSpecifiedTests=false), i.e. a false green.
                 val testModule = if (moduleOverride.isNullOrBlank()) plan.testTarget else mavenModule
                 val report = verification.verify(
-                    shell = shell,
+                    shell = buildShell,
                     fs = fs,
                     module = mavenModule,
                     // repo-consistency always runs; compile is only meaningful
@@ -1746,8 +1819,8 @@ class CodingToolExecutor : AbstractToolExecutor() {
         val reopened = retainedRoot?.let { WorkspaceIsolation.reopen(it, checkpoint.id) }
         val isolation = reopened ?: if (retainedRoot == null) beginIsolation(receiver) else null
         val effective = when {
-            reopened != null -> targetAt(reopened.isolatedRoot)
-            isolation != null -> targetAt(isolation.isolatedRoot)
+            reopened != null -> targetAt(reopened.isolatedRoot, receiver.policy)
+            isolation != null -> targetAt(isolation.isolatedRoot, receiver.policy)
             else -> receiver
         }
 
@@ -1875,20 +1948,73 @@ class CodingToolExecutor : AbstractToolExecutor() {
         }.trimEnd()
     }
 
-    /** A coding target whose shell and filesystem are rooted at [root]. */
-    private fun targetAt(root: java.nio.file.Path): Target = Target(
-        // v0.3: shell now respects allowExternalAccess for cwd containment
-        CodingAgentShell(
-            baseDir = root,
-            allowDestructive = CodingWorkspace.allowDestructive,
-            allowExternalAccess = CodingWorkspace.allowExternalAccess,
-        ),
-        CodingAgentFileSystem(
-            workspaceRoot = root,
-            allowExternalAccess = CodingWorkspace.allowExternalAccess,
-            allowDestructive = CodingWorkspace.allowDestructive,
-        ),
-    )
+    /**
+     * A coding target whose shell and filesystem are rooted at [root].
+     *
+     * Used for isolated dev-task workspaces (a worktree / reopened checkpoint). The receiver's
+     * policy travels with it: an isolated workspace is more permissive by accident only if the
+     * policy is dropped here, which would make `--fresh-workspace` a way around the preset.
+     */
+    private fun targetAt(root: java.nio.file.Path, policy: AgentAccessPolicy): Target =
+        target(root, policy)
+
+    /**
+     * The `coding.permissions` report: what this run may do, in the terms the presets are defined in.
+     *
+     * A refusal is only useful if it is actionable, so this lists the *allowed* routes next to the
+     * denied ones — a model that was refused `coding.shell` learns here that `coding.mvnBuild` is
+     * still open under `read-build`, instead of retrying the refused call with different syntax.
+     */
+    private fun describePermissions(policy: AgentAccessPolicy, fs: CodingAgentFileSystem): String {
+        val yes = "yes"
+        val no = "NO (refused with PERMISSION_DENIED)"
+        val denied = toolSpec.keys.filter { !policy.allowsTool(domain, it) }.sorted()
+        return buildString {
+            appendLine("Access preset: ${policy.preset.id}")
+            appendLine(
+                "Automatic approval: " + (
+                    policy.autoApproveUpTo?.let { ceiling ->
+                        "up to '${ceiling.id}' — calls this preset refuses are granted and audited " +
+                            "(denied tools, protected paths and sensitive paths are never approved)"
+                    } ?: "off — a call this preset refuses is refused"
+                    )
+            )
+            appendLine("Workspace root: ${fs.workspaceRoot}")
+            appendLine("Isolation: ${CodingWorkspace.isolationMode}" +
+                (WorkspaceMirror.defaultSourceRepo()?.let { " (mirror of $it)" } ?: " (no source checkout detected)"))
+            appendLine("Files:")
+            appendLine("  read workspace           : $yes")
+            appendLine("  write workspace          : ${if (policy.allowsFileMutation()) yes else no}")
+            appendLine("  paths outside workspace  : ${if (policy.allowExternalAccess) yes else no}")
+            appendLine("  delete/copy/move         : ${if (policy.allowDestructive) yes else no}")
+            appendLine("Build and execution:")
+            // Ask the policy, not the preset: under an approval ceiling `read` may still build, and
+            // a report that contradicts the gate is worse than no report.
+            appendLine("  project build (mvn/verify): ${if (policy.allowsTool(domain, "mvnBuild")) yes else no}")
+            appendLine("  shell + arbitrary code    : ${if (policy.allowsExec()) yes else no}")
+            appendLine("  network shell commands    : ${if (policy.allowNetwork) yes else no}")
+            if (policy.denyTools.isNotEmpty()) {
+                appendLine("Explicitly denied by configuration: ${policy.denyTools.sorted().joinToString(", ")}")
+            }
+            appendLine("Denied coding methods (${denied.size}): ${denied.joinToString(", ").ifEmpty { "none" }}")
+            // The rails, not the capabilities: a model that reads this must learn what it can never
+            // touch — `protectedList()` alone only shows the session's dynamic protections, which
+            // made the report answer "No protections." next to a guarded bookkeeping tree.
+            appendLine("Protections:")
+            appendLine("  protected files   : ${policy.protectedFiles.sorted().joinToString(", ")}")
+            appendLine("  protected dirs    : ${policy.protectedDirs.sorted().joinToString(", ")}")
+            appendLine("  credential paths  : ${policy.sensitivePaths.sorted().joinToString(", ")}")
+            appendLine(
+                "  session policies  : " +
+                    fs.protectedList().lines().joinToString("; ") { it.trim() }.ifBlank { "none" }
+            )
+            appendLine(
+                "Scope of this policy: the presets bound what the model can *spell* — mutating paths, " +
+                    "commands and code. A build still executes the project's own code (Maven plugins, " +
+                    "npm scripts), so treat a build as running repository code, not as a sandbox."
+            )
+        }.trimEnd()
+    }
 
     /** Start an isolated workspace when the switch is on and the tree supports it. */
     private suspend fun beginIsolation(receiver: Target): WorkspaceIsolation? {

@@ -4037,6 +4037,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "noop-limit", description: "Override the consecutive no-op abort threshold (default: 5; long coding tasks benefit from 8-10). Passing --coding is the explicit way to mark an agent task as a coding task", is_bool: false, short: None },
                 OptionDef { name: "coding", description: "Mark the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task, which is the default: task type is never auto-detected", is_bool: true, short: None },
                 OptionDef { name: "fresh-workspace", description: "Run this task in a fresh, isolated workspace directory instead of the shared workspace. Use for tasks that must not see or mutate previous tasks' scratch files", is_bool: true, short: None },
+                OptionDef { name: "access", description: "Access preset for this task's coding tools: full (default), write (no shell), read-build (read + project build, no shell, no file mutation), read. Omit to use the server-wide browser4.agent.access default. Reset when the task ends", is_bool: false, short: None },
+                OptionDef { name: "auto-approve", description: "Automatic approval ceiling for this task (full, write, read-build or read): a coding call the access preset refuses is granted and audited when the preset that would grant it is no wider than this ceiling — no human in the loop. Denied tools, protected paths and sensitive paths are never approved. Omit to use the server-wide browser4.agent.autoApprove default (off)", is_bool: false, short: None },
                 OptionDef { name: "engine", description: "Agent execution engine (default: cli; observe-act is the DEPRECATED legacy engine)", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "Stream the task's steps (tool calls, model text, failures) while waiting, then print the result. Implies waiting; a slow tool or failure is always reported, successful fast tools are not", is_bool: true, short: None },
                 OptionDef { name: "ndjson", description: "With --follow: emit one JSON object per step (NDJSON) for machine consumption instead of human-readable lines", is_bool: true, short: None },
@@ -4066,6 +4068,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if get_bool(args, "fresh-workspace").unwrap_or(false) {
                     p["freshWorkspace"] = json!(true);
+                }
+                if let Some(access) = get_opt_str(args, "access") {
+                    p["access"] = json!(access);
+                }
+                // Same rule as `access`: absent means "server default", which is off.
+                if let Some(ceiling) = get_opt_str(args, "auto-approve") {
+                    p["autoApprove"] = json!(ceiling);
                 }
                 // CLI-side modes: consumed by handle_agent_run, never sent to
                 // the backend (`command.run` rejects undeclared arguments).

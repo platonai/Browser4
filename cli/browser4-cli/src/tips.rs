@@ -306,6 +306,12 @@ const TIPS_AGENT: &[Tip] = &[
         text: "`agent run \"<task>\" --follow` streams every tool call and the model's own text; Ctrl+C cancels the task instead of orphaning it",
     },
     Tip {
+        text: "`agent run <task> --access read-build` lets a coding task read the workspace and run the build, but not edit files or use the shell — `--access write` allows edits while keeping the shell off",
+    },
+    Tip {
+        text: "`agent run <task> --auto-approve write` keeps a narrow `--access` but grants it file mutation on demand; the ceiling never overrides `denyTools`, protected paths or sensitive paths, and every approval is audited",
+    },
+    Tip {
         text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls",
     },
 ];

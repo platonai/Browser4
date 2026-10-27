@@ -4,8 +4,11 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.common.AgentShell
+import ai.platon.pulsar.coding.AccessPreset
+import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
+import ai.platon.pulsar.coding.CodingComponents
 import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.skills.SkillContext
@@ -37,6 +40,17 @@ class AgentToolManager constructor(
      *  [b4CliExecutor] are rebuilt to point at the new root. */
     @Volatile
     var workspaceRoot: Path = initialWorkspaceRoot
+        private set
+
+    /**
+     * The access policy for the coding domain.
+     *
+     * Replaced per task by [applyAccessPolicy] (from `command.run(access=…)`) and restored by
+     * [resetAccessPolicy] when the task ends: the companion agent is shared across tasks, so a
+     * previous task's grant must never leak into the next one.
+     */
+    @Volatile
+    var accessPolicy: AgentAccessPolicy = AgentAccessPolicy.serverDefault
         private set
 
     /** Upper bound for polling document.readyState after a navigation-triggering action. */
@@ -71,7 +85,7 @@ class AgentToolManager constructor(
         private set
     /** Composite target for the coding domain. Rebuilt alongside the shell/fs
      *  on [rebindWorkspace] so tool dispatch always targets the active root. */
-    var codingTarget: CodingToolExecutor.Target = CodingToolExecutor.Target(codingShell, codingFs)
+    var codingTarget: CodingToolExecutor.Target = buildCodingTarget(initialWorkspaceRoot)
         private set
     /** CLI tool executor for browser4-cli integration (domain `b4`) */
     var b4CliExecutor: B4CliToolExecutor = buildB4CliExecutor(initialWorkspaceRoot)
@@ -313,18 +327,20 @@ class AgentToolManager constructor(
 
     // -- workspace rebinding (fresh-workspace) -----------------------------------
 
-    private fun buildCodingShell(root: Path) = CodingAgentShell(
-        baseDir = root,
-        allowDestructive = CodingWorkspace.allowDestructive,
-        allowExternalAccess = CodingWorkspace.allowExternalAccess,
-    )
+    private fun buildCodingShell(root: Path) = CodingComponents.shell(root, accessPolicy)
 
-    private fun buildCodingFs(root: Path) = CodingAgentFileSystem(
-        workspaceRoot = root,
-        allowExternalAccess = CodingWorkspace.allowExternalAccess,
-        allowDestructive = CodingWorkspace.allowDestructive,
-        persistSnapshots = true,
-    )
+    private fun buildCodingFs(root: Path) = CodingComponents.fs(root, accessPolicy, persistSnapshots = true)
+
+    /** Composite target carrying the active policy; the executor enforces it on every dispatch. */
+    private fun buildCodingTarget(root: Path): CodingToolExecutor.Target {
+        val shell = codingShell
+        return CodingToolExecutor.Target(
+            shell = shell,
+            fs = codingFs,
+            policy = accessPolicy,
+            buildShell = CodingComponents.buildShell(root, accessPolicy, modelShell = shell),
+        )
+    }
 
     private fun buildB4CliExecutor(root: Path) = B4CliToolExecutor(
         backendBaseUrl = session.sessionConfig.get("browser4.server.url"),
@@ -341,10 +357,31 @@ class AgentToolManager constructor(
         workspaceRoot = root
         codingShell = buildCodingShell(root)
         codingFs = buildCodingFs(root)
-        codingTarget = CodingToolExecutor.Target(codingShell, codingFs)
+        codingTarget = buildCodingTarget(root)
         b4CliExecutor = buildB4CliExecutor(root)
         logger.info("rebound agent workspace to {}", root)
     }
+
+    /**
+     * Apply the access policy for the current task.
+     *
+     * Rebuilds the coding shell/fs/target so the new preset is not merely recorded but enforced:
+     * a read-only file system and a disabled or narrowed shell are created here, while the tool
+     * registry filter and the executor's method gate read [accessPolicy] directly.
+     */
+    fun applyAccessPolicy(policy: AgentAccessPolicy) {
+        if (policy == accessPolicy) return
+        accessPolicy = policy
+        codingShell = buildCodingShell(workspaceRoot)
+        codingFs = buildCodingFs(workspaceRoot)
+        codingTarget = buildCodingTarget(workspaceRoot)
+        logger.info(
+            "agent access policy: preset={}, denyTools={}", policy.preset.id, policy.denyTools
+        )
+    }
+
+    /** Restore the server-wide default policy after a task ends. */
+    fun resetAccessPolicy() = applyAccessPolicy(AgentAccessPolicy.serverDefault)
 
     /**
      * Register a custom target object for a specific domain.

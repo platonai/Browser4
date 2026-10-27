@@ -69,13 +69,26 @@ object CodingWorkspace {
         return null
     }
 
-    /** Whether absolute paths outside the workspace root are permitted. */
+    /**
+     * Whether absolute paths outside the workspace root are permitted.
+     *
+     * Deprecated entry point: this is now a read-only projection of
+     * [AgentAccessPolicy.serverDefault], which is the single source of truth. Prefer
+     * `browser4.agent.access=<preset>` over the legacy property.
+     */
+    @Deprecated("Use AgentAccessPolicy.serverDefault.allowExternalAccess")
     val allowExternalAccess: Boolean
-        get() = System.getProperty("browser4.agent.allowExternalAccess", "false").toBoolean()
+        get() = AgentAccessPolicy.serverDefault.allowExternalAccess
 
-    /** Whether destructive file operations (delete/move/copy) are permitted. */
+    /**
+     * Whether destructive file operations (delete/move/copy) are permitted.
+     *
+     * Deprecated entry point: this is now a read-only projection of
+     * [AgentAccessPolicy.serverDefault]. Note this switch is **not** a read-only mode.
+     */
+    @Deprecated("Use AgentAccessPolicy.serverDefault.allowDestructive")
     val allowDestructive: Boolean
-        get() = System.getProperty("browser4.agent.allowDestructive", "true") != "false"
+        get() = AgentAccessPolicy.serverDefault.allowDestructive
 
     /**
      * Transactional workspace mode (plan P2.1): `off` (default) runs a dev task

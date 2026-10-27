@@ -96,6 +96,89 @@ The workspace lives on the machine that runs the backend — when the backend is
 remote, copy the artifacts from there (or have the agent return the data inline).
 Each task gets its own workspace, so artifacts of two tasks never collide.
 
+### Permissions (`--access`)
+
+A task's coding tools run under one access **preset**, which decides what the
+agent may read, write and execute. `--access` sets it for a single task; omit it
+to use the backend-wide `browser4.agent.access` default (`full` when unset):
+
+| Preset | Read workspace | Write files | Project build (`mvnBuild`/`verify`) | Shell / arbitrary code |
+|---|---|---|---|---|
+| `full` *(default)* | ✓ | ✓ | ✓ | ✓ |
+| `write` | ✓ | ✓ | ✓ | ✗ |
+| `read-build` | ✓ | ✗ | ✓ | ✗ |
+| `read` | ✓ | ✗ | ✗ | ✗ |
+
+```bash
+browser4-cli agent run "Read pom.xml and report the failing module" --coding --access read-build
+```
+
+An unknown `--access` value is rejected with an error instead of silently falling back — a typo
+must not quietly grant `full`.
+
+A denied call fails like any other failed step (the task still ends whatever its
+own completion check decides), and the step text names the refusal structurally:
+
+```text
+PERMISSION_DENIED | code=TOOL_DENIED | tool=coding.shell | detail=not permitted under access preset 'read-build' | hint=re-run with access=full or access=write …
+```
+
+`code` is one of `TOOL_DENIED` (the preset does not grant the method),
+`READ_ONLY` (workspace is read-only), `EXEC_DISABLED` (no shell at all),
+`COMMAND_NOT_ALLOWED` (command outside the shell's tier),
+`PATH_OUTSIDE_WORKSPACE` / `PATH_DENIED` (a path the file tools refused),
+`SENSITIVE_PATH` (credentials), `COMMAND_PATH_DENIED` (a command argument naming
+credentials), `PROTECTED_PATH` (governance file or protected directory, such as
+`.browser4`). If the agent keeps retrying a refused call, have it call
+`coding.permissions` — the same view MCP clients get — which prints the preset,
+the allowed routes and the protections.
+
+Two limits worth knowing:
+
+- The presets bound what the model can *spell* — mutating paths, commands and
+  code. They are not an OS-level sandbox: every preset that allows the project
+  build (`read-build`, `write`, `full`) executes repository code (Maven plugins,
+  npm scripts). Use a container or VM when the repository itself is untrusted.
+- `--access` is scoped to the task and reset when it ends, so the next task on
+  the same backend starts from the server default again.
+
+### Automatic approval (`--auto-approve`)
+
+`--auto-approve <preset>` raises a **ceiling**: a call the preset refuses is
+granted automatically as long as the preset that *would* grant it is no wider
+than the ceiling. This keeps a task on a narrow preset without the agent
+stalling on a denial it cannot work around.
+
+```bash
+# Read + build, but let the agent write files when it decides it must
+browser4-cli agent run "Fix the failing test" --coding --access read-build --auto-approve write
+
+# Read only, but let the agent run the shell (and therefore the build) as needed
+browser4-cli agent run "Diagnose the build" --coding --access read --auto-approve full
+```
+
+| Ceiling | Grants automatically on top of the preset |
+|---|---|
+| `read-build` | the project build |
+| `write` | file mutation (`write`/`edit`/`delete`/`copy`/`move`) **and** the project build (the build requires the narrower `read-build` grant, so it is approved too) |
+| `full` | file mutation, the project build **and** the shell / arbitrary code |
+
+Rules that hold regardless of the ceiling:
+
+- `denyTools` is never overridden — an explicit denial is a rail, not a
+  capability. A refusal names it: `detail=excluded by denyTools under access
+  preset 'full'`.
+- Protected paths (governance files, `.browser4`, `.github/workflows`) and
+  sensitive paths (credentials) are never approved.
+- Every automatically approved call is audited once as
+  `coding access auto-approved: tool=… required=… ceiling=…` and counted under
+  `AUTO_APPROVED`, so the widening is visible after the fact.
+
+Omitted, automatic approval is **off** and every refusal stands. The
+backend-wide default lives in `browser4.agent.autoApprove`; like `--access`, the
+flag is scoped to the task and reset when it ends. `coding.permissions` prints
+the effective ceiling alongside the preset.
+
 ## Patterns
 
 ### 1. Asynchronous Multi-Step Task
@@ -427,6 +510,8 @@ CLI never lets a *display* problem end it:
 | `--ndjson` | `agent run --follow` | Emit one JSON object per line (submission, every step, the final result) instead of human lines |
 | `-i`, `--interactive` | `agent run` | Open an interactive session (see above); an optional task runs immediately |
 | `--coding` | `agent run` | Explicitly mark the task as a coding task (plain file/build work; no browser page). Omitted (the default) the task is a browser task — task type is never auto-detected |
+| `--access <preset>` | `agent run` | Access preset for this task's coding tools: `full` (default), `write`, `read-build`, `read`. Omitted, the backend's `browser4.agent.access` applies. Scoped to the task and reset when it ends — see [Permissions](#permissions---access) |
+| `--auto-approve <preset>` | `agent run` | Automatic approval ceiling for this task: calls the preset refuses are granted when the preset that grants them is no wider. Omitted, the backend's `browser4.agent.autoApprove` applies (`off` by default). Scoped to the task and reset when it ends — see [Automatic approval](#automatic-approval---auto-approve) |
 | `--json` | `agent status`, `agent result`, `agent list` | Emit the envelope as JSON instead of the human rendering |
 | `--all` | `agent list --clear` | Also untrack tasks that are not finished (they keep running server-side) |
 | `--schema <json>` | `extract` | Enforce a JSON output schema for the extraction |
@@ -458,5 +543,6 @@ containing a URL or page interaction stays a browser task regardless.
 | `⚠ not delivered: …` after typing into `-i` | The task finished (or stopped accepting input) while the line was typed — the text is NOT turned into a task; type it again to start one, or `/cancel` first when you want a different task |
 | `agent list` shows a different status than `agent status` | `agent list` refreshes from the backend on every call; if the backend is unreachable it prints a note and shows cached labels |
 | Task lost after backend restart | Task ids may not persist; re-submit the task |
+| Steps fail with `PERMISSION_DENIED \| code=…` | The task's access preset refuses that call — re-submit with a wider `--access`, grant it automatically with `--auto-approve <preset>`, or narrow the task to the routes the preset allows (`coding.permissions` lists them) |
 | `extract`/`summarize` blocking too long | Use `agent run` for async execution instead |
 | Agent subcommands in batch mode | Not supported — use standalone commands |

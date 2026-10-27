@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agent.tool
 
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
+import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.CommandAgentHistory
@@ -283,6 +284,76 @@ class CommandToolExecutorTest {
         }
 
         assertTrue(ex.message!!.contains("coding"), ex.message)
+    }
+
+    @Test
+    @DisplayName("run forwards the access preset so a task can be narrowed to read-build")
+    fun runForwardsAccessPreset() {
+        runBlocking {
+            `when`(
+                runner.submitPlainCommand("s1", "report the module", null, null, null, null, AccessPreset.READ_BUILD)
+            ).thenReturn("t-access")
+
+            val taskId = call(
+                "run",
+                mapOf("command" to "report the module", "sessionId" to "s1", "access" to "read-build")
+            )
+
+            assertEquals("t-access", taskId)
+            Mockito.verify(runner)
+                .submitPlainCommand("s1", "report the module", null, null, null, null, AccessPreset.READ_BUILD)
+        }
+    }
+
+    @Test
+    @DisplayName("run rejects an unknown access preset instead of silently granting full")
+    fun runRejectsUnknownAccessPreset() {
+        val ex = assertThrows<IllegalArgumentException> {
+            call("run", mapOf("command" to "task", "sessionId" to "s1", "access" to "readonly"))
+        }
+
+        assertTrue(ex.message!!.contains("Unknown access"), ex.message)
+        Mockito.verifyNoInteractions(runner)
+    }
+
+    @Test
+    @DisplayName("run forwards the automatic approval ceiling alongside the access preset")
+    fun runForwardsAutoApproveCeiling() {
+        runBlocking {
+            `when`(
+                runner.submitPlainCommand(
+                    "s1", "report the module", null, null, null, null,
+                    AccessPreset.READ, AccessPreset.WRITE
+                )
+            ).thenReturn("t-auto")
+
+            val taskId = call(
+                "run",
+                mapOf(
+                    "command" to "report the module",
+                    "sessionId" to "s1",
+                    "access" to "read",
+                    "autoApprove" to "write",
+                )
+            )
+
+            assertEquals("t-auto", taskId)
+            Mockito.verify(runner).submitPlainCommand(
+                "s1", "report the module", null, null, null, null,
+                AccessPreset.READ, AccessPreset.WRITE
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("run rejects an unknown automatic approval ceiling instead of silently turning it off")
+    fun runRejectsUnknownAutoApproveCeiling() {
+        val ex = assertThrows<IllegalArgumentException> {
+            call("run", mapOf("command" to "task", "sessionId" to "s1", "autoApprove" to "everything"))
+        }
+
+        assertTrue(ex.message!!.contains("Unknown autoApprove"), ex.message)
+        Mockito.verifyNoInteractions(runner)
     }
 
     @Test

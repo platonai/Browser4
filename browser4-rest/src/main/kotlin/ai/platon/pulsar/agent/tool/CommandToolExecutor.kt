@@ -7,6 +7,7 @@ import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.TaskEnvelopes
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
+import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.statusWord
@@ -78,6 +79,21 @@ class CommandToolExecutor(
                 ToolSpec.Arg(
                     "engine", "String?", "null",
                     "Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated.",
+                ),
+                ToolSpec.Arg(
+                    "access", "String?", "null",
+                    "Access preset for this task's coding tools: `full` (default), `write` (no shell), " +
+                        "`read-build` (read + project build, no shell, no file mutation), `read`. " +
+                        "Omit to use the server-wide `browser4.agent.access` default. The preset is " +
+                        "reset when the task ends.",
+                ),
+                ToolSpec.Arg(
+                    "autoApprove", "String?", "null",
+                    "Automatic approval ceiling for this task: `full`, `write`, `read-build` or `read`. " +
+                        "A coding call the task's access preset refuses is then granted (and audited) when " +
+                        "the preset that would grant it is no wider than this ceiling — no human in the " +
+                        "loop. Explicitly denied tools, protected paths and sensitive paths are never " +
+                        "approved. Omit to use the server-wide `browser4.agent.autoApprove` default (off).",
                 ),
             ),
             returnType = "String",
@@ -221,7 +237,7 @@ class CommandToolExecutor(
             "run" -> {
                 validateArgs(
                     args,
-                    allowed = setOf("command", "async", "noopLimit", "engine", "coding", "freshWorkspace") + SESSION_ARG,
+                    allowed = setOf("command", "async", "noopLimit", "engine", "coding", "freshWorkspace", "access", "autoApprove") + SESSION_ARG,
                     required = setOf("command"),
                     functionName
                 )
@@ -243,10 +259,34 @@ class CommandToolExecutor(
                 // null (absent) = browser task: explicit opt-in only, never guessed.
                 val coding = paramBool(args, "coding", functionName, required = false, default = null)
                 val freshWorkspace = paramBool(args, "freshWorkspace", functionName, required = false, default = null)
+                // Unknown preset must fail loudly: silently falling back to the server default
+                // would run a task the caller believes is read-only with full access.
+                val access = paramString(args, "access", functionName, required = false, default = null)
+                    ?.also { raw ->
+                        require(AccessPreset.parse(raw) != null) {
+                            "Unknown access '$raw': expected one of " +
+                                AccessPreset.values().joinToString(", ") { it.id }
+                        }
+                    }
+                    ?.let { AccessPreset.parse(it) }
+                // Same reasoning as `access`: an unknown ceiling must not quietly become "off"
+                // (too strict, looks like a bug) or "full" (far too permissive).
+                val autoApprove = paramString(args, "autoApprove", functionName, required = false, default = null)
+                    ?.also { raw ->
+                        require(AccessPreset.parse(raw) != null) {
+                            "Unknown autoApprove '$raw': expected one of " +
+                                AccessPreset.values().joinToString(", ") { it.id }
+                        }
+                    }
+                    ?.let { AccessPreset.parse(it) }
                 if (isAsync) {
-                    service.submitPlainCommand(sessionId, command, noopLimit, engine, coding, freshWorkspace)
+                    service.submitPlainCommand(
+                        sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove
+                    )
                 } else {
-                    val status = service.executePlainCommand(sessionId, command, noopLimit, engine, coding, freshWorkspace)
+                    val status = service.executePlainCommand(
+                        sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove
+                    )
                     pulsarObjectMapper().writeValueAsString(status)
                 }
             }

@@ -10,6 +10,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor
 import ai.platon.pulsar.agentic.tools.advanced.crawl.failed
 import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.getLogger
@@ -181,6 +182,8 @@ class UserCommandExecutor(
         engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        access: AccessPreset? = null,
+        autoApprove: AccessPreset? = null,
     ): CommandStatus {
         if (plainCommand.isBlank()) {
             return CommandStatus.failed(ResourceStatus.SC_BAD_REQUEST)
@@ -199,7 +202,10 @@ class UserCommandExecutor(
             ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
         } else {
             ensureAgentRunner(sessionId)
-                .execute(plainCommand, noopLimit = noopLimit, engine = engine, coding = coding, freshWorkspace = freshWorkspace)
+                .execute(
+                    plainCommand, noopLimit = noopLimit, engine = engine, coding = coding,
+                    freshWorkspace = freshWorkspace, access = access, autoApprove = autoApprove,
+                )
                 .toCommandStatus()
         }
     }
@@ -221,6 +227,8 @@ class UserCommandExecutor(
         engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        access: AccessPreset? = null,
+        autoApprove: AccessPreset? = null,
     ): String {
         val command = plainCommand.trim()
 
@@ -234,7 +242,7 @@ class UserCommandExecutor(
         // CLI engine (the default): always an agent task — no URL shortcut, no
         // normalizer hijack. The agent decides how to reach the page via b4.run.
         if (engine != RunEngine.OBSERVE_ACT) {
-            return submitAgentTask(sessionId, command, noopLimit, engine, coding, freshWorkspace)
+            return submitAgentTask(sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
         }
 
         // 2. Single URL with optional parameters — use page visit directly
@@ -292,15 +300,18 @@ class UserCommandExecutor(
         engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        access: AccessPreset? = null,
+        autoApprove: AccessPreset? = null,
     ): String {
         val runner = ensureAgentRunner(sessionId)
         val status = runner.create()
         taskOwner[status.id] = "agent"
         logger.info(
-            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={})",
-            status.id, sessionId, noopLimit, coding ?: false, freshWorkspace ?: false
+            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, autoApprove={})",
+            status.id, sessionId, noopLimit, coding ?: false, freshWorkspace ?: false,
+            access?.id ?: "default", autoApprove?.id ?: "off"
         )
-        runner.submit(plainCommand, status, noopLimit, engine, coding, freshWorkspace)
+        runner.submit(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
         return status.id
     }
 

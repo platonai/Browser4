@@ -13,6 +13,8 @@ import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.api.Browser
+import ai.platon.pulsar.coding.AccessPreset
+import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -438,9 +440,11 @@ open class StatefulAgentRunner(
         engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        access: AccessPreset? = null,
+        autoApprove: AccessPreset? = null,
     ): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace)
+        execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
         return status
     }
 
@@ -460,9 +464,11 @@ open class StatefulAgentRunner(
         engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        access: AccessPreset? = null,
+        autoApprove: AccessPreset? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
-            execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace)
+            execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
         }
         runningJobs[status.id] = job
         job.start()
@@ -530,10 +536,12 @@ open class StatefulAgentRunner(
         engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        access: AccessPreset? = null,
+        autoApprove: AccessPreset? = null,
     ) {
         try {
             runMutex.withLock {
-                executeSerialized(plainCommand, status, noopLimit, engine, coding, freshWorkspace)
+                executeSerialized(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
             }
         } catch (e: CancellationException) {
             // A task cancelled while queued never reaches executeSerialized — without
@@ -558,6 +566,8 @@ open class StatefulAgentRunner(
         engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        access: AccessPreset? = null,
+        autoApprove: AccessPreset? = null,
     ) {
         val agent = session.companionAgent
 
@@ -593,6 +603,14 @@ open class StatefulAgentRunner(
                 if (engine != null) {
                     logger.info("Agent task {} (session={}): engine overridden to {}", status.id, session.uuid, engine)
                 }
+                // Per-task access policy (`command.run(access=…, autoApprove=…)`). Applied before
+                // any tool call and before the fresh-workspace rebind below, because that rebind
+                // rebuilds the coding components from the active policy. Absent values keep the
+                // server-wide defaults; the finally below restores them either way, so a companion
+                // agent shared across tasks never inherits the previous task's grant.
+                it.agentToolManager.applyAccessPolicy(
+                    AgentAccessPolicy.serverDefault.withTaskOverrides(access, autoApprove)
+                )
                 // Explicit coding flag, never auto-detected: the coding flag is
                 // opt-in per call (`command_run`'s coding argument, e.g. the CLI's
                 // agent run --coding). Unset ⇒ browser task.
@@ -717,6 +735,9 @@ open class StatefulAgentRunner(
                     runCatching { it.agentToolManager.rebindWorkspace(default) }
                         .onFailure { w -> logger.warn("reset workspace failed: {}", w.message) }
                 }
+                // Restore the server-wide policy: the next task decides its own grant.
+                runCatching { it.agentToolManager.resetAccessPolicy() }
+                    .onFailure { w -> logger.warn("reset access policy failed: {}", w.message) }
             }
             status.done()
             onStatusChanged(status)

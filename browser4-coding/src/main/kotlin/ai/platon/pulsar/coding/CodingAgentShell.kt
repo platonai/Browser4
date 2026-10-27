@@ -9,6 +9,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -53,11 +54,73 @@ class CodingAgentShell(
      *  [CodingAgentFileSystem.allowExternalAccess] so the two tools stay in
      *  lockstep. */
     private val allowExternalAccess: Boolean = false,
+    /**
+     * Credential locations (home-relative, `~` expanded) that may never appear as a **path
+     * argument**, whatever [allowExternalAccess] says. Same set as
+     * [CodingAgentFileSystem.sensitivePaths] so the file tools and the shell agree.
+     */
+    private val sensitivePaths: Set<String> = CodingAgentFileSystem.DEFAULT_SENSITIVE_PATHS,
+    /**
+     * Workspace-relative directories the shell may not name at all (as an argument, a redirection
+     * target or a working directory).
+     *
+     * The file tools already refuse to write under them ([CodingAgentFileSystem.protectedDirs]);
+     * without this the shell was a one-line bypass — `echo forged >
+     * .browser4/data/agent/agent-tasks.jsonl` passed validation because the argument guard only
+     * knew about credential locations.
+     */
+    private val protectedDirs: Set<String> = CodingAgentFileSystem.DEFAULT_PROTECTED_DIRS,
+    /**
+     * `-Dbrowser4.agent.shell.pathGuard=off` disables the credential argument guard.
+     *
+     * [protectedDirs] is unaffected: those are rails (the agent's own bookkeeping), not a
+     * capability heuristic somebody may need to switch off locally.
+     */
+    private val pathGuardEnabled: Boolean =
+        System.getProperty("browser4.agent.shell.pathGuard", "on").lowercase() != "off",
+    /**
+     * `build-only` profile: development tools are narrowed to [BUILD_COMMANDS].
+     *
+     * Interpreters (`python`/`node`/`pwsh`/`sh`/`cmd`), cloud CLIs, containers, remote shells and
+     * VCS are dev tools in the full profile but each is arbitrary code execution, which the
+     * `write` and `read-build` presets do not grant. [AgentAccessPolicy.allowsExec] is not
+     * consulted here on purpose: this shell backs the internal build runner.
+     */
+    private val buildOnly: Boolean = false,
+    /**
+     * When false the shell refuses every command up front.
+     *
+     * Used by [CodingComponents.shell] for the model-facing shell when the policy does not allow
+     * execution; the internal build shell keeps it true (see [buildOnly]).
+     */
+    private val allowExecution: Boolean = true,
 ) {
     companion object {
         const val MAX_TIMEOUT_SECONDS = 600L
         const val MAX_OUTPUT_CHARS = 200_000
+
+        /** Tool name the audit records shell refusals under. */
+        private const val SHELL_TOOL = "coding.shell"
+
+        /** Prefix of every [argumentPathViolation] message; used to pick the audit code. */
+        private const val PATH_GUARD_PREFIX = "path guard: "
+
+        /** Prefix of every [protectedPathViolation] message; used to pick the audit code. */
+        private const val PROTECTED_PATH_PREFIX = "protected path: "
+
+        /** Redirection introduced by an argument (`>file`, `>>file`, `2>file`, `&>file`). */
+        private val REDIRECTION_PREFIX = Regex("""^(?:\d+|&)?>>?""")
+
         private val logger = LoggerFactory.getLogger(CodingAgentShell::class.java)
+
+        private val PS_ENV_VAR = Regex("""\${'$'}env:([A-Za-z_][A-Za-z0-9_]*)""", RegexOption.IGNORE_CASE)
+        private val WIN_ENV_VAR = Regex("""%([A-Za-z_][A-Za-z0-9_]*)%""")
+        private val POSIX_ENV_VAR = Regex("""\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)""")
+
+        /** Words that identify a credential artefact when a variable cannot be expanded. */
+        private val SENSITIVE_PATH_KEYWORDS = listOf(
+            ".ssh", "id_rsa", "id_ed25519", ".aws", ".gnupg", "gcloud", ".browser4",
+        )
 
         /**
          * Charset of the bytes a child process writes to stdout/stderr.
@@ -152,6 +215,21 @@ class CodingAgentShell(
             "ssh", "scp",
         )
 
+        /**
+         * Build toolchain — the only development tools a [buildOnly] shell may run.
+         *
+         * Kept deliberately narrow: `mvn`/`cargo`/`npm` etc. execute the project's own build
+         * scripts, so `read-build` is about preventing accidental damage and data exfiltration,
+         * not about sandboxing hostile code (see the plan's threat model).
+         */
+        val BUILD_COMMANDS = setOf(
+            "mvn", "mvnw", "gradle", "gradlew",
+            "cargo", "rustc",
+            "npm", "npx", "tsc",
+            "go", "dotnet",
+            "make", "cmake", "ninja", "javac", "kotlinc",
+        )
+
         /** Commands that access the network — always require [allowNetwork] */
         val NETWORK_COMMANDS = setOf(
             "curl", "wget", "nc", "telnet", "nslookup", "dig",
@@ -234,7 +312,6 @@ class CodingAgentShell(
 
     /** Base working directory — resolved to canonical path for security checks */
     private val canonicalBaseDir: Path = baseDir.toRealPath()
-
     /** Canonical workspace directory used as the default command working directory. */
     val canonicalWorkspaceDir: Path get() = canonicalBaseDir
 
@@ -259,6 +336,15 @@ class CodingAgentShell(
     // ------------------------------------------------------------------
 
     /**
+     * Whether [baseCommand] is permitted by the enabled development-tool profile.
+     *
+     * In [buildOnly] mode the profile is [BUILD_COMMANDS] instead of [DEV_COMMANDS]; everything
+     * else (safe, network, destructive, explicit allow/deny) is unchanged.
+     */
+    private fun devToolAllowed(baseCommand: String): Boolean =
+        allowDevTools && baseCommand in if (buildOnly) BUILD_COMMANDS else DEV_COMMANDS
+
+    /**
      * Execute a command with full development tool support.
      *
      * @param command The command to execute
@@ -273,13 +359,16 @@ class CodingAgentShell(
         workingDir: String? = null,
         env: Map<String, String> = emptyMap(),
     ): String {
+        if (!allowExecution) {
+            return "Error: " + execDisabledRefusal()
+        }
         if (command.isBlank()) {
             return "Error: Command must not be blank."
         }
 
         val violation = validateCommand(command)
         if (violation != null) {
-            return "Error: Command blocked — $violation"
+            return "Error: " + commandRefusal(violation)
         }
 
         val effectiveTimeout = timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS)
@@ -319,13 +408,16 @@ class CodingAgentShell(
         workingDir: String? = null,
         env: Map<String, String> = emptyMap(),
     ): ShellResult {
+        if (!allowExecution) {
+            return ShellResult("", command, -1, "", execDisabledRefusal(), 0)
+        }
         if (command.isBlank()) {
             return ShellResult("", command, -1, "", "Command must not be blank.", 0)
         }
 
         val violation = validateCommand(command)
         if (violation != null) {
-            return ShellResult("", command, -1, "", "Command blocked: $violation", 0)
+            return ShellResult("", command, -1, "", commandRefusal(violation), 0)
         }
 
         val effectiveTimeout = timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS)
@@ -486,7 +578,9 @@ class CodingAgentShell(
         val reason = when {
             base in explicitAllow -> "'$base' is in the explicit allow list"
             base in SAFE_COMMANDS -> "'$base' is a safe command"
-            allowDevTools && base in DEV_COMMANDS -> "'$base' is a dev tool (allowDevTools=true)"
+            devToolAllowed(base) ->
+                if (buildOnly) "'$base' is a build tool (build-only profile)"
+                else "'$base' is a dev tool (allowDevTools=true)"
             allowNetwork && base in NETWORK_COMMANDS -> "'$base' is a network command (allowNetwork=true)"
             allowDestructive && base in DESTRUCTIVE_COMMANDS -> "'$base' is a destructive command (allowDestructive=true)"
             else -> "every command in the chain is allowed (pattern / path / PATH rule)"
@@ -535,6 +629,13 @@ class CodingAgentShell(
         if (!allowExternalAccess && !candidate.startsWith(canonicalBaseDir)) {
             throw WorkspaceEscapeException(candidate, canonicalBaseDir)
         }
+        // A working directory inside a protected subtree would make every relative path in the
+        // command a protected write (`cd .browser4 && echo forged > agent-tasks.jsonl`).
+        protectedRoots.firstOrNull { candidate.startsWith(it) }?.let { root ->
+            throw WorkspaceProtectedPathException(
+                candidate, canonicalBaseDir.relativize(root).toString().replace('\\', '/')
+            )
+        }
         if (!java.nio.file.Files.exists(candidate)) {
             // Only auto-create a relative subdirectory — absolute external
             // paths (and anything rejected above) must already exist.
@@ -553,6 +654,47 @@ class CodingAgentShell(
     // ------------------------------------------------------------------
     // Command validation
     // ------------------------------------------------------------------
+
+    /**
+     * Structured refusal for a command the tiered allow-list refused.
+     *
+     * The reason itself is kept verbatim, because tools outside this module match on it (for example
+     * `bin/eval-devtask.ps1` recognises `Command blocked` and `is not allowed (safe=`), but it is now
+     * wrapped in the `PERMISSION_DENIED | code=… | tool=… | detail=… | hint=…` envelope so the model,
+     * the CLI and `FailureCategory` can all tell a policy refusal from a command that simply failed.
+     */
+    private fun commandRefusal(violation: String): String {
+        // `contains`, not `startsWith`: a violation can be wrapped by a nested-command layer
+        // (`command substitution rejected — path guard: …`) and the specific audit code is still
+        // the one the inner guard produced.
+        val (code, hint) = when {
+            violation.contains(PATH_GUARD_PREFIX) ->
+                PermissionAudit.CODE_COMMAND_PATH_DENIED to
+                    "pass a path inside the workspace; credential locations are never valid arguments"
+            violation.contains(PROTECTED_PATH_PREFIX) ->
+                PermissionAudit.CODE_PROTECTED_PATH to
+                    "use the coding.* tools for the agent's own bookkeeping (.browser4) and CI " +
+                        "definitions (.github/workflows); the shell may not touch them"
+            else ->
+                PermissionAudit.CODE_COMMAND_NOT_ALLOWED to
+                    "run the build through coding.mvnBuild/coding.verify; ask the operator for access=full " +
+                        "if this command is genuinely needed"
+        }
+        return PermissionAudit.denied(
+            tool = SHELL_TOOL,
+            code = code,
+            detail = "Command blocked — $violation",
+            hint = hint,
+        )
+    }
+
+    /** Structured refusal for the `allowExecution=false` presets. */
+    private fun execDisabledRefusal(): String = PermissionAudit.denied(
+        tool = SHELL_TOOL,
+        code = PermissionAudit.CODE_EXEC_DISABLED,
+        detail = "shell execution is disabled by the access policy",
+        hint = "re-run with access=full to run shell commands",
+    )
 
     /**
      * Validate a whole command line, not just its first token.
@@ -617,9 +759,223 @@ class CodingAgentShell(
         return null
     }
 
+    /** Home-expanded credential roots, shared with [CodingAgentFileSystem]. */
+    private val sensitiveRoots: List<Path> by lazy { SensitivePaths.roots(sensitivePaths) }
+
+    /** Absolute roots of [protectedDirs] under the workspace base. */
+    private val protectedRoots: List<Path> by lazy {
+        protectedDirs.map { canonicalBaseDir.resolve(it).normalize() }
+    }
+
+    /**
+     * Rejects path arguments that resolve into a credential location.
+     *
+     * The shell already contains the *working directory* to [canonicalBaseDir], but arguments were
+     * never inspected: `type %USERPROFILE%\.ssh\id_rsa` (Windows), `cat ~/.ssh/id_rsa` or
+     * `ssh -i $env:USERPROFILE\.ssh\id_rsa` all passed. Paths inside the workspace and ordinary
+     * absolute paths outside it stay allowed — this guard is only about credentials, so builds
+     * that reference `~/.m2` or an external SDK are untouched.
+     *
+     * An undefined variable makes the token unresolvable; such a token is allowed unless it also
+     * names a credential artefact, so `%JAVA_HOME%\bin\mvn` keeps working while
+     * `%SOMETHING%\.ssh\id_rsa` is still refused.
+     */
+    private fun argumentPathViolation(tokens: List<String>): String? {
+        if (!pathGuardEnabled) return null
+        for (token in tokens) {
+            val candidate = pathCandidate(token) ?: continue
+            val expanded = expandVariables(candidate)
+            if (expanded == null) {
+                if (SENSITIVE_PATH_KEYWORDS.any { candidate.lowercase().contains(it) }) {
+                    return PATH_GUARD_PREFIX +
+                        "'$token' names a credential location through an undefined variable"
+                }
+                continue
+            }
+            val path = runCatching { Path.of(expanded) }.getOrNull() ?: continue
+            val resolved = if (path.isAbsolute) path.normalize()
+            else canonicalBaseDir.resolve(expanded).normalize()
+            if (resolved.startsWith(canonicalBaseDir)) {
+                // The lexical path is inside the workspace, but a link inside it may still resolve
+                // into a credential location (module junctions are links too, so only the sensitive
+                // roots are checked here, not "outside the workspace").
+                if (!isWorkspaceOwned(resolved) && SensitivePaths.isSensitive(resolved, sensitiveRoots)) {
+                    return PATH_GUARD_PREFIX + "'$token' links to a credential location ($resolved); " +
+                        "set -Dbrowser4.agent.shell.pathGuard=off to bypass"
+                }
+                continue
+            }
+            if (SensitivePaths.isSensitive(resolved, sensitiveRoots)) {
+                return PATH_GUARD_PREFIX + "'$token' resolves to a credential location ($resolved); " +
+                    "set -Dbrowser4.agent.shell.pathGuard=off to bypass"
+            }
+        }
+        return null
+    }
+
+    /**
+     * Rejects any argument that names a workspace-protected directory (`.browser4`,
+     * `.github/workflows`).
+     *
+     * The file tools already refuse to write there; the shell did not, so
+     * `echo forged > .browser4/data/agent/agent-tasks.jsonl` rewrote the agent's own task ledger
+     * and `cp pom.xml .github/workflows/ci.yml` replaced a CI definition without ever touching a
+     * `coding.*` file tool. Redirection targets are inspected like any other argument, and both
+     * reads and writes are refused: the shell has no business in the bookkeeping tree, and the
+     * read tools are still available for it.
+     */
+    private fun protectedPathViolation(tokens: List<String>): String? {
+        if (protectedRoots.isEmpty()) return null
+        for (token in tokens) {
+            val candidate = pathLikeValue(token) ?: continue
+            val hit = protectedRootOf(candidate) ?: continue
+            return PROTECTED_PATH_PREFIX +
+                "'$token' is inside protected directory '${canonicalBaseDir.relativize(hit).toString().replace('\\', '/')}' — " +
+                "the shell may not read or write it; use the coding.* file tools instead"
+        }
+        return null
+    }
+
+    /**
+     * The protected root [candidate] lands in, or null.
+     *
+     * Checks the lexical form first so glob forms (`rm -rf .browser4/` plus a wildcard) and other
+     * values that [Path.of] rejects are still caught, then the resolved absolute path for absolute
+     * forms.
+     */
+    private fun protectedRootOf(candidate: String): Path? {
+        val lexical = candidate.replace('\\', '/').removePrefix("./").trimStart('/')
+        protectedDirs.firstOrNull { dir ->
+            val d = dir.trim('/')
+            lexical == d || lexical.startsWith("$d/") || lexical.startsWith("$d*") || lexical.startsWith("$d?")
+        }?.let { dir -> return canonicalBaseDir.resolve(dir).normalize() }
+
+        val path = runCatching { Path.of(candidate) }.getOrNull() ?: return null
+        val resolved = if (path.isAbsolute) path.normalize() else canonicalBaseDir.resolve(candidate).normalize()
+        return protectedRoots.firstOrNull { resolved.startsWith(it) }
+    }
+
+    /** Whether [candidate] resolves to a location inside the workspace (a real path check). */
+    private fun isWorkspaceOwned(candidate: Path): Boolean = runCatching {
+        if (Files.exists(candidate)) candidate.toRealPath().startsWith(canonicalBaseDir) else true
+    }.getOrDefault(true)
+
+    /**
+     * The path-like part of [token], or null when the token cannot be a path
+     * (bare flags, plain words, option names without a value).
+     */
+    private fun pathCandidate(token: String): String? {
+        val value = pathLikeValue(token) ?: return null
+        val looksLikePath = value.startsWith("~") || value.startsWith("%") || value.startsWith("$") ||
+            value.contains('/') || value.contains('\\')
+        return if (looksLikePath) value else null
+    }
+
+    /**
+     * The value part of [token]: strips a shell redirection prefix (`>file`, `2>>file`), the
+     * `--key=value` wrapper and surrounding quotes.
+     */
+    private fun pathLikeValue(token: String): String? {
+        if (token.isEmpty()) return null
+        var t = token
+        REDIRECTION_PREFIX.find(t)?.let { m -> t = t.substring(m.range.last + 1) }
+        if (t.startsWith("-")) {
+            // `-Dkey=value`, `--file=value`: only the value can be a path.
+            val eq = t.indexOf('=')
+            if (eq < 0) return null
+            t = t.substring(eq + 1)
+        }
+        t = t.trim('"', '\'').trimStart('>', '<', '&').trim()
+        return t.ifEmpty { null }
+    }
+
+    /**
+     * Expands `~`, `$VAR`, `${VAR}`, `$env:VAR` and `%VAR%`; returns null when any variable is
+     * undefined (the result would be a guess).
+     */
+    private fun expandVariables(raw: String): String? {
+        var unresolved = false
+        var s = raw
+        s = PS_ENV_VAR.replace(s) { m ->
+            val v = System.getenv(m.groupValues[1])
+            if (v == null) { unresolved = true; m.value } else v
+        }
+        s = WIN_ENV_VAR.replace(s) { m ->
+            val v = System.getenv(m.groupValues[1])
+            if (v == null) { unresolved = true; m.value } else v
+        }
+        s = POSIX_ENV_VAR.replace(s) { m ->
+            val name = m.groupValues[1].ifEmpty { m.groupValues[2] }
+            val v = System.getenv(name)
+            if (v == null) { unresolved = true; m.value } else v
+        }
+        if (s.startsWith("~")) s = System.getProperty("user.home") + s.substring(1)
+        return if (unresolved) null else s
+    }
+
+    /**
+     * Validates the command substitutions that survive segmentation.
+     *
+     * [splitSimpleCommands] lifts an *unquoted* `$(...)` / backtick body into its own segment, but
+     * one inside double quotes stays in the segment text, so
+     * `echo "$(cat ~/.ssh/id_rsa)"` was invisible to both the allow-list and the credential guard —
+     * and the platform shell still runs it. Quoting follows the platform rules: a single-quoted
+     * body is literal text, a double-quoted or unquoted one is a command.
+     *
+     * The check is applied on every platform because the same command line runs through
+     * `cmd.exe` on Windows and `sh -c` elsewhere; refusing what `sh` would execute keeps the
+     * decision portable.
+     */
+    private fun substitutionViolation(segment: String, depth: Int): String? {
+        if (depth > MAX_INLINE_SCRIPT_DEPTH) {
+            return "nested command substitution exceeds $MAX_INLINE_SCRIPT_DEPTH levels — refusing to guess"
+        }
+        var i = 0
+        var inSingleQuote = false
+        while (i < segment.length) {
+            val c = segment[i]
+            when {
+                c == '\'' -> {
+                    inSingleQuote = !inSingleQuote
+                    i++
+                }
+                inSingleQuote -> i++
+                c == '\\' -> i += 2
+                // Arithmetic expansion is not a command: `$((x + 1))`.
+                c == '$' && segment.startsWith("$((", i) -> {
+                    val end = segment.indexOf("))", i)
+                    i = if (end < 0) segment.length else end + 2
+                }
+                c == '$' && i + 1 < segment.length && segment[i + 1] == '(' -> {
+                    val end = matchingParen(segment, i + 1)
+                    val inner = if (end < 0) segment.substring(i + 2) else segment.substring(i + 2, end)
+                    validateSegments(inner, depth + 1)?.let { return "command substitution rejected — $it" }
+                    i = if (end < 0) segment.length else end + 1
+                }
+                c == '`' -> {
+                    val end = segment.indexOf('`', i + 1)
+                    val inner = if (end < 0) segment.substring(i + 1) else segment.substring(i + 1, end)
+                    validateSegments(inner, depth + 1)?.let { return "command substitution rejected — $it" }
+                    i = if (end < 0) segment.length else end + 1
+                }
+                else -> i++
+            }
+        }
+        return null
+    }
+
     private fun validateSimpleCommand(segment: String, depth: Int): String? {
         val tokens = tokenize(segment)
         if (tokens.isEmpty()) return "empty or invalid command"
+
+        // Argument-path guard: the working directory is contained, but nothing stopped an
+        // argument like `~/.ssh/id_rsa` from naming a credential location (plan P0-3).
+        argumentPathViolation(tokens)?.let { return it }
+        // Protected-subtree guard: the file tools refuse `.browser4` / `.github/workflows`, and the
+        // shell must not be the way around them.
+        protectedPathViolation(tokens)?.let { return it }
+        // Command substitutions inside quotes are commands too.
+        substitutionViolation(segment, depth)?.let { return it }
 
         // Skip leading env assignments (VAR=value cmd ...).
         var index = 0
@@ -631,8 +987,14 @@ class CodingAgentShell(
         if (baseCommand.isEmpty()) return "empty or invalid command"
 
         // Inline script (`sh -c "..."`, `pwsh -Command "..."`, `cmd /c ...`):
-        // the wrapper itself is allowed, but the inner script must be validated.
+        // the wrapper and the inner script must both be validated. Checking only the
+        // body let `sh -c "mvn ..."` through the build-only profile, where `sh` is
+        // precisely the arbitrary-execution surface BUILD_COMMANDS removes.
         inlineScript(tokens.subList(index, tokens.size))?.let { inner ->
+            if (buildOnly && !devToolAllowed(baseCommand)) {
+                return "'$baseCommand' is not allowed in the build-only profile " +
+                    "(inline-script hosts are not build tools)"
+            }
             validateSegments(inner, depth + 1)?.let { violation ->
                 return "inline script via '$baseCommand' rejected — $violation"
             }
@@ -659,7 +1021,7 @@ class CodingAgentShell(
         // `python3`. Without this, Windows builds were rejected while the same
         // command passed on Linux (plan P0.4 / eval K4).
         if (baseCommand in SAFE_COMMANDS) return null
-        if (allowDevTools && baseCommand in DEV_COMMANDS) return null
+        if (devToolAllowed(baseCommand)) return null
         if (allowNetwork && baseCommand in NETWORK_COMMANDS) return null
         if (allowDestructive && baseCommand in DESTRUCTIVE_COMMANDS) return null
 
@@ -677,13 +1039,15 @@ class CodingAgentShell(
         // Explicit path form (e.g. /usr/bin/git, ./script.sh, C:\repo\mvnw.cmd):
         // historically allowed with dev tools; an absolute path the operator
         // spelled out is not the injection vector — the *unexpected* token is.
-        if (isPathLike(rawToken) && allowDevTools) return null
+        // Under the build-only profile this fallback is closed, otherwise
+        // `./anything.sh` would bypass BUILD_COMMANDS.
+        if (isPathLike(rawToken) && allowDevTools && !buildOnly) return null
 
         // PATH fallback — command not in any set but found on PATH
-        if (allowDevTools && isCommandOnPath(baseCommand)) return null
+        if (allowDevTools && !buildOnly && isCommandOnPath(baseCommand)) return null
 
         return "command '$baseCommand' is not allowed (safe=${baseCommand in SAFE_COMMANDS}, " +
-            "dev=${baseCommand in DEV_COMMANDS && allowDevTools}, " +
+            "dev=${devToolAllowed(baseCommand)}, " +
             "network=${baseCommand in NETWORK_COMMANDS && allowNetwork}, " +
             "destructive=${baseCommand in DESTRUCTIVE_COMMANDS && allowDestructive})"
     }
@@ -1033,9 +1397,13 @@ class CodingAgentShell(
 
     /**
      * List available development tools detected on PATH.
+     *
+     * Reports the tier this instance actually runs at, so `coding.toolsDetect` cannot advertise
+     * interpreters to a build-only shell.
      */
     fun detectAvailableTools(): Set<String> {
-        return DEV_COMMANDS.filter { isCommandOnPath(it) }.toSet()
+        val tier = if (buildOnly) BUILD_COMMANDS else DEV_COMMANDS
+        return tier.filter { isCommandOnPath(it) }.toSet()
     }
 
     /**
@@ -1095,6 +1463,26 @@ class WorkspaceDirMissingException(
         append(path.toAbsolutePath().normalize())
         if (detail != null) append(" (").append(detail).append(')')
     }
+)
+
+/**
+ * The requested working directory is inside a workspace-protected subtree
+ * ([CodingAgentFileSystem.DEFAULT_PROTECTED_DIRS]).
+ *
+ * The message is a structured refusal so the caller can surface the same
+ * `PERMISSION_DENIED | code=…` contract the rest of the policy uses.
+ */
+class WorkspaceProtectedPathException(
+    val path: Path,
+    val protectedDir: String,
+) : IllegalArgumentException(
+    PermissionAudit.format(
+        tool = "coding.shell",
+        code = PermissionAudit.CODE_PROTECTED_PATH,
+        detail = "working directory ${path.toAbsolutePath().normalize()} is inside protected " +
+            "directory '$protectedDir'",
+        hint = "use the workspace root or a subdirectory outside '$protectedDir'",
+    )
 )
 
 

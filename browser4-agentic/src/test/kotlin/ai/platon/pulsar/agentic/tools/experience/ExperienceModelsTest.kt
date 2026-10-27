@@ -121,6 +121,30 @@ class ExperienceModelsTest {
         }
 
         @Test
+        @DisplayName("classifies the coding policy's structured refusal as a permission problem")
+        fun testStructuredPermissionRefusal() {
+            // The access policy stamps `PERMISSION_DENIED | code=… | tool=…`; the underscore form
+            // must classify, otherwise every policy refusal is reported as UNKNOWN and never
+            // surfaces as a permission problem.
+            for (code in listOf(
+                ai.platon.pulsar.coding.PermissionAudit.CODE_TOOL_DENIED,
+                ai.platon.pulsar.coding.PermissionAudit.CODE_READ_ONLY,
+                ai.platon.pulsar.coding.PermissionAudit.CODE_EXEC_DISABLED,
+                ai.platon.pulsar.coding.PermissionAudit.CODE_SENSITIVE_PATH,
+                ai.platon.pulsar.coding.PermissionAudit.CODE_PROTECTED_PATH,
+            )) {
+                val text = ai.platon.pulsar.coding.PermissionAudit.format(
+                    tool = "coding.write", code = code, detail = "refused by the access policy"
+                )
+                assertEquals(
+                    FailureCategory.PERMISSION_DENIED,
+                    FailureCategory.classify(text),
+                    "code=$code text=$text",
+                )
+            }
+        }
+
+        @Test
         @DisplayName("null or blank message returns UNKNOWN")
         fun testNullMessage() {
             assertEquals(FailureCategory.UNKNOWN, FailureCategory.classify(null))

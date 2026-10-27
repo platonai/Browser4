@@ -21,8 +21,6 @@ import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.CodingToolExecutor
-import ai.platon.pulsar.coding.CodingAgentShell
-import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.window.SessionWindowProbe
@@ -447,26 +445,13 @@ class MCPToolController(
      * When a `coding_*` tool is called WITHOUT a sessionId, the request is
      * dispatched through this executor — no browser session is required.
      * The workspace root defaults to the JVM working directory.
+     *
+     * Built through the shared factory (like the agent path), so the target carries the
+     * server-wide [ai.platon.pulsar.coding.AgentAccessPolicy]: an MCP direct call is refused by
+     * the same method gate as an in-task call rather than bypassing it.
      */
-    private val standaloneCodingShell: CodingAgentShell by lazy {
-        CodingAgentShell(
-            baseDir = CodingWorkspace.workspaceRoot,
-            allowDestructive = CodingWorkspace.allowDestructive,
-            // v0.3: cwd containment follows CodingAgentFileSystem.allowExternalAccess
-            allowExternalAccess = CodingWorkspace.allowExternalAccess,
-        )
-    }
-    private val standaloneCodingFs: CodingAgentFileSystem by lazy {
-        CodingAgentFileSystem(
-            workspaceRoot = CodingWorkspace.workspaceRoot,
-            allowExternalAccess = CodingWorkspace.allowExternalAccess,
-            allowDestructive = CodingWorkspace.allowDestructive,
-            // P2.3: snapshots survive a backend restart (revert/diff after a crash).
-            persistSnapshots = true,
-        )
-    }
     private val standaloneCodingTarget: CodingToolExecutor.Target by lazy {
-        CodingToolExecutor.Target(standaloneCodingShell, standaloneCodingFs)
+        CodingToolExecutor.target(CodingWorkspace.workspaceRoot, persistSnapshots = true)
     }
     private val standaloneCodingExecutor: CodingToolExecutor by lazy {
         CodingToolExecutor()

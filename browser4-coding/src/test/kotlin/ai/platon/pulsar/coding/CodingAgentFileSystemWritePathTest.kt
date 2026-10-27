@@ -92,6 +92,91 @@ class CodingAgentFileSystemWritePathTest {
         assertTrue(result.startsWith("✓"), "result: $result")
     }
 
+    @Test
+    @DisplayName("the agent's own bookkeeping under .browser4 is not writable")
+    fun browser4DirProtected() = runBlocking {
+        write(".browser4/data/agent/agent-tasks.jsonl", "{}\n")
+        val result = fs().writeFile(".browser4/data/agent/agent-tasks.jsonl", "forged\n")
+        assertTrue(result.startsWith("Error:"), "result: $result")
+        assertTrue(result.contains("protected directory"), "result: $result")
+        assertEquals("{}\n", read(".browser4/data/agent/agent-tasks.jsonl"))
+    }
+
+    @Test
+    @DisplayName("snapshots under .browser4 cannot be deleted or overwritten by the tools")
+    fun browser4SnapshotsProtected() = runBlocking {
+        write(".browser4/coding-snapshots/abc.json", "{}")
+        val deleteResult = fs().delete(".browser4/coding-snapshots/abc.json")
+        assertTrue(deleteResult.startsWith("Error:"), "result: $deleteResult")
+
+        write("payload.txt", "x")
+        val copyResult = fs().copy("payload.txt", ".browser4/coding-snapshots/abc.json")
+        assertTrue(copyResult.startsWith("Error:"), "result: $copyResult")
+
+        assertEquals("{}", read(".browser4/coding-snapshots/abc.json"))
+    }
+
+    @Test
+    @DisplayName("every workflow is protected, not only ci.yml")
+    fun workflowsDirProtected() = runBlocking {
+        write(".github/workflows/nightly.yml", "on: push\n")
+        val result = fs().writeFile(".github/workflows/nightly.yml", "on: pull_request\n")
+        assertTrue(result.startsWith("Error:"), "result: $result")
+        assertTrue(result.contains("protected directory"), "result: $result")
+        assertEquals("on: push\n", read(".github/workflows/nightly.yml"))
+    }
+
+    @Test
+    @DisplayName("the snapshot writer still persists under the protected .browser4 directory")
+    fun snapshotWriterBypassesProtection() = runBlocking {
+        val fs = CodingAgentFileSystem(tempDir, persistSnapshots = true)
+        write("src/a.kt", "class A\n")
+        val result = fs.writeFile("src/a.kt", "class B\n")
+        assertTrue(result.startsWith("✓"), "result: $result")
+
+        val snapshots = tempDir.resolve(".browser4/coding-snapshots")
+        val files = Files.list(snapshots).use { stream -> stream.map { it.fileName.toString() }.toList() }
+        assertFalse(files.isEmpty(), "the tools must still be able to persist snapshots")
+    }
+
+    @Test
+    @DisplayName("mkdir is blocked inside a protected directory")
+    fun mkdirInsideProtectedDirRefused() = runBlocking {
+        val result = fs().mkdir(".browser4/data/agent")
+        assertTrue(result.startsWith("Error:"), "result: $result")
+        assertTrue(result.contains("protected directory"), "result: $result")
+        assertFalse(Files.exists(tempDir.resolve(".browser4/data/agent")))
+    }
+
+    @Test
+    @DisplayName("a link inside the workspace cannot reach the protected bookkeeping tree")
+    fun protectedDirThroughLinkRefused() = runBlocking {
+        write(".browser4/data/agent/agent-tasks.jsonl", "{}\n")
+        val link = tempDir.resolve("proxy")
+        if (!createLink(link, tempDir.resolve(".browser4"))) {
+            // No symlink privilege (unprivileged Windows without Developer Mode): the platform
+            // cannot express the attack, so there is nothing to assert.
+            return@runBlocking
+        }
+        val fs = fs()
+        val writeResult = fs.writeFile("proxy/data/agent/agent-tasks.jsonl", "forged\n")
+        assertTrue(writeResult.startsWith("Error:"), "result: $writeResult")
+        assertEquals("{}\n", read(".browser4/data/agent/agent-tasks.jsonl"))
+
+        val deleteResult = fs.delete("proxy/data/agent/agent-tasks.jsonl")
+        assertTrue(deleteResult.startsWith("Error:"), "result: $deleteResult")
+        assertTrue(Files.exists(tempDir.resolve(".browser4/data/agent/agent-tasks.jsonl")))
+    }
+
+    /** Creates a symlink or (on Windows) a directory junction; false when the platform refuses. */
+    private fun createLink(link: Path, target: Path): Boolean {
+        if (runCatching { Files.createSymbolicLink(link, target) }.isSuccess) return true
+        return runCatching {
+            ProcessBuilder("cmd.exe", "/c", "mklink", "/J", link.toString(), target.toString())
+                .redirectErrorStream(true).start().waitFor() == 0
+        }.getOrDefault(false)
+    }
+
     // ==================== atomic writes ====================
 
     @Test
@@ -209,7 +294,6 @@ class CodingAgentFileSystemWritePathTest {
         // "the run modified 23 file(s) the report does not list: .b4scratch/outline.py, …"
         val fs = CodingAgentFileSystem(tempDir)
         fs.writeFile(".b4scratch/outline.py", "print('hi')")
-        fs.writeFile(".browser4/coding-snapshots/x.json", "{}")
         fs.writeFile("browser4-core/browser4-browser/target/classes/A.class", "x")
         fs.writeFile("src/main/kotlin/A.kt", "class A")
 
@@ -218,6 +302,18 @@ class CodingAgentFileSystemWritePathTest {
             fs.mutationsSnapshot().map { it.op to it.path },
             "only repository files may reach the finish gate",
         )
+    }
+
+    @Test
+    @DisplayName("the bookkeeping directory is still classified as non-deliverable")
+    fun browser4PathClassifiedNonDeliverable() {
+        // The classifier and the write guard are separate layers: the guard now blocks the tools
+        // from writing into .browser4 at all, while the classifier keeps snapshot/checkpoint rows
+        // (written by the tools' own APIs) out of the finish gate.
+        assertTrue(isNonDeliverableMutationPath(".browser4/coding-snapshots/x.json"))
+        assertTrue(isNonDeliverableMutationPath(".b4scratch/outline.py"))
+        assertTrue(isNonDeliverableMutationPath("browser4-core/browser4-browser/target/x.txt"))
+        assertFalse(isNonDeliverableMutationPath("src/main/kotlin/A.kt"))
     }
 
     @Test

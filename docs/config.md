@@ -463,6 +463,65 @@ docker run -d -p 18182:18182 `
   java -Dknowledge.dir=/var/lib/browser4/knowledge -jar Browser4.jar
   ```
 
+* **`browser4.agent.access`** *(JVM system property; default: `full`)*
+  Server-wide access preset for the built-in agent's `coding.*` tools. One task can override it
+  with `browser4-cli agent run … --access <preset>`.
+
+  | Preset | Read workspace | Write files | Project build (`mvnBuild`/`verify`) | Shell / arbitrary code |
+  |---|---|---|---|---|
+  | `full` | ✓ | ✓ | ✓ | ✓ |
+  | `write` | ✓ | ✓ | ✓ | ✗ |
+  | `read-build` | ✓ | ✗ | ✓ | ✗ |
+  | `read` | ✓ | ✗ | ✗ | ✗ |
+
+  Each preset is enforced at the file-system, shell, tool-registry and MCP entry points, so a
+  denied method cannot be reached by exposing it or by calling it directly. Refusals carry
+  `PERMISSION_DENIED | code=… | tool=… | detail=… | hint=…`; `coding.permissions` prints the active
+  policy. An unknown value is logged and falls back to `full`.
+
+  `read-build` **runs the repository's own build**, which executes project code (Maven plugins,
+  npm scripts) — it is a guard against mistakes and accidental disclosure, not a sandbox against
+  malicious code. Use a container or VM for that.
+
+  Related properties (all JVM system properties, set the same way):
+
+  - `browser4.agent.autoApprove` *(default: unset — automatic approval off)* — automatic approval
+    ceiling, one preset id. A call that `browser4.agent.access` refuses is then granted
+    automatically (and audited as `AUTO_APPROVED`) when the preset that would grant it is no wider
+    than the ceiling: `read-build` approves the project build, `write` approves file mutation and
+    (being the wider grant) the build, `full` approves mutation, the build and the shell.
+    `denyTools`, protected files, `.browser4` / `.github/workflows` and credential paths are
+    **never** auto-approved — they are rails, not capabilities. A task overrides it with
+    `browser4-cli agent run … --auto-approve <preset>`. An unknown value is logged (once) and
+    leaves automatic approval off.
+  - `browser4.agent.allowExternalAccess` *(default: `false`)* — **deprecated**, prefer `access`.
+    Whether file tools may resolve paths outside the workspace; projected into every preset.
+  - `browser4.agent.allowDestructive` *(default: `true`)* — **deprecated**, prefer `access`.
+    When `false`, `delete`/`copy`/`move` are refused. It is **not** a read-only switch: `write`/
+    `append`/`replace` stay allowed — use `access=read` (or `read-build`) for that.
+  - `browser4.agent.shell.pathGuard` *(default: `on`)* — when `off`, the shell stops rejecting
+    command arguments that name credential locations (`~/.ssh`, `~/.aws`, `~/.browser4`, …). It does
+    **not** relax the protected subtrees: `.browser4` and `.github/workflows` are refused as shell
+    arguments, redirection targets and working directories whatever this property says. Only for
+    local debugging; leave it on.
+
+  ```bash
+  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.access=read-build" browser4-cli open
+  ```
+
+* **`browser4.agent.workspace`** *(JVM system property; default: auto-detected)*
+  Repository root the coding tools treat as the workspace. When unset, the backend walks up from
+  its working directory looking for the `ROOT.md` + `pom.xml` pair; if that fails it uses the
+  working directory. The CLI injects the repository root when it starts the backend from a source
+  tree, so `coding.*` operates on your checkout rather than the runtime bundle.
+
+  A coding `agent run` mirrors the checkout into its per-task workspace; modules are linked as
+  directory junctions, so **module writes land in the real checkout** — the workspace isolates
+  task artifacts, not the module sources. `coding.permissions` prints the resolved root.
+
+  Related: `browser4.agent.workspace.isolation=worktree` runs `coding.devTask(execute=true)` inside
+  a `git worktree` under `.browser4/worktrees/` and merges back only on success (default `off`).
+
 ### 📦 `browser.profile.mode` Comparison Table
 
 | Mode           | Description                                                                 | User Data Directory Behavior                             | Use Case            |

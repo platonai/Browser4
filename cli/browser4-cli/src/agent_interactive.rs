@@ -1357,6 +1357,12 @@ struct Repl {
     noop_limit: Option<i64>,
     coding: bool,
     fresh_workspace: bool,
+    /// Access preset for this REPL's tasks (`--access`); `None` keeps the
+    /// server-wide `browser4.agent.access` default.
+    access: Option<String>,
+    /// Automatic approval ceiling for this REPL's tasks (`--auto-approve`);
+    /// `None` keeps the server-wide `browser4.agent.autoApprove` default (off).
+    auto_approve: Option<String>,
     tty: bool,
     quiet: bool,
     current: Option<TaskFollower>,
@@ -1398,6 +1404,14 @@ impl Repl {
             .get("freshWorkspace")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let access = params
+            .get("access")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let auto_approve = params
+            .get("autoApprove")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
 
         Self {
             client: client.clone(),
@@ -1409,6 +1423,8 @@ impl Repl {
             noop_limit,
             coding,
             fresh_workspace,
+            access,
+            auto_approve,
             tty: io::stdin().is_terminal(),
             quiet: quiet_enabled(),
             current: None,
@@ -1702,6 +1718,8 @@ impl Repl {
             self.noop_limit,
             self.coding,
             self.fresh_workspace,
+            self.access.as_deref(),
+            self.auto_approve.as_deref(),
             self.session_id().as_deref(),
         )
     }

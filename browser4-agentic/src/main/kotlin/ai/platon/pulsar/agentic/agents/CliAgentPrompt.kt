@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agentic.agents
 
+import ai.platon.pulsar.coding.AccessPreset
+import ai.platon.pulsar.coding.AgentAccessPolicy
 import java.nio.file.Path
 
 /**
@@ -104,8 +106,15 @@ internal object CliAgentPrompt {
      * a 13-minute run wrote 37 files, reported 20, and its completed, verified
      * issue was marked failed). Scratch files belong under `.b4scratch/`, and
      * `coding.changeSummary` is the authoritative list for `filesChanged`.
+     * @param policy the access policy this run is under; the `### Permissions` block is appended only
+     *   for restricted presets, so a `full` run sees exactly the prompt it saw before.
      */
-    fun hygiene(codingMode: Boolean, workspaceDir: Path): String = if (codingMode) {
+    fun hygiene(
+        codingMode: Boolean,
+        workspaceDir: Path,
+        policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
+    ): String {
+        val base = if (codingMode) {
         """
         ### Context hygiene
         - Read with coding.readLines (bounded ranges) instead of dumping whole files;
@@ -147,6 +156,47 @@ internal object CliAgentPrompt {
           repeated omissions are amended by the engine from that trace).
           When you ran coding.verify, paste its exact VERDICT_JSON line
           verbatim into the summary; a cited verdict must match the recorded one.
+        """.trimIndent()
+        }
+        return base + permissionsBlock(policy)
+    }
+
+    /**
+     * The `### Permissions` block, empty under `full`.
+     *
+     * A restricted preset changes the *shape* of a run — whole tools disappear and mutating calls
+     * are refused — so the agent has to be told before it plans, not after it fails. The key line is
+     * the "do not retry" rule: without it the observed failure mode is a model that re-phrases the
+     * same refused call (different quoting, different interpreter, absolute instead of relative
+     * path) until the step budget runs out.
+     */
+    private fun permissionsBlock(policy: AgentAccessPolicy): String {
+        if (policy.preset == AccessPreset.FULL && policy.denyTools.isEmpty()) return ""
+        val abilities = buildList {
+            add("read the workspace")
+            if (policy.allowsFileMutation()) add("write workspace files")
+            if (policy.allowExternalAccess) add("reach paths outside the workspace")
+            // Ask the policy, not the preset: an approval ceiling can grant the build under `read`.
+            if (policy.allowsTool("coding", "mvnBuild")) add("run the project build (coding.mvnBuild/coding.verify)")
+            if (policy.allowsExec()) add("run shell commands and arbitrary code")
+        }
+        val ceiling = policy.autoApproveUpTo?.let {
+            "- Automatic approval is on up to '${it.id}': a call this preset refuses is granted (and " +
+                "audited) when the preset that grants it is no wider. Denied tools, protected paths " +
+                "and sensitive paths are still refused — never route around them."
+        } ?: "- Automatic approval is off: every refusal above stands."
+        return """
+
+        ### Permissions
+        - This run is under access preset '${policy.preset.id}': you may ${abilities.joinToString(", ")}.
+        $ceiling
+        - Tools the preset does not grant are not in your tool list at all, and a call that slips
+          through anyway is refused with `PERMISSION_DENIED | code=...`. A refusal is structural, not
+          a syntax problem: do NOT retry it, re-quote it, or reach for an interpreter to do the same
+          thing. The refusal text carries a `hint=` with the route that is still open.
+        - Run coding.permissions to see exactly what is allowed before planning a step that might be
+          outside it. Work you cannot do under this preset belongs in `problems` at
+          system.taskComplete — say what was blocked and how it should be run, rather than looping.
         """.trimIndent()
     }
 }

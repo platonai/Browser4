@@ -1720,6 +1720,27 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - --access <preset> narrows this task's coding tools: full (default), write (no shell),".to_string(),
+        );
+        lines.push(
+            "    read-build (read + project build, no shell, no file mutation), read. Omitted, the".to_string(),
+        );
+        lines.push(
+            "    backend-wide browser4.agent.access applies; the preset is reset when the task ends.".to_string(),
+        );
+        lines.push(
+            "  - --auto-approve <preset> sets the automatic approval ceiling for the same task: a call the".to_string(),
+        );
+        lines.push(
+            "    preset refuses is granted (and audited) when the granting preset is no wider than the".to_string(),
+        );
+        lines.push(
+            "    ceiling. denyTools, protected paths and sensitive paths are never approved. Omitted, the".to_string(),
+        );
+        lines.push(
+            "    backend-wide browser4.agent.autoApprove applies (off by default).".to_string(),
+        );
+        lines.push(
             "  - --follow streams the task's steps (tool calls, model text, slow/failed tools)".to_string(),
         );
         lines.push("    and then the result; --ndjson makes every line JSON.".to_string());
@@ -1754,6 +1775,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(
             "  browser4-cli agent run \"Read pom.xml, fix the failing module build\" --coding"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Report the failing module\" --coding --access read-build"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Fix the failing test\" --coding --access read-build --auto-approve write"
                 .to_string(),
         );
         lines.push(
