@@ -1738,6 +1738,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    and tool calls (served by the backend's run counters; /stats <task-id> for another task)."
                 .to_string(),
         );
+        lines.push(
+            "  - A step the CLI cannot parse is skipped (one notice line) instead of ending the"
+                .to_string(),
+        );
+        lines.push(
+            "    live view; -i keeps following a task the backend still reports as running."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(

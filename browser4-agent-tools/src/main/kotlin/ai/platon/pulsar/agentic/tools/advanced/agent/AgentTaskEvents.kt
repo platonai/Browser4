@@ -277,15 +277,20 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
         totalTokens: Int? = null,
         epochMillis: Long = System.currentTimeMillis(),
     ): AgentTaskEvent {
+        // The log is the last point before serialization, so the "no unpaired
+        // surrogate" invariant is enforced here for every string field: a strict
+        // JSON follower must be able to parse the page whichever caller wrote
+        // which field (see AgentTaskEventSanitizer's KDoc). The repair returns the
+        // same instance for well-formed text, so the common path is unchanged.
         val event = AgentTaskEvent(
             seq = nextSeq++,
-            type = type,
+            type = AgentTaskEventSanitizer.replaceUnpairedSurrogates(type),
             epochMillis = epochMillis,
-            tool = tool,
-            arguments = arguments,
+            tool = tool?.let(AgentTaskEventSanitizer::replaceUnpairedSurrogates),
+            arguments = arguments?.let(AgentTaskEventSanitizer::replaceUnpairedSurrogates),
             ok = ok,
             durationMs = durationMs,
-            text = text,
+            text = text?.let(AgentTaskEventSanitizer::replaceUnpairedSurrogates),
             turn = turn,
             inputTokens = inputTokens,
             outputTokens = outputTokens,
@@ -366,6 +371,22 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
  *
  * Everything is then collapsed to one line and truncated, so a 200 KB page
  * snapshot cannot bloat the buffer.
+ *
+ * ## Why a preview must stay valid JSON
+ *
+ * The preview is served over `GET /api/commands/{id}/events` and parsed by
+ * followers with a strict JSON parser (the Rust CLI's `serde_json`). Jackson
+ * serializes an **unpaired** UTF-16 surrogate as the escape `\uD83D`, and a
+ * strict parser rejects the whole page with "unexpected end of hex escape" —
+ * one truncated emoji used to poison the response, stall the follower for its
+ * whole retry window and end the live step view of a running task
+ * ([issue #620](https://github.com/platonai/Browser4/issues/620)).
+ *
+ * So no preview may contain an unpaired surrogate, which means:
+ * - [preview] never cuts a code point in half (it truncates **between** code
+ *   points, so a surrogate pair survives or is not written at all);
+ * - unpaired surrogates that arrive in the source text (a provider, CDP) are
+ *   replaced with `U+FFFD` rather than escaped into the event stream.
  * */
 object AgentTaskEventSanitizer {
 
@@ -416,6 +437,9 @@ object AgentTaskEventSanitizer {
 
     private val WHITESPACE = Regex("""\s+""")
 
+    /** Replacement for a surrogate that has no partner. */
+    const val REPLACEMENT_CHARACTER = "\uFFFD"
+
     /**
      * Collapse [text] to a single trimmed line no longer than [maxChars].
      *
@@ -423,12 +447,78 @@ object AgentTaskEventSanitizer {
      * multi-line tool result would break `--follow` rendering and NDJSON
      * framing alike. `null`/blank input returns `null` rather than `""`, so the
      * JSON payload omits the field instead of carrying an empty string.
+     *
+     * The result is always serializable as strict JSON: unpaired surrogates are
+     * replaced with [REPLACEMENT_CHARACTER] (see the class KDoc), and the
+     * truncation lands on a code-point boundary so a surrogate pair is never
+     * cut in half. [maxChars] still counts UTF-16 code units, so a preview is
+     * never longer than `maxChars + 1`; backing off one unit can only shorten
+     * it.
      * */
     fun preview(text: String?, maxChars: Int = MAX_PREVIEW_CHARS): String? {
         val collapsed = text?.replace(WHITESPACE, " ")?.trim() ?: return null
         if (collapsed.isEmpty()) return null
-        if (collapsed.length <= maxChars) return collapsed
-        return collapsed.take(maxChars).trimEnd() + "…"
+        val whole = replaceUnpairedSurrogates(collapsed)
+        if (whole.length <= maxChars) return whole
+        // Cutting between the halves of a surrogate pair would leave an unpaired
+        // high surrogate behind — the `\uD83D` that breaks a strict JSON parser.
+        val end = maxChars.coerceIn(0, whole.length).let { limit ->
+            if (limit > 0 && Character.isHighSurrogate(whole[limit - 1])) limit - 1 else limit
+        }
+        val trimmed = whole.substring(0, end).trimEnd()
+        return if (trimmed.isEmpty()) "…" else trimmed + "…"
+    }
+
+    /**
+     * Replace every unpaired surrogate in [text] with [REPLACEMENT_CHARACTER].
+     *
+     * Returns the same instance when the text is already well-formed, so the
+     * common path allocates nothing. A well-formed pair is kept verbatim.
+     * */
+    fun replaceUnpairedSurrogates(text: String): String {
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            if (Character.isHighSurrogate(c) && i + 1 < text.length && Character.isLowSurrogate(text[i + 1])) {
+                i += 2
+                continue
+            }
+            if (Character.isSurrogate(c)) return repairSurrogates(text, i)
+            i++
+        }
+        return text
+    }
+
+    /** Rebuild [text], replacing every unpaired surrogate from [from] onwards. */
+    private fun repairSurrogates(text: String, from: Int): String {
+        val builder = StringBuilder(text.length)
+        builder.append(text, 0, from)
+        var index = from
+        while (index < text.length) {
+            val c = text[index]
+            when {
+                Character.isHighSurrogate(c) -> {
+                    if (index + 1 < text.length && Character.isLowSurrogate(text[index + 1])) {
+                        builder.append(c).append(text[index + 1])
+                        index += 2
+                    } else {
+                        builder.append(REPLACEMENT_CHARACTER)
+                        index++
+                    }
+                }
+
+                Character.isLowSurrogate(c) -> {
+                    builder.append(REPLACEMENT_CHARACTER)
+                    index++
+                }
+
+                else -> {
+                    builder.append(c)
+                    index++
+                }
+            }
+        }
+        return builder.toString()
     }
 
     /**

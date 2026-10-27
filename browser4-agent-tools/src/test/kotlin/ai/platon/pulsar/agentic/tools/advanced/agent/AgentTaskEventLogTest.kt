@@ -96,6 +96,32 @@ class AgentTaskEventLogTest {
         assertFailsWith<IllegalArgumentException> { AgentTaskEventLog(capacity = 0) }
     }
 
+    @Test
+    @DisplayName("an unpaired surrogate can never reach the wire, whichever field carries it")
+    fun logKeepsEveryFieldStrictlySerializable() {
+        val log = AgentTaskEventLog()
+        // A provider can hand back a lone surrogate in any string it produced;
+        // `text`/`arguments` are previewed by the sanitizer, `type`/`tool` are not.
+        val event = log.append(
+            type = "tool.call\uD83D",
+            tool = "coding.write\uDE00",
+            text = "half an emoji \uD83D",
+        )
+
+        assertEquals("tool.call\uFFFD", event.type)
+        assertEquals("coding.write\uFFFD", event.tool)
+        assertEquals("half an emoji \uFFFD", event.text, "a previewed field is repaired too")
+
+        val json = String(
+            ai.platon.pulsar.common.serialize.json.pulsarObjectMapper().writeValueAsBytes(event),
+            Charsets.UTF_8,
+        )
+        assertFalse(
+            Regex("""\\u[dD][89abAB][0-9a-fA-F]{2}""").containsMatchIn(json),
+            "an unpaired surrogate escape breaks strict JSON readers (issue #620): $json",
+        )
+    }
+
     // ---- aggregate run statistics (the interactive `/stats` command) --------
 
     @Test

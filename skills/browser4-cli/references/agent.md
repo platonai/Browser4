@@ -305,7 +305,17 @@ agent> now compare it with the enterprise page
 
 A line typed while a task is running is **steering**, not a new task: it is sent
 to the running task and injected into the agent as a user message at its next
-model round-trip.
+model round-trip. A backend hiccup does not end the session either: the live view
+keeps following a task that is still running (see
+[When the step stream fails](#when-the-step-stream-fails)).
+
+Steering is chosen whenever this session's task is still running — the CLI asks
+the backend rather than trusting its own bookkeeping, so a line can never be
+queued as a second task behind a live one. If the session had stopped following
+the task, accepting the line re-attaches the live view (`… following task <id>
+again`). To start a *different* task, `/cancel` the running one first; after
+`/new` the previous task belongs to the old agent context, so a later line is a
+new task.
 
 ```
 agent> Summarize the pricing page
@@ -386,6 +396,27 @@ Against an **older backend** the CLI degrades instead of failing:
 The `queued`/`running`/`done`/`failed`/`cancelled` vocabulary and the result
 payload are identical in every mode.
 
+### When the step stream fails
+
+The live view is a convenience over a task that keeps running server-side, so the
+CLI never lets a *display* problem end it:
+
+- **A page the CLI cannot parse** (a proxy error page, a truncated response, one
+  step whose preview is not representable as strict JSON) is not retried
+  unchanged — that could never succeed. The follower narrows the page until the
+  offending step stands alone, then steps over it and prints
+  `… skipped 1 unreadable step (up to seq N)`. One preview line is lost, not the
+  stream.
+- **`-i` keeps following a running task.** If the follower exhausts its window
+  (e.g. the backend restarted), the session prints `⚠ …` and then continues to
+  follow the task as long as the backend still reports it as `running` — the
+  steps resume when the backend answers. The follower is dropped only when the
+  task is finished or the backend no longer knows the id; `/status` and `/result`
+  keep answering from what the session already saw.
+- **`--follow` gives up after ~5 min** without a usable response and exits
+  non-zero, naming the task id: a one-shot command must terminate, and
+  `agent status <id>` reports the task's real state.
+
 ## Flags
 
 | Flag | Applies to | Description |
@@ -424,6 +455,7 @@ containing a URL or page interaction stays a browser task regardless.
 | `No agent task found with id '…'` | The backend has no record of that id (cleared, expired, or the backend restarted) — `agent list` shows what is still tracked |
 | Task still `running` after minutes | Poll `agent status` — browsing agents routinely take minutes; `processed` shows whether it is still stepping |
 | `agent result` says the result carries no data | The agent may have written its deliverable to a file: the same output names the `workspace` it wrote into |
+| `⚠ not delivered: …` after typing into `-i` | The task finished (or stopped accepting input) while the line was typed — the text is NOT turned into a task; type it again to start one, or `/cancel` first when you want a different task |
 | `agent list` shows a different status than `agent status` | `agent list` refreshes from the backend on every call; if the backend is unreachable it prints a note and shows cached labels |
 | Task lost after backend restart | Task ids may not persist; re-submit the task |
 | `extract`/`summarize` blocking too long | Use `agent run` for async execution instead |

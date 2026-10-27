@@ -34,7 +34,8 @@ const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(400);
 /// How often the status fallback polls (an events-less backend).
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
-/// Page size requested from the events endpoint.
+/// Page size requested from the events endpoint — also the ceiling the follower
+/// backs off to after narrowing a page to isolate an unreadable step.
 const EVENTS_PAGE_LIMIT: usize = 200;
 
 /// How long a follower tolerates consecutive transport failures before giving
@@ -138,7 +139,9 @@ struct EventsPage {
 ///
 /// Every field is optional on purpose: a follower must keep working against a
 /// backend that adds or drops fields, and a malformed page is retried (the
-/// cursor is unchanged) instead of killing the session.
+/// cursor is unchanged) instead of killing the session. A page that stays
+/// malformed is handled by [`TaskFollower::recover_unparseable_page`], which
+/// narrows the page and finally steps over the one unreadable step.
 fn parse_events_page(body: &str) -> Result<EventsPage, String> {
     let value: Value = serde_json::from_str(body)
         .map_err(|e| format!("could not parse the events response as JSON: {e}"))?;
@@ -196,6 +199,21 @@ fn string_field(value: &Value, key: &str) -> Option<String> {
         .and_then(|v| v.as_str())
         .map(str::to_string)
         .filter(|s| !s.is_empty())
+}
+
+/// The cursor a page advertises even when the page is not valid JSON.
+///
+/// `nextSeq` is serialized **before** `events`, so a body broken inside one step
+/// still carries a usable cursor. That is what lets the follower step over an
+/// unreadable event instead of stalling on it forever. The scan is deliberately
+/// narrow (the first `"nextSeq"` key and its digits) — it only has to survive a
+/// body that a strict parser rejects, not arbitrary text.
+fn parse_next_seq(body: &str) -> Option<u64> {
+    const KEY: &str = "\"nextSeq\"";
+    let rest = &body[body.find(KEY)? + KEY.len()..];
+    let rest = rest.trim_start().strip_prefix(':')?.trim_start();
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 /// Progress of a task as read from the `command_status` envelope — the fallback
@@ -789,6 +807,16 @@ struct TaskFollower {
     ndjson: bool,
     started: Instant,
     last_poll: Option<Instant>,
+    /// Page size requested from `/events`, narrowed when a page cannot be parsed.
+    ///
+    /// A page that parses only partially is deterministic — the same cursor asks
+    /// for the same bytes — so re-requesting it for the whole transient window
+    /// can never succeed. Halving the page isolates the offending step, at which
+    /// point the follower steps over it ([`Self::recover_unparseable_page`]).
+    page_limit: usize,
+    /// Steps stepped over because their page could not be parsed (for `/stats`
+    /// honesty: this count is never inferred from the events that followed).
+    skipped_steps: u64,
     /// Steps this follower observed, counted locally.
     ///
     /// The fallback behind `/stats`: a backend without the stats endpoint (or one
@@ -812,8 +840,22 @@ impl TaskFollower {
             ndjson,
             started,
             last_poll: None,
+            page_limit: EVENTS_PAGE_LIMIT,
+            skipped_steps: 0,
             observed: RunStats::default(),
         }
+    }
+
+    /// A follower that starts from an existing cursor.
+    ///
+    /// Used when the session re-attaches to a task it stopped following (a
+    /// steering line proved the task is alive): starting at 0 would replay up to
+    /// a thousand retained steps, while the cursor the released follower stopped
+    /// at shows exactly what happened since.
+    fn at_cursor(task_id: &str, after: u64, ndjson: bool, color: bool, quiet: bool) -> Self {
+        let mut follower = Self::new(task_id, ndjson, color, quiet);
+        follower.after = after;
+        follower
     }
 
     /// Spacing between polls: the events endpoint is a cheap cursor read; the
@@ -852,7 +894,7 @@ impl TaskFollower {
             base_url,
             &self.task_id,
             self.after,
-            EVENTS_PAGE_LIMIT,
+            self.page_limit,
         )
         .await
         {
@@ -877,12 +919,15 @@ impl TaskFollower {
 
         let page = match parse_events_page(&response.body) {
             Ok(page) => page,
-            // A 200 with a non-JSON body (proxy error page, truncated body) is a
-            // transport problem, not the end of the task: retry with the cursor
-            // unchanged, exactly as `parse_events_page` promises.
-            Err(error) => return self.tolerate_transient(error),
+            // A 200 the parser rejects is not a transport problem: the page is
+            // deterministic, so retrying it unchanged never helps. Recover from
+            // it instead of blocking the live view for the whole retry window.
+            Err(error) => return self.recover_unparseable_page(&response.body, error),
         };
         self.first_failure = None;
+        // Back off the narrowing now that pages parse again: a long coding run
+        // must not stay limited to the one step that isolated a bad page.
+        self.page_limit = self.page_limit.saturating_mul(2).min(EVENTS_PAGE_LIMIT);
         for event in &page.events {
             self.emit(event);
         }
@@ -892,6 +937,59 @@ impl TaskFollower {
             return Ok(PollOutcome::Done {
                 status: page.status,
             });
+        }
+        Ok(PollOutcome::Running)
+    }
+
+    /// Recover from a `200` whose body does not parse as the events page.
+    ///
+    /// Three things produce such a body: a proxy error page, a truncated
+    /// response, and — the case behind
+    /// [issue #620](https://github.com/platonai/Browser4/issues/620) — one step
+    /// whose preview cannot be represented as strict JSON (an unpaired surrogate
+    /// that the backend's serializer escaped as `\uD83D`, which strict parsers
+    /// such as the CLI's `serde_json` reject with "unexpected end of hex
+    /// escape").
+    ///
+    /// Waiting cannot fix any of them: the cursor has not moved, so the next
+    /// poll asks for the very same bytes. Narrow the page until the offending
+    /// step stands alone, then step over that single step using the `nextSeq`
+    /// the body still carries — losing one preview line instead of the live view
+    /// of a task that keeps running for another hour.
+    fn recover_unparseable_page(
+        &mut self,
+        body: &str,
+        error: String,
+    ) -> Result<PollOutcome, String> {
+        if self.page_limit > 1 {
+            if self.page_limit == EVENTS_PAGE_LIMIT
+                && notice_enabled(self.ndjson, self.renderer.quiet)
+            {
+                self.renderer.print(&format!(
+                    "{}   … {error} (narrowing to a smaller page)",
+                    self.renderer.time_prefix()
+                ));
+            }
+            self.page_limit = (self.page_limit / 2).max(1);
+            return Ok(PollOutcome::Running);
+        }
+
+        // One step per page and it still does not parse: the step itself is
+        // unreadable. `nextSeq` is serialized before `events`, so a body broken
+        // inside the step still advertises a cursor — move past it.
+        let Some(next) = parse_next_seq(body).filter(|next| *next > self.after) else {
+            // No usable cursor either (a proxy error page, a truncated body):
+            // that IS an outage, so fall back to the transient-failure window.
+            return self.tolerate_transient(error);
+        };
+        self.after = next;
+        self.page_limit = EVENTS_PAGE_LIMIT;
+        self.skipped_steps += 1;
+        if notice_enabled(self.ndjson, self.renderer.quiet) {
+            self.renderer.print(&format!(
+                "{}   … skipped 1 unreadable step (up to seq {next}): {error}",
+                self.renderer.time_prefix()
+            ));
         }
         Ok(PollOutcome::Running)
     }
@@ -993,10 +1091,12 @@ impl TaskFollower {
         let failing_for = now.duration_since(since);
         if failing_for >= TRANSIENT_FAILURE_WINDOW {
             return Err(format!(
-                "giving up on task {} after {}s without a usable response: {}",
+                "giving up on task {} after {}s without a usable response: {} \
+                 (the task itself may still be running — 'agent status {}' reports it)",
                 self.task_id,
                 failing_for.as_secs(),
-                error
+                error,
+                self.task_id
             ));
         }
         // One notice per outage, and only on a human-facing stream: NDJSON must
@@ -1009,6 +1109,16 @@ impl TaskFollower {
             ));
         }
         Ok(PollOutcome::Running)
+    }
+
+    /// Re-arm the outage window after the caller decided the task is worth
+    /// following anyway.
+    ///
+    /// The window exists to bound a one-shot `--follow`; in an interactive
+    /// session the user is the bound, and abandoning a task that still runs is
+    /// what made `agent run -i` go silent after a backend hiccup.
+    fn resume(&mut self) {
+        self.first_failure = None;
     }
 
     fn elapsed(&self) -> Duration {
@@ -1111,6 +1221,15 @@ async fn print_completion(
 ) -> Result<(), String> {
     let elapsed = follower.elapsed();
     track_terminal(&follower.task_id, status);
+    // An unreadable step is skipped so the stream survives it; say so once the
+    // task ends instead of leaving a silent gap in the log.
+    if follower.skipped_steps > 0 && notice_enabled(ndjson, follower.renderer.quiet) {
+        follower.renderer.print(&format!(
+            "{}   … {} step(s) could not be displayed and were skipped",
+            follower.renderer.time_prefix(),
+            follower.skipped_steps
+        ));
+    }
     match status {
         "done" => {
             let result = get_command_result(client, base_url, &follower.task_id).await?;
@@ -1242,6 +1361,12 @@ struct Repl {
     quiet: bool,
     current: Option<TaskFollower>,
     last_task: Option<String>,
+    /// Session generation [Self::last_task] was started in.
+    ///
+    /// `/new` bumps the generation to start a fresh agent context; a task from the
+    /// previous one is not steered by a line typed afterwards, because "the next
+    /// task starts a fresh context" is exactly what the user asked for.
+    last_task_generation: u32,
     /// Cursor of the last finished task, so `/events` can show its newest steps
     /// instead of the oldest page.
     last_task_seq: u64,
@@ -1288,6 +1413,7 @@ impl Repl {
             quiet: quiet_enabled(),
             current: None,
             last_task: None,
+            last_task_generation: 0,
             last_task_seq: 0,
             last_local_stats: None,
             prompt_pending: true,
@@ -1385,13 +1511,11 @@ impl Repl {
                     if self.current.is_some() {
                         if let Err(error) = self.poll_current().await {
                             // The follower gave up (transport failures for the whole
-                            // window, unknown task id, …): report it and keep the
-                            // session alive instead of tearing down the REPL.
+                            // window, unknown task id, …): report it, then decide
+                            // whether the task is worth following still. Never go
+                            // silent while it is.
                             self.out(&format!("⚠ {error}"));
-                            if let Some(follower) = self.current.take() {
-                                self.release_current(follower, "unknown", false);
-                            }
-                            self.prompt_pending = true;
+                            self.recover_current().await;
                         }
                     }
                 }
@@ -1432,15 +1556,94 @@ impl Repl {
                 self.prompt_pending = self.current.is_none();
             }
             None => {
-                // Submission is a one-off failure (LLM key, backend error): report
-                // it and stay in the session.
-                if let Err(error) = self.start_task(line).await {
-                    self.out(&format!("✖ {error}"));
-                    self.prompt_pending = true;
+                // A line typed while a task runs is steering — that is the whole
+                // contract of this session, not a property of whether the CLI
+                // still holds a follower for the task. Ask the backend before
+                // submitting: a task that is still running would queue a second
+                // one behind it and the agent would never see the instruction
+                // (issue #620).
+                match self.running_task().await {
+                    Some(task_id) => {
+                        self.steer(&task_id, &line).await;
+                        self.prompt_pending = self.current.is_none();
+                    }
+                    // Submission is a one-off failure (LLM key, backend error):
+                    // report it and stay in the session.
+                    None => {
+                        if let Err(error) = self.start_task(line).await {
+                            self.out(&format!("✖ {error}"));
+                            self.prompt_pending = true;
+                        }
+                    }
                 }
             }
         }
         Ok(true)
+    }
+
+    /// The task this session started that the backend still reports as live.
+    ///
+    /// The follower is the normal source of that knowledge, but it must not be
+    /// the only one: a session that lost it — a backend hiccup, a task submitted
+    /// before the follower was re-armed — would otherwise take the next typed
+    /// line as a second task, queue it behind the live one and lose the
+    /// instruction (issue #620).
+    ///
+    /// Only a *positive* answer steers. An unreachable or unparseable status must
+    /// never swallow the line: "cannot tell" means "submit", because submitting is
+    /// recoverable and silently dropping the user's instruction is not.
+    async fn running_task(&mut self) -> Option<String> {
+        // A task of a previous `/new` generation belongs to another agent context:
+        // the user asked for a fresh start, so a line is a task, not steering.
+        if self.last_task_generation != self.generation {
+            return None;
+        }
+        let task_id = self.last_task.clone()?;
+        let body = get_command_status(&self.client, &self.base_url, &task_id)
+            .await
+            .ok()?;
+        // Require a real status envelope: `parse_status_progress` falls back to
+        // "running" for anything it cannot read, which is the opposite of what this
+        // probe needs.
+        let value: Value = serde_json::from_str(&body).ok()?;
+        if value.get("status").and_then(|v| v.as_str()).is_none()
+            && value.get("processState").and_then(|v| v.as_str()).is_none()
+        {
+            return None;
+        }
+        let progress = parse_status_progress(&body);
+        (!progress.not_found && !progress.done).then_some(task_id)
+    }
+
+    /// Resume the live view of [task_id] after the session stopped following it.
+    ///
+    /// Accepting a steering line proves the task is alive. Without a follower the
+    /// next such line would be taken as a new task again, and the user would see
+    /// no steps either — so steering re-attaches from the cursor the released
+    /// follower stopped at (no replay of a long log).
+    fn attach_if_detached(&mut self, task_id: &str) {
+        if self.current.is_some() {
+            return;
+        }
+        // `last_task_seq` is the released follower's cursor; it belongs to this
+        // task because both the probe and the release that set it come from
+        // `last_task`. Guard anyway: resuming at an unrelated cursor would show
+        // the wrong steps.
+        let after = if self.last_task.as_deref() == Some(task_id) {
+            self.last_task_seq
+        } else {
+            0
+        };
+        self.current = Some(TaskFollower::at_cursor(
+            task_id,
+            after,
+            false,
+            color_enabled(),
+            self.quiet,
+        ));
+        self.out(&format!(
+            "… following task {task_id} again — live steps resume"
+        ));
     }
 
     async fn steer(&mut self, task_id: &str, text: &str) {
@@ -1449,6 +1652,7 @@ impl Repl {
                 let parsed: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
                 if parsed.get("accepted").and_then(|v| v.as_bool()) == Some(true) {
                     self.out("↪ steering queued — the agent sees it at its next model round");
+                    self.attach_if_detached(task_id);
                 } else {
                     let reason = parsed
                         .get("message")
@@ -1512,6 +1716,55 @@ impl Repl {
         }
     }
 
+    /// Decide what happens to a task whose follower just gave up.
+    ///
+    /// `agent run -i` used to drop the follower on any error, which is why an
+    /// error mid-run ended the step-by-step output while the task kept running
+    /// ([issue #620](https://github.com/platonai/Browser4/issues/620)): `/status`
+    /// went on reporting new steps, but nothing was printing them. The follower
+    /// is therefore abandoned only when the backend says the task is gone or
+    /// finished; a task that is still running — or a backend that still cannot
+    /// answer — keeps being followed, with a fresh outage window.
+    async fn recover_current(&mut self) {
+        let Some(follower) = self.current.as_ref() else {
+            // The error came from completing the task (`complete_current` took
+            // the follower already): there is nothing left to follow.
+            self.prompt_pending = true;
+            return;
+        };
+        let task_id = follower.task_id.clone();
+
+        let progress = get_command_status(&self.client, &self.base_url, &task_id)
+            .await
+            .ok()
+            .map(|body| parse_status_progress(&body));
+
+        if let Some(progress) = &progress {
+            if progress.not_found {
+                if let Some(follower) = self.current.take() {
+                    self.release_current(follower, "unknown", false);
+                }
+                self.prompt_pending = true;
+                return;
+            }
+            if progress.done {
+                let status = progress.word.clone();
+                if let Err(error) = self.complete_current(status).await {
+                    self.out(&format!("⚠ {error}"));
+                }
+                return;
+            }
+        }
+
+        // Still running — or the backend is unreachable, which is exactly the
+        // case the follower's window was re-armed for. Keep the live view.
+        let resumed = self.current.as_mut().map(TaskFollower::resume).is_some();
+        if resumed {
+            self.out("… still following it; the live step view resumes when the backend answers");
+        }
+        self.prompt_pending = false;
+    }
+
     /// Remember a task whose follower is going away: its id, its cursor, and the
     /// steps this session counted itself.
     ///
@@ -1522,6 +1775,7 @@ impl Repl {
         let elapsed_ms = follower.elapsed().as_millis() as u64;
         let observed = follower.observed.clone();
         self.last_task = Some(follower.task_id.clone());
+        self.last_task_generation = self.generation;
         self.last_task_seq = follower.after;
         self.last_local_stats = Some(TaskStatsReport {
             task_id: follower.task_id,
@@ -1539,6 +1793,7 @@ impl Repl {
         };
         let task_id = follower.task_id.clone();
         let elapsed = follower.elapsed();
+        let skipped = follower.skipped_steps;
         self.release_current(follower, &status, true);
         self.prompt_pending = true;
 
@@ -1565,6 +1820,14 @@ impl Repl {
                 self.out(&format!("✖ failed · {task_id} — {reason}"));
                 let _ = crate::state::update_async_task_status(&task_id, "failed", None);
             }
+        }
+
+        // An unreadable step is skipped so the live view survives it; say so once
+        // at the end rather than letting the count vanish with the follower.
+        if skipped > 0 {
+            self.out(&format!(
+                "⚠ {skipped} step(s) could not be displayed and were skipped"
+            ));
         }
 
         Ok(())
@@ -1613,7 +1876,8 @@ impl Repl {
         self.out("  /stats [task-id]   run statistics: LLM rounds/requests, tokens, tool calls");
         self.out("  /quit              leave the session");
         self.out("");
-        self.out("Anything else is a task. Type a line while a task runs to steer it.");
+        self.out("Anything else is a task. While a task runs, a typed line steers it at its");
+        self.out("next model round — /cancel the running task first to start a different one.");
     }
 
     async fn print_status(&mut self) {
@@ -2398,57 +2662,177 @@ mod tests {
         assert!(message_only.not_found);
     }
 
-    /// A one-connection-per-entry HTTP stub, enough for the follower's GETs.
-    fn spawn_http_stub(
-        responses: Vec<(u16, &'static str)>,
-    ) -> (String, std::thread::JoinHandle<()>) {
-        use std::io::{Read, Write};
+    /// One scripted HTTP answer: request path, status, body.
+    type StubRoute = (&'static str, u16, &'static str);
 
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("stub bind");
-        let port = listener.local_addr().expect("stub addr").port();
-        let handle = std::thread::spawn(move || {
-            for (status, body) in responses {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    return;
-                };
-                let mut buffer = [0u8; 4096];
-                let _ = stream.read(&mut buffer);
-                let response = format!(
-                    "HTTP/1.1 {status} {}\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\
-                     Connection: close\r\n\r\n{body}",
-                    if status == 200 { "OK" } else { "Not Found" },
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
+    /// An HTTP stub for the follower and the interactive session.
+    ///
+    /// Answers are keyed by request **path** (a path may hold several answers,
+    /// served in order) rather than by arrival order: a positional script hands
+    /// the next answer to *whatever* connects next, so an unexpected connection
+    /// silently desynchronizes the test and it fails for a reason that has nothing
+    /// to do with the code under test. Unknown paths answer 404 without consuming
+    /// a queued answer.
+    struct HttpStub {
+        base_url: String,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl HttpStub {
+        fn start(routes: Vec<StubRoute>) -> Self {
+            use std::collections::{HashMap, VecDeque};
+            use std::io::Write;
+            use std::sync::atomic::{AtomicBool, Ordering};
+            use std::sync::Arc;
+
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("stub bind");
+            let port = listener.local_addr().expect("stub addr").port();
+            listener.set_nonblocking(true).expect("stub nonblocking");
+            let stop = Arc::new(AtomicBool::new(false));
+            let stop_flag = Arc::clone(&stop);
+            let handle = std::thread::spawn(move || {
+                let mut queues: HashMap<String, VecDeque<(u16, &'static str)>> = HashMap::new();
+                for (path, status, body) in routes {
+                    queues
+                        .entry(path.to_string())
+                        .or_default()
+                        .push_back((status, body));
+                }
+                while !stop_flag.load(Ordering::Relaxed) {
+                    let stream = listener.accept();
+                    let Ok((mut stream, _)) = stream else {
+                        if stop_flag.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                        continue;
+                    };
+                    // Windows hands the accepted socket the listener's
+                    // non-blocking mode: without this, the first read returns
+                    // WouldBlock before the request arrives, the stub answers (and
+                    // closes) early, and the client fails with "error sending
+                    // request" — which showed up as an unrelated test failing.
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                    let request = read_http_request(&mut stream);
+                    let path = request
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("/")
+                        .split('?')
+                        .next()
+                        .unwrap_or("/")
+                        .to_string();
+                    let (status, body) = queues
+                        .get_mut(&path)
+                        .and_then(|queue| queue.pop_front())
+                        .unwrap_or((404, "not scripted"));
+                    let response = format!(
+                        "HTTP/1.1 {status} {}\r\nContent-Type: text/html; charset=utf-8\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        if status == 200 { "OK" } else { "Not Found" },
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
+                }
+            });
+            Self {
+                base_url: format!("http://127.0.0.1:{port}"),
+                stop,
+                handle: Some(handle),
             }
-        });
-        (format!("http://127.0.0.1:{port}"), handle)
+        }
+
+        fn join(mut self) {
+            use std::sync::atomic::Ordering;
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    /// Read one HTTP request (headers plus a `Content-Length` body).
+    ///
+    /// The body must be consumed before the answer: responding and closing while
+    /// the client is still writing makes it fail with "connection closed before
+    /// message completed".
+    fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+
+        let mut data = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    data.extend_from_slice(&chunk[..read]);
+                    if let Some(end) = data.windows(4).position(|window| window == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&data[..end]).to_lowercase();
+                        let length = head
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length:"))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if data.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(_) => break,
+            }
+        }
+        String::from_utf8_lossy(&data).to_string()
+    }
+
+    #[test]
+    fn parse_next_seq_reads_the_cursor_from_a_body_json_rejects() {
+        // `nextSeq` is serialized before `events`, so a body broken inside a step
+        // still carries the cursor the follower needs to step over it.
+        assert_eq!(
+            parse_next_seq(r#"{"taskId":"t1","nextSeq":41,"events":[{"seq":41,"#),
+            Some(41)
+        );
+        assert_eq!(parse_next_seq(r#"{"nextSeq": 7, "events":[]}"#), Some(7));
+        assert_eq!(parse_next_seq("<html>proxy error</html>"), None);
+        assert_eq!(parse_next_seq(r#"{"events":[]}"#), None);
+        assert_eq!(parse_next_seq(r#"{"nextSeq":"nope"}"#), None);
     }
 
     #[tokio::test]
-    async fn malformed_events_page_is_retried_without_moving_the_cursor() {
-        let (base_url, handle) = spawn_http_stub(vec![
-            (200, "<html>proxy error</html>"),
+    async fn unparseable_page_narrows_the_page_before_it_retries() {
+        let stub = HttpStub::start(vec![
+            ("/api/commands/t1/events", 200, "<html>proxy error</html>"),
             (
+                "/api/commands/t1/events",
                 200,
                 r#"{"status":"running","done":false,"nextSeq":2,
                     "events":[{"seq":1,"type":"model.text","text":"hi"},
                               {"seq":2,"type":"tool.call","tool":"coding.read"}]}"#,
             ),
         ]);
+        let base_url = stub.base_url.clone();
         let client = Client::builder().build().expect("client");
-        // quiet: the retry notice is noise in a unit test's output
+        // quiet: the narrowing notice is noise in a unit test's output
         let mut follower = TaskFollower::new("t1", false, false, true);
 
         let first = follower
             .poll(&client, &base_url)
             .await
-            .expect("a malformed page must be retried, not propagated");
+            .expect("an unparseable page must be recovered from, not propagated");
         assert!(matches!(first, PollOutcome::Running));
         assert_eq!(follower.after, 0, "the cursor must not move on a bad page");
+        assert_eq!(
+            follower.page_limit,
+            EVENTS_PAGE_LIMIT / 2,
+            "the page narrows so the offending step can be isolated"
+        );
         assert!(
-            follower.first_failure.is_some(),
-            "the failure window must start on a bad page"
+            follower.first_failure.is_none(),
+            "a page that may just be too wide is not an outage yet"
         );
 
         // The poll throttle is wall-clock based; a retry must not be dropped.
@@ -2459,11 +2843,325 @@ mod tests {
             .expect("a valid page must be accepted after a bad one");
         assert!(matches!(second, PollOutcome::Running));
         assert_eq!(follower.after, 2, "the recovered page advances the cursor");
+        assert_eq!(
+            follower.page_limit, EVENTS_PAGE_LIMIT,
+            "a page that parses restores the requested page size"
+        );
         assert!(
             follower.first_failure.is_none(),
             "a good response resets the failure window"
         );
 
-        handle.join().expect("stub thread");
+        stub.join();
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_step_is_skipped_and_following_continues() {
+        // One step whose text is a lone surrogate escape — exactly what a backend
+        // that truncated a preview inside an emoji serves, and what serde_json
+        // rejects with "unexpected end of hex escape" (#620).
+        let stub = HttpStub::start(vec![
+            (
+                "/api/commands/t1/events",
+                200,
+                r#"{"taskId":"t1","status":"running","done":false,"nextSeq":41,
+                    "events":[{"seq":41,"type":"model.text","text":"broken \ud83d"}]}"#,
+            ),
+            (
+                "/api/commands/t1/events",
+                200,
+                r#"{"status":"running","done":true,"nextSeq":42,
+                    "events":[{"seq":42,"type":"task.done"}]}"#,
+            ),
+        ]);
+        let base_url = stub.base_url.clone();
+        let client = Client::builder().build().expect("client");
+        let mut follower = TaskFollower::new("t1", false, false, true);
+        // Already narrowed: the next unreadable page is the offending step itself.
+        follower.page_limit = 1;
+
+        let outcome = follower
+            .poll(&client, &base_url)
+            .await
+            .expect("an unreadable step must not stall the live view");
+        assert!(matches!(outcome, PollOutcome::Running));
+        assert_eq!(
+            follower.after, 41,
+            "the follower steps over the unreadable step instead of waiting for it"
+        );
+        assert_eq!(follower.skipped_steps, 1);
+        assert_eq!(
+            follower.page_limit, EVENTS_PAGE_LIMIT,
+            "the page widens again once the bad step is behind it"
+        );
+        assert!(
+            follower.first_failure.is_none(),
+            "skipping a step is not a transport failure"
+        );
+
+        follower.last_poll = None;
+        match follower
+            .poll(&client, &base_url)
+            .await
+            .expect("the following page is fine")
+        {
+            PollOutcome::Done { status } => assert_eq!(status, "running"),
+            PollOutcome::Running => panic!("the task is done"),
+        }
+        assert_eq!(follower.after, 42);
+
+        stub.join();
+    }
+
+    #[tokio::test]
+    async fn a_page_without_a_cursor_still_counts_as_an_outage() {
+        let stub = HttpStub::start(vec![(
+            "/api/commands/t1/events",
+            200,
+            "<html>proxy error</html>",
+        )]);
+        let base_url = stub.base_url.clone();
+        let client = Client::builder().build().expect("client");
+        let mut follower = TaskFollower::new("t1", false, false, true);
+        // Nothing left to narrow: a body with no cursor cannot be stepped over.
+        follower.page_limit = 1;
+
+        let outcome = follower
+            .poll(&client, &base_url)
+            .await
+            .expect("a transient failure is retried, not propagated");
+        assert!(matches!(outcome, PollOutcome::Running));
+        assert_eq!(follower.after, 0);
+        assert!(
+            follower.first_failure.is_some(),
+            "a body carrying no cursor is a real outage"
+        );
+
+        stub.join();
+    }
+
+    #[tokio::test]
+    async fn a_follower_that_gave_up_keeps_following_a_running_task() {
+        // #620: an error mid-run must not end the step-by-step output of a task
+        // the backend still reports as running.
+        let stub = HttpStub::start(vec![(
+            "/mcp/call-tool",
+            200,
+            r#"{"status":"running","statusCode":102}"#,
+        )]);
+        let base_url = stub.base_url.clone();
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, &base_url, &json!({}), None);
+        repl.current = Some(TaskFollower::new("t1", false, false, true));
+        repl.current.as_mut().unwrap().first_failure = Some(Instant::now());
+
+        repl.recover_current().await;
+
+        assert!(repl.current.is_some(), "a running task keeps its follower");
+        assert!(
+            repl.current.as_ref().unwrap().first_failure.is_none(),
+            "the outage window is re-armed so polling resumes"
+        );
+        assert!(repl.last_task.is_none(), "the task is not released");
+
+        stub.join();
+    }
+
+    #[tokio::test]
+    async fn a_follower_that_gave_up_keeps_following_when_the_backend_cannot_answer() {
+        // Nothing listens on the port: "cannot tell" must not drop a task that
+        // may well still be running.
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://127.0.0.1:1", &json!({}), None);
+        repl.current = Some(TaskFollower::new("t1", false, false, true));
+        repl.current.as_mut().unwrap().first_failure = Some(Instant::now());
+
+        repl.recover_current().await;
+
+        assert!(repl.current.is_some());
+        assert!(repl.current.as_ref().unwrap().first_failure.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_follower_that_gave_up_releases_a_task_the_backend_lost() {
+        let stub = HttpStub::start(vec![(
+            "/mcp/call-tool",
+            200,
+            r#"{"taskId":"t1","status":"failed","statusCode":404,"isDone":true,
+                "message":"No task found with id 't1'."}"#,
+        )]);
+        let base_url = stub.base_url.clone();
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, &base_url, &json!({}), None);
+        repl.current = Some(TaskFollower::new("t1", false, false, true));
+
+        repl.recover_current().await;
+
+        assert!(
+            repl.current.is_none(),
+            "a task the backend lost has nothing left to stream"
+        );
+        assert_eq!(
+            repl.last_task.as_deref(),
+            Some("t1"),
+            "the id stays remembered for /status"
+        );
+        assert!(repl.prompt_pending);
+
+        stub.join();
+    }
+
+    #[tokio::test]
+    async fn a_follower_that_gave_up_completes_a_task_that_finished_meanwhile() {
+        let stub = HttpStub::start(vec![
+            (
+                "/mcp/call-tool",
+                200,
+                r#"{"status":"done","statusCode":200,"isDone":true}"#,
+            ),
+            ("/mcp/call-tool", 200, r#"{"message":"Saved 20 rows."}"#),
+        ]);
+        let base_url = stub.base_url.clone();
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, &base_url, &json!({}), None);
+        repl.current = Some(TaskFollower::new("t1", false, false, true));
+
+        repl.recover_current().await;
+
+        assert!(repl.current.is_none());
+        assert_eq!(
+            repl.last_local_stats.as_ref().map(|stats| stats.is_done),
+            Some(true),
+            "the task's outcome is recorded even when the stream never delivered it"
+        );
+
+        stub.join();
+    }
+
+    // ---- steering: a typed line while a task runs (#620) --------------------
+
+    /// The regression from issue #620's comment: the session lost its follower,
+    /// the user typed an instruction, and the CLI submitted a second task that
+    /// queued behind the running one instead of steering it.
+    #[tokio::test]
+    async fn a_line_for_a_detached_running_task_steers_instead_of_queueing_a_second_task() {
+        let stub = HttpStub::start(vec![
+            (
+                "/mcp/call-tool",
+                200,
+                r#"{"taskId":"t1","status":"running","statusCode":102,"message":"Agent is working"}"#,
+            ),
+            (
+                "/api/commands/t1/input",
+                200,
+                r#"{"taskId":"t1","accepted":true,"message":"queued: the agent sees it at its next model round"}"#,
+            ),
+        ]);
+        let base_url = stub.base_url.clone();
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, &base_url, &json!({}), None);
+        // The follower is gone (the old bug dropped it), the task is not.
+        repl.last_task = Some("t1".to_string());
+        repl.last_task_seq = 7;
+
+        repl.handle_line("打开真实浏览器访问详情页".to_string())
+            .await
+            .expect("handling a line never aborts the session");
+
+        let follower = repl
+            .current
+            .as_ref()
+            .expect("steering re-attaches the live view of the running task");
+        assert_eq!(follower.task_id, "t1", "the running task was steered");
+        assert_eq!(
+            follower.after, 7,
+            "the live view resumes at the cursor the session stopped at"
+        );
+        assert!(
+            repl.last_local_stats.is_none(),
+            "no task was released: nothing was submitted and nothing finished"
+        );
+
+        stub.join();
+    }
+
+    #[tokio::test]
+    async fn a_task_from_a_previous_session_generation_is_not_steered() {
+        let client = Client::builder().build().expect("client");
+        // Nothing listens: a probe would fail anyway, so reaching the network here
+        // would make the assertion pass for the wrong reason.
+        let mut repl = Repl::new(&client, "http://127.0.0.1:1", &json!({}), None);
+        repl.last_task = Some("t1".to_string());
+        repl.new_session();
+
+        assert_eq!(
+            repl.running_task().await,
+            None,
+            "/new asks for a fresh context: a later line is a task, not steering"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_positive_status_answer_makes_a_task_steerable() {
+        let client = Client::builder().build().expect("client");
+
+        let running = HttpStub::start(vec![(
+            "/mcp/call-tool",
+            200,
+            r#"{"taskId":"t1","status":"running","statusCode":102}"#,
+        )]);
+        let mut repl = Repl::new(&client, &running.base_url, &json!({}), None);
+        repl.last_task = Some("t1".to_string());
+        assert_eq!(repl.running_task().await.as_deref(), Some("t1"));
+        running.join();
+
+        let done = HttpStub::start(vec![(
+            "/mcp/call-tool",
+            200,
+            r#"{"status":"done","isDone":true,"statusCode":200}"#,
+        )]);
+        let mut repl = Repl::new(&client, &done.base_url, &json!({}), None);
+        repl.last_task = Some("t1".to_string());
+        assert_eq!(repl.running_task().await, None, "a finished task is a task");
+        done.join();
+
+        // A body the CLI cannot read must not swallow the typed line either: it
+        // could be an expired task just as well as an unparseable envelope.
+        let broken = HttpStub::start(vec![("/mcp/call-tool", 200, "<html>proxy error</html>")]);
+        let mut repl = Repl::new(&client, &broken.base_url, &json!({}), None);
+        repl.last_task = Some("t1".to_string());
+        assert_eq!(repl.running_task().await, None);
+        broken.join();
+
+        let lost = HttpStub::start(vec![(
+            "/mcp/call-tool",
+            200,
+            r#"{"taskId":"t1","status":"failed","statusCode":404,"isDone":true,
+                "message":"No task found with id 't1'."}"#,
+        )]);
+        let mut repl = Repl::new(&client, &lost.base_url, &json!({}), None);
+        repl.last_task = Some("t1".to_string());
+        assert_eq!(repl.running_task().await, None);
+        lost.join();
+    }
+
+    #[test]
+    fn attaching_never_steals_an_existing_follower() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://127.0.0.1:1", &json!({}), None);
+
+        repl.attach_if_detached("t1");
+        assert_eq!(
+            repl.current.as_ref().map(|f| f.task_id.as_str()),
+            Some("t1")
+        );
+
+        // A different task must not replace the follower of the live one.
+        repl.attach_if_detached("t2");
+        assert_eq!(
+            repl.current.as_ref().map(|f| f.task_id.as_str()),
+            Some("t1"),
+            "the follower of a task being followed is never replaced"
+        );
     }
 }
