@@ -371,3 +371,41 @@ Finish report rejected: the run modified 23 file(s) the report does not list:
 - LLM 配置（D7）已修复并端到端验证：不带环境变量重建后端，任务 `done`（§4.2）。
 - 仍未做运行时验证的：D9（临时文件不计入交付改动）——单测覆盖，未再跑完整重构任务复验。
 - 剩余设计层面建议见 §7（按任务隔离工作区、shell 不得越出工作区、镜像 `1 failed` 的报错信息）。
+
+## 10. 2026-10-27 复发：同一扇门，换到浏览任务的临时脚本上
+
+D9 只把 `.b4scratch/`、`.browser4/`、`target/` 从 mutation log 里摘出去。**浏览型任务**（`codingMode=false`）的
+提示词却让模型"用相对路径写 eval 用的 JS"（即工作区根目录），这类脚本不在上述豁免内，于是同一个误杀换了个形态复发：
+
+```
+✖ failed · 2bb2f4e0… — 🛑 Invalid state: step 0 - Finish report rejected:
+   the run modified 17 file(s) the report does not list: ev.js, evf.js, evf2.js, evf3.js, read_events.js
+```
+
+证据（`app-data\logs\agent\…\cli-events.jsonl` + 工作区 mtime）：
+
+| run | 实际写入 | 报告 `filesChanged` | 差集 |
+|---|---|---|---|
+| `90b850ac…`（问句任务，3m41s） | 6（`gh_issues.js` … `url.js`） | 0 | 6，告警前 5 名完全一致 |
+| `2bb2f4e0…`（13m52s，issue #623 已提交并验证） | 37 | 20 | 17，告警前 5 名完全一致 |
+
+根因链：模型手写 `filesChanged`（13 分钟 / 39 次 `coding.write`，内层循环 4 次撞 40 次迭代上限，只剩有界摘要）
+→ 规则 7 把"报告漏列"当硬违规 → `strict` 直接抛 → `classifyError` 把它包装成
+`PermanentError("🛑 Invalid state: step 0 - …")`（CLI 引擎只增 `turn`，`context.step` 恒为 0）
+→ `resolveProblemWithRetry` 对 PermanentError 不重试 → 任务红；且**完成门禁没有修复回环**（只有 `coding.verify` 有）。
+
+### 修复（D10）：漏列 = 记账问题，不是谎报
+
+- `FinishReportGate`：规则 7 现在把漏列文件暴露为 `Verdict.unlistedFiles` / `onlyUnlistedFiles`；写后删除的文件不再算交付物
+  （最后一次操作是 delete 即摘除）。
+- 新增 `FinishReportRepair`（纯策略 + 单测）：漏列先回灌"缺哪些文件 + `coding.changeSummary` 是权威清单"，
+  预算同 `browser4.agent.repair.maxRounds`；预算耗尽（或循环已结束）则**用 mutation trace 补全 `filesChanged` 并接受完成**，
+  只有"幻影文件 / 编造 gate / 0 次工具调用 / 伪造 VERDICT_JSON"才继续判失败。
+- `RobustBrowserAgent`：拆出 `evaluateFinishReport` / `acceptCompletion` / `reconcileFinishReport`，
+  `taskComplete`、纯文本收尾、循环结束三条路径都走同一套协调；拒绝时把**全部**违规写日志（原来只剩 `.first()`）。
+- 提示词：两种模式都指向 `coding.changeSummary` 作为 `filesChanged` 的权威来源；浏览模式改为把 helper JS 放 `.b4scratch/`
+  （`eval --file .b4scratch/ev.js`），不再写工作区根目录。
+- 回退开关：`-Dbrowser4.agent.finish.unlistedFiles=reject`（恢复旧的 fail-fast）；`finishGateCheck=warn` 仍然只告警。
+
+验证：`FinishReportGateTest`（26 例）、`FinishReportRepairTest`（10 例）、`CliAgentPromptTest`（7 例）全绿。
+

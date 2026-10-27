@@ -131,6 +131,21 @@ data class AgentConfig(
     val finishWorkspace: String =
         System.getProperty("browser4.agent.finish.workspace", ""),
     /**
+     * What the finish gate does when the run's mutation trace shows files the
+     * completion report does not list (rule 7):
+     *
+     * - `amend` (default): the model gets the missing list back for up to
+     *   [repairMaxRounds] rounds; when the budget is spent the report is
+     *   completed from the trace and the run stays successful. A long run
+     *   writes dozens of helper files and cannot always enumerate them, and
+     *   failing a finished task over that bookkeeping is wrong.
+     * - `reject`: fail the task (pre-2026-10-27 behaviour).
+     *
+     * Configurable via `-Dbrowser4.agent.finish.unlistedFiles=reject`.
+     */
+    val finishUnlistedFiles: String =
+        System.getProperty("browser4.agent.finish.unlistedFiles", "amend"),
+    /**
      * Repair-round budget (plan P1.3): when the latest `coding.verify` verdict
      * failed, the engine feeds the structured diagnostics back and lets the
      * model repair, up to this many rounds, then fails the task with the

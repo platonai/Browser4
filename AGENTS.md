@@ -377,6 +377,10 @@ File-queue system for task-driven AI workflows (`coworker/`). Task files (Markdo
   It also compares the report against the run's recorded file mutations: a cited `VERDICT_JSON` must
   match the verdict the run actually recorded, every file the run modified must be listed in
   `filesChanged`, and claimed deletions must be backed by the run (or by git). Prose is never trusted.
+  A file the run wrote but the report omits is treated as bookkeeping, not as a lie: the missing list
+  goes back to the model for up to `browser4.agent.repair.maxRounds` rounds, then `filesChanged` is
+  completed from the mutation trace and the task stays successful
+  (`-Dbrowser4.agent.finish.unlistedFiles=reject` restores the fail-fast behaviour).
   A failing verdict is fed back with its diagnostics for `-Dbrowser4.agent.repair.maxRounds` rounds
   (default 3, `0` disables), then the task fails with the verdict as evidence
 - [ ] No new high-noise logs or warnings

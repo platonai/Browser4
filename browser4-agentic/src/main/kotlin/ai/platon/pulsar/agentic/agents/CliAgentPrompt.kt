@@ -96,6 +96,14 @@ internal object CliAgentPrompt {
     /**
      * Closing "context hygiene" block. Coding runs get file/report discipline;
      * browsing runs keep the snapshot rules.
+     *
+     * Both modes now point at `.b4scratch/` and `coding.changeSummary`, for one
+     * reason: a browsing run writes one helper `.js` per `b4 run eval --file`, a
+     * long run leaves dozens of them in the workspace, and the finish gate used
+     * to treat every one as a deliverable the report had to enumerate (observed:
+     * a 13-minute run wrote 37 files, reported 20, and its completed, verified
+     * issue was marked failed). Scratch files belong under `.b4scratch/`, and
+     * `coding.changeSummary` is the authoritative list for `filesChanged`.
      */
     fun hygiene(codingMode: Boolean, workspaceDir: Path): String = if (codingMode) {
         """
@@ -110,8 +118,10 @@ internal object CliAgentPrompt {
           summary=..., keyFindings=[...], filesChanged=[...], deletedFiles=[...],
           problems=[...]).
           The report is checked against a trace of what actually happened:
-          list EVERY file you wrote or edited in filesChanged and every file
-          you deleted in deletedFiles — an omitted file fails the gate.
+          coding.changeSummary returns exactly the files this run wrote — list
+          EVERY one of them in filesChanged and every deletion in deletedFiles;
+          an omitted file is rejected (and repeated omissions are amended by the
+          engine from that trace).
           When you ran coding.verify, paste its exact VERDICT_JSON line
           verbatim into the summary; a cited verdict must match the recorded one.
         """.trimIndent()
@@ -120,20 +130,24 @@ internal object CliAgentPrompt {
         ### Context hygiene
         - Prefer `snapshot -v 0 --stdout` and targeted `htmlsnapshot get` over full page dumps.
         - After navigation, take a snapshot before deciding the next action.
-        - Your working directory is $workspaceDir; write helper files
-          (e.g. JS for eval) with relative paths — never create files in the
-          repository root.
+        - Your working directory is $workspaceDir. Keep helper scripts under
+          `.b4scratch/` (e.g. `eval --file .b4scratch/ev.js`) — never in the
+          repository root. Files there are scratch, not deliverables: they need no
+          reporting and do not pollute change tracking.
         - When you need to remember something across steps, write it with
           memory_note (the note stays visible and survives compression).
           When past tasks might be relevant, search them with memory_search.
-        - When the task is finished, call system.taskComplete(
+        - When the task is finished, run coding.changeSummary — it lists exactly the
+          files this run wrote — then call system.taskComplete(
           summary=..., keyFindings=[...], filesChanged=[...], deletedFiles=[...],
           problems=[...]).
-          The report is checked against a trace of what actually happened:
-          list EVERY file you wrote or edited in filesChanged and every file
-          you deleted in deletedFiles — an omitted file fails the gate.
+          The report is checked against a trace of what actually happened: copy the
+          changeSummary files into filesChanged and every deletion into
+          deletedFiles. A file the run wrote but the report omits is rejected (and
+          repeated omissions are amended by the engine from that trace).
           When you ran coding.verify, paste its exact VERDICT_JSON line
           verbatim into the summary; a cited verdict must match the recorded one.
         """.trimIndent()
     }
 }
+

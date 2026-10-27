@@ -284,6 +284,73 @@ class FinishReportGateTest {
     }
 
     @Test
+    @DisplayName("rule 7 exposes the unlisted files so the engine can repair the report")
+    fun unlistedFilesAreExposed() {
+        // The 2026-10-27 incident: a browsing run wrote 37 helper scripts and the
+        // model reported 20, so the strict gate failed a task whose issue had
+        // already been filed and verified. The omission must be actionable, not
+        // just a rejection.
+        val verdict = FinishReportGate.evaluate(
+            evidence(
+                recordedMutations = listOf("write ev.js", "write issue_body.md"),
+                filesChanged = listOf("issue_body.md"),
+            )
+        )
+        assertFalse(verdict.passed)
+        assertEquals(listOf("ev.js"), verdict.unlistedFiles)
+        assertTrue(verdict.onlyUnlistedFiles, "an omission is repairable: ${verdict.violations}")
+    }
+
+    @Test
+    @DisplayName("a file written and then deleted is not a deliverable")
+    fun writeThenDeleteIsNotMaterial() {
+        val deleted = FinishReportGate.evaluate(
+            evidence(recordedMutations = listOf("write ev.js", "delete ev.js"))
+        )
+        assertTrue(deleted.passed, "violations: ${deleted.violations}")
+        assertTrue(deleted.unlistedFiles.isEmpty())
+
+        // A sibling that is still there must still be reported.
+        val sibling = FinishReportGate.evaluate(
+            evidence(recordedMutations = listOf("write ev.js", "delete ev.js", "write scan.js"))
+        )
+        assertFalse(sibling.passed)
+        assertEquals(listOf("scan.js"), sibling.unlistedFiles)
+    }
+
+    @Test
+    @DisplayName("an omission alongside a lie is not auto-amendable")
+    fun omissionWithAnotherViolationIsNotAmendable() {
+        val verdict = FinishReportGate.evaluate(
+            evidence(
+                executedToolCalls = 0,
+                executedToolNames = emptySet(),
+                recordedMutations = listOf("write ev.js"),
+            )
+        )
+        assertFalse(verdict.passed)
+        assertFalse(
+            verdict.onlyUnlistedFiles,
+            "only the rule-7 omission is amendable, not a fabricated completion: ${verdict.violations}"
+        )
+    }
+
+    @Test
+    @DisplayName("the rule-7 violation stays bounded while the full list is exposed")
+    fun rule7ViolationIsBounded() {
+        val files = (1..12).map { "scratch$it.js" }
+        val verdict = FinishReportGate.evaluate(
+            evidence(recordedMutations = files.map { "write $it" })
+        )
+        assertFalse(verdict.passed)
+        assertEquals(12, verdict.unlistedFiles.size)
+        val violation = verdict.violations.single()
+        assertTrue(violation.contains("12 file(s)"), violation)
+        assertTrue(violation.contains("scratch1.js, scratch2.js, scratch3.js, scratch4.js, scratch5.js"), violation)
+        assertFalse(violation.contains("scratch6.js"), "the log line lists five paths: $violation")
+    }
+
+    @Test
     @DisplayName("a cited verdict must match the verdict the run recorded")
     fun citedVerdictMismatchRejected() {
         val actual = """{"passed":true,"module":"browser4-coding","requested":["compile"],""" +

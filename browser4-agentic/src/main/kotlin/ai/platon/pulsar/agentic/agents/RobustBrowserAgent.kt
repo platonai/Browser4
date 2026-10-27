@@ -458,6 +458,19 @@ open class RobustBrowserAgent(
     private val repairLoop = RepairLoop(config.repairMaxRounds)
 
     /**
+     * Repair/amend policy for a completion report that omits files the run
+     * really wrote (rule 7 of [FinishReportGate]).
+     *
+     * Uses the same round budget as [repairLoop] but its own counter: a
+     * bookkeeping omission must not eat the `coding.verify` repair budget.
+     * `-Dbrowser4.agent.finish.unlistedFiles=reject` restores fail-fast.
+     */
+    private val finishReportRepair = FinishReportRepair(
+        maxRounds = config.repairMaxRounds,
+        amendUnlistedFiles = !config.finishUnlistedFiles.equals("reject", ignoreCase = true),
+    )
+
+    /**
      * Latest structured verification verdict observed in the tool results of
      * the current run (null until `coding.verify` has run). Reset per run.
      */
@@ -984,6 +997,7 @@ open class RobustBrowserAgent(
             // A new run starts with no verdict and a full repair budget.
             lastVerificationVerdict = null
             repairLoop.reset()
+            finishReportRepair.reset()
             logger.info("🚀 cli-agent.start sid={} turns={} instr='{}'",
                 context.sid, maxTurns, Strings.compactInline(action.action, 100))
 
@@ -1007,6 +1021,11 @@ open class RobustBrowserAgent(
             // [codingProgressNudge]).
             var readOnlyCodingRounds = 0
             var mutationsSeen = agentToolManager.codingFs.mutationsSnapshot().size
+            // The completion claim a finish-report repair round was already asked
+            // for. Identity comparison is enough: taskComplete builds a new
+            // ActionDescription per call, so "same object" means the model did not
+            // re-report — amend from the trace instead of burning another round.
+            var repairedClaim: ActionDescription? = null
             while (!isClosed && turn < maxTurns) {
                 val toolsBefore = toolExecutions.get()
                 emitRunEvent(AgentRunEvent(AgentRunEvent.ROUND_START, turn = turn + 1))
@@ -1069,7 +1088,20 @@ open class RobustBrowserAgent(
                         turn++
                         continue
                     }
-                    return completeCliRun(completion, context)
+                    // P0.5: the finish report itself may be incomplete (files the
+                    // run wrote that the model forgot). Repair, then amend — never
+                    // fail a finished run over the bookkeeping list.
+                    val reconciled = reconcileFinishReport(
+                        completion, context, allowRepair = repairedClaim !== completion,
+                    )
+                    val finishRepair = reconciled.repairMessage
+                    if (finishRepair != null) {
+                        repairedClaim = completion
+                        messages = messages + UserMessage.from(finishRepair)
+                        turn++
+                        continue
+                    }
+                    return completeCliRun(reconciled.completion ?: completion, context)
                 }
                 val text = response.content
                 val executed = toolExecutions.get() > toolsBefore
@@ -1107,7 +1139,17 @@ open class RobustBrowserAgent(
                             isDecidedComplete = true,
                             summary = text,
                         )
-                        return completeCliRun(textCompletion, context)
+                        // A plain-text report carries no filesChanged at all, so
+                        // this is exactly the claim rule 7 rejects when the run
+                        // wrote anything. Repair it the same way as taskComplete.
+                        val reconciled = reconcileFinishReport(textCompletion, context, allowRepair = true)
+                        val finishRepair = reconciled.repairMessage
+                        if (finishRepair != null) {
+                            messages = messages + UserMessage.from(finishRepair)
+                            turn++
+                            continue
+                        }
+                        return completeCliRun(reconciled.completion ?: textCompletion, context)
                     }
                     if (config.textOnlyStallLimit > 0 && textOnlyStreak >= config.textOnlyStallLimit) {
                         logger.info("⛔ cli-agent.text-only-stall sid={} consecutive={}",
@@ -1145,7 +1187,10 @@ open class RobustBrowserAgent(
 
             val completion = completionRef.get()
             if (completion != null && completion.isDecidedComplete) {
-                return completeCliRun(completion, context)
+                // The loop is over, so no repair round is available: the report is
+                // accepted as-is or amended from the run's trace (allowRepair=false).
+                val reconciled = reconcileFinishReport(completion, context, allowRepair = false)
+                return completeCliRun(reconciled.completion ?: completion, context)
             }
             val stopReason = if (turn >= maxTurns) StopReason.MAX_STEPS else StopReason.NOOP_LIMIT
             logger.info("⛔ cli-agent.no-completion sid={} stop={}", context.sid, stopReason)
@@ -1869,9 +1914,14 @@ open class RobustBrowserAgent(
     }
 
     /**
-     * Finish a CLI-engine run: run the shared completion pipeline and record the
-     * completed state into the agent history so callers (StatefulAgentRunner)
-     * can surface the final summary (the loop itself creates no step states).
+     * Finish a CLI-engine run: record the (already reconciled) completion and
+     * push the completed state into the agent history so callers
+     * (StatefulAgentRunner) can surface the final summary (the loop itself
+     * creates no step states).
+     *
+     * The finish-report gate runs in [reconcileFinishReport] before this is
+     * called, so [completion]'s `filesChanged` is already complete — possibly
+     * amended from the run's mutation trace.
      */
     private suspend fun completeCliRun(
         completion: ActionDescription,
@@ -1885,7 +1935,7 @@ open class RobustBrowserAgent(
                 "filesChanged" to (completion.filesChanged ?: emptyList<String>()),
             )
         )
-        onTaskCompletion(completion, context)
+        acceptCompletion(completion, context)
         stateManager.addToHistory(context.agentState)
         // Agent memory: record the successful completion (idempotent per task)
         // and schedule the L0→L1 knowledge deposit (PEM fusion, M3).
@@ -2161,20 +2211,42 @@ open class RobustBrowserAgent(
         onTaskCompletion(actionDescription, context)
     }
 
+    /**
+     * Legacy completion path (the deprecated observe-act engine, one step at a
+     * time): evaluate the finish report, fail on a violation under `strict`, then
+     * record the completion.
+     *
+     * The CLI engine does not use this: it calls [reconcileFinishReport] first so
+     * a repairable omission gets a repair round instead of ending the task (see
+     * [FinishReportRepair]).
+     */
     private suspend fun onTaskCompletion(action: ActionDescription, context: ExecutionContext) {
-        val step = context.step
-        val sid = context.sessionId
-
         require(action.isDecidedComplete) { "Required action.isComplete" }
 
-        // ── Finish-report hard validation (design §3.2, plan P0.5) ──────────
-        // A completion claim is only as good as the evidence behind it: the rules
-        // live in [FinishReportGate] (deterministic, unit-tested) and this block
-        // only gathers the evidence and applies the verdict.
-        // Under `finishGateCheck=strict` the first violation fails the task;
-        // under `warn` every violation is logged instead.
-        val strict = config.finishGateCheck.equals("strict", ignoreCase = true)
+        val verdict = evaluateFinishReport(action, context)
+        verdict.warnings.forEach { warning ->
+            logger.warn("⚠ finish.report sid={} {}", context.sid.take(8), warning)
+        }
+        if (verdict.violations.isNotEmpty()) {
+            // Log every rule that objected: the exception only carries the first.
+            verdict.violations.forEach { violation ->
+                logger.warn("⚠ finish.report sid={} {}", context.sid.take(8), violation)
+            }
+            if (config.finishGateCheck.equals("strict", ignoreCase = true)) {
+                throw IllegalStateException(finishRejectionMessage(verdict))
+            }
+        }
+        acceptCompletion(action, context)
+    }
 
+    /**
+     * Gather the completion evidence and apply the deterministic rules.
+     *
+     * Side-effect free (the only IO is `git status` on the finish workspace), so
+     * the CLI engine can evaluate a claim, hand the diagnostics back for a repair
+     * round, and evaluate the next claim again.
+     */
+    private fun evaluateFinishReport(action: ActionDescription, context: ExecutionContext): FinishReportGate.Verdict {
         // Two sources: outer states (one per model turn with an executed tool)
         // and inner-loop executions recorded by the tool-calling coordinator.
         val runStates = stateHistory.snapshotFor(context.sessionId).states
@@ -2189,7 +2261,7 @@ open class RobustBrowserAgent(
             logger.debug("finish.report: git unavailable in {} — filesChanged cross-check skipped", workspace)
         }
 
-        val verdict = FinishReportGate.evaluate(
+        return FinishReportGate.evaluate(
             FinishEvidence(
                 executedToolCalls = outerExecuted.size + innerToolExecutionCount,
                 executedToolNames = executedNames,
@@ -2205,17 +2277,116 @@ open class RobustBrowserAgent(
                 gitDeletedFiles = workspace?.let { gitDeletedFiles(it) },
             )
         )
+    }
+
+    /** Outcome of reconciling one completion claim with the finish-report gate. */
+    private data class FinishReconciliation(
+        /** The claim to accept (its `filesChanged` is complete after an amendment). */
+        val completion: ActionDescription? = null,
+        /** A user message to inject: the loop must run another round. */
+        val repairMessage: String? = null,
+    )
+
+    /**
+     * Reconcile a completion claim with the run's evidence before accepting it.
+     *
+     * Rule 7 of [FinishReportGate] compares the report with the run's own mutation
+     * trace. A long run writes dozens of helper files (one `.js` per
+     * `b4 run eval --file`) and the model rebuilds `filesChanged` from a compressed
+     * memory of the run, so the list is often short — that is a bookkeeping
+     * omission, not a false completion, and it used to fail a finished task with
+     * `Invalid state: step 0 - Finish report rejected: …`.
+     *
+     * Policy (see [FinishReportRepair]): one bounded repair round per attempt,
+     * then amend the report from the trace. Every other violation still rejects.
+     *
+     * @param allowRepair false when the run's loop cannot take another round.
+     */
+    private fun reconcileFinishReport(
+        action: ActionDescription,
+        context: ExecutionContext,
+        allowRepair: Boolean,
+    ): FinishReconciliation {
+        val sid = context.sessionId.take(8)
+        val verdict = evaluateFinishReport(action, context)
         verdict.warnings.forEach { warning ->
-            logger.warn("⚠ finish.report sid={} {}", sid.take(8), warning)
+            logger.warn("⚠ finish.report sid={} {}", sid, warning)
         }
-        if (verdict.violations.isNotEmpty()) {
-            if (strict) {
-                throw IllegalStateException("Finish report rejected: ${verdict.violations.first()}")
-            }
-            verdict.violations.forEach { violation ->
-                logger.warn("⚠ finish.report sid={} {}", sid.take(8), violation)
-            }
+        if (verdict.violations.isEmpty()) {
+            return FinishReconciliation(completion = action)
         }
+        // Log every rule that objected — only violations.first() used to survive.
+        verdict.violations.forEach { violation ->
+            logger.warn("⚠ finish.report sid={} {}", sid, violation)
+        }
+        if (!config.finishGateCheck.equals("strict", ignoreCase = true)) {
+            logger.warn(
+                "⚠ finish.report sid={} finishGateCheck=warn — accepting the completion despite {} violation(s)",
+                sid, verdict.violations.size,
+            )
+            return FinishReconciliation(completion = action)
+        }
+
+        val decision = finishReportRepair.decide(
+            verdict,
+            reportedFiles = action.filesChanged.orEmpty(),
+            canRepair = allowRepair,
+        )
+        return when (decision.action) {
+            FinishReportRepair.Action.PASSED -> FinishReconciliation(completion = action)
+
+            FinishReportRepair.Action.RETRY -> {
+                cliLoopTracer.logEvent(
+                    "finish.repair.round",
+                    mapOf(
+                        "round" to decision.round,
+                        "maxRounds" to finishReportRepair.maxRounds,
+                        "missing" to verdict.unlistedFiles.take(20),
+                    ),
+                )
+                logger.info(
+                    "🔁 cli-agent.finish.repair.round sid={} round={}/{} missing={}",
+                    sid, decision.round, finishReportRepair.maxRounds, verdict.unlistedFiles.size,
+                )
+                FinishReconciliation(repairMessage = decision.message)
+            }
+
+            FinishReportRepair.Action.AMEND -> {
+                val amended = decision.amendedFiles.orEmpty()
+                cliLoopTracer.logEvent(
+                    "finish.amend",
+                    mapOf(
+                        "added" to verdict.unlistedFiles,
+                        "filesChanged" to amended,
+                    ),
+                )
+                logger.warn(
+                    "⚠ finish.report sid={} amended filesChanged: the run wrote {} file(s) the " +
+                        "report omitted ({} listed now) — the mutation trace is authoritative",
+                    sid, verdict.unlistedFiles.size, amended.size,
+                )
+                FinishReconciliation(completion = action.copy(filesChanged = amended))
+            }
+
+            FinishReportRepair.Action.REJECT -> throw IllegalStateException(finishRejectionMessage(verdict))
+        }
+    }
+
+    /** Bounded, actionable rejection message (the log has every violation). */
+    private fun finishRejectionMessage(verdict: FinishReportGate.Verdict): String {
+        val first = "Finish report rejected: ${verdict.violations.first()}"
+        if (verdict.violations.size <= 1) return first
+        return "$first (+${verdict.violations.size - 1} more violation(s) in the run log)"
+    }
+
+    /**
+     * Record a validated completion: agent state, audit stream, trace and the
+     * agent-data listing. Split from the gate so the CLI engine can repair a
+     * report and only then accept it.
+     */
+    private suspend fun acceptCompletion(action: ActionDescription, context: ExecutionContext) {
+        val step = context.step
+        val sid = context.sessionId
 
         context.agentState.also {
             it.isComplete = true
@@ -2244,6 +2415,7 @@ open class RobustBrowserAgent(
             logger.info("No files used by this agent")
         }
     }
+
 
     // ─── Finish-report evidence helpers ───────────────────────────────────────
 

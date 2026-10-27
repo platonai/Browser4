@@ -92,7 +92,21 @@ class CliAgentPromptTest {
         val browsing = CliAgentPrompt.hygiene(codingMode = false, workspaceDir = workspace)
         assertTrue(browsing.contains("snapshot -v 0"), browsing)
         assertTrue(browsing.contains(workspace.toString()), browsing)
-        assertFalse(browsing.contains(".b4scratch/"), browsing)
+        // A browsing run writes one helper .js per `b4 run eval --file`; those
+        // belong under .b4scratch/ — the finish gate counts everything else as a
+        // deliverable (observed: 37 files written, 20 reported, task failed).
+        assertTrue(browsing.contains(".b4scratch/"), browsing)
+        assertTrue(browsing.contains("eval --file .b4scratch/"), browsing)
+    }
+
+    @Test
+    @DisplayName("both modes point at coding.changeSummary as the authoritative file list")
+    fun changeSummaryIsTheAuthoritativeList() {
+        for (codingMode in listOf(true, false)) {
+            val hygiene = CliAgentPrompt.hygiene(codingMode, workspace)
+            assertTrue(hygiene.contains("coding.changeSummary"), hygiene)
+            assertTrue(hygiene.contains("filesChanged"), hygiene)
+        }
     }
 
     @Test

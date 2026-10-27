@@ -59,8 +59,20 @@ internal data class FinishEvidence(
  * The reverse direction (files git shows that the report does not list) is a
  * warning, not a violation: a dirty working tree may legitimately carry changes
  * from before this task.
+ *
+ * Rule 7's own direction (files the *run* wrote that the report omits) is real
+ * evidence but not a lie, so it is reported as [Verdict.unlistedFiles] instead of
+ * being baked into the failure: [FinishReportRepair] turns it into one bounded
+ * repair round, then amends the report from the trace. A long run writes dozens
+ * of helper files (one `.js` per `b4 run eval --file`) and the model rebuilds
+ * `filesChanged` from a compressed memory of the run — observed: a 13-minute run
+ * wrote 37 files, reported 20, and the strict gate failed a task whose issue had
+ * already been filed and verified.
  */
 internal object FinishReportGate {
+
+    /** Missing files named in the rule-7 violation, so the log line stays bounded. */
+    private const val MAX_UNLISTED_IN_VIOLATION = 5
 
     /** Separately-reportable outcome: hard violations and soft warnings. */
     internal data class Verdict(
@@ -71,8 +83,30 @@ internal object FinishReportGate {
          * shared work tree has no run-start baseline to compare against.
          */
         val warnings: List<String>,
+        /**
+         * Material files the run wrote that `filesChanged` does not list:
+         * rule 7's actionable detail (empty when the rule passed).
+         *
+         * A caller that can still talk to the model sends this list back as a
+         * repair message; one that cannot amends the report with it instead of
+         * failing a run that did the work (see [FinishReportRepair]).
+         */
+        val unlistedFiles: List<String> = emptyList(),
     ) {
         val passed: Boolean get() = violations.isEmpty()
+
+        /**
+         * True when the **only** violation is rule 7's omission.
+         *
+         * Rule 7 appends exactly one violation when it fires, so a single
+         * violation plus a non-empty [unlistedFiles] means no other rule
+         * objected. Such a report can be amended from the run's own trace: the
+         * files really were written, only the bookkeeping list is incomplete —
+         * unlike a phantom change or an invented gate, which are lies about what
+         * happened and must still fail the task.
+         */
+        val onlyUnlistedFiles: Boolean
+            get() = unlistedFiles.isNotEmpty() && violations.size == 1
     }
 
     fun evaluate(evidence: FinishEvidence): Verdict {
@@ -165,19 +199,20 @@ internal object FinishReportGate {
         // files but reports none is a false completion regardless of the prose.
         // Only *material* mutations count — a write outside the repository (a
         // scratch/temp file) and the `.browser4/` tool state are excluded.
-        val materialMutations = evidence.recordedMutations
-            .filterNot { it.startsWith("delete ") }
-            .map { normalizePath(it.substringAfter(' ', "")) }
-            .filter { it.isNotEmpty() && isMaterialPath(it, evidence) }
-            .distinct()
+        //
+        // An omission is reported separately from a lie: `unlistedFiles` lets the
+        // caller repair the report (or amend it from the trace) instead of
+        // failing a finished run over bookkeeping.
+        var unlistedFiles = emptyList<String>()
+        val materialMutations = materialMutationPaths(evidence)
         if (materialMutations.isNotEmpty()) {
             val listed = (reported + claimedDeletions).map { normalizePath(it) }
-            val unlisted = materialMutations.filterNot { path ->
+            unlistedFiles = materialMutations.filterNot { path ->
                 listed.any { l -> l == path || l.endsWith("/$path") || path.endsWith("/$l") }
             }
-            if (unlisted.isNotEmpty()) {
-                violations += "the run modified ${unlisted.size} file(s) the report does not list: " +
-                    unlisted.take(5).joinToString(", ")
+            if (unlistedFiles.isNotEmpty()) {
+                violations += "the run modified ${unlistedFiles.size} file(s) the report does not list: " +
+                    unlistedFiles.take(MAX_UNLISTED_IN_VIOLATION).joinToString(", ")
             }
         }
 
@@ -217,7 +252,32 @@ internal object FinishReportGate {
             }
         }
 
-        return Verdict(violations, warnings)
+        return Verdict(violations, warnings, unlistedFiles)
+    }
+
+    /**
+     * Paths the run touched that still exist, in the order of their **last** touch.
+     *
+     * The last operation wins: a file written and then deleted is not a
+     * deliverable any more (the workspace no longer has it), so a report that
+     * omits it is truthful. Deletions of files this run never wrote are not
+     * material here either — rule 6 owns the "claimed deletion" direction.
+     */
+    private fun materialMutationPaths(evidence: FinishEvidence): List<String> {
+        val lastOp = LinkedHashMap<String, String>()
+        evidence.recordedMutations.forEach { entry ->
+            val op = entry.substringBefore(' ', "").trim()
+            if (op.isEmpty()) return@forEach
+            val path = normalizePath(entry.substringAfter(' ', ""))
+            if (path.isEmpty()) return@forEach
+            // Re-insert so iteration order tracks the latest touch of each path.
+            lastOp.remove(path)
+            lastOp[path] = op
+        }
+        return lastOp.entries
+            .filter { it.value != "delete" }
+            .map { it.key }
+            .filter { isMaterialPath(it, evidence) }
     }
 
     /**
