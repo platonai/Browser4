@@ -1,7 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.PerceptiveAgent
-import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.api.AbstractBrowser
 import ai.platon.pulsar.api.AbstractWebDriver
@@ -34,16 +33,6 @@ class ExecutorsNamedArgsTest {
             val observe = executor.callFunctionOn(ToolCall("agent", "observe", mutableMapOf("instruction" to "x")), agent)
             assertNotNull(observe.exception)
         }
-    }
-
-    @Test
-    fun fs_readString_uses_named_args() {
-        val fs = mockk<AgentFileSystem>(relaxed = true)
-        val executor = FileSystemToolExecutor()
-        val tc = ToolCall(domain = "fs", method = "readString", arguments = mutableMapOf("filename" to "a.txt", "external" to "true"))
-
-        runBlocking { executor.callFunctionOn(tc, fs) }
-        coVerify { fs.readString("a.txt", true) }
     }
 
     @Test

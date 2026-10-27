@@ -9,7 +9,7 @@
 ### 入口
 
 - `AgentToolManager`
-  - domain 路由（driver/browser/fs/agent/system/skill + custom domains）
+  - domain 路由（tab/browser/coding/b4/agent/system/skill/memory + custom domains）
   - 调用执行：`BasicToolCallExecutor.callFunctionOn(...)`
   - post hooks：`switchTab` / `navigate` 等
   - 导航统一等待：`ToolSpecification.MAY_NAVIGATE_ACTIONS`
@@ -46,8 +46,8 @@
 - `AgentToolExecutor` — agent 域执行器
 - `BrowserTabToolExecutor` — tab/driver 域执行器（页面交互、导航等）
 - `BrowserToolExecutor` — browser 域执行器（标签页管理）
-- `FileSystemToolExecutor` — fs 域执行器
-- `ShellToolExecutor` — shell 域执行器
+- `CodingToolExecutor` — coding 域执行器（读写文件、shell、构建、校验；原 `fs`/`shell` 域已并入此处）
+- `B4CliToolExecutor` — b4 域执行器（browser4-cli 命令）
 - `SystemToolExecutor` — system 域执行器
 - `WebDriverExToolExecutor` — WebDriver 扩展执行器
 
