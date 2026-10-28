@@ -55,8 +55,8 @@ cargo check --manifest-path cli/browser4-cli/Cargo.toml --all-targets
 ## 3. Gate 执行结果（2026-10-29 02:00–03:00）
 
 **判定：不通过**（数据/预算维度）；行为维度大部分通过。完整证据、对比表与复现命令见
-[`logs/supervise-20261029/gate-report.md`](../../logs/supervise-20261029/gate-report.md)，
-D14 取证见同目录 `d14-provenance.md`。
+[`gate-report-agent-run-2026-10-29.md`](gate-report-agent-run-2026-10-29.md)；原始日志在
+`logs/supervise-20261029/`（git-ignored），D14 取证见其中 `d14-provenance.md`。
 
 ### 3.1 取证与运行
 
