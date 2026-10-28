@@ -296,10 +296,10 @@ call this directly and treat a non-terminal `status` as "not ready".
 ### `command_run`
 
 ```
-command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, engine: String? = null)
+command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, engine: String? = null, access: String? = null, autoApprove: String? = null)
 ```
 
-Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; 'observe-act' is the DEPRECATED legacy engine. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.
+Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine is a deprecated compatibility argument: the CLI tool loop is the only engine, and the removed 'observe-act' engine is rejected. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -308,7 +308,9 @@ Execute a plain command (URL, instruction, or agent task). When async=true (defa
 | `noopLimit` | Int? | no | null | Consecutive no-op abort threshold for agent tasks; omit to use the server default. |
 | `coding` | Boolean? | no | null | Explicit task type. True marks the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task (the default, also when omitted): task type is never auto-detected. |
 | `freshWorkspace` | Boolean? | no | null | True runs this task in a fresh, isolated workspace directory (created under the agent's data dir) instead of the shared workspace. Use for tasks that must not see or mutate previous tasks' scratch files. Omit or false uses the default shared workspace. |
-| `engine` | String? | no | null | Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated. |
+| `engine` | String? | no | null | Deprecated compatibility argument: the CLI tool loop is the only engine. `cli` is accepted and ignored; the removed `observe-act` engine is rejected. |
+| `access` | String? | no | null | Access preset for this task's coding tools: `full` (default), `write` (no shell), `read-build` (read + project build, no shell, no file mutation), `read`. Omit to use the server-wide `browser4.agent.access` default. The preset is reset when the task ends. |
+| `autoApprove` | String? | no | null | Automatic approval ceiling for this task: `full`, `write`, `read-build` or `read`. A coding call the task's access preset refuses is then granted (and audited) when the preset that would grant it is no wider than this ceiling — no human in the loop. Explicitly denied tools, protected paths and sensitive paths are never approved. Omit to use the server-wide `browser4.agent.autoApprove` default (off). |
 
 Returns: `String`
 

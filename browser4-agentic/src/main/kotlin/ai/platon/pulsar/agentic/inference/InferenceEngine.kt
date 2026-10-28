@@ -28,7 +28,7 @@ class InferenceEngine(
         get() = (session.getOrCreateBoundDriver() as? AbstractWebDriver)?.snapshotService
             ?: throw IllegalStateException("Bound driver is not AbstractWebDriver")
 
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     suspend fun observe(params: ObserveParams, context: ExecutionContext): ActionDescription {
         val messages = InferencePromptBuilder.buildObserveMessages(params)
 

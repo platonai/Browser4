@@ -64,9 +64,7 @@ open class BasicBrowserAgent constructor(
      * where its deliverables landed (see `AgentTaskStatus.workspace`).
      */
     val workspaceRoot: Path
-        get() = (this as? RobustBrowserAgent)
-            ?.takeIf { it.effectiveRunEngine == RunEngine.CLI_TOOL_LOOP }
-            ?.agentWorkspaceDir
+        get() = (this as? RobustBrowserAgent)?.agentWorkspaceDir
             ?: CodingWorkspace.workspaceRoot
 
     private val toolManagerInitialized = AtomicBoolean(false)
@@ -200,13 +198,13 @@ open class BasicBrowserAgent constructor(
      * Observes the page given an instruction, returning zero or more ObserveResult objects describing
      * candidate elements and potential actions (if returnAction=true).
      */
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     override suspend fun observe(instruction: String): List<ObserveResult> {
         val opts = ObserveOptions(instruction = instruction, returnAction = null)
         return observe(opts)
     }
 
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     override suspend fun observe(options: ObserveOptions): List<ObserveResult> {
         onWillObserve(options)
 
@@ -217,7 +215,7 @@ open class BasicBrowserAgent constructor(
         return result.observeResults
     }
 
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     protected suspend fun doObserve(options: ObserveOptions): ObserveActResult {
         val context = stateManager.getOrCreateActiveContext(options, "observe")
 
@@ -268,7 +266,7 @@ open class BasicBrowserAgent constructor(
         return result
     }
 
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     override suspend fun act(observe: ObserveResult): ActResult {
         val instruction = observe.agentState.instruction
         val context = stateManager.getActiveContext()
@@ -413,13 +411,13 @@ open class BasicBrowserAgent constructor(
         return result
     }
 
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     data class ObserveActResult(
         val observeResults: List<ObserveResult>,
         val actionDescription: ActionDescription,
     )
 
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     protected fun onWillObserve(options: ObserveOptions) {
         val agentId = this.uuid.toString()
         // Emit AgentEventBus event for SSE streaming
@@ -438,7 +436,7 @@ open class BasicBrowserAgent constructor(
         )
     }
 
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     protected fun onDidObserve(options: ObserveOptions, result: ObserveActResult) {
         val agentId = this.uuid.toString()
 
@@ -644,7 +642,7 @@ open class BasicBrowserAgent constructor(
         )
     }
 
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     private suspend fun doObserveAct(options: ActionOptions): ActResult {
         val options = when {
             !options.fromRunLoop -> options.copy(action = promptBuilder.buildObserveActToolUsePrompt(options.action))
@@ -718,7 +716,7 @@ open class BasicBrowserAgent constructor(
         return ActResultHelper.failed(IllegalStateException(msg), options.action)
     }
 
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     private suspend fun doObserveActObserve(
         options: Any, context: ExecutionContext, multistep: Boolean
     ): ObserveActResult {

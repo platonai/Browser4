@@ -1,6 +1,5 @@
 package ai.platon.pulsar.agent.tool
 
-import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agentic.model.TaskPolicy
 import ai.platon.pulsar.agentic.model.ToolExample
@@ -78,7 +77,8 @@ class CommandToolExecutor(
                 ),
                 ToolSpec.Arg(
                     "engine", "String?", "null",
-                    "Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated.",
+                    "Deprecated compatibility argument: the CLI tool loop is the only engine. " +
+                        "`cli` is accepted and ignored; the removed `observe-act` engine is rejected.",
                 ),
                 ToolSpec.Arg(
                     "access", "String?", "null",
@@ -101,8 +101,8 @@ class CommandToolExecutor(
                     "When async=true (default), returns a task ID immediately. " +
                     "When async=false, blocks until done and returns the CommandStatus as JSON. " +
                     "noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. " +
-                    "engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; " +
-                    "'observe-act' is the DEPRECATED legacy engine. " +
+                    "engine is a deprecated compatibility argument: the CLI tool loop is the only engine, " +
+                    "and the removed 'observe-act' engine is rejected. " +
                     "coding=true explicitly marks an agent task as a coding task (file/build work, no page); " +
                     "omitted or false means a browser task — the default, and never auto-detected.",
             help = """
@@ -245,17 +245,22 @@ class CommandToolExecutor(
                 val command = paramString(args, "command", functionName)!!
                 val isAsync = paramBool(args, "async", functionName, required = false, default = true) ?: true
                 val noopLimit = paramInt(args, "noopLimit", functionName, required = false, default = null)
-                // null (param absent) must stay null so the agent falls back to
-                // its configured runEngine; RunEngine.parse(null) would force
-                // OBSERVE_ACT and clobber a CLI_TOOL_LOOP config.
-                val engine = paramString(args, "engine", functionName, required = false)?.also {
-                    // RunEngine.parse silently maps ANY unknown value to the default
-                    // engine — a typo such as "clli" would look accepted and change
-                    // nothing. Fail loudly instead.
-                    require(it.trim().lowercase() in ENGINE_VALUES) {
-                        "Unknown engine '$it': expected 'cli' or 'observe-act' (deprecated)"
+                // `engine` survives only for compatibility with existing clients: the
+                // observe-act engine was removed and the CLI tool loop is the only
+                // engine left. Accept the remaining id, reject a removed one loudly —
+                // silently ignoring `observe-act` would run a different engine than
+                // the caller asked for.
+                paramString(args, "engine", functionName, required = false)?.let { raw ->
+                    val value = raw.trim().lowercase()
+                    require(value in CLI_ENGINE_VALUES) {
+                        if (value in REMOVED_ENGINE_VALUES) {
+                            "The '$raw' engine was removed: the CLI tool loop is the only engine. " +
+                                "Drop the `engine` argument (or pass 'cli')."
+                        } else {
+                            "Unknown engine '$raw': expected 'cli'"
+                        }
                     }
-                }?.let { RunEngine.parse(it) }
+                }
                 // null (absent) = browser task: explicit opt-in only, never guessed.
                 val coding = paramBool(args, "coding", functionName, required = false, default = null)
                 val freshWorkspace = paramBool(args, "freshWorkspace", functionName, required = false, default = null)
@@ -281,11 +286,11 @@ class CommandToolExecutor(
                     ?.let { AccessPreset.parse(it) }
                 if (isAsync) {
                     service.submitPlainCommand(
-                        sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove
+                        sessionId, command, noopLimit, coding, freshWorkspace, access, autoApprove
                     )
                 } else {
                     val status = service.executePlainCommand(
-                        sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove
+                        sessionId, command, noopLimit, coding, freshWorkspace, access, autoApprove
                     )
                     pulsarObjectMapper().writeValueAsString(status)
                 }
@@ -333,8 +338,11 @@ class CommandToolExecutor(
         }
     }
 
-    /** Aliases `RunEngine.parse` recognizes; anything else must be a loud client error. */
-    private val ENGINE_VALUES = setOf("cli", "observe-act", "observe_act", "v1", "legacy")
+    /** The only remaining engine id (and its alias): anything else is a loud client error. */
+    private val CLI_ENGINE_VALUES = setOf("cli", "cli-tool-loop")
+
+    /** Engine ids that used to select the removed observe-act engine, rejected loudly. */
+    private val REMOVED_ENGINE_VALUES = setOf("observe-act", "observe_act", "v1", "legacy")
 
     /**
      * The shared status envelope of a command task.

@@ -29,32 +29,6 @@ enum class StopReason {
 }
 
 /**
- * Result of processing a single step within the agent loop.
- *
- * @property context The updated execution context after step processing
- * @property consecutiveNoOps Running count of consecutive no-op steps
- * @property shouldStop Whether the agent loop should terminate after this step
- * @property stopReason Why the loop should stop; null when the loop continues
- */
-data class StepProcessingResult(
-    val context: ExecutionContext,
-    val consecutiveNoOps: Int,
-    val shouldStop: Boolean,
-    val stopReason: StopReason? = null
-)
-
-/**
- * Result of [RobustBrowserAgent.prepareStep]: the built context, the no-op counter
- * (which may have been incremented when the page state froze), and whether the loop
- * must stop before executing another act.
- */
-data class PrepareStepResult(
-    val context: ExecutionContext,
-    val noOps: Int,
-    val stop: Boolean
-)
-
-/**
  * Result of generating a summary via LLM.
  *
  * @property context The execution context at time of summarization

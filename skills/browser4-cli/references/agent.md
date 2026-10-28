@@ -464,9 +464,7 @@ it is appended — they stay exact even for steps the step log no longer retains
 without that endpoint the report is labelled `counted by this session` and can
 only undercount: it holds the steps this session actually saw.
 
-The counters are reported by the CLI engine (`--engine cli`, the default). The
-deprecated observe-act engine emits lifecycle steps only, so its rounds and
-token counters stay at 0.
+The counters are reported by the CLI engine, the only engine.
 
 An optional task runs immediately: `agent run -i "Summarize this page"`.
 With piped stdin the banner and prompt are omitted, so a harness can drive the

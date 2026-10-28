@@ -5,7 +5,6 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.agents.AgentRunEvent
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
-import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
@@ -437,14 +436,13 @@ open class StatefulAgentRunner(
     suspend fun execute(
         plainCommand: String,
         noopLimit: Int? = null,
-        engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
     ): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
+        execute(plainCommand, status, noopLimit, coding, freshWorkspace, access, autoApprove)
         return status
     }
 
@@ -461,14 +459,13 @@ open class StatefulAgentRunner(
         plainCommand: String,
         status: AgentTaskStatus,
         noopLimit: Int? = null,
-        engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
-            execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
+            execute(plainCommand, status, noopLimit, coding, freshWorkspace, access, autoApprove)
         }
         runningJobs[status.id] = job
         job.start()
@@ -533,7 +530,6 @@ open class StatefulAgentRunner(
         plainCommand: String,
         status: AgentTaskStatus,
         noopLimit: Int? = null,
-        engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
@@ -541,7 +537,7 @@ open class StatefulAgentRunner(
     ) {
         try {
             runMutex.withLock {
-                executeSerialized(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
+                executeSerialized(plainCommand, status, noopLimit, coding, freshWorkspace, access, autoApprove)
             }
         } catch (e: CancellationException) {
             // A task cancelled while queued never reaches executeSerialized — without
@@ -563,7 +559,6 @@ open class StatefulAgentRunner(
         plainCommand: String,
         status: AgentTaskStatus,
         noopLimit: Int? = null,
-        engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
@@ -598,10 +593,6 @@ open class StatefulAgentRunner(
                 it.noopLimitOverride = noopLimit
                 if (noopLimit != null) {
                     logger.info("Agent task {} (session={}): noop limit overridden to {}", status.id, session.uuid, noopLimit)
-                }
-                it.runEngineOverride = engine
-                if (engine != null) {
-                    logger.info("Agent task {} (session={}): engine overridden to {}", status.id, session.uuid, engine)
                 }
                 // Per-task access policy (`command.run(access=…, autoApprove=…)`). Applied before
                 // any tool call and before the fresh-workspace rebind below, because that rebind
@@ -705,10 +696,9 @@ open class StatefulAgentRunner(
         } finally {
             // Reset the per-task overrides: the companion agent is shared with callers
             // outside this runner's mutex (chat, direct agent tools), and a stale
-            // --noop-limit / runEngine override would silently change those runs too.
+            // --noop-limit override would silently change those runs too.
             (agent as? RobustBrowserAgent)?.let {
                 it.noopLimitOverride = null
-                it.runEngineOverride = null
                 it.codingMode = false
                 // Detach this task's live feed and steering queue: the companion
                 // agent is shared, and a stale listener would keep reporting into
