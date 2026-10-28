@@ -52,48 +52,54 @@ cargo check --manifest-path cli/browser4-cli/Cargo.toml --all-targets
 > 上已过期（`CLI_BROWSING_CODING_METHODS` 早先为 xlsx 解析加入了 `shell`），本次按
 > 现状修正断言：`coding_shell` 暴露，`shellOutput`/`mvnBuild`/`ktSymbols` 仍隐藏。
 
-## 3. 尚未执行（需要真实环境）
+## 3. Gate 执行结果（2026-10-29 02:00–03:00）
 
-以下是方案 §5 的 Gate，需要真实 LLM key + 浏览器 + 默认配置双运行，**本次未执行**：
+**判定：不通过**（数据/预算维度）；行为维度大部分通过。完整证据、对比表与复现命令见
+[`logs/supervise-20261029/gate-report.md`](../../logs/supervise-20261029/gate-report.md)，
+D14 取证见同目录 `d14-provenance.md`。
 
-1. Run A（human `--follow`）/ Run B（`--follow --ndjson`），默认预算、默认 workspace；
-2. §1.2 的 20×75 CSV 数据断言（表头/ASIN/榜单一致性/keywords/category/price/bullets/编码/新鲜度）；
-3. §1.3 负向：`--token-budget 20000` abort + exit code、`b4.run("eval --file .b4scratch/missing.js")` 的 `[fail]`、>30s eval、`coding.shell("if exist …")`；
-4. 与基线 `02807b73` 的对比表（token/时长/请求数/工具数/新产物）。
+### 3.1 取证与运行
 
-Gate 前置检查（D14）：确认后端由**本工作树**构建（jar build stamp / `git rev-parse HEAD` 与本文件一致）。
+| 项 | 结果 |
+|---|---|
+| D14 | HEAD `8605bccfa3`（+ 修复主体 `b30f39c101`），本树重建 bundle `builtAtUtc 2026-10-28T18:15:35Z`，`lib/pulsar-browser-4.11.27.jar` |
+| Run A（human `--follow`，默认配置） | task `807f0d5f`：779 s / 223 请求 / 5.01M tokens / exit 1 / `errorCode=TOKEN_BUDGET` / `resumable=true`；**无 CSV 交付物**，`filesChanged: (none this run)` |
+| Run B（NDJSON） | **未重复整任务**（已确认默认 5M 内不可能完成）；NDJSON 契约用两次短运行验证：成功运行 28 行、失败运行 9 行，`run.usage` 的 `effectiveTokenBudget`/`cumulativeTokens` 与 `task.failed` 的 `errorCode`/`resumable` 齐全 |
+| 数据断言 | Run A 无产物 → 无法评估；基线 CSV 校验 5 PASS / 5 FAIL（keywords 20/20 全空、category 写成品类名、bullets 重复、乱码 `鈥`×12/`d茅cor`×3） |
+| 负向 | 相对路径 `[fail]`+hint ✅、`if exist` 拦截 ✅、`--token-budget` abort + exit 码 + `--allow-failed` ✅；>30 s eval ❌（驱动层 `PT30S`）；无 `--await` Promise ❌（CLI 返回 `{}`，`b4.run` 路径被引号问题挡住） |
+| 可观测 | `--follow` 44 条 `tokens x / y (%)`；80% 只告警一次；abort 有明确 `✖ failed … Token budget exceeded …` + `Tip:` |
+| 与基线对比 | 时长 −16%（928→779 s），请求数持平，失败可见性/隔离/提示显著改善，交付物仍未达成（见 gate-report §6） |
 
-### 3.1 Gate 执行记录（2026-10-29 02:00 起）
+### 3.2 本轮 Gate 发现并修复
 
-证据目录：`logs/supervise-20261029/`（`d14-provenance.md`、`run-human.log`、`run-human-trace.txt` 等）。
+| 编号 | 问题 | 修复 | 验证 |
+|---|---|---|---|
+| F11 | Chrome 156 在 `/json/version` 新增 `File-Path-Style`，base 4.11.25 的 `ChromeVersion` 用普通 `ObjectMapper` 反序列化 → 任何导航都死在 `createDevTools`（基线 `02807b73` 同因） | `browser4-base.version` 4.11.25 → 4.11.27（Central 2026-10-28，含 `@JsonIgnoreProperties(ignoreUnknown = true)`） | 导航冒烟 `Page Title: Example Domain`；`ChromeVersionCompatibilityTest`（2 项） |
+| F15a | NDJSON 终态 `task.failed` 行只有 status/message，缺 `errorCode`/`resumable`（流式那条有；机器消费者读最后一行） | 新增 `terminal_failure_event()`；`parse_status_progress` 解析两字段 | `neg7` 校验 3/3 PASS；CLI 单测 1970 passed |
+| F16 | `daemon::tests::test_expected_runtime_tag_prefers_local_bundle_in_checkout` 偶发顺序依赖失败（`Some("v4.14.0")` vs `Some("local")`），单跑/复跑通过 | 未修，先记录 | 全量复跑 1970 passed |
 
-**D14 取证 ✅**：HEAD `b30f39c101`（工作树干净）；旧 bundle `builtAtUtc 2026-10-28T13:12:12Z`
-→ 用本树重建 `builtAtUtc 2026-10-28T18:05:14Z`（本地 02:05:14），并核对 `lib/` 内类符号
-（`B4CliFailureException`、`effectiveTokenBudget`、`skillDoc`）。
+### 3.3 未修阻断项（下一轮按序处理）
 
-**Run A 第一次尝试 ❌（环境阻断，不是修复失效）**：task `dab8f49b`，02:06:51–02:08:53，
-37 次请求 / 614k tokens / exit 1。已观察到的**新行为全部正常**：
+1. **F13 `b4.run` 参数被 PowerShell 二次解析（最大浪费源）**：`eval "(async()=>1)()"`、
+   `eval --js JSON.stringify({…})` 到 CLI 前引号/括号已被吞 → `ParserError`；模型改用文件写盘再重试，
+   预算就是这样烧掉的。证据：`run-a-human.log` 的 ParserError 行、`neg2` 的【2】。
+2. **F14 驱动层 `Runtime.evaluate` 30 s 上限**：MCP/CLI 的 `--timeout 300` 覆盖不到，
+   >30 s 的页面内等待不可行；错误文本只到 `[INTERNAL] browser_evaluate … (PT30S)`，未提示替代方案。
+3. **F15 P0-4 的 Promise 反馈不可达**：CLI `eval` 返回 `{}`（静默），`b4.run` 路径被 F13 破坏；
+   现在只有 agent 工具层单测能观察到 “re-run with --await”。
+4. **F12 `coding.shell` 可杀后端**：Gate 第一次 Run A 就是被模型 `taskkill /PID …` 杀掉后端而中断；
+   `33be64` 只封了 `b4.run` 的生命周期命令。
+5. **数据语义缺口**：keywords 全空 / category 用品类名 / bullets 重复 / 乱码 —— P2-1 的字段规格与
+   输入保真没有覆盖到这些采集语义。
+6. **默认 5M 结构性不足**：基线（5,006,041）与本次（5,012,835）都在 5M 处 abort。按方案 §1.4
+   不得用 10M 掩盖；先修 F13/F14 再复测，或走“有证据地调整默认值”的独立决策。
 
-- per-task workspace 生效：`app-data/agent/2026/10/29/1e411b43-…/workspace.dab8f49b-…`（P1-1）；
-- 输入物化：`.b4inputs/asin_field_description.xlsx` 已复制（721,965 B）；
-- `--follow` 打出 `tokens 109.3k / 5.00M (2%) · 10 requests`（P0-5）；
-- `b4.wait` 失败显示 `b4.wait [fail] … stderr: ❌ Navigation failed … [CDP_ERROR] …`（P0-2），
-  不再是 `[ok]`。
+### 3.4 第一次 Run A 尝试（2026-10-29 02:06，F11 现场）
 
-**根因 F11（阻断 Gate）**：`Unrecognized field "File-Path-Style" (class
-ai.platon.pulsar.api.model.ChromeVersion)`。本机 Chrome **156.0.8078.73** 在
-`/json/version` 新增该字段，而本树 pin 的 base 库 **4.11.25** 用普通 `ObjectMapper`
-反序列化（`FAIL_ON_UNKNOWN_PROPERTIES` 默认开），于是**任何导航**都失败在
-`createDevTools`。这与基线 `02807b73` 的失败是同一根因（base 仓 `6768c4d38` 2026-10-28 21:19
-已修复，但本树未消费）。**修复**：`browser4-dependencies/pom.xml` 的
-`browser4-base.version` 4.11.25 → **4.11.27**（Central 2026-10-28 发布；已核对 jar 内
-`ChromeVersion.class` 含 `@JsonIgnoreProperties(ignoreUnknown = true)`，且 `JsWorld` 仍在）。
-
-**新发现 F12（未修，需决策）**：Run A 里模型在导航失败后自行诊断，最后执行
-`coding_shell("cmd /c \"taskkill /PID 24448 /F /T\"")` **杀掉了后端进程**，run 随即中断
-（02:08:53）。`33be64` 只对 `b4.run` 的生命周期命令（stop/close-all/kill-all…）做了拒绝，
-`coding.shell` 仍是任意进程控制入口。建议下一轮把“终止本后端/本 agent 进程”的命令按
-`b4.run` 同规则拒绝，或至少让 `taskkill` 目标命中本后端时明确失败。
+task `dab8f49b`：02:06:51–02:08:53，37 请求 / 614k tokens / exit 1。当时新行为已正常工作：
+per-task workspace（`workspace.dab8f49b-…`）、输入物化（`.b4inputs/asin_field_description.xlsx`）、
+`--follow` 的 `tokens 109.3k / 5.00M (2%)`、`b4.wait` 的 `[fail]` 分类；失败根因是 F11，
+随后模型自行 `taskkill` 掉后端（F12）。证据：`a1-run-human.log` / `a1-run-human-trace.txt`。
 
 ## 4. 行为变更速查
 
@@ -102,7 +108,7 @@ ai.platon.pulsar.api.model.ChromeVersion)`。本机 Chrome **156.0.8078.73** 在
 | 每个任务默认独立 workspace（`workspace.<taskId>`） | 依赖旧共享目录的脚本需加 `--shared-workspace`；`--resume` 行为不变 |
 | `agent result` 对 failed/cancelled 非零退出 | 流水线可区分成功/失败；需要旧行为时用 `--allow-failed` |
 | `b4.run` 失败不再伪装成功 | 模型会看到 `[fail]` + 原因，不再重复同一失败命令 |
-| 未 `--await` 的 Promise 报错 | 异步 eval 必须显式 `--await` |
+| 未 `--await` 的 Promise 报错（仅 agent 工具层；CLI `eval` 仍返回 `{}`，见 Gate F15） | 异步 eval 必须显式 `--await`；CLI 路径的提示尚未覆盖 |
 | `eval` 的 `undefined` 输出提示行 | `--json` 仍为 `null`；文本消费者仍能看到 `null` |
 | `skillDoc("SKILL.md")` 默认返回索引 | 读取正文用 `offset=0` 或 topic 文档 |
 | `coding.listDir` 默认最多 50 条 | 需要全量时 `limit=0` |

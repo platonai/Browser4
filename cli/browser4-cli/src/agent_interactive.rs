@@ -260,6 +260,10 @@ struct StatusProgress {
     word: String,
     message: Option<String>,
     tools: i64,
+    /// Machine-readable failure reason, when the backend reports one.
+    error_code: Option<String>,
+    /// Whether `agent run --resume <id>` can continue the task.
+    resumable: Option<bool>,
 }
 
 fn parse_status_progress(body: &str) -> StatusProgress {
@@ -270,6 +274,8 @@ fn parse_status_progress(body: &str) -> StatusProgress {
             word: "running".to_string(),
             message: None,
             tools: 0,
+            error_code: None,
+            resumable: None,
         };
     };
 
@@ -309,6 +315,17 @@ fn parse_status_progress(body: &str) -> StatusProgress {
         .or_else(|| value.get("toolExecutions").and_then(|v| v.as_i64()))
         .unwrap_or(0);
 
+    // Failure semantics travel with the status envelope (`errorCode`/`resumable`,
+    // added by the backend in 4.15.2). They let the terminal NDJSON event answer
+    // "why did it fail and can I resume it" exactly like the streamed
+    // `task.failed` step does.
+    let error_code = value
+        .get("errorCode")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let resumable = value.get("resumable").and_then(|v| v.as_bool());
+
     // The backend answers an unknown id with `statusCode: 404` and a message
     // naming the id; a missing ROUTE (an older backend) has no such envelope.
     let status_code = value.get("statusCode").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -324,6 +341,8 @@ fn parse_status_progress(body: &str) -> StatusProgress {
         word,
         message,
         tools,
+        error_code,
+        resumable,
     }
 }
 
@@ -1389,18 +1408,15 @@ async fn print_completion(
             ))
         }
         _ => {
-            let reason = status_failure_reason(client, base_url, &follower.task_id)
-                .await
+            let progress = status_failure_progress(client, base_url, &follower.task_id).await;
+            let reason = progress
+                .as_ref()
+                .and_then(|progress| progress.message.clone())
                 .unwrap_or_else(|| "the task reported failure".to_string());
             if ndjson {
                 crate::print_stdout_line(
-                    &json!({
-                        "taskId": follower.task_id,
-                        "type": "task.failed",
-                        "status": status,
-                        "message": reason,
-                    })
-                    .to_string(),
+                    &terminal_failure_event(&follower.task_id, status, progress.as_ref(), &reason)
+                        .to_string(),
                 );
             } else {
                 follower.renderer.print(&format!(
@@ -1415,11 +1431,48 @@ async fn print_completion(
     }
 }
 
+/// The failure details of a task, from its status envelope.
+async fn status_failure_progress(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Option<StatusProgress> {
+    let body = get_command_status(client, base_url, task_id).await.ok()?;
+    Some(parse_status_progress(&body))
+}
+
 /// The human-readable failure reason of a task, from its status envelope.
 async fn status_failure_reason(client: &Client, base_url: &str, task_id: &str) -> Option<String> {
-    let body = get_command_status(client, base_url, task_id).await.ok()?;
-    let progress = parse_status_progress(&body);
-    progress.message
+    status_failure_progress(client, base_url, task_id)
+        .await?
+        .message
+}
+
+/// The synthesized last line of an `--ndjson` run that failed.
+///
+/// The follower streams the backend's own `task.failed` step (which carries
+/// `errorCode`/`resumable`), then prints this line as the run's final word.
+/// Machine consumers read the last event, so it must carry the same failure
+/// semantics instead of only a sentence.
+fn terminal_failure_event(
+    task_id: &str,
+    status: &str,
+    progress: Option<&StatusProgress>,
+    reason: &str,
+) -> Value {
+    let mut event = json!({
+        "taskId": task_id,
+        "type": "task.failed",
+        "status": status,
+        "message": reason,
+    });
+    if let Some(code) = progress.and_then(|progress| progress.error_code.clone()) {
+        event["errorCode"] = json!(code);
+    }
+    if let Some(resumable) = progress.and_then(|progress| progress.resumable) {
+        event["resumable"] = json!(resumable);
+    }
+    event
 }
 
 /// Cancel a task and describe the outcome in one line.
@@ -2425,6 +2478,42 @@ mod tests {
         assert!(progress.done);
         assert_eq!(progress.word, "failed");
         assert_eq!(progress.message.as_deref(), Some("no LLM configured"));
+    }
+
+    #[test]
+    fn parse_status_progress_carries_failure_semantics() {
+        let progress = parse_status_progress(
+            r#"{"status":"failed","statusCode":417,"error":"budget exceeded","errorCode":"TOKEN_BUDGET","resumable":true}"#,
+        );
+        assert_eq!(progress.message.as_deref(), Some("budget exceeded"));
+        assert_eq!(progress.error_code.as_deref(), Some("TOKEN_BUDGET"));
+        assert_eq!(progress.resumable, Some(true));
+    }
+
+    #[test]
+    fn terminal_failure_event_carries_the_machine_fields() {
+        let progress = StatusProgress {
+            error_code: Some("TOKEN_BUDGET".to_string()),
+            resumable: Some(true),
+            ..Default::default()
+        };
+
+        let event = terminal_failure_event("task-1", "failed", Some(&progress), "budget exceeded");
+
+        assert_eq!(event["type"], "task.failed");
+        assert_eq!(event["status"], "failed");
+        assert_eq!(event["message"], "budget exceeded");
+        assert_eq!(event["errorCode"], "TOKEN_BUDGET");
+        assert_eq!(event["resumable"], true);
+    }
+
+    #[test]
+    fn terminal_failure_event_omits_unknown_machine_fields() {
+        let event = terminal_failure_event("task-1", "failed", None, "the task reported failure");
+
+        assert_eq!(event["type"], "task.failed");
+        assert!(event.get("errorCode").is_none());
+        assert!(event.get("resumable").is_none());
     }
 
     #[test]
