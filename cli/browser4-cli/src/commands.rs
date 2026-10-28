@@ -11022,6 +11022,10 @@ mod tests {
         args.insert("outcome".to_string(), json!("failure"));
         args.insert("intent".to_string(), json!("buy product"));
         args.insert("task-type".to_string(), json!("extract_product_detail"));
+        args.insert(
+            "facts".to_string(),
+            json!(r##"{"selectors":{"search_input":{"primary":"#q"}}}"##),
+        );
 
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["url"], "https://amazon.com/dp/test");
@@ -11029,6 +11033,26 @@ mod tests {
         assert_eq!(params["outcome"], "failure");
         assert_eq!(params["intent"], "buy product");
         assert_eq!(params["task_type"], "extract_product_detail");
+        assert_eq!(
+            params["facts"],
+            r##"{"selectors":{"search_input":{"primary":"#q"}}}"##
+        );
+    }
+
+    /// `--facts` reaches the MCP arguments verbatim: the `@file` expansion lives
+    /// in `main.rs` (which owns filesystem access and can fail loudly), so the
+    /// command layer must not trim, re-quote or otherwise rewrite the value.
+    #[test]
+    fn test_experience_save_facts_option_is_forwarded_verbatim() {
+        let map = commands_map();
+        let cmd = map.get("experience-save").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com/p/1"));
+        args.insert("trace".to_string(), json!("{}"));
+        args.insert("facts".to_string(), json!("@lessons.json"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["facts"], "@lessons.json");
     }
 
     #[test]
@@ -11043,6 +11067,10 @@ mod tests {
         assert_eq!(params["url"], "https://example.com");
         assert_eq!(params["trace"], "{}");
         assert!(params.get("outcome").is_none());
+        assert!(
+            params.get("facts").is_none(),
+            "an omitted --facts must not send a facts argument: {params}"
+        );
     }
 
     #[test]
