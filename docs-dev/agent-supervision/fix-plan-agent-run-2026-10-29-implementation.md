@@ -63,6 +63,38 @@ cargo check --manifest-path cli/browser4-cli/Cargo.toml --all-targets
 
 Gate 前置检查（D14）：确认后端由**本工作树**构建（jar build stamp / `git rev-parse HEAD` 与本文件一致）。
 
+### 3.1 Gate 执行记录（2026-10-29 02:00 起）
+
+证据目录：`logs/supervise-20261029/`（`d14-provenance.md`、`run-human.log`、`run-human-trace.txt` 等）。
+
+**D14 取证 ✅**：HEAD `b30f39c101`（工作树干净）；旧 bundle `builtAtUtc 2026-10-28T13:12:12Z`
+→ 用本树重建 `builtAtUtc 2026-10-28T18:05:14Z`（本地 02:05:14），并核对 `lib/` 内类符号
+（`B4CliFailureException`、`effectiveTokenBudget`、`skillDoc`）。
+
+**Run A 第一次尝试 ❌（环境阻断，不是修复失效）**：task `dab8f49b`，02:06:51–02:08:53，
+37 次请求 / 614k tokens / exit 1。已观察到的**新行为全部正常**：
+
+- per-task workspace 生效：`app-data/agent/2026/10/29/1e411b43-…/workspace.dab8f49b-…`（P1-1）；
+- 输入物化：`.b4inputs/asin_field_description.xlsx` 已复制（721,965 B）；
+- `--follow` 打出 `tokens 109.3k / 5.00M (2%) · 10 requests`（P0-5）；
+- `b4.wait` 失败显示 `b4.wait [fail] … stderr: ❌ Navigation failed … [CDP_ERROR] …`（P0-2），
+  不再是 `[ok]`。
+
+**根因 F11（阻断 Gate）**：`Unrecognized field "File-Path-Style" (class
+ai.platon.pulsar.api.model.ChromeVersion)`。本机 Chrome **156.0.8078.73** 在
+`/json/version` 新增该字段，而本树 pin 的 base 库 **4.11.25** 用普通 `ObjectMapper`
+反序列化（`FAIL_ON_UNKNOWN_PROPERTIES` 默认开），于是**任何导航**都失败在
+`createDevTools`。这与基线 `02807b73` 的失败是同一根因（base 仓 `6768c4d38` 2026-10-28 21:19
+已修复，但本树未消费）。**修复**：`browser4-dependencies/pom.xml` 的
+`browser4-base.version` 4.11.25 → **4.11.27**（Central 2026-10-28 发布；已核对 jar 内
+`ChromeVersion.class` 含 `@JsonIgnoreProperties(ignoreUnknown = true)`，且 `JsWorld` 仍在）。
+
+**新发现 F12（未修，需决策）**：Run A 里模型在导航失败后自行诊断，最后执行
+`coding_shell("cmd /c \"taskkill /PID 24448 /F /T\"")` **杀掉了后端进程**，run 随即中断
+（02:08:53）。`33be64` 只对 `b4.run` 的生命周期命令（stop/close-all/kill-all…）做了拒绝，
+`coding.shell` 仍是任意进程控制入口。建议下一轮把“终止本后端/本 agent 进程”的命令按
+`b4.run` 同规则拒绝，或至少让 `taskkill` 目标命中本后端时明确失败。
+
 ## 4. 行为变更速查
 
 | 变更 | 影响 |
