@@ -345,6 +345,9 @@ class AgentToolManager constructor(
     private fun buildB4CliExecutor(root: Path) = B4CliToolExecutor(
         backendBaseUrl = session.sessionConfig.get("browser4.server.url"),
         defaultWorkingDir = root,
+        // Per-task policy: `b4.run`'s file:// and upload must obey the same
+        // boundary as the coding tools (read lazily — the policy changes per task).
+        accessPolicy = { accessPolicy },
     )
 
     /**

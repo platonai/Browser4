@@ -62,6 +62,44 @@ class B4CliToolExecutorJobTest {
     }
 
     @Test
+    @DisplayName("wait reports the job's terminal state, not just its output")
+    fun waitReportsTerminalState() = runBlocking {
+        // A 1 ms yield window escalates immediately, so `wait` is exercised without a
+        // multi-second sleep. The state line is what tells the model whether the text
+        // is a result (COMPLETED) or a fragment (FAILED/CANCELLED) — a live run re-ran
+        // a whole 20-page crawl because `wait` returned only partial progress.
+        val ex = executor(jobYieldMs = 1)
+        try {
+            val text = ex.callFunctionOn(
+                ToolCall(
+                    domain = "b4", method = "run",
+                    arguments = mutableMapOf(
+                        "args" to "-NoProfile -Command \"Write-Output job-state\"",
+                        "timeoutSeconds" to 60L,
+                    )
+                ),
+                shell(),
+            ).value?.toString() ?: ""
+            assertTrue(text.startsWith("[job:"), "expected job handle, got: $text")
+            val id = Regex("\\[job: ([0-9a-f-]+)\\]").find(text)?.groupValues?.get(1)
+            assertNotNull(id, "job id must be present: $text")
+
+            val waited = ex.callFunctionOn(
+                ToolCall(
+                    domain = "b4", method = "wait",
+                    arguments = mutableMapOf("id" to id!!, "timeoutSeconds" to 60L),
+                ),
+                shell(),
+            ).value?.toString() ?: ""
+
+            assertTrue(waited.contains("state=COMPLETED"), "a finished job must report its state: $waited")
+            assertTrue(waited.contains("job-state"), "the output must survive the state prefix: $waited")
+        } finally {
+            ex.closeJobs()
+        }
+    }
+
+    @Test
     @Tag("Slow")
     @DisplayName("long commands escalate to a job handle, then status/wait/kill work")
     fun longCommandEscalatesToJob() = runBlocking {

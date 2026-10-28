@@ -95,6 +95,13 @@ class CommandToolExecutor(
                         "loop. Explicitly denied tools, protected paths and sensitive paths are never " +
                         "approved. Omit to use the server-wide `browser4.agent.autoApprove` default (off).",
                 ),
+                ToolSpec.Arg(
+                    "resumeTaskId", "String?", "null",
+                    "Resume an interrupted task by id: the new run starts from that task's checkpoint — " +
+                        "its instruction, workspace and the files already written — and inherits its " +
+                        "coding/access flags. `command` may then be empty. The id must be known to this " +
+                        "backend (the interrupted row is restored after a restart, within its TTL).",
+                ),
             ),
             returnType = "String",
             description = "Execute a plain command (URL, instruction, or agent task). " +
@@ -237,12 +244,24 @@ class CommandToolExecutor(
             "run" -> {
                 validateArgs(
                     args,
-                    allowed = setOf("command", "async", "noopLimit", "engine", "coding", "freshWorkspace", "access", "autoApprove") + SESSION_ARG,
-                    required = setOf("command"),
+                    allowed = setOf(
+                        "command", "async", "noopLimit", "engine", "coding", "freshWorkspace",
+                        "access", "autoApprove", "resumeTaskId",
+                    ) + SESSION_ARG,
+                    // `agent run --resume <id>` may omit the task text: the instruction
+                    // comes from the interrupted task's checkpoint. Validated below.
+                    required = emptySet(),
                     functionName
                 )
                 val sessionId = paramString(args, "sessionId", functionName, default = DEFAULT_SESSION_ID)!!
-                val command = paramString(args, "command", functionName)!!
+                val command = paramString(args, "command", functionName, required = false, default = "") ?: ""
+                // Resume: seed a new run from an interrupted task's checkpoint. The
+                // backend must know the id; an unknown one fails the task loudly in
+                // the runner instead of quietly starting from the bare instruction.
+                val resumeTaskId = paramString(args, "resumeTaskId", functionName, required = false, default = null)
+                require(command.isNotBlank() || !resumeTaskId.isNullOrBlank()) {
+                    "command is required (or resumeTaskId, to resume an interrupted task)"
+                }
                 val isAsync = paramBool(args, "async", functionName, required = false, default = true) ?: true
                 val noopLimit = paramInt(args, "noopLimit", functionName, required = false, default = null)
                 // null (param absent) must stay null so the agent falls back to
@@ -281,11 +300,13 @@ class CommandToolExecutor(
                     ?.let { AccessPreset.parse(it) }
                 if (isAsync) {
                     service.submitPlainCommand(
-                        sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove
+                        sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove,
+                        resumeTaskId,
                     )
                 } else {
                     val status = service.executePlainCommand(
-                        sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove
+                        sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove,
+                        resumeTaskId,
                     )
                     pulsarObjectMapper().writeValueAsString(status)
                 }

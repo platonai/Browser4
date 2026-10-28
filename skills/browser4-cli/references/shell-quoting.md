@@ -169,6 +169,23 @@ Applies to any value that legitimately starts with `/` and is not an existing fi
 `cookie-set --path /` is the same case, and its `--path=/` spelling is rewritten identically —
 both need the same workaround (or just omit the flag: `cookie-set --path` defaults to `/`).
 
+## Inside an agent run: who parses the line?
+
+Two different shells sit under the agent's tools, and syntax that works in one
+fails in the other:
+
+| Tool | Executed as | Rules |
+|---|---|---|
+| `b4.run(args=…)` | `pwsh -Command "& browser4-cli …"` | PowerShell parses `args`: quote `@file` (`'--sql @q.sql'`), `&&` works, `dir /b` does not |
+| `coding.shell` | `cmd.exe` | POSIX tools (`head`, `sed`) and `$()` fail; pipes/redirection are restricted |
+| `coding.shell` inline scripts | refused — `PERMISSION_DENIED \| code=COMMAND_NOT_ALLOWED` | `powershell -Command …` / `bash -c …` are blocked by the command guard |
+
+Observed 2026-10-28 (20-product supervision run): an unquoted `@.b4scratch/x-asin.sql`
+inside `b4.run` produced 18 `ParserError`s — and the Chinese parse error came back as
+mojibake, so the model could not read it. The same command with the `@file` quoted
+worked on the first retry. Write `@file` references quoted, and keep each shell's
+syntax inside its own tool.
+
 ## Why This Works
 
 - **`--file`** — File content is read directly; the shell never interprets it.

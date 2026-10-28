@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.model
 
+import ai.platon.pulsar.coding.PermissionAudit
 import ai.platon.pulsar.common.Strings
 
 /**
@@ -12,6 +13,10 @@ import ai.platon.pulsar.common.Strings
  * what gets rendered into the Execution History / previous-step-result message
  * so that context stays bounded (design: docs-dev/copilot/
  * browser4-agent-tool-disclosure-feedback-design.md §2).
+ *
+ * A `PERMISSION_DENIED | code=…` refusal counts as a failure ([ok] is false) even
+ * though the tool call itself did not throw: a refusal the model reads as success
+ * is a refusal the model retries.
  */
 data class ToolOutcome(
     val domain: String,
@@ -90,10 +95,17 @@ data class ToolOutcome(
             }
 
             val raw = evaluate.value?.toString().orEmpty()
-            val ok = evaluate.success && exception == null
-            val summary = buildSummary(ok, raw, exception)
+            // A policy refusal is a failure FOR THE MODEL even though the tool
+            // executed and returned the refusal as a value (`PermissionAudit`'s
+            // contract is "returned, never thrown"). Rendering it as `[ok]` hid
+            // every refusal from `--follow` (which prints `[fail]` results only)
+            // and from the model, which re-phrased the same denied path four
+            // times in a live run because nothing said the call was refused.
+            val refused = isPermissionRefusal(raw)
+            val ok = evaluate.success && exception == null && !refused
+            val summary = if (refused) buildRefusalSummary(raw) else buildSummary(ok, raw, exception)
             val body = raw.takeIf { it.isNotBlank() }
-                ?.let { Strings.compactInline(it, BODY_BUDGETS[key] ?: DEFAULT_BODY_LEN) }
+                ?.let { boundedBody(it, BODY_BUDGETS[key] ?: DEFAULT_BODY_LEN) }
 
             return ToolOutcome(
                 domain = resolvedDomain, method = resolvedMethod, ok = ok,
@@ -109,6 +121,54 @@ data class ToolOutcome(
             }
             val firstLine = raw.lineSequence().firstOrNull { it.isNotBlank() } ?: "done"
             return Strings.compactInline(firstLine, DEFAULT_SUMMARY_LEN)
+        }
+
+        /**
+         * True when [raw] **starts** with a `PERMISSION_DENIED | code=…` refusal
+         * envelope (see [PermissionAudit]).
+         *
+         * The envelope must lead the text: `memory.read` returns JSON that *contains*
+         * earlier refusal events, and matching anywhere in the first line marked a
+         * successful memory read as `[fail]` (observed 2026-10-28). Producers prefix
+         * the envelope either directly (`coding.shell`) or with `Error: `
+         * (`coding.fs`), so only that tolerates a prefix; the rest of a body is data.
+         */
+        private fun isPermissionRefusal(raw: String): Boolean {
+            val firstLine = raw.lineSequence().firstOrNull { it.isNotBlank() }?.trimStart() ?: return false
+            val candidate = firstLine.removePrefix("Error: ").trimStart()
+            return candidate.startsWith(PermissionAudit.DENIED) && candidate.contains("| code=")
+        }
+
+        /**
+         * The refusal text itself is the useful summary — `failed: execution failed`
+         * would throw away the only part the model needs (the reason and the hint).
+         */
+        private fun buildRefusalSummary(raw: String): String {
+            val firstLine = raw.lineSequence().firstOrNull { it.isNotBlank() } ?: PermissionAudit.DENIED
+            return Strings.compactInline(firstLine, DEFAULT_SUMMARY_LEN)
+        }
+
+        /**
+         * Bound [raw] to [budget] characters **without destroying its line structure**.
+         *
+         * The body is *content* (file text, command output), not prose: inlining it —
+         * `Strings.compactInline` turns every newline into a space — made `coding.read`
+         * return a whole file as a single line, so the model could not see line or row
+         * boundaries. Observed 2026-10-28: a three-line input came back as
+         * `ALPHA-1 BETA-2 GAMMA-3` and the model fell back to python to recover the
+         * lines (and a CSV read back this way is unusable). Only the summary is
+         * inlined; an over-budget body is cut in the middle like a CLI result.
+         */
+        private fun boundedBody(raw: String, budget: Int): String {
+            val text = raw.replace("\r\n", "\n").trim()
+            if (text.length <= budget) return text
+            val omitted = text.length - budget
+            val marker = "\n…[truncated $omitted chars]…\n"
+            val keep = (budget - marker.length).coerceAtLeast(0)
+            if (keep <= 0) return text.take(budget)
+            val head = keep * 2 / 3
+            val tail = keep - head
+            return text.take(head) + marker + text.takeLast(tail)
         }
     }
 }

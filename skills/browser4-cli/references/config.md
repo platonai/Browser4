@@ -21,7 +21,7 @@ The `config` command family manages two kinds of settings: persistent CLI defaul
 | `proxy` | CLI default | Default download proxy URL (overridden by `--proxy`) |
 | `session` | CLI default | Default session name (overridden by `-s` / `--session`) |
 | `agent.llm.maxRequestTokens` | server-side | Per-request LLM token limit (default 500,000) |
-| `agent.token.budget.total` | server-side | Cumulative token budget per agent run (default 5,000,000) |
+| `agent.token.budget.total` | server-side | Cumulative token budget per agent run (default 5,000,000). Enforced on every engine: the legacy observe-act loop and the default CLI tool loop both charge each model request, and a breach stops the run with `Token budget exceeded` (the 80% mark is logged once). `0` / `unlimited` keeps accounting only |
 
 ## CLI Defaults (config.json)
 

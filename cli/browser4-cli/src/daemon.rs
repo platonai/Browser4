@@ -7419,14 +7419,73 @@ fn read_bundle_build_stamp(lib_dir: &Path) -> Option<std::time::SystemTime> {
 /// Best effort: a read-only bundle directory must not fail a build that
 /// otherwise succeeded — the staleness check then simply keeps using the jar
 /// mtimes.
-fn write_bundle_build_stamp(lib_dir: &Path) {
+///
+/// The stamp also records the git HEAD (and whether the tree was dirty) the bundle
+/// was assembled from. Two worktrees of the same version share the Maven local
+/// repository, so a bundle can end up holding a *sibling's* jars while every mtime
+/// looks current (observed 2026-10-28); the build-time jar-provenance guard rejects
+/// that, and the recorded commit lets the launcher reject a bundle from a different
+/// branch/commit even when the mtimes are fine.
+fn write_bundle_build_stamp(root: &Path, lib_dir: &Path) {
     let path = bundle_build_stamp_path(lib_dir);
-    if let Err(error) = std::fs::write(&path, b"rebuilt from the checked-out sources\n") {
+    let commit = current_git_head(root).unwrap_or_else(|| "unknown".to_string());
+    let dirty = git_tree_is_dirty(root).unwrap_or(false);
+    let content = format!(
+        "rebuilt from the checked-out sources\ncommit={commit}\ndirty={dirty}\n"
+    );
+    if let Err(error) = std::fs::write(&path, content.as_bytes()) {
         eprintln!(
             "Could not write the bundle build stamp at {} ({error}); \
              dev mode will keep re-checking the bundle against the source timestamps.",
             path.display()
         );
+    }
+}
+
+/// The git HEAD recorded in the bundle build stamp, when present.
+fn read_bundle_build_stamp_commit(lib_dir: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(bundle_build_stamp_path(lib_dir)).ok()?;
+    content
+        .lines()
+        .find_map(|line| line.strip_prefix("commit=").map(|value| value.trim().to_string()))
+        .filter(|value| !value.is_empty() && value != "unknown")
+}
+
+/// The checkout's current git HEAD, when it can be read.
+fn current_git_head(root: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if sha.is_empty() { None } else { Some(sha) }
+}
+
+/// Whether the checkout has uncommitted changes (best effort).
+fn git_tree_is_dirty(root: &Path) -> Option<bool> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(!output.stdout.iter().all(|byte| byte.is_ascii_whitespace()))
+}
+
+/// Whether a bundle stamped with `stamped` was built from a different commit than
+/// `current`. Unknown values never make a bundle stale on their own.
+fn bundle_commit_mismatch(stamped: Option<&str>, current: Option<&str>) -> bool {
+    match (stamped, current) {
+        (Some(stamped), Some(current)) => !stamped.is_empty() && !current.is_empty() && stamped != current,
+        _ => false,
     }
 }
 
@@ -7449,6 +7508,17 @@ fn write_bundle_build_stamp(lib_dir: &Path) {
 /// change alters the assembled bundle without touching a `.kt` file), so it is
 /// compared against the newest project jar in the bundle.
 fn local_sources_newer_than(root: &Path, lib_dir: &Path, newest_jar_mtime: std::time::SystemTime) -> bool {
+    // A bundle assembled from a different commit is stale even when every mtime looks
+    // fine — switching branches without rebuilding used to keep serving the old code.
+    // The build-time jar-provenance guard covers the other direction (a sibling
+    // worktree's jars winning the shared Maven repository).
+    if bundle_commit_mismatch(
+        read_bundle_build_stamp_commit(lib_dir).as_deref(),
+        current_git_head(root).as_deref(),
+    ) {
+        return true;
+    }
+
     let stamp = read_bundle_build_stamp(lib_dir);
     let floor = |mtime: std::time::SystemTime| match stamp {
         Some(stamp) if stamp > mtime => stamp,
@@ -8119,7 +8189,7 @@ async fn try_build_local_runtime_bundle(
         // clear a "sources look newer" reading.  Only stamped when Maven actually
         // ran, i.e. when the installed jars were refreshed from this tree.
         if maven_ran {
-            write_bundle_build_stamp(&lib_dir);
+            write_bundle_build_stamp(&root, &lib_dir);
         }
         eprintln!(
             "Local Browser4 runtime bundle built successfully at {}.",
@@ -14299,6 +14369,30 @@ mod tests {
     }
 
     #[test]
+    fn a_build_stamp_records_the_commit_and_rejects_a_different_one() {
+        let tmp = test_temp_dir();
+        let lib_dir = tmp.path().join("lib");
+        create_dir_all(&lib_dir).unwrap();
+
+        // No stamp yet → nothing to compare.
+        assert_eq!(read_bundle_build_stamp_commit(&lib_dir), None);
+        assert!(!bundle_commit_mismatch(None, Some("a1b2c3")));
+
+        // The stamp records `commit=`; `unknown` (no git available) never makes a bundle stale.
+        write(&bundle_build_stamp_path(&lib_dir), "rebuilt from the checked-out sources\ncommit=deadbeef\ndirty=false\n").unwrap();
+        assert_eq!(
+            read_bundle_build_stamp_commit(&lib_dir),
+            Some("deadbeef".to_string())
+        );
+        assert!(bundle_commit_mismatch(Some("deadbeef"), Some("cafebabe")), "a different commit is stale");
+        assert!(!bundle_commit_mismatch(Some("deadbeef"), Some("deadbeef")));
+
+        write(&bundle_build_stamp_path(&lib_dir), "rebuilt from the checked-out sources\ncommit=unknown\n").unwrap();
+        assert_eq!(read_bundle_build_stamp_commit(&lib_dir), None);
+        assert!(!bundle_commit_mismatch(None, Some("cafebabe")));
+    }
+
+    #[test]
     fn a_build_stamp_clears_newer_source_timestamps() {
         let tmp = test_temp_dir();
         write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
@@ -14326,7 +14420,7 @@ mod tests {
             .unwrap()
             .modified()
             .unwrap();
-        write_bundle_build_stamp(&lib_dir);
+        write_bundle_build_stamp(tmp.path(), &lib_dir);
         fs::File::options()
             .write(true)
             .open(bundle_build_stamp_path(&lib_dir))

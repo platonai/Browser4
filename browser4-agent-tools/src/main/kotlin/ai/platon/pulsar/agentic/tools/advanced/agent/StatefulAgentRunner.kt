@@ -442,9 +442,10 @@ open class StatefulAgentRunner(
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
+        resumeTaskId: String? = null,
     ): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
+        execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove, resumeTaskId)
         return status
     }
 
@@ -466,9 +467,10 @@ open class StatefulAgentRunner(
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
+        resumeTaskId: String? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
-            execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
+            execute(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove, resumeTaskId)
         }
         runningJobs[status.id] = job
         job.start()
@@ -538,10 +540,13 @@ open class StatefulAgentRunner(
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
+        resumeTaskId: String? = null,
     ) {
         try {
             runMutex.withLock {
-                executeSerialized(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
+                executeSerialized(
+                    plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove, resumeTaskId
+                )
             }
         } catch (e: CancellationException) {
             // A task cancelled while queued never reaches executeSerialized — without
@@ -568,8 +573,35 @@ open class StatefulAgentRunner(
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
+        resumeTaskId: String? = null,
     ) {
         val agent = session.companionAgent
+
+        // `agent run --resume <id>`: seed this NEW run from the interrupted task's
+        // checkpoint — its instruction, workspace and files. The old conversation
+        // died with the process, so this is the only continuity there is. Resolved
+        // before the per-task flags so an omitted --coding / --access inherits what
+        // the interrupted task ran with.
+        val resume = resumeTaskId?.trim()?.takeIf { it.isNotEmpty() }?.let { id ->
+            // The cache holds this runner's restored rows; the shared JSONL is the
+            // fallback for a checkpoint that belongs to another session's runner
+            // (the CLI resumes through whichever session it is attached to).
+            val prior = getStatus(id)
+                ?: runCatching { persistence.readAll().lastOrNull { it.id == id } }.getOrNull()
+                ?: throw IllegalArgumentException(
+                    "No checkpoint for task '$id': this backend does not know it " +
+                        "(it may have run on another backend, or the row expired)."
+                )
+            resumeCheckpointOf(prior).also {
+                logger.info(
+                    "Agent task {} (session={}): resuming {} (workspace={}, files={})",
+                    status.id, session.uuid, id, it.workspace, it.files.size
+                )
+            }
+        }
+        val instruction = resume?.let { resumeInstruction(plainCommand, it) } ?: plainCommand
+        val codingMode = coding ?: resume?.codingMode ?: false
+        val accessPreset = access ?: resume?.accessPreset?.let { AccessPreset.parse(it) }
 
         // The companion agent keeps ONE cumulative stateHistory across every task
         // executed in the session. Remember where this task's states begin so the
@@ -585,11 +617,19 @@ open class StatefulAgentRunner(
 
         try {
             status.refresh(ResourceStatus.SC_PROCESSING)
+            // Record what this run is: the effective flags decide a later resume's
+            // inheritance, and `resumedFrom` links the two task ids.
+            status.codingMode = codingMode
+            status.accessPreset = accessPreset?.id
+            status.resumedFrom = resume?.taskId
             // The submit-time row says "created"; record the transition to
             // "in progress" immediately so a restart cannot revive a task that had
             // already started as if it were still queued.
             persistProgress(status, force = true)
-            recordLifecycle(status, AgentTaskEvent.TYPE_STARTED, plainCommand)
+            recordLifecycle(
+                status, AgentTaskEvent.TYPE_STARTED,
+                plainCommand.ifBlank { resume?.instruction.orEmpty() }.ifBlank { instruction },
+            )
 
             // Per-task flags. Explicit values win; a null resets any stale
             // override left over from a previous task (the companion agent is
@@ -609,13 +649,13 @@ open class StatefulAgentRunner(
                 // server-wide defaults; the finally below restores them either way, so a companion
                 // agent shared across tasks never inherits the previous task's grant.
                 it.agentToolManager.applyAccessPolicy(
-                    AgentAccessPolicy.serverDefault.withTaskOverrides(access, autoApprove)
+                    AgentAccessPolicy.serverDefault.withTaskOverrides(accessPreset, autoApprove)
                 )
                 // Explicit coding flag, never auto-detected: the coding flag is
                 // opt-in per call (`command_run`'s coding argument, e.g. the CLI's
-                // agent run --coding). Unset ⇒ browser task.
-                it.codingMode = coding == true
-                if (coding == true) {
+                // agent run --coding). A resumed run inherits it from its checkpoint.
+                it.codingMode = codingMode
+                if (codingMode) {
                     logger.info("Agent task {} (session={}): coding mode (explicit) — skipping driver health check and page navigation", status.id, session.uuid)
                 }
                 // Fresh-workspace isolation (design §6.6): create a timestamped
@@ -627,6 +667,15 @@ open class StatefulAgentRunner(
                     it.workspaceDirOverride = fresh
                     it.agentToolManager.rebindWorkspace(fresh)
                     logger.info("Agent task {} (session={}): fresh workspace at {}", status.id, session.uuid, fresh)
+                } else if (resume?.workspace != null) {
+                    // Resume keeps the interrupted task's workspace, so the files it
+                    // already wrote are what the new run continues from.
+                    it.workspaceDirOverride = resume.workspace
+                    it.agentToolManager.rebindWorkspace(resume.workspace)
+                    logger.info(
+                        "Agent task {} (session={}): resumed workspace at {}",
+                        status.id, session.uuid, resume.workspace
+                    )
                 }
                 // Live step feed and steering for THIS task. Cleared in the finally
                 // below: the companion agent outlives the task and is shared by
@@ -674,10 +723,10 @@ open class StatefulAgentRunner(
                     AgentEventBus.withServerSideAgentEventHandlers(serverSideAgentEventHandlers) {
                         if (runDispatcher != null) {
                             withContext(runDispatcher) {
-                                executeAgentCommand(plainCommand, status, agent, runHasReturned, startIndex, coding, freshWorkspace)
+                                executeAgentCommand(instruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
                             }
                         } else {
-                            executeAgentCommand(plainCommand, status, agent, runHasReturned, startIndex, coding, freshWorkspace)
+                            executeAgentCommand(instruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
                         }
                     }
                 } finally {
@@ -804,7 +853,10 @@ open class StatefulAgentRunner(
     ) {
         // Record the submitted instruction so callers can verify they're
         // getting results for the right task (prevents cross-talk confusion).
-        status.submittedTask = plainCommand
+        // A resumed run's prompt carries a `## Resume context` block that is not
+        // part of what the user submitted, so store the task text without it —
+        // otherwise a second resume would nest blocks.
+        status.submittedTask = stripResumeBlock(plainCommand)
 
         // Record where this task's tools may write, so a finished task can point its
         // caller at the deliverables instead of leaving them to search app-data.

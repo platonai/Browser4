@@ -599,6 +599,64 @@ function Test-ValidJar([string]$jarPath) {
     }
 }
 
+<#
+.SYNOPSIS
+    Compare the first-party JARs in a bundle's lib/ directory with this checkout's
+    own build outputs.
+
+.DESCRIPTION
+    `dependency:copy-dependencies` resolves Browser4 modules from the Maven local
+    repository, and two worktrees of the same version share it: a sibling checkout
+    that installs while this one assembles silently wins the copy, so the bundle
+    runs ANOTHER worktree's code while the build still reports success (observed
+    2026-10-28: lib/ held a sibling's browser4-agentic jar and a smoke run exercised
+    pre-fix behavior, with nothing in the output saying so).
+
+    Pure comparison — no scanning, no logging. Returns one record per bundle JAR
+    with Status = match | mismatch | not-built-here.
+
+.PARAMETER BundleJarPaths
+    Full paths of the first-party JARs found in the bundle's lib/.
+
+.PARAMETER WorktreeJarPaths
+    Full paths of the first-party JARs built by this checkout (under */target/).
+#>
+function Get-JarProvenanceReport {
+    param(
+        [string[]]$BundleJarPaths = @(),
+        [string[]]$WorktreeJarPaths = @()
+    )
+
+    $byName = @{}
+    foreach ($path in @($WorktreeJarPaths)) {
+        if (-not $path) { continue }
+        $name = [System.IO.Path]::GetFileName($path)
+        if (-not $byName.ContainsKey($name)) { $byName[$name] = $path }
+    }
+
+    $report = @()
+    foreach ($bundlePath in @($BundleJarPaths)) {
+        if (-not $bundlePath) { continue }
+        $name = [System.IO.Path]::GetFileName($bundlePath)
+        $worktreePath = $byName[$name]
+        if (-not $worktreePath) {
+            $report += [pscustomobject]@{
+                Name = $name; Status = 'not-built-here'
+                BundlePath = $bundlePath; WorktreePath = $null
+            }
+            continue
+        }
+        $bundleHash = (Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256).Hash
+        $worktreeHash = (Get-FileHash -LiteralPath $worktreePath -Algorithm SHA256).Hash
+        $status = if ($bundleHash -eq $worktreeHash) { 'match' } else { 'mismatch' }
+        $report += [pscustomobject]@{
+            Name = $name; Status = $status
+            BundlePath = $bundlePath; WorktreePath = $worktreePath
+        }
+    }
+    return $report
+}
+
 function Get-JdepsClassPath([string]$libDirectory) {
     # Use wildcard classpath (lib/*) instead of listing every JAR individually.
     # Joining all JAR paths into a single argument easily exceeds the Windows
@@ -1647,6 +1705,50 @@ if ($removedCount -gt 0) {
     Write-Host "Cleaned up $removedCount unnecessary JARs ($libJarCountAfter remaining in lib/)" -ForegroundColor Green
 }
 
+# --------------------------------------------------------------------------
+# Verify the first-party JARs in lib/ were built by THIS checkout.
+#
+# `dependency:copy-dependencies` resolves Browser4 modules from the shared Maven
+# local repository; a sibling worktree of the same version that installs while
+# this bundle assembles silently wins the copy. The build still reports success,
+# yet the bundle runs another worktree's code (observed 2026-10-28: lib/ held a
+# sibling's browser4-agentic jar, and a smoke run exercised pre-fix behavior).
+# Skipped when Maven did not run: lib/ may then legitimately hold jars installed
+# by an earlier build (see -SkipMavenInstall).
+# --------------------------------------------------------------------------
+if (-not $SkipMavenInstall) {
+    $worktreeJars = @()
+    foreach ($moduleRoot in @(Get-ChildItem -Path $repoRoot -Directory -Filter 'browser4-*' -ErrorAction SilentlyContinue)) {
+        $worktreeJars += @(
+            Get-ChildItem -Path $moduleRoot.FullName -Recurse -Depth 3 -File -Filter 'browser4-*.jar' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Directory.Name -eq 'target' } |
+                ForEach-Object { $_.FullName }
+        )
+    }
+    $bundleJars = @(Get-ChildItem -Path $libDirectory -File -Filter 'browser4-*.jar' -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.FullName })
+    if ($bundleJars.Count -gt 0) {
+        $provenance = @(Get-JarProvenanceReport -BundleJarPaths $bundleJars -WorktreeJarPaths $worktreeJars)
+        $mismatches = @($provenance | Where-Object { $_.Status -eq 'mismatch' })
+        if ($mismatches.Count -gt 0) {
+            foreach ($m in $mismatches) {
+                Write-Host "  x $($m.Name): bundle JAR differs from this checkout's target JAR" -ForegroundColor Red
+                Write-Host "      bundle:   $($m.BundlePath)" -ForegroundColor DarkGray
+                Write-Host "      worktree: $($m.WorktreePath)" -ForegroundColor DarkGray
+            }
+            throw ("The runtime bundle contains $($mismatches.Count) first-party JAR(s) built by a different checkout. " +
+                "Another worktree of the same version most likely installed to the shared Maven repository during this build. " +
+                "Re-run the bundle build, or isolate the local repository with -Dmaven.repo.local.")
+        }
+        $notBuilt = @($provenance | Where-Object { $_.Status -eq 'not-built-here' })
+        if ($notBuilt.Count -gt 0) {
+            Write-Host "  ! $($notBuilt.Count) first-party JAR(s) in lib/ have no build output in this checkout:" -ForegroundColor Yellow
+            $notBuilt | ForEach-Object { Write-Host "      $($_.Name)" -ForegroundColor DarkGray }
+        }
+        Write-Host "Verified $($provenance.Count) first-party JAR(s) in lib/ came from this checkout" -ForegroundColor Green
+    }
+}
+
 # Record that the jars under lib/ were assembled from the checked-out sources at
 # this moment.  The dev-mode launcher compares source timestamps against the jar
 # timestamps, but this project builds reproducibly, so Maven leaves a jar whose
@@ -1657,7 +1759,25 @@ if ($removedCount -gt 0) {
 if (-not $SkipMavenInstall) {
     $stampPath = Join-Path $libDirectory '.browser4-bundle-build-stamp'
     try {
-        Set-Content -Path $stampPath -Value 'rebuilt from the checked-out sources' -Encoding ascii -NoNewline
+        # Record the commit (and whether the tree was dirty) the bundle was assembled
+        # from: two worktrees of the same version share the Maven local repository, so
+        # a bundle can hold a sibling's jars while every mtime looks current. The
+        # build-time jar-provenance check rejects that; the commit lets the CLI's
+        # launcher reject a bundle built from another branch/commit.
+        $stampCommit = 'unknown'
+        $stampDirty = 'unknown'
+        try {
+            $sha = (git -C $repoRoot rev-parse --verify HEAD 2>$null | Select-Object -First 1)
+            if ($LASTEXITCODE -eq 0 -and $sha) { $stampCommit = $sha.Trim() }
+            $porcelain = (git -C $repoRoot status --porcelain 2>$null)
+            if ($LASTEXITCODE -eq 0) {
+                $stampDirty = if ([string]::IsNullOrWhiteSpace(($porcelain -join ''))) { 'false' } else { 'true' }
+            }
+        } catch {
+            # git is optional: a source archive has no .git and the bundle still builds.
+        }
+        Set-Content -Path $stampPath -Encoding ascii -NoNewline `
+            -Value ("rebuilt from the checked-out sources`ncommit={0}`ndirty={1}`n" -f $stampCommit, $stampDirty)
     } catch {
         Write-Warning "Could not write the bundle build stamp at ${stampPath}: $_"
     }

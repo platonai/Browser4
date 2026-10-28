@@ -78,6 +78,18 @@ class CodingAgentShell(
      */
     private val pathGuardEnabled: Boolean =
         System.getProperty("browser4.agent.shell.pathGuard", "on").lowercase() != "off",
+
+    /**
+     * Whether a literal absolute path argument outside the workspace is refused when
+     * [allowExternalAccess] is off (default `on`).
+     *
+     * Separate from [pathGuardEnabled] because the two answer different questions: the
+     * credential guard is about secrets, this one is about the workspace boundary. Turn
+     * it off with `-Dbrowser4.agent.shell.workspaceBoundary=off` for a local workflow that
+     * genuinely needs to pass an absolute path outside the workspace.
+     */
+    private val workspaceBoundaryEnabled: Boolean =
+        System.getProperty("browser4.agent.shell.workspaceBoundary", "on").lowercase() != "off",
     /**
      * `build-only` profile: development tools are narrowed to [BUILD_COMMANDS].
      *
@@ -121,6 +133,28 @@ class CodingAgentShell(
         private val SENSITIVE_PATH_KEYWORDS = listOf(
             ".ssh", "id_rsa", "id_ed25519", ".aws", ".gnupg", "gcloud", ".browser4",
         )
+
+        private val IS_WINDOWS: Boolean =
+            System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+
+        /** `/s`, `/b`, `/c:…` — Windows command switches, not POSIX paths. */
+        private val WINDOWS_SWITCH = Regex("""^/[A-Za-z?][A-Za-z0-9:._-]*$""")
+
+        /**
+         * Build launchers that may be spelled with an absolute path outside the
+         * workspace (`C:\tools\mvnw.cmd`, `/usr/bin/python3`). Data files stay contained.
+         */
+        private val LAUNCHER_BASENAMES = setOf(
+            "mvnw", "mvnw.cmd", "mvnw.bat", "mvn", "mvn.cmd", "mvn.bat",
+            "gradlew", "gradlew.bat", "gradle",
+            "java", "javac", "javaw", "node", "npm", "npx", "pnpm", "yarn",
+            "python", "python3", "python.exe", "py", "pip", "pip3",
+            "pwsh", "powershell", "cmd", "bash", "sh", "zsh",
+            "git", "cargo", "rustc", "go", "dotnet", "kotlin", "kotlinc",
+        )
+
+        /** Executable script/binary extensions — a launcher, never a data file. */
+        private val EXECUTABLE_EXTENSIONS = setOf("cmd", "bat", "exe", "ps1", "sh", "py", "com", "msc")
 
         /**
          * Charset of the bytes a child process writes to stdout/stderr.
@@ -168,7 +202,7 @@ class CodingAgentShell(
         /** Read-only / safe commands — always permitted (subset of AgentShell whitelist) */
         val SAFE_COMMANDS = setOf(
             "ls", "dir", "pwd", "cd", "tree",
-            "cat", "type", "less", "head", "tail",
+            "cat", "type", "less", "more", "head", "tail",
             "grep", "findstr", "awk", "sed",
             "wc", "sort", "uniq", "cut", "tr",
             "echo", "printf", "date", "time",
@@ -814,6 +848,74 @@ class CodingAgentShell(
     }
 
     /**
+     * Rejects a literal absolute path argument that leaves the workspace while
+     * [allowExternalAccess] is off.
+     *
+     * `coding.*` file tools cannot read outside the workspace, but the shell could: a
+     * live run used `dir /s /b "D:\workspace\…"` and `git -C "D:\repo" show …` to hunt
+     * for a fixture the file tools refused to read (2026-10-28). The boundary therefore
+     * applies to arguments too, with deliberate exceptions so ordinary builds keep
+     * working:
+     * - standard toolchain locations (JDK, `~/.m2`, `~/.gradle`, `~/.cache`, temp,
+     *   `%SystemRoot%`) stay readable;
+     * - a token whose variables cannot be expanded is left alone (it is not a path we
+     *   can judge);
+     * - Windows `/s`, `/b` … switches are not paths.
+     *
+     * Inline scripts (`python -c "…"`) are not parsed — this guard is about the shell's
+     * own arguments, and a script is free to compute whatever it likes.
+     */
+    private fun workspaceBoundaryViolation(tokens: List<String>): String? {
+        if (!workspaceBoundaryEnabled || allowExternalAccess) return null
+        for (token in tokens) {
+            if (isWindowsSwitch(token)) continue
+            val candidate = pathCandidate(token) ?: continue
+            val expanded = expandVariables(candidate) ?: continue
+            val path = runCatching { Path.of(expanded) }.getOrNull() ?: continue
+            val relativeEscape = !path.isAbsolute && expanded.contains("..")
+            if (!path.isAbsolute && !relativeEscape) continue
+            val resolved = if (path.isAbsolute) path.normalize() else canonicalBaseDir.resolve(expanded).normalize()
+            if (resolved.startsWith(canonicalBaseDir)) continue
+            if (toolchainRoots.any { resolved.startsWith(it) }) continue
+            // Credential locations stay the credential guard's business (so its switch
+            // still governs them); this guard is about ordinary paths.
+            if (SensitivePaths.isSensitive(resolved, sensitiveRoots)) continue
+            // Build launchers are tools, not data: an absolute `mvnw`/`python3` outside
+            // the workspace stays usable (the shell has always accepted those).
+            if (isLauncherReference(resolved)) continue
+            return PATH_GUARD_PREFIX + "'$token' resolves outside the workspace ($resolved); " +
+                "use a workspace-relative path, copy the input into the workspace, or set " +
+                "-Dbrowser4.agent.allowExternalAccess=true"
+        }
+        return null
+    }
+
+    /** `/s`, `/b`, `/i` are switches on Windows, not POSIX paths. */
+    private fun isWindowsSwitch(token: String): Boolean =
+        IS_WINDOWS && WINDOWS_SWITCH.matches(token)
+
+    /** A build launcher (or any executable script/binary) may live outside the workspace. */
+    private fun isLauncherReference(path: Path): Boolean {
+        val name = path.fileName?.toString()?.lowercase() ?: return false
+        if (name in LAUNCHER_BASENAMES) return true
+        val extension = name.substringAfterLast('.', "")
+        return extension.isNotEmpty() && extension in EXECUTABLE_EXTENSIONS
+    }
+
+    /** JDK, package caches, temp and the OS directory — what a build legitimately reaches. */
+    private val toolchainRoots: List<Path> by lazy {
+        val home = runCatching { Path.of(System.getProperty("user.home")) }.getOrNull()
+        listOfNotNull(
+            runCatching { Path.of(System.getProperty("java.home")) }.getOrNull(),
+            home?.resolve(".m2"),
+            home?.resolve(".gradle"),
+            home?.resolve(".cache"),
+            runCatching { Path.of(System.getProperty("java.io.tmpdir")) }.getOrNull(),
+            runCatching { Path.of(System.getenv("SystemRoot") ?: "C:/Windows") }.getOrNull(),
+        ).map { it.toAbsolutePath().normalize() }
+    }
+
+    /**
      * Rejects any argument that names a workspace-protected directory (`.browser4`,
      * `.github/workflows`).
      *
@@ -965,6 +1067,15 @@ class CodingAgentShell(
     }
 
     private fun validateSimpleCommand(segment: String, depth: Int): String? {
+        val tierViolation = validateSimpleCommandTier(segment, depth)
+        if (tierViolation != null) return tierViolation
+        // The command itself is permitted: the workspace boundary now applies to its
+        // arguments. Checking after the tier rules keeps their specific messages
+        // (`mklink` is disabled, credential/protected paths) authoritative.
+        return workspaceBoundaryViolation(tokenize(segment))
+    }
+
+    private fun validateSimpleCommandTier(segment: String, depth: Int): String? {
         val tokens = tokenize(segment)
         if (tokens.isEmpty()) return "empty or invalid command"
 
@@ -1120,6 +1231,14 @@ class CodingAgentShell(
                 c == '|' && i + 1 < command.length && command[i + 1] == '&' -> {
                     flush(); i += 2
                 }
+                // `2>&1`, `1>&2`, `>&1`: the ampersand belongs to a redirection, not to
+                // command chaining. Splitting on it turned the descriptor into a command —
+                // `python x.py > out.txt 2>&1` was refused with "command '1' is not
+                // allowed" (observed 2026-10-28 rerun, 9 times in one run).
+                c == '&' && isRedirectionAmpersand(command, i, current) -> {
+                    current.append(c)
+                    i++
+                }
                 c == '|' || c == ';' || c == '&' -> {
                     flush(); i++
                 }
@@ -1133,8 +1252,26 @@ class CodingAgentShell(
         return segments.filter { it.isNotBlank() }
     }
 
-    /** Index of the `)` matching the `(` at [openIndex], honoring nesting and quotes. */
-    private fun matchingParen(text: String, openIndex: Int): Int {
+    /**
+     * True when the `&` at [index] continues a descriptor redirection (`2>&1`, `>&2`).
+     *
+     * The splitter treats `&` as command chaining, so `python x.py > out.txt 2>&1` used to
+     * become the segments `python x.py > out.txt 2>` and `1` — and `1` is not an allowed
+     * command (observed 2026-10-28 rerun: 9 such refusals). A redirection `&` follows a
+     * `>`/`<` (optionally with a descriptor digit) and is followed by a descriptor digit
+     * or `-`.
+     */
+    private fun isRedirectionAmpersand(command: String, index: Int, pending: StringBuilder): Boolean {
+        val next = command.getOrNull(index + 1) ?: return false
+        if (!next.isDigit() && next != '-') return false
+        val text = pending.toString().trimEnd()
+        if (!text.endsWith(">") && !text.endsWith("<")) return false
+        val before = text.dropLast(1)
+        // `2>&1` (digit descriptor) or `>&1` (no descriptor); `a > b` has no `&` here anyway.
+        return before.isEmpty() || before.last().isDigit() || before.last().isWhitespace()
+    }
+
+    /** Index of the `)` matching the `(` at [openIndex], honoring nesting and quotes. */    private fun matchingParen(text: String, openIndex: Int): Int {
         var depth = 0
         var quote: Char? = null
         var i = openIndex

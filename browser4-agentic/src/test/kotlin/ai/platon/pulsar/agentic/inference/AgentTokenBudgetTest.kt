@@ -97,4 +97,33 @@ class AgentTokenBudgetTest {
         assertTrue(ex.message!!.contains("1,000,000"), "message should contain comma-formatted budget tokens")
         assertTrue(ex.message!!.contains(AgentTokenBudget.CONFIG_KEY), "message should mention the config key")
     }
+
+    @Test
+    @DisplayName("charge stops the run as soon as the budget is spent")
+    fun chargeThrowsWhenExhausted() {
+        // The CLI tool loop charges every provider response through this entry point;
+        // the exception is what aborts the run (a live CLI run consumed 7.87M input
+        // tokens against the 5M default because that loop never charged at all).
+        val budget = AgentTokenBudget(maxTotalTokens = 1_000)
+
+        budget.charge(400, 100)
+        assertEquals(500, budget.consumedTotal)
+        assertFalse(budget.isExceeded, "500 < 1000")
+
+        val ex = assertThrows<TokenBudgetExceededException> { budget.charge(500, 0) }
+        assertEquals(1_000L, ex.consumedTokens)
+        assertEquals(1_000L, ex.budgetTokens)
+    }
+
+    @Test
+    @DisplayName("charge never throws when the budget is unlimited")
+    fun chargeUnlimitedNeverThrows() {
+        val budget = AgentTokenBudget(maxTotalTokens = 0)
+
+        budget.charge(10_000_000, 1_000_000)
+
+        assertEquals(11_000_000, budget.consumedTotal)
+        assertFalse(budget.isExceeded, "0 means unlimited: accounting only")
+        assertFalse(budget.shouldWarn(), "an unlimited budget never warns")
+    }
 }

@@ -9,12 +9,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Dispatchers
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.ByteBuffer
+import java.nio.charset.Charset
+import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.time.Duration
@@ -306,14 +310,66 @@ class CliProcessManager(
     private fun startReader(stream: InputStream, buffer: HeadTailBuffer): Thread =
         Thread({
             runCatching {
-                stream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
-                    reader.forEachLine { line -> buffer.append(line + "\n") }
+                // Decode line by line, not as one UTF-8 stream: a Windows console program
+                // writes its own error text in the OEM codepage (GBK on a zh-CN host), and
+                // decoding those bytes as UTF-8 produced mojibake the model could not read
+                // (observed 2026-10-28: 18 `ParserError` results from `b4.run`, all garbled).
+                // UTF-8 stays the default; only a line UTF-8 cannot decode falls back to the
+                // platform charset.
+                val fallback = platformOutputCharset()
+                stream.use { input ->
+                    val line = ByteArrayOutputStream()
+                    val chunk = ByteArray(8192)
+                    while (true) {
+                        val read = input.read(chunk)
+                        if (read < 0) break
+                        var start = 0
+                        for (index in 0 until read) {
+                            if (chunk[index] == '\n'.code.toByte()) {
+                                line.write(chunk, start, index - start)
+                                buffer.append(decodeLine(line.toByteArray(), fallback) + "\n")
+                                line.reset()
+                                start = index + 1
+                            }
+                        }
+                        if (start < read) line.write(chunk, start, read - start)
+                    }
+                    if (line.size() > 0) buffer.append(decodeLine(line.toByteArray(), fallback))
                 }
             }
         }, "cli-process-reader").apply {
             isDaemon = true
             start()
         }
+
+    /**
+     * Decode one line of child-process output.
+     *
+     * UTF-8 is attempted strictly; only bytes that are not valid UTF-8 are decoded
+     * with [fallback] (the platform charset), so a GBK/cp1252 error message becomes
+     * readable instead of `Դ�ı����޷�ʶ��`. A trailing CR is dropped.
+     */
+    internal fun decodeLine(bytes: ByteArray, fallback: Charset = StandardCharsets.UTF_8): String {
+        if (bytes.isEmpty()) return ""
+        val utf8 = runCatching {
+            StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes))
+                .toString()
+        }.getOrNull()
+        return (utf8 ?: String(bytes, fallback)).removeSuffix("\r")
+    }
+
+    /**
+     * The charset a Windows console program writes when its output is not UTF-8.
+     *
+     * `native.encoding` (JEP 400) is the JVM's platform charset — GBK, cp1252, … — and
+     * is only ever used as the fallback for lines that fail strict UTF-8 decoding.
+     */
+    private fun platformOutputCharset(): Charset =
+        runCatching { Charset.forName(System.getProperty("native.encoding") ?: "UTF-8") }
+            .getOrDefault(StandardCharsets.UTF_8)
 
     private suspend fun backendHealthy(baseUrl: String): Boolean {
         val now = System.currentTimeMillis()

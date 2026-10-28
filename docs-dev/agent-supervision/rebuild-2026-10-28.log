@@ -1,0 +1,8 @@
+Name      | Session ID                           | URL          | Status   | Display    | Created             | Last Access         | Connection | Next open
+----------+--------------------------------------+--------------+----------+------------+---------------------+---------------------+------------+----------
+amz-mw    | 36b976f6-641b-4443-8be4-0c1ead27c06c | -            | Unknown  | Headless   | 2026-10-27 00:00:09 | 2026-10-27 00:00:09 | Browser4   | Refresh  
+(default) | 7ccf5be6-6453-436b-9547-595c8782d886 | -            | Unknown  | Headless   | 2026-10-27 23:54:30 | 2026-10-27 23:54:30 | Browser4   | Refresh
+
+(default) = unnamed session auto-created by goto/open without -s <name>. It is safe to close or switch away from with `session-default <name>`.
+
+Note: Browser4 backend is not started or unreachable at http://localhost:8282. Showing local persisted sessions only; the next `open` will refresh any saved session because its active state cannot be verified.

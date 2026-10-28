@@ -535,6 +535,30 @@ docker run -d -p 18182:18182 `
   Related: `browser4.agent.workspace.isolation=worktree` runs `coding.devTask(execute=true)` inside
   a `git worktree` under `.browser4/worktrees/` and merges back only on success (default `off`).
 
+* **`browser4.agent.copyTaskInputs`** *(default: `true`)*
+  Before a task runs, copy the files its instruction references but that live outside the agent
+  workspace into `<workspace>/.b4inputs/`, and tell the model the workspace-relative paths in the
+  user message. Without this, a browsing task that names a repository or absolute path can only hit
+  `PERMISSION_DENIED | code=PATH_DENIED` — a real run spent ten minutes hunting such a fixture.
+
+  Limits: regular files only; at most 20 files, 10 MB each, 25 MB total; credential locations
+  (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.browser4`) are never copied; a path already
+  readable from the workspace (including the coding mirror) is left alone; references that do not
+  resolve are ignored. Set `false` to keep the instruction exactly as the user wrote it.
+
+  ```bash
+  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.copyTaskInputs=false" browser4-cli open
+  ```
+
+* **`browser4.agent.shell.workspaceBoundary`** *(default: `on`)*
+  When `browser4.agent.allowExternalAccess` is off, `coding.shell` refuses arguments that
+  are literal absolute paths (or `..` escapes) outside the workspace — the file tools
+  already refused them. Toolchain locations (`java.home`, `~/.m2`, `~/.gradle`, the temp
+  dir, `%SystemRoot%`), build launchers (`mvnw`, `python3`, `*.exe`/`*.cmd`/`*.ps1`) and
+  credential locations keep their previous behaviour. `b4.run`'s `file://` URLs and
+  `upload` paths are refused under the same condition. Set `off` only for a local
+  workflow that genuinely needs to pass an absolute external path.
+
 ### 📦 `browser.profile.mode` Comparison Table
 
 | Mode           | Description                                                                 | User Data Directory Behavior                             | Use Case            |

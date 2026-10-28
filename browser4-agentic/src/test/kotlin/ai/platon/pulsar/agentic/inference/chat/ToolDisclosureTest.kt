@@ -189,4 +189,39 @@ class ToolDisclosureTest {
         assertEquals(emptyList(), exposed, "ambiguous bare names must not silently pick a tool")
         assertTrue(msg.text().contains("read (unknown or ambiguous)"))
     }
+
+    @Test
+    @DisplayName("a wrong tool name gets the closest real names as a correction")
+    fun exposeToolsResultSuggestsClosestNames() {
+        // Observed 2026-10-28: a live run exposed ["coding_copy","coding_run","coding_shell",
+        // "coding_exec"] in one call; only coding_shell existed and the answer said
+        // "unknown or ambiguous" for the other three, so the model learned nothing.
+        val byName = lc4j(
+            listOf(
+                spec("coding", "shell"), spec("coding", "runCode"),
+                spec("coding", "read"), spec("coding", "write"),
+            )
+        ).associateBy { it.name() }
+        val exposed = mutableListOf<LangChain4jToolSpec>()
+
+        val msg = ToolDisclosureTools.exposeToolsResult(
+            "id1", """{"toolNames":["coding_exec","coding_run"]}""", byName, exposed,
+        ).text()
+
+        assertTrue(msg.contains("coding_exec (unknown or ambiguous)"), msg)
+        assertTrue(msg.contains("closest:"), msg)
+        assertTrue(msg.contains("coding_shell"), "coding_exec should point at coding_shell: $msg")
+        assertTrue(msg.contains("coding_runCode"), "coding_run should point at coding_runCode: $msg")
+    }
+
+    @Test
+    @DisplayName("closestToolNames prefers a prefix match over edit distance")
+    fun closestToolNamesPrefersPrefix() {
+        val candidates = listOf("coding_shell", "coding_runCode", "coding_read", "coding_append")
+
+        val suggestions = closestToolNames("coding_run", candidates)
+
+        assertEquals("coding_runCode", suggestions.first(), suggestions.toString())
+        assertEquals(3, suggestions.size, "bounded: $suggestions")
+    }
 }

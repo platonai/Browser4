@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.inference
 
 import ai.platon.pulsar.common.config.ImmutableConfig
+import ai.platon.pulsar.common.getLogger
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -24,16 +25,19 @@ class TokenBudgetExceededException(
 /**
  * Thread-safe token budget for a single agent run.
  *
- * All LLM calls made through [ai.platon.pulsar.agentic.inference.action.ContextToAction]
- * are accounted here. When the cumulative usage exceeds [maxTotalTokens], subsequent
- * calls throw [TokenBudgetExceededException], stopping the agent loop before a
- * runaway task can burn unbounded provider credits.
+ * Both engine paths account their usage here: every LLM call made through
+ * [ai.platon.pulsar.agentic.inference.action.ContextToAction] (legacy engine) and
+ * every request of the default CLI tool loop (charged from its `onModelResponse`
+ * callback). When the cumulative usage exceeds [maxTotalTokens], the run stops
+ * with [TokenBudgetExceededException] before a runaway task can burn unbounded
+ * provider credits.
  *
  * A [maxTotalTokens] of `0` or less means unlimited (observability only).
  *
  * @param maxTotalTokens hard cap on total (input + output) tokens per agent run.
  */
 class AgentTokenBudget(val maxTotalTokens: Long = DEFAULT_MAX_TOTAL_TOKENS) {
+    private val logger = getLogger(this)
     private val consumedInput = AtomicLong(0)
     private val consumedOutput = AtomicLong(0)
     private val warned = AtomicBoolean(false)
@@ -70,6 +74,31 @@ class AgentTokenBudget(val maxTotalTokens: Long = DEFAULT_MAX_TOTAL_TOKENS) {
         val limit = effectiveMaxTotalTokens
         if (limit <= 0) return false
         return consumedTotal * 5 >= limit * 4 && warned.compareAndSet(false, true)
+    }
+
+    /**
+     * Charge one provider response to this run and stop the loop when the budget
+     * is spent.
+     *
+     * This is the single entry point both engines use: the legacy
+     * [ai.platon.pulsar.agentic.inference.action.ContextToAction] counts every LLM
+     * call, and the default CLI tool loop calls it from its `onModelResponse`
+     * callback. Before that wiring existed the budget was enforced only on the
+     * legacy path, so a CLI-engine run could consume unbounded tokens (observed:
+     * 7.87M input tokens against the 5M default, with no abort).
+     *
+     * @param inputTokens prompt tokens reported by the provider (0 when unknown)
+     * @param outputTokens completion tokens reported by the provider (0 when unknown)
+     * @throws TokenBudgetExceededException when the cumulative usage reaches the budget
+     */
+    fun charge(inputTokens: Long, outputTokens: Long) {
+        val total = add(inputTokens, outputTokens)
+        if (shouldWarn()) {
+            logger.warn("⚠️ token usage at 80%+ of budget: {}", this)
+        }
+        if (isExceeded) {
+            throw TokenBudgetExceededException(total, effectiveMaxTotalTokens)
+        }
     }
 
     override fun toString(): String {

@@ -107,7 +107,8 @@ internal object CliAgentPrompt {
      * issue was marked failed). Scratch files belong under `.b4scratch/`, and
      * `coding.changeSummary` is the authoritative list for `filesChanged`.
      * @param policy the access policy this run is under; the `### Permissions` block is appended only
-     *   for restricted presets, so a `full` run sees exactly the prompt it saw before.
+     *   for restricted presets, and a short `### Workspace boundary` block when a `full` run still
+     *   cannot read outside the workspace (`allowExternalAccess=false`, the default).
      */
     fun hygiene(
         codingMode: Boolean,
@@ -143,6 +144,24 @@ internal object CliAgentPrompt {
           `.b4scratch/` (e.g. `eval --file .b4scratch/ev.js`) — never in the
           repository root. Files there are scratch, not deliverables: they need no
           reporting and do not pollute change tracking.
+        - Multi-item tasks (collect N pages/products): persist each item as soon as you
+          have it — append its row to a data file under `.b4scratch/` and keep the ids
+          you already collected in `.b4scratch/progress.txt`. A tool round is capped and
+          only a short digest of it survives the cut-off, so an item that lives only in
+          the conversation is lost and gets re-fetched (observed: the same 20 pages
+          crawled four times).
+        - Marketplaces localize by host/IP: when titles or prices come back in the wrong
+          language or currency, set `Accept-Language` (`set headers`, cookies) or add
+          `?language=en_US` and re-read the page — do not post-process localized values.
+        - Deliverables are text: write CSV (or JSONL) for tabular data and Markdown for
+          prose. There is no spreadsheet writer and `.xlsx` output is out of scope; do not
+          hand-roll one. If the task's INPUT is an `.xlsx`, extract it with a script
+          (`coding.shell` + python/openpyxl where available) or convert it to CSV first —
+          coding.read refuses binary files.
+        - Finish rather than perfect: once the requested rows/fields are written and
+          spot-checked (row count plus a couple of values), call system.taskComplete.
+          Optional fields you could not fill belong in `problems`, not in another round of
+          polishing — a run that keeps refining and never reports delivers nothing.
         - When you need to remember something across steps, write it with
           memory_note (the note stays visible and survives compression).
           When past tasks might be relevant, search them with memory_search.
@@ -162,16 +181,33 @@ internal object CliAgentPrompt {
     }
 
     /**
-     * The `### Permissions` block, empty under `full`.
+     * The `### Permissions` block, empty under `full` with external access on.
      *
      * A restricted preset changes the *shape* of a run — whole tools disappear and mutating calls
      * are refused — so the agent has to be told before it plans, not after it fails. The key line is
      * the "do not retry" rule: without it the observed failure mode is a model that re-phrases the
      * same refused call (different quoting, different interpreter, absolute instead of relative
      * path) until the step budget runs out.
+     *
+     * The workspace boundary is *independent of the preset*: with `allowExternalAccess=false`
+     * (the default) every path outside the workspace is refused even under `full`. A live browsing
+     * run retried the same denied repo path four times because the block was suppressed by the
+     * preset check while the boundary was still active, so that case gets its own short block.
      */
     private fun permissionsBlock(policy: AgentAccessPolicy): String {
-        if (policy.preset == AccessPreset.FULL && policy.denyTools.isEmpty()) return ""
+        if (policy.preset == AccessPreset.FULL && policy.denyTools.isEmpty()) {
+            if (policy.allowExternalAccess) return ""
+            return """
+
+        ### Workspace boundary
+        - The coding file tools only resolve paths INSIDE the workspace: absolute paths, `..`
+          traversal and repo-relative paths outside it are refused with
+          `PERMISSION_DENIED | code=PATH_DENIED` (allowExternalAccess=false).
+        - A refusal is structural: do NOT retry it with different quoting, a `..` prefix, or an
+          interpreter. Keep task inputs under the workspace; an input that is blocked belongs in
+          `problems` at system.taskComplete.
+            """.trimIndent()
+        }
         val abilities = buildList {
             add("read the workspace")
             if (policy.allowsFileMutation()) add("write workspace files")
@@ -185,10 +221,14 @@ internal object CliAgentPrompt {
                 "audited) when the preset that grants it is no wider. Denied tools, protected paths " +
                 "and sensitive paths are still refused — never route around them."
         } ?: "- Automatic approval is off: every refusal above stands."
+        val boundary = if (policy.allowExternalAccess) "" else
+            "Paths outside the workspace are refused (`PERMISSION_DENIED | code=PATH_DENIED`); " +
+                "absolute paths, `..` traversal and interpreters do not get around it."
         return """
 
         ### Permissions
         - This run is under access preset '${policy.preset.id}': you may ${abilities.joinToString(", ")}.
+        - $boundary
         $ceiling
         - Tools the preset does not grant are not in your tool list at all, and a call that slips
           through anyway is refused with `PERMISSION_DENIED | code=...`. A refusal is structural, not

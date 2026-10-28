@@ -200,7 +200,19 @@ object ToolDisclosureTools {
         for (name in parseToolNames(argumentsJson)) {
             val spec = resolveSpec(name, allSpecs)
             when {
-                spec == null -> skipped += "$name (unknown or ambiguous)"
+                spec == null -> {
+                    // The model guesses tool names ("coding_exec", "coding_copy").
+                    // "unknown or ambiguous" alone left it guessing again; naming the
+                    // closest real tools turns the miss into a correction. The clause
+                    // is appended after the parenthesis so the existing wording (and
+                    // anything matching on it) keeps working.
+                    val suggestions = closestToolNames(name, allSpecs.keys)
+                    skipped += if (suggestions.isEmpty()) {
+                        "$name (unknown or ambiguous)"
+                    } else {
+                        "$name (unknown or ambiguous) — closest: ${suggestions.joinToString(", ")}"
+                    }
+                }
                 exposed.any { it.name() == spec.name() } -> skipped += "${spec.name()} (already exposed)"
                 else -> {
                     exposed += spec
@@ -227,4 +239,62 @@ object ToolDisclosureTools {
         val matches = allSpecs.values.filter { it.name().endsWith("_$name") }
         return matches.singleOrNull()
     }
+}
+
+/**
+ * Real tool names closest to a name the model guessed wrong, best first.
+ *
+ * `system.exposeTools` used to answer "unknown or ambiguous" and nothing else; a
+ * live run then guessed `coding_exec`, `coding_copy`, `coding_run` in one call and
+ * learned nothing. Returning the nearest names (`coding_shell`, `coding_runCode`, …)
+ * turns the miss into the correction the model needs.
+ *
+ * Same-domain tools are preferred; a prefix/contains match ranks above raw edit
+ * distance, so `coding_run` suggests `coding_runCode` rather than a random sibling.
+ *
+ * @param requested the name the model sent
+ * @param candidates every known sanitized tool name (`domain_method`)
+ * @param limit maximum suggestions
+ */
+internal fun closestToolNames(requested: String, candidates: Collection<String>, limit: Int = 3): List<String> {
+    val target = requested.lowercase()
+    val domain = target.substringBefore('_')
+    val method = target.substringAfter('_', "")
+    val sameDomain = candidates.filter { it.lowercase().startsWith("${domain}_") }
+    val pool = if (sameDomain.isNotEmpty()) sameDomain else candidates.toList()
+    return pool
+        .filter { it != requested }
+        .sortedWith(compareBy<String> { nameScore(it, method) }.thenBy { it })
+        .take(limit)
+}
+
+/** 0 = exact, then prefix/contains, then edit distance — lower is closer. */
+private fun nameScore(candidate: String, method: String): Int {
+    val c = candidate.substringAfter('_', "").lowercase()
+    return when {
+        c == method -> 0
+        c.startsWith(method) || method.startsWith(c) -> 1
+        c.contains(method) || method.contains(c) -> 2
+        else -> 3 + levenshtein(c, method)
+    }
+}
+
+/** Small, allocation-light edit distance (names are short). */
+private fun levenshtein(a: String, b: String): Int {
+    if (a == b) return 0
+    if (a.isEmpty()) return b.length
+    if (b.isEmpty()) return a.length
+    var previous = IntArray(b.length + 1) { it }
+    var current = IntArray(b.length + 1)
+    for (i in 1..a.length) {
+        current[0] = i
+        for (j in 1..b.length) {
+            val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+            current[j] = minOf(current[j - 1] + 1, previous[j] + 1, previous[j - 1] + cost)
+        }
+        val swap = previous
+        previous = current
+        current = swap
+    }
+    return previous[b.length]
 }

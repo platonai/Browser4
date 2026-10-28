@@ -4039,6 +4039,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fresh-workspace", description: "Run this task in a fresh, isolated workspace directory instead of the shared workspace. Use for tasks that must not see or mutate previous tasks' scratch files", is_bool: true, short: None },
                 OptionDef { name: "access", description: "Access preset for this task's coding tools: full (default), write (no shell), read-build (read + project build, no shell, no file mutation), read. Omit to use the server-wide browser4.agent.access default. Reset when the task ends", is_bool: false, short: None },
                 OptionDef { name: "auto-approve", description: "Automatic approval ceiling for this task (full, write, read-build or read): a coding call the access preset refuses is granted and audited when the preset that would grant it is no wider than this ceiling — no human in the loop. Denied tools, protected paths and sensitive paths are never approved. Omit to use the server-wide browser4.agent.autoApprove default (off)", is_bool: false, short: None },
+                OptionDef { name: "resume", description: "Resume an interrupted task by id: the new run is seeded with that task's instruction, workspace and files already written (the checkpoint must exist on the same backend). The task description may be omitted", is_bool: false, short: None },
                 OptionDef { name: "engine", description: "Agent execution engine (default: cli; observe-act is the DEPRECATED legacy engine)", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "Stream the task's steps (tool calls, model text, failures) while waiting, then print the result. Implies waiting; a slow tool or failure is always reported, successful fast tools are not", is_bool: true, short: None },
                 OptionDef { name: "ndjson", description: "With --follow: emit one JSON object per step (NDJSON) for machine consumption instead of human-readable lines", is_bool: true, short: None },
@@ -4075,6 +4076,14 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // Same rule as `access`: absent means "server default", which is off.
                 if let Some(ceiling) = get_opt_str(args, "auto-approve") {
                     p["autoApprove"] = json!(ceiling);
+                }
+                // Backend-side resume: forwarded as-is. A blank value must not
+                // become a checkpoint id, so only a non-blank one is sent.
+                if let Some(id) = get_opt_str(args, "resume")
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                {
+                    p["resumeTaskId"] = json!(id);
                 }
                 // CLI-side modes: consumed by handle_agent_run, never sent to
                 // the backend (`command.run` rejects undeclared arguments).
@@ -7198,6 +7207,32 @@ mod tests {
         args.insert("coding".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["coding"], true);
+    }
+
+    #[test]
+    fn test_agent_run_forwards_resume_task_id() {
+        // `--resume <id>` is a backend-side checkpoint lookup: the id must reach
+        // `command.run` as `resumeTaskId`, trimmed, and must stay absent otherwise.
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+
+        let mut args = HashMap::new();
+        args.insert("resume".to_string(), json!(" 1d5ec7d3-eaaa "));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["resumeTaskId"], "1d5ec7d3-eaaa");
+
+        let mut blank = HashMap::new();
+        blank.insert("resume".to_string(), json!("   "));
+        let params = (cmd.tool_params_fn)(&blank);
+        assert!(
+            params.get("resumeTaskId").is_none(),
+            "a blank id must not be forwarded, got {params}"
+        );
+
+        let mut plain = HashMap::new();
+        plain.insert("task".to_string(), json!("do the thing"));
+        let params = (cmd.tool_params_fn)(&plain);
+        assert!(params.get("resumeTaskId").is_none(), "got {params}");
     }
 
     #[test]

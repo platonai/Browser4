@@ -15253,6 +15253,18 @@ fn build_agent_run_extra(
     extra
 }
 
+/// Forward `--resume <task-id>` into the `command.run` payload.
+///
+/// A resume is entirely backend-side: the CLI cannot invent the interrupted task's
+/// instruction or workspace, it only names the checkpoint. A blank value is not an
+/// id, so it must not be forwarded (the backend would look up `""` and fail the
+/// task with a confusing "unknown checkpoint").
+fn apply_resume_task_id(extra: &mut Value, resume_task_id: Option<&str>) {
+    if let Some(id) = resume_task_id.map(str::trim).filter(|s| !s.is_empty()) {
+        extra["resumeTaskId"] = json!(id);
+    }
+}
+
 /// Submit one agent task in async mode and return its task id.
 ///
 /// Shared by the one-shot forms and the interactive session, so every mode
@@ -15309,9 +15321,19 @@ async fn handle_agent_run(
         .get("task")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
+    // `--resume <id>` makes the task text optional: the backend seeds the run from
+    // the interrupted task's checkpoint (its instruction, workspace and files).
+    let resume_task_id = tool_params
+        .get("resumeTaskId")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
-    if task.is_empty() {
-        return Err("Task description is required.".to_string());
+    if task.is_empty() && resume_task_id.is_none() {
+        return Err(
+            "Task description is required (or --resume <task-id> to resume an interrupted task)."
+                .to_string(),
+        );
     }
 
     let follow = tool_params
@@ -15334,7 +15356,7 @@ async fn handle_agent_run(
     // browser on the first navigation; `-s <name>` alone was not enough either,
     // because the backend only knows the name after the CLI registered it.
     let resolved_session_id = resolve_agent_session_id(session_name);
-    let extra = build_agent_run_extra(
+    let mut extra = build_agent_run_extra(
         tool_params
             .get("engine")
             .and_then(|v| v.as_str())
@@ -15351,6 +15373,7 @@ async fn handle_agent_run(
         tool_params.get("autoApprove").and_then(|v| v.as_str()),
         resolved_session_id.as_deref(),
     );
+    apply_resume_task_id(&mut extra, resume_task_id);
     let task_id = submit_agent_task(client, base_url, task, extra).await?;
 
     // NDJSON mode is machine output end to end: the submission is a JSON line
@@ -40764,6 +40787,23 @@ linkGroups:
             "no session must stay absent, got {anonymous}"
         );
         assert_eq!(anonymous["coding"], json!(true));
+    }
+
+    /// `--resume <id>` is forwarded only when non-blank: the backend owns the
+    /// checkpoint, and an empty id would be looked up and rejected there.
+    #[test]
+    fn apply_resume_task_id_forwards_only_a_non_blank_id() {
+        let mut extra = build_agent_run_extra("cli", None, false, false, None, None, None);
+        apply_resume_task_id(&mut extra, Some("  1d5ec7d3-eaaa  "));
+        assert_eq!(extra["resumeTaskId"], json!("1d5ec7d3-eaaa"));
+
+        let mut absent = build_agent_run_extra("cli", None, false, false, None, None, None);
+        apply_resume_task_id(&mut absent, None);
+        assert!(absent.get("resumeTaskId").is_none(), "got {absent}");
+
+        let mut blank = build_agent_run_extra("cli", None, false, false, None, None, None);
+        apply_resume_task_id(&mut blank, Some("   "));
+        assert!(blank.get("resumeTaskId").is_none(), "got {blank}");
     }
 
     /// `--access` is only forwarded when set: an absent key means "server

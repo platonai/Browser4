@@ -184,8 +184,11 @@ class UserCommandExecutor(
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
+        resumeTaskId: String? = null,
     ): CommandStatus {
-        if (plainCommand.isBlank()) {
+        // A resume may omit the task text entirely: the instruction comes from the
+        // interrupted task's checkpoint on the backend.
+        if (plainCommand.isBlank() && resumeTaskId.isNullOrBlank()) {
             return CommandStatus.failed(ResourceStatus.SC_BAD_REQUEST)
         }
 
@@ -205,6 +208,7 @@ class UserCommandExecutor(
                 .execute(
                     plainCommand, noopLimit = noopLimit, engine = engine, coding = coding,
                     freshWorkspace = freshWorkspace, access = access, autoApprove = autoApprove,
+                    resumeTaskId = resumeTaskId,
                 )
                 .toCommandStatus()
         }
@@ -229,11 +233,14 @@ class UserCommandExecutor(
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
+        resumeTaskId: String? = null,
     ): String {
         val command = plainCommand.trim()
 
-        // 1. Bad command — reject immediately without creating a page visitor
-        if (command.isBlank()) {
+        // 1. Bad command — reject immediately without creating a page visitor.
+        //    Exception: a resume may carry no task text at all (the checkpoint's
+        //    instruction is the base), so a blank command is legal there.
+        if (command.isBlank() && resumeTaskId.isNullOrBlank()) {
             val status = CommandStatus(statusCode = ResourceStatus.SC_BAD_REQUEST, processState = "done")
             rejectedStatuses.put(status.id, status)
             return status.id
@@ -242,7 +249,9 @@ class UserCommandExecutor(
         // CLI engine (the default): always an agent task — no URL shortcut, no
         // normalizer hijack. The agent decides how to reach the page via b4.run.
         if (engine != RunEngine.OBSERVE_ACT) {
-            return submitAgentTask(sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
+            return submitAgentTask(
+                sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove, resumeTaskId
+            )
         }
 
         // 2. Single URL with optional parameters — use page visit directly
@@ -302,16 +311,19 @@ class UserCommandExecutor(
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
+        resumeTaskId: String? = null,
     ): String {
         val runner = ensureAgentRunner(sessionId)
         val status = runner.create()
         taskOwner[status.id] = "agent"
         logger.info(
-            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, autoApprove={})",
+            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, autoApprove={}, resume={})",
             status.id, sessionId, noopLimit, coding ?: false, freshWorkspace ?: false,
-            access?.id ?: "default", autoApprove?.id ?: "off"
+            access?.id ?: "default", autoApprove?.id ?: "off", resumeTaskId ?: "none"
         )
-        runner.submit(plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove)
+        runner.submit(
+            plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove, resumeTaskId
+        )
         return status.id
     }
 

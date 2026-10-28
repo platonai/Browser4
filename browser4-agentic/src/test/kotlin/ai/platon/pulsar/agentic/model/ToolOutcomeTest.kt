@@ -28,7 +28,36 @@ class ToolOutcomeTest {
         assertTrue(outcome.ok)
         assertEquals("unknown.unknown", "${outcome.domain}.${outcome.method}")
         assertEquals("✓ Written 1204 bytes to src/Foo.kt", outcome.summary)
-        assertEquals("✓ Written 1204 bytes to src/Foo.kt rest of output", outcome.body)
+        // The body is content: it must keep its newline (a CSV read back as one
+        // space-separated line is unusable — see testBodyKeepsLineStructure).
+        assertEquals("✓ Written 1204 bytes to src/Foo.kt\nrest of output", outcome.body)
+    }
+
+    @Test
+    @DisplayName("the body keeps line breaks so rows stay distinguishable")
+    fun testBodyKeepsLineStructure() {
+        val csv = "asin,title,price\nB001,Microwave A,99.99\nB002,Microwave B,129.00\n"
+
+        val outcome = ToolOutcome.from(result(csv), domain = "coding", method = "read")
+
+        val body = outcome.body ?: ""
+        assertTrue(body.contains("\n"), "line breaks must survive the envelope: $body")
+        assertEquals(3, body.lines().count { it.isNotBlank() }, body)
+        assertTrue(body.contains("B002,Microwave B,129.00"), body)
+    }
+
+    @Test
+    @DisplayName("an over-budget body is cut in the middle and keeps a marker")
+    fun testBodyTruncationKeepsMarker() {
+        val long = (1..400).joinToString("\n") { "row $it,value $it" }
+
+        val outcome = ToolOutcome.from(result(long), domain = "coding", method = "read")
+
+        val body = outcome.body ?: ""
+        assertTrue(body.length <= 1_600 + 64, "coding.read body should stay bounded, got ${body.length}")
+        assertTrue(body.contains("…[truncated"), body.takeLast(120))
+        assertTrue(body.startsWith("row 1,value 1"), body.take(80))
+        assertTrue(body.trimEnd().endsWith("row 400,value 400"), body.takeLast(80))
     }
 
     @Test
@@ -105,5 +134,45 @@ class ToolOutcomeTest {
         assertTrue(preview!!.length <= 600, "preview should be capped at 600 chars")
         assertFalse(preview.contains("\n"), "preview should be single-line")
         assertNull(AgentState(step = 1, instruction = "t").resultPreview)
+    }
+
+    @Test
+    @DisplayName("a permission refusal is rendered as a failure, not [ok]")
+    fun testPermissionRefusalIsFailure() {
+        // PermissionAudit returns refusals as values (never throws by design). Reporting
+        // them as [ok] hid every refusal from `--follow` (which prints [fail] results
+        // only) and let the model re-phrase the same denied path four times in a live run.
+        val refusal = "Error: PERMISSION_DENIED | code=PATH_DENIED | tool=coding.fs " +
+            "| detail=path 'D:\\workspace\\x.xlsx' is outside the workspace " +
+            "| hint=use a workspace-relative path"
+
+        val outcome = ToolOutcome.from(result(refusal), domain = "coding", method = "stat")
+
+        assertFalse(outcome.ok, "a refusal must not be reported as success")
+        val rendered = outcome.render()
+        assertTrue(rendered.startsWith("coding.stat [fail]"), rendered)
+        assertTrue(rendered.contains("PATH_DENIED"), "the refusal reason must survive: $rendered")
+        assertTrue(rendered.contains("hint="), "the allowed route must survive: $rendered")
+    }
+
+    @Test
+    @DisplayName("the refusal marker inside a result body does not fail a successful call")
+    fun testRefusalMarkerInBodyStaysOk() {
+        val outcome = ToolOutcome.from(result("README.md\nnote: PERMISSION_DENIED | code=PATH_DENIED in a doc"))
+
+        assertTrue(outcome.ok, "only the first line decides: ${outcome.render()}")
+    }
+
+    @Test
+    @DisplayName("JSON that embeds earlier refusals stays ok (memory.read)")
+    fun testEmbeddedRefusalInJsonStaysOk() {
+        // memory.read returns the task's own event log, which quotes earlier refusal
+        // results. The marker is *inside* the JSON, not the result's verdict.
+        val json = """{"taskId":"cf268579","events":[{"type":"tool_executed","text":"PARSE DENIED"},""" +
+            """"PERMISSION_DENIED | code=PATH_DENIED | tool=coding.fs"}]}"""
+
+        val outcome = ToolOutcome.from(result(json), domain = "memory", method = "read")
+
+        assertTrue(outcome.ok, "an embedded refusal must not fail the read: ${outcome.render()}")
     }
 }

@@ -48,6 +48,17 @@ class CodingAgentShellTest {
         assertTrueAllowed(s, "/usr/bin/python3 --version")
     }
 
+    @Test
+    @DisplayName("stderr redirection (2>&1) is a redirection, not a command")
+    fun stderrRedirectionIsNotACommand() {
+        // The splitter treated `&` as chaining, so `2>&1` became the command `1` and the
+        // whole line was refused — 9 times in the 2026-10-28 rerun.
+        val s = shell()
+        assertTrueAllowed(s, "python .b4scratch/cols.py > .b4scratch/cols.txt 2>&1")
+        assertTrueAllowed(s, "python .b4scratch/cols.py 2>&1 | more")
+        assertTrueAllowed(s, "type build.log 2>&1")
+    }
+
     // --- Whole-command validation (K7 / P0.7) -------------------------------
 
     @Test

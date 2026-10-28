@@ -99,6 +99,19 @@ class CliAgentPromptTest {
         // deliverable (observed: 37 files written, 20 reported, task failed).
         assertTrue(browsing.contains(".b4scratch/"), browsing)
         assertTrue(browsing.contains("eval --file .b4scratch/"), browsing)
+        // Multi-item collection must checkpoint to disk: a live 20-product run
+        // re-crawled the same 20 pages four times because the round digest kept
+        // only the newest six results and the collected rows lived in the conversation.
+        assertTrue(browsing.contains(".b4scratch/progress.txt"), browsing)
+        // Localized marketplaces (observed: Amazon serving zh-CN/HKD to a US task)
+        // need a locale fix on the page, not post-processing of the wrong values.
+        assertTrue(browsing.contains("Accept-Language"), browsing)
+        // No spreadsheet writer is built in (decision 2026-10-28: no Excel dependency):
+        // deliverables are CSV/JSONL, and an .xlsx INPUT is extracted by a script.
+        assertTrue(browsing.contains("write CSV"), browsing)
+        assertTrue(browsing.contains("out of scope"), browsing)
+        assertTrue(browsing.contains("coding.read refuses binary"), browsing)
+        assertFalse(coding.contains("progress.txt"), coding)
     }
 
     @Test
@@ -123,12 +136,24 @@ class CliAgentPromptTest {
     }
 
     @Test
-    @DisplayName("a restricted preset adds the permissions block, full does not")
+    @DisplayName("a restricted preset adds the permissions block; full adds only the workspace boundary")
     fun permissionsBlockFollowsThePolicy() {
-        // FULL is the default and must keep the prompt byte-for-byte what it was: the block is
-        // added only when it changes what the model may do.
+        // FULL with external access OFF still has a boundary: the coding file tools refuse every
+        // path outside the workspace. Announcing it is what stops the retry loop — a live browsing
+        // run re-phrased the same denied repo path four times because the preset check suppressed
+        // the block while the boundary was still active. The full preset contract block stays absent.
         val full = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy())
         assertFalse(full.contains("### Permissions"), full)
+        assertTrue(full.contains("### Workspace boundary"), full)
+        assertTrue(full.contains("allowExternalAccess=false"), full)
+        assertTrue(full.contains("do NOT retry"), full)
+
+        // External access on = nothing to warn about: the prompt stays as it was.
+        val fullExternal = CliAgentPrompt.hygiene(
+            true, workspace, AgentAccessPolicy(allowExternalAccess = true),
+        )
+        assertFalse(fullExternal.contains("### Workspace boundary"), fullExternal)
+        assertFalse(fullExternal.contains("### Permissions"), fullExternal)
 
         val read = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy(preset = AccessPreset.READ))
         assertTrue(read.contains("### Permissions"), read)
@@ -136,6 +161,7 @@ class CliAgentPromptTest {
         // The point of the block: the model must not retry a structural refusal.
         assertTrue(read.contains("do NOT retry"), read)
         assertTrue(read.contains("coding.permissions"), read)
+        assertTrue(read.contains("Paths outside the workspace are refused"), read)
         assertFalse(read.contains("run the project build"), read)
         assertFalse(read.contains("run shell commands"), read)
     }

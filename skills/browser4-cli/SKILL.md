@@ -413,6 +413,7 @@ Organized by task — follow the link that matches what you're trying to do:
 [quick-patterns.md](references/quick-patterns.md) — proven interact/verify/extract copy-paste recipes
 
 **Run at scale (multiple pages/URLs):**
+[bulk-collection.md](references/bulk-collection.md) — collecting N items without losing data: persist rows as you go (CSV + `.b4scratch/progress.txt`), pin locale/currency, inspect big outputs without flooding context, deliver CSV (no xlsx writer), and quote commands correctly inside an agent run
 [crawl.md](references/crawl.md) — recursive crawling, seed-file bulk fetch, X-SQL extraction
 [swarm.md](references/swarm.md) — parallel scraping across multiple browser contexts
 [loop.md](references/loop.md) — repeated task execution with persistence/resume
@@ -434,6 +435,8 @@ Organized by task — follow the link that matches what you're trying to do:
 [development-mode.md](references/development-mode.md) — one backend per checkout: development ports from 8282, per-checkout state and app data, workspace-scoped `stop`
 
 **AI-powered extraction:** [agent.md](references/agent.md) — `extract`, `summarize`, `agent run|status|result`, LLM provider config
+[agent-access.md](references/agent-access.md) — task access presets (`full`/`write`/`read-build`/`read`), `PERMISSION_DENIED` codes, `--auto-approve` ceilings
+[agent-workspace.md](references/agent-workspace.md) — where an agent may read/write: per-task workspace, path boundary, credential/protected paths, automatic task-input copying, deliverable format
 
 **Resilient selectors:**
 [power-dom.md](references/power-dom.md) — PowerCSS `:expr()` visual-feature selectors

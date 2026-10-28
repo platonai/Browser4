@@ -72,6 +72,12 @@ class CliEngineToolSetTest {
 
         assertTrue("b4_run" in names, "initial set: $names")
         assertTrue("coding_read" in names, "small helper-file tooling stays available: $names")
+        // The browsing prompt names these three by contract: changeSummary is the
+        // authoritative `filesChanged` list, diff shows the edits, workspaceRoot
+        // answers "where am I". A live run had to expose changeSummary by hand.
+        assertTrue("coding_changeSummary" in names, "initial set: $names")
+        assertTrue("coding_diff" in names, "initial set: $names")
+        assertTrue("coding_workspaceRoot" in names, "initial set: $names")
         // The heavy coding-only tools stay behind system.exposeTools.
         assertFalse("coding_verify" in names, "initial set: $names")
         assertFalse("coding_mvnBuild" in names, "initial set: $names")

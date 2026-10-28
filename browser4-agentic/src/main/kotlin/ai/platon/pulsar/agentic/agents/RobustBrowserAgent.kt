@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.*
 import ai.platon.pulsar.agentic.common.AgentPaths
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.AgenticEvents
+import ai.platon.pulsar.agentic.inference.AgentTokenBudget
 import ai.platon.pulsar.agentic.inference.RequestTokenLimitExceededException
 import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.agentic.inference.chat.*
@@ -24,6 +25,7 @@ import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
 import ai.platon.pulsar.chrome.dom.util.DomDebug
 import ai.platon.pulsar.coding.AgentAccessPolicy
+import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.coding.SafeText
 import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.common.AppPaths
@@ -103,7 +105,13 @@ private val CLI_CORE_CODING_METHODS = setOf(
 /**
  * Coding-domain methods exposed initially for BROWSING tasks: the most common
  * FILE tools only (helper scripts for eval, small data files, locating
- * things). The coding long tail — shell*, mvnBuild, validate, devTask,
+ * things), plus the three read-only bookkeeping tools the browsing prompt
+ * names by name — `coding.changeSummary` ("it lists exactly the files this run
+ * wrote" for `filesChanged`), `coding.diff`, and `coding.workspaceRoot` (the
+ * model must be able to answer "where am I?"). Leaving `changeSummary` out of
+ * the initial set forced a live run to spend a `system.listTools` /
+ * `system.exposeTools` round on a tool the prompt had just told it to use.
+ * The coding long tail — shell*, mvnBuild, validate, devTask,
  * editLines/insertAfter, symbols, kt-symbols, scaffold family, impact, ... —
  * stays hidden and is reachable via system.listTools / system.exposeTools
  * on demand.
@@ -112,6 +120,7 @@ private val CLI_BROWSING_CODING_METHODS = setOf(
     "read", "write", "append", "replace",
     "listDir", "glob", "grep",
     "stat", "mkdir", "delete",
+    "diff", "changeSummary", "workspaceRoot",
 )
 
 /**
@@ -261,6 +270,44 @@ internal data class RoundToolRecord(
  */
 internal fun cliToolLoopMaxIterations(configured: Int, codingMode: Boolean): Int =
     configured.coerceAtLeast(if (codingMode) 60 else 40)
+
+/**
+ * The "progress so far" block appended to an overflow continuation.
+ *
+ * The block must survive being shipped in every continuation, so it is bounded by
+ * line count and characters; a blank summary becomes an explicit instruction to
+ * persist instead of an empty section the model can ignore.
+ *
+ * @param summary `coding.changeSummary()` output (null when unavailable)
+ */
+internal fun progressDigestFromSummary(summary: String?, maxLines: Int = 20, maxChars: Int = 1_200): String {
+    val text = summary?.trim().orEmpty()
+    if (text.isEmpty()) {
+        return "(no files written yet — persist collected rows before continuing)"
+    }
+    return text.lineSequence()
+        .filter { it.isNotBlank() }
+        .take(maxLines)
+        .joinToString("\n")
+        .take(maxChars)
+}
+
+/**
+ * True when this tool-result text reports a failure.
+ *
+ * Two shapes reach the model: the coordinator's raw `[fail] …` catch-all, and the
+ * bounded [ai.platon.pulsar.agentic.model.ToolOutcome] envelope, whose header is
+ * `domain.method [fail] summary`. Checking only the raw prefix (the old code) missed
+ * every envelope failure: a policy refusal was rendered `[fail]` for the model yet
+ * still counted as ok here, so `agent run --follow` never printed it (observed in
+ * the 2026-10-28 supervision run, where all 20 refusals stayed invisible).
+ */
+internal fun isFailedToolResult(resultText: String): Boolean {
+    val trimmed = resultText.trimStart()
+    if (trimmed.startsWith("[fail]")) return true
+    val firstLine = trimmed.lineSequence().firstOrNull().orEmpty()
+    return firstLine.contains(" [fail] ")
+}
 
 /** Consecutive rounds without a recorded file mutation before a coding run is told to land an edit. */
 internal const val CLI_CODING_READONLY_ROUND_LIMIT = 2
@@ -1008,7 +1055,10 @@ open class RobustBrowserAgent(
             }.getOrNull().orEmpty()
             var messages: List<ChatMessage> = listOf(
                 SystemMessage.from(cliAgentSystemPrompt() + inheritedSection + memorySection),
-                UserMessage.from(action.action),
+                // Task inputs the instruction references but that live outside the
+                // isolated workspace are copied into `.b4inputs/` here; the message
+                // names their workspace paths (no-op when nothing was copied).
+                UserMessage.from(materializeTaskInputs(action.action, context.sid)),
             )
             var textOnlyStreak = 0
             var turn = 0
@@ -1035,6 +1085,12 @@ open class RobustBrowserAgent(
             // P2-3: system.exposeTools results are carried across rounds via
             // [exposedSpecsThisRun], so the model never has to re-disclose.
             var exposedSpecsThisRun: List<dev.langchain4j.agent.tool.ToolSpecification>? = null
+            // P0 cost guard: the CLI engine used to ignore `agent.token.budget.total`
+            // entirely — the budget was enforced only in ContextToAction, so a live
+            // browsing run consumed 7.87M input tokens against the 5M default with no
+            // abort. Charged from the loop's onModelResponse callback; the breach
+            // propagates to resolveProblemWithRetry, which treats it as permanent.
+            val tokenBudget = AgentTokenBudget.from(session.sessionConfig)
             // Coding progress enforcement: rounds without a recorded file
             // mutation. Reset on every round that changes a file (see
             // [codingProgressNudge]).
@@ -1078,6 +1134,7 @@ open class RobustBrowserAgent(
                     initialSpecsOverride = exposedSpecsThisRun,
                     toolRecords = roundToolRecords,
                     turn = turn + 1,
+                    tokenBudget = tokenBudget,
                 )
                 // P1-1: the inference timeout now applies PER LLM CALL inside
                 // AgentToolCallLoop — NOT to the whole round. A round with many
@@ -1191,7 +1248,7 @@ open class RobustBrowserAgent(
                     // resumes from the cut point instead.
                     overflow -> {
                         cliLoopTracer.logEvent("overflow", mapOf("modelError" to response.modelError!!))
-                        messages + UserMessage.from(overflowContinuationMessage(response.modelError!!))
+                        messages + UserMessage.from(overflowContinuationMessage(response.modelError!!, progressDigest()))
                     }
                     // Blank model text: keep the nudge-only append (a blank
                     // AiMessage risks provider "content required" rejections;
@@ -1242,12 +1299,67 @@ open class RobustBrowserAgent(
                 context.sid, e.message ?: "user interruption"
             )
             throw e
+        } catch (e: TokenBudgetExceededException) {
+            // P0 cost guard: the run's token budget is spent. Permanent by definition —
+            // rethrow so resolveProblemWithRetry records it without a retry (the retry
+            // would throw on its first request anyway, burning nothing but time).
+            logger.error("🛑 cli-agent.budget sid={} msg={}", context.sid, e.message)
+            agentMemory.sink.failed(
+                context.sid, uuid.toString(),
+                e.message ?: "token budget exceeded", step = context.step,
+            )
+            agentMemory.consolidator?.schedule(context.sid)
+            throw e
         } catch (e: Exception) {
             // Failure memory event (user cancellation is deliberately excluded).
             agentMemory.sink.failed(context.sid, uuid.toString(), e.message ?: e.javaClass.simpleName)
             agentMemory.consolidator?.schedule(context.sid)
             throw handleResolutionFailure(e, context, startTime)
         }
+    }
+
+    /**
+     * Copy task inputs that live outside the workspace into `<workspace>/.b4inputs/`
+     * and return the instruction that names their workspace paths.
+     *
+     * A browsing task's workspace is isolated, so a task that names a repository or
+     * absolute path can only hit `PATH_DENIED` (observed 2026-10-28: ten minutes of
+     * `glob`/`file://`/`dir /s` hunting for a fixture the run was never allowed to
+     * read). Materializing the reference keeps the boundary and makes the task doable.
+     *
+     * Disabled with `-Dbrowser4.agent.copyTaskInputs=false`. Failures are logged and
+     * never block the run: the model still sees the original instruction.
+     *
+     * @param instruction the task text as the user wrote it
+     * @param sid session id, for the log/trace event
+     * @return [instruction], plus a mapping note when at least one input was copied
+     */
+    private fun materializeTaskInputs(instruction: String, sid: String): String {
+        val enabled = runCatching {
+            session.sessionConfig.getBoolean("browser4.agent.copyTaskInputs", true)
+        }.getOrDefault(true)
+        if (!enabled) return instruction
+
+        return runCatching {
+            val searchRoots = buildList {
+                runCatching { CodingWorkspace.workspaceRoot }.getOrNull()?.let { add(it) }
+                runCatching { Path.of(System.getProperty("user.dir")) }.getOrNull()?.let { add(it) }
+            }.distinct()
+            val result = TaskInputs.materialize(instruction, agentWorkspaceDir, searchRoots)
+            if (result.inputs.isNotEmpty()) {
+                logger.info(
+                    "📥 cli-agent.inputs sid={} copied={} into={}",
+                    sid, result.inputs.size, agentWorkspaceDir.resolve(TaskInputs.INPUT_DIR),
+                )
+                cliLoopTracer.logEvent(
+                    "inputs.copied",
+                    mapOf("count" to result.inputs.size, "sid" to sid),
+                )
+            }
+            result.instruction
+        }.onFailure {
+            logger.warn("Could not materialize task inputs: {}", it.message)
+        }.getOrDefault(instruction)
     }
 
     private fun buildCliToolLoop(
@@ -1266,6 +1378,12 @@ open class RobustBrowserAgent(
         toolRecords: MutableList<RoundToolRecord> = mutableListOf(),
         /** 1-based outer round number this loop serves (event metadata). */
         turn: Int = 0,
+        /**
+         * P0 cost guard: the run's token budget. Every model request of this loop is
+         * charged to it, so a runaway run stops at `agent.token.budget.total` instead
+         * of running unbounded (the legacy engine was the only one enforced).
+         */
+        tokenBudget: AgentTokenBudget? = null,
     ): AgentToolCallLoop {
         val conf = session.sessionConfig
         val initialToolSet = conf.get("browser4.agent.toolLoop.initialToolSet") ?: "core"
@@ -1348,6 +1466,20 @@ open class RobustBrowserAgent(
             onModelResponse = { seq, response ->
                 cliLoopTracer.logResponse(seq, response)
                 emitUsageEvent(response, turn)
+                // P0 cost guard: charge this request to the run's budget. The
+                // exception (TokenBudgetExceededException) is an
+                // IllegalStateException, so it propagates out of the loop and is
+                // treated as permanent — no retry, no further tokens.
+                tokenBudget?.let { budget ->
+                    runCatching { response.tokenUsage() }.getOrNull()?.let { usage ->
+                        // A provider that omits usage contributes nothing; the request
+                        // is still counted by the loop's own totals.
+                        budget.charge(
+                            usage.inputTokenCount()?.toLong() ?: 0L,
+                            usage.outputTokenCount()?.toLong() ?: 0L,
+                        )
+                    }
+                }
             },
             onToolResult = { req, result, durationMs ->
                 // Live view: one event per executed tool (`agent run --follow`).
@@ -1356,7 +1488,7 @@ open class RobustBrowserAgent(
                     AgentRunEvent(
                         AgentRunEvent.TOOL_RESULT,
                         tool = req.name(),
-                        ok = !resultText.trimStart().startsWith("[fail]"),
+                        ok = !isFailedToolResult(resultText),
                         durationMs = durationMs,
                         text = resultText,
                         turn = turn,
@@ -1375,7 +1507,7 @@ open class RobustBrowserAgent(
                     memory.sink.toolExecuted(
                         memory.currentTaskId ?: "unknown", uuid.toString(), req.name(),
                         req.arguments() ?: "{}",
-                        ok = !result.text().trimStart().startsWith("[fail]"),
+                        ok = !isFailedToolResult(result.text()),
                         result.text(), durationMs, req.id() ?: "",
                     )
                 }
@@ -1526,7 +1658,7 @@ open class RobustBrowserAgent(
      * of re-executing the whole round (the overflowed loop's own message list
      * is discarded by [AgentToolCallLoop.generate]).
      */
-    private fun overflowContinuationMessage(modelError: String): String = buildString {
+    private fun overflowContinuationMessage(modelError: String, progress: String): String = buildString {
         append(
             "Your previous tool round was cut short after exceeding the per-round " +
                 "iteration cap. The tools that already executed and the newest results " +
@@ -1534,7 +1666,29 @@ open class RobustBrowserAgent(
                 "re-execute tools that already succeeded unless you need their full output.\n\n"
         )
         append(modelError)
+        append("\n\n## Progress so far (do not start over)\n")
+        append(progress)
+        append(
+            "\nIf a data file is incomplete, append the missing rows instead of rewriting it; " +
+                "re-read `.b4scratch/progress.txt` (when it exists) to see which items are done."
+        )
     }
+
+    /**
+     * What this run has already written, for the overflow continuation.
+     *
+     * An overflow restarts the round from a lossy digest (the newest few tool results,
+     * ~2K chars). Without the files the run already produced, the model re-fetches and
+     * rewrites finished work — the 2026-10-27 run crawled the same 20 pages four times
+     * across six overflows. `coding.changeSummary` is the authoritative list of files
+     * this run wrote; it is bounded here because the block ships in every continuation.
+     */
+    private fun progressDigest(maxLines: Int = 20, maxChars: Int = 1_200): String =
+        progressDigestFromSummary(
+            runCatching { agentToolManager.codingFs.changeSummary() }.getOrNull(),
+            maxLines,
+            maxChars,
+        )
 
     /**
      * Complete-prompt + run tracing for the CLI engine.

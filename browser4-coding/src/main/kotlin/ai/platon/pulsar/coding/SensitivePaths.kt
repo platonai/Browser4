@@ -8,9 +8,12 @@ import java.nio.file.Path
  *
  * Both the file tools and the shell consult this object so that "credential location" means the
  * same thing in both layers, including the `~` expansion and the real-path check used for
- * workspace junctions.
+ * workspace junctions. The task-input materializer in the agent layer (`TaskInputs`) is the third
+ * caller: it must never copy a credential location into the workspace.
+ *
+ * Public so the agent layer reuses the same definition instead of re-deriving it.
  */
-internal object SensitivePaths {
+object SensitivePaths {
 
     /** Expands `~`-relative entries against `user.home`; other entries are taken as-is. */
     fun roots(entries: Set<String>): List<Path> {

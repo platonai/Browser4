@@ -751,6 +751,58 @@ Assert-True -Label 'TVJ: missing file returns false (catches internally)' `
 Write-Host ''
 
 # ═══════════════════════════════════════════════════════════════════
+# TESTS: Get-JarProvenanceReport
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Get-JarProvenanceReport ━━━" -ForegroundColor Cyan
+
+# Two worktrees of the same version share the Maven local repository, so
+# dependency:copy-dependencies can copy a SIBLING checkout's jar into lib/ while
+# the build still reports success (observed 2026-10-28). The report must flag a
+# same-named jar whose bytes differ, and must not flag an identical one.
+$provenanceDir = New-TempDir 'jar-provenance'
+$provenanceLib = Join-Path $provenanceDir 'bundle-lib'
+$provenanceTarget = Join-Path $provenanceDir 'worktree-target'
+New-Item -ItemType Directory -Path $provenanceLib -Force | Out-Null
+New-Item -ItemType Directory -Path $provenanceTarget -Force | Out-Null
+
+$sameJarName = 'browser4-agentic-4.15.2-SNAPSHOT.jar'
+$driftJarName = 'browser4-coding-4.15.2-SNAPSHOT.jar'
+$foreignJarName = 'browser4-plugin-swarm-4.13.1.jar'
+
+Set-Content -LiteralPath (Join-Path $provenanceLib $sameJarName) -Value 'identical-bytes' -Encoding UTF8
+Set-Content -LiteralPath (Join-Path $provenanceTarget $sameJarName) -Value 'identical-bytes' -Encoding UTF8
+Set-Content -LiteralPath (Join-Path $provenanceLib $driftJarName) -Value 'sibling-worktree-bytes' -Encoding UTF8
+Set-Content -LiteralPath (Join-Path $provenanceTarget $driftJarName) -Value 'this-worktree-bytes' -Encoding UTF8
+Set-Content -LiteralPath (Join-Path $provenanceLib $foreignJarName) -Value 'older-release-bytes' -Encoding UTF8
+
+$bundleJarPaths = @(
+    (Join-Path $provenanceLib $sameJarName),
+    (Join-Path $provenanceLib $driftJarName),
+    (Join-Path $provenanceLib $foreignJarName)
+)
+$worktreeJarPaths = @(
+    (Join-Path $provenanceTarget $sameJarName),
+    (Join-Path $provenanceTarget $driftJarName)
+)
+
+$provenance = @(Get-JarProvenanceReport -BundleJarPaths $bundleJarPaths -WorktreeJarPaths $worktreeJarPaths)
+
+Assert-Equal -Label 'JPR: one record per bundle jar' -Expected 3 -Actual $provenance.Count
+Assert-Equal -Label 'JPR: identical jar is a match' -Expected 'match' `
+    -Actual (($provenance | Where-Object { $_.Name -eq $sameJarName }).Status)
+Assert-Equal -Label 'JPR: same name + different bytes is a mismatch' -Expected 'mismatch' `
+    -Actual (($provenance | Where-Object { $_.Name -eq $driftJarName }).Status)
+Assert-Equal -Label 'JPR: jar with no worktree counterpart is not-built-here' -Expected 'not-built-here' `
+    -Actual (($provenance | Where-Object { $_.Name -eq $foreignJarName }).Status)
+Assert-True -Label 'JPR: a mismatch reports the worktree jar it was compared with' `
+    -Condition ([bool](($provenance | Where-Object { $_.Name -eq $driftJarName }).WorktreePath))
+
+$emptyProvenance = @(Get-JarProvenanceReport -BundleJarPaths @() -WorktreeJarPaths @())
+Assert-Equal -Label 'JPR: empty input yields no records' -Expected 0 -Actual $emptyProvenance.Count
+
+Write-Host ''
+
+# ═══════════════════════════════════════════════════════════════════
 # TESTS: Read-ManifestAttribute
 # ═══════════════════════════════════════════════════════════════════
 Write-Host "━━━ Read-ManifestAttribute ━━━" -ForegroundColor Cyan

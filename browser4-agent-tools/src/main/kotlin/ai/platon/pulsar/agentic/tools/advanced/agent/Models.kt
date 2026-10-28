@@ -164,6 +164,19 @@ data class AgentTaskStatus(
      */
     var workspace: String? = null
 
+    /**
+     * Coding mode this task ran with (null for rows written before the field
+     * existed). Needed by `agent run --resume <id>`: a resumed coding task must
+     * stay a coding task.
+     */
+    var codingMode: Boolean? = null
+
+    /** Access preset id this task ran under (null when unknown), reused on resume. */
+    var accessPreset: String? = null
+
+    /** The interrupted task this run resumes, when started with `agent run --resume <id>`. */
+    var resumedFrom: String? = null
+
     companion object {
         /**
          * The internal event trace is a debugging aid but ends up in the JSONL
