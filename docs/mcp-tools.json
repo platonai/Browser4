@@ -194,7 +194,7 @@
     "method" : "run",
     "mcpNames" : [ "command_run" ],
     "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, engine: String? = null, access: String? = null, autoApprove: String? = null, resumeTaskId: String? = null)",
-    "description" : "Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; 'observe-act' is the DEPRECATED legacy engine. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.",
+    "description" : "Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine is a deprecated compatibility argument: the CLI tool loop is the only engine, and the removed 'observe-act' engine is rejected. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "command",
@@ -230,7 +230,7 @@
       "type" : "String?",
       "required" : false,
       "default" : "null",
-      "description" : "Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated."
+      "description" : "Deprecated compatibility argument: the CLI tool loop is the only engine. `cli` is accepted and ignored; the removed `observe-act` engine is rejected."
     }, {
       "name" : "access",
       "type" : "String?",

@@ -125,8 +125,9 @@ enum class ToolErrorCode(
      */
     ENDPOINT_WRONG_BROWSER(
         false, 409,
-        "Request the channel you meant (`--cdp msedge` / `--cdp chrome`), or pass the target " +
-            "browser's exact --cdp endpoint so the wrong instance cannot be picked.",
+        "The endpoint answered as a browser family other than the requested `channel` " +
+            "(e.g. `--cdp msedge` resolved Chrome). Request the channel you meant, or pass that " +
+            "browser's exact endpoint. Nothing was bound — no session, driver or tab.",
     ),
 
     /** A downstream service failed. */

@@ -28,19 +28,30 @@ overwrites a file you already edited.
 
 ## Which provider is used?
 
-When **more than one** provider key is configured, the first one in the built-in detection
-order wins. `OPENAI_API_KEY` is deliberately near the end of that order, so a generic
-OpenAI-compatible key never shadows a dedicated provider:
+When **more than one** provider key is configured, the first one in Browser4's provider
+order wins:
 
 ```
-openrouter → groq → together → mistral → xai → perplexity → fireworks → deepseek →
-dashscope(bailian) → volcengine → zhipu → moonshot → baichuan → yi → stepfun →
-hunyuan → qianfan → openai → anthropic → gemini → minimax → (alias keys, e.g. KIMI_API_KEY)
+openrouter → deepseek → zhipu → moonshot → minimax → volcengine → hunyuan → qianfan →
+dashscope(bailian) → openai → anthropic → gemini → groq → together → mistral → xai →
+perplexity → fireworks → baichuan → yi → stepfun → (alias keys, e.g. KIMI_API_KEY)
 ```
+
+> **This order belongs to Browser4, not to `browser4-base`.** It is declared in
+> [`browser4-core/browser4-resources/src/main/resources/config/llm/providers.json`](../browser4-core/browser4-resources/src/main/resources/config/llm/providers.json).
+> At startup `Browser4ProviderRegistry.install()` materializes that file as
+> `<app data>/config/providers.json` and points `llm.provider.config.path` at it, so
+> upgrading the base library cannot change which provider a request goes to.
+> To use a different registry, set `-Dllm.provider.config.path=/path/to/providers.json`
+> (or the `LLM_PROVIDER_CONFIG_PATH` environment variable) — an explicit value always wins.
+> The file is a full provider catalog, not just an order: a provider added to the base
+> library must be added here too, and a unit test fails when the two catalogs diverge.
 
 Consequences worth knowing:
 
-- A leftover `deepseek.api.key` (still uncommented in the same
+- `openai` sits at position 10: a leftover `OPENAI_API_KEY` **wins over** the keys of
+  Groq, Together, Mistral, xAI, Perplexity, Fireworks, Baichuan, Yi and StepFun, while a
+  leftover `deepseek.api.key` (still uncommented in the same
   `application-private.properties`, or exported in the backend's environment) **wins over**
   `openai.api.key`, so `openai.base.url` / `openai.model.name` appear to be ignored.
 - A key that is set but **empty** (`deepseek.api.key=`) has no value and must never win.
@@ -59,7 +70,7 @@ Consequences worth knowing:
   ✓ LLM is configured.
   Configured keys: DEEPSEEK_API_KEY (configuration file), OPENAI_API_KEY (environment variable)
   Config file: ~/.browser4/config/conf-enabled/application-private.properties
-  Selected key: DEEPSEEK_API_KEY (first in the built-in priority list)
+  Selected key: DEEPSEEK_API_KEY (first in the priority list)
   Active model: deepseek-v4-flash (OpenAiChatModel)
   Source: configuration file
   ⚠  Several LLM providers are configured: ...

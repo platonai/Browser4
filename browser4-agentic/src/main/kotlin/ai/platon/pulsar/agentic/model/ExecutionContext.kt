@@ -87,7 +87,7 @@ data class ExecutionContext constructor(
  * Builds observe parameters that preserve the current context and merge caller-provided observe options with
  * agent-level configuration.
  */
-@Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+@Deprecated("Use the CLI tool-loop engine path instead")
 fun ExecutionContext.createObserveParams(
     options: ObserveOptions,
     fromAct: Boolean,
@@ -108,7 +108,7 @@ fun ExecutionContext.createObserveParams(
  * Convenience factory for the common "observe in order to act" flow, where the model is expected to return an
  * actionable result and logging should honor the current agent configuration.
  */
-@Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+@Deprecated("Use the CLI tool-loop engine path instead")
 fun ExecutionContext.createObserveActParams(multistep: Boolean, codingMode: Boolean = false): ObserveParams {
     return ObserveParams(
         context = this,

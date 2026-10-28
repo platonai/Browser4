@@ -8,13 +8,10 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor
 import ai.platon.pulsar.agentic.tools.advanced.crawl.failed
-import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.common.ResourceStatus
-import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.refreshed
@@ -166,11 +163,11 @@ class UserCommandExecutor(
     }
 
     /**
-     * Execute a plain command synchronously.
+     * Execute a plain command synchronously as an agent task.
      *
-     * If a [CommandNormalizer] is configured and returns a valid PageVisitRequest,
-     * it executes the command using the standard command execution flow.
-     * Otherwise, it executes the command using the agent's run method.
+     * There is no URL/normalizer shortcut: the CLI tool-loop engine is the only
+     * engine, and it always runs the command as an agent task (see
+     * [submitPlainCommand]).
      *
      * @param plainCommand The plain text command to execute.
      * @return CommandStatus containing the execution result.
@@ -179,7 +176,6 @@ class UserCommandExecutor(
         sessionId: String,
         plainCommand: String,
         noopLimit: Int? = null,
-        engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
@@ -192,34 +188,22 @@ class UserCommandExecutor(
             return CommandStatus.failed(ResourceStatus.SC_BAD_REQUEST)
         }
 
-        // CLI engine (the default) executes everything as an agent task; only
-        // the explicit legacy OBSERVE_ACT engine keeps the URL/normalizer
-        // routing (URL-bearing tasks would otherwise hijack cli-engine runs).
-        val request = if (engine == RunEngine.OBSERVE_ACT) {
-            commandNormalizer?.normalize(plainCommand)
-        } else {
-            null
-        }
-        return if (request != null) {
-            val eventHandlers = PageEventHandlersFactory.create()
-            ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
-        } else {
-            ensureAgentRunner(sessionId)
-                .execute(
-                    plainCommand, noopLimit = noopLimit, engine = engine, coding = coding,
-                    freshWorkspace = freshWorkspace, access = access, autoApprove = autoApprove,
-                    resumeTaskId = resumeTaskId,
-                )
-                .toCommandStatus()
-        }
+        return ensureAgentRunner(sessionId)
+            .execute(
+                plainCommand, noopLimit = noopLimit, coding = coding,
+                freshWorkspace = freshWorkspace, access = access, autoApprove = autoApprove,
+                resumeTaskId = resumeTaskId,
+            )
+            .toCommandStatus()
     }
 
     /**
      * Submit a plain command for asynchronous execution.
      *
-     * If a [CommandNormalizer] is configured and returns a valid PageVisitRequest,
-     * it submits the command using the standard async command execution flow.
-     * Otherwise, it submits the command for agent-based execution.
+     * Every command is submitted as an agent task: the CLI tool-loop engine is the
+     * only engine, and a bare URL must not silently bypass the agent (and its
+     * access policy, supervision and completion gates). The agent decides how to
+     * reach the page via `b4.run`.
      *
      * @param plainCommand The plain text command to execute.
      * @return The command status ID for tracking execution progress.
@@ -228,7 +212,6 @@ class UserCommandExecutor(
         sessionId: String,
         plainCommand: String,
         noopLimit: Int? = null,
-        engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
@@ -237,52 +220,18 @@ class UserCommandExecutor(
     ): String {
         val command = plainCommand.trim()
 
-        // 1. Bad command — reject immediately without creating a page visitor.
-        //    Exception: a resume may carry no task text at all (the checkpoint's
-        //    instruction is the base), so a blank command is legal there.
+        // Bad command — reject immediately without creating a page visitor.
+        // Exception: a resume may carry no task text at all (the checkpoint's
+        // instruction is the base), so a blank command is legal there.
         if (command.isBlank() && resumeTaskId.isNullOrBlank()) {
             val status = CommandStatus(statusCode = ResourceStatus.SC_BAD_REQUEST, processState = "done")
             rejectedStatuses.put(status.id, status)
             return status.id
         }
 
-        // CLI engine (the default): always an agent task — no URL shortcut, no
-        // normalizer hijack. The agent decides how to reach the page via b4.run.
-        if (engine != RunEngine.OBSERVE_ACT) {
-            return submitAgentTask(
-                sessionId, command, noopLimit, engine, coding, freshWorkspace, access, autoApprove, resumeTaskId
-            )
-        }
-
-        // 2. Single URL with optional parameters — use page visit directly
-        // For bulk scraping, use the ScrapeController instead.
-        if (isConfiguredUrl(command)) {
-            val session = sessionManager.getOrCreateSession(sessionId)
-            val url = session.agenticSession.normalize(command)
-            if (url.isNotNil) {
-                val eventHandlers = PageEventHandlersFactory.create()
-                val request = PageVisitRequest(url = url.urlSpec, args = url.args)
-                return submitPageVisitCommand(sessionId, request, eventHandlers)
-            }
-        }
-
-        val request = commandNormalizer?.normalize(command)
-        return if (request != null) {
-            // 3. Structured page visit command
-            val eventHandlers = PageEventHandlersFactory.create()
-            submitPageVisitCommand(sessionId, request, eventHandlers)
-        } else {
-            // 4. Free-form agent command
-            submitAgentTask(sessionId, command, noopLimit, engine, coding, freshWorkspace)
-        }
-    }
-
-    private fun isConfiguredUrl(s: String): Boolean {
-        // A url whose *fragment* holds an invalid escape (`https://x.com/a#100%`) is loadable — the
-        // fragment is dropped by the normalization — and URLUtils used to reject it outright, which
-        // demoted a perfectly good url command to a free-form agent task.  The fix is in
-        // pulsar-common (since 4.11.23: `URLUtils.normalize` strips the fragment before it parses).
-        return Strings.isSingleLine(s) && URLUtils.normalizeOrNull(s) != null
+        return submitAgentTask(
+            sessionId, command, noopLimit, coding, freshWorkspace, access, autoApprove, resumeTaskId
+        )
     }
 
     /**
@@ -306,7 +255,6 @@ class UserCommandExecutor(
         sessionId: String,
         plainCommand: String,
         noopLimit: Int? = null,
-        engine: RunEngine? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
         access: AccessPreset? = null,
@@ -322,7 +270,7 @@ class UserCommandExecutor(
             access?.id ?: "default", autoApprove?.id ?: "off", resumeTaskId ?: "none"
         )
         runner.submit(
-            plainCommand, status, noopLimit, engine, coding, freshWorkspace, access, autoApprove, resumeTaskId
+            plainCommand, status, noopLimit, coding, freshWorkspace, access, autoApprove, resumeTaskId
         )
         return status.id
     }

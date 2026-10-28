@@ -754,8 +754,9 @@ pub(super) fn test_agent_run_multiple_tasks_distinct_replies(ctx: &mut E2ECtx) {
 
 /// `agent run` forwards `--engine` and `--noop-limit` into the MCP
 /// `command_run` payload while still returning the pre-designed AI result.
-/// `--engine=observe-act` selects the legacy engine (DEPRECATED) — kept here
-/// to verify the forwarding path still works.
+/// `--engine=cli` is the only remaining engine id (the `observe-act` engine was
+/// removed and is rejected by the backend) — kept here to verify the forwarding
+/// path still works.
 pub(super) fn test_agent_run_forwards_engine_and_noop_limit(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let started_at = Instant::now();
@@ -779,7 +780,7 @@ pub(super) fn test_agent_run_forwards_engine_and_noop_limit(ctx: &mut E2ECtx) {
             "agent",
             "run",
             task,
-            "--engine=observe-act",
+            "--engine=cli",
             "--noop-limit=9",
         ],
     );
@@ -811,7 +812,7 @@ pub(super) fn test_agent_run_forwards_engine_and_noop_limit(ctx: &mut E2ECtx) {
     );
     assert_eq!(
         command_call.arguments["engine"],
-        serde_json::json!("observe-act"),
+        serde_json::json!("cli"),
         "command_run payload should forward engine: {:?}",
         command_call.arguments
     );

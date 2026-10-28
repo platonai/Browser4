@@ -1,5 +1,6 @@
 package ai.platon.pulsar.apps
 
+import ai.platon.pulsar.agentic.llm.Browser4ProviderRegistry
 import ai.platon.pulsar.agentic.llm.LlmConfigNormalizer
 import ai.platon.pulsar.agentic.mcp.server.runMcpAppIfRequested
 import ai.platon.pulsar.boot.autoconfigure.PulsarContextInitializer
@@ -91,6 +92,9 @@ fun runBrowser4BundleApplication(args: Array<String>) {
     // properties files to dotted keys before any session is created, so the
     // engine's `deepseek.api.key` lookups actually bind.
     LlmConfigNormalizer.normalize()
+    // Point the engine at Browser4's own provider registry (the base library's
+    // copy decides the auto-detection order, which Browser4 owns).
+    Browser4ProviderRegistry.install()
     // `--app mcp` starts the standalone MCP server (stdio or HTTP/SSE) instead of
     // the web application; it owns its agentic context and never boots Spring.
     if (runMcpAppIfRequested(args)) {

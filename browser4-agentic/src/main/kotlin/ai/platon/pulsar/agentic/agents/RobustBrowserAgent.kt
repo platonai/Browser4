@@ -22,8 +22,6 @@ import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.builtin.TaskCompletion
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
-import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
-import ai.platon.pulsar.chrome.dom.util.DomDebug
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.coding.SafeText
@@ -33,7 +31,6 @@ import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
@@ -48,12 +45,10 @@ import java.nio.file.Path
 import java.time.Duration
 import java.time.Instant
 import java.util.*
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.math.min
 import kotlin.time.Duration.Companion.milliseconds
 
 // File-level constants previously in companion object
@@ -375,16 +370,6 @@ open class RobustBrowserAgent(
     var noopLimitOverride: Int? = null
 
     /**
-     * Per-task engine override (design v0.2), set by
-     * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] when the
-     * caller chooses the CLI tool-loop engine. Falls back to [AgentConfig.runEngine].
-     */
-    @Volatile
-    var runEngineOverride: RunEngine? = null
-
-    internal val effectiveRunEngine: RunEngine get() = runEngineOverride ?: config.runEngine
-
-    /**
      * Per-agent scratch workspace for CLI-engine (browser) tasks. Helper files
      * the model writes via coding.* and b4.run land here — never the backend
      * working directory / repository root (workspace isolation, P1).
@@ -560,8 +545,6 @@ open class RobustBrowserAgent(
     private val agentJob = SupervisorJob()
     private val agentScope = CoroutineScope(Dispatchers.Default + agentJob)
 
-    private val stepExecutionTimes = ConcurrentHashMap<Int, Long>()
-
     // New components for better separation of concerns
     private val circuitBreaker = CircuitBreaker(
         maxLLMFailures = config.maxConsecutiveLLMFailures,
@@ -663,7 +646,7 @@ open class RobustBrowserAgent(
      * @param observe The observation result containing the action to execute
      * @return Result of the action execution
      */
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     override suspend fun act(observe: ObserveResult): ActResult {
         return try {
             val ctx = agentScope.coroutineContext.minusKey(Job)
@@ -706,7 +689,7 @@ open class RobustBrowserAgent(
      * Observes the page given an instruction, returning zero or more ObserveResult objects describing
      * candidate elements and potential actions (if returnAction=true).
      */
-    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
+    @Deprecated("Use the CLI tool-loop engine path instead")
     override suspend fun observe(options: ObserveOptions): List<ObserveResult> {
         val context = stateManager.getOrCreateActiveContext(options, "observe")
 
@@ -898,103 +881,7 @@ open class RobustBrowserAgent(
     ): ResolveResult {
         initializeResolution(initContext, attempt)
 
-        return if (effectiveRunEngine == RunEngine.CLI_TOOL_LOOP) {
-            doRunCliAgentLoop(initActionOptions, initContext)
-        } else {
-            doRunAgentLoopLegacy(initActionOptions, initContext, attempt)
-        }
-    }
-
-    @Deprecated("This is the legacy branch for doRunAgentLoop, and will be removed in the further")
-    private suspend fun doRunAgentLoopLegacy(
-        initActionOptions: ActionOptions, initContext: ExecutionContext, attempt: Int
-    ): ResolveResult {
-        var consecutiveNoOps = 0
-        // Text-only stall fuse: consecutive responses without ANY tool call and
-        // without a completion marker. Text-only responses deliberately don't
-        // count as no-ops (they're legitimate reasoning turns), but an agent
-        // that only reasons without ever acting stalls forever — abort it.
-        var consecutiveTextOnly = 0
-        var lastStopReason: StopReason? = null
-        var context = initContext
-        val startTime = Instant.now()
-        try {
-            val action = initActionOptions.copy(fromRunLoop = true)
-
-            while (!isClosed && context.step < config.maxSteps) {
-                val stepResult: StepProcessingResult
-                try {
-                    val prepared = prepareStep(action, context, consecutiveNoOps)
-                    context = prepared.context
-                    consecutiveNoOps = prepared.noOps
-
-                    if (prepared.stop) {
-                        // The page state froze despite repeated browser interactions —
-                        // the loop stops here without executing another act.
-                        stepResult = StepProcessingResult(context, consecutiveNoOps, true, StopReason.NOOP_LIMIT)
-                    } else {
-                        stepResult = step(action, context, consecutiveNoOps)
-
-                        require(stepResult.context.step == context.step) { "Step check failed" }
-                        require(stepResult.context.agentState.actionDescription != null) { "Check failed: stepResult.context.agentState.actionDescription != null" }
-
-                        context = stepResult.context
-                        consecutiveNoOps = stepResult.consecutiveNoOps
-                    }
-                } finally {
-                    stateManager.addToHistory(context.agentState)
-                }
-
-                if (stepResult.shouldStop) {
-                    lastStopReason = stepResult.stopReason
-                    break
-                }
-
-                // Text-only stall fuse (browser4.agent.textOnlyStallLimit, 0 = disabled).
-                // A step that executed ≥1 internal tool (loop tool calls, e.g.
-                // coding.read) is real work even when the final response carries
-                // no ToolCall (overflow steps) — never count it as text idling.
-                val lastToolCall = context.agentState.actionDescription?.toolCall
-                val internalToolsExecuted = context.agentState.actionDescription?.internalToolsExecuted == true
-                consecutiveTextOnly = nextTextOnlyStallCount(consecutiveTextOnly, lastToolCall, internalToolsExecuted)
-                if (lastToolCall == null && !internalToolsExecuted) {
-                    // `--noop-limit` (noopLimitOverride) also raises this fuse so the
-                    // two no-progress fuses stay coupled when the operator tunes one.
-                    val stallLimit = if (noopLimitOverride != null) noopLimit else config.textOnlyStallLimit
-                    if (stallLimit > 0 && consecutiveTextOnly >= stallLimit) {
-                        logger.info(
-                            "🧵 textOnly.stall sid={} step={} consecutive={} limit={}",
-                            context.sid, context.step, consecutiveTextOnly, stallLimit
-                        )
-                        lastStopReason = StopReason.NOOP_LIMIT
-                        break
-                    }
-                }
-            }
-
-            // The loop exited without an explicit completion: it hit the no-op limit or
-            // maxSteps while the task was still unfinished — report it as a failure rather
-            // than letting the final summary mask an abnormal termination.
-            val stopReason = lastStopReason
-                ?: if (context.step >= config.maxSteps) StopReason.MAX_STEPS else null
-
-            val actResult = buildFinalActResult(initContext.instruction, context, startTime, stopReason)
-
-            return ResolveResult(context, actResult)
-        } catch (e: CancellationException) {
-            // User cancellation or the overall resolve timeout — propagate so
-            // the resolve layer can record 'resolveTimeout' and report a
-            // timeout instead of a user cancellation.
-            logger.info(
-                "🛑 doResolve.cancelled sid={} steps={} reason={}",
-                context.sid,
-                context.step,
-                e.message ?: "user interruption"
-            )
-            throw e
-        } catch (e: Exception) {
-            throw handleResolutionFailure(e, context, startTime)
-        }
+        return doRunCliAgentLoop(initActionOptions, initContext)
     }
 
     // ─── CLI tool-loop engine (design v0.2) ────────────────────────────────
@@ -1227,9 +1114,13 @@ open class RobustBrowserAgent(
                         }
                         return completeCliRun(reconciled.completion ?: textCompletion, context)
                     }
-                    if (config.textOnlyStallLimit > 0 && textOnlyStreak >= config.textOnlyStallLimit) {
-                        logger.info("⛔ cli-agent.text-only-stall sid={} consecutive={}",
-                            context.sid, textOnlyStreak)
+                    // `--noop-limit` raises this fuse too: the operator tunes one
+                    // "no progress" knob, so the two fuses must stay coupled (the
+                    // removed observe-act loop behaved the same way).
+                    val stallLimit = if (noopLimitOverride != null) noopLimit else config.textOnlyStallLimit
+                    if (stallLimit > 0 && textOnlyStreak >= stallLimit) {
+                        logger.info("⛔ cli-agent.text-only-stall sid={} consecutive={} limit={}",
+                            context.sid, textOnlyStreak, stallLimit)
                         break
                     }
                 }
@@ -2163,123 +2054,6 @@ open class RobustBrowserAgent(
         append(CliAgentPrompt.hygiene(codingMode, agentWorkspaceDir, agentToolManager.accessPolicy))
     }
 
-    @Deprecated("This is the legacy branch for agent.run(), and will be removed in the further")
-    private suspend fun step(action: ActionOptions, context: ExecutionContext, noOpsIn: Int): StepProcessingResult {
-        var consecutiveNoOps = noOpsIn
-
-        // Execute the tool call with enhanced error handling
-        val actResult = act(action)
-
-        if (actResult.isComplete) {
-            onTaskCompletion(actResult, context)
-            return StepProcessingResult(context, consecutiveNoOps, true, StopReason.COMPLETED)
-        }
-
-        if (!actResult.isSuccess) {
-            // Only count failures of actual browser-interaction tool calls as no-ops.
-            // A failed act WITHOUT a tool call (e.g. the model returned plain text while
-            // reasoning, or a non-browser tool like fs/cli/coding failed) is a legitimate
-            // intermediate state in reasoning-heavy tasks — counting it as a no-op is what
-            // killed coding agents with "noop.stop limit=5" mid-task.
-            val lastToolCall = actResult.detail?.actionDescription?.toolCall
-            if (lastToolCall != null && ToolSpecification.isBrowserInteraction(lastToolCall.domain)) {
-                consecutiveNoOps++
-                val stop = handleConsecutiveNoOps(consecutiveNoOps, actResult, context)
-                if (stop) {
-                    return StepProcessingResult(context, consecutiveNoOps, true, StopReason.NOOP_LIMIT)
-                }
-            }
-        }
-
-        delay(calculateAdaptiveDelay().milliseconds)
-        return StepProcessingResult(context, consecutiveNoOps, false)
-    }
-
-    // ─── Step preparation ─────────────────────────────────────────────────────
-    @Deprecated("This is the legacy branch for agent.run(), and will be removed in the further")
-    private suspend fun prepareStep(
-        action: ActionOptions, ctxIn: ExecutionContext, noOpsIn: Int
-    ): PrepareStepResult {
-        val context = buildExecutionContextForStep(action, "step", ctxIn)
-
-        val prevAgentState = context.prevAgentState ?: return PrepareStepResult(context, noOpsIn, false)
-        require(prevAgentState == ctxIn.agentState)
-
-        val prevBrowserUseState = prevAgentState.browserUseState
-        val step = context.step
-        val sid = context.sid
-        val prevToolCall = lastExecutedToolCall(context)
-        if (step == 3 && logger.isDebugEnabled) {
-            require(prevAgentState == context.agentState.prevState) { "Inconsistent step state" }
-            logger.debug("Previous agent state: {}", Pson.toJson(prevAgentState))
-            logger.debug("Agent state: {}", Pson.toJson(context.agentState))
-        }
-        val prevDomain = prevToolCall?.domain
-
-        var consecutiveNoOps = noOpsIn
-        if (ToolSpecification.isBrowserInteraction(prevDomain)) {
-            // Only browser-interaction actions can change the WebPage state
-            val unchangedCount = pageStateTracker.checkStateChange(prevBrowserUseState)
-            if (unchangedCount >= 3) {
-                logger.info("⚠️ loop.warn sid={} step={} unchangedSteps={} lastTool={}",
-                    sid, step, unchangedCount, prevToolCall?.pseudoExpression)
-                consecutiveNoOps++
-                if (consecutiveNoOps >= noopLimit) {
-                    // The page state froze despite repeated browser actions — treat it as a
-                    // deadlock and stop the loop. The counter now flows back to the run loop
-                    // (previously this increment was computed but never propagated).
-                    val synthetic = ActResult(
-                        message = "Page state unchanged for $unchangedCount consecutive steps",
-                        action = action.action,
-                        exception = IllegalStateException("Page state unchanged for $unchangedCount steps")
-                    )
-                    val stop = handleConsecutiveNoOps(consecutiveNoOps, synthetic, context)
-                    return PrepareStepResult(context, consecutiveNoOps, stop)
-                }
-            }
-            logger.info("▶️ step.exec sid={} step={}/{} noOps={} lastTool={}",
-                sid, step, config.maxSteps, consecutiveNoOps, prevToolCall?.pseudoExpression)
-        }
-
-        if (logger.isDebugEnabled) {
-            logger.debug("🧩 dom={}", DomDebug.summarizeStr(prevBrowserUseState.domState, 5))
-        }
-
-        return PrepareStepResult(context, consecutiveNoOps, false)
-    }
-
-    protected fun lastExecutedToolCall(context: ExecutionContext) =
-        context.prevAgentState?.toolCallResult?.actionDescription?.toolCall
-            ?: context.prevAgentState?.actionDescription?.toolCall
-
-    private suspend fun buildExecutionContextForStep(
-        action: ActionOptions, event: String, ctxIn: ExecutionContext
-    ): ExecutionContext {
-        // TRUE LAZY LAUNCH: building a step context must not create (launch) a
-        // browser. Coding tasks skip the page entirely; every other task uses the
-        // driver only when it is ALREADY bound (`session.boundDriver` — not the
-        // creating `activeDriver` getter). With no page attached the step context
-        // carries DUMMY browser state (see AgentStateManager.getBrowserUseState),
-        // and the first real page tool binds the driver.
-        if (!codingMode) {
-            val driver = session.boundDriver
-            if (driver != null) {
-                val url = driver.url()
-                if (url.isBlank() || url == "about:blank") {
-                    val searchURL = SearchEngineSelector.selectBest()
-                    driver.navigate(searchURL)
-                }
-            }
-        }
-
-        val instruction = action.action
-        val step = ctxIn.step + 1
-        val activeContext = stateManager.buildExecutionContext(instruction, step, event, baseContext = ctxIn)
-        stateManager.setActiveContext(activeContext)
-
-        return activeContext
-    }
-
     private suspend fun initializeResolution(initContext: ExecutionContext, attempt: Int) {
         val sid = initContext.sid
         logger.info(
@@ -2337,91 +2111,7 @@ open class RobustBrowserAgent(
         }
     }
 
-    // ─── NoOp handling ────────────────────────────────────────────────────────
-
-    private suspend fun handleConsecutiveNoOps(
-        consecutiveNoOps: Int,
-        result: ActResult,
-        context: ExecutionContext
-    ): Boolean {
-        val step = context.step
-        val expression = result.weakTypeExpression
-        stateManager.addTrace(
-            context.agentState,
-            event = "noop",
-            items = mapOf("step" to step, "consecutive" to consecutiveNoOps),
-            message = "🕒 no-op"
-        )
-        logger.info("🕒 noop sid={} step={} consecutive={} toolCall={} | result={}",
-            context.sid, step, consecutiveNoOps, expression, result)
-        if (consecutiveNoOps >= noopLimit) {
-            logger.info("⛔ noop.stop sid={} step={} limit={} toolCall={}",
-                context.sid, step, noopLimit, expression)
-            return true
-        }
-        if (isClosed) {
-            return true
-        }
-        val delayMs = calculateConsecutiveNoOpDelay(consecutiveNoOps)
-        delay(delayMs.milliseconds)
-        val job = currentCoroutineContext()[Job]
-        if (job == null || !job.isActive) {
-            logger.info("🕒 noop cancelled sid={} step={}", context.sid, step)
-            return true
-        }
-        return false
-    }
-
-    private fun calculateConsecutiveNoOpDelay(consecutiveNoOps: Int): Long {
-        val baseDelay = 250L
-        val exponentialDelay = baseDelay * consecutiveNoOps
-        return min(exponentialDelay, 5000L)
-    }
-
-    private fun calculateAdaptiveDelay(): Long {
-        if (!config.enableAdaptiveDelays) return 100L
-        val avgStepTime = stepExecutionTimes.values.takeIf { it.isNotEmpty() }?.average() ?: 0.0
-        return when {
-            avgStepTime < 500 -> 50L
-            avgStepTime < 2000 -> 100L
-            else -> 200L
-        }
-    }
-
-    // ─── Task completion ──────────────────────────────────────────────────────
-
-    private suspend fun onTaskCompletion(actResult: ActResult, context: ExecutionContext) {
-        val actionDescription = actResult.detail?.actionDescription ?: return
-        onTaskCompletion(actionDescription, context)
-    }
-
-    /**
-     * Legacy completion path (the deprecated observe-act engine, one step at a
-     * time): evaluate the finish report, fail on a violation under `strict`, then
-     * record the completion.
-     *
-     * The CLI engine does not use this: it calls [reconcileFinishReport] first so
-     * a repairable omission gets a repair round instead of ending the task (see
-     * [FinishReportRepair]).
-     */
-    private suspend fun onTaskCompletion(action: ActionDescription, context: ExecutionContext) {
-        require(action.isDecidedComplete) { "Required action.isComplete" }
-
-        val verdict = evaluateFinishReport(action, context)
-        verdict.warnings.forEach { warning ->
-            logger.warn("⚠ finish.report sid={} {}", context.sid.take(8), warning)
-        }
-        if (verdict.violations.isNotEmpty()) {
-            // Log every rule that objected: the exception only carries the first.
-            verdict.violations.forEach { violation ->
-                logger.warn("⚠ finish.report sid={} {}", context.sid.take(8), violation)
-            }
-            if (config.finishGateCheck.equals("strict", ignoreCase = true)) {
-                throw IllegalStateException(finishRejectionMessage(verdict))
-            }
-        }
-        acceptCompletion(action, context)
-    }
+    // ─── Finish report gate ──────────────────────────────────────────────────
 
     /**
      * Gather the completion evidence and apply the deterministic rules.
@@ -2818,13 +2508,3 @@ open class RobustBrowserAgent(
     }
 }
 
-/**
- * Next value of the text-only stall counter for one step.
- *
- * A step whose response parsed into a [ToolCall] — or one that executed ≥1
- * internal tool inside the tool-calling loop (overflow steps execute tools but
- * carry no parsed ToolCall) — resets the counter to 0; pure text responses
- * increment it (P0.2-2: real work must never count as text idling).
- */
-internal fun nextTextOnlyStallCount(current: Int, toolCall: ToolCall?, internalToolsExecuted: Boolean): Int =
-    if (toolCall == null && !internalToolsExecuted) current + 1 else 0

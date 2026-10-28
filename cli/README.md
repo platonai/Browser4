@@ -265,9 +265,11 @@ AI-powered commands such as `extract`, `summarize`, `chat`, `agent run`, and X-S
 export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-> Configure **one** provider. When several provider keys are present, the first one in the
-> built-in detection order wins — `openai` comes after the dedicated providers such as
-> `deepseek`, so a leftover `DEEPSEEK_API_KEY` silently wins over `OPENAI_*`.
+> Configure **one** provider. When several provider keys are present, the first one in
+> Browser4's provider order wins — the order lives in
+> `browser4-core/browser4-resources/src/main/resources/config/llm/providers.json`, so a
+> leftover `DEEPSEEK_API_KEY` silently wins over `OPENAI_*`, while `OPENAI_API_KEY` wins
+> over `GROQ_API_KEY`.
 > `browser4-cli doctor` prints the key that won (`Selected key`) and the model the backend
 > will request (`Active model`); see `docs/config.md` in the repository.
 

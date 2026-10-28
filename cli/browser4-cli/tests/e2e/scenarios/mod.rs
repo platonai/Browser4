@@ -3092,6 +3092,21 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         estimated_duration_ms: None,
     },
     ScenarioDef {
+        name: "test_e2e_experience_save_forwards_facts",
+        short_name: "test_experience_save_forwards_facts",
+        // Mock server only: the CLI half of the contract is the MCP arguments,
+        // so the scenario needs neither a backend nor a browser.
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_e2e_experience_save_forwards_facts,
+        group: Some("experience"),
+        level: ScenarioLevel::Basic,
+        exclude_by_default: false,
+        exclusion_reason: None,
+        estimated_duration_ms: Some(10_000),
+    },
+    ScenarioDef {
         name: "test_e2e_experience_web_roundtrip",
         short_name: "test_experience_web_roundtrip",
         requires_browser4: true,

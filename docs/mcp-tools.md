@@ -24,7 +24,7 @@
 | `ENDPOINT_UNREACHABLE` | no | 502 | Start the target browser with --remote-debugging-port, or point --cdp at the browser that is running, then retry attach. |
 | `ENDPOINT_NOT_CDP` | no | 502 | Point --cdp at the browser's DevTools port (`--remote-debugging-port`), or use `attach --extension` for Chrome's built-in remote debugging. |
 | `ENDPOINT_NO_PAGE_TARGETS` | no | 409 | Open a tab in the target browser, then retry attach. |
-| `ENDPOINT_WRONG_BROWSER` | no | 409 | Request the channel you meant (`--cdp msedge` / `--cdp chrome`), or pass the target browser's exact --cdp endpoint so the wrong instance cannot be picked. |
+| `ENDPOINT_WRONG_BROWSER` | no | 409 | The endpoint answered as a browser family other than the requested `channel` (e.g. `--cdp msedge` resolved Chrome). Request the channel you meant, or pass that browser's exact endpoint. Nothing was bound — no session, driver or tab. |
 | `UPSTREAM_ERROR` | yes | 502 | An upstream service failed; retrying may help. |
 | `CONFLICT` | yes | 409 | Re-read the resource and retry. |
 | `CANCELLED` | no | 499 | The task was cancelled; submit a new one if still needed. |
@@ -299,7 +299,7 @@ call this directly and treat a non-terminal `status` as "not ready".
 command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, engine: String? = null, access: String? = null, autoApprove: String? = null, resumeTaskId: String? = null)
 ```
 
-Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; 'observe-act' is the DEPRECATED legacy engine. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.
+Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine is a deprecated compatibility argument: the CLI tool loop is the only engine, and the removed 'observe-act' engine is rejected. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -308,7 +308,7 @@ Execute a plain command (URL, instruction, or agent task). When async=true (defa
 | `noopLimit` | Int? | no | null | Consecutive no-op abort threshold for agent tasks; omit to use the server default. |
 | `coding` | Boolean? | no | null | Explicit task type. True marks the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task (the default, also when omitted): task type is never auto-detected. |
 | `freshWorkspace` | Boolean? | no | null | True runs this task in a fresh, isolated workspace directory (created under the agent's data dir) instead of the shared workspace. Use for tasks that must not see or mutate previous tasks' scratch files. Omit or false uses the default shared workspace. |
-| `engine` | String? | no | null | Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated. |
+| `engine` | String? | no | null | Deprecated compatibility argument: the CLI tool loop is the only engine. `cli` is accepted and ignored; the removed `observe-act` engine is rejected. |
 | `access` | String? | no | null | Access preset for this task's coding tools: `full` (default), `write` (no shell), `read-build` (read + project build, no shell, no file mutation), `read`. Omit to use the server-wide `browser4.agent.access` default. The preset is reset when the task ends. |
 | `autoApprove` | String? | no | null | Automatic approval ceiling for this task: `full`, `write`, `read-build` or `read`. A coding call the task's access preset refuses is then granted (and audited) when the preset that would grant it is no wider than this ceiling — no human in the loop. Explicitly denied tools, protected paths and sensitive paths are never approved. Omit to use the server-wide `browser4.agent.autoApprove` default (off). |
 | `resumeTaskId` | String? | no | null | Resume an interrupted task by id: the new run starts from that task's checkpoint — its instruction, workspace and the files already written — and inherits its coding/access flags. `command` may then be empty. The id must be known to this backend (the interrupted row is restored after a restart, within its TTL). |

@@ -13,8 +13,9 @@ import java.nio.file.Files
  *
  * 1. *Is an LLM configured?* — decided by [ChatModelFactory], exactly as it is for
  *    every LLM-backed command.
- * 2. *Which provider will the requests actually go to?* — the winner of the
- *    built-in priority list, the model the client will request, and the
+ * 2. *Which provider will the requests actually go to?* — the provider the engine
+ *    itself would select (Browser4 ships its own registry, so the order is not the
+ *    base library's built-in one), the model the client will request, and the
  *    configuration key that supplied the API key.
  *
  * Answering only the first question is what made "✓ LLM is configured" coexist
@@ -151,9 +152,13 @@ object LlmStatusReporter {
 
         val explicitProvider = runCatching { conf["llm.provider"] }.getOrNull()?.takeIf { it.isNotBlank() }
 
-        // SUPPORTED_API_KEY_NAMES is ordered by detection priority, so the first
-        // usable key is the one that wins the auto-detection race.
-        val selectedKey = if (explicitProvider == null) competing.firstOrNull()?.key else null
+        // The effective selection, resolved by the engine itself: unlike
+        // SUPPORTED_API_KEY_NAMES (the base library's built-in order) it honors an
+        // external registry — Browser4 ships its own provider list — the deny list
+        // and `llm.provider`.  Reporting the built-in order here made doctor name a
+        // "selected key" that was not the one the engine would actually use.
+        val selection = runCatching { ChatModelFactory.describeActiveProvider(conf) }.getOrNull()
+        val selectedKey = selection?.takeIf { !it.explicit }?.apiKeyName
         val detectedVia = when {
             testLlmEnabled -> SOURCE_TEST_FILE_BACKED
             present.isEmpty() -> null
@@ -180,7 +185,7 @@ object LlmStatusReporter {
             "selectedKey" to selectedKey,
             "selectedBy" to (explicitProvider?.let { "llm.provider=$it" } ?: "auto-detection"),
             "multipleProviders" to (competing.size > 1),
-            "warning" to warning(competing, emptyKeys, explicitProvider),
+            "warning" to warning(competing, emptyKeys, explicitProvider, selectedKey),
             "activeModel" to if (configured) activeModel(conf) else null,
             "configFile" to configFile(),
             "keyPrefixes" to listOf("OPENROUTER", "DEEPSEEK", "VOLCENGINE", "OPENAI"),
@@ -193,6 +198,7 @@ object LlmStatusReporter {
         usable: List<ConfiguredKey>,
         emptyKeys: List<String>,
         explicitProvider: String?,
+        selectedKey: String?,
     ): String? {
         val issues = mutableListOf<String>()
 
@@ -203,7 +209,7 @@ object LlmStatusReporter {
 
         if (usable.size > 1 && explicitProvider == null) {
             issues += "Several LLM providers are configured: " + usable.joinToString(", ") { it.key } +
-                ". The first key in the built-in priority list wins (" + usable.first().key +
+                ". The first key in the priority list wins (" + (selectedKey ?: usable.first().key) +
                 "), so set llm.provider to choose explicitly, add the unused provider to " +
                 "llm.provider.deny.list, or remove its key."
         }

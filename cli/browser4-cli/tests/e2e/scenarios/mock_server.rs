@@ -8946,3 +8946,101 @@ pub(super) fn test_mock_click_is_stack_safe(ctx: &mut E2ECtx) {
     );
 }
 
+/// CLI-side passthrough contract for `experience save --facts`.
+///
+/// The real-page round trip (`browser.rs::test_e2e_experience_web_roundtrip`)
+/// proves the merged knowledge is actionable, but it needs a backend and Chrome
+/// and only runs at EXTENDED.  This scenario pins the CLI half without either:
+/// inline JSON and the documented `@file` form must both reach the
+/// `experience_save` MCP arguments verbatim, and an omitted `--facts` must not
+/// send an empty argument the server would have to interpret.
+pub(super) fn test_e2e_experience_save_forwards_facts(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let trace = r#"{"steps":[{"sequence":1,"action":"navigate"}],"outcome":"success"}"#;
+    let facts = r##"{"selectors":{"search_input":{"primary":"#search-box"}},"interaction_hints":["type then press Enter"],"known_blockers":[{"type":"disabled_decoy","selector":"#legacy","action":"skip"}],"anti_patterns":["never target the first input"]}"##;
+
+    // 1. Inline JSON — the form used when the patch is short.
+    run_command(
+        ctx,
+        &[
+            "experience",
+            "save",
+            "https://example.com/inline",
+            trace,
+            "--intent",
+            "buy the product",
+            "--facts",
+            facts,
+        ],
+    );
+
+    // 2. `--facts @file` — the documented form for long patches, which would
+    //    otherwise fight PowerShell quoting.
+    let facts_file = ctx.workspace_dir.join("_e2e_experience_facts.json");
+    fs::write(&facts_file, facts).expect("write the facts patch file");
+    let facts_file_arg = format!("@{}", facts_file.display());
+    run_command(
+        ctx,
+        &[
+            "experience",
+            "save",
+            "https://example.com/file",
+            trace,
+            "--facts",
+            facts_file_arg.as_str(),
+        ],
+    );
+
+    // 3. No `--facts` — nothing may be forwarded.
+    run_command(
+        ctx,
+        &["experience", "save", "https://example.com/plain", trace],
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let save_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "experience_save")
+        .collect();
+    assert_eq!(
+        save_calls.len(),
+        3,
+        "expected one experience_save call per command, got: {:?}",
+        tool_calls
+            .iter()
+            .map(|call| call.tool.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    assert_eq!(
+        save_calls[0].arguments["facts"].as_str(),
+        Some(facts),
+        "inline --facts must reach the MCP arguments verbatim: {:?}",
+        save_calls[0].arguments
+    );
+    assert_eq!(
+        save_calls[0].arguments["intent"].as_str(),
+        Some("buy the product")
+    );
+    assert_eq!(
+        save_calls[0].arguments["url"].as_str(),
+        Some("https://example.com/inline")
+    );
+
+    assert_eq!(
+        save_calls[1].arguments["facts"].as_str(),
+        Some(facts),
+        "`--facts @file` must expand the file contents into the argument: {:?}",
+        save_calls[1].arguments
+    );
+
+    assert!(
+        save_calls[2].arguments.get("facts").is_none(),
+        "an omitted --facts must not send a facts argument: {:?}",
+        save_calls[2].arguments
+    );
+}

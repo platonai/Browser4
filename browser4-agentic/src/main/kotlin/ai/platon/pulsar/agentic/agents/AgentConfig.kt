@@ -5,33 +5,6 @@ import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 
 /**
- * Which inner execution engine [RobustBrowserAgent] uses for a run.
- *
- * - [OBSERVE_ACT] — legacy observe→act loop (ARIA snapshot + JSON action
- *   description). DEPRECATED, kept for backward compatibility only.
- * - [CLI_TOOL_LOOP] — native function-calling loop driving browser4-cli
- *   subprocesses via `b4.run` (design v0.2). Default.
- */
-enum class RunEngine {
-    OBSERVE_ACT,
-    CLI_TOOL_LOOP,
-    ;
-
-    companion object {
-        /**
-         * Parse from the `browser4.agent.runEngine` system property value.
-         * The default is now [CLI_TOOL_LOOP]; the legacy engine can still be
-         * selected with `observe-act` / `v1` / `legacy` — DEPRECATED, kept for
-         * backward compatibility only.
-         */
-        fun parse(value: String?): RunEngine = when (value?.trim()?.lowercase()) {
-            "observe-act", "observe_act", "v1", "legacy" -> OBSERVE_ACT
-            else -> CLI_TOOL_LOOP
-        }
-    }
-}
-
-/**
  * Configuration for enhanced error handling, retry mechanisms and agent behavior.
  *
  * Each field tunes a specific aspect of the autonomous loop:
@@ -160,14 +133,6 @@ data class AgentConfig(
      */
     val toolLoopMaxIterations: Int =
         System.getProperty("browser4.agent.toolLoop.maxIterations", "40").toInt().coerceAtLeast(1),
-    /**
-     * Inner execution engine for a run (design v0.2). Default is now
-     * [RunEngine.CLI_TOOL_LOOP]; the legacy engine is still selectable via
-     * `-Dbrowser4.agent.runEngine=observe-act` — DEPRECATED, kept for
-     * backward compatibility only.
-     */
-    val runEngine: RunEngine =
-        RunEngine.parse(System.getProperty("browser4.agent.runEngine", "cli")),
     // Overall timeout for resolve() to avoid indefinite hangs
     val resolveTimeoutMs: Long = 24.hours.inWholeMilliseconds,
     // Circuit breaker configuration
