@@ -70,8 +70,8 @@ use http::{
     submit_swarm_query, CallToolResult,
 };
 use managed_processes::{
-    read_managed_server_processes, stop_browser4_server_forcibly, stop_workspace_servers_forcibly,
-    ManagedServerProcess, ShutdownResult,
+    kill_orphaned_browser_processes, read_managed_server_processes, stop_browser4_server_forcibly,
+    stop_workspace_servers_forcibly, ManagedServerProcess, ShutdownResult,
 };
 use snapshot::{
     reconcile_screenshot_path, requested_screenshot_format, resolve_output_path, save_binary, save_snapshot,
@@ -27128,6 +27128,34 @@ async fn handle_stop(base_url: &str) -> Result<(), String> {
         stop_browser4_server_forcibly().shutdown
     };
     finalize_global_cleanup("Stopped", &shutdown_result, true);
+
+    // Reclaim browsers whose backend was killed without closing them. The workspace
+    // stop above deliberately leaves browsers alone (another workspace may own one),
+    // but an orphan under the shared `browser4-pereg` temp root belongs to no live
+    // backend: left behind, the launcher reuses it by user-data-dir, and a stale
+    // browser newer than the driver poisons every later session (2026-10-28: 169
+    // orphaned Chrome processes, every navigation failing with `createDevTools`).
+    let browser_kill = kill_orphaned_browser_processes();
+    if !browser_kill.killed_pids.is_empty() {
+        let pids: Vec<String> = browser_kill
+            .killed_pids
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        cli_println!(
+            "Reclaimed {} orphaned Browser4 browser process(es): {}",
+            browser_kill.killed_pids.len(),
+            pids.join(", ")
+        );
+    }
+    if !browser_kill.remaining_pids.is_empty() {
+        cli_println!(
+            "warning: {} orphaned Browser4 browser process(es) survived the sweep",
+            browser_kill.remaining_pids.len()
+        );
+    }
+    json_field("browser_pids_killed", json!(browser_kill.killed_pids));
+    json_field("browser_pids_remaining", json!(browser_kill.remaining_pids));
 
     let server_was_running = !(shutdown_result.stopped_pids.is_empty()
         && shutdown_result.missing_pids.is_empty()

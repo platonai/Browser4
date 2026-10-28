@@ -640,11 +640,146 @@ pub fn kill_all_browsers() -> BrowserKillResult {
     result
 }
 
+/// Marker shared by every browser Browser4 launches: its profile root lives under the
+/// process-wide temp directory (`.../browser4-pereg/...`).
+const BROWSER_TEMP_ROOT_MARKER: &str = "browser4-pereg";
+
+/// Reclaim browser processes whose backend died before it could close them.
+///
+/// Why this exists: `stop` is deliberately **workspace-scoped for servers** and never
+/// swept browsers, "kill-all remains the hammer" (see
+/// [stop_workspace_servers_forcibly]). The price was a leak: a force-killed backend
+/// leaves its Chrome/Edge children orphaned under the shared `browser4-pereg` temp
+/// root — 169 processes accumulated in one afternoon. They are not harmless: the
+/// launcher reuses a browser by user-data-dir, so a stale browser **newer than the
+/// driver** keeps poisoning every later session (`createDevTools` failing on an
+/// unknown `/json/version` field, 2026-10-28).
+///
+/// Only **orphans** are killed. A browser tree whose root's parent is still a live JVM
+/// belongs to a running backend — this workspace's (its tree kill failed) or another
+/// workspace's — and stays untouched; killing the root with `/T` takes its
+/// renderer/GPU children with it.
+pub fn kill_orphaned_browser_processes() -> BrowserKillResult {
+    let pids = find_orphaned_browser_roots();
+    if pids.is_empty() {
+        return BrowserKillResult::default();
+    }
+
+    let mut result = BrowserKillResult::default();
+    result.killed_pids.extend(pids.iter().copied());
+    bulk_force_stop_browser_processes(&pids);
+    wait_for_exit_all(&pids, 500, 100);
+    result.killed_pids.sort_unstable();
+    result.killed_pids.dedup();
+    result.remaining_pids = find_orphaned_browser_roots();
+    result
+}
+
+/// Root browser processes under [BROWSER_TEMP_ROOT_MARKER] whose parent is neither a
+/// browser (a renderer/GPU child) nor a live JVM (an owning backend).
+fn find_orphaned_browser_roots() -> Vec<u32> {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+
+        let ps_command = orphan_browser_scan_script();
+        let mut pids = match Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_command])
+            .output()
+        {
+            Ok(output) => parse_pid_list(&output.stdout),
+            Err(_) => Vec::new(),
+        };
+        pids.sort_unstable();
+        pids.dedup();
+        pids
+    }
+
+    #[cfg(unix)]
+    {
+        use std::collections::HashMap;
+        use std::process::Command;
+
+        // One `ps` call: pid, ppid and the full argument list for every process.
+        let output = match Command::new("ps").args(["-eo", "pid=,ppid=,args="]).output() {
+            Ok(output) => output,
+            Err(_) => return Vec::new(),
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut rows: HashMap<u32, (u32, String)> = HashMap::new();
+        for line in text.lines() {
+            let mut parts = line.trim_start().splitn(3, char::is_whitespace);
+            let pid = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let ppid = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let args = parts.next().unwrap_or("").trim_start().to_string();
+            if let (Some(pid), Some(ppid)) = (pid, ppid) {
+                rows.insert(pid, (ppid, args));
+            }
+        }
+
+        let is_browser = |args: &str| {
+            matches_browser_name(executable_name(args))
+        };
+        let is_jvm = |args: &str| matches!(executable_name(args), "java" | "javaw");
+
+        let mut roots = Vec::new();
+        for (pid, (ppid, args)) in &rows {
+            if !args.contains(BROWSER_TEMP_ROOT_MARKER) || !is_browser(args) {
+                continue;
+            }
+            let parent = rows.get(ppid);
+            if parent.map(|(_, a)| is_browser(a)).unwrap_or(false) {
+                continue; // a renderer/GPU child; its root carries the decision
+            }
+            if !parent.map(|(_, a)| is_jvm(a)).unwrap_or(false) {
+                roots.push(*pid);
+            }
+        }
+        roots.sort_unstable();
+        roots.dedup();
+        roots
+    }
+}
+
+/// Basename of the executable in a command line (`/usr/bin/java -x` → `java`).
+#[cfg(unix)]
+fn executable_name(args: &str) -> &str {
+    let exe = args.split_whitespace().next().unwrap_or("");
+    exe.rsplit('/').next().unwrap_or(exe)
+}
+
+/// The PowerShell scan that lists orphaned Browser4 browser roots.
+///
+/// Extracted from [find_orphaned_browser_roots] so a unit test can guard the markers
+/// it matches on: dropping `browser4-pereg` would silently stop reclaiming anything,
+/// and treating a browser parent as an owner would make the sweep kill renderers it
+/// should leave to their root.
+#[cfg(windows)]
+fn orphan_browser_scan_script() -> String {
+    format!(
+        r#"
+        $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+        $byId = @{{}}
+        foreach ($p in $procs) {{ $byId[[int]$p.ProcessId] = $p }}
+        $browserNames = @('chrome.exe','chromium.exe','msedge.exe')
+        foreach ($p in $procs) {{
+            if ($p.Name -notin $browserNames) {{ continue }}
+            if ([string]::IsNullOrWhiteSpace($p.CommandLine)) {{ continue }}
+            if ($p.CommandLine -notmatch '{marker}') {{ continue }}
+            $parent = $byId[[int]$p.ParentProcessId]
+            if ($parent -and ($parent.Name -in $browserNames)) {{ continue }}
+            if ($parent -and ($parent.Name -in @('java.exe','javaw.exe'))) {{ continue }}
+            $p.ProcessId
+        }}
+        "#,
+        marker = BROWSER_TEMP_ROOT_MARKER
+    )
+}
+
 /// Kill multiple browser processes in a single bulk operation.
 /// On Windows, uses `taskkill /F /PID ...` with all PIDs so the
 /// process trees are torn down together, reducing orphan risk.
-fn bulk_force_stop_browser_processes(pids: &[u32]) {
-    if pids.is_empty() {
+fn bulk_force_stop_browser_processes(pids: &[u32]) {    if pids.is_empty() {
         return;
     }
 
@@ -2318,6 +2453,38 @@ mod tests {
         // The JVM sweep now relies on a single snapshot query; a syntax error
         // here would silently kill nothing, so validate the exact command.
         assert_powershell_syntax_valid("java-process-snapshot", WINDOWS_JAVA_PROCESS_SNAPSHOT_PS);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_orphan_browser_scan_script_is_syntactically_valid() {
+        // A syntax error in the scan would silently reclaim nothing, which is exactly
+        // the leak it exists to stop (169 orphaned browsers after one afternoon).
+        assert_powershell_syntax_valid("orphan-browser-scan", &orphan_browser_scan_script());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_orphan_browser_scan_script_keeps_its_markers() {
+        let script = orphan_browser_scan_script();
+
+        // The profile root every Browser4 browser carries.
+        assert!(
+            script.contains(BROWSER_TEMP_ROOT_MARKER),
+            "the scan must match Browser4's temp root: {script}"
+        );
+        // Orphan detection is a parent check; without it the scan would kill a live
+        // backend's browsers, and treating a browser parent as the owner would kill
+        // renderers individually instead of letting the root's /T take them.
+        assert!(script.contains("ParentProcessId"), "{script}");
+        assert!(script.contains("java.exe"), "{script}");
+    }
+
+    #[test]
+    fn test_orphan_browser_roots_scan_does_not_panic() {
+        // Smoke test: the scan shells out to the OS and must degrade to an empty
+        // list (never a panic) when the query fails or there is nothing to find.
+        let _: Vec<u32> = find_orphaned_browser_roots();
     }
 
     #[test]
