@@ -107,4 +107,35 @@ class AgentResumeTest {
         assertFalse(files.any { it == "f29.csv" }, "sorted, so only the first entries fit: $files")
         assertTrue(files.all { it.startsWith("f") || it.startsWith(".b4scratch/") }, files.toString())
     }
+
+    @Test
+    @DisplayName("deliverables are top-level files only — scratch, inputs and dot-files are not artifacts")
+    fun deliverablesExcludeWorkingState(@TempDir tmp: Path) {
+        Files.writeString(tmp.resolve("amazon_microwaves.csv"), "id\n1\n")
+        Files.writeString(tmp.resolve(".env"), "secret")
+        Files.createDirectories(tmp.resolve(".b4scratch"))
+        Files.writeString(tmp.resolve(".b4scratch").resolve("ev.js"), "x")
+        Files.createDirectories(tmp.resolve(".b4inputs"))
+        Files.writeString(tmp.resolve(".b4inputs").resolve("spec.xlsx"), "x")
+
+        // A run that aborts on budget must offer the CSV, not its helper scripts.
+        assertEquals(listOf("amazon_microwaves.csv"), deliverableFilesOf(tmp.toString()))
+    }
+
+    @Test
+    @DisplayName("a missing, blank or non-directory workspace has no deliverables")
+    fun deliverablesOfMissingWorkspaceAreEmpty(@TempDir tmp: Path) {
+        assertTrue(deliverableFilesOf(null).isEmpty())
+        assertTrue(deliverableFilesOf("").isEmpty())
+        assertTrue(deliverableFilesOf(tmp.resolve("does-not-exist").toString()).isEmpty())
+        assertTrue(deliverableFilesOf(tmp.resolve("file.txt").also { Files.writeString(it, "x") }.toString()).isEmpty())
+    }
+
+    @Test
+    @DisplayName("the deliverables list is bounded")
+    fun deliverablesAreBounded(@TempDir tmp: Path) {
+        repeat(80) { index -> Files.writeString(tmp.resolve("f$index.csv"), "x") }
+
+        assertEquals(MAX_ABORT_DELIVERABLES, deliverableFilesOf(tmp.toString()).size)
+    }
 }

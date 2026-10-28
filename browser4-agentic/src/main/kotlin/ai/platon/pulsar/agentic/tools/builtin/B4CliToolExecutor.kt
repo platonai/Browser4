@@ -151,6 +151,9 @@ class B4CliToolExecutor(
                 // tools' boundary never covered. Refuse them while the task may not read
                 // outside its workspace.
                 externalPathRefusal(cliArgs)?.let { return it }
+                // D5: `stop` and friends end the backend this task runs in. A live run used
+                // `stop` to "fix" a browser failure and killed itself (2026-10-28).
+                b4CliLifecycleRefusal(cliArgs)?.let { return it }
                 val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
                 val workingDir = paramString(args, "workingDir", functionName, required = false, default = null)
                 // Long-command job escalation (design §4.1.1): start the command
@@ -297,6 +300,62 @@ internal fun externalPathRefusal(args: String, workspace: Path?, allowExternalAc
         )
     }
     return null
+}
+
+/**
+ * CLI subcommands that end the backend this task runs in, or mutate the installation
+ * underneath it.
+ *
+ * `close` is deliberately **absent**: closing one session is the documented anti-bot step
+ * (`close`, then `open --headed` with the same `-s`). Only the whole-backend variants are
+ * blocked, plus installation/state rewrites an agent run must not perform on itself.
+ */
+private val B4_LIFECYCLE_COMMANDS = setOf(
+    "stop", "close-all", "kill-all", "install", "uninstall", "upgrade", "delete-data",
+)
+
+/** Global CLI flags that consume the next token, so it is not mistaken for the subcommand. */
+private val B4_GLOBAL_FLAGS_WITH_VALUE = setOf("-s", "--session", "--server", "--timeout")
+
+/**
+ * Refuse `b4.run` invocations that would stop the backend running this agent task.
+ *
+ * Why: `b4.run` forwards raw CLI arguments, so `b4.run("stop")` terminates the very
+ * process executing the task. A live supervision run (Amazon top-20, 2026-10-28) did
+ * exactly that while "fixing" an unrelated browser failure: the JVM exited, the task was
+ * reported as `server restarted`, and the real cause — its own `stop` — was lost.
+ * Installation/state rewrites (`install`, `uninstall`, `upgrade`, `delete-data`,
+ * `close-all`, `kill-all`, `doctor --fix`) are blocked for the same reason: an agent run
+ * may not rewrite the runtime it is executing from.
+ *
+ * @param args the raw `b4.run(args=...)` string, as forwarded to the CLI
+ * @return a structured `PERMISSION_DENIED` refusal, or null when the command is allowed
+ */
+internal fun b4CliLifecycleRefusal(args: String): String? {
+    val words = args.trim().split(Regex("""\s+""")).filter { it.isNotEmpty() }
+    var i = 0
+    // Global flags (e.g. `-s work1`) precede the subcommand; skip them and their values.
+    while (i < words.size && words[i].startsWith("-")) {
+        if (words[i] in B4_GLOBAL_FLAGS_WITH_VALUE) i++
+        i++
+    }
+    val command = words.getOrNull(i)?.trim('"', '\'')?.lowercase() ?: return null
+    val rest = words.drop(i + 1).map { it.trim('"', '\'') }
+    // `--help` is read-only: a task may ask what a lifecycle command does before reporting
+    // it as a blocker.
+    if (rest.any { it.equals("--help", ignoreCase = true) || it == "-h" }) return null
+    val mutatingDoctor = command == "doctor" && rest.any { it.equals("--fix", ignoreCase = true) }
+    if (command !in B4_LIFECYCLE_COMMANDS && !mutatingDoctor) return null
+
+    val blocked = if (mutatingDoctor) "doctor --fix" else command
+    return PermissionAudit.format(
+        tool = "b4.run",
+        code = PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+        detail = "'$blocked' is blocked inside an agent run — it stops or rewrites the backend " +
+            "executing this task",
+        hint = "run lifecycle/installation commands outside the task (before or after it), and " +
+            "report the blocker in system.taskComplete(problems=[...]) instead",
+    )
 }
 
 /** `file:///D:/x`, `file://server/share/x` and plain paths, URL-decoded. */

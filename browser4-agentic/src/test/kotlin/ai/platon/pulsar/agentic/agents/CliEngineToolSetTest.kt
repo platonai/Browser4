@@ -71,6 +71,11 @@ class CliEngineToolSetTest {
         val names = names(codingMode = false)
 
         assertTrue("b4_run" in names, "initial set: $names")
+        // The browsing prompt tells the model to read an `.xlsx` task input with
+        // `coding.shell` + python/openpyxl. A tool the prompt names by contract must be
+        // in the first request: on 2026-10-28 it was called while undeclared, which only
+        // worked because the provider tolerated an undeclared function.
+        assertTrue("coding_shell" in names, "the xlsx guidance needs coding.shell: $names")
         assertTrue("coding_read" in names, "small helper-file tooling stays available: $names")
         // The browsing prompt names these three by contract: changeSummary is the
         // authoritative `filesChanged` list, diff shows the edits, workspaceRoot
@@ -82,6 +87,9 @@ class CliEngineToolSetTest {
         assertFalse("coding_verify" in names, "initial set: $names")
         assertFalse("coding_mvnBuild" in names, "initial set: $names")
         assertFalse("coding_readLines" in names, "initial set: $names")
+        // The background-shell bookkeeping tools stay hidden too: browsing needs one-shot
+        // shell calls, not the session family.
+        assertFalse("coding_shellStatus" in names, "initial set: $names")
     }
 
     @Test

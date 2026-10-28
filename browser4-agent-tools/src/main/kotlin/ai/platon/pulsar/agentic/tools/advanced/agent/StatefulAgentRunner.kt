@@ -165,47 +165,63 @@ open class StatefulAgentRunner(
         val ttlCutoff = ttlCutoff()
         val terminalState = TERMINAL_PROCESS_STATE
 
-        persistence.restore { entry ->
+        // Fold the append-only file down to ONE row per task *before* writing any
+        // correction. The previous streaming version appended an "interrupted" row the
+        // first time it met a non-terminal row — the submit-time `created` row — and that
+        // correction became the LAST row for the id, shadowing the real terminal row on
+        // every later read. `agent run --resume` then saw no `workspace`, reported
+        // "previous workspace is no longer available", and the resumed task re-collected
+        // everything from scratch (2026-10-28). Terminal states still never regress.
+        val latest = LinkedHashMap<String, AgentTaskStatus>()
+        persistence.readAll().forEach { entry ->
+            val known = latest[entry.id]
+            if (known != null) {
+                // A generic restart correction is *derived* from an older row by an
+                // earlier restore, so it must never shadow a specific terminal outcome
+                // (budget exceeded, cancelled, completed). Files written before the fold
+                // fix still carry such a correction as their last row; without this
+                // guard it keeps winning and the task's workspace stays lost.
+                val genericCorrection = entry.failureReason == INTERRUPTED_REASON
+                if (genericCorrection && known.processState == terminalState &&
+                    known.failureReason != INTERRUPTED_REASON
+                ) {
+                    logger.debug("Skipping generic interruption row for agent task {} — a specific terminal row is known", entry.id)
+                    return@forEach
+                }
+                if (known.processState == terminalState && entry.processState != terminalState) {
+                    logger.debug("Skipping non-terminal row for agent task {} — terminal status already read", entry.id)
+                    return@forEach
+                }
+            }
+            latest[entry.id] = entry
+        }
+
+        latest.values.forEach { entry ->
             // TTL is measured from the row's LAST activity, not its creation: a
             // run that has been going for hours keeps writing progress rows, and
             // judging those rows by createdTime threw the newest state away.
             val lastActivity = entry.lastActivity()
-            // Skip terminal entries whose TTL has expired — they were evicted
-            // from the cache before shutdown and should not be revived.
-            if (entry.processState == terminalState &&
-                lastActivity.isBefore(ttlCutoff)
-            ) {
-                logger.debug("Skipping expired agent task {} during restore (lastActivity={})", entry.id, lastActivity)
-                return@restore
-            }
-            // Skip stale non-terminal entries too: created/queued tasks are never
-            // auto-resumed after a restart, so restoring them only pollutes the
-            // status caches with zombie "queued" records from previous sessions.
-            if (entry.processState != terminalState &&
-                lastActivity.isBefore(ttlCutoff)
-            ) {
-                logger.debug("Skipping stale non-terminal agent task {} during restore (lastActivity={})", entry.id, lastActivity)
-                return@restore
-            }
-            // Terminal states never regress: when an earlier row already restored
-            // a terminal status for this id, a later non-terminal row (append-order
-            // glitch in the JSONL) must not overwrite it back to queued/in_progress.
-            val cached = statusCache.getIfPresent(entry.id)
-            if (cached?.processState == terminalState && entry.processState != terminalState) {
-                logger.debug("Skipping non-terminal row for agent task {} — terminal status already restored", entry.id)
-                return@restore
+            // Skip expired rows: terminal ones were evicted from the cache before
+            // shutdown, and created/queued tasks are never auto-resumed after a
+            // restart — restoring them only pollutes the caches with zombie records.
+            if (lastActivity.isBefore(ttlCutoff)) {
+                logger.debug(
+                    "Skipping stale agent task {} during restore (state={}, lastActivity={})",
+                    entry.id, entry.processState, lastActivity
+                )
+                return@forEach
             }
             if (entry.processState != terminalState) {
-                // A non-terminal row on disk means the process died mid-task (or a queued
-                // task was never started): nobody will ever resume it. Restoring it as
-                // queued/in_progress produced a zombie status that looked alive for the
-                // rest of the cache TTL — restore it as an interrupted failure instead.
-                // A task still owned by a live runner in this process is authoritative
-                // and must not be clobbered from the file snapshot.
+                // A non-terminal LAST row means the process died mid-task (or the task was
+                // queued and never started): nobody will ever resume it. Restoring it as
+                // in_progress produced a zombie status that looked alive for the rest of
+                // the cache TTL — restore it as an interrupted failure instead. A task
+                // still owned by a live runner in this process is authoritative and must
+                // not be clobbered from the file snapshot.
                 val liveOwner = liveInstances.firstOrNull { it !== this && it.getStatus(entry.id)?.isDone == false }
                 if (liveOwner != null) {
                     statusCache.put(entry.id, entry)
-                    return@restore
+                    return@forEach
                 }
                 entry.failed(ResourceStatus.SC_EXPECTATION_FAILED)
                 entry.failureReason = INTERRUPTED_REASON
@@ -214,11 +230,12 @@ open class StatefulAgentRunner(
                 // Persist the correction so subsequent restores see a terminal row.
                 persistence.append(entry)
                 logger.debug("Restored interrupted agent task {} as failed", entry.id)
-                return@restore
+                return@forEach
             }
             statusCache.put(entry.id, entry)
             logger.debug("Restored agent task {}", entry.id)
         }
+        logger.info("Restored {} agent task(s) from disk", latest.size)
     }
 
     /**
@@ -736,12 +753,26 @@ open class StatefulAgentRunner(
             status.cancelled = true
             status.failureReason = CANCELLED_MESSAGE
             status.message = CANCELLED_MESSAGE
+            // Keep what the run already produced: a cancel is not a reason to lose
+            // the deliverables that are already on disk.
+            status.deliverables = deliverableFilesOf(status.workspace).takeIf { it.isNotEmpty() }
             throw e
         } catch (e: Throwable) {
             logger.error("Failed to execute agent command: {} (session={})", plainCommand, session.uuid, e)
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
             status.failureReason = "${e.javaClass.simpleName}: ${e.message}"
             status.message = e.message
+            // A budget/step abort used to report a bare failure with `filesChanged`
+            // empty although the data was already written (2026-10-28: a complete
+            // 20×75 CSV, task reported as `failed (417)` with no artifacts).
+            status.deliverables = deliverableFilesOf(status.workspace).takeIf { it.isNotEmpty() }
+            // Persist the terminal row NOW. The finally block below runs task bookkeeping
+            // (endTask, workspace reset, policy reset) before it appends again, and a
+            // status poll landing in that window used to read the last RUNNING row from
+            // disk — reporting the generic interruption message instead of this reason
+            // (observed 2026-10-28: a NOOP_LIMIT abort reported as a server restart).
+            runCatching { onStatusChanged(status) }
+                .onFailure { logger.warn("persisting failed status for {} failed: {}", status.id, it.message) }
         } finally {
             // Reset the per-task overrides: the companion agent is shared with callers
             // outside this runner's mutex (chat, direct agent tools), and a stale
@@ -1011,6 +1042,14 @@ open class StatefulAgentRunner(
         private const val INTERRUPTED_REASON = "Interrupted by server restart"
 
         /**
+         * Reason for a non-terminal row with **no live owner** and no evidence of what
+         * ended it. Deliberately does not claim a restart: during a live run the only
+         * thing known is that the task stopped reporting (`statusFromDisk` used to answer
+         * "server restarted" for a NOOP_LIMIT abort whose JVM never restarted).
+         */
+        private const val UNREPORTED_REASON = "Interrupted before the task reported completion"
+
+        /**
          * Runners are per session, but the JSONL file is global — keep the list of
          * live runners so a compaction can rewrite the union of everyone's statuses
          * instead of clobbering the other runners' rows.
@@ -1081,6 +1120,14 @@ open class StatefulAgentRunner(
          */
         fun statusFromDisk(id: String): AgentTaskStatus? {
             if (id.isBlank()) return null
+            // A live runner's in-memory status is authoritative. The caller is often a
+            // DIFFERENT session's runner (the CLI polls `command_status` with no session),
+            // and the owner may not have flushed its terminal row yet. Reading the file
+            // first turned a live task into a phantom failure: on 2026-10-28 a NOOP_LIMIT
+            // abort was reported as "did not complete before the server restarted" 263 ms
+            // after the runner had recorded the real reason, and no restart had happened.
+            liveInstances.firstNotNullOfOrNull { runCatching { it.getStatus(id) }.getOrNull() }
+                ?.let { return it }
             val rows = synchronized(diskScanLock) {
                 val fingerprint = diskFileFingerprint()
                 val cached = diskScan
@@ -1097,8 +1144,10 @@ open class StatefulAgentRunner(
             return rows[id]?.let { entry ->
                 if (entry.processState == TERMINAL_PROCESS_STATE) entry
                 else entry.failed(ResourceStatus.SC_EXPECTATION_FAILED).apply {
-                    failureReason = INTERRUPTED_REASON
-                    message = "Agent task did not complete before the server restarted"
+                    failureReason = UNREPORTED_REASON
+                    message = "Agent task ended before it reported completion — no live runner " +
+                        "owns it, and its last written state was still running. The backend may " +
+                        "have stopped mid-task; check the backend log for the cause."
                 }
             }
         }

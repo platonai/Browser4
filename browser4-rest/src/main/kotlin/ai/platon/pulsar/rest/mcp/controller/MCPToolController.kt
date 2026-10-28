@@ -1995,13 +1995,18 @@ class MCPToolController(
                 ResponseEntity.ok(agentResultResponse(request.tool, paginatedText, pagination))
             }
         } catch (e: Exception) {
+            // The cause chain, not just the outermost message: the driver wraps a real
+            // failure in a phase-named wrapper (`WebDriverException("createDevTools", cause)`),
+            // and logging only `e.message` erased the reason from both the log and the CLI
+            // ("createDevTools" told the model nothing about why the browser was unusable).
+            val chain = exceptionChainMessage(e).ifBlank { e.brief() }
             logger.warn(
                 "MCP tool execution failed | tool={} | normalizedTool={} | {}",
                 request.tool,
                 toolName,
-                e.brief()
+                chain
             )
-            ResponseEntity.ok(errorResponse("${request.tool} failed: ${e.brief()}"))
+            ResponseEntity.ok(errorResponse("${request.tool} failed: $chain"))
         }
     }
 
@@ -2293,23 +2298,6 @@ class MCPToolController(
         .replace("frameMain()", "`frame main`")
 
     /**
-     * Build a chain of exception messages from [e] through all its causes,
-     * joined by " ← ".  This ensures the CLI sees the root cause when the
-     * outermost message is generic (e.g. "browser_navigate failed" wrapping
-     * "Failed to launch browser" wrapping "libgbm.so.1: cannot open shared
-     * object file").
-     */
-    private fun exceptionChainMessage(e: Throwable): String {
-        val messages = LinkedHashSet<String>()
-        var current: Throwable? = e
-        while (current != null) {
-            current.message?.let { messages.add(it) }
-            current = current.cause
-        }
-        return messages.joinToString(" ← ")
-    }
-
-    /**
      * Stamp the call with an id, returned to the caller as `X-Request-Id` and used
      * for both log lines and the metrics labels — the same id scheme as the
      * standard MCP server, so one grep follows a call across channels.
@@ -2324,6 +2312,27 @@ class MCPToolController(
 // =========================================================================
 // Tool error formatting helpers
 // =========================================================================
+
+/**
+ * Build a chain of exception messages from [e] through all its causes,
+ * joined by " ← ".
+ *
+ * The driver reports several failures as a **phase name only** — e.g.
+ * `WebDriverException("createDevTools", cause)` — so rendering `e.message` alone
+ * tells the model and the operator nothing about why the browser was unusable
+ * (2026-10-28: every navigation failed with the bare word `createDevTools`
+ * while Chrome itself was healthy). Keeping the causes answers "what actually
+ * broke" without a debugger.
+ */
+internal fun exceptionChainMessage(e: Throwable): String {
+    val messages = LinkedHashSet<String>()
+    var current: Throwable? = e
+    while (current != null) {
+        current.message?.let { messages.add(it) }
+        current = current.cause
+    }
+    return messages.joinToString(" ← ")
+}
 
 /**
  * True when [message] is the raw JS ReferenceError raised by code that

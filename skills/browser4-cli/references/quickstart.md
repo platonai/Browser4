@@ -83,6 +83,9 @@ refs are temporary handles: any interaction (click/fill/type/press/select/check/
 - **Dialogs**: clicking something that triggers `alert`/`confirm`/`prompt` times out; handle with `dialog-accept` / `dialog-dismiss` (or `click --auto-dismiss-dialogs <ref>`).
 - **Sandboxed environments**: when the JVM cannot write its logs, `open`/`goto` time out at startup — set `BROWSER4_RUNTIME_DIR` / `BROWSER4_CLI_STATE_DIR` to writable directories.
 - **Session reuse**: `--headless` / `--headed` only apply when creating a new session; running sessions ignore them with a warning.
+- **`-s <name>` goes BEFORE the command**, like every other global flag: `browser4-cli -s job-1 open …`. Written after the command it is rejected as an unexpected positional argument (`unknown option -s for 'open'`), which reads like a broken option rather than a position rule.
+- **When driving the CLI through `b4.run` (agent runs), lifecycle commands are refused**: `stop`, `close-all`, `kill-all`, `install`, `uninstall`, `upgrade`, `delete-data` and `doctor --fix` would stop or rewrite the backend executing the task, so `b4.run` answers `PERMISSION_DENIED | code=COMMAND_NOT_ALLOWED`. Report the blocker in `system.taskComplete(problems=[...])` instead of retrying — a retried `stop` never helps, and the old failure mode was the task killing its own backend.
+- **Spreadsheet output is not supported**: tabular deliverables are **CSV** (or JSONL); an `.xlsx` is an *input* to parse. A "save it as a spreadsheet" request is a documented downgrade — deliver CSV and state the downgrade in `problems`.
 
 ## Extraction Decision Tree
 

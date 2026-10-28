@@ -155,13 +155,23 @@ internal object CliAgentPrompt {
           `?language=en_US` and re-read the page — do not post-process localized values.
         - Deliverables are text: write CSV (or JSONL) for tabular data and Markdown for
           prose. There is no spreadsheet writer and `.xlsx` output is out of scope; do not
-          hand-roll one. If the task's INPUT is an `.xlsx`, extract it with a script
+          hand-roll one. A task that asks to "save as a spreadsheet" is delivered as CSV,
+          and the downgrade is part of the result: name it in `problems` at
+          system.taskComplete (e.g. "requested .xlsx; delivered CSV — the runtime has no
+          spreadsheet writer"). If the task's INPUT is an `.xlsx`, extract it with a script
           (`coding.shell` + python/openpyxl where available) or convert it to CSV first —
           coding.read refuses binary files.
         - Finish rather than perfect: once the requested rows/fields are written and
           spot-checked (row count plus a couple of values), call system.taskComplete.
           Optional fields you could not fill belong in `problems`, not in another round of
           polishing — a run that keeps refining and never reports delivers nothing.
+        - If the SAME infrastructure error repeats (navigation failing twice with the same
+          CDP/driver message, a browser that never launches), STOP retrying and stop
+          inspecting the environment. Record the exact error text, read at most one
+          `b4.run("doctor log tail")`, then report it in `problems` at
+          system.taskComplete. An unusable browser is a blocker to report, not a puzzle to
+          solve: a live run burned ~50 steps on status/close/doctor/help/tasklist against a
+          driver that could not start, and then tried to "fix" it by stopping the backend.
         - When you need to remember something across steps, write it with
           memory_note (the note stays visible and survives compression).
           When past tasks might be relevant, search them with memory_search.

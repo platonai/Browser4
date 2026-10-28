@@ -299,6 +299,16 @@ Task submitted: 3b27930e-48bc-4460-aae7-be521f0a9194
 - **Ctrl+C cancels the task** (the same thing `agent cancel <task-id>` does) and
   exits — it no longer leaves an orphan running in the background.
 
+> **A run cannot stop its own backend.** The agent drives the CLI through
+> `b4.run`, which refuses `stop`, `close-all`, `kill-all`, `install`,
+> `uninstall`, `upgrade`, `delete-data` and `doctor --fix` with
+> `PERMISSION_DENIED | code=COMMAND_NOT_ALLOWED`: those commands end or rewrite
+> the process the task is running in. Before this guard existed, a task that
+> could not launch a browser ran `b4.run("stop")` as a "fix", killed its own
+> backend, and was reported as `server restarted`. When the browser is broken,
+> read `b4.run("doctor log …")` / take stock of the real error and report the
+> blocker through `system.taskComplete(problems=[...])`.
+
 `--ndjson` turns the same stream into machine output — every stdout line is one
 JSON object, with no human prose:
 

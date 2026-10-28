@@ -107,10 +107,20 @@ class CliAgentPromptTest {
         // need a locale fix on the page, not post-processing of the wrong values.
         assertTrue(browsing.contains("Accept-Language"), browsing)
         // No spreadsheet writer is built in (decision 2026-10-28: no Excel dependency):
-        // deliverables are CSV/JSONL, and an .xlsx INPUT is extracted by a script.
+        // deliverables are CSV/JSONL, and an .xlsx INPUT is extracted by a script. A
+        // spreadsheet REQUEST is a documented downgrade that must be reported, not a
+        // silent substitution.
         assertTrue(browsing.contains("write CSV"), browsing)
         assertTrue(browsing.contains("out of scope"), browsing)
+        assertTrue(browsing.contains("delivered as CSV"), browsing)
+        assertTrue(browsing.contains("name it in `problems`"), browsing)
         assertTrue(browsing.contains("coding.read refuses binary"), browsing)
+        // A repeated infrastructure failure must end the run with a report, not start an
+        // environment investigation: a live run spent ~50 steps on status/close/doctor
+        // against a driver that could not start, then stopped its own backend.
+        assertTrue(browsing.contains("SAME infrastructure error"), browsing)
+        assertTrue(browsing.contains("doctor log tail"), browsing)
+        assertTrue(browsing.contains("report it in `problems`"), browsing)
         assertFalse(coding.contains("progress.txt"), coding)
     }
 

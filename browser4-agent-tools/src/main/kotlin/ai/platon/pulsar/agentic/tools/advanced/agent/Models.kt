@@ -165,6 +165,17 @@ data class AgentTaskStatus(
     var workspace: String? = null
 
     /**
+     * Files the run had already produced in [workspace] when it ended **without**
+     * reporting them — a token-budget abort, the step cap, a cancellation.
+     *
+     * A run that wrote its CSV and then hit the budget was reported as a bare failure
+     * with `filesChanged` empty, so the data looked lost although it was on disk
+     * (2026-10-28: 20 rows × 75 fields, task `failed (417)`). [toCommandStatus] falls
+     * back to this list when the agent left no completion report.
+     */
+    var deliverables: List<String>? = null
+
+    /**
      * Coding mode this task ran with (null for rows written before the field
      * existed). Needed by `agent run --resume <id>`: a resumed coding task must
      * stay a coding task.
@@ -288,5 +299,12 @@ fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskS
     snapshot.failureReason = failureReason
     snapshot.workspace = workspace
     snapshot.toolExecutions = toolExecutions
+    // Body-declared fields the resume/finish paths read back from disk: `copy()`
+    // resets every one of them, so a progress row used to lose the flags a later
+    // `agent run --resume` inherits and the artifacts an aborted run produced.
+    snapshot.codingMode = codingMode
+    snapshot.accessPreset = accessPreset
+    snapshot.resumedFrom = resumedFrom
+    snapshot.deliverables = deliverables
     return snapshot
 }

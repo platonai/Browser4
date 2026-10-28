@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.AgentRunEvent
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
+import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.api.model.BrowserUseState
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
@@ -134,10 +136,39 @@ class StatefulAgentRunnerTest {
         }
     }
 
+    @Test
+    @DisplayName("a budget abort keeps the files the run already wrote")
+    fun budgetAbortKeepsDeliverables(@TempDir tmp: Path) = runBlocking {
+        Files.writeString(tmp.resolve("amazon_microwaves.csv"), "id,title\n1,x\n")
+        Files.createDirectories(tmp.resolve(".b4scratch"))
+        Files.writeString(tmp.resolve(".b4scratch").resolve("ev.js"), "x")
+
+        val agent = mockAgent(AgentHistory(), "run-budget")
+        every { agent.workspaceRoot } returns tmp
+        coEvery { agent.run(any<String>()) } throws TokenBudgetExceededException(5_000_001, 5_000_000)
+
+        val runner = StatefulAgentRunner(mockSession(agent))
+        try {
+            val status = AgentTaskStatus()
+            runner.execute("collect 20 microwaves", status)
+
+            assertTrue(status.isDone)
+            assertEquals(ResourceStatus.SC_EXPECTATION_FAILED, status.statusCode)
+            // The data is on disk; a budget abort must not hide it behind an empty
+            // filesChanged (2026-10-28: complete 20×75 CSV, task failed with nothing).
+            assertEquals(listOf("amazon_microwaves.csv"), status.deliverables)
+            assertTrue(
+                status.failureReason.orEmpty().contains("Token budget exceeded"),
+                "the real reason must survive: ${status.failureReason}"
+            )
+        } finally {
+            runner.close()
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // P2.5: JSONL restore never regresses a terminal status
     // ─────────────────────────────────────────────────────────────────────
-
     @Test
     @DisplayName("restoreFromDisk keeps a terminal status when a later JSONL row is non-terminal")
     fun restoreFromDiskKeepsTerminalStatus() {
@@ -165,6 +196,86 @@ class StatefulAgentRunnerTest {
             assertNotNull(restored, "terminal task must be restored from the JSONL")
             assertEquals("done", restored!!.processState,
                 "a non-terminal row must not overwrite the restored terminal status")
+        } finally {
+            runner2.close()
+        }
+    }
+
+    @Test
+    @DisplayName("restore keeps the terminal row instead of rewriting the submit-time row")
+    fun restoreKeepsTerminalRowOverSubmitRow() {
+        val agent = mockAgent(AgentHistory(), "run-term")
+        val runner1 = StatefulAgentRunner(mockSession(agent))
+        try {
+            // The real append order of a run: created (no workspace) → progress →
+            // terminal. Restore used to rewrite the created row as "interrupted" and
+            // append it LAST, so every later read lost `workspace`/`toolExecutions` and
+            // `agent run --resume` could not find the deliverables (2026-10-28).
+            runner1.persistence.append(AgentTaskStatus(id = "t-term", processState = "created"))
+            runner1.persistence.append(
+                AgentTaskStatus(id = "t-term", processState = "in_progress").apply {
+                    workspace = "C:/ws"
+                    toolExecutions = 20
+                }
+            )
+            runner1.persistence.append(
+                AgentTaskStatus(id = "t-term", statusCode = 417, processState = "done").apply {
+                    workspace = "C:/ws"
+                    toolExecutions = 240
+                    failureReason = "TokenBudgetExceededException"
+                }
+            )
+        } finally {
+            runner1.close()
+        }
+
+        val runner2 = StatefulAgentRunner(mockSession(agent))
+        try {
+            val restored = runner2.getStatus("t-term")
+
+            assertNotNull(restored, "the terminal row must be restored")
+            assertEquals("done", restored!!.processState)
+            assertEquals(240, restored.toolExecutions, "the terminal row's counters must survive")
+            assertEquals("C:/ws", restored.workspace, "the workspace is what a resume reads")
+            assertEquals("TokenBudgetExceededException", restored.failureReason)
+        } finally {
+            runner2.close()
+        }
+    }
+
+    @Test
+    @DisplayName("a generic restart correction never shadows a specific terminal row")
+    fun genericCorrectionDoesNotShadowTerminal() {
+        val agent = mockAgent(AgentHistory(), "run-poisoned")
+        val runner1 = StatefulAgentRunner(mockSession(agent))
+        try {
+            runner1.persistence.append(
+                AgentTaskStatus(id = "t-poisoned", statusCode = 417, processState = "done").apply {
+                    workspace = "C:/ws"
+                    toolExecutions = 240
+                    failureReason = "TokenBudgetExceededException"
+                }
+            )
+            // What an older build's restore appended: a correction derived from the
+            // submit-time row, with no workspace and no counters. It must not win.
+            runner1.persistence.append(
+                AgentTaskStatus(id = "t-poisoned", statusCode = 417, processState = "done").apply {
+                    failureReason = "Interrupted by server restart"
+                    message = "Agent task did not complete before the server restarted"
+                }
+            )
+        } finally {
+            runner1.close()
+        }
+
+        val runner2 = StatefulAgentRunner(mockSession(agent))
+        try {
+            val restored = runner2.getStatus("t-poisoned")
+
+            assertNotNull(restored)
+            assertEquals("TokenBudgetExceededException", restored!!.failureReason)
+            assertEquals("C:/ws", restored.workspace)
+            assertEquals(240, restored.toolExecutions)
         } finally {
             runner2.close()
         }
@@ -366,13 +477,37 @@ class StatefulAgentRunnerTest {
         assertNotNull(first, "a row on disk must be answerable without a runner")
         assertEquals(first!!.id, second!!.id)
         assertTrue(first.isDone, "an interrupted row is reported as a terminal failure")
-        assertEquals("Interrupted by server restart", first.failureReason)
-        assertFalse(first.cancelled, "a restart interruption is a failure, not a user cancel")
+        // No restart is known to have happened at this point — only that nobody owns the
+        // task. The old wording claimed one and sent supervision runs chasing a phantom
+        // backend restart (2026-10-28).
+        assertEquals("Interrupted before the task reported completion", first.failureReason)
+        assertFalse(first.cancelled, "an interruption is a failure, not a user cancel")
 
         // Unknown ids stay unknown; repeated polls reuse the cached snapshot
         // (same file fingerprint) instead of rescanning the file each time.
         assertNull(StatefulAgentRunner.statusFromDisk("no-such-id"))
         assertNull(StatefulAgentRunner.statusFromDisk("no-such-id"))
+    }
+
+    @Test
+    @DisplayName("statusFromDisk prefers a live runner's status over a stale disk row")
+    fun statusFromDiskPrefersLiveRunner() {
+        val agent = mockAgent(AgentHistory(), "run-live")
+        val runner = StatefulAgentRunner(mockSession(agent))
+        try {
+            val status = runner.create()
+
+            // The caller is a different session's runner in production (the CLI polls
+            // `command_status` with no session). A task a live runner still owns must be
+            // answered from memory, not converted to an interrupted failure from disk.
+            val resolved = StatefulAgentRunner.statusFromDisk(status.id)
+
+            assertNotNull(resolved, "a live task must resolve")
+            assertEquals(status.id, resolved!!.id)
+            assertFalse(resolved.isDone, "a live runner's task must not be reported as interrupted")
+        } finally {
+            runner.close()
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────

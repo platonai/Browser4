@@ -106,12 +106,22 @@ private val CLI_CORE_CODING_METHODS = setOf(
  * model must be able to answer "where am I?"). Leaving `changeSummary` out of
  * the initial set forced a live run to spend a `system.listTools` /
  * `system.exposeTools` round on a tool the prompt had just told it to use.
- * The coding long tail — shell*, mvnBuild, validate, devTask,
- * editLines/insertAfter, symbols, kt-symbols, scaffold family, impact, ... —
- * stays hidden and is reachable via system.listTools / system.exposeTools
+ *
+ * `shell` belongs here for the same reason, and a second live run proved it
+ * (Amazon top-20, 2026-10-28): the browsing prompt tells the model to extract an
+ * `.xlsx` task input "with a script (`coding.shell` + python/openpyxl where
+ * available)", yet the first request advertised 28 tools without `coding_shell`.
+ * The model called it anyway and a permissive provider executed it, but a strict
+ * function-calling provider cannot call an undeclared tool, and the run paid a
+ * `system.listTools` round for a tool its own prompt had named.
+ *
+ * The rest of the coding long tail — shellOutput/shellStatus, mvnBuild, validate,
+ * devTask, editLines/insertAfter, symbols, kt-symbols, scaffold family, impact,
+ * ... — stays hidden and is reachable via system.listTools / system.exposeTools
  * on demand.
  */
 private val CLI_BROWSING_CODING_METHODS = setOf(
+    "shell",
     "read", "write", "append", "replace",
     "listDir", "glob", "grep",
     "stat", "mkdir", "delete",

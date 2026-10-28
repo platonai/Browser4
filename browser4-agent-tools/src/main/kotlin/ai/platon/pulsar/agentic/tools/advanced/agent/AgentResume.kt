@@ -83,6 +83,38 @@ internal fun listWorkspaceFiles(workspace: Path, maxFiles: Int = RESUME_MAX_FILE
     (top + scratch).take(maxFiles)
 }.getOrDefault(emptyList())
 
+/** Cap for the deliverables snapshot of an aborted run. */
+internal const val MAX_ABORT_DELIVERABLES = 50
+
+/**
+ * The files a run had already produced in its workspace, for a run that ended
+ * **without** reporting them.
+ *
+ * A token-budget or step-cap abort used to leave `filesChanged` empty, so a task whose
+ * CSV was complete on disk was reported as a bare failure and the data looked lost
+ * (2026-10-28: 20 rows × 75 fields written, task `failed (417)` with no artifacts).
+ *
+ * Only top-level regular files count: `.b4scratch/` helper scripts, `.b4inputs/`
+ * copies and dot-files are working state, not deliverables — the browsing prompt says
+ * so explicitly. The list is bounded and sorted so a pathological workspace cannot
+ * bloat a status row and repeated polls stay stable.
+ */
+internal fun deliverableFilesOf(workspace: String?, maxFiles: Int = MAX_ABORT_DELIVERABLES): List<String> {
+    val dir = workspace
+        ?.takeIf { it.isNotBlank() }
+        ?.let { runCatching { Path.of(it) }.getOrNull() }
+        ?.takeIf { Files.isDirectory(it) }
+        ?: return emptyList()
+    return runCatching {
+        Files.newDirectoryStream(dir).use { entries ->
+            entries.filter { Files.isRegularFile(it) && !it.fileName.toString().startsWith(".") }
+                .map { it.fileName.toString() }
+                .sorted()
+                .take(maxFiles)
+        }
+    }.getOrDefault(emptyList())
+}
+
 /**
  * The instruction a resumed run starts from.
  *

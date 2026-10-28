@@ -102,12 +102,17 @@ explicit opt-in, not something a task can grant itself.
 
 ### Deliverable format
 
-There is **no spreadsheet writer** and `.xlsx` output is out of scope. Deliver **CSV**
-(opens in Excel) or **JSONL**, and Markdown for prose. An `.xlsx` *input* is extracted
-with a script (`coding.shell` + python/openpyxl where available) or converted to CSV
-once — `coding.read` refuses binary files. Field specs: compare the produced columns
-with the spec's header row and report missing columns in `problems` instead of quietly
-shipping a subset.
+There is **no spreadsheet writer**, and `.xlsx` output is out of scope by decision. A
+task that asks to "save it as a spreadsheet" is therefore delivered as **CSV** (opens in
+Excel) — and that downgrade is part of the result, not a silent substitution: name it
+in `problems` at `system.taskComplete`, for example
+`"requested .xlsx; delivered CSV — the runtime has no spreadsheet writer"`.
+
+Deliver tabular data as **CSV** or **JSONL**, and Markdown for prose. An `.xlsx`
+*input* is extracted with a script (`coding.shell` + python/openpyxl where available) or
+converted to CSV once — `coding.read` refuses binary files. Field specs: compare the
+produced columns with the spec's header row and report missing columns in `problems`
+instead of quietly shipping a subset.
 
 ## Patterns
 

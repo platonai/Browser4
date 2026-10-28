@@ -327,7 +327,12 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     val lastState = status.agentState
     val result = status.ensureCommandResult()
     result.keyFindings = lastState?.keyFindings?.takeIf { it.isNotEmpty() }
+    // A run that aborted before `system.taskComplete` (token budget, step cap,
+    // cancellation) still wrote its artifacts; the runner snapshots them into
+    // `deliverables`. Without this fallback the data looked lost although it was on
+    // disk (2026-10-28: a complete 20×75 CSV reported as a bare failure).
     result.filesChanged = lastState?.filesChanged?.takeIf { it.isNotEmpty() }
+        ?: this.deliverables?.takeIf { it.isNotEmpty() }
     result.problems = lastState?.problems?.takeIf { it.isNotEmpty() }
     result.workspace = this.workspace
 
