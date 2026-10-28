@@ -296,7 +296,7 @@ call this directly and treat a non-terminal `status` as "not ready".
 ### `command_run`
 
 ```
-command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, engine: String? = null, access: String? = null, autoApprove: String? = null, resumeTaskId: String? = null)
+command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, autoApprove: String? = null, resumeTaskId: String? = null, tokenBudget: Long? = null)
 ```
 
 Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine is a deprecated compatibility argument: the CLI tool loop is the only engine, and the removed 'observe-act' engine is rejected. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.
@@ -307,11 +307,13 @@ Execute a plain command (URL, instruction, or agent task). When async=true (defa
 | `async` | Boolean | no | true | `true` (default) returns a task id immediately; `false` blocks until the command finishes and returns the CommandStatus JSON. |
 | `noopLimit` | Int? | no | null | Consecutive no-op abort threshold for agent tasks; omit to use the server default. |
 | `coding` | Boolean? | no | null | Explicit task type. True marks the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task (the default, also when omitted): task type is never auto-detected. |
-| `freshWorkspace` | Boolean? | no | null | True runs this task in a fresh, isolated workspace directory (created under the agent's data dir) instead of the shared workspace. Use for tasks that must not see or mutate previous tasks' scratch files. Omit or false uses the default shared workspace. |
+| `freshWorkspace` | Boolean? | no | null | Deprecated compatibility switch: every task now runs in its own workspace (<agent data dir>/workspace.<taskId>), so this is a no-op. Kept so older clients keep working; use `sharedWorkspace` for the opposite. |
+| `sharedWorkspace` | Boolean? | no | null | True runs this task in the shared <agent data dir>/workspace instead of a per-task workspace, so it sees and mutates previous tasks' files. Omit or false keeps the default isolation (one workspace per task; `resumeTaskId` keeps the interrupted task's workspace). |
 | `engine` | String? | no | null | Deprecated compatibility argument: the CLI tool loop is the only engine. `cli` is accepted and ignored; the removed `observe-act` engine is rejected. |
 | `access` | String? | no | null | Access preset for this task's coding tools: `full` (default), `write` (no shell), `read-build` (read + project build, no shell, no file mutation), `read`. Omit to use the server-wide `browser4.agent.access` default. The preset is reset when the task ends. |
 | `autoApprove` | String? | no | null | Automatic approval ceiling for this task: `full`, `write`, `read-build` or `read`. A coding call the task's access preset refuses is then granted (and audited) when the preset that would grant it is no wider than this ceiling — no human in the loop. Explicitly denied tools, protected paths and sensitive paths are never approved. Omit to use the server-wide `browser4.agent.autoApprove` default (off). |
 | `resumeTaskId` | String? | no | null | Resume an interrupted task by id: the new run starts from that task's checkpoint — its instruction, workspace and the files already written — and inherits its coding/access flags. `command` may then be empty. The id must be known to this backend (the interrupted row is restored after a restart, within its TTL). |
+| `tokenBudget` | Long? | no | null | Token budget for THIS task (`agent run --token-budget`), overriding `agent.token.budget.total` for this run only — a per-run override, never a process-wide config write. 0 means unlimited. Omit to use the configured default. |
 
 Returns: `String`
 
@@ -1053,7 +1055,7 @@ Examples:
 memory.search(query: String, agent: String? = null, limit: Int = 10)
 ```
 
-Search agent memory (past tasks and tool executions) by keywords. Returns hits with taskId, timestamp, tool and a snippet; use memory.read to fetch details. Optionally restrict to one agent uuid (agent).
+Search agent memory (past tasks and tool executions) by keywords. Every hit names the task it came from and an ISO `createdAt`, because hits are HISTORIC — not results of the current run — so live data must be re-read before it is reported. Use memory.read to fetch details. Optionally restrict to one agent uuid (agent).
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|

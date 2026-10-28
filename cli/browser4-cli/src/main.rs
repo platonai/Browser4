@@ -9833,7 +9833,14 @@ async fn handle_tool_command_with_options(
     // distinguishing JS null/undefined (which arrive as the literal string
     // "null") from genuinely empty strings (which arrive as "").
     if tool_name == "browser_evaluate" {
-        let is_null_result = result == "null";
+        // The backend marks a JS `undefined` result with this prefix
+        // (`UNDEFINED_RESULT_PREFIX` in AbstractToolExecutor.kt): a bare `null`
+        // could not tell the caller whether the expression produced no value or
+        // returned null. The notice is printed in human mode; `--json` keeps the
+        // type-faithful JSON `null` instead of downgrading it to a string.
+        const UNDEFINED_NOTE_PREFIX: &str = "null  (undefined";
+        let is_undefined_result = result.starts_with(UNDEFINED_NOTE_PREFIX);
+        let is_null_result = result == "null" || is_undefined_result;
         let is_empty_result = result.is_empty();
         // --json: keep the result type-faithful.  The backend transports the
         // evaluated value as text, so parse it back into JSON to recover
@@ -9841,7 +9848,11 @@ async fn handle_tool_command_with_options(
         // valid JSON (e.g. an empty result for undefined) is wrapped as a
         // JSON string.  The typed value feeds both the stdout document and
         // the envelope below.
-        let result_json = eval_result_to_typed_json(&result);
+        let result_json = if is_undefined_result {
+            Value::Null
+        } else {
+            eval_result_to_typed_json(&result)
+        };
         let expression = tool_params
             .get("expression")
             .and_then(|v| v.as_str())
@@ -9861,6 +9872,9 @@ async fn handle_tool_command_with_options(
                 }
                 .unwrap_or_else(|_| result.clone())
             );
+        } else if is_undefined_result {
+            // The notice IS the useful output here: it explains why there is no data.
+            cli_println!("{}", result);
         } else if is_null_result {
             cli_println!("null");
         } else if is_empty_result {
@@ -15223,9 +15237,11 @@ fn build_agent_run_extra(
     noop_limit: Option<i64>,
     coding: bool,
     fresh_workspace: bool,
+    shared_workspace: bool,
     access: Option<&str>,
     auto_approve: Option<&str>,
     session_id: Option<&str>,
+    token_budget: Option<i64>,
 ) -> Value {
     let mut extra = json!({ "engine": engine });
     if let Some(limit) = noop_limit {
@@ -15236,6 +15252,15 @@ fn build_agent_run_extra(
     }
     if fresh_workspace {
         extra["freshWorkspace"] = json!(true);
+    }
+    if shared_workspace {
+        extra["sharedWorkspace"] = json!(true);
+    }
+    // Per-task token budget: forwarded only when the caller named one, so an
+    // omitted value keeps the server-wide `agent.token.budget.total` default
+    // (the backend treats an absent key as "use the configured budget").
+    if let Some(budget) = token_budget {
+        extra["tokenBudget"] = json!(budget);
     }
     // Only forward when set: absent means "use the server-wide
     // `browser4.agent.access` default", not "full".
@@ -15299,6 +15324,16 @@ async fn handle_agent_run(
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
+    // --token-budget: rejected rather than ignored when it is not a budget. An
+    // ignored flag would run the task under the default budget while the user
+    // believes they raised it — the exact failure this flag exists to prevent.
+    // Checked before the interactive branch, which would otherwise swallow it.
+    if let Some(raw) = tool_params.get("tokenBudgetInvalid").and_then(|v| v.as_str()) {
+        return Err(format!(
+            "--token-budget expects a non-negative integer (0 = unlimited), got '{}'.",
+            raw
+        ));
+    }
     // Interactive session (`agent run -i`): its own loop owns submission and
     // output, including the optional initial task.
     if tool_params
@@ -15369,9 +15404,14 @@ async fn handle_agent_run(
             .get("freshWorkspace")
             .and_then(|v| v.as_bool())
             == Some(true),
+        tool_params
+            .get("sharedWorkspace")
+            .and_then(|v| v.as_bool())
+            == Some(true),
         tool_params.get("access").and_then(|v| v.as_str()),
         tool_params.get("autoApprove").and_then(|v| v.as_str()),
         resolved_session_id.as_deref(),
+        tool_params.get("tokenBudget").and_then(|v| v.as_i64()),
     );
     apply_resume_task_id(&mut extra, resume_task_id);
     let task_id = submit_agent_task(client, base_url, task, extra).await?;
@@ -15809,6 +15849,104 @@ fn print_agent_deliverables(payload: &Value) {
     }
 }
 
+/// The status word a `command_result` payload reports (`failed`, `cancelled`, …).
+///
+/// `status` is the shared envelope's word; `processState`/`statusCode` are the
+/// fallbacks for an older backend that only has the raw form.
+fn agent_result_status_word(payload: &Value) -> Option<String> {
+    if let Some(word) = payload.get("status").and_then(|v| v.as_str()) {
+        let lower = word.trim().to_lowercase();
+        if !lower.is_empty() {
+            return Some(lower);
+        }
+    }
+    if let Some(state) = payload.get("processState").and_then(|v| v.as_str()) {
+        return match state.trim().to_lowercase().as_str() {
+            "done" | "completed" => Some("done".to_string()),
+            "failed" | "error" => Some("failed".to_string()),
+            "cancelled" | "canceled" => Some("cancelled".to_string()),
+            _ => Some("running".to_string()),
+        };
+    }
+    None
+}
+
+/// The one-line human verdict of a finished task: `✖ failed (budget) · files: … · resume: …`.
+///
+/// `agent result` used to append "Files the agent reported changing" even for a
+/// failed run, listing whatever happened to be in the workspace (2026-10-28: an old
+/// CSV and another task's report, timestamped before the run started). The verdict
+/// line names the failure reason, the workspace, the files THIS run wrote, and how
+/// to continue — or says plainly that it wrote none.
+fn format_agent_result_verdict(task_id: &str, payload: &Value) -> Option<String> {
+    let word = agent_result_status_word(payload)?;
+    if word != "failed" && word != "cancelled" {
+        return None;
+    }
+    let error_code = payload
+        .get("errorCode")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            payload
+                .get("result")
+                .and_then(|r| r.get("errorCode"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        });
+    let reason = payload
+        .get("error")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| payload.get("message").and_then(|v| v.as_str()))
+        .map(|s| crate::agent_interactive::truncate(s, 160));
+    let details = payload.get("result").unwrap_or(payload);
+    let files = details
+        .get("filesChanged")
+        .and_then(|v| v.as_array())
+        .map(|items| items.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let workspace = details
+        .get("workspace")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| payload.get("workspace").and_then(|v| v.as_str()));
+    let resumable = details
+        .get("resumable")
+        .and_then(|v| v.as_bool())
+        .or_else(|| payload.get("resumable").and_then(|v| v.as_bool()));
+    let budget = payload
+        .get("effectiveTokenBudget")
+        .and_then(|v| v.as_i64())
+        .or_else(|| details.get("effectiveTokenBudget").and_then(|v| v.as_i64()));
+
+    let label = match error_code {
+        Some(code) => format!("{} ({})", word, code.to_lowercase()),
+        None => word.clone(),
+    };
+    let mut line = format!("✖ {} · workspace: {}", label, workspace.unwrap_or("(unknown)"));
+    if files.is_empty() {
+        line.push_str(" · files: (none this run)");
+    } else {
+        line.push_str(&format!(" · files: {}", files.len()));
+    }
+    if let Some(limit) = budget {
+        if limit > 0 {
+            line.push_str(&format!(" · budget: {}", crate::agent_interactive::format_thousands(limit as u64)));
+        } else {
+            line.push_str(" · budget: unlimited");
+        }
+    }
+    if let Some(reason) = reason {
+        line.push_str(&format!(" · reason: {}", reason));
+    }
+    if resumable.unwrap_or(false) {
+        line.push_str(&format!(" · resume: agent run --resume {}", task_id));
+    }
+    Some(line)
+}
+
+
 async fn handle_agent_status(
     client: &Client,
     base_url: &str,
@@ -15953,6 +16091,36 @@ async fn handle_agent_result(
     json_field("raw", json!(&result));
     if !json_active() {
         print_agent_deliverables(payload);
+        if let Some(verdict) = format_agent_result_verdict(id, parsed_payload.as_ref().unwrap_or(&Value::Null)) {
+            cli_println!("");
+            cli_println!("{}", verdict);
+        }
+    }
+
+    // A failed/cancelled task is a failed command. `agent result` printed the
+    // failure and exited 0, so a pipeline could not tell a completed run from an
+    // aborted one (2026-10-28 baseline: `status=failed` with exit 0). The payload is
+    // printed first — the reason is what the caller needs — then the exit is non-zero.
+    // `--allow-failed` is the explicit escape hatch for "give me the failed payload".
+    let allow_failed = tool_params
+        .get("allowFailed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let word = parsed_payload
+        .as_ref()
+        .and_then(agent_result_status_word)
+        .unwrap_or_default();
+    if !allow_failed && (word == "failed" || word == "cancelled") {
+        let code = parsed_payload
+            .as_ref()
+            .and_then(|v| v.get("errorCode"))
+            .and_then(|v| v.as_str())
+            .map(|c| format!(" ({})", c))
+            .unwrap_or_default();
+        return Err(format!(
+            "Agent task {} {}{}. The payload above carries the reason; pass --allow-failed to exit 0 anyway.",
+            id, word, code
+        ));
     }
     Ok(())
 }
@@ -31843,6 +32011,12 @@ async fn run(
     } else {
         build_command_args(&raw_parsed, &arg_names, COMMAND_ARG_ALIASES).map_err(|e| e.to_string())?
     };
+    // Commands whose slots are exact (`agent run`) must not absorb a stray token
+    // into their task text: the combined task silently differs from what the user
+    // typed, and the model runs the wrong instruction. Runs before the generic
+    // builder's "join into the last slot" behaviour can hide it.
+    args::validate_positional_count(&raw_parsed, arg_names.len(), &command)
+        .map_err(|message| CliError(ExitCode::Usage, message))?;
 
     // Reject options the command does not declare: a misplaced or misspelled
     // flag used to be dropped silently (e.g. `htmlsnapshot get --bogus`, or
@@ -40805,11 +40979,11 @@ linkGroups:
     /// The session id, once resolved, is the payload the backend acts on.
     #[test]
     fn build_agent_run_extra_forwards_a_resolved_session_id() {
-        let extra = build_agent_run_extra("cli", None, false, false, None, None, Some("s-work"));
+        let extra = build_agent_run_extra("cli", None, false, false, false, None, None, Some("s-work"), None);
         assert_eq!(extra["sessionId"], json!("s-work"));
         assert_eq!(extra["engine"], json!("cli"));
 
-        let anonymous = build_agent_run_extra("cli", None, true, false, None, None, None);
+        let anonymous = build_agent_run_extra("cli", None, true, false, false, None, None, None, None);
         assert!(
             anonymous.get("sessionId").is_none(),
             "no session must stay absent, got {anonymous}"
@@ -40821,15 +40995,15 @@ linkGroups:
     /// checkpoint, and an empty id would be looked up and rejected there.
     #[test]
     fn apply_resume_task_id_forwards_only_a_non_blank_id() {
-        let mut extra = build_agent_run_extra("cli", None, false, false, None, None, None);
+        let mut extra = build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
         apply_resume_task_id(&mut extra, Some("  1d5ec7d3-eaaa  "));
         assert_eq!(extra["resumeTaskId"], json!("1d5ec7d3-eaaa"));
 
-        let mut absent = build_agent_run_extra("cli", None, false, false, None, None, None);
+        let mut absent = build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
         apply_resume_task_id(&mut absent, None);
         assert!(absent.get("resumeTaskId").is_none(), "got {absent}");
 
-        let mut blank = build_agent_run_extra("cli", None, false, false, None, None, None);
+        let mut blank = build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
         apply_resume_task_id(&mut blank, Some("   "));
         assert!(blank.get("resumeTaskId").is_none(), "got {blank}");
     }
@@ -40838,13 +41012,13 @@ linkGroups:
     /// default", and a blank value must not become a preset id.
     #[test]
     fn build_agent_run_extra_forwards_only_a_non_blank_access_preset() {
-        let read_build = build_agent_run_extra("cli", None, false, false, Some("read-build"), None, None);
+        let read_build = build_agent_run_extra("cli", None, false, false, false, Some("read-build"), None, None, None);
         assert_eq!(read_build["access"], json!("read-build"));
 
-        let absent = build_agent_run_extra("cli", None, false, false, None, None, None);
+        let absent = build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
         assert!(absent.get("access").is_none(), "got {absent}");
 
-        let blank = build_agent_run_extra("cli", None, false, false, Some("   "), None, None);
+        let blank = build_agent_run_extra("cli", None, false, false, false, Some("   "), None, None, None);
         assert!(blank.get("access").is_none(), "got {blank}");
     }
 
@@ -40853,15 +41027,30 @@ linkGroups:
     #[test]
     fn build_agent_run_extra_forwards_only_a_non_blank_auto_approve_ceiling() {
         let ceiling =
-            build_agent_run_extra("cli", None, false, false, Some("read"), Some("write"), None);
+            build_agent_run_extra("cli", None, false, false, false, Some("read"), Some("write"), None, None);
         assert_eq!(ceiling["access"], json!("read"));
         assert_eq!(ceiling["autoApprove"], json!("write"));
 
-        let absent = build_agent_run_extra("cli", None, false, false, Some("read"), None, None);
+        let absent = build_agent_run_extra("cli", None, false, false, false, Some("read"), None, None, None);
         assert!(absent.get("autoApprove").is_none(), "got {absent}");
 
-        let blank = build_agent_run_extra("cli", None, false, false, None, Some("  "), None);
+        let blank = build_agent_run_extra("cli", None, false, false, false, None, Some("  "), None, None);
         assert!(blank.get("autoApprove").is_none(), "got {blank}");
+    }
+
+    /// `--token-budget` is a per-run override: forwarded when named, absent
+    /// otherwise so the backend keeps its configured `agent.token.budget.total`.
+    #[test]
+    fn build_agent_run_extra_forwards_the_task_token_budget_only_when_set() {
+        let budget = build_agent_run_extra("cli", None, false, false, false, None, None, None, Some(2_000_000));
+        assert_eq!(budget["tokenBudget"], json!(2_000_000));
+
+        // 0 is a real value ("unlimited"), not "not set".
+        let unlimited = build_agent_run_extra("cli", None, false, false, false, None, None, None, Some(0));
+        assert_eq!(unlimited["tokenBudget"], json!(0));
+
+        let absent = build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        assert!(absent.get("tokenBudget").is_none(), "got {absent}");
     }
 
     #[test]

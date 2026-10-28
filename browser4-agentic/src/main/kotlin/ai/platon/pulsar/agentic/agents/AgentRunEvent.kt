@@ -26,6 +26,11 @@ package ai.platon.pulsar.agentic.agents
  *   ([USAGE] only; `null` when the provider reported no usage)
  * @property outputTokens provider-reported output tokens of the model request
  * @property totalTokens provider-reported total tokens of the model request
+ * @property budgetTokens the run's effective token budget ([USAGE] only): `0` means
+ *   unlimited, `null` when the run reports no budget
+ * @property cumulativeTokens tokens consumed by the run so far, this request
+ *   included ([USAGE] only) — the number a supervisor needs to see "how close to
+ *   the abort are we", which a per-request count alone cannot answer
  * */
 data class AgentRunEvent(
     val type: String,
@@ -38,6 +43,10 @@ data class AgentRunEvent(
     val inputTokens: Int? = null,
     val outputTokens: Int? = null,
     val totalTokens: Int? = null,
+    /** Effective token budget of this run ([USAGE] only; 0 = unlimited). */
+    val budgetTokens: Long? = null,
+    /** Tokens consumed by this run so far, this request included ([USAGE] only). */
+    val cumulativeTokens: Long? = null,
 ) {
     companion object {
         /** A new outer round started; a model request is about to be made. */

@@ -314,6 +314,15 @@ const TIPS_AGENT: &[Tip] = &[
     Tip {
         text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls",
     },
+    Tip {
+        text: "Every task runs in its own workspace — artifacts of an earlier run never show up in this run's `filesChanged`. `--resume <id>` reuses the interrupted task's workspace; `--shared-workspace` opts into the old shared directory",
+    },
+    Tip {
+        text: "`agent run <task> --token-budget <n>` caps THIS task only (0 = unlimited); `config set agent.token.budget.total` changes every later run on the backend",
+    },
+    Tip {
+        text: "`agent result <id>` exits non-zero for a failed task — read `errorCode` and the `resume:` line, or pass `--allow-failed` to exit 0 while still seeing the failed payload",
+    },
 ];
 
 const TIPS_WEBMINER: &[Tip] = &[
@@ -678,6 +687,17 @@ fn failure_tip_for(
     error_code: Option<&str>,
     retry_after_ms: Option<u64>,
 ) -> Option<String> {
+    // A budget abort may arrive as prose only (an older payload without errorCode),
+    // and it is actionable in a way no other failure is: two different knobs, easy to
+    // confuse. Checked before the code extraction, which would otherwise drop it.
+    if error_code == Some("TOKEN_BUDGET") || error_message.contains("Token budget exceeded") {
+        let name = crate::help::public_command_name(command);
+        return Some(format!(
+            "Tip: '{name}' stopped at the run's token budget — raise the cap for one task with \
+             `agent run <task> --token-budget <n>`, change the backend default with \
+             `config set agent.token.budget.total <n>`, or continue with `agent run --resume <task-id>`."
+        ));
+    }
     // The message is authoritative — the backend embeds the code in the text
     // (`ERROR: [RATE_LIMITED] …`); the structured field covers a response whose
     // text carries no token.
@@ -711,6 +731,8 @@ fn failure_tip_for(
             "'{name}' timed out — if the backend was just started, its first fetch-backed call can take \
              minutes while the page store initializes; retry once it warms up, or check `browser4-cli doctor log`."
         ),
+        // A token-budget abort is handled before the code extraction (it may arrive as
+        // prose only), so there is no arm for it here.
         // Everything else (INTERNAL, INVALID_ARGUMENT, …) has no CLI-side
         // remediation worth a line of noise.
         _ => return None,
@@ -999,5 +1021,31 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn test_failure_tip_token_budget_names_both_knobs() {
+        // A budget abort is actionable in two different ways and the two knobs are
+        // easy to confuse: the per-task flag vs the process-wide key.
+        let structured = failure_tip_for(
+            "agent-result",
+            "Token budget exceeded: consumed 5,006,041 tokens",
+            Some("TOKEN_BUDGET"),
+            None,
+        )
+        .expect("a budget abort is actionable");
+        assert!(structured.contains("--token-budget"), "got: {structured}");
+        assert!(structured.contains("agent.token.budget.total"), "got: {structured}");
+        assert!(structured.contains("--resume"), "got: {structured}");
+
+        // An older payload carries the reason as prose only: the tip must still fire.
+        let prose = failure_tip_for(
+            "agent-result",
+            "IllegalStateException: Token budget exceeded: consumed 5,006,041 tokens",
+            None,
+            None,
+        )
+        .expect("prose-only budget aborts must still get a tip");
+        assert!(prose.contains("--token-budget"), "got: {prose}");
     }
 }

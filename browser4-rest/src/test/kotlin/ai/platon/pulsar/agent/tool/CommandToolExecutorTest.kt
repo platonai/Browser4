@@ -245,12 +245,12 @@ class CommandToolExecutorTest {
     @DisplayName("run passes an explicit coding flag to the executor")
     fun runForwardsExplicitCodingFlag() {
         runBlocking {
-            `when`(runner.submitPlainCommand("s1", "fix pom.xml", null, true, null)).thenReturn("t-coding")
+            `when`(runner.submitPlainCommand("s1", "fix pom.xml", null, true, null, null)).thenReturn("t-coding")
 
             val taskId = call("run", mapOf("command" to "fix pom.xml", "sessionId" to "s1", "coding" to true))
 
             assertEquals("t-coding", taskId)
-            Mockito.verify(runner).submitPlainCommand("s1", "fix pom.xml", null, true, null)
+            Mockito.verify(runner).submitPlainCommand("s1", "fix pom.xml", null, true, null, null)
         }
     }
 
@@ -327,7 +327,7 @@ class CommandToolExecutorTest {
     fun runForwardsAccessPreset() {
         runBlocking {
             `when`(
-                runner.submitPlainCommand("s1", "report the module", null, null, null, AccessPreset.READ_BUILD)
+                runner.submitPlainCommand("s1", "report the module", null, null, null, null, AccessPreset.READ_BUILD)
             ).thenReturn("t-access")
 
             val taskId = call(
@@ -337,7 +337,7 @@ class CommandToolExecutorTest {
 
             assertEquals("t-access", taskId)
             Mockito.verify(runner)
-                .submitPlainCommand("s1", "report the module", null, null, null, AccessPreset.READ_BUILD)
+                .submitPlainCommand("s1", "report the module", null, null, null, null, AccessPreset.READ_BUILD)
         }
     }
 
@@ -358,7 +358,7 @@ class CommandToolExecutorTest {
         runBlocking {
             `when`(
                 runner.submitPlainCommand(
-                    "s1", "report the module", null, null, null,
+                    "s1", "report the module", null, null, null, null,
                     AccessPreset.READ, AccessPreset.WRITE
                 )
             ).thenReturn("t-auto")
@@ -375,7 +375,7 @@ class CommandToolExecutorTest {
 
             assertEquals("t-auto", taskId)
             Mockito.verify(runner).submitPlainCommand(
-                "s1", "report the module", null, null, null,
+                "s1", "report the module", null, null, null, null,
                 AccessPreset.READ, AccessPreset.WRITE
             )
         }

@@ -83,6 +83,14 @@ struct TaskEvent {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     total_tokens: Option<u64>,
+    /// The run's effective token budget (`run.usage` steps; 0 = unlimited).
+    budget_tokens: Option<u64>,
+    /// Tokens consumed by the run so far, this request included.
+    cumulative_tokens: Option<u64>,
+    /// Machine-readable failure reason (`task.failed`/`task.cancelled` steps).
+    error_code: Option<String>,
+    /// Whether `agent run --resume <id>` can continue the task.
+    resumable: Option<bool>,
 }
 
 impl TaskEvent {
@@ -121,6 +129,20 @@ impl TaskEvent {
         }
         if let Some(tokens) = self.total_tokens {
             obj["totalTokens"] = json!(tokens);
+        }
+        // Budget visibility for machine consumers: `--ndjson` must answer "how
+        // close to the abort are we" without a second call.
+        if let Some(budget) = self.budget_tokens {
+            obj["effectiveTokenBudget"] = json!(budget);
+        }
+        if let Some(tokens) = self.cumulative_tokens {
+            obj["cumulativeTokens"] = json!(tokens);
+        }
+        if let Some(code) = &self.error_code {
+            obj["errorCode"] = json!(code);
+        }
+        if let Some(resumable) = self.resumable {
+            obj["resumable"] = json!(resumable);
         }
         obj
     }
@@ -182,6 +204,13 @@ fn parse_events_page(body: &str) -> Result<EventsPage, String> {
             input_tokens: item.get("inputTokens").and_then(|v| v.as_u64()),
             output_tokens: item.get("outputTokens").and_then(|v| v.as_u64()),
             total_tokens: item.get("totalTokens").and_then(|v| v.as_u64()),
+            budget_tokens: item
+                .get("effectiveTokenBudget")
+                .and_then(|v| v.as_u64())
+                .or_else(|| item.get("budgetTokens").and_then(|v| v.as_u64())),
+            cumulative_tokens: item.get("cumulativeTokens").and_then(|v| v.as_u64()),
+            error_code: string_field(item, "errorCode"),
+            resumable: item.get("resumable").and_then(|v| v.as_bool()),
         });
     }
 
@@ -487,7 +516,21 @@ struct Renderer {
     color: bool,
     quiet: bool,
     tool_index: u64,
+    /// Successful model requests seen (`run.usage` steps), for the usage cadence.
+    usage_requests: u64,
+    /// When the last usage line was printed (time-based cadence).
+    last_usage_at: Option<Instant>,
+    /// Whether the one-shot 80% warning has been printed.
+    warned_80: bool,
+    /// Whether the budget-exhausted line has been printed.
+    exhausted_printed: bool,
 }
+
+/// How many model requests between two progress usage lines.
+const USAGE_REQUESTS_PER_LINE: u64 = 10;
+
+/// Minimum wall-clock spacing of progress usage lines.
+const USAGE_LINE_INTERVAL: Duration = Duration::from_secs(15);
 
 impl Renderer {
     fn new(started: Instant, color: bool, quiet: bool) -> Self {
@@ -496,6 +539,10 @@ impl Renderer {
             color,
             quiet,
             tool_index: 0,
+            usage_requests: 0,
+            last_usage_at: None,
+            warned_80: false,
+            exhausted_printed: false,
         }
     }
 
@@ -587,8 +634,68 @@ impl Renderer {
                     truncate(text, MODEL_TEXT_PREVIEW)
                 ))
             }
+            "run.usage" => self.format_usage(event),
             _ => None,
         }
+    }
+
+    /// The cost line: cumulative tokens against the run's effective budget.
+    ///
+    /// A 5M-token cap used to be discovered only in the abort: `--follow` showed no
+    /// token information at all, so a 15-minute run looked healthy until it died
+    /// (2026-10-28 baseline: 5,006,041 tokens, zero advance warning). The line is
+    /// throttled (every [USAGE_REQUESTS_PER_LINE] requests or [USAGE_LINE_INTERVAL])
+    /// so it stays readable, but the 80% warning and the exhaustion line always print.
+    fn format_usage(&mut self, event: &TaskEvent) -> Option<String> {
+        self.usage_requests += 1;
+        let cumulative = event.cumulative_tokens?;
+        let budget = event.budget_tokens.unwrap_or(0);
+        let now = Instant::now();
+        let fraction = if budget > 0 {
+            cumulative as f64 / budget as f64
+        } else {
+            0.0
+        };
+
+        if budget > 0 && fraction >= 1.0 && !self.exhausted_printed {
+            self.exhausted_printed = true;
+            return Some(format!(
+                "{} {} token budget exhausted: {} / {} — the run is being aborted",
+                self.time_prefix(),
+                self.paint("✖", Style::Error),
+                format_token_amount(cumulative),
+                format_token_amount(budget),
+            ));
+        }
+
+        let warn_now = budget > 0 && fraction >= 0.8 && !self.warned_80;
+        let due_by_requests = self.usage_requests % USAGE_REQUESTS_PER_LINE == 0;
+        let due_by_time = self
+            .last_usage_at
+            .map(|at| now.duration_since(at) >= USAGE_LINE_INTERVAL)
+            .unwrap_or(true);
+        if !(warn_now || due_by_requests || due_by_time) {
+            return None;
+        }
+        self.last_usage_at = Some(now);
+
+        let ratio = if budget > 0 {
+            format!(" / {} ({:.0}%)", format_token_amount(budget), fraction * 100.0)
+        } else {
+            String::new()
+        };
+        let mut line = format!(
+            "{} tokens {}{} · {} requests",
+            self.time_prefix(),
+            format_token_amount(cumulative),
+            ratio,
+            self.usage_requests
+        );
+        if warn_now {
+            self.warned_80 = true;
+            line = format!("{} {} 80% of the token budget used", line, self.paint("⚠", Style::Error));
+        }
+        Some(line)
     }
 
     /// Print a human-readable line.
@@ -674,7 +781,7 @@ fn format_run_duration(duration_ms: u64) -> String {
 }
 
 /// Group digits (`48231` → `48,231`) so a token total is readable at a glance.
-fn format_thousands(value: u64) -> String {
+pub(crate) fn format_thousands(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, ch) in digits.chars().enumerate() {
@@ -684,6 +791,20 @@ fn format_thousands(value: u64) -> String {
         out.push(ch);
     }
     out
+}
+
+/// A token amount in the shortest readable form: `48231` → `48.2k`, `1240000` → `1.24M`.
+///
+/// A usage line has to fit next to the elapsed time; the exact digit string is
+/// what `agent result --json` / `/stats` are for.
+fn format_token_amount(value: u64) -> String {
+    if value >= 1_000_000 {
+        format!("{:.2}M", value as f64 / 1_000_000.0)
+    } else if value >= 10_000 {
+        format!("{:.1}k", value as f64 / 1_000.0)
+    } else {
+        format_thousands(value)
+    }
 }
 
 /// The human-readable `/stats` block.
@@ -771,7 +892,7 @@ fn format_tool_arguments(arguments: &str) -> String {
 }
 
 /// Truncate on a char boundary, appending an ellipsis when anything was cut.
-fn truncate(text: &str, max_chars: usize) -> String {
+pub(crate) fn truncate(text: &str, max_chars: usize) -> String {
     let mut out = String::new();
     for (index, ch) in text.chars().enumerate() {
         if index >= max_chars {
@@ -1357,6 +1478,9 @@ struct Repl {
     noop_limit: Option<i64>,
     coding: bool,
     fresh_workspace: bool,
+    shared_workspace: bool,
+    /// Per-task token budget (`--token-budget`); `None` keeps the server default.
+    token_budget: Option<i64>,
     /// Access preset for this REPL's tasks (`--access`); `None` keeps the
     /// server-wide `browser4.agent.access` default.
     access: Option<String>,
@@ -1404,6 +1528,10 @@ impl Repl {
             .get("freshWorkspace")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let shared_workspace = params
+            .get("sharedWorkspace")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let access = params
             .get("access")
             .and_then(|v| v.as_str())
@@ -1412,6 +1540,7 @@ impl Repl {
             .get("autoApprove")
             .and_then(|v| v.as_str())
             .map(str::to_string);
+        let token_budget = params.get("tokenBudget").and_then(|v| v.as_i64());
 
         Self {
             client: client.clone(),
@@ -1423,6 +1552,8 @@ impl Repl {
             noop_limit,
             coding,
             fresh_workspace,
+            shared_workspace,
+            token_budget,
             access,
             auto_approve,
             tty: io::stdin().is_terminal(),
@@ -1718,9 +1849,11 @@ impl Repl {
             self.noop_limit,
             self.coding,
             self.fresh_workspace,
+            self.shared_workspace,
             self.access.as_deref(),
             self.auto_approve.as_deref(),
             self.session_id().as_deref(),
+            self.token_budget,
         )
     }
 

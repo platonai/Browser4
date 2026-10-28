@@ -126,4 +126,37 @@ class AgentTokenBudgetTest {
         assertFalse(budget.isExceeded, "0 means unlimited: accounting only")
         assertFalse(budget.shouldWarn(), "an unlimited budget never warns")
     }
+
+    @Test
+    @DisplayName("a per-task override wins over the configured value and the process-wide registry")
+    fun taskOverrideWins() {
+        // `agent run --token-budget` is a per-run choice: it must beat both the
+        // configured `agent.token.budget.total` and a runtime override, and it is
+        // never written into the registry (the next task keeps the default).
+        RuntimeConfigRegistry.setOverride(AgentTokenBudget.CONFIG_KEY, "9000000")
+        try {
+            val configured = AgentTokenBudget(maxTotalTokens = AgentTokenBudget.DEFAULT_MAX_TOTAL_TOKENS)
+            assertEquals(9_000_000L, configured.effectiveMaxTotalTokens, "registry override wins over config")
+
+            val task = AgentTokenBudget(taskTotalTokens = 2_000_000L)
+            assertEquals(2_000_000L, task.effectiveMaxTotalTokens, "the task budget must win")
+            assertTrue(task.isTaskOverridden)
+
+            val defaulted = AgentTokenBudget(maxTotalTokens = AgentTokenBudget.DEFAULT_MAX_TOTAL_TOKENS)
+            assertEquals(9_000_000L, defaulted.effectiveMaxTotalTokens, "no task budget → registry/config")
+            assertFalse(defaulted.isTaskOverridden)
+        } finally {
+            RuntimeConfigRegistry.clearOverride(AgentTokenBudget.CONFIG_KEY)
+        }
+    }
+
+    @Test
+    @DisplayName("a task budget of 0 means unlimited and never aborts")
+    fun taskOverrideZeroIsUnlimited() {
+        val budget = AgentTokenBudget(taskTotalTokens = 0L)
+
+        assertEquals(0L, budget.effectiveMaxTotalTokens)
+        budget.charge(50_000_000, 1_000_000)
+        assertFalse(budget.isExceeded)
+    }
 }

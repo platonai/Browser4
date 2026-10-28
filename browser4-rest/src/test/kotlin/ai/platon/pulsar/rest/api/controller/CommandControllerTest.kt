@@ -115,7 +115,7 @@ class CommandControllerTest {
             whenever(
                 executor.submitPlainCommand(
                     any(), any(), anyOrNull(), anyOrNull(), anyOrNull(),
-                    anyOrNull(), anyOrNull(), anyOrNull(),
+                    anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
                 )
             ).thenReturn("agent-task-9")
 
@@ -142,7 +142,7 @@ class CommandControllerTest {
             whenever(
                 executor.executePlainCommand(
                     any(), any(), anyOrNull(), anyOrNull(), anyOrNull(),
-                    anyOrNull(), anyOrNull(), anyOrNull(),
+                    anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
                 )
             ).thenReturn(status)
 

@@ -4036,10 +4036,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "wait-timeout", description: "Max seconds to block with --wait (default: 600) or to follow with --follow (default: no cap). The task keeps running server-side after a timeout", is_bool: false, short: None },
                 OptionDef { name: "noop-limit", description: "Override the consecutive no-op abort threshold (default: 5; long coding tasks benefit from 8-10). Passing --coding is the explicit way to mark an agent task as a coding task", is_bool: false, short: None },
                 OptionDef { name: "coding", description: "Mark the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task, which is the default: task type is never auto-detected", is_bool: true, short: None },
-                OptionDef { name: "fresh-workspace", description: "Run this task in a fresh, isolated workspace directory instead of the shared workspace. Use for tasks that must not see or mutate previous tasks' scratch files", is_bool: true, short: None },
+                OptionDef { name: "fresh-workspace", description: "Deprecated compatibility switch: every task now runs in its own workspace directory, so this is a no-op. Use --shared-workspace for the opposite", is_bool: true, short: None },
+                OptionDef { name: "shared-workspace", description: "Run this task in the shared workspace (the old default) instead of its own per-task workspace, so it sees and mutates previous tasks' files. --resume still uses the interrupted task's workspace", is_bool: true, short: None },
                 OptionDef { name: "access", description: "Access preset for this task's coding tools: full (default), write (no shell), read-build (read + project build, no shell, no file mutation), read. Omit to use the server-wide browser4.agent.access default. Reset when the task ends", is_bool: false, short: None },
                 OptionDef { name: "auto-approve", description: "Automatic approval ceiling for this task (full, write, read-build or read): a coding call the access preset refuses is granted and audited when the preset that would grant it is no wider than this ceiling — no human in the loop. Denied tools, protected paths and sensitive paths are never approved. Omit to use the server-wide browser4.agent.autoApprove default (off)", is_bool: false, short: None },
                 OptionDef { name: "resume", description: "Resume an interrupted task by id: the new run is seeded with that task's instruction, workspace and files already written (the checkpoint must exist on the same backend). The task description may be omitted", is_bool: false, short: None },
+                OptionDef { name: "token-budget", description: "Token budget for THIS task, overriding agent.token.budget.total for this run only (0 = unlimited). A per-run override, never a process-wide config change; the next task keeps the configured default", is_bool: false, short: None },
                 OptionDef { name: "engine", description: "Deprecated compatibility option: the CLI tool loop is the only agent engine. `cli` is accepted; the removed `observe-act` engine is rejected", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "Stream the task's steps (tool calls, model text, failures) while waiting, then print the result. Implies waiting; a slow tool or failure is always reported, successful fast tools are not", is_bool: true, short: None },
                 OptionDef { name: "ndjson", description: "With --follow: emit one JSON object per step (NDJSON) for machine consumption instead of human-readable lines", is_bool: true, short: None },
@@ -4070,6 +4072,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if get_bool(args, "fresh-workspace").unwrap_or(false) {
                     p["freshWorkspace"] = json!(true);
                 }
+                if get_bool(args, "shared-workspace").unwrap_or(false) {
+                    p["sharedWorkspace"] = json!(true);
+                }
                 if let Some(access) = get_opt_str(args, "access") {
                     p["access"] = json!(access);
                 }
@@ -4084,6 +4089,15 @@ pub fn all_commands() -> Vec<CommandDef> {
                     .filter(|s| !s.is_empty())
                 {
                     p["resumeTaskId"] = json!(id);
+                }
+                // Per-task token budget. A negative or non-numeric value is not a
+                // budget; it is surfaced here (as `tokenBudgetInvalid`) and rejected
+                // by handle_agent_run instead of silently becoming "unlimited".
+                if let Some(raw) = get_opt_str(args, "token-budget") {
+                    match raw.trim().parse::<i64>() {
+                        Ok(value) if value >= 0 => p["tokenBudget"] = json!(value),
+                        _ => p["tokenBudgetInvalid"] = json!(raw),
+                    }
                 }
                 // CLI-side modes: consumed by handle_agent_run, never sent to
                 // the backend (`command.run` rejects undeclared arguments).
@@ -4125,11 +4139,18 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[
                 OptionDef { name: "json", description: "Emit the envelope and its payload as one JSON object instead of printing them as text", is_bool: true, short: None },
+                OptionDef { name: "allow-failed", description: "Exit 0 even when the task failed or was cancelled. Without it, a failed task makes the command exit non-zero after printing the payload, so a pipeline can tell a completed run from an aborted one", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {
-                json!({ "id": get_str(args, "id").unwrap_or_default() })
+                let mut p = json!({ "id": get_str(args, "id").unwrap_or_default() });
+                // CLI-side flag: consumed by handle_agent_result, never sent to the
+                // backend (`command.result` declares only `id`).
+                if get_bool(args, "allow-failed").unwrap_or(false) {
+                    p["allowFailed"] = json!(true);
+                }
+                p
             },
         },
         CommandDef {
@@ -7233,6 +7254,45 @@ mod tests {
         plain.insert("task".to_string(), json!("do the thing"));
         let params = (cmd.tool_params_fn)(&plain);
         assert!(params.get("resumeTaskId").is_none(), "got {params}");
+    }
+
+    /// `--token-budget` is a per-run override (`tokenBudget`) and a malformed value
+    /// is surfaced, not ignored: silently running under the default 5M while the
+    /// user believes they raised the cap is the failure this flag prevents.
+    #[test]
+    fn test_agent_run_forwards_token_budget() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("collect the top 20"));
+        args.insert("token-budget".to_string(), json!("2000000"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["tokenBudget"], 2_000_000);
+
+        let mut unlimited = HashMap::new();
+        unlimited.insert("task".to_string(), json!("collect"));
+        unlimited.insert("token-budget".to_string(), json!("0"));
+        let params = (cmd.tool_params_fn)(&unlimited);
+        assert_eq!(params["tokenBudget"], 0, "0 means unlimited, not unset");
+
+        let mut absent = HashMap::new();
+        absent.insert("task".to_string(), json!("collect"));
+        let params = (cmd.tool_params_fn)(&absent);
+        assert!(params.get("tokenBudget").is_none(), "got {params}");
+
+        let mut bad = HashMap::new();
+        bad.insert("task".to_string(), json!("collect"));
+        bad.insert("token-budget".to_string(), json!("lots"));
+        let params = (cmd.tool_params_fn)(&bad);
+        assert_eq!(params["tokenBudgetInvalid"], "lots");
+        assert!(params.get("tokenBudget").is_none(), "got {params}");
+
+        let mut negative = HashMap::new();
+        negative.insert("task".to_string(), json!("collect"));
+        negative.insert("token-budget".to_string(), json!("-5"));
+        let params = (cmd.tool_params_fn)(&negative);
+        assert_eq!(params["tokenBudgetInvalid"], "-5");
     }
 
     #[test]

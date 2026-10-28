@@ -35,6 +35,14 @@ import com.fasterxml.jackson.databind.node.ObjectNode
  *   ([TYPE_USAGE] only; `null` when the provider reported no usage at all)
  * @property outputTokens provider-reported output tokens of one model request
  * @property totalTokens provider-reported total tokens of one model request
+ * @property budgetTokens the run's effective token budget ([TYPE_USAGE] only;
+ *   `0` = unlimited, `null` = not reported)
+ * @property cumulativeTokens tokens consumed so far, this request included
+ *   ([TYPE_USAGE] only) — what a follower needs to show "1.24M / 5.0M (25%)"
+ * @property errorCode machine-readable failure reason ([TYPE_FAILED] only):
+ *   `TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`, `TOOL_ERROR`
+ * @property resumable whether `agent run --resume <id>` can continue the task
+ *   ([TYPE_FAILED] only)
  * */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class AgentTaskEvent(
@@ -50,6 +58,10 @@ data class AgentTaskEvent(
     val inputTokens: Int? = null,
     val outputTokens: Int? = null,
     val totalTokens: Int? = null,
+    val budgetTokens: Long? = null,
+    val cumulativeTokens: Long? = null,
+    val errorCode: String? = null,
+    val resumable: Boolean? = null,
 ) {
     companion object {
         /** The task row was created (queued). */
@@ -275,6 +287,10 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
         inputTokens: Int? = null,
         outputTokens: Int? = null,
         totalTokens: Int? = null,
+        budgetTokens: Long? = null,
+        cumulativeTokens: Long? = null,
+        errorCode: String? = null,
+        resumable: Boolean? = null,
         epochMillis: Long = System.currentTimeMillis(),
     ): AgentTaskEvent {
         // The log is the last point before serialization, so the "no unpaired
@@ -295,6 +311,10 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
             inputTokens = inputTokens,
             outputTokens = outputTokens,
             totalTokens = totalTokens,
+            budgetTokens = budgetTokens,
+            cumulativeTokens = cumulativeTokens,
+            errorCode = errorCode,
+            resumable = resumable,
         )
         accumulator.record(type, tool, ok, inputTokens, outputTokens, totalTokens, epochMillis)
         events.addLast(event)

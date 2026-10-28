@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.agentic.ExtractResult
 import ai.platon.pulsar.agentic.model.DirectValue
 import ai.platon.pulsar.agentic.model.TcEvaluate
+import ai.platon.pulsar.agentic.model.TcException
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.api.model.JsEvaluation
@@ -161,7 +162,25 @@ abstract class AbstractToolExecutor : ToolExecutor {
                     }
                 }
             }
-            TcEvaluate(value = value, className = className, expression = pseudoExpression)
+            // JS results the model cannot use must say so. This is the last layer that
+            // still sees the CDP type/subtype: the CLI only receives text
+            // (`MCPToolController` renders the value), so a Promise used to arrive as
+            // `{}` and an undefined as a bare `null` (2026-10-28: three `eval`s of a
+            // 20-page batch silently lost their data).
+            val issue = jsEvaluationIssue(r as? JsEvaluation)
+            val evaluate = TcEvaluate(
+                value = issue?.text ?: value,
+                className = if (issue != null) null else className,
+                expression = pseudoExpression,
+            )
+            if (issue?.failure == true) {
+                evaluate.exception = TcException(
+                    pseudoExpression,
+                    IllegalArgumentException(issue.text),
+                    help(functionName),
+                )
+            }
+            evaluate
         } catch (e: Exception) {
             logger.warn("Error executing expression: {} - {}", pseudoExpression, e.brief())
             val h = help(functionName)
@@ -286,15 +305,60 @@ abstract class AbstractToolExecutor : ToolExecutor {
 }
 
 /**
+ * A JS evaluation result the model cannot use as-is.
+ *
+ * @property text what the model should see instead of the unusable value
+ * @property failure true when the call must count as failed (the model has to
+ *   change the expression before the data can exist)
+ */
+internal data class JsEvaluationIssue(val text: String, val failure: Boolean)
+
+/**
+ * The unusable part of a [JsEvaluation], or null when the value is real.
+ *
+ * Both cases are only observable here: `MCPToolController` receives the already
+ * rendered text, where a Promise had become `{}` and an undefined a bare `null`.
+ * The marker prefix of the undefined notice is consumed by the CLI
+ * (`main.rs`, `eval` output) so `eval --json` still emits `null`.
+ *
+ * @param evaluation the raw evaluation; null for non-JS tool results
+ */
+internal fun jsEvaluationIssue(evaluation: JsEvaluation?): JsEvaluationIssue? {
+    if (evaluation == null) return null
+    val subtype = evaluation.cdpSubtype?.lowercase()
+    val type = evaluation.cdpType?.lowercase()
+    return when {
+        // A promise value is not the result: without `--await` the CLI serialized it as
+        // `{}`, and the model treated that as the extracted data (2026-10-28 run).
+        subtype == "promise" -> JsEvaluationIssue(
+            "The expression returned an unresolved Promise, not a value. " +
+                "Re-run it with --await (or await it in the expression) so the resolved " +
+                "value is returned; a Promise object is not the result.",
+            failure = true,
+        )
+        // Legitimate for side-effect expressions, so it stays a success — but "null"
+        // alone taught the model nothing about why there was no data.
+        type == "undefined" -> JsEvaluationIssue(
+            "$UNDEFINED_RESULT_PREFIX: the expression produced no value. Make it return one " +
+                "(a final expression, or `return` inside a function) if you need the data.",
+            failure = false,
+        )
+        else -> null
+    }
+}
+
+/**
+ * Prefix of the plain-mode notice for a JS `undefined` result.
+ *
+ * The literal `null` leads so text consumers that look for it keep working; the CLI
+ * maps this prefix back to JSON null for `--json`, where a string would be a
+ * regression.
+ */
+internal const val UNDEFINED_RESULT_PREFIX = "null  (undefined"
+
+/**
  * Drop an authored help block's leading line when the framework already rendered
  * that exact line above it.
- *
- * A `ToolSpec.help` is written by hand and conventionally restates the callable
- * signature as its first line (`media.getInfo(filePath: String)`) — the same line
- * [AbstractToolExecutor.renderHelp] emits from `spec.expression`. Rendering both
- * printed the signature twice in every usage-error help block of every plugin,
- * because the block travels into the exception's `help` and from there into the
- * client-facing error text.
  *
  * Only an *identical* first line is removed, and blank leading lines are skipped
  * when looking for it: a different opening line is real documentation

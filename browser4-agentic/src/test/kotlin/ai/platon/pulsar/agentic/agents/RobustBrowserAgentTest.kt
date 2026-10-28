@@ -76,7 +76,13 @@ class RobustBrowserAgentTest {
         val initial = names(toolSet.initialSpecs)
         assertTrue(initial.contains("b4_run"), "web access tools are always exposed")
         assertTrue(initial.contains("coding_read"), "browsing profile keeps the most common file tools")
-        assertFalse(initial.contains("coding_shell"), "browsing profile hides shell (not a file tool)")
+        // `shell` IS exposed now: the browsing prompt tells the model to extract an
+        // `.xlsx` input with a script, and a strict function-calling provider cannot
+        // call an undeclared tool (Amazon top-20, 2026-10-28). The long tail stays
+        // hidden — that is what this test pins.
+        assertTrue(initial.contains("coding_shell"), "browsing profile keeps coding.shell (named by the prompt)")
+        assertFalse(initial.contains("coding_shellOutput"), "the shell long tail stays hidden")
+        assertFalse(initial.contains("coding_mvnBuild"), "build tools stay hidden in a browsing task")
         assertFalse(initial.contains("coding_ktSymbols"), "coding long tail stays hidden")
         assertTrue(initial.contains("system_taskComplete"), "system contract survives the browsing profile")
         assertTrue(toolSet.disclosureSpecs.isNotEmpty(), "the hidden coding tools stay disclosable")

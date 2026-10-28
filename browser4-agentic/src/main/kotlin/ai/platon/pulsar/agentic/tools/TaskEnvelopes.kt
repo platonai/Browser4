@@ -93,6 +93,12 @@ object TaskEnvelopes {
      *   without parsing English error text.
      * @param message human-readable status description, e.g. the agent's current
      *   step. Unlike [error] it is present while the task is still healthy.
+     * @param errorCode machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`,
+     *   `CANCELLED`, `TOOL_ERROR`, `INFRASTRUCTURE`) — a client branches on this
+     *   instead of parsing [error], and `statusCode` (417 for every failure) cannot
+     *   tell the cases apart.
+     * @param resumable whether the task can be continued (agent tasks only)
+     * @param effectiveTokenBudget the token budget the run enforced (`0` = unlimited)
      */
     fun of(
         taskId: String,
@@ -104,6 +110,9 @@ object TaskEnvelopes {
         statusCode: Int? = null,
         message: String? = null,
         error: String? = null,
+        errorCode: String? = null,
+        resumable: Boolean? = null,
+        effectiveTokenBudget: Long? = null,
         statusTool: String? = null,
         resultTool: String? = null,
         cancelTool: String? = null,
@@ -119,6 +128,9 @@ object TaskEnvelopes {
         statusCode?.let { envelope["statusCode"] = it }
         message?.takeIf { it.isNotBlank() }?.let { envelope["message"] = it }
         error?.takeIf { it.isNotBlank() }?.let { envelope["error"] = it }
+        errorCode?.takeIf { it.isNotBlank() }?.let { envelope["errorCode"] = it }
+        resumable?.let { envelope["resumable"] = it }
+        effectiveTokenBudget?.let { envelope["effectiveTokenBudget"] = it }
         statusTool?.let { envelope["statusTool"] = it }
         resultTool?.let { envelope["resultTool"] = it }
         cancelTool?.let { envelope["cancelTool"] = it }

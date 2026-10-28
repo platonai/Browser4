@@ -6,6 +6,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -210,5 +211,42 @@ class CliProcessManagerTest {
         val results = listOf(a.await(), b.await())
         assertTrue(results.count { it.rejected } == 1, "exactly one rejected: $results")
         assertTrue(results.count { it.isSuccess } == 1, "exactly one success: $results")
+    }
+
+    @Test
+    @DisplayName("a long command gets its own global --timeout, once and only for the CLI")
+    fun timeoutInjection() {
+        // The child used the CLI's 30s MCP default: a 20-page `eval --await` batch was
+        // cut into five retries, each an unexplained timeout (2026-10-28 run).
+        assertEquals(
+            "--timeout 300 eval --file x.js",
+            injectCliGlobalTimeout("browser4-cli.exe", "eval --file x.js", 300),
+        )
+        assertEquals(
+            "--timeout 60 --version",
+            injectCliGlobalTimeout("browser4-cli", "--version", 60),
+        )
+        // ≤30s is a deliberate fast-fail budget; the outer kill must not be pushed out.
+        assertEquals("eval --file x.js", injectCliGlobalTimeout("browser4-cli", "eval --file x.js", 30))
+        // An explicit --timeout (both spellings) is never duplicated.
+        assertEquals(
+            "eval --timeout 120 --file x.js",
+            injectCliGlobalTimeout("browser4-cli", "eval --timeout 120 --file x.js", 300),
+        )
+        assertEquals(
+            "eval --timeout=120",
+            injectCliGlobalTimeout("browser4-cli", "eval --timeout=120", 300),
+        )
+        // Other binaries go through this manager in tests: never inject a CLI flag.
+        assertEquals(
+            "-NoProfile -Command \"Write-Output x\"",
+            injectCliGlobalTimeout("pwsh.exe", "-NoProfile -Command \"Write-Output x\"", 300),
+        )
+        assertTrue(hasCliTimeoutFlag("--timeout 120 eval"))
+        assertTrue(
+            hasCliTimeoutFlag("eval --timeout 120"),
+            "a caller-named deadline anywhere must suppress the injection",
+        )
+        assertFalse(hasCliTimeoutFlag("eval --timeouts 120"))
     }
 }

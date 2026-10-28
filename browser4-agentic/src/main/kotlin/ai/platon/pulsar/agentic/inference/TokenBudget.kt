@@ -35,20 +35,30 @@ class TokenBudgetExceededException(
  * A [maxTotalTokens] of `0` or less means unlimited (observability only).
  *
  * @param maxTotalTokens hard cap on total (input + output) tokens per agent run.
+ * @param taskTotalTokens per-task budget (`agent run --token-budget`). It wins over
+ *   both [maxTotalTokens] and the process-wide [RuntimeConfigRegistry] override, and
+ *   is never written into the registry: a task-level choice must not change every
+ *   later task in the JVM. `null` keeps the config/registry resolution.
  */
-class AgentTokenBudget(val maxTotalTokens: Long = DEFAULT_MAX_TOTAL_TOKENS) {
+class AgentTokenBudget(
+    val maxTotalTokens: Long = DEFAULT_MAX_TOTAL_TOKENS,
+    val taskTotalTokens: Long? = null,
+) {
     private val logger = getLogger(this)
     private val consumedInput = AtomicLong(0)
     private val consumedOutput = AtomicLong(0)
     private val warned = AtomicBoolean(false)
 
     /**
-     * The budget actually enforced: a runtime override from
-     * [RuntimeConfigRegistry] (unified REST config interface) wins over the
-     * constructor value, effective immediately for existing instances.
+     * The budget actually enforced: a per-task override wins over a runtime override
+     * from [RuntimeConfigRegistry] (unified REST config interface), which wins over
+     * the constructor value.
      */
     val effectiveMaxTotalTokens: Long
-        get() = RuntimeConfigRegistry.getOverrideAsLong(CONFIG_KEY) ?: maxTotalTokens
+        get() = taskTotalTokens ?: RuntimeConfigRegistry.getOverrideAsLong(CONFIG_KEY) ?: maxTotalTokens
+
+    /** True when this run's budget came from a per-task override. */
+    val isTaskOverridden: Boolean get() = taskTotalTokens != null
 
     /** Total tokens consumed so far (input + output). */
     val consumedTotal: Long get() = consumedInput.get() + consumedOutput.get()
@@ -131,6 +141,16 @@ class AgentTokenBudget(val maxTotalTokens: Long = DEFAULT_MAX_TOTAL_TOKENS) {
             val raw = conf.get(CONFIG_KEY)?.trim()
             return AgentTokenBudget(parseBudgetValue(raw))
         }
+
+        /**
+         * Build the budget for one run: the per-task override when the caller named
+         * one, the configured value otherwise.
+         *
+         * @param conf the session configuration
+         * @param taskTokens `agent run --token-budget` value (`null` when omitted)
+         */
+        fun forRun(conf: ImmutableConfig, taskTokens: Long?): AgentTokenBudget =
+            if (taskTokens != null) AgentTokenBudget(taskTotalTokens = taskTokens) else from(conf)
 
         /**
          * Parse a raw config string into a budget value.

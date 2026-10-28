@@ -37,7 +37,8 @@ class AgentToolManager constructor(
 
     /** The active workspace root. Rebindable via [rebindWorkspace] for
      *  `agent run --fresh-workspace`; [codingShell], [codingFs] and
-     *  [b4CliExecutor] are rebuilt to point at the new root. */
+     *  [codingTarget] are rebuilt to point at the new root. The `b4` executor reads
+     *  the root from the shell at dispatch time, so it cannot go stale. */
     @Volatile
     var workspaceRoot: Path = initialWorkspaceRoot
         private set
@@ -87,8 +88,8 @@ class AgentToolManager constructor(
      *  on [rebindWorkspace] so tool dispatch always targets the active root. */
     var codingTarget: CodingToolExecutor.Target = buildCodingTarget(initialWorkspaceRoot)
         private set
-    /** CLI tool executor for browser4-cli integration (domain `b4`) */
-    var b4CliExecutor: B4CliToolExecutor = buildB4CliExecutor(initialWorkspaceRoot)
+    /** CLI tool executor for browser4-cli integration (domain `b4`); workspace-free (see [buildB4CliExecutor]) */
+    var b4CliExecutor: B4CliToolExecutor = buildB4CliExecutor()
         private set
 
     val system: SystemToolExecutor = SystemToolExecutor(this)
@@ -342,9 +343,17 @@ class AgentToolManager constructor(
         )
     }
 
-    private fun buildB4CliExecutor(root: Path) = B4CliToolExecutor(
+    /**
+     * The `b4` domain executor.
+     *
+     * It carries NO working directory: `b4.run` resolves its cwd from the
+     * [CodingAgentShell] it is dispatched with, i.e. from the workspace root that is
+     * current for THIS task. A captured `root` survived [rebindWorkspace] only in the
+     * executor registry, so a rebind left `b4.run` writing into the previous task's
+     * workspace while `coding.*` wrote into the new one (2026-10-28).
+     */
+    private fun buildB4CliExecutor() = B4CliToolExecutor(
         backendBaseUrl = session.sessionConfig.get("browser4.server.url"),
-        defaultWorkingDir = root,
         // Per-task policy: `b4.run`'s file:// and upload must obey the same
         // boundary as the coding tools (read lazily — the policy changes per task).
         accessPolicy = { accessPolicy },
@@ -353,7 +362,7 @@ class AgentToolManager constructor(
     /**
      * Point the coding tools at a fresh, isolated workspace root. Used by the
      * task runner when the caller passes `agent run --fresh-workspace`. The
-     * previous [codingShell]/[codingFs]/[b4CliExecutor] are replaced; callers
+     * previous [codingShell]/[codingFs]/[codingTarget] are replaced; callers
      * that read these properties each dispatch see the new instances.
      */
     fun rebindWorkspace(root: Path) {
@@ -361,7 +370,9 @@ class AgentToolManager constructor(
         codingShell = buildCodingShell(root)
         codingFs = buildCodingFs(root)
         codingTarget = buildCodingTarget(root)
-        b4CliExecutor = buildB4CliExecutor(root)
+        // The b4 executor is deliberately NOT rebuilt: it holds no workspace of its own
+        // and resolves the cwd from the shell it is dispatched with, which is the new
+        // one. Replacing it here also orphaned its tracked background jobs.
         logger.info("rebound agent workspace to {}", root)
     }
 

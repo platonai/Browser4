@@ -48,6 +48,12 @@ data class ToolOutcome(
 
         /**
          * Char budgets for verbose tool families (everything else uses [DEFAULT_BODY_LEN]).
+         *
+         * Keyed by **method only**: the lookup used to be `"$domain.$method"`, so every
+         * entry here was dead code and each tool fell back to [DEFAULT_BODY_LEN]. The
+         * visible damage was `system.skillDoc`: SKILL.md came back as 1,290 chars of
+         * `…[truncated 58125 chars]…` with no way to read further, so the model could
+         * not reach the reference docs the prompt told it to consult (2026-10-28 run).
          */
         private val BODY_BUDGETS: Map<String, Int> = mapOf(
             "mvnBuild" to 3_000,
@@ -58,6 +64,10 @@ data class ToolOutcome(
             "diagnostics" to 2_000,
             "ktSymbols" to 1_600,
             "ktReferences" to 1_600,
+            // One paginated skill document. `SystemToolExecutor.skillDoc` already pages
+            // at 8,000 chars, so a default page survives intact; an explicit larger
+            // `limit` is cut here with a continuation hint (see [boundedBody]).
+            "skillDoc" to 8_000,
         )
 
         /**
@@ -81,7 +91,6 @@ data class ToolOutcome(
             val toolCall = result.actionDescription?.toolCall
             val resolvedDomain = domain ?: toolCall?.domain ?: "unknown"
             val resolvedMethod = method ?: toolCall?.method ?: "unknown"
-            val key = "$resolvedDomain.$resolvedMethod"
             val exception = evaluate.exception
 
             val errors = mutableListOf<String>()
@@ -104,8 +113,15 @@ data class ToolOutcome(
             val refused = isPermissionRefusal(raw)
             val ok = evaluate.success && exception == null && !refused
             val summary = if (refused) buildRefusalSummary(raw) else buildSummary(ok, raw, exception)
+            val budget = BODY_BUDGETS[resolvedMethod] ?: DEFAULT_BODY_LEN
+            // Only `system.skillDoc` is paginated: its result is a slice of a document,
+            // so the truncation marker must name the offset that continues THIS slice
+            // (a bare "truncated 8,000 chars" is unreachable for a 59 KB SKILL.md).
+            val continuation = if (resolvedMethod == "skillDoc") {
+                { keptChars: String -> skillDocContinuation(raw, keptChars) }
+            } else null
             val body = raw.takeIf { it.isNotBlank() }
-                ?.let { boundedBody(it, BODY_BUDGETS[key] ?: DEFAULT_BODY_LEN) }
+                ?.let { boundedBody(it, budget, continuation) }
 
             return ToolOutcome(
                 domain = resolvedDomain, method = resolvedMethod, ok = ok,
@@ -158,10 +174,33 @@ data class ToolOutcome(
          * `ALPHA-1 BETA-2 GAMMA-3` and the model fell back to python to recover the
          * lines (and a CSV read back this way is unusable). Only the summary is
          * inlined; an over-budget body is cut in the middle like a CLI result.
+         *
+         * @param continuation when set, the result is **paginated content** rather than
+         *   free text: the cut keeps only the head (a tail would repeat data the model
+         *   already has, in the wrong order) and [continuation] renders the marker that
+         *   names the offset continuing the slice.
          */
-        private fun boundedBody(raw: String, budget: Int): String {
+        private fun boundedBody(
+            raw: String,
+            budget: Int,
+            continuation: ((String) -> String)? = null,
+        ): String {
             val text = raw.replace("\r\n", "\n").trim()
             if (text.length <= budget) return text
+            if (continuation != null) {
+                // Reserve room for the marker, then render it from the text we actually
+                // keep so the offset it names is exact.
+                var keep = (budget - 160).coerceAtLeast(0)
+                var head = text.take(keep)
+                var marker = "\n" + continuation(head) + "\n"
+                val overflow = head.length + marker.length - budget
+                if (overflow > 0) {
+                    keep = (keep - overflow).coerceAtLeast(0)
+                    head = text.take(keep)
+                    marker = "\n" + continuation(head) + "\n"
+                }
+                return head + marker
+            }
             val omitted = text.length - budget
             val marker = "\n…[truncated $omitted chars]…\n"
             val keep = (budget - marker.length).coerceAtLeast(0)
@@ -169,6 +208,22 @@ data class ToolOutcome(
             val head = keep * 2 / 3
             val tail = keep - head
             return text.take(head) + marker + text.takeLast(tail)
+        }
+
+        /** `offset=(\d+)` in the pagination header [SystemToolExecutor] emits. */
+        private val SKILL_DOC_OFFSET = Regex("""\boffset=(\d+)""")
+
+        /**
+         * Continuation marker for a truncated skill-document page: the next offset must
+         * point into the DOCUMENT, not into this page (a page can start at 24,000).
+         */
+        private fun skillDocContinuation(raw: String, keptText: String): String {
+            val omitted = raw.length - keptText.length
+            val pageStart = raw.lineSequence().firstOrNull()
+                ?.let { SKILL_DOC_OFFSET.find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            if (pageStart == null) return "…[truncated $omitted chars]…"
+            val consumed = keptText.codePointCount(0, keptText.length)
+            return "…[truncated $omitted chars; call system.skillDoc(name, offset=${pageStart + consumed})]…"
         }
     }
 }

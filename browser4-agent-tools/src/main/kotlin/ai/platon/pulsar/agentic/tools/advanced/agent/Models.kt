@@ -188,7 +188,82 @@ data class AgentTaskStatus(
     /** The interrupted task this run resumes, when started with `agent run --resume <id>`. */
     var resumedFrom: String? = null
 
+    /**
+     * The token budget this run actually enforced (`0` = unlimited, `null` = never
+     * reported by the engine).
+     *
+     * A budget abort used to surface as a bare `TokenBudgetExceededException` with no
+     * number attached, so a caller could not tell whether the configured 5M default
+     * was too small or the run was runaway. Filled from the agent's own budget at the
+     * end of the run (see `RobustBrowserAgent.lastRunTokenBudget`).
+     */
+    var effectiveTokenBudget: Long? = null
+
+    /**
+     * Machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`,
+     * `TOOL_ERROR`), derived from [failureReason] by [failureCodeOf].
+     *
+     * Clients branch on this instead of matching prose: `agent result` uses it for a
+     * resume hint, and the CLI maps it onto `task.failed.errorCode`.
+     */
+    var errorCode: String? = null
+
+    /**
+     * Whether this failed/cancelled task can be continued with
+     * `agent run --resume <id>`: a budget/step/no-op abort is resumable (the
+     * workspace and its files survive), an infrastructure failure may not be.
+     */
+    var resumable: Boolean? = null
+
     companion object {
+        /** Machine-readable failure codes carried on a failed/cancelled task. */
+        const val ERROR_TOKEN_BUDGET = "TOKEN_BUDGET"
+        const val ERROR_NOOP_LIMIT = "NOOP_LIMIT"
+        const val ERROR_CANCELLED = "CANCELLED"
+        const val ERROR_TOOL_ERROR = "TOOL_ERROR"
+        const val ERROR_INFRASTRUCTURE = "INFRASTRUCTURE"
+
+        /** Failure reasons produced by the token-budget guard. */
+        private val TOKEN_BUDGET_PATTERN = Regex("""(?i)token ?budget|tokenbudget""")
+
+        /** Failure reasons produced by the consecutive no-op guard. */
+        private val NOOP_PATTERN = Regex("""(?i)\bno[- ]?op|nooplimit""")
+
+        /** Failure reasons that mean the runtime, not the task, was unusable. */
+        private val INFRA_PATTERN = Regex(
+            """(?i)server restart|runner closed|backend|unreachable|no checkpoint"""
+        )
+
+        /**
+         * Derive the machine-readable code of a failed run from its reason.
+         *
+         * Codes, not prose: the CLI's `task.failed` line, `agent result` and any
+         * supervisory script must agree on WHY a run stopped. A budget abort used to
+         * surface only as `TokenBudgetExceededException: …`, which no client could
+         * branch on (2026-10-28 baseline).
+         */
+        fun errorCodeOf(failureReason: String?, cancelled: Boolean): String? = when {
+            cancelled -> ERROR_CANCELLED
+            failureReason.isNullOrBlank() -> null
+            TOKEN_BUDGET_PATTERN.containsMatchIn(failureReason) -> ERROR_TOKEN_BUDGET
+            NOOP_PATTERN.containsMatchIn(failureReason) -> ERROR_NOOP_LIMIT
+            INFRA_PATTERN.containsMatchIn(failureReason) -> ERROR_INFRASTRUCTURE
+            else -> ERROR_TOOL_ERROR
+        }
+
+        /**
+         * Whether a failed task can be continued with `agent run --resume <id>`.
+         *
+         * Everything the runner can resume has an instruction and a workspace; only a
+         * failure whose cause is the runtime (no live backend, no checkpoint) cannot
+         * be resumed in place. `null` for an unknown code.
+         */
+        fun isResumable(errorCode: String?): Boolean? = when (errorCode) {
+            null -> null
+            ERROR_INFRASTRUCTURE -> false
+            else -> true
+        }
+
         /**
          * The internal event trace is a debugging aid but ends up in the JSONL
          * persistence rows and in every status poll response; a long agent run
@@ -306,5 +381,8 @@ fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskS
     snapshot.accessPreset = accessPreset
     snapshot.resumedFrom = resumedFrom
     snapshot.deliverables = deliverables
+    snapshot.effectiveTokenBudget = effectiveTokenBudget
+    snapshot.errorCode = errorCode
+    snapshot.resumable = resumable
     return snapshot
 }

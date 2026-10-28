@@ -77,6 +77,45 @@ class ToolOutcomeTest {
     }
 
     @Test
+    @DisplayName("the body budget is keyed by method, not by domain.method (skillDoc regression)")
+    fun testBodyBudgetKeyedByMethod() {
+        // `coding.shell` used to fall back to the 1,200-char default because the lookup
+        // key was "coding.shell" while the table holds "shell".
+        val longOutput = (1..400).joinToString("\n") { "shell output line $it" }
+        val codingshell = ToolOutcome.from(result(longOutput), domain = "coding", method = "shell")
+        assertTrue(
+            codingshell.body!!.length > 2_000,
+            "coding.shell must use the 3,000-char budget, got ${codingshell.body!!.length}"
+        )
+
+        val skill = ToolOutcome.from(
+            result("SKILL.md · offset=0 nextOffset=8000 totalLength=59326\n\n" + "# x\n" + "y".repeat(20_000)),
+            domain = "system", method = "skillDoc",
+        )
+        assertTrue(
+            skill.body!!.length <= 8_000 + 64,
+            "system.skillDoc must stay within 8,000 chars, got ${skill.body!!.length}"
+        )
+    }
+
+    @Test
+    @DisplayName("a truncated skillDoc body points at the offset that continues the document")
+    fun testSkillDocTruncationCarriesContinuationOffset() {
+        val header = "SKILL.md · offset=8000 nextOffset=16096 totalLength=59326"
+        val page = header + "\n\n" + buildString { repeat(20_000) { append('z') } }
+
+        val outcome = ToolOutcome.from(result(page), domain = "system", method = "skillDoc")
+
+        val body = outcome.body!!
+        assertTrue(body.length <= 8_064, "body must stay bounded, got ${body.length}")
+        assertTrue(body.contains("offset="), "the marker must name a continuation offset: ${body.takeLast(200)}")
+        // The offset is into the DOCUMENT: page start 8,000 plus what this page kept.
+        val marker = Regex("""offset=(\d+)\)""").find(body)!!.groupValues[1].toInt()
+        assertTrue(marker > 8_000, "the marker must continue the document, not restart the page: $marker")
+        assertTrue(marker < 16_096, "the marker must stay inside the page: $marker")
+    }
+
+    @Test
     @DisplayName("envelope reports failure with bounded error chain")
     fun testFailureCapturesErrors() {
         val cause = IllegalStateException("Unresolved reference 'pdk'".repeat(60))

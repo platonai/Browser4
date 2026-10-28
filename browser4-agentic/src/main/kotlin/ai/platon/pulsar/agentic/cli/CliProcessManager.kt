@@ -36,6 +36,16 @@ data class CliProcessConfig(
     val defaultTimeoutMs: Long = 120_000,
     val maxTimeoutMs: Long = 600_000,
     val graceMs: Long = 3_000,
+    /**
+     * Extra wall-clock time given to a CLI that enforces its OWN HTTP deadline
+     * (`--timeout <s>`).
+     *
+     * The outer kill and the CLI's HTTP timeout used to be the same number, so the
+     * two raced: the subprocess was killed at 300s while the CLI was still waiting
+     * out its own 300s request, and the model got a truncated output instead of the
+     * CLI's error. The grace lets the CLI report its timeout first.
+     */
+    val cliTimeoutGraceSeconds: Long = 60,
     val outputBufferBytes: Int = 1 shl 20,
     val returnMaxTokens: Int = 10_000,
     val maxConcurrentGlobal: Int = 8,
@@ -87,16 +97,22 @@ class CliProcessManager(
     /** Resolve a raw request into an explicit spec (throws [CliUnavailableException]). */
     fun resolve(request: CliRunRequest, backendBaseUrl: String? = null): CliRunSpec {
         val binary = resolver.resolve()
-        val (shell, shellArgv, commandLine) = buildShellInvocation(binary, request.args)
-        val timeoutMs = ((request.timeoutSeconds
-            ?: (config.defaultTimeoutMs / 1000)))
-            .coerceIn(1, config.maxTimeoutMs / 1000) * 1000
+        val timeoutSeconds = (request.timeoutSeconds
+            ?: (config.defaultTimeoutMs / 1000))
+            .coerceIn(1, config.maxTimeoutMs / 1000)
+        // Give the CLI its own, longer HTTP deadline (see [injectCliGlobalTimeout]).
+        // The outer process kill must outlive it, or the two deadlines race and a
+        // long eval is truncated instead of reporting the CLI's own timeout.
+        val effectiveArgs = injectCliGlobalTimeout(binary.fileName?.toString().orEmpty(), request.args, timeoutSeconds)
+        val cliOwnsDeadline = hasCliTimeoutFlag(effectiveArgs)
+        val (shell, shellArgv, commandLine) = buildShellInvocation(binary, effectiveArgs)
+        val deadlineSeconds = timeoutSeconds + if (cliOwnsDeadline) config.cliTimeoutGraceSeconds else 0
         return CliRunSpec(
             binaryPath = binary,
             shell = shell,
             shellArgv = shellArgv,
             commandLine = commandLine,
-            timeoutMs = timeoutMs,
+            timeoutMs = deadlineSeconds * 1000,
             graceMs = config.graceMs,
             outputBufferBytes = config.outputBufferBytes,
             returnMaxTokens = config.returnMaxTokens,
@@ -412,8 +428,17 @@ class CliProcessManager(
         val commandLine = "$quotedBinary $args".trimEnd()
         return if (isWindows) {
             val shell = if (pwshAvailable.get()) "pwsh" else "powershell"
-            // UTF-8 preamble for Windows PowerShell 5.1 OEM codepage safety.
-            val preamble = if (shell == "powershell") "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " else ""
+            // UTF-8 console I/O for BOTH PowerShell hosts, not just 5.1.
+            //
+            // `b4.run("… > file")` and any child program's output are decoded by the
+            // PowerShell layer: with the OEM code page (cp936 on a zh-CN host) a
+            // UTF-8 child wrote `It鈥檚`/`dÉcor` into the file, and the model then tried
+            // to "fix" the data (2026-10-28 run). `$OutputEncoding` covers the pipe to
+            // native commands, `[Console]::OutputEncoding` the bytes read back, and
+            // `chcp 65001` the console program's own code page. Each step is wrapped in
+            // try/catch: a GUI/hostless run may have no console and the setter throws.
+            val preamble = "try { [Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
+                "\$OutputEncoding=[Text.Encoding]::UTF8; chcp 65001 > \$null } catch { }; "
             Triple(
                 shell,
                 listOf(shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", preamble + "& " + commandLine),
@@ -514,6 +539,7 @@ class CliProcessManager(
      * budget is exceeded.
      */
     private class HeadTailBuffer(private val maxChars: Int) {
+
         private val headCap = maxChars / 2
         private val tailCap = maxChars - headCap
         private val head = StringBuilder()
@@ -545,4 +571,45 @@ class CliProcessManager(
             return if (dropped > 0) body + "\n…[dropped $dropped chars]…" else body
         }
     }
+}
+
+/**
+ * A global `--timeout` consuming the next token (or `--timeout=120`).
+ *
+ * Used to avoid injecting a second one: a caller that already named its deadline
+ * means it, and two global flags would make the last one win silently.
+ */
+private val CLI_TIMEOUT_FLAG = Regex("""(^|\s)--timeout(=|\s|$)""")
+
+/** True when [args] already carry a global `--timeout` flag. */
+internal fun hasCliTimeoutFlag(args: String): Boolean = CLI_TIMEOUT_FLAG.containsMatchIn(args)
+
+/**
+ * Seconds below which no `--timeout` is injected.
+ *
+ * The MCP tool-call default is 30s (the shortest deadline in the chain): a command
+ * with a smaller budget is meant to fail fast, and forcing the CLI to a wider HTTP
+ * timeout would only make the outer kill look like a mystery.
+ */
+internal const val CLI_TIMEOUT_INJECTION_THRESHOLD_SECONDS = 30L
+
+/**
+ * Give the browser4-cli subprocess its own global HTTP deadline.
+ *
+ * Without it the child used the CLI's 30s MCP default: a 20-page `eval --await`
+ * batch was cut into five retries, each reporting a timeout the model could not
+ * act on (2026-10-28 run, seq 243/414/483). The flag is only added for the real CLI
+ * binary (tests run other programs through this manager) and only when the caller
+ * has not named a deadline itself.
+ *
+ * @param binaryName the resolved binary's file name
+ * @param args the raw CLI arguments
+ * @param timeoutSeconds the tool call's timeout, already clamped
+ * @return [args] with `--timeout <s>` prepended when the CLI should own the deadline
+ */
+internal fun injectCliGlobalTimeout(binaryName: String, args: String, timeoutSeconds: Long): String {
+    if (!binaryName.startsWith("browser4-cli", ignoreCase = true)) return args
+    if (timeoutSeconds <= CLI_TIMEOUT_INJECTION_THRESHOLD_SECONDS) return args
+    if (hasCliTimeoutFlag(args)) return args
+    return "--timeout $timeoutSeconds $args"
 }

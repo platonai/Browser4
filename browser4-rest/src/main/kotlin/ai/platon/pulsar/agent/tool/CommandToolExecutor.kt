@@ -70,10 +70,16 @@ class CommandToolExecutor(
                 ),
                 ToolSpec.Arg(
                     "freshWorkspace", "Boolean?", "null",
-                    "True runs this task in a fresh, isolated workspace directory " +
-                        "(created under the agent's data dir) instead of the shared workspace. " +
-                        "Use for tasks that must not see or mutate previous tasks' scratch files. " +
-                        "Omit or false uses the default shared workspace.",
+                    "Deprecated compatibility switch: every task now runs in its own workspace " +
+                        "(<agent data dir>/workspace.<taskId>), so this is a no-op. Kept so older " +
+                        "clients keep working; use `sharedWorkspace` for the opposite.",
+                ),
+                ToolSpec.Arg(
+                    "sharedWorkspace", "Boolean?", "null",
+                    "True runs this task in the shared <agent data dir>/workspace instead of a " +
+                        "per-task workspace, so it sees and mutates previous tasks' files. " +
+                        "Omit or false keeps the default isolation (one workspace per task; " +
+                        "`resumeTaskId` keeps the interrupted task's workspace).",
                 ),
                 ToolSpec.Arg(
                     "engine", "String?", "null",
@@ -101,6 +107,12 @@ class CommandToolExecutor(
                         "its instruction, workspace and the files already written — and inherits its " +
                         "coding/access flags. `command` may then be empty. The id must be known to this " +
                         "backend (the interrupted row is restored after a restart, within its TTL).",
+                ),
+                ToolSpec.Arg(
+                    "tokenBudget", "Long?", "null",
+                    "Token budget for THIS task (`agent run --token-budget`), overriding " +
+                        "`agent.token.budget.total` for this run only — a per-run override, never a " +
+                        "process-wide config write. 0 means unlimited. Omit to use the configured default.",
                 ),
             ),
             returnType = "String",
@@ -245,8 +257,8 @@ class CommandToolExecutor(
                 validateArgs(
                     args,
                     allowed = setOf(
-                        "command", "async", "noopLimit", "engine", "coding", "freshWorkspace",
-                        "access", "autoApprove", "resumeTaskId",
+                        "command", "async", "noopLimit", "engine", "coding", "freshWorkspace", "sharedWorkspace",
+                        "access", "autoApprove", "resumeTaskId", "tokenBudget",
                     ) + SESSION_ARG,
                     // `agent run --resume <id>` may omit the task text: the instruction
                     // comes from the interrupted task's checkpoint. Validated below.
@@ -283,6 +295,7 @@ class CommandToolExecutor(
                 // null (absent) = browser task: explicit opt-in only, never guessed.
                 val coding = paramBool(args, "coding", functionName, required = false, default = null)
                 val freshWorkspace = paramBool(args, "freshWorkspace", functionName, required = false, default = null)
+                val sharedWorkspace = paramBool(args, "sharedWorkspace", functionName, required = false, default = null)
                 // Unknown preset must fail loudly: silently falling back to the server default
                 // would run a task the caller believes is read-only with full access.
                 val access = paramString(args, "access", functionName, required = false, default = null)
@@ -303,15 +316,19 @@ class CommandToolExecutor(
                         }
                     }
                     ?.let { AccessPreset.parse(it) }
+                // Per-task token budget: a negative value is not a budget, so it is
+                // rejected rather than silently becoming "unlimited".
+                val tokenBudget = paramLong(args, "tokenBudget", functionName, required = false, default = null)
+                    ?.also { require(it >= 0) { "tokenBudget must be >= 0 (0 = unlimited), actual=$it" } }
                 if (isAsync) {
                     service.submitPlainCommand(
-                        sessionId, command, noopLimit, coding, freshWorkspace, access, autoApprove,
-                        resumeTaskId,
+                        sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove,
+                        resumeTaskId, tokenBudget,
                     )
                 } else {
                     val status = service.executePlainCommand(
-                        sessionId, command, noopLimit, coding, freshWorkspace, access, autoApprove,
-                        resumeTaskId,
+                        sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove,
+                        resumeTaskId, tokenBudget,
                     )
                     pulsarObjectMapper().writeValueAsString(status)
                 }
@@ -401,6 +418,12 @@ class CommandToolExecutor(
             // Human-readable progress, present while the task is still healthy.
             message = status.message,
             error = if (word == "failed") status.message else null,
+            // Failure semantics travel on the envelope as well as the payload: every
+            // client reads the envelope first, and `status=failed` alone cannot tell
+            // a token-budget abort from a broken browser.
+            errorCode = status.errorCode,
+            resumable = status.resumable,
+            effectiveTokenBudget = status.effectiveTokenBudget,
             statusTool = "command_status",
             resultTool = "command_result",
             cancelTool = "command_cancel",

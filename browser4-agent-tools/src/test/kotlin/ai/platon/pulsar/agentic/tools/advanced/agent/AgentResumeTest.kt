@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.tools.advanced.agent
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.FileTime
 import java.time.Instant
 
 /**
@@ -137,5 +139,61 @@ class AgentResumeTest {
         repeat(80) { index -> Files.writeString(tmp.resolve("f$index.csv"), "x") }
 
         assertEquals(MAX_ABORT_DELIVERABLES, deliverableFilesOf(tmp.toString()).size)
+    }
+
+    @Test
+    @DisplayName("deliverables are attributed to THIS run: files older than the start are not claimed")
+    fun deliverablesIgnoreOlderFiles(@TempDir tmp: Path) {
+        // The 2026-10-28 baseline reported a CSV written 36 minutes before the run and
+        // another agent's report as this run's deliverables; the finish gate compares a
+        // completion report against this list, so a wrong list is worse than an empty one.
+        val stale = tmp.resolve("old_report.csv")
+        Files.writeString(stale, "old")
+        Files.setLastModifiedTime(stale, FileTime.from(Instant.now().minusSeconds(3_600)))
+
+        val startedAt = Instant.now()
+        val fresh = tmp.resolve("top20.csv")
+        Files.writeString(fresh, "id\n1\n")
+        Files.setLastModifiedTime(fresh, FileTime.from(startedAt.plusMillis(500)))
+
+        assertEquals(listOf("top20.csv"), deliverableFilesOf(tmp.toString(), startedAt))
+    }
+
+    @Test
+    @DisplayName("the mutation log wins over the mtime scan and may name nested deliverables")
+    fun deliverablesPreferMutations(@TempDir tmp: Path) {
+        Files.createDirectories(tmp.resolve("out"))
+        Files.writeString(tmp.resolve("out").resolve("rows.csv"), "x")
+        Files.writeString(tmp.resolve("unrelated.csv"), "x")
+
+        val files = deliverableFilesOf(
+            tmp.toString(),
+            mutations = listOf("out/rows.csv", ".b4scratch/ev.js", "../escape.csv"),
+        )
+
+        assertEquals(listOf("out/rows.csv"), files)
+    }
+
+    @Test
+    @DisplayName("each task gets its own workspace; only --shared-workspace and --resume opt out")
+    fun perTaskWorkspaceIsTheDefault(@TempDir tmp: Path) {
+        val first = taskWorkspaceFor(tmp, "task-a", resumeWorkspace = null, sharedWorkspace = null)
+        val second = taskWorkspaceFor(tmp, "task-b", resumeWorkspace = null, sharedWorkspace = null)
+
+        assertEquals(tmp.resolve("workspace.task-a"), first)
+        assertEquals(tmp.resolve("workspace.task-b"), second)
+        assertNotEquals(first, second, "two tasks must never share a workspace")
+
+        assertNull(
+            taskWorkspaceFor(tmp, "task-c", resumeWorkspace = null, sharedWorkspace = true),
+            "--shared-workspace keeps the old shared directory",
+        )
+
+        val checkpoint = tmp.resolve("workspace.interrupted")
+        assertEquals(
+            checkpoint,
+            taskWorkspaceFor(tmp, "task-d", resumeWorkspace = checkpoint, sharedWorkspace = true),
+            "a resume keeps the interrupted task's workspace even with --shared-workspace",
+        )
     }
 }

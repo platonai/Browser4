@@ -103,9 +103,39 @@ browser4-cli agent result <task-id>
 
 The workspace lives on the machine that runs the backend — when the backend is
 remote, copy the artifacts from there (or have the agent return the data inline).
-Each task gets its own workspace, so artifacts of two tasks never collide. What the
-agent may read (and what stays refused), how task inputs are copied in, and the
-deliverable format are documented in [agent-workspace.md](agent-workspace.md).
+Each task gets its **own** workspace directory (`<agent data dir>/workspace.<task-id>`),
+so artifacts of two tasks never collide: a file another run wrote is never in this
+run's workspace, never in its `filesChanged`, and never mistaken for this run's
+deliverable. `--resume <task-id>` keeps the interrupted task's workspace (that is the
+point of resuming); `--shared-workspace` restores the old shared
+`<agent data dir>/workspace` for callers that really want to see earlier files.
+`--fresh-workspace` is accepted but is now the default behaviour. What the agent may
+read (and what stays refused), how task inputs are copied in, and the deliverable
+format are documented in [agent-workspace.md](agent-workspace.md).
+
+### Cost control (`--token-budget`, `--follow` usage lines)
+
+A run is capped at `agent.token.budget.total` (5M tokens by default) and aborts with
+`TOKEN_BUDGET` before it can burn unbounded provider credits. Two different knobs:
+
+| Knob | Scope | Use it when |
+|---|---|---|
+| `agent run … --token-budget <n>` | **this task only** (a per-run override; cleared when the task ends) | one long task legitimately needs more (or less) than the default |
+| `config set agent.token.budget.total <n>` | process-wide: every later task on this backend | the operator wants a new default |
+
+`--token-budget 0` means unlimited (accounting only). `--follow` reports the spend:
+
+```text
+[04:31] tokens 412.0k / 5.00M (8%) · 37 requests
+...
+[12:02] tokens 4.02M / 5.00M (80%) · 118 requests ⚠ 80% of the token budget used
+[15:24] ✖ token budget exhausted: 5.01M / 5.00M — the run is being aborted
+```
+
+The progress line is throttled (every 10 requests or 15s); the 80% warning appears
+once and the abort line names both numbers. `--ndjson` carries the same information as
+`effectiveTokenBudget` + `cumulativeTokens` on every `run.usage` line, and
+`agent result --json` reports the budget as `result.effectiveTokenBudget`.
 
 ### Permissions (`--access`)
 
@@ -498,6 +528,9 @@ containing a URL or page interaction stays a browser task regardless.
 | Symptom | Recovery |
 |----------|---------|
 | `agent run` exits non-zero | Check backend is reachable and LLM key is configured |
+| `agent result` exits non-zero with `✖ failed (<code>)` | The task really failed. The printed payload carries `errorCode` (`TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`, `TOOL_ERROR`, `INFRASTRUCTURE`), the workspace, the files it wrote and — when the work can continue — `resume: agent run --resume <id>`. Pass `--allow-failed` to exit 0 while still reading the failed payload |
+| `✖ failed (TOKEN_BUDGET)` | Raise the cap for one task (`--token-budget <n>`), the default for the backend (`config set agent.token.budget.total <n>`), or resume with a narrower scope (`--resume <id>`); `errors`/`summary` name the consumed budget |
+| `agent run` reports `unexpected positional arguments: [...]` | The task is one argument: quote it (`agent run "the whole task"`). Extra positional words are rejected instead of being appended to the instruction |
 | `No agent task found with id '…'` | The backend has no record of that id (cleared, expired, or the backend restarted) — `agent list` shows what is still tracked |
 | Task still `running` after minutes | Poll `agent status` — browsing agents routinely take minutes; `processed` shows whether it is still stepping |
 | `agent result` says the result carries no data | The agent may have written its deliverable to a file: the same output names the `workspace` it wrote into |

@@ -272,4 +272,63 @@ class AgentTaskStatusTest {
         assertEquals(7, snapshot.toolExecutions)
         assertEquals(status.startedTime, snapshot.startedTime)
     }
+
+    // -----------------------------------------------------------------
+    // Failure semantics (errorCode / resumable)
+    // -----------------------------------------------------------------
+
+    @Test
+    @DisplayName("failure codes distinguish budget, no-op, cancel and tool failures")
+    fun errorCodeDerivation() {
+        // `statusCode` is 417 for every failure, so a client could not tell a token
+        // budget abort (raise the budget) from a broken browser (fix the runtime).
+        assertEquals(
+            AgentTaskStatus.ERROR_TOKEN_BUDGET,
+            AgentTaskStatus.errorCodeOf("TokenBudgetExceededException: Token budget exceeded: consumed 5,006,041", false),
+        )
+        assertEquals(
+            AgentTaskStatus.ERROR_NOOP_LIMIT,
+            AgentTaskStatus.errorCodeOf("Aborted after 8 consecutive no-op steps", false),
+        )
+        assertEquals(
+            AgentTaskStatus.ERROR_CANCELLED,
+            AgentTaskStatus.errorCodeOf("TokenBudgetExceededException: whatever", true),
+            "cancelled wins over the reason",
+        )
+        assertEquals(
+            AgentTaskStatus.ERROR_INFRASTRUCTURE,
+            AgentTaskStatus.errorCodeOf("Interrupted by server restart", false),
+        )
+        assertEquals(
+            AgentTaskStatus.ERROR_TOOL_ERROR,
+            AgentTaskStatus.errorCodeOf("IllegalStateException: driver died", false),
+        )
+        assertNull(AgentTaskStatus.errorCodeOf(null, false), "a successful run has no code")
+        assertNull(AgentTaskStatus.errorCodeOf("  ", false))
+    }
+
+    @Test
+    @DisplayName("a runtime failure is not resumable in place; everything else is")
+    fun resumability() {
+        assertEquals(false, AgentTaskStatus.isResumable(AgentTaskStatus.ERROR_INFRASTRUCTURE))
+        assertEquals(true, AgentTaskStatus.isResumable(AgentTaskStatus.ERROR_TOKEN_BUDGET))
+        assertEquals(true, AgentTaskStatus.isResumable(AgentTaskStatus.ERROR_NOOP_LIMIT))
+        assertEquals(true, AgentTaskStatus.isResumable(AgentTaskStatus.ERROR_CANCELLED))
+        assertNull(AgentTaskStatus.isResumable(null))
+    }
+
+    @Test
+    @DisplayName("detachedSnapshot keeps the failure semantics and budget")
+    fun detachedSnapshotKeepsFailureSemantics() {
+        val status = AgentTaskStatus(processState = "in_progress")
+        status.effectiveTokenBudget = 5_000_000
+        status.errorCode = AgentTaskStatus.ERROR_TOKEN_BUDGET
+        status.resumable = true
+
+        val snapshot = status.detachedSnapshot(includeHistory = false)
+
+        assertEquals(5_000_000L, snapshot.effectiveTokenBudget)
+        assertEquals(AgentTaskStatus.ERROR_TOKEN_BUDGET, snapshot.errorCode)
+        assertEquals(true, snapshot.resumable)
+    }
 }

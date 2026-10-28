@@ -397,11 +397,22 @@ class CodingToolExecutor : AbstractToolExecutor() {
         toolSpec["listDir"] = ToolSpec(
             domain = domain, method = "listDir",
             arguments = listOf(
-                ToolSpec.Arg("path", "String", "\".\""),
-                ToolSpec.Arg("maxDepth", "Int", "1"),
+                ToolSpec.Arg("path", "String", "\".\"", "Directory to list, relative to the workspace root."),
+                ToolSpec.Arg("maxDepth", "Int", "1", "Recursion depth (capped at 32)."),
+                ToolSpec.Arg(
+                    "limit", "Int", "50",
+                    "Maximum entries to print (default 50; 0 prints everything). The total and an " +
+                        "extension summary are always reported.",
+                ),
+                ToolSpec.Arg(
+                    "summary", "Boolean", "true",
+                    "Print the total count + extension breakdown (and the .b4scratch/progress.txt " +
+                        "reminder). Set false for the bare listing.",
+                ),
             ),
             returnType = "String",
-            description = "List directory contents"
+            description = "List directory contents (bounded by default: first 50 entries, then the total " +
+                "and an extension summary). Use glob/grep to find a specific file instead of raising the limit."
         )
         toolSpec["glob"] = ToolSpec(
             domain = domain, method = "glob",
@@ -1035,10 +1046,18 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 )
             }
             "listDir" -> {
-                validateArgs(args, allowed = setOf("path", "maxDepth"), required = emptySet(), functionName)
+                validateArgs(
+                    args, allowed = setOf("path", "maxDepth", "limit", "summary"),
+                    required = emptySet(), functionName
+                )
                 fs.listDir(
                     path = paramString(args, "path", functionName, required = false, default = ".") ?: ".",
                     maxDepth = paramInt(args, "maxDepth", functionName, required = false, default = 1) ?: 1,
+                    limit = paramInt(
+                        args, "limit", functionName, required = false,
+                        default = CodingAgentFileSystem.DEFAULT_LIST_LIMIT,
+                    ) ?: CodingAgentFileSystem.DEFAULT_LIST_LIMIT,
+                    summary = paramBool(args, "summary", functionName, required = false, default = true) ?: true,
                 )
             }
             "glob" -> {

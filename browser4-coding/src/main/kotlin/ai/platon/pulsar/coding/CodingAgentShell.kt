@@ -107,6 +107,18 @@ class CodingAgentShell(
      */
     private val allowExecution: Boolean = true,
 ) {
+    /**
+     * The workspace this shell is bound to.
+     *
+     * Public because other tools that spawn processes must resolve relative paths the
+     * same way the shell does: `b4.run` shipped a cwd of its own, and after a
+     * workspace rebind it ran in the PREVIOUS task's workspace while `coding.*`
+     * wrote into the new one (2026-10-28: a relative `--file .b4scratch/ev.js`
+     * "not found" four times, pointing at another agent's directory). Reading the
+     * root from the receiver makes the two agree by construction.
+     */
+    val workspaceRoot: Path get() = baseDir
+
     companion object {
         const val MAX_TIMEOUT_SECONDS = 600L
         const val MAX_OUTPUT_CHARS = 200_000
@@ -400,7 +412,7 @@ class CodingAgentShell(
             return "Error: Command must not be blank."
         }
 
-        val violation = validateCommand(command)
+        val violation = validateCommand(normalizeShellCommand(command))
         if (violation != null) {
             return "Error: " + commandRefusal(violation)
         }
@@ -415,7 +427,7 @@ class CodingAgentShell(
 
         return try {
             val result = withContext(Dispatchers.IO) {
-                runCommand(sessionId, command, effectiveTimeout, dir, env)
+                runCommand(sessionId, normalizeShellCommand(command), effectiveTimeout, dir, env)
             }
             results[sessionId] = result
             formatResult(result)
@@ -449,7 +461,7 @@ class CodingAgentShell(
             return ShellResult("", command, -1, "", "Command must not be blank.", 0)
         }
 
-        val violation = validateCommand(command)
+        val violation = validateCommand(normalizeShellCommand(command))
         if (violation != null) {
             return ShellResult("", command, -1, "", commandRefusal(violation), 0)
         }
@@ -462,7 +474,7 @@ class CodingAgentShell(
 
         return try {
             val result = withContext(Dispatchers.IO) {
-                runCommand(sessionId, command, effectiveTimeout, dir, env)
+                runCommand(sessionId, normalizeShellCommand(command), effectiveTimeout, dir, env)
             }
             results[sessionId] = result
             result
@@ -730,6 +742,33 @@ class CodingAgentShell(
         hint = "re-run with access=full to run shell commands",
     )
 
+    /** True when the host is Windows, where commands run through `cmd.exe /c`. */
+    private fun isWindowsHost(): Boolean =
+        System.getProperty("os.name", "").lowercase().contains("win")
+
+    /**
+     * Platform-specific command normalization, applied before validation AND execution.
+     *
+     * `cmd.exe` spells some idioms differently from the command name the allow-list
+     * checks: `echo.` (print a blank line) is not `echo`, so it was rejected as an
+     * unknown command and the model had no clean way to emit a separator (2026-10-28:
+     * agents worked around it with `python -c` and lost time). The same normalization
+     * runs on the executed text, so the validated command and the executed command
+     * cannot diverge.
+     */
+    internal fun normalizeShellCommand(command: String): String {
+        if (!isWindowsHost()) return command
+        return CMD_ECHO_DOT.replace(command) { match ->
+            match.groupValues[1] + "echo"
+        }
+    }
+
+    /** `echo.` / `echo. text` at a command position → `echo` (cmd's blank-line idiom). */
+    private val CMD_ECHO_DOT = Regex("""(^|[&|;]\s*)echo\.(?=\s|$)""", RegexOption.IGNORE_CASE)
+
+    /** cmd.exe flow-control keywords: valid in a script, never as a standalone command. */
+    private val CMD_CONTROL_KEYWORDS = setOf("if", "for")
+
     /**
      * Validate a whole command line, not just its first token.
      *
@@ -744,29 +783,32 @@ class CodingAgentShell(
      * @return a human-readable violation reason, or null when allowed
      */
     private fun validateCommand(command: String): String? {
-        if (command.isBlank()) return "empty or invalid command"
+        // Normalize first so a policy query (`isAllowed` / `explain`) agrees with what
+        // would actually be executed: `echo.` is cmd's blank-line idiom for `echo`.
+        val normalizedCommand = normalizeShellCommand(command)
+        if (normalizedCommand.isBlank()) return "empty or invalid command"
 
         // 1. Hardcoded blocked patterns — whole string, cannot be overridden
-        blockedPatternViolation(command)?.let { return it }
+        blockedPatternViolation(normalizedCommand)?.let { return it }
 
         // 2. Explicit deny / deny patterns — whole-string vetoes (they are
         //    authored as full-command regexes), re-checked per segment below
-        extractBaseCommand(command).lowercase().let { base ->
+        extractBaseCommand(normalizedCommand).lowercase().let { base ->
             if (base.isNotEmpty() && base in explicitDeny) return "'$base' is explicitly denied"
         }
         for (pattern in denyPatterns) {
-            if (pattern.containsMatchIn(command)) return "matches deny pattern: ${pattern.pattern}"
+            if (pattern.containsMatchIn(normalizedCommand)) return "matches deny pattern: ${pattern.pattern}"
         }
 
         // 3. Explicit allow / allow patterns — whole-string opt-ins bypass the
         //    per-token checks (the operator authored a trust rule for this shape)
-        if (extractBaseCommand(command).lowercase() in explicitAllow) return null
+        if (extractBaseCommand(normalizedCommand).lowercase() in explicitAllow) return null
         for (pattern in allowPatterns) {
-            if (pattern.containsMatchIn(command)) return null
+            if (pattern.containsMatchIn(normalizedCommand)) return null
         }
 
         // 4. Every simple command in the pipeline / substitution / inline script
-        return validateSegments(command, depth = 0)
+        return validateSegments(normalizedCommand, depth = 0)
     }
 
     private fun blockedPatternViolation(command: String): String? {
@@ -1125,6 +1167,26 @@ class CodingAgentShell(
         if (baseCommand in explicitAllow) return null
         for (pattern in allowPatterns) {
             if (pattern.containsMatchIn(segment)) return null
+        }
+
+        // cmd.exe flow control: valid inside a script, meaningless as a standalone
+        // command. Rejected with an actionable route instead of the generic
+        // "not allowed": the model can put the block in a .cmd file, and a hint is
+        // what stops it from re-phrasing the same `if exist …` four times.
+        if (isWindowsHost() && baseCommand in CMD_CONTROL_KEYWORDS) {
+            return "'$baseCommand' is a cmd.exe control-flow keyword and coding.shell does not " +
+                "execute blocks. Put the block in a script (write `run.cmd`, then `cmd /c run.cmd`) " +
+                "or use `python -c \"...\"` for the same logic"
+        }
+        // `set` (cmd built-in): allowed without arguments or with NAME=value
+        // assignments only — `set /p`, `set /a` and other forms are not.
+        if (isWindowsHost() && baseCommand == "set") {
+            val setArgs = tokens.drop(index + 1)
+            val assignmentsOnly = setArgs.isNotEmpty() &&
+                setArgs.all { ENV_ASSIGNMENT.matches(it.trim('"')) }
+            if (setArgs.isEmpty() || assignmentsOnly) return null
+            return "'set' is only allowed with no arguments or with NAME=value assignments " +
+                "(e.g. `set PYTHONIOENCODING=utf-8`)"
         }
 
         // Category checks use the normalized name, so platform launcher

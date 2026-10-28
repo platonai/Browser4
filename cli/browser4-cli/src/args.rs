@@ -792,6 +792,51 @@ pub fn build_command_args(
     Ok(result)
 }
 
+/// Commands whose positional slots are exact: surplus positionals are rejected.
+///
+/// Every other command may deliberately join surplus positionals into its last
+/// slot (`loop -- "subcmd arg"`), so this is an explicit allow-list rather than a
+/// global rule. `agent run` belongs here because its single slot is the WHOLE task
+/// text: an unquoted or duplicated argument silently became part of the
+/// instruction (a live run swallowed a stray `。` into the task) while the user
+/// believed the extra token was rejected.
+pub fn rejects_extra_positionals(command: &str) -> bool {
+    matches!(command, "agent-run")
+}
+
+/// Reject positionals beyond [max_slots] for a [rejects_extra_positionals] command.
+///
+/// The message matches the CLI's other argument errors (`error: …`) so the caller's
+/// exit code is `Usage`, and it names the offending tokens verbatim — a Debug-printed
+/// array of the extras is what tells the user which quoting went wrong.
+pub fn validate_positional_count(
+    raw: &HashMap<String, Value>,
+    max_slots: usize,
+    command: &str,
+) -> Result<(), String> {
+    if !rejects_extra_positionals(command) {
+        return Ok(());
+    }
+    let positionals = match raw.get("_") {
+        Some(Value::Array(arr)) => arr,
+        _ => return Ok(()),
+    };
+    // Index 0 is the command's own name.
+    let supplied = positionals.len().saturating_sub(1);
+    if supplied <= max_slots {
+        return Ok(());
+    }
+    let extras: Vec<String> = positionals
+        .iter()
+        .skip(1 + max_slots)
+        .map(|v| v.as_str().unwrap_or_default().to_string())
+        .collect();
+    Err(format!(
+        "error: unexpected positional arguments: {:?} (this command accepts {})",
+        extras, max_slots
+    ))
+}
+
 /// Parse `browser4-cli batch` flags and positional command strings.
 pub fn parse_batch_args(raw_args: &[String]) -> Result<BatchArgs, String> {
     let mut parsed = BatchArgs::default();

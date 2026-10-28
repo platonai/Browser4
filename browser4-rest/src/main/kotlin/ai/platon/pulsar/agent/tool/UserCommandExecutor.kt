@@ -178,9 +178,11 @@ class UserCommandExecutor(
         noopLimit: Int? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
         resumeTaskId: String? = null,
+        tokenBudget: Long? = null,
     ): CommandStatus {
         // A resume may omit the task text entirely: the instruction comes from the
         // interrupted task's checkpoint on the backend.
@@ -191,8 +193,9 @@ class UserCommandExecutor(
         return ensureAgentRunner(sessionId)
             .execute(
                 plainCommand, noopLimit = noopLimit, coding = coding,
-                freshWorkspace = freshWorkspace, access = access, autoApprove = autoApprove,
-                resumeTaskId = resumeTaskId,
+                freshWorkspace = freshWorkspace, sharedWorkspace = sharedWorkspace,
+                access = access, autoApprove = autoApprove,
+                resumeTaskId = resumeTaskId, tokenBudget = tokenBudget,
             )
             .toCommandStatus()
     }
@@ -214,9 +217,11 @@ class UserCommandExecutor(
         noopLimit: Int? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
         resumeTaskId: String? = null,
+        tokenBudget: Long? = null,
     ): String {
         val command = plainCommand.trim()
 
@@ -230,7 +235,8 @@ class UserCommandExecutor(
         }
 
         return submitAgentTask(
-            sessionId, command, noopLimit, coding, freshWorkspace, access, autoApprove, resumeTaskId
+            sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove, resumeTaskId,
+            tokenBudget,
         )
     }
 
@@ -257,20 +263,24 @@ class UserCommandExecutor(
         noopLimit: Int? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
         resumeTaskId: String? = null,
+        tokenBudget: Long? = null,
     ): String {
         val runner = ensureAgentRunner(sessionId)
         val status = runner.create()
         taskOwner[status.id] = "agent"
         logger.info(
-            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, autoApprove={}, resume={})",
+            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, autoApprove={}, resume={}, tokenBudget={})",
             status.id, sessionId, noopLimit, coding ?: false, freshWorkspace ?: false,
-            access?.id ?: "default", autoApprove?.id ?: "off", resumeTaskId ?: "none"
+            access?.id ?: "default", autoApprove?.id ?: "off", resumeTaskId ?: "none",
+            tokenBudget ?: "default",
         )
         runner.submit(
-            plainCommand, status, noopLimit, coding, freshWorkspace, access, autoApprove, resumeTaskId
+            plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove, resumeTaskId,
+            tokenBudget,
         )
         return status.id
     }

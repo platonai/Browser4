@@ -13,6 +13,12 @@ package ai.platon.pulsar.rest.api.entities
  * @property workspace The directory the agent's tools wrote into. Deliverables that
  *   are not inlined in [summary]/[fields]/[keyFindings] live here — without it a
  *   caller had to search the backend's app-data tree by hand.
+ * @property errorCode Machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`,
+ *   `CANCELLED`, `TOOL_ERROR`), so a client can branch instead of parsing prose.
+ * @property resumable Whether `agent run --resume <id>` can continue this task.
+ * @property effectiveTokenBudget The token budget this run actually enforced
+ *   (`0` = unlimited, `null` = unknown). A failed run that aborted on the budget
+ *   must say which budget, or the caller cannot tell "too small" from "runaway".
  */
 data class CommandResult(
     var summary: String? = null,
@@ -24,4 +30,7 @@ data class CommandResult(
     var filesChanged: List<String>? = null,
     var problems: List<String>? = null,
     var workspace: String? = null,
+    var errorCode: String? = null,
+    var resumable: Boolean? = null,
+    var effectiveTokenBudget: Long? = null,
 )

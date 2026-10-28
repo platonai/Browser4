@@ -21,7 +21,7 @@ The `config` command family manages two kinds of settings: persistent CLI defaul
 | `proxy` | CLI default | Default download proxy URL (overridden by `--proxy`) |
 | `session` | CLI default | Default session name (overridden by `-s` / `--session`) |
 | `agent.llm.maxRequestTokens` | server-side | Per-request LLM token limit (default 500,000) |
-| `agent.token.budget.total` | server-side | Cumulative token budget per agent run (default 5,000,000). Enforced on every engine: the legacy observe-act loop and the default CLI tool loop both charge each model request, and a breach stops the run with `Token budget exceeded` (the 80% mark is logged once). `0` / `unlimited` keeps accounting only |
+| `agent.token.budget.total` | server-side | Cumulative token budget per agent run (default 5,000,000). Enforced on every engine: the legacy observe-act loop and the default CLI tool loop both charge each model request, and a breach stops the run with `Token budget exceeded` (the 80% mark is logged once). `0` / `unlimited` keeps accounting only. For ONE task use `agent run --token-budget <n>` instead (per-run, cleared when the task ends) |
 
 ## CLI Defaults (config.json)
 
@@ -71,3 +71,25 @@ Notes:
 - Unlike local keys, these are not stored in `config.json` — they route to the running server's unified REST config interface (`GET/PUT/DELETE /api/config/{key}`, `GET /api/config` to list all), so the server must be up.
 - The override is runtime-only — lost on server restart, which falls back to the key's value in the server configuration.
 - Accepted values: a non-negative integer, `0`, or `unlimited` (= 0, disables enforcement). Unknown keys and invalid values are rejected server-side with 404/400.
+
+### Task budget vs. global `config set`
+
+`agent.token.budget.total` is a **process-wide** default: every task the backend runs
+afterwards is capped at it. When only ONE task needs a different cap, do not change the
+global default — pass the per-run override:
+
+```bash
+browser4-cli agent run "<long task>" --token-budget 20000000   # this task only
+browser4-cli agent run "<small task>" --token-budget 0          # this task: unlimited
+```
+
+The override is resolved when the run starts, prefers over both the configuration file
+and the runtime `config set` value, and is **cleared when the task ends** — the next
+task goes back to the configured default. It is never written into the runtime config
+registry, so two concurrent sessions cannot change each other's budget.
+
+`agent result --json` reports the budget that was actually enforced
+(`result.effectiveTokenBudget`, `0` = unlimited), and a budget abort carries
+`errorCode: "TOKEN_BUDGET"` plus `resumable: true`. `agent run --follow` prints a
+throttled `tokens <used> / <budget> (<pct>)` line (every 10 requests or 15s), a
+one-time warning at 80%, and an abort line at 100%.

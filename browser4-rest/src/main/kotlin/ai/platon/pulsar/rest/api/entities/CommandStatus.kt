@@ -86,6 +86,27 @@ data class CommandStatus(
      * reach a deliverable the agent left on disk.
      */
     var workspace: String? = null,
+
+    /**
+     * Machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`,
+     * `TOOL_ERROR`, `INFRASTRUCTURE`), `null` for a run that has not failed.
+     *
+     * Mirrored on the envelope as well as [commandResult] because every client reads
+     * the envelope first; `statusCode` alone (417 for every kind of failure) cannot
+     * tell a budget abort from a broken browser.
+     */
+    var errorCode: String? = null,
+
+    /** Whether `agent run --resume <id>` can continue this task (`null` when it succeeded). */
+    var resumable: Boolean? = null,
+
+    /**
+     * The token budget the run actually enforced (`0` = unlimited, `null` = unknown).
+     *
+     * A budget abort without the number is unactionable: "5M was not enough" and
+     * "the configured limit was 20k by mistake" look identical.
+     */
+    var effectiveTokenBudget: Long? = null,
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
     var lastModifiedTime: Instant? = null
@@ -285,6 +306,9 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     status.startedTime = this.startedTime
     status.toolExecutions = this.toolExecutions
     status.workspace = this.workspace
+    status.errorCode = this.errorCode
+    status.resumable = this.resumable
+    status.effectiveTokenBudget = this.effectiveTokenBudget
     // The page this task ended on. AgentTaskStatus now carries it (observed from
     // the live page, see DocumentHttpStatus); before that the conversion dropped
     // it and every agent/loop record shipped the model's 201/"created" default.
@@ -335,6 +359,32 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
         ?: this.deliverables?.takeIf { it.isNotEmpty() }
     result.problems = lastState?.problems?.takeIf { it.isNotEmpty() }
     result.workspace = this.workspace
+    // Failure semantics travel with the payload too: a client that only reads
+    // `result` (the CLI's `agent result --json`) must still see why the run failed
+    // and whether resuming it is possible.
+    result.errorCode = this.errorCode
+    result.resumable = this.resumable
+    result.effectiveTokenBudget = this.effectiveTokenBudget
+    // An aborted run's summary must carry what it DID produce, not only the
+    // exception text: "wrote top20.csv, resume with …" is what tells the operator
+    // whether the work is lost. The files were already there; the summary just did
+    // not say so.
+    if (failed) {
+        val taskId = this.id
+        val suffix = buildString {
+            val files = result.filesChanged.orEmpty()
+            if (files.isNotEmpty()) {
+                append(" · wrote ").append(files.size).append(" file(s): ")
+                append(files.take(5).joinToString(", "))
+                if (files.size > 5) append(", …")
+            } else {
+                append(" · files: (none this run)")
+            }
+            if (result.resumable == true) append(" · resume: agent run --resume $taskId")
+        }
+        val current = result.summary
+        result.summary = if (current.isNullOrBlank()) suffix.trimStart(' ', '·') else current + suffix
+    }
 
     if (status.agentState == null) {
         status.agentState = createFallbackAgentState(status)

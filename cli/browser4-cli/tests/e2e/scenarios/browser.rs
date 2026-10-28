@@ -960,21 +960,28 @@ pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
     );
 
     // --- undefined ---
-    // `void 0` evaluates to undefined, and in the default main world the backend
-    // carries it as JSON null, so the CLI prints `null` — the same rendering as JS
-    // `null` (they are indistinguishable in plain output; see references/eval.md).
+    // `void 0` evaluates to undefined. The backend reports it as a `null` first line
+    // plus an explanation of how to return a value (`--json` keeps JSON null), so a
+    // reader can tell "no value" from a real null result — the 2026-10-28 batch
+    // silently lost data that a bare `null` made indistinguishable.
     // An isolated-world evaluation arrived as an empty string instead, and the CLI
     // quotes a genuinely empty result, so accept those spellings too.
     // The CLI may append a diagnostic tip on the next line — only check the first.
     let undef_val = eval_text(ctx, "void 0");
     let first_line = undef_val.lines().next().unwrap_or("").trim();
     assert!(
-        first_line == "null"
+        first_line.starts_with("null")
             || first_line == "undefined"
             || first_line.is_empty()
             || first_line == "\"\"",
-        "Expected null, undefined, empty string, or quoted-empty for `void 0`, got: {undef_val}"
+        "Expected a null/undefined rendering for `void 0`, got: {undef_val}"
     );
+    if first_line.starts_with("null") && first_line != "null" {
+        assert!(
+            undef_val.contains("undefined"),
+            "an undefined result must explain itself, got: {undef_val}"
+        );
+    }
 
     run_command(ctx, &["close"]);
 }

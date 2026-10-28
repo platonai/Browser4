@@ -644,7 +644,7 @@ class CodingToolExecutorTest {
         @Test
         @DisplayName("listDir calls fs.listDir with defaults")
         fun testListDirDefaults() = runBlocking {
-            coEvery { fs.listDir(any(), any()) } returns "4 items"
+            coEvery { fs.listDir(any(), any(), any(), any()) } returns "4 items"
 
             val tc = ToolCall(
                 domain = "coding",
@@ -653,14 +653,14 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, target)
-            coVerify { fs.listDir(".", 1) }
+            coVerify { fs.listDir(".", 1, any(), any()) }
             assertEquals("4 items", result.value)
         }
 
         @Test
         @DisplayName("listDir calls fs.listDir with explicit path and maxDepth")
         fun testListDirWithArgs() = runBlocking {
-            coEvery { fs.listDir(any(), any()) } returns "12 items"
+            coEvery { fs.listDir(any(), any(), any(), any()) } returns "12 items"
 
             val tc = ToolCall(
                 domain = "coding",
@@ -669,7 +669,7 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, target)
-            coVerify { fs.listDir("src/", 3) }
+            coVerify { fs.listDir("src/", 3, any(), any()) }
             assertEquals("12 items", result.value)
         }
 

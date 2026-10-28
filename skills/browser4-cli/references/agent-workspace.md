@@ -38,16 +38,28 @@ browser4-cli agent run "Use the fields in docs/field-spec.csv and build the shee
 
 ### The per-task workspace
 
-| Task | Root |
-|---|---|
-| `agent run` (browsing) | `<app-data>/agent/<yyyy>/<MM>/<dd>/<uuid>/workspace` — on a dev-mode backend `<app-data>` is `~/.browser4/workspaces/<workspace-id>/app-data` |
-| `agent run --coding` | the same per-agent directory, provisioned as a **mirror** of the checkout (source files; `.git` is absent) |
-| either, `--fresh-workspace` | a fresh isolated copy for that task, so it cannot see previous tasks' scratch files |
+Every task runs in its **own** directory. The path is
+`<agent data>/<yyyy>/<MM>/<dd>/<agent-uuid>/workspace.<task-id>` — on a dev-mode
+backend `<agent data>` is `~/.browser4/workspaces/<workspace-id>/app-data`.
 
-`agent result <task-id>` names the directory (`workspace`) and lists the files the agent
-reported (`filesChanged`). The workspace lives on the machine that runs the backend —
-when the backend is remote, copy the artifacts from there (or have the agent return the
-data inline).
+| Command | Root |
+|---|---|
+| `agent run "<task>"` | `…/<agent-uuid>/workspace.<task-id>` — this task only |
+| `agent run "<task>" --coding` | the same per-task directory, provisioned as a **mirror** of the checkout (source files; `.git` is absent) |
+| `agent run --resume <task-id>` | the **interrupted** task's workspace, so the rows/files it already wrote are what the new run continues from |
+| `agent run --shared-workspace` | the old shared `…/<agent-uuid>/workspace`, which holds earlier tasks' files |
+| `--fresh-workspace` | accepted for compatibility; a per-task workspace is now the default |
+
+Why isolation is the default: files from an earlier run must never appear in this run's
+`filesChanged` (a 2026-10-28 run reported a CSV written 36 minutes earlier and another
+agent's report as its own deliverables), and a task that lists its workspace must not
+wade through a previous task's hundreds of helper scripts.
+
+`agent result <task-id>` names the directory (`workspace`) and lists the files **this
+run** reported (`filesChanged`); a run that aborted without reporting them still lists
+the files it wrote (from its mutation log), never older ones. The workspace lives on the
+machine that runs the backend — when the backend is remote, copy the artifacts from
+there (or have the agent return the data inline).
 
 ### What it may read by default
 
@@ -156,7 +168,9 @@ Credential locations stay refused. `--access` never widens paths.
 | Flag / property | Applies to | Effect |
 |---|---|---|
 | `--coding` | `agent run` | mirror the checkout into the per-task workspace (repo-relative paths become readable) |
-| `--fresh-workspace` | `agent run` | isolate this task from previous scratch files |
+| `--shared-workspace` | `agent run` | use the shared `<agent data>/workspace` (earlier tasks' files are visible) instead of this task's own directory |
+| `--resume <task-id>` | `agent run` | reuse the interrupted task's workspace (its files are what the new run continues from) |
+| `--fresh-workspace` | `agent run` | accepted for compatibility; per-task isolation is the default now |
 | `--access <preset>` | `agent run` | which *tools* run (`full`/`write`/`read-build`/`read`); never widens paths |
 | `browser4.agent.copyTaskInputs` | backend | copy instruction-referenced external files into `.b4inputs/` (default `true`) |
 | `browser4.agent.allowExternalAccess` | backend | allow absolute paths outside the workspace (default `false`) |
@@ -172,6 +186,8 @@ Credential locations stay refused. `--access` never widens paths.
 | The agent reports a blocked input in `problems` | the file could not be resolved at all | check the path exists in the checkout, then re-run |
 | `coding.read` refuses a file | binary (`.xlsx`, `.pdf`, `.zip`, image) | extract it with a script, or convert it to CSV first |
 | Artifacts are "missing" from the repository | they live in the task workspace | use `agent result` to find the workspace and copy from there |
+| The agent cannot see a file an earlier task wrote | each task has its own workspace | pass `--shared-workspace`, or name the file so it is copied into `.b4inputs/` |
+| A failed run lists no files | the run wrote nothing **of its own** | files from earlier tasks are deliberately excluded; resume (`--resume`) continues the same workspace |
 
 ## Related
 

@@ -1716,6 +1716,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - Task text is ONE argument: `agent run \"the whole task\"`. Extra positional"
+                .to_string(),
+        );
+        lines.push(
+            "    arguments are rejected (they are not appended to the task).".to_string(),
+        );
+        lines.push(
             "  - Task type: browser by default (never auto-detected). --coding marks a pure coding task (file/build work)."
                 .to_string(),
         );
@@ -1765,6 +1772,40 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(
             "    live view; -i keeps following a task the backend still reports as running."
+                .to_string(),
+        );
+        lines.push(
+            "  - Workspace: every task runs in its own directory (<agent data>/workspace.<task-id>),"
+                .to_string(),
+        );
+        lines.push(
+            "    so files from an earlier run never appear in this run's result. --resume keeps the"
+                .to_string(),
+        );
+        lines.push(
+            "    interrupted task's workspace; --shared-workspace restores the old shared directory"
+                .to_string(),
+        );
+        lines.push(
+            "    (--fresh-workspace is now a no-op, kept for compatibility).".to_string(),
+        );
+        lines.push(
+            "  - --token-budget <n> overrides agent.token.budget.total for THIS task only (0 ="
+                .to_string(),
+        );
+        lines.push(
+            "    unlimited). The configured default applies again to the next task; `config set` is"
+                .to_string(),
+        );
+        lines.push(
+            "    the process-wide knob and changes every later task on the backend.".to_string(),
+        );
+        lines.push(
+            "  - --follow prints a `tokens <used> / <budget> (<pct>)` line every 10 requests or 15s,"
+                .to_string(),
+        );
+        lines.push(
+            "    a one-time warning at 80% of the budget, and an explicit abort line at 100%."
                 .to_string(),
         );
         lines.push(String::new());

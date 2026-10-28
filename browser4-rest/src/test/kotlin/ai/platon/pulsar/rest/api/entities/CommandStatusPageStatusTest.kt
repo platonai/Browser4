@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
 import ai.platon.pulsar.common.ResourceStatus
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
@@ -78,5 +79,57 @@ class CommandStatusPageStatusTest {
             CommandStatus.failed(ResourceStatus.SC_EXPECTATION_FAILED).pageStatusCode,
         )
         assertEquals(404, CommandStatus.failed("id", 404, 404).pageStatusCode)
+    }
+
+    // -----------------------------------------------------------------
+    // Failure semantics (P0-6)
+    // -----------------------------------------------------------------
+
+    @Test
+    @DisplayName("a failed run's errorCode, resumability and budget survive the conversion")
+    fun failureSemanticsAreCarriedIntoThePayload() {
+        val agentStatus = AgentTaskStatus(
+            statusCode = ResourceStatus.SC_EXPECTATION_FAILED,
+            processState = "done",
+            message = "Token budget exceeded: consumed 5,006,041 tokens",
+        )
+        agentStatus.failureReason = "TokenBudgetExceededException: Token budget exceeded"
+        agentStatus.errorCode = AgentTaskStatus.ERROR_TOKEN_BUDGET
+        agentStatus.resumable = true
+        agentStatus.effectiveTokenBudget = 5_000_000
+
+        val commandStatus = agentStatus.toCommandStatus()
+        val result = commandStatus.commandResult!!
+
+        assertEquals(AgentTaskStatus.ERROR_TOKEN_BUDGET, commandStatus.errorCode)
+        assertEquals(true, commandStatus.resumable)
+        assertEquals(5_000_000L, commandStatus.effectiveTokenBudget)
+        assertEquals(AgentTaskStatus.ERROR_TOKEN_BUDGET, result.errorCode)
+        assertEquals(true, result.resumable)
+        assertEquals(5_000_000L, result.effectiveTokenBudget)
+    }
+
+    @Test
+    @DisplayName("a failed run's summary says what it wrote and how to resume")
+    fun failedSummaryKeepsTheDeliverablesAndResumeHint() {
+        // A budget abort used to read as a bare exception, so a 20×75 CSV already on
+        // disk looked lost (2026-10-28 baseline).
+        val agentStatus = AgentTaskStatus(
+            id = "abc-123",
+            statusCode = ResourceStatus.SC_EXPECTATION_FAILED,
+            processState = "done",
+        )
+        agentStatus.failureReason = "TokenBudgetExceededException: Token budget exceeded"
+        agentStatus.errorCode = AgentTaskStatus.ERROR_TOKEN_BUDGET
+        agentStatus.resumable = true
+        agentStatus.deliverables = listOf("amazon_microwaves.csv")
+
+        val result = agentStatus.toCommandStatus().commandResult!!
+
+        assertEquals(listOf("amazon_microwaves.csv"), result.filesChanged)
+        val summary = result.summary.orEmpty()
+        assertTrue(summary.contains("wrote 1 file(s)"), summary)
+        assertTrue(summary.contains("amazon_microwaves.csv"), summary)
+        assertTrue(summary.contains("agent run --resume abc-123"), summary)
     }
 }

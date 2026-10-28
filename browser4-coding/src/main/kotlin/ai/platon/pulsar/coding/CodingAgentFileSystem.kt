@@ -98,6 +98,18 @@ class CodingAgentFileSystem(
         const val MAX_LIST_DIR_DEPTH = 32
 
         /**
+         * Default number of entries [listDir] prints.
+         *
+         * A task workspace can hold hundreds of files; printing all of them flooded the
+         * model's context with paths it had already seen. 50 + a total/extension summary
+         * answers "what is here" without the flood; `limit=0` still prints everything.
+         */
+        const val DEFAULT_LIST_LIMIT = 50
+
+        /** Agent scratch directory inside a workspace (helper scripts, progress notes). */
+        private const val SCRATCH_DIR = ".b4scratch"
+
+        /**
          * Default cap on the number of characters returned to the LLM context by
          * [readFile] / [readFileLines] / [diff]. ~120K chars ≈ 35K tokens —
          * enough for most source files, while preventing a single 5 MB read
@@ -904,8 +916,24 @@ class CodingAgentFileSystem(
 
     /**
      * List files in a directory (relative to workspace root).
+     *
+     * The listing is **bounded by default**: a task workspace can hold hundreds of
+     * files (a live run left 125 helper scripts behind), and dumping all of them into
+     * the model's context was pure noise — the model then re-read paths it had
+     * already seen. The first [limit] entries are printed, followed by the total and
+     * an extension summary, so a truncated listing still answers "what is here".
+     *
+     * @param path directory to list, relative to the workspace root
+     * @param maxDepth recursion depth (capped at [MAX_LIST_DIR_DEPTH])
+     * @param limit maximum entries to print; `0` prints everything
+     * @param summary print the total + extension breakdown (default true)
      */
-    suspend fun listDir(path: String = ".", maxDepth: Int = 1): String {
+    suspend fun listDir(
+        path: String = ".",
+        maxDepth: Int = 1,
+        limit: Int = DEFAULT_LIST_LIMIT,
+        summary: Boolean = true,
+    ): String {
         val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("Not found: $path")
         if (!resolved.isDirectory()) return errorResult("Not a directory: $path")
@@ -923,11 +951,12 @@ class CodingAgentFileSystem(
             }
 
             if (entries.isEmpty()) return "Directory is empty: $path"
+            val shown = if (limit <= 0) entries else entries.take(limit)
 
             buildString {
                 val capNote = if (depthCapped) " (depth capped at $MAX_LIST_DIR_DEPTH)" else ""
                 appendLine("Contents of $path (${entries.size} entries)$capNote:")
-                for (entry in entries) {
+                for (entry in shown) {
                     val relPath = resolved.relativize(entry)
                     val prefix = if (entry.isDirectory()) "📁" else "📄"
                     val size = try {
@@ -935,10 +964,55 @@ class CodingAgentFileSystem(
                     } catch (_: Exception) { "" }
                     appendLine("  $prefix $relPath$size")
                 }
+                val hidden = entries.size - shown.size
+                if (hidden > 0) {
+                    appendLine("  … $hidden more entries (raise limit=, narrow path=, or use glob/grep)")
+                }
+                if (summary) {
+                    appendLine(extensionSummary(path, entries))
+                    // S11: a multi-item task is expected to record what it collected
+                    // in `.b4scratch/progress.txt` while it works. The prompt says so,
+                    // but the listing is where the absence is visible — a run that
+                    // wrote 58 scripts and no progress file lost its ids and re-crawled
+                    // the same pages four times (2026-10-28).
+                    progressFileHint(resolved)?.let { appendLine(it) }
+                }
             }.trimEnd()
         } catch (e: IOException) {
             errorResult("Failed to list '$path': ${e.message}")
         }
+    }
+
+    /** Total + extension breakdown, e.g. `Summary: 65 files, 4 dirs · .kt 40, .md 22, .json 3`. */
+    private fun extensionSummary(path: String, entries: List<Path>): String {
+        val files = entries.filter { !it.isDirectory() }
+        val dirs = entries.size - files.size
+        val byExtension = files
+            .map { it.fileName?.toString()?.substringAfterLast('.', missingDelimiterValue = "") ?: "" }
+            .map { extension -> if (extension.length in 1..8) ".$extension" else "(none)" }
+            .groupingBy { it }
+            .eachCount()
+            .entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .take(8)
+            .joinToString(", ") { "${it.key} ${it.value}" }
+        val suffix = byExtension.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""
+        return "Summary: ${files.size} file(s), $dirs dir(s)$suffix"
+    }
+
+    /**
+     * `progress.txt` reminder for a workspace root listing, or null.
+     *
+     * Only when the task already created `.b4scratch/` (so it is working there) and the
+     * file is missing: the hint belongs to exactly the state it corrects.
+     */
+    private fun progressFileHint(resolved: Path): String? {
+        val scratch = resolved.resolve(SCRATCH_DIR)
+        if (!Files.isDirectory(scratch)) return null
+        if (Files.isRegularFile(scratch.resolve("progress.txt"))) return null
+        return "Hint: no $SCRATCH_DIR/progress.txt — for multi-item tasks keep the ids/rows " +
+            "collected so far there (append as you go); a round can be cut off before the " +
+            "data reaches your report."
     }
 
     /**

@@ -317,6 +317,24 @@ open class StatefulAgentRunner(
     }
 
     /**
+     * Append the terminal failure step, carrying the machine-readable reason.
+     *
+     * `task.failed` used to be prose only ("TokenBudgetExceededException: …"), so a
+     * follower could not branch on the cause and `agent result` had no code to map
+     * onto an exit reason.
+     */
+    private fun recordFailure(status: AgentTaskStatus) {
+        val code = status.errorCode ?: AgentTaskStatus.errorCodeOf(status.failureReason, status.cancelled)
+        val reason = status.failureReason ?: status.message
+        eventLog(status.id).append(
+            type = if (status.cancelled) AgentTaskEvent.TYPE_CANCELLED else AgentTaskEvent.TYPE_FAILED,
+            text = AgentTaskEventSanitizer.preview(reason),
+            errorCode = code,
+            resumable = AgentTaskStatus.isResumable(code),
+        )
+    }
+
+    /**
      * Translate one agent-reported step into the task's event log.
      *
      * `internal` (not private) so the runner's tests can exercise the
@@ -334,6 +352,8 @@ open class StatefulAgentRunner(
             inputTokens = event.inputTokens,
             outputTokens = event.outputTokens,
             totalTokens = event.totalTokens,
+            budgetTokens = event.budgetTokens,
+            cumulativeTokens = event.cumulativeTokens,
         )
     }
 
@@ -455,12 +475,14 @@ open class StatefulAgentRunner(
         noopLimit: Int? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
         resumeTaskId: String? = null,
+        tokenBudget: Long? = null,
     ): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status, noopLimit, coding, freshWorkspace, access, autoApprove, resumeTaskId)
+        execute(plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove, resumeTaskId, tokenBudget)
         return status
     }
 
@@ -479,12 +501,14 @@ open class StatefulAgentRunner(
         noopLimit: Int? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
         resumeTaskId: String? = null,
+        tokenBudget: Long? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
-            execute(plainCommand, status, noopLimit, coding, freshWorkspace, access, autoApprove, resumeTaskId)
+            execute(plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove, resumeTaskId, tokenBudget)
         }
         runningJobs[status.id] = job
         job.start()
@@ -551,14 +575,16 @@ open class StatefulAgentRunner(
         noopLimit: Int? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
         resumeTaskId: String? = null,
+        tokenBudget: Long? = null,
     ) {
         try {
             runMutex.withLock {
                 executeSerialized(
-                    plainCommand, status, noopLimit, coding, freshWorkspace, access, autoApprove, resumeTaskId
+                    plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove, resumeTaskId, tokenBudget
                 )
             }
         } catch (e: CancellationException) {
@@ -577,15 +603,35 @@ open class StatefulAgentRunner(
         }
     }
 
+    /**
+     * The files THIS run wrote, for a run that ended without a completion report.
+     *
+     * Reads the run's mutation log (the authoritative record, already free of
+     * scratch/agent-state paths) and falls back to files modified since the task
+     * started. The previous version listed every file in the workspace, so a reused
+     * workspace reported earlier tasks' CSVs and reports as this run's deliverables
+     * (2026-10-28 baseline).
+     */
+    private fun currentRunDeliverables(agent: PerceptiveAgent, status: AgentTaskStatus): List<String> {
+        val mutations = runCatching {
+            (agent as? BasicBrowserAgent)?.agentToolManager?.codingFs?.mutationsSnapshot()
+                ?.map { it.path }
+                .orEmpty()
+        }.getOrDefault(emptyList())
+        return deliverableFilesOf(status.workspace, status.startedTime, mutations)
+    }
+
     private suspend fun executeSerialized(
         plainCommand: String,
         status: AgentTaskStatus,
         noopLimit: Int? = null,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
         autoApprove: AccessPreset? = null,
         resumeTaskId: String? = null,
+        tokenBudget: Long? = null,
     ) {
         val agent = session.companionAgent
 
@@ -648,6 +694,14 @@ open class StatefulAgentRunner(
             // shared across tasks).
             (agent as? RobustBrowserAgent)?.let {
                 it.noopLimitOverride = noopLimit
+                // Per-task token budget (`agent run --token-budget`): a per-run
+                // override, NOT a process-wide config write — the next task in this
+                // session (or another session) must keep the configured default. The
+                // runner clears it in its finally.
+                it.tokenBudgetOverride = tokenBudget
+                if (tokenBudget != null) {
+                    logger.info("Agent task {} (session={}): token budget overridden to {}", status.id, session.uuid, tokenBudget)
+                }
                 if (noopLimit != null) {
                     logger.info("Agent task {} (session={}): noop limit overridden to {}", status.id, session.uuid, noopLimit)
                 }
@@ -666,23 +720,34 @@ open class StatefulAgentRunner(
                 if (codingMode) {
                     logger.info("Agent task {} (session={}): coding mode (explicit) — skipping driver health check and page navigation", status.id, session.uuid)
                 }
-                // Fresh-workspace isolation (design §6.6): create a timestamped
-                // workspace dir under the agent's base dir, point both the agent's
-                // workspaceDir and the tool manager's coding shell/fs at it.
-                if (freshWorkspace == true) {
-                    val fresh = it.baseDir.resolve("workspace.fresh.${status.id}")
-                    java.nio.file.Files.createDirectories(fresh)
-                    it.workspaceDirOverride = fresh
-                    it.agentToolManager.rebindWorkspace(fresh)
-                    logger.info("Agent task {} (session={}): fresh workspace at {}", status.id, session.uuid, fresh)
-                } else if (resume?.workspace != null) {
-                    // Resume keeps the interrupted task's workspace, so the files it
-                    // already wrote are what the new run continues from.
-                    it.workspaceDirOverride = resume.workspace
-                    it.agentToolManager.rebindWorkspace(resume.workspace)
+                // Per-task workspace isolation (P1-1): EVERY task gets its own
+                // workspace, so files from earlier runs can never be mistaken for this
+                // run's deliverables (the 2026-10-28 baseline reported a CSV written 36
+                // minutes earlier) and `coding_listDir` no longer shows a previous
+                // task's 125 scratch scripts. The docs have promised this since
+                // agent.md/agent-workspace.md were written; the code only did it for
+                // --fresh-workspace.
+                //
+                //   --resume <id>       → the interrupted task's workspace (its files
+                //                         are what the new run continues from)
+                //   --shared-workspace  → the old `<baseDir>/workspace` (explicit opt-in)
+                //   otherwise           → `<baseDir>/workspace.<taskId>`
+                //
+                // --fresh-workspace is still accepted and is now the default behaviour;
+                // its old `workspace.fresh.*` directory is no longer created.
+                val taskWorkspace = taskWorkspaceFor(it.baseDir, status.id, resume?.workspace, sharedWorkspace)
+                if (taskWorkspace != null) {
+                    java.nio.file.Files.createDirectories(taskWorkspace)
+                    it.workspaceDirOverride = taskWorkspace
+                    it.agentToolManager.rebindWorkspace(taskWorkspace)
                     logger.info(
-                        "Agent task {} (session={}): resumed workspace at {}",
-                        status.id, session.uuid, resume.workspace
+                        "Agent task {} (session={}): workspace at {} (resume={}, shared={})",
+                        status.id, session.uuid, taskWorkspace, resume != null, sharedWorkspace == true
+                    )
+                } else {
+                    logger.info(
+                        "Agent task {} (session={}): shared workspace (--shared-workspace)",
+                        status.id, session.uuid
                     )
                 }
                 // Live step feed and steering for THIS task. Cleared in the finally
@@ -754,8 +819,9 @@ open class StatefulAgentRunner(
             status.failureReason = CANCELLED_MESSAGE
             status.message = CANCELLED_MESSAGE
             // Keep what the run already produced: a cancel is not a reason to lose
-            // the deliverables that are already on disk.
-            status.deliverables = deliverableFilesOf(status.workspace).takeIf { it.isNotEmpty() }
+            // the deliverables that are already on disk. Attributed to THIS task —
+            // files from earlier runs in a shared workspace are not ours to claim.
+            status.deliverables = currentRunDeliverables(agent, status).takeIf { it.isNotEmpty() }
             throw e
         } catch (e: Throwable) {
             logger.error("Failed to execute agent command: {} (session={})", plainCommand, session.uuid, e)
@@ -765,7 +831,7 @@ open class StatefulAgentRunner(
             // A budget/step abort used to report a bare failure with `filesChanged`
             // empty although the data was already written (2026-10-28: a complete
             // 20×75 CSV, task reported as `failed (417)` with no artifacts).
-            status.deliverables = deliverableFilesOf(status.workspace).takeIf { it.isNotEmpty() }
+            status.deliverables = currentRunDeliverables(agent, status).takeIf { it.isNotEmpty() }
             // Persist the terminal row NOW. The finally block below runs task bookkeeping
             // (endTask, workspace reset, policy reset) before it appends again, and a
             // status poll landing in that window used to read the last RUNNING row from
@@ -779,6 +845,9 @@ open class StatefulAgentRunner(
             // --noop-limit override would silently change those runs too.
             (agent as? RobustBrowserAgent)?.let {
                 it.noopLimitOverride = null
+                // Per-task budget: cleared so the next task in this session goes back
+                // to the configured default (a task-level choice must not leak).
+                it.tokenBudgetOverride = null
                 it.codingMode = false
                 // Detach this task's live feed and steering queue: the companion
                 // agent is shared, and a stale listener would keep reporting into
@@ -809,17 +878,27 @@ open class StatefulAgentRunner(
                 runCatching { it.agentToolManager.resetAccessPolicy() }
                     .onFailure { w -> logger.warn("reset access policy failed: {}", w.message) }
             }
+            // Machine-readable failure semantics (P0-6): the code and the resume
+            // affordance are derived from the terminal state while it is still in
+            // hand, so `agent result` can exit non-zero with a reason instead of prose
+            // only, and the `task.failed` step carries the same code.
+            (agent as? RobustBrowserAgent)?.lastRunTokenBudget?.let { status.effectiveTokenBudget = it }
+            status.errorCode = AgentTaskStatus.errorCodeOf(status.failureReason, status.cancelled)
+            status.resumable = if (status.cancelled || status.failureReason != null) {
+                AgentTaskStatus.isResumable(status.errorCode)
+            } else {
+                null
+            }
             status.done()
             onStatusChanged(status)
             // Close the live feed: the terminal step is what makes a follower
             // stop, and the steering queue can never be drained after this point.
             pendingInputs.remove(status.id)
-            val terminalType = when {
-                status.cancelled -> AgentTaskEvent.TYPE_CANCELLED
-                status.failureReason != null -> AgentTaskEvent.TYPE_FAILED
-                else -> AgentTaskEvent.TYPE_DONE
+            if (status.cancelled || status.failureReason != null) {
+                recordFailure(status)
+            } else {
+                recordLifecycle(status, AgentTaskEvent.TYPE_DONE, status.message)
             }
-            recordLifecycle(status, terminalType, status.failureReason ?: status.message)
         }
     }
 

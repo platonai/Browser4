@@ -16,6 +16,9 @@ browser4-cli open "https://example.com"
 # Inline expression — prints the return value
 browser4-cli eval "document.title"
 
+# ⚠ FIRST RULE: an async expression needs --await
+browser4-cli eval --await "(async () => (await fetch('/api/x')).json())()"
+
 # Machine-readable output (scalars become quoted strings)
 browser4-cli eval --json "document.querySelectorAll('.product-card').length"
 
@@ -23,6 +26,10 @@ browser4-cli eval --json "document.querySelectorAll('.product-card').length"
 browser4-cli eval "element => element.textContent" --ref e5
 ```
 
+- **`--await` is the first thing to check.** Without it an async expression returns an
+  unresolved Promise; the backend reports that as a **failure** (`The expression returned
+  an unresolved Promise… re-run with --await`) instead of pretending a value came back.
+  A batch that returns `{}` is this case, not empty data.
 - The expression runs against the live DOM; JS exceptions are surfaced as CLI errors.
 - Only the **return value** is printed — `console.log` output is not part of eval's result
   (read it with `browser4-cli console`).
@@ -46,9 +53,14 @@ The expression is evaluated over CDP against the live page. Input channel and ta
 
 Return-value semantics:
 
-- JS `null` prints as `null`, and so does `undefined` in the default main world: an undefined
-  result is carried as JSON `null`, so the two are **indistinguishable in plain output**. An
-  empty string prints as `""`, which is a third result collapsing into a second rendering.
+- **A Promise is not a value.** An expression that returns one without `--await` is
+  reported as a failure with the fix named (`--await`); it is never silently rendered as
+  `{}` or empty data.
+- JS `undefined` prints a `null` line plus an explanation (`null  (undefined: …)`),
+  because a bare `null` taught nothing about why there was no data. `--json` keeps the
+  type-faithful `null` for it. Return a value (last expression or `return`) when the
+  result matters.
+- JS `null` prints as `null`. An empty string prints as `""`.
 - Objects and arrays are serialized as valid JSON.
 - `--json` wraps the result in the CLI's JSON envelope; scalar results become quoted strings, numbers/booleans/null pass through.
 - Do not rely on telling `undefined`, `null` and `''` apart — have the expression return an

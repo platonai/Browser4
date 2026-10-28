@@ -85,6 +85,26 @@ coding.append(path=".b4scratch/progress.txt", content="B0DY95T5HB\n")
 ```
 
 Write the header row once at the start; never rewrite the whole file per item.
+`coding.listDir` reminds you when `.b4scratch/` has no `progress.txt` — its absence is
+how a run loses the ids it already collected and re-crawls the same pages.
+
+### Waiting for a page in a batch
+
+There is no `goto --load` option. `goto` is a navigation command; the explicit wait is
+`wait --load domcontentloaded|load|networkidle` afterwards. For a batch, prefer the path
+that does the waiting itself:
+
+```bash
+# One command per page: navigate, wait, evaluate, write — no round-trip between steps.
+browser4-cli crawl --seed-file .b4scratch/urls.txt --depth 0 --sql @.b4scratch/x-asin.sql --format csv -o .b4scratch/rows.csv
+
+# Per-item eval: resolve the promise (--await), bound the wait to the result element.
+browser4-cli eval --await --wait-selector "#productTitle" --file .b4scratch/item.js
+```
+
+After `goto`, poll the element you need (`wait "<selector>"`, or
+`eval --wait-selector <css>`) instead of assuming the DOM settled: a result page
+computed by page JS can still be empty when the network goes quiet.
 
 ### Resume a half-finished run
 

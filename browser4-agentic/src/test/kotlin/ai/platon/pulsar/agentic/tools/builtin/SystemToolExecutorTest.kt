@@ -58,12 +58,80 @@ class SystemToolExecutorTest {
     }
 
     @Test
-    @DisplayName("skillDoc reads bundled browser4-cli SKILL.md from classpath")
+    @DisplayName("skillDoc returns the SKILL.md reference map when no offset is given")
     fun skillDocReadsBundledSkill() {
         val content = executor.skillDoc("SKILL.md")
 
-        assertTrue(content.startsWith("---"), "expected bundled SKILL.md frontmatter, got: ${content.take(60)}")
-        assertTrue(content.contains("browser4-cli"), "SKILL.md must mention browser4-cli")
+        assertTrue(content.contains("reference map"), "expected a reference map, got: ${content.take(120)}")
+        assertTrue(content.contains("## 7. Reference Map"), "the section map must list skills sections")
+        assertTrue(
+            content.length <= 2_048,
+            "the reference map ships in the model context and must stay bounded, got ${content.length}"
+        )
+    }
+
+    @Test
+    @DisplayName("the SKILL.md index lists the reference docs a long task needs")
+    fun skillDocIndexListsReferenceDocs() {
+        val index = executor.skillDoc("SKILL.md")
+
+        listOf("bulk-collection.md", "agent-workspace.md", "htmlsnapshot.md", "agent.md").forEach { doc ->
+            assertTrue(index.contains(doc), "$doc must be reachable from the index: $index")
+        }
+        // The index is a MAP: each doc carries the offset where SKILL.md links it, so a
+        // follow-up call can load the surrounding section without a full read.
+        assertTrue(
+            Regex("""- offset \d+: \w[\w.-]*\.md""").containsMatchIn(index),
+            "reference docs need their offsets: $index"
+        )
+    }
+
+    @Test
+    @DisplayName("skillDoc pages by code-point offset without overlap")
+    fun skillDocPagesWithoutOverlap() {
+        val first = executor.skillDoc("SKILL.md", offset = 0)
+        val header = Regex("""offset=(\d+) nextOffset=(\d+) totalLength=(\d+)""").find(first)
+        assertNotNull(header, "a page must advertise offset/nextOffset/totalLength: ${first.take(120)}")
+        val firstStart = header!!.groupValues[1].toInt()
+        val nextOffset = header.groupValues[2].toInt()
+        val total = header.groupValues[3].toInt()
+        assertEquals(0, firstStart)
+        assertTrue(total > 50_000, "SKILL.md should be the real document, got totalLength=$total")
+
+        val second = executor.skillDoc("SKILL.md", offset = nextOffset)
+        val secondHeader = Regex("""offset=(\d+) nextOffset=(\d+) totalLength=(\d+)""").find(second)!!
+        assertEquals(nextOffset, secondHeader.groupValues[1].toInt(), "the second page starts where the first ended")
+
+        // No overlap: the tail of page 1 is not the head of page 2.
+        assertFalse(second.contains(first.takeLast(200)), "pages must not repeat each other")
+    }
+
+    @Test
+    @DisplayName("skillDoc honours an explicit limit and bounds it to 16k")
+    fun skillDocHonoursLimit() {
+        val big = executor.skillDoc("SKILL.md", offset = 0, limit = 16_000)
+        assertTrue(big.length in 15_000..16_000, "executor must be able to return a 16k slice, got ${big.length}")
+
+        val small = executor.skillDoc("SKILL.md", offset = 0, limit = 2_000)
+        assertTrue(small.length <= 2_100, "a small limit must bound the result, got ${small.length}")
+
+        val clamped = executor.skillDoc("SKILL.md", offset = 0, limit = 999_999)
+        assertTrue(clamped.length <= 16_100, "limit must be capped at 16k, got ${clamped.length}")
+    }
+
+    @Test
+    @DisplayName("skillDoc takes offset/limit through the tool call arguments")
+    fun skillDocAcceptsPagingArguments() = runBlocking {
+        val tc = ToolCall(
+            domain = "system",
+            method = "skillDoc",
+            arguments = mutableMapOf("name" to "SKILL.md", "offset" to 0, "limit" to 1_000),
+        )
+
+        val text = executor.callFunctionOn(tc, executor).value?.toString() ?: ""
+
+        assertTrue(text.startsWith("SKILL.md · offset=0 "), text.take(80))
+        assertTrue(text.length <= 1_100, "limit must be honoured by the executor, got ${text.length}")
     }
 
     @Test
@@ -82,9 +150,10 @@ class SystemToolExecutorTest {
     @Test
     @DisplayName("quickstart stays in sync with SKILL.md on key facts (distillation drift guard)")
     fun quickstartStaysInSyncWithSkill() {
-        val quickstart = executor.skillDoc("quickstart.md")
-        val skill = executor.skillDoc("SKILL.md")
-
+        // Read the documents themselves: `skillDoc` pages a long document, and the
+        // drift guard compares content, not a slice.
+        val quickstart = executor.skillDocStrict("quickstart.md") ?: error("quickstart.md must resolve")
+        val skill = executor.skillDocStrict("SKILL.md") ?: error("SKILL.md must resolve")
         listOf(
             "DOM_LOAD_AND_SELECT", "--auto-diff", "generate-locator",
             "--headless", "BROWSER4_RUNTIME_DIR", "htmlsnapshot",

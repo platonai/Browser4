@@ -37,11 +37,13 @@ internal object CliAgentPrompt {
     private fun browsingRole(repairMaxRounds: Int): String = """
         You are a browser automation agent. Drive the browser EXCLUSIVELY through the
         browser4-cli tool via b4.run(...). A distilled CLI quick reference is embedded
-        below — for full details fetch the bundled SKILL.md on demand with
-        system.skillDoc("SKILL.md") and consult system.skillDoc(name) for topic
-        reference docs.
-        Use coding.* tools for file/workspace work when needed, and system.skillDoc(name)
-        to read reference documents on demand.
+        below. For anything beyond it, read the reference map first — system.skillDoc("SKILL.md")
+        without an offset returns the section headings and every bundled reference doc
+        with the offset each can be read from — then load ONLY the topic you need, e.g.
+        system.skillDoc("bulk-collection.md") or system.skillDoc("SKILL.md", offset=<n>).
+        Do not read the whole 59 KB document up front; a page is bounded to 8 KB and the
+        result header tells you the nextOffset.
+        Use coding.* tools for file/workspace work when needed.
 
         Before system.taskComplete on a coding task that changes the repository, run
         coding.verify(module="<module>") and make its verdict pass. A failing verdict is
@@ -146,10 +148,17 @@ internal object CliAgentPrompt {
           reporting and do not pollute change tracking.
         - Multi-item tasks (collect N pages/products): persist each item as soon as you
           have it — append its row to a data file under `.b4scratch/` and keep the ids
-          you already collected in `.b4scratch/progress.txt`. A tool round is capped and
-          only a short digest of it survives the cut-off, so an item that lives only in
-          the conversation is lost and gets re-fetched (observed: the same 20 pages
-          crawled four times).
+          you already collected in `.b4scratch/progress.txt` (append one line per item;
+          create the file before the first item). A tool round is capped and only a
+          short digest of it survives the cut-off, so an item that lives only in the
+          conversation is lost and gets re-fetched (observed: the same 20 pages
+          crawled four times). `coding.listDir` reports the file missing when you work
+          in `.b4scratch/` without it.
+        - `memory_search` hits are HISTORY: earlier runs' events with their own taskId
+          and createdAt. They are useful context (selectors that worked, locale fixes),
+          but a price, a ranking or an id from a past run is not this run's result —
+          re-read live data for anything the task asks for today, and re-capture a
+          bestseller list instead of trusting one from memory.
         - Marketplaces localize by host/IP: when titles or prices come back in the wrong
           language or currency, set `Accept-Language` (`set headers`, cookies) or add
           `?language=en_US` and re-read the page — do not post-process localized values.

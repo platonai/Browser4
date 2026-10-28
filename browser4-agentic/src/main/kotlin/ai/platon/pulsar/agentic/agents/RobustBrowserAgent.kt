@@ -380,6 +380,32 @@ open class RobustBrowserAgent(
     var noopLimitOverride: Int? = null
 
     /**
+     * Per-task token budget, set by the task runner when the caller passes
+     * `command.run(tokenBudget=…)` / `agent run --token-budget <n>`.
+     *
+     * It wins over both the configured `agent.token.budget.total` and the
+     * process-wide [ai.platon.pulsar.agentic.inference.RuntimeConfigRegistry]
+     * override, and is deliberately NOT written into the registry: a task-level
+     * choice must not leak into every later task in the JVM (the runner clears this
+     * field in its `finally`). `0` means unlimited, matching
+     * [ai.platon.pulsar.agentic.inference.AgentTokenBudget]'s semantics.
+     */
+    @Volatile
+    var tokenBudgetOverride: Long? = null
+
+    /**
+     * Effective token budget of the most recent run (`null` before the first run and
+     * for a run created without a budget).
+     *
+     * Published so the task runner can report it on a terminal (especially failed)
+     * status: a supervisor needs to see "aborted at 5.0M / 5.0M", not just
+     * `TokenBudgetExceededException`.
+     */
+    @Volatile
+    var lastRunTokenBudget: Long? = null
+        private set
+
+    /**
      * Per-agent scratch workspace for CLI-engine (browser) tasks. Helper files
      * the model writes via coding.* and b4.run land here — never the backend
      * working directory / repository root (workspace isolation, P1).
@@ -987,7 +1013,11 @@ open class RobustBrowserAgent(
             // browsing run consumed 7.87M input tokens against the 5M default with no
             // abort. Charged from the loop's onModelResponse callback; the breach
             // propagates to resolveProblemWithRetry, which treats it as permanent.
-            val tokenBudget = AgentTokenBudget.from(session.sessionConfig)
+            //
+            // The per-task override (`agent run --token-budget`) is resolved here, once
+            // per run, and never written into the process-wide registry.
+            val tokenBudget = AgentTokenBudget.forRun(session.sessionConfig, tokenBudgetOverride)
+            lastRunTokenBudget = tokenBudget.effectiveMaxTotalTokens
             // Coding progress enforcement: rounds without a recorded file
             // mutation. Reset on every round that changes a file (see
             // [codingProgressNudge]).
@@ -1366,11 +1396,9 @@ open class RobustBrowserAgent(
             // following the task had no way to see token consumption at all.
             onModelResponse = { seq, response ->
                 cliLoopTracer.logResponse(seq, response)
-                emitUsageEvent(response, turn)
-                // P0 cost guard: charge this request to the run's budget. The
-                // exception (TokenBudgetExceededException) is an
-                // IllegalStateException, so it propagates out of the loop and is
-                // treated as permanent — no retry, no further tokens.
+                // Charged BEFORE the usage event so the reported cumulative total
+                // includes this request (a task-level budget that is about to abort
+                // must still be visible), then reported with the effective budget.
                 tokenBudget?.let { budget ->
                     runCatching { response.tokenUsage() }.getOrNull()?.let { usage ->
                         // A provider that omits usage contributes nothing; the request
@@ -1381,6 +1409,7 @@ open class RobustBrowserAgent(
                         )
                     }
                 }
+                emitUsageEvent(response, turn, budget = tokenBudget)
             },
             onToolResult = { req, result, durationMs ->
                 // Live view: one event per executed tool (`agent run --follow`).
@@ -1506,8 +1535,17 @@ open class RobustBrowserAgent(
      * @param response the provider's answer for this request
      * @param turn 1-based outer round the request belongs to (0 for auxiliary calls)
      * @param category [AgentRunEvent.USAGE_CATEGORY_COMPACTION] for a compaction call
+     * @param budget the run's budget, when it has one: its effective limit and the
+     *   cumulative consumption are what let a supervisor see 5M tokens approaching
+     *   instead of only discovering it in the abort (2026-10-28 baseline: 5,006,041
+     *   tokens consumed, zero advance warning in `--follow`)
      */
-    private fun emitUsageEvent(response: ChatResponse, turn: Int, category: String? = null) {
+    private fun emitUsageEvent(
+        response: ChatResponse,
+        turn: Int,
+        category: String? = null,
+        budget: AgentTokenBudget? = null,
+    ) {
         val usage = runCatching { response.tokenUsage() }.getOrNull()
         emitRunEvent(
             AgentRunEvent(
@@ -1517,6 +1555,8 @@ open class RobustBrowserAgent(
                 inputTokens = usage?.inputTokenCount(),
                 outputTokens = usage?.outputTokenCount(),
                 totalTokens = usage?.totalTokenCount(),
+                budgetTokens = budget?.effectiveMaxTotalTokens,
+                cumulativeTokens = budget?.consumedTotal,
             )
         )
     }
@@ -2051,9 +2091,13 @@ open class RobustBrowserAgent(
             append(
                 """
 
-                Load the complete SKILL.md with system.skillDoc("SKILL.md") before the first
-                browser interaction, and use system.skillDoc("<reference>.md") for detailed
-                topic guides (htmlsnapshot, x-sql, snapshot, crawl, swarm, ...) when needed.
+                Need more detail? Call system.skillDoc("SKILL.md") with NO offset: it returns the
+                reference map — the section headings plus every bundled reference doc with the
+                offset to read it from. Then load only what this task needs:
+                system.skillDoc("bulk-collection.md"), system.skillDoc("agent-workspace.md"),
+                system.skillDoc("htmlsnapshot.md"), ... or a slice with
+                system.skillDoc("SKILL.md", offset=<n>). Each result header carries
+                offset/nextOffset/totalLength; never load the whole document up front.
                 """.trimIndent()
             )
         }

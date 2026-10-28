@@ -6,6 +6,7 @@ import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationProvider
 import ai.platon.pulsar.agentic.tools.specs.ToolResultSchemas
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import java.time.Instant
 import kotlin.reflect.KClass
 
 /**
@@ -60,9 +61,10 @@ class MemoryToolExecutor(
             returnType = "String",
             outputSchema = ToolResultSchemas.MEMORY_SEARCH,
             description = "Search agent memory (past tasks and tool executions) " +
-                "by keywords. Returns hits with taskId, timestamp, tool and a " +
-                "snippet; use memory.read to fetch details. Optionally restrict " +
-                "to one agent uuid (agent).",
+                "by keywords. Every hit names the task it came from and an ISO `createdAt`, " +
+                "because hits are HISTORIC — not results of the current run — so live data " +
+                "must be re-read before it is reported. Use memory.read to fetch details. " +
+                "Optionally restrict to one agent uuid (agent).",
             examples = listOf(
                 ToolExample(title = "Find past work on a topic", args = mapOf("query" to "amazon price")),
             ),
@@ -159,7 +161,32 @@ class MemoryToolExecutor(
         val page = memory.queryService.searchEvents(
             query, SearchFilters(agentUuid = agent), limit = limit.coerceIn(1, 50),
         )
-        return mapper.writeValueAsString(page)
+        // Provenance, explicitly: a hit is an event of an EARLIER run. Without this
+        // the model read a previous run's numbers (prices, rankings, ids) as if it had
+        // just collected them — a live run answered a "today" task from yesterday's
+        // memory (2026-10-28). Every hit names its task id and an ISO timestamp, and
+        // the envelope says what the hits are.
+        val currentTaskId = runCatching { memory.currentTaskId }.getOrNull()
+        val hits = page.hits.map { hit ->
+            val entry = linkedMapOf<String, Any?>(
+                "taskId" to hit.taskId,
+                "createdAt" to Instant.ofEpochMilli(hit.ts).toString(),
+                "ts" to hit.ts,
+                "tool" to hit.tool,
+                "snippet" to hit.snippet,
+                "tier" to hit.tier,
+                "fromCurrentTask" to (currentTaskId != null && hit.taskId == currentTaskId),
+            )
+            entry.filterValues { it != null }
+        }
+        val envelope = linkedMapOf<String, Any?>(
+            "provenance" to "Hits come from EARLIER agent runs (taskId + createdAt). They are " +
+                "historical context, not results of the current run: live data (prices, rankings, " +
+                "ids) must be re-read from the page before it is used or reported.",
+            "hits" to hits,
+            "nextCursor" to page.nextCursor,
+        )
+        return mapper.writeValueAsString(envelope)
     }
 
     private suspend fun handleRead(memory: AgentMemory, args: Map<String, Any?>): String {

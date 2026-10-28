@@ -193,7 +193,7 @@
     "domain" : "command",
     "method" : "run",
     "mcpNames" : [ "command_run" ],
-    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, engine: String? = null, access: String? = null, autoApprove: String? = null, resumeTaskId: String? = null)",
+    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, autoApprove: String? = null, resumeTaskId: String? = null, tokenBudget: Long? = null)",
     "description" : "Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine is a deprecated compatibility argument: the CLI tool loop is the only engine, and the removed 'observe-act' engine is rejected. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.",
     "returnType" : "String",
     "arguments" : [ {
@@ -224,7 +224,13 @@
       "type" : "Boolean?",
       "required" : false,
       "default" : "null",
-      "description" : "True runs this task in a fresh, isolated workspace directory (created under the agent's data dir) instead of the shared workspace. Use for tasks that must not see or mutate previous tasks' scratch files. Omit or false uses the default shared workspace."
+      "description" : "Deprecated compatibility switch: every task now runs in its own workspace (<agent data dir>/workspace.<taskId>), so this is a no-op. Kept so older clients keep working; use `sharedWorkspace` for the opposite."
+    }, {
+      "name" : "sharedWorkspace",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "null",
+      "description" : "True runs this task in the shared <agent data dir>/workspace instead of a per-task workspace, so it sees and mutates previous tasks' files. Omit or false keeps the default isolation (one workspace per task; `resumeTaskId` keeps the interrupted task's workspace)."
     }, {
       "name" : "engine",
       "type" : "String?",
@@ -249,6 +255,12 @@
       "required" : false,
       "default" : "null",
       "description" : "Resume an interrupted task by id: the new run starts from that task's checkpoint — its instruction, workspace and the files already written — and inherits its coding/access flags. `command` may then be empty. The id must be known to this backend (the interrupted row is restored after a restart, within its TTL)."
+    }, {
+      "name" : "tokenBudget",
+      "type" : "Long?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Token budget for THIS task (`agent run --token-budget`), overriding `agent.token.budget.total` for this run only — a per-run override, never a process-wide config write. 0 means unlimited. Omit to use the configured default."
     } ],
     "examples" : [ {
       "title" : "Load a page asynchronously",
@@ -1074,7 +1086,7 @@
     "method" : "search",
     "mcpNames" : [ "memory_search" ],
     "signature" : "memory.search(query: String, agent: String? = null, limit: Int = 10)",
-    "description" : "Search agent memory (past tasks and tool executions) by keywords. Returns hits with taskId, timestamp, tool and a snippet; use memory.read to fetch details. Optionally restrict to one agent uuid (agent).",
+    "description" : "Search agent memory (past tasks and tool executions) by keywords. Every hit names the task it came from and an ISO `createdAt`, because hits are HISTORIC — not results of the current run — so live data must be re-read before it is reported. Use memory.read to fetch details. Optionally restrict to one agent uuid (agent).",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "query",

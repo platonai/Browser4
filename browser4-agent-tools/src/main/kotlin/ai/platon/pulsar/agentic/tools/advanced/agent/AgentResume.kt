@@ -87,6 +87,32 @@ internal fun listWorkspaceFiles(workspace: Path, maxFiles: Int = RESUME_MAX_FILE
 internal const val MAX_ABORT_DELIVERABLES = 50
 
 /**
+ * The directory a task runs in.
+ *
+ * Isolation is the DEFAULT: every task gets `<agent base dir>/workspace.<taskId>`, so
+ * files from an earlier run are never in this run's workspace (and never in its
+ * `filesChanged`). The documents have promised this since agent.md/agent-workspace.md
+ * were written; only `--fresh-workspace` actually did it.
+ *
+ * @param baseDir the agent's data directory
+ * @param taskId the task id (also the workspace suffix)
+ * @param resumeWorkspace the interrupted task's workspace when resuming — the files it
+ *   already wrote are what the new run continues from
+ * @param sharedWorkspace `--shared-workspace`: use the shared `<baseDir>/workspace`
+ * @return the workspace to use, or `null` for the shared one
+ */
+internal fun taskWorkspaceFor(
+    baseDir: Path,
+    taskId: String,
+    resumeWorkspace: Path?,
+    sharedWorkspace: Boolean?,
+): Path? = when {
+    resumeWorkspace != null -> resumeWorkspace
+    sharedWorkspace == true -> null
+    else -> baseDir.resolve("workspace.$taskId")
+}
+
+/**
  * The files a run had already produced in its workspace, for a run that ended
  * **without** reporting them.
  *
@@ -94,26 +120,83 @@ internal const val MAX_ABORT_DELIVERABLES = 50
  * CSV was complete on disk was reported as a bare failure and the data looked lost
  * (2026-10-28: 20 rows × 75 fields written, task `failed (417)` with no artifacts).
  *
- * Only top-level regular files count: `.b4scratch/` helper scripts, `.b4inputs/`
- * copies and dot-files are working state, not deliverables — the browsing prompt says
- * so explicitly. The list is bounded and sorted so a pathological workspace cannot
- * bloat a status row and repeated polls stay stable.
+ * ## Why attribution matters
+ *
+ * The old version listed **every** top-level regular file in the workspace. On a
+ * reused workspace that included files from earlier tasks — the 2026-10-28 baseline
+ * reported an old CSV (written 36 minutes before the run) and another agent's
+ * `msedge-*.md` report as this run's deliverables. The list is what the finish gate
+ * compares a completion report against, so a wrong list is worse than an empty one.
+ *
+ * Sources, in order of trust:
+ * 1. [mutations] — the run's own mutation log (`CodingAgentFileSystem`); exact, and it
+ *    already excludes scratch/agent-state paths;
+ * 2. files modified at or after [startedAt] — the fallback for a run whose writes went
+ *    through something other than the coding file tools (a CLI script);
+ * 3. every top-level file — only when the call site knows no start time (legacy
+ *    cancel paths).
+ *
+ * `.b4scratch/`, `.b4inputs/`, `.browser4*` and dot-entries are working state, not
+ * deliverables; they are excluded from each source.
+ *
+ * @param workspace the run's workspace root
+ * @param startedAt when the run started, or null when unknown
+ * @param mutations the run's mutation paths (workspace-relative)
+ * @param maxFiles bound on the returned list
  */
-internal fun deliverableFilesOf(workspace: String?, maxFiles: Int = MAX_ABORT_DELIVERABLES): List<String> {
+internal fun deliverableFilesOf(
+    workspace: String?,
+    startedAt: Instant? = null,
+    mutations: Collection<String> = emptyList(),
+    maxFiles: Int = MAX_ABORT_DELIVERABLES,
+): List<String> {
     val dir = workspace
         ?.takeIf { it.isNotBlank() }
         ?.let { runCatching { Path.of(it) }.getOrNull() }
         ?.takeIf { Files.isDirectory(it) }
         ?: return emptyList()
+
+    val fromMutations = mutations.asSequence()
+        .map { it.replace('\\', '/').trim() }
+        .filter { isDeliverablePath(it) }
+        .filter { runCatching { Files.isRegularFile(dir.resolve(it)) }.getOrDefault(false) }
+        .distinct()
+        .sorted()
+        .take(maxFiles)
+        .toList()
+    if (fromMutations.isNotEmpty()) return fromMutations
+
     return runCatching {
         Files.newDirectoryStream(dir).use { entries ->
-            entries.filter { Files.isRegularFile(it) && !it.fileName.toString().startsWith(".") }
+            entries.filter { entry ->
+                Files.isRegularFile(entry) &&
+                    isDeliverablePath(entry.fileName.toString()) &&
+                    (startedAt == null || modifiedAtOrAfter(entry, startedAt))
+            }
                 .map { it.fileName.toString() }
                 .sorted()
                 .take(maxFiles)
         }
     }.getOrDefault(emptyList())
 }
+
+/** True when a workspace-relative path can be a deliverable (not agent state). */
+private fun isDeliverablePath(relative: String): Boolean {
+    if (relative.isBlank()) return false
+    if (relative.startsWith("/") || relative.contains(":\\") || relative.startsWith("\\\\")) return false
+    val parts = relative.split('/')
+    if (parts.any { it.isEmpty() || it == ".." || it == "." }) return false
+    // Dot-entries cover `.b4scratch/`, `.b4inputs/`, `.browser4/` and editor droppings.
+    return !parts.first().startsWith(".")
+}
+
+/** True when [path] was modified at or after [startedAt] (a file system race floors at 0). */
+private fun modifiedAtOrAfter(path: Path, startedAt: Instant): Boolean = runCatching {
+    val modified = Files.getLastModifiedTime(path).toInstant()
+    // One-second slack: archives and Windows FAT-style timestamps round down, and a
+    // deliverable written in the same second the task started must not be dropped.
+    !modified.isBefore(startedAt.minusSeconds(1))
+}.getOrDefault(false)
 
 /**
  * The instruction a resumed run starts from.

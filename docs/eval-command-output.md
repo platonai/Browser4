@@ -18,15 +18,22 @@ Silent failures (no output, no error) were a known issue before the 4.11.x fix �
 
 | JavaScript completion value | Printed output |
 |---|---|
-| `undefined` (e.g. `var x = 5`, `for` loops, function declarations) | `null` |
+| `undefined` (e.g. `var x = 5`, `for` loops, function declarations) | `null` plus an explanation of how to return a value (`--json` keeps JSON `null`) |
 | `null` | `null` |
 | `""` (empty string) | `""` |
+| `Promise` (an async expression without `--await`) | **error**: `The expression returned an unresolved Promise … re-run with --await` |
 | `0`, `false`, `"hello"`, `42`, etc. | The value as-is |
 | `throw new Error(...)` | Error message surfaced to stderr |
 
-> **Note:** Both `undefined` and `null` print as `null` because the CDP protocol serialises
-> both to a non-existent `value` field. Distinguishing them would require inspecting the
-> CDP `type` field, which the current `evaluateValue` API discards.
+> **Note:** `undefined` and `null` both arrive from CDP without a `value` field, so the
+> backend distinguishes them with the CDP `type` (`cdpType == "undefined"`) before the
+> text is rendered (`AbstractToolExecutor.jsEvaluationIssue`). An `undefined` result
+> carries a plain-text notice — a bare `null` taught the model nothing about why there
+> was no data (2026-10-28 run: three `eval`s of a 20-page batch silently lost it).
+>
+> **Promises are a failure, not data.** Without `--await` the value is an unresolved
+> `Promise` object; it used to reach the CLI as `{}`, which read like a result. The
+> backend now fails the call and names the fix.
 
 ## Batch mode
 
