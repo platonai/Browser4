@@ -125,6 +125,27 @@ class B4CliToolExecutorTest {
     }
 
     @Test
+    fun `the evaluate deadline hints at server-side waits, not a bigger timeout`() {
+        // 2026-10-29 Gate: a 35s page-side sleep inside `eval --await` failed with
+        // `[INTERNAL] browser_evaluate failed: No response | Runtime.evaluate | #14, (PT30S)`,
+        // and no timeout knob could widen the driver's 30s deadline.
+        val result = CliResult(
+            exitCode = 1,
+            stdout = "",
+            stderr = "Error: [INTERNAL] browser_evaluate failed: No response | Runtime.evaluate | #14, (PT30S)",
+            durationMs = 31_000,
+        )
+
+        val text = classifyCliResult(result, "run")
+
+        assertTrue(text.contains("[hint]"), text)
+        assertTrue(text.contains("30s driver deadline"), "the hint must name the deadline: $text")
+        assertTrue(text.contains("wait --selector"), "the hint must point at wait: $text")
+        assertTrue(text.contains("wait --fn"), text)
+        assertTrue(text.contains("cannot widen"), "the hint must say a timeout will not help: $text")
+    }
+
+    @Test
     fun `per-item status errors do not fail a successful command`() {
         // A crawl reports a failed page as `"status":"error"` inside its item list;
         // only a TOP-LEVEL status is the command's own verdict.

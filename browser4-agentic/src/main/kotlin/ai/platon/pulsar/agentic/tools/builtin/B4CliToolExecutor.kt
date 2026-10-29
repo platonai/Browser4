@@ -416,6 +416,14 @@ internal fun classifyCliResult(result: CliResult, method: String, workingDir: Pa
             val where = workingDir?.toAbsolutePath()?.normalize()?.toString() ?: "(unknown)"
             add("relative paths resolve against the b4.run working directory: $where")
         }
+        if (looksLikeEvaluateDeadline(text)) {
+            add(
+                "a single page-side evaluate has a fixed 30s driver deadline " +
+                    "(No response | Runtime.evaluate | PT30S) that timeoutSeconds cannot widen: " +
+                    "wait server-side with `wait <ms>`, `wait --selector <css> --timeout <ms>` or " +
+                    "`wait --fn '<expr>' --timeout <ms>`, or poll with short eval calls"
+            )
+        }
         if (result.aborted) add("the job was cancelled; re-running it will do the same unless the cause is fixed")
     }
     val hintLine = hints.joinToString("\n").takeIf { it.isNotBlank() }?.let { "\n[hint] $it" } ?: ""
@@ -426,6 +434,19 @@ internal fun classifyCliResult(result: CliResult, method: String, workingDir: Pa
 private fun looksLikeMissingPath(text: String): Boolean {
     val lower = text.lowercase()
     return lower.contains("not found") || lower.contains("no such file") || lower.contains("cannot find")
+}
+
+/**
+ * True when the output reports the driver's fixed 30s page-evaluate deadline.
+ *
+ * `Runtime.evaluate` gets a 30s CDP deadline that neither `timeoutSeconds` nor the CLI's
+ * `--timeout` can widen: a 35s page-side sleep inside `eval --await` always ends as
+ * `No response | Runtime.evaluate | (PT30S)` (2026-10-29 Gate, F14). The hint must point
+ * at server-side waits, not at a bigger timeout.
+ */
+internal fun looksLikeEvaluateDeadline(text: String): Boolean {
+    val lower = text.lowercase()
+    return (lower.contains("runtime.evaluate") && lower.contains("no response")) || lower.contains("pt30s")
 }
 
 /**

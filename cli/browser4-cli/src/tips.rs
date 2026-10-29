@@ -661,6 +661,17 @@ fn is_client_side_timeout(message: &str) -> bool {
     lower.contains("timed out") || lower.contains("deadline has elapsed")
 }
 
+/// True for the driver's page-evaluate deadline
+/// (`browser_evaluate failed: No response | Runtime.evaluate | #14, (PT30S)`).
+///
+/// A single `Runtime.evaluate` gets a fixed 30s CDP deadline that no `--timeout` or MCP
+/// timeout can widen, so a page-side wait longer than that can only be polled from
+/// outside (2026-10-29 Gate run: a 35s `eval --await` failed with `No response`).
+fn is_evaluate_deadline(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    (lower.contains("runtime.evaluate") && lower.contains("no response")) || lower.contains("pt30s")
+}
+
 /// Parse the retry delay out of a rejection message
 /// (`… ; retry after 45 ms`), for backends that report it in prose only.
 fn parse_retry_after_ms(message: &str) -> Option<u64> {
@@ -696,6 +707,17 @@ fn failure_tip_for(
             "Tip: '{name}' stopped at the run's token budget — raise the cap for one task with \
              `agent run <task> --token-budget <n>`, change the backend default with \
              `config set agent.token.budget.total <n>`, or continue with `agent run --resume <task-id>`."
+        ));
+    }
+    // The page-evaluate deadline is worth naming before the code extraction: the
+    // wrapped message carries `[INTERNAL]`, whose arm intentionally has no tip.
+    if is_evaluate_deadline(error_message) {
+        let name = crate::help::public_command_name(command);
+        return Some(format!(
+            "Tip: '{name}' hit the driver's 30s page-evaluate deadline — one evaluate cannot wait \
+             longer and --timeout does not change it. Wait server-side instead: `wait <ms>`, \
+             `wait --selector <css> --timeout <ms>`, or `wait --fn '<expr>' --timeout <ms>`; \
+             or poll with short `eval` calls."
         ));
     }
     // The message is authoritative — the backend embeds the code in the text
@@ -996,6 +1018,25 @@ mod tests {
         let backend_code = failure_tip_for("crawl", "ERROR: [TIMEOUT] no progress", None, None)
             .expect("the backend's own TIMEOUT code is actionable");
         assert!(backend_code.contains("'crawl'"), "got: {backend_code}");
+    }
+
+    #[test]
+    fn test_failure_tip_evaluate_deadline_points_at_wait() {
+        // 2026-10-29 Gate: `eval --await` on a 35s page-side sleep failed with
+        // `[INTERNAL] browser_evaluate failed: No response | Runtime.evaluate | #14, (PT30S)`,
+        // and no --timeout could change it.
+        let message = "Error: [INTERNAL] browser_evaluate failed: No response | Runtime.evaluate | #14, (PT30S)";
+        let tip = failure_tip_for("eval", message, None, None)
+            .expect("the 30s evaluate deadline is actionable");
+        assert!(tip.contains("'eval'"), "got: {tip}");
+        assert!(tip.contains("30s page-evaluate deadline"), "got: {tip}");
+        assert!(tip.contains("wait --selector") && tip.contains("wait --fn"), "got: {tip}");
+
+        // A plain internal error still gets no tip.
+        assert_eq!(
+            failure_tip_for("eval", "ERROR: [INTERNAL] unexpected failure", Some("INTERNAL"), None),
+            None
+        );
     }
 
     #[test]
