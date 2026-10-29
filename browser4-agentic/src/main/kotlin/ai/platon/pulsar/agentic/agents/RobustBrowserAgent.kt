@@ -343,6 +343,38 @@ internal fun codingProgressNudge(readOnlyRounds: Int, limit: Int = CLI_CODING_RE
         "then run coding.verify on the module. If something genuinely blocks the edit, state exactly what it is."
 }
 
+/** Budget percentage at which the run is told to wrap up ([budgetPressureNudge]). */
+internal const val CLI_BUDGET_FINISH_PERCENT = 80
+
+/** Budget percentage at which the wrap-up directive stops being a suggestion. */
+internal const val CLI_BUDGET_FINAL_PERCENT = 95
+
+/**
+ * Directive injected once a run has spent most of its token budget.
+ *
+ * Measured on 2026-10-29 (the 20-microwave collection task): three independent runs — the
+ * supervised baseline, a 5M run and a 6M run — each consumed 99–100% of *whatever* cap
+ * they were given and were aborted by `TokenBudgetExceededException`. The deliverable CSV
+ * existed from minute 14; the tail was spent re-auditing columns and patching single
+ * fields, so raising the cap only moved the abort. The model needs to be told that a
+ * reported partial result beats an aborted run with no report — the same lesson as
+ * [codingProgressNudge], expressed for the budget instead of read-only rounds.
+ *
+ * @param consumed the run's tokens so far
+ * @param limit the run's effective budget (`0` or a negative value means unlimited)
+ * @param percent threshold the caller wants to announce (80 or 95)
+ * @return the directive, or `null` while the run is below [percent]
+ */
+internal fun budgetPressureNudge(consumed: Long, limit: Long, percent: Int = CLI_BUDGET_FINISH_PERCENT): String? {
+    if (limit <= 0 || consumed <= 0) return null
+    if (consumed * 100 < limit * percent) return null
+    val now = consumed * 100 / limit
+    return "You have used $now% of this task's token budget ($consumed of $limit). Stop collecting and " +
+        "re-auditing: write the deliverable to the workspace root now if it is still under .b4scratch, " +
+        "list every field the page did not provide in `problems`, and call system.taskComplete. " +
+        "An honest partial report is better than an aborted run with no report."
+}
+
 /**
  * Bounded digest of what ONE outer round actually executed, fed back to the
  * model in the next round's continuation message.
@@ -1028,6 +1060,11 @@ open class RobustBrowserAgent(
             // ActionDescription per call, so "same object" means the model did not
             // re-report — amend from the trace instead of burning another round.
             var repairedClaim: ActionDescription? = null
+            // Budget wrap-up nudges are announced once per threshold: repeating them every
+            // round would crowd out the model's own plan near the abort (see
+            // [budgetPressureNudge]).
+            var budgetNudgeAt80 = false
+            var budgetNudgeAt95 = false
             while (!isClosed && turn < maxTurns) {
                 val toolsBefore = toolExecutions.get()
                 emitRunEvent(AgentRunEvent(AgentRunEvent.ROUND_START, turn = turn + 1))
@@ -1055,6 +1092,38 @@ open class RobustBrowserAgent(
                         roundMessages = roundMessages + UserMessage.from(nudge)
                         readOnlyCodingRounds = 0
                     }
+                }
+                // Deterministic "wrap up" nudge near the budget: without it the run keeps
+                // re-auditing an already-written deliverable and is aborted at 100% with no
+                // report (2026-10-29: 5M and 6M runs both ended at 99-100%).
+                val budgetPercent = when {
+                    !budgetNudgeAt95 &&
+                        budgetPressureNudge(tokenBudget.consumedTotal, tokenBudget.effectiveMaxTotalTokens, CLI_BUDGET_FINAL_PERCENT) != null ->
+                        CLI_BUDGET_FINAL_PERCENT
+                    !budgetNudgeAt80 &&
+                        budgetPressureNudge(tokenBudget.consumedTotal, tokenBudget.effectiveMaxTotalTokens) != null ->
+                        CLI_BUDGET_FINISH_PERCENT
+                    else -> 0
+                }
+                if (budgetPercent > 0) {
+                    if (budgetPercent >= CLI_BUDGET_FINAL_PERCENT) budgetNudgeAt95 = true else budgetNudgeAt80 = true
+                    logger.info("💸 budget.nudge at {}% consumed={} limit={}",
+                        budgetPercent, tokenBudget.consumedTotal, tokenBudget.effectiveMaxTotalTokens)
+                    cliLoopTracer.logEvent(
+                        "budget.nudge",
+                        mapOf(
+                            "percent" to budgetPercent,
+                            "consumed" to tokenBudget.consumedTotal,
+                            "limit" to tokenBudget.effectiveMaxTotalTokens,
+                        )
+                    )
+                    roundMessages = roundMessages + UserMessage.from(
+                        budgetPressureNudge(
+                            tokenBudget.consumedTotal,
+                            tokenBudget.effectiveMaxTotalTokens,
+                            budgetPercent,
+                        )!!
+                    )
                 }
                 val loop = buildCliToolLoop(
                     action.action, completionRef, toolExecutions,
