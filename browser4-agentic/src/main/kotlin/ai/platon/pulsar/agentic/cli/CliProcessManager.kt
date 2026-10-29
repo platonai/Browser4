@@ -10,6 +10,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Dispatchers
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.net.URI
@@ -22,6 +23,7 @@ import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.time.Duration
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
@@ -171,6 +173,13 @@ class CliProcessManager(
         pb.environment().putAll(spec.env)
         spec.workingDir?.let { pb.directory(it.toFile()) }
         pb.redirectErrorStream(false)
+        // The command arrives as an argv string; there is no stdin to feed it. Leaving
+        // the default pipe open made any command that reads stdin block until its
+        // deadline — `b4.run("eval --js \"…\"")` (where `--js` is the shorthand for
+        // `--stdin`) hung for the full 300s on the 2026-10-29 smoke run. Node's
+        // `spawn(..., { stdio: ["ignore", …] })` — what pi's shell transport uses for
+        // argv commands — reads from NUL instead, so such commands see EOF at once.
+        pb.redirectInput(nullDevice())
 
         val proc = try {
             withContext(Dispatchers.IO) {
@@ -428,22 +437,36 @@ class CliProcessManager(
         val commandLine = "$quotedBinary $args".trimEnd()
         return if (isWindows) {
             val shell = if (pwshAvailable.get()) "pwsh" else "powershell"
-            // UTF-8 console I/O for BOTH PowerShell hosts, not just 5.1.
-            //
-            // `b4.run("… > file")` and any child program's output are decoded by the
-            // PowerShell layer: with the OEM code page (cp936 on a zh-CN host) a
-            // UTF-8 child wrote `It鈥檚`/`dÉcor` into the file, and the model then tried
-            // to "fix" the data (2026-10-28 run). `$OutputEncoding` covers the pipe to
-            // native commands, `[Console]::OutputEncoding` the bytes read back, and
-            // `chcp 65001` the console program's own code page. Each step is wrapped in
-            // try/catch: a GUI/hostless run may have no console and the setter throws.
-            val preamble = "try { [Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
-                "\$OutputEncoding=[Text.Encoding]::UTF8; chcp 65001 > \$null } catch { }; "
-            Triple(
-                shell,
-                listOf(shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", preamble + "& " + commandLine),
-                commandLine,
-            )
+            val preamble = windowsPowerShellPreamble()
+            val encoded = encodePowerShellCommand(commandLine, preamble)
+            if (encoded != null) {
+                // The command text travels inside the script, never through the host's
+                // argv parser: Java's ProcessBuilder quotes an argv entry the standard
+                // CRT way, PowerShell re-parses `-Command <text>` with its own rules and
+                // drops the quotes, so `eval --js "JSON.stringify({...})"` reached the
+                // CLI as `eval --js JSON.stringify({...})` and died in ParserError
+                // (2026-10-29 Gate run). `-EncodedCommand` is base64, so nothing in the
+                // payload can be re-interpreted, and the exit code is still propagated
+                // through `exit $LASTEXITCODE` inside the script.
+                Triple(
+                    shell,
+                    listOf(
+                        shell, "-NoLogo", "-NoProfile", "-NonInteractive",
+                        "-OutputFormat", "Text", "-EncodedCommand", encoded,
+                    ),
+                    commandLine,
+                )
+            } else {
+                // Too long for a base64 argv token (Windows caps a command line at
+                // 32,767 chars). Keep the legacy inline form; a command long enough to
+                // hit this is expected to use --file/--stdin anyway.
+                Triple(
+                    shell,
+                    listOf(shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                        preamble + "& " + commandLine),
+                    commandLine,
+                )
+            }
         } else {
             // POSIX: run through /bin/sh -c. Escape `$`, backticks and `\` in
             // the args so sh does NOT expand `$env:PATH`, `$(...)` or
@@ -462,6 +485,21 @@ class CliProcessManager(
         }
     }
 
+    /**
+     * UTF-8 console I/O for BOTH PowerShell hosts, not just 5.1.
+     *
+     * `b4.run("… > file")` and any child program's output are decoded by the PowerShell
+     * layer: with the OEM code page (cp936 on a zh-CN host) a UTF-8 child wrote
+     * `It鈥檚`/`dÉcor` into the file, and the model then tried to "fix" the data
+     * (2026-10-28 run). `$OutputEncoding` covers the pipe to native commands,
+     * `[Console]::OutputEncoding` the bytes read back, and `chcp 65001` the console
+     * program's own code page. Each step is wrapped in try/catch: a GUI/hostless run may
+     * have no console and the setter throws.
+     */
+    private fun windowsPowerShellPreamble(): String =
+        "try { [Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
+            "\$OutputEncoding=[Text.Encoding]::UTF8; chcp 65001 > \$null } catch { }; "
+
     private val pwshAvailable: AtomicBoolean by lazy {
         AtomicBoolean(
             runCatching {
@@ -473,6 +511,13 @@ class CliProcessManager(
     }
 
     private fun quoteForShell(path: String): String = "'" + path.replace("'", "''") + "'"
+
+    /**
+     * `NUL` on Windows, `/dev/null` elsewhere — the stdin an argv-transported command
+     * gets so that a reader sees EOF instead of waiting on a pipe nobody writes.
+     */
+    private fun nullDevice(): ProcessBuilder.Redirect =
+        ProcessBuilder.Redirect.from(File(if (isWindows) "NUL" else "/dev/null"))
 
     private fun buildWhitelistedEnv(backendBaseUrl: String?): Map<String, String> {
         val base = processEnv
@@ -612,4 +657,65 @@ internal fun injectCliGlobalTimeout(binaryName: String, args: String, timeoutSec
     if (timeoutSeconds <= CLI_TIMEOUT_INJECTION_THRESHOLD_SECONDS) return args
     if (hasCliTimeoutFlag(args)) return args
     return "--timeout $timeoutSeconds $args"
+}
+
+/**
+ * Windows caps a process command line at 32,767 characters; 30k leaves room for the
+ * host flags around the base64 payload.
+ */
+internal const val PWSH_ENCODED_COMMAND_LIMIT = 30_000
+
+/**
+ * Escape the characters PowerShell would interpret while parsing the command line, so
+ * the target program receives them literally.
+ *
+ * The POSIX branch already suppresses `$`/backtick expansion for the same reason: the
+ * command line belongs to the binary, not to the shell. Escaping here also removes the
+ * accidental "protection" the old inline form got from the quote loss (a `"… $env:X …"`
+ * argument used to survive only because PowerShell never saw the quotes, and therefore
+ * never expanded it).
+ *
+ * Backticks are doubled first so the backticks introduced for `$` are not escaped again.
+ */
+internal fun escapeForPowerShellScript(commandLine: String): String =
+    commandLine.replace("`", "``").replace("$", "`$")
+
+/**
+ * The PowerShell script that runs [commandLine] without exposing it to the host's
+ * command-line parser.
+ *
+ * The command text is carried as base64 and parsed with `[ScriptBlock]::Create` at run
+ * time, so a syntax error becomes an explicit `ParserError:` line and exit code 2
+ * instead of CLIXML on stderr (which `-EncodedCommand` produces for a parse failure and,
+ * on PowerShell 7, exits 0). `exit $LASTEXITCODE` keeps the child's exit code, which the
+ * caller turns into `b4.run [fail]`.
+ *
+ * The payload is prefixed with `&` because the script block runs a command line that
+ * starts with the quoted binary path; without it PowerShell parses `'path' -Flag` as a
+ * string literal followed by arguments and throws. Everything the shell could expand is
+ * escaped by [escapeForPowerShellScript] first.
+ *
+ * @param commandLine the shell command line, e.g. `'browser4-cli.exe' eval --js "…"`
+ * @param preamble encoding setup to run first, see `windowsPowerShellPreamble`
+ */
+internal fun buildEncodedCommandScript(commandLine: String, preamble: String): String {
+    val command = "& " + escapeForPowerShellScript(commandLine)
+    val payload = Base64.getEncoder().encodeToString(command.toByteArray(StandardCharsets.UTF_8))
+    return preamble +
+        "\$b4Text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$payload'))\n" +
+        "try { \$b4Block = [ScriptBlock]::Create(\$b4Text) } " +
+        "catch { [Console]::Error.WriteLine('ParserError: ' + \$_.Exception.Message); exit 2 }\n" +
+        "& \$b4Block\n" +
+        "exit \$LASTEXITCODE\n"
+}
+
+/**
+ * The `-EncodedCommand` payload for [buildEncodedCommandScript], or `null` when the
+ * command is too long for a Windows command line.
+ */
+internal fun encodePowerShellCommand(commandLine: String, preamble: String): String? {
+    val script = buildEncodedCommandScript(commandLine, preamble)
+    val encoded = Base64.getEncoder()
+        .encodeToString(script.toByteArray(StandardCharsets.UTF_16LE))
+    return if (encoded.length <= PWSH_ENCODED_COMMAND_LIMIT) encoded else null
 }

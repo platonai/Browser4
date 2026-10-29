@@ -95,12 +95,30 @@ echo 'a[href]' | browser4-cli htmlsnapshot inspect --stdin
 | | `--stdin` | `echo 'a[href]' \| htmlsnapshot inspect --stdin` |
 | | `--selector-base64` | `--selector-base64 <base64>` |
 
+## Agent `b4.run`: one PowerShell layer, no stdin
+
+`b4.run("…")` inside an agent task is not a shell you can pipe into. On Windows the
+command text is handed to PowerShell as an **encoded** command (`pwsh -EncodedCommand`),
+so the quoting you write survives into the CLI — `b4.run("eval --json \"1+1\"")` reaches
+`eval` with one quoted argument instead of a `ParserError` (fixed 2026-10-29; before that
+Java's argv quoting was undone by PowerShell's own `-Command` parser).
+
+Two consequences:
+
+- The text is still **PowerShell** syntax: quote `@file` references (`--sql "@query.sql"`)
+  and do not use `cmd.exe` builtins (`dir /b`, `%VAR%`).
+- There is **no stdin**: a command that reads it sees EOF at once. `eval --js` is a
+  *bool* shorthand for `eval --stdin`, so `b4.run("eval --js \"…\"")` fails immediately
+  with `Error: Stdin was empty …` (exit 2) instead of hanging for the whole timeout. Pass
+  the JavaScript with `eval --file <path>` or as a quoted positional expression.
+
 ## Errors & Recovery
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `--sql "…"` output is mangled or empty | Shell reinterprets nested quotes (Windows/Git Bash) | Use `--sql @file.sql` or `--sql-stdin` |
 | `eval "…"` returns `null` or syntax errors | Quotes stripped across the 4 shell layers | Use `--file` / `--stdin` / `--base64` |
+| Agent `b4.run("eval --js \"…\"")` exits 2 with `Stdin was empty` | `--js` is a bool shorthand for `--stdin`, and `b4.run` has no stdin | Use `eval --file <path>` or a quoted positional (`eval "1+1"`) |
 | `htmlsnapshot inspect --selector "…"` breaks on special chars | `$`, backticks, or quotes in the selector | Use `@file`, `--stdin`, or `--selector-base64` |
 | A `/`-leading value is mangled | MSYS path conversion | Omit `--path` if `/` is the default, or use `./b4w.sh` / `MSYS2_ARG_CONV_EXCL='*'` |
 

@@ -16,6 +16,8 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.charset.StandardCharsets
+import java.util.Base64
 
 @DisplayName("CliProcessManager M1 core")
 class CliProcessManagerTest {
@@ -248,5 +250,102 @@ class CliProcessManagerTest {
             "a caller-named deadline anywhere must suppress the injection",
         )
         assertFalse(hasCliTimeoutFlag("eval --timeouts 120"))
+    }
+
+    @Test
+    @DisplayName("the encoded script carries the command verbatim, not through argv")
+    fun encodedScriptKeepsTheCommandVerbatim() {
+        val command = "'browser4-cli.exe' eval --js \"JSON.stringify({url: location.href})\""
+        val preamble = "preamble; "
+        val script = buildEncodedCommandScript(command, preamble)
+        val expectedPayload = "& " + escapeForPowerShellScript(command)
+        val payload = Base64.getEncoder()
+            .encodeToString(expectedPayload.toByteArray(StandardCharsets.UTF_8))
+
+        assertTrue(script.startsWith(preamble), script)
+        assertTrue(script.contains(payload), "the command must travel as a base64 payload")
+        assertTrue(script.contains("[ScriptBlock]::Create"), script)
+        assertTrue(script.contains("exit \$LASTEXITCODE"), "the child exit code must be propagated")
+        // Nothing of the command's own quoting may survive into the outer script: that is
+        // exactly what PowerShell's -Command parser ate (2026-10-29 Gate run).
+        assertFalse(script.contains("JSON.stringify"), "raw command text leaked into the script")
+        assertFalse(script.contains("\""), "no double quote may remain in the outer script")
+        // The block must be a command invocation, not a string literal followed by args.
+        assertTrue(
+            String(Base64.getDecoder().decode(payload), StandardCharsets.UTF_8).startsWith("& '"),
+            "the script block must invoke the binary with &",
+        )
+    }
+
+    @Test
+    @DisplayName("PowerShell would expand $ and backticks in the command text; escape them")
+    fun powerShellEscapeKeepsTheCommandLiteral() {
+        assertEquals(
+            "`\$env:PATH and ``backtick``",
+            escapeForPowerShellScript("\$env:PATH and `backtick`"),
+        )
+        // The escaped text must decode back to the literal command, byte for byte after
+        // the PowerShell parse: the doubling is what makes `$env:` reach the child.
+        val payload =
+            "'cli.exe' eval --js \"`\$('a')`\"".let { escapeForPowerShellScript(it) }
+        assertTrue(payload.contains("`\$('a')"), payload)
+        assertTrue(payload.contains("``"), "backticks must be doubled: $payload")
+    }
+
+    @Test
+    @DisplayName("the encoded command is a UTF-16LE base64 script")
+    fun encodedCommandIsBase64Utf16() {
+        val encoded = encodePowerShellCommand("'x.exe' e --js \"a b\"", "")
+        assertNotNull(encoded, "a normal command must produce an encoded script")
+        val script = String(Base64.getDecoder().decode(encoded!!), StandardCharsets.UTF_16LE)
+        assertTrue(script.contains("[ScriptBlock]::Create"), script)
+        assertTrue(script.contains("exit \$LASTEXITCODE"), script)
+    }
+
+    @Test
+    @DisplayName("a command too long for a Windows command line falls back instead of truncating")
+    fun encodedCommandRefusesAnOverlongPayload() {
+        val command = "eval --js \"" + "x".repeat(40_000) + "\""
+        assertEquals(null, encodePowerShellCommand(command, ""))
+    }
+
+    @Test
+    @Tag("Slow")
+    @DisplayName("a quoted argument reaches the target program intact")
+    fun quotedArgumentSurvivesTheShell() = runBlocking {
+        // Regression for the 2026-10-29 Gate run: `eval --js "JSON.stringify({...})"`
+        // arrived at the CLI without its quotes because ProcessBuilder's argv quoting
+        // was undone by PowerShell's own -Command parser. The inner pwsh prints
+        // "a b" on one line only when it receives the quotes.
+        val mgr = manager()
+        val result = mgr.run(
+            CliRunRequest(args = "-NoProfile -Command \"Write-Output 'a b'\""),
+            backendBaseUrl = null,
+        )
+        assertEquals(0, result.exitCode, "stdout=${result.stdout} stderr=${result.stderr}")
+        assertEquals("a b", result.stdout.trim(), "the quoted argument must stay one token")
+    }
+
+    @Test
+    @Tag("Slow")
+    @DisplayName("a command that reads stdin sees EOF instead of hanging")
+    fun stdinIsClosedForArgvCommands() = runBlocking {
+        // `b4.run("eval --js \"…\"")` is `--stdin` under the hood; with the default
+        // ProcessBuilder pipe open, the CLI waited on stdin until its deadline
+        // (2026-10-29 smoke run: 300s). pi's shell transport spawns argv commands with
+        // stdio[0] = "ignore" for the same reason.
+        val mgr = manager()
+        val started = System.currentTimeMillis()
+        val result = mgr.run(
+            CliRunRequest(
+                args = "-NoProfile -Command \"[Console]::In.ReadToEnd(); Write-Output 'EOF-reached'\"",
+                timeoutSeconds = 30,
+            ),
+            backendBaseUrl = null,
+        )
+        val elapsed = System.currentTimeMillis() - started
+        assertTrue(result.isSuccess, "result: $result")
+        assertTrue(result.stdout.contains("EOF-reached"), "stdout: ${result.stdout}")
+        assertTrue(elapsed < 15_000, "must not block on stdin, took ${elapsed}ms")
     }
 }

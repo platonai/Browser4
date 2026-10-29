@@ -97,9 +97,14 @@ class B4CliToolExecutor(
                 "code, a JSON `\"status\":\"error\"` answer, a timeout or a cancelled job " +
                 "all count as failures, and the output plus the reason stay in the result. " +
                 "On Windows the arguments are interpreted by PowerShell " +
-                "(pwsh -Command \"& browser4-cli ...\"), not as plain argv: quote @file " +
-                "references ('@query.sql' — an unquoted @file is PowerShell splatting) and do not " +
-                "use cmd.exe syntax (dir /b, %VAR%). " +
+                "(pwsh -EncodedCommand \"& browser4-cli ...\"), not as plain argv: they reach " +
+                "the CLI with their quoting intact, so `eval --json \"1+1\"` works, but the " +
+                "text is still PowerShell syntax — quote @file references ('@query.sql' — an " +
+                "unquoted @file is PowerShell splatting) and do not use cmd.exe syntax " +
+                "(dir /b, %VAR%). " +
+                "There is no stdin: a command that reads it (e.g. `eval --js`, the bool " +
+                "shorthand for `eval --stdin`) sees EOF, so pass the JavaScript with " +
+                "`eval --file <path>` or as a quoted positional expression instead. " +
                 "The binary is resolved automatically (bundled / PATH / auto-install). " +
                 "Default timeout 300s (max 600s); above 30s the CLI is also given a matching " +
                 "global --timeout, so the CLI's own HTTP deadline is longer than the MCP call " +

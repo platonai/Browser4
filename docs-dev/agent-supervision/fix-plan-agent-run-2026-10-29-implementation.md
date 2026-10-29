@@ -77,22 +77,22 @@ cargo check --manifest-path cli/browser4-cli/Cargo.toml --all-targets
 | F11 | Chrome 156 在 `/json/version` 新增 `File-Path-Style`，base 4.11.25 的 `ChromeVersion` 用普通 `ObjectMapper` 反序列化 → 任何导航都死在 `createDevTools`（基线 `02807b73` 同因） | `browser4-base.version` 4.11.25 → 4.11.27（Central 2026-10-28，含 `@JsonIgnoreProperties(ignoreUnknown = true)`） | 导航冒烟 `Page Title: Example Domain`；`ChromeVersionCompatibilityTest`（2 项） |
 | F15a | NDJSON 终态 `task.failed` 行只有 status/message，缺 `errorCode`/`resumable`（流式那条有；机器消费者读最后一行） | 新增 `terminal_failure_event()`；`parse_status_progress` 解析两字段 | `neg7` 校验 3/3 PASS；CLI 单测 1970 passed |
 | F16 | `daemon::tests::test_expected_runtime_tag_prefers_local_bundle_in_checkout` 偶发顺序依赖失败（`Some("v4.14.0")` vs `Some("local")`），单跑/复跑通过 | 未修，先记录 | 全量复跑 1970 passed |
+| F13 | `b4.run` 的参数被 PowerShell 二次解析：Java 的 argv 引号被 `-Command` 的解析器剥掉，`eval "(async()=>1)()"`、`eval --json "(…)()"` 到 CLI 前已变成多个 token → `ParserError`（Gate 里最大的重试/预算浪费源） | 见 §3.5：`-EncodedCommand` + `[ScriptBlock]::Create`，命令文本 base64 传递并通过 `escapeForPowerShellScript` 抑制 `$`/反引号展开 | `quotedArgumentSurvivesTheShell`、`encodedScriptKeepsTheCommandVerbatim` 等 5 个单测；`f13-smoke2.log` 里 `eval --json "JSON.stringify(…)"` 返回 `[ok]` + JSON |
+| F13a | `eval --js "…"`（`--js` 是 `--stdin` 的布尔简写）在 `b4.run` 下读 stdin，而父进程从不关闭该管道 → 命令挂到 300 s 超时（11:43 冒烟现场） | 见 §3.5：`b4.run` 的 stdin 重定向到 `NUL` / `/dev/null`（对齐 pi 的 `stdio: ["ignore", …]`），读 stdin 的命令立即 EOF | `stdinIsClosedForArgvCommands`；`f13-smoke2.log` 第 4 条 1 s 内返回 `Stdin was empty`（exit 2） |
 
 ### 3.3 未修阻断项（下一轮按序处理）
 
-1. **F13 `b4.run` 参数被 PowerShell 二次解析（最大浪费源）**：`eval "(async()=>1)()"`、
-   `eval --js JSON.stringify({…})` 到 CLI 前引号/括号已被吞 → `ParserError`；模型改用文件写盘再重试，
-   预算就是这样烧掉的。证据：`run-a-human.log` 的 ParserError 行、`neg2` 的【2】。
-2. **F14 驱动层 `Runtime.evaluate` 30 s 上限**：MCP/CLI 的 `--timeout 300` 覆盖不到，
+1. **F14 驱动层 `Runtime.evaluate` 30 s 上限**：MCP/CLI 的 `--timeout 300` 覆盖不到，
    >30 s 的页面内等待不可行；错误文本只到 `[INTERNAL] browser_evaluate … (PT30S)`，未提示替代方案。
-3. **F15 P0-4 的 Promise 反馈不可达**：CLI `eval` 返回 `{}`（静默），`b4.run` 路径被 F13 破坏；
-   现在只有 agent 工具层单测能观察到 “re-run with --await”。
-4. **F12 `coding.shell` 可杀后端**：Gate 第一次 Run A 就是被模型 `taskkill /PID …` 杀掉后端而中断；
+2. **F15 P0-4 的 Promise 反馈不可达**：CLI `eval "(async()=>1)()"` 退出码 0 且返回 `{}`（静默），
+   F13 修好后已能稳定复现（`f13-smoke2.log` 第 3 条）；目前只有 agent 工具层单测能观察到
+   “re-run with --await”。
+3. **F12 `coding.shell` 可杀后端**：Gate 第一次 Run A 就是被模型 `taskkill /PID …` 杀掉后端而中断；
    `33be64` 只封了 `b4.run` 的生命周期命令。
-5. **数据语义缺口**：keywords 全空 / category 用品类名 / bullets 重复 / 乱码 —— P2-1 的字段规格与
+4. **数据语义缺口**：keywords 全空 / category 用品类名 / bullets 重复 / 乱码 —— P2-1 的字段规格与
    输入保真没有覆盖到这些采集语义。
-6. **默认 5M 结构性不足**：基线（5,006,041）与本次（5,012,835）都在 5M 处 abort。按方案 §1.4
-   不得用 10M 掩盖；先修 F13/F14 再复测，或走“有证据地调整默认值”的独立决策。
+5. **默认 5M 结构性不足**：基线（5,006,041）与本次（5,012,835）都在 5M 处 abort。按方案 §1.4
+   不得用 10M 掩盖；F13/F13a 修完后需用同一任务复测，再决定是否走“有证据地调整默认值”。
 
 ### 3.4 第一次 Run A 尝试（2026-10-29 02:06，F11 现场）
 
@@ -100,6 +100,38 @@ task `dab8f49b`：02:06:51–02:08:53，37 请求 / 614k tokens / exit 1。当�
 per-task workspace（`workspace.dab8f49b-…`）、输入物化（`.b4inputs/asin_field_description.xlsx`）、
 `--follow` 的 `tokens 109.3k / 5.00M (2%)`、`b4.wait` 的 `[fail]` 分类；失败根因是 F11，
 随后模型自行 `taskkill` 掉后端（F12）。证据：`a1-run-human.log` / `a1-run-human-trace.txt`。
+
+### 3.5 F13 修复（2026-10-29 11:20–12:00）
+
+**根因**（`CliProcessManager.buildShellInvocation`）：命令被拼成
+`pwsh -Command "<preamble> & '<cli.exe>' <args>"`，Java 的 `ProcessBuilder` 按 CRT 规则给
+argv 加引号（内部 `"` → `\"`），PowerShell 的 `-Command` 解析器再把它们吃掉。探针
+（`logs/supervise-20261029/probe-argv/Probe.java`）对比：
+
+| 形态 | 引号 | 子进程退出码 | 解析错误可读性 |
+|---|---|---|---|
+| `-Command "<text>"`（旧） | **丢** | 7 ✓ | 纯文本 |
+| `-File <ps1>` | 保留 | ✓ | 纯文本，但语法错误时 **exit 0**（静默成功风险） |
+| `-Command -`（stdin） | 保留 | ✓ | 纯文本，但 **非 ASCII 被按 cp936 解码**（中文丢字） |
+| `-EncodedCommand <base64>`（新） | **保留** | ✓（脚本内 `exit $LASTEXITCODE`） | CLIXML ← 由 `[ScriptBlock]::Create` 预解析规避 |
+
+**做法**：命令文本先按 UTF-8 base64 编码，再放进一段只含 ASCII 的脚本，整段以 UTF-16LE
+base64 交给 `pwsh -OutputFormat Text -EncodedCommand`；脚本在运行前用
+`[ScriptBlock]::Create` 解析，语法错误 → `ParserError: …` + exit 2（避免 CLIXML 和
+“语法错误 exit 0”），最后 `exit $LASTEXITCODE` 保留子进程退出码。
+`escapeForPowerShellScript` 把 `$` 转义为 `` `$ ``、反引号翻倍，保证命令文本**字面**传给
+CLI（与 POSIX 分支对 `$`/反引号的处理一致；旧形态是靠“引号被吃掉”偶然避开展开的）。
+命令行超过 30k 字符时退回旧的内联形态（Windows 命令行上限 32,767）。
+
+**stdin**：对齐 pi 的 `spawn(..., { stdio: ["ignore", …] })` —— `b4.run` 没有 stdin 可喂，
+`ProcessBuilder` 默认的管道会让 `eval --js`（= `--stdin`）读到 300 s 超时；现在重定向到
+`NUL`/`/dev/null`，读 stdin 的命令立即拿到 EOF 并以明确错误退出。
+
+**验证**：`CliProcessManagerTest` 16 项全过（含 `quotedArgumentSurvivesTheShell`、
+`stdinIsClosedForArgvCommands`、编码/转义/超长回退单测）；`B4CliToolExecutorTest` 12 项过；
+真实 agent 冒烟（`f13-smoke2.log`，task `11263f25`）：
+`eval --json "JSON.stringify({…})"` → `[ok]` + JSON、`eval --await "(async()=>1)()"` → `1`、
+`eval --js "…"` → 1 s 内 `Stdin was empty`（exit 2，不再挂住）。
 
 ## 4. 行为变更速查
 
