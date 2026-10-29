@@ -60,6 +60,37 @@ class CodingAgentShellWindowsBuiltinTest {
     }
 
     @Test
+    @DisplayName("a command that would kill the backend or its JVM is refused")
+    fun processKillsOfTheRuntimeAreRefused() {
+        // 2026-10-29 Gate: a live run ran `taskkill /PID <backend> /F /T` after a
+        // navigation failure; the backend died and the task ended with no report.
+        val s = shell()
+        val ownPid = ProcessHandle.current().pid()
+
+        val ownPidKill = "taskkill /PID $ownPid /F /T"
+        assertFalse(s.isAllowed(ownPidKill), s.explain(ownPidKill))
+        assertTrue(s.explain(ownPidKill).contains("runtime executing this task"), s.explain(ownPidKill))
+        assertTrue(s.explain(ownPidKill).contains(ownPid.toString()), s.explain(ownPidKill))
+
+        for (command in listOf(
+            "taskkill /IM java.exe /F",
+            "taskkill /IM browser4-cli.exe /F",
+            "Stop-Process -Id $ownPid -Force",
+            "kill -9 $ownPid",
+        )) {
+            assertFalse(s.isAllowed(command), "$command must be refused: ${s.explain(command)}")
+        }
+
+        // A different explicit pid is not the runtime: the refusal must not be this one
+        // (whether the shell allows taskkill at all depends on the profile/PATH).
+        val otherPid = "taskkill /PID 999999 /F"
+        assertFalse(
+            s.explain(otherPid).contains("runtime executing this task"),
+            "a non-runtime pid must not be refused for this reason: ${s.explain(otherPid)}",
+        )
+    }
+
+    @Test
     @DisplayName("if/for are refused with an actionable hint, never executed")
     fun controlFlowGetsAHint() {
         assumeTrue(isWindows, "cmd.exe control flow")

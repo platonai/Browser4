@@ -307,6 +307,21 @@ class CodingAgentShell(
             "mklink", "ln", "mount",
         )
 
+        /**
+         * Commands that terminate processes.
+         *
+         * They are not forbidden — killing a stray dev server is legitimate — but a task
+         * must not kill the runtime that executes it (see [processKillViolation]).
+         */
+        private val PROCESS_KILL_COMMANDS = setOf(
+            "taskkill", "tskill", "pskill", "kill", "pkill", "killall", "stop-process", "spps",
+        )
+
+        /** The pid named by `taskkill /PID 42`, `Stop-Process -Id 42`, `kill -9 42`, … */
+        private val PID_ARGUMENT = Regex(
+            """(?i)(?:/pid[=\s]+|-id[=\s]+|--pid[=\s]+|\bkill\s+(?:-\w+\s+)*)(\d+)"""
+        )
+
         private val BLOCKED_PATTERNS = listOf(
             Regex("rm\\s+-[^\\s]*r[^\\s]*\\s+/\\s*$"),
             Regex("rm\\s+-[^\\s]*r[^\\s]*\\s+/\\*"),
@@ -1108,6 +1123,38 @@ class CodingAgentShell(
         return null
     }
 
+    /**
+     * Refuse a process-termination command that would kill the runtime executing this task.
+     *
+     * The backend JVM is the process running this shell, and the CLI/agent children are
+     * part of the same runtime: a task that kills them ends itself with no result. A live
+     * run did exactly that — after a navigation failure it ran
+     * `taskkill /PID <backend> /F /T`, the backend died, and the task had no report
+     * (2026-10-29 Gate, F12). `b4.run` already refuses the CLI's lifecycle commands, so
+     * this closes the `coding.shell` route.
+     *
+     * Only runtime targets are refused: an explicit pid that is not the backend, or a
+     * non-runtime image, still passes — killing a stray dev server is legitimate.
+     */
+    private fun processKillViolation(command: String, tokens: List<String>): String? {
+        if (tokens.isEmpty()) return null
+        val base = normalizeCommandName(tokens[0])
+        if (base !in PROCESS_KILL_COMMANDS) return null
+
+        val ownPid = ProcessHandle.current().pid().toString()
+        val lower = command.lowercase()
+        val pidArguments = PID_ARGUMENT.findAll(command).map { it.groupValues[1] }.toSet()
+        val targetsOwnPid = pidArguments.contains(ownPid) ||
+            tokens.drop(1).any { it.trim('"', '\'').trimStart('-', '/') == ownPid }
+        val targetsRuntimeName = lower.contains("browser4") ||
+            Regex("""(?<![\w-])java(?:w)?(?:\.exe)?(?![\w-])""").containsMatchIn(lower)
+        if (!targetsOwnPid && !targetsRuntimeName) return null
+
+        return "'$base' would terminate the Browser4 backend (pid $ownPid) or a JVM that may be " +
+            "it — coding.shell refuses to kill the runtime executing this task. Stop stray " +
+            "processes from outside the task, or name an explicit pid that is not the backend."
+    }
+
     private fun validateSimpleCommand(segment: String, depth: Int): String? {
         val tierViolation = validateSimpleCommandTier(segment, depth)
         if (tierViolation != null) return tierViolation
@@ -1159,6 +1206,10 @@ class CodingAgentShell(
             return "'$baseCommand' is disabled — workspace links are provisioned by the framework, " +
                 "not by the agent"
         }
+        // A task must not destroy the runtime that executes it. `b4.run` already refuses the
+        // CLI's own lifecycle commands; `coding.shell` was the remaining way in — a live run
+        // ended itself with `taskkill /PID <backend> /F /T` (2026-10-29 Gate, F12).
+        processKillViolation(segment, tokens.subList(index, tokens.size))?.let { return it }
         // Explicit deny — absolute veto
         if (baseCommand in explicitDeny) return "'$baseCommand' is explicitly denied"
         for (pattern in denyPatterns) {
