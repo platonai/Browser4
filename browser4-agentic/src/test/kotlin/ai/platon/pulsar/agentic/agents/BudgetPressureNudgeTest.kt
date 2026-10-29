@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.agents
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
@@ -47,6 +48,29 @@ class BudgetPressureNudgeTest {
     fun finalThresholdIsReachable() {
         assertNull(budgetPressureNudge(consumed = 4_749_999, limit = 5_000_000, percent = 95))
         val text = budgetPressureNudge(consumed = 4_750_000, limit = 5_000_000, percent = 95)!!
+        assertTrue(text.contains("95%"), text)
+    }
+
+    @Test
+    @DisplayName("each threshold is announced once, earliest first")
+    fun thresholdsAreAnnouncedOnce() {
+        // The check runs before every inference inside the loop, so the 80% directive can
+        // actually reach the model while it still has budget left (a round-start check
+        // fired at 90.8%/94.8% in the 2026-10-29 runs).
+        assertEquals(0, nextBudgetNudgePercent(3_999_999, 5_000_000, emptySet()))
+        assertEquals(80, nextBudgetNudgePercent(4_000_000, 5_000_000, emptySet()))
+        assertEquals(0, nextBudgetNudgePercent(4_500_000, 5_000_000, setOf(80)))
+        assertEquals(95, nextBudgetNudgePercent(4_750_000, 5_000_000, setOf(80)))
+        assertEquals(0, nextBudgetNudgePercent(4_990_000, 5_000_000, setOf(80, 95)))
+        assertEquals(0, nextBudgetNudgePercent(9_000_000, 0, emptySet()), "no budget, no nudge")
+    }
+
+    @Test
+    @DisplayName("the 95% directive is a last-chance instruction")
+    fun finalDirectiveIsStronger() {
+        val text = budgetPressureNudge(consumed = 4_750_000, limit = 5_000_000, percent = 95)!!
+        assertTrue(text.contains("last chance"), text)
+        assertTrue(text.contains("system.taskComplete NOW"), text)
         assertTrue(text.contains("95%"), text)
     }
 

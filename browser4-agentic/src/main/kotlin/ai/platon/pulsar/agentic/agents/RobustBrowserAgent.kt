@@ -369,10 +369,40 @@ internal fun budgetPressureNudge(consumed: Long, limit: Long, percent: Int = CLI
     if (limit <= 0 || consumed <= 0) return null
     if (consumed * 100 < limit * percent) return null
     val now = consumed * 100 / limit
-    return "You have used $now% of this task's token budget ($consumed of $limit). Stop collecting and " +
-        "re-auditing: write the deliverable to the workspace root now if it is still under .b4scratch, " +
-        "list every field the page did not provide in `problems`, and call system.taskComplete. " +
-        "An honest partial report is better than an aborted run with no report."
+    return if (percent >= CLI_BUDGET_FINAL_PERCENT) {
+        "You have used $now% of this task's token budget ($consumed of $limit). This is the last chance to " +
+            "report: do not start another collection or repair step. Make sure the deliverable is in the " +
+            "workspace root, list every field the page did not provide in `problems`, and call " +
+            "system.taskComplete NOW. An honest partial report is better than an aborted run with no report."
+    } else {
+        "You have used $now% of this task's token budget ($consumed of $limit). Stop collecting and " +
+            "re-auditing: write the deliverable to the workspace root now if it is still under .b4scratch, " +
+            "list every field the page did not provide in `problems`, and call system.taskComplete. " +
+            "An honest partial report is better than an aborted run with no report."
+    }
+}
+
+/**
+ * Which budget threshold to announce on this iteration, or `0` when nothing is due.
+ *
+ * The check runs before every inference inside the tool loop, not once per outer round:
+ * a round can be hundreds of steps long, so a round-start check fired at 90-95% of the
+ * budget (Run G 90.8%, Run H 94.8%) — too late to change the model's plan (2026-10-29).
+ * Each threshold is announced once per run ([announced] is shared across rounds).
+ */
+internal fun nextBudgetNudgePercent(consumed: Long, limit: Long, announced: Set<Int>): Int {
+    if (limit <= 0 || consumed <= 0) return 0
+    if (CLI_BUDGET_FINAL_PERCENT !in announced &&
+        budgetPressureNudge(consumed, limit, CLI_BUDGET_FINAL_PERCENT) != null
+    ) {
+        return CLI_BUDGET_FINAL_PERCENT
+    }
+    if (CLI_BUDGET_FINISH_PERCENT !in announced &&
+        budgetPressureNudge(consumed, limit, CLI_BUDGET_FINISH_PERCENT) != null
+    ) {
+        return CLI_BUDGET_FINISH_PERCENT
+    }
+    return 0
 }
 
 /**
@@ -1060,11 +1090,11 @@ open class RobustBrowserAgent(
             // ActionDescription per call, so "same object" means the model did not
             // re-report — amend from the trace instead of burning another round.
             var repairedClaim: ActionDescription? = null
-            // Budget wrap-up nudges are announced once per threshold: repeating them every
-            // round would crowd out the model's own plan near the abort (see
-            // [budgetPressureNudge]).
-            var budgetNudgeAt80 = false
-            var budgetNudgeAt95 = false
+            // Budget wrap-up nudges: one per threshold per run. The check itself happens
+            // before every inference inside the tool loop (see `onBeforeIteration`), because
+            // an outer round can be hundreds of steps long — a round-start check fired at
+            // 90-95% of the budget (Run G 90.8%, Run H 94.8%), too late to change the plan.
+            val announcedBudgetNudges = mutableSetOf<Int>()
             while (!isClosed && turn < maxTurns) {
                 val toolsBefore = toolExecutions.get()
                 emitRunEvent(AgentRunEvent(AgentRunEvent.ROUND_START, turn = turn + 1))
@@ -1093,44 +1123,15 @@ open class RobustBrowserAgent(
                         readOnlyCodingRounds = 0
                     }
                 }
-                // Deterministic "wrap up" nudge near the budget: without it the run keeps
-                // re-auditing an already-written deliverable and is aborted at 100% with no
-                // report (2026-10-29: 5M and 6M runs both ended at 99-100%).
-                val budgetPercent = when {
-                    !budgetNudgeAt95 &&
-                        budgetPressureNudge(tokenBudget.consumedTotal, tokenBudget.effectiveMaxTotalTokens, CLI_BUDGET_FINAL_PERCENT) != null ->
-                        CLI_BUDGET_FINAL_PERCENT
-                    !budgetNudgeAt80 &&
-                        budgetPressureNudge(tokenBudget.consumedTotal, tokenBudget.effectiveMaxTotalTokens) != null ->
-                        CLI_BUDGET_FINISH_PERCENT
-                    else -> 0
-                }
-                if (budgetPercent > 0) {
-                    if (budgetPercent >= CLI_BUDGET_FINAL_PERCENT) budgetNudgeAt95 = true else budgetNudgeAt80 = true
-                    logger.info("💸 budget.nudge at {}% consumed={} limit={}",
-                        budgetPercent, tokenBudget.consumedTotal, tokenBudget.effectiveMaxTotalTokens)
-                    cliLoopTracer.logEvent(
-                        "budget.nudge",
-                        mapOf(
-                            "percent" to budgetPercent,
-                            "consumed" to tokenBudget.consumedTotal,
-                            "limit" to tokenBudget.effectiveMaxTotalTokens,
-                        )
-                    )
-                    roundMessages = roundMessages + UserMessage.from(
-                        budgetPressureNudge(
-                            tokenBudget.consumedTotal,
-                            tokenBudget.effectiveMaxTotalTokens,
-                            budgetPercent,
-                        )!!
-                    )
-                }
+                // Deterministic "wrap up" nudge near the budget runs inside the loop, before
+                // every inference, so it cannot be skipped by a long round.
                 val loop = buildCliToolLoop(
                     action.action, completionRef, toolExecutions,
                     initialSpecsOverride = exposedSpecsThisRun,
                     toolRecords = roundToolRecords,
                     turn = turn + 1,
                     tokenBudget = tokenBudget,
+                    announcedBudgetNudges = announcedBudgetNudges,
                 )
                 // P1-1: the inference timeout now applies PER LLM CALL inside
                 // AgentToolCallLoop — NOT to the whole round. A round with many
@@ -1384,6 +1385,8 @@ open class RobustBrowserAgent(
          * of running unbounded (the legacy engine was the only one enforced).
          */
         tokenBudget: AgentTokenBudget? = null,
+        /** Budget thresholds already announced in this run (80 / 95). */
+        announcedBudgetNudges: MutableSet<Int> = mutableSetOf(),
     ): AgentToolCallLoop {
         val conf = session.sessionConfig
         val initialToolSet = conf.get("browser4.agent.toolLoop.initialToolSet") ?: "core"
@@ -1574,8 +1577,42 @@ open class RobustBrowserAgent(
             },
             // Steering arrives mid-round for the interactive session: inject it
             // right before the next inference so the model can react within the
-            // current round instead of after it.
-            onBeforeIteration = { innerMessages -> drainSteering { innerMessages.add(it) } },
+            // current round instead of after it. The budget wrap-up directive rides
+            // the same hook (see [nextBudgetNudgePercent]).
+            onBeforeIteration = { innerMessages ->
+                drainSteering { innerMessages.add(it) }
+                if (tokenBudget != null) {
+                    val percent = nextBudgetNudgePercent(
+                        tokenBudget.consumedTotal,
+                        tokenBudget.effectiveMaxTotalTokens,
+                        announcedBudgetNudges,
+                    )
+                    if (percent > 0) {
+                        announcedBudgetNudges += percent
+                        logger.info(
+                            "💸 budget.nudge at {}% consumed={} limit={}",
+                            percent, tokenBudget.consumedTotal, tokenBudget.effectiveMaxTotalTokens,
+                        )
+                        cliLoopTracer.logEvent(
+                            "budget.nudge",
+                            mapOf(
+                                "percent" to percent,
+                                "consumed" to tokenBudget.consumedTotal,
+                                "limit" to tokenBudget.effectiveMaxTotalTokens,
+                            )
+                        )
+                        innerMessages.add(
+                            UserMessage.from(
+                                budgetPressureNudge(
+                                    tokenBudget.consumedTotal,
+                                    tokenBudget.effectiveMaxTotalTokens,
+                                    percent,
+                                )!!
+                            )
+                        )
+                    }
+                }
+            },
         )
     }
 
