@@ -133,6 +133,18 @@ data class ToolSpec constructor(
          * client nothing about the parameter.
          */
         val description: String? = null,
+        /**
+         * Name of a sibling argument that makes this one optional.
+         *
+         * Some tools take either one argument or another (`command.run` accepts a
+         * task text *or* `resumeTaskId`: a resume takes its instruction from the
+         * interrupted task's checkpoint). Declaring `defaultValue = null` alone made
+         * the validator reject `agent run --resume <id>` — the exact command the
+         * failure line tells the user to run (2026-10-29). When the sibling is
+         * present and non-blank, a missing value here is not a violation; the
+         * executor still enforces the pairing.
+         */
+        val requiredUnless: String? = null,
     ) {
         val expression: String
             get() {

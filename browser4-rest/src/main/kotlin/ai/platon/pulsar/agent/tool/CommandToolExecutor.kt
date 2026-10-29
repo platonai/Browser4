@@ -50,7 +50,9 @@ class CommandToolExecutor(
                 ToolSpec.Arg(
                     "command", "String", null,
                     "What to run: a URL to load, a natural-language instruction, or an agent task. " +
-                        "Required.",
+                        "Required unless `resumeTaskId` is given (a resume takes its instruction from " +
+                        "the interrupted task's checkpoint).",
+                    requiredUnless = "resumeTaskId",
                 ),
                 ToolSpec.Arg(
                     "async", "Boolean", "true",

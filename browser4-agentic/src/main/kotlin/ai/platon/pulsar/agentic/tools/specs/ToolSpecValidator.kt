@@ -64,7 +64,7 @@ class ToolSpecValidator(
         for (arg in spec.arguments) {
             if (arg.name in contextArgs) continue
             val value = args[arg.name]
-            if (arg.defaultValue == null && isMissing(value)) {
+            if (arg.defaultValue == null && isMissing(value) && !satisfiedBySibling(arg, args)) {
                 violations += Violation(
                     ToolErrorCode.MISSING_REQUIRED_ARG,
                     "missing required argument '${arg.name}' for ${spec.expression}",
@@ -98,6 +98,16 @@ class ToolSpecValidator(
         null -> true
         is String -> value.isBlank()
         else -> false
+    }
+
+    /**
+     * True when [arg] is optional because the caller supplied the sibling argument
+     * that replaces it — `command.run` with `resumeTaskId` and no task text: the
+     * instruction comes from the interrupted task's checkpoint.
+     */
+    private fun satisfiedBySibling(arg: ToolSpec.Arg, args: Map<String, Any?>): Boolean {
+        val sibling = arg.requiredUnless?.takeIf { it.isNotBlank() } ?: return false
+        return !isMissing(args[sibling])
     }
 
     /** Type check limited to what the schema advertises and executors parse. */

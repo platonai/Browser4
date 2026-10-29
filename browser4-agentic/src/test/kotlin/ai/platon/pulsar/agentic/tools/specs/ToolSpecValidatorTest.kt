@@ -61,6 +61,38 @@ class ToolSpecValidatorTest {
     }
 
     @Test
+    @DisplayName("an argument replaced by a sibling is not required when the sibling is given")
+    fun siblingArgumentSatisfiesTheRequirement() {
+        // `agent run --resume <id>` carries no task text: the instruction comes from the
+        // interrupted task's checkpoint. Rejecting it made the failure line's own advice
+        // ("continue with agent run --resume <task-id>") unusable (2026-10-29).
+        val resumeSpec = ToolSpec(
+            domain = "command",
+            method = "run",
+            arguments = listOf(
+                ToolSpec.Arg(
+                    "command", "String", null, "Task text",
+                    requiredUnless = "resumeTaskId",
+                ),
+                ToolSpec.Arg("resumeTaskId", "String?", "null", "Resume this task"),
+            ),
+            returnType = "String",
+            description = "Run a command.",
+        )
+
+        assertEquals(emptyList<ToolSpecValidator.Violation>(), validator.validate(resumeSpec, mapOf("resumeTaskId" to "abc")))
+        assertEquals(
+            ToolErrorCode.MISSING_REQUIRED_ARG,
+            validator.validate(resumeSpec, emptyMap()).single().code,
+        )
+        // A blank sibling is not a resume: the requirement stands.
+        assertEquals(
+            ToolErrorCode.MISSING_REQUIRED_ARG,
+            validator.validate(resumeSpec, mapOf("resumeTaskId" to "  ")).single().code,
+        )
+    }
+
+    @Test
     @DisplayName("a wrongly typed value is invalid, not silently coerced")
     fun wrongTypeIsInvalid() {
         val violations = validator.validate(crawlSubmit, mapOf("url" to "https://example.com", "depth" to "abc"))
