@@ -50,6 +50,16 @@ class CrawlService(
     private val logger = LoggerFactory.getLogger(CrawlService::class.java)
 
     /**
+     * Resolves the browser every page of a task is fetched with.
+     *
+     * A crawl is a batch of page loads, and the profile those loads run in decides
+     * what the site answers (locale, currency, delivery location, login).  Naming a
+     * session — the DEFAULT session when the request names none — is what pins that
+     * profile; see [CrawlSessionBinder].
+     */
+    private val crawlSessionBinder = CrawlSessionBinder(sessionManager)
+
+    /**
      * Task store: taskId -> CrawlResponse.
      *
      * Size-bounded at 100 entries; Window TinyLFU eviction beyond that.
@@ -800,23 +810,29 @@ class CrawlService(
         // binds no driver, so each concurrent load leases its own tab
         // from the browser driver pool and the seeds really do run in
         // parallel.  Binding a driver here is what would serialize them.
-        val sharedDepth0Session = if (task.request.depth == 0) {
-            // Labelled so a running crawl's session is identifiable in logs and
-            // context dumps; this task is its only owner (see the finally block).
-            sessionManager.agenticContext.createSession(PulsarSettings(label = crawlSessionLabel(task.taskId)))
-        } else {
-            null
-        }
+        // Which browser the pages are fetched with is a *correctness* decision, not a
+        // performance one: cookies (locale, currency, delivery location, login) live in
+        // the browser profile, and a pool-leased browser has none of them.  Binding the
+        // requested session's browser is what makes "warm the profile once, crawl many
+        // times" hold; null (unresolvable) keeps the historical pool-driven fetch.
+        //
+        // Sharing one *session* does not share one *tab*: the binding's session carries
+        // the `Browser` bean and no driver, so each concurrent load leases its own tab
+        // from that browser and the seeds really do run in parallel.  Binding a driver
+        // here is what would serialize them.
+        // The binding is resolved by the first seed that actually loads a page
+        // (ensureCrawlSession): a task whose budget is already spent must not touch the
+        // session manager, because it will never fetch anything.
 
         try {
             val budget = task.parallelTabs.coerceAtMost(totalSeeds)
             if (budget > 1) {
                 mapCrawlSeedsConcurrently(task.seedUrls, budget) { index, seedUrl ->
-                    runSeedUnit(task, sharedDepth0Session, index, seedUrl)
+                    runSeedUnit(task, index, seedUrl)
                 }
             } else {
                 for ((index, seedUrl) in task.seedUrls.withIndex()) {
-                    runSeedUnit(task, sharedDepth0Session, index, seedUrl)
+                    runSeedUnit(task, index, seedUrl)
                     if (index < totalSeeds - 1) {
                         // The delay lets the browser settle between
                         // seeds.  It only exists on the sequential
@@ -828,15 +844,16 @@ class CrawlService(
                 }
             }
         } finally {
-            // Close the session *and* deregister it: nothing else tracks it (it was
-            // not created through PulsarSessionManager), so a failure to close here
-            // leaks browser resources with no one left to reconcile them.
-            sharedDepth0Session?.let { session ->
-                releaseCrawlSession(session, sessionManager.agenticContext)?.let { failure ->
+            // Only a session this crawl created may be closed: a borrowed one belongs
+            // to the caller's session, and closing it would take their browser (and
+            // their cookies) away with it.  The session the rounds load through is
+            // never the caller's — it carries the browser bean and nothing else.
+            task.crawlSession?.takeIf { it.owned }?.let { bound ->
+                releaseCrawlSession(bound.session, sessionManager.agenticContext)?.let { failure ->
                     logger.warn(
-                        "Crawl {}: the shared depth-0 session {} could not be closed and deregistered; " +
-                        "the browser resources it holds are no longer tracked by anything",
-                        task.taskId, session.id, failure
+                        "Crawl {}: the crawl session {} could not be closed and deregistered; " +
+                            "the browser resources it holds are no longer tracked by anything",
+                        task.taskId, bound.session.id, failure
                     )
                 }
             }
@@ -861,7 +878,6 @@ class CrawlService(
      */
     private suspend fun runSeedUnit(
         task: CrawlTaskContext,
-        sharedDepth0Session: PulsarSession?,
         index: Int,
         seedUrl: String
     ) {
@@ -883,7 +899,7 @@ class CrawlService(
             )
             return
         }
-        val (round, status) = fetchSeedUnit(task, sharedDepth0Session, index, seedUrl, restored)
+        val (round, status) = fetchSeedUnit(task, index, seedUrl, restored)
         recordSeedProgress(task, index, round, status)
     }
 
@@ -909,7 +925,6 @@ class CrawlService(
      */
     private suspend fun fetchSeedUnit(
         task: CrawlTaskContext,
-        sharedDepth0Session: PulsarSession?,
         index: Int,
         seedUrl: String,
         restored: CrawlSeedResume? = null
@@ -979,19 +994,23 @@ class CrawlService(
             // so this round's progress is merged into the crawl's record under
             // that lock instead of racing the seed bookkeeping.
             val seedProgress = SeedProgressSink(task, index)
+            // Only now is a browser needed: past this point every branch loads pages.
+            val binding = ensureCrawlSession(task)
             val fetched = when {
                 // Depth=0 is bulk fetch: one URL, no link
                 // discovery, so its pages are its whole round.
                 seedRequest.depth == 0 -> CrawlRound(
-                    pages = roundRunner.crawlDepth0(task.taskId, seedRequest, sharedDepth0Session, task.run)
+                    pages = roundRunner.crawlDepth0(task.taskId, seedRequest, binding?.session, task.run, binding?.browser)
                 )
                 seedRequest.depth <= 1 -> roundRunner.crawlDepth1(
                     task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs, seedProgress,
-                    resume = restored, run = task.run
+                    resume = restored, run = task.run,
+                    sharedSession = binding?.session, pinnedBrowser = binding?.browser
                 )
                 else -> roundRunner.crawlDepthN(
                     task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs, seedProgress,
-                    resume = restored, run = task.run
+                    resume = restored, run = task.run,
+                    sharedSession = binding?.session, pinnedBrowser = binding?.browser
                 )
             }
             // One merge, in one place: a continued round reports only what *this*
@@ -1066,6 +1085,34 @@ class CrawlService(
             )
         } finally {
             task.inFlight.decrementAndGet()
+        }
+    }
+
+    /**
+     * The browser this task fetches with, bound once per task.
+     *
+     * Resolved on the first seed that really loads a page (see
+     * [CrawlTaskContext.crawlSession] for why it is lazy), then shared by every round of
+     * the task so one crawl reads one profile: mixing a warmed browser with pool-leased
+     * ones is exactly the inconsistency — a US storefront on some rows, another region
+     * on the rest — this binding exists to prevent.
+     *
+     * @return the binding, or null when no browser could be bound; the rounds then keep
+     *   the historical pool-driven fetch rather than failing the task
+     */
+    private fun ensureCrawlSession(task: CrawlTaskContext): CrawlSessionBinding? {
+        task.crawlSession?.let { return it }
+        synchronized(task) {
+            task.crawlSession?.let { return it }
+            val binding = crawlSessionBinder.bind(task.taskId, task.request)
+            if (binding != null) {
+                logger.info(
+                    "Crawl {}: fetching through {} ({} seed URL(s) share that browser)",
+                    task.taskId, binding.description, task.seedUrls.size
+                )
+                task.crawlSession = binding
+            }
+            return binding
         }
     }
 
@@ -1919,6 +1966,19 @@ class CrawlService(
         /** The interruption this run continues from; null for a first run. */
         val resumedFrom: Instant? = null,
     ) {
+        /**
+         * The browser this task fetches with, resolved on the first seed that really
+         * loads a page.
+         *
+         * Resolved lazily on purpose: a task whose whole budget is consumed before a
+         * single seed can start must not touch the session manager at all — it has no
+         * page to fetch, so binding (and possibly launching) a browser for it would be
+         * work with no consumer, and would make `verifyNoInteractions(sessionManager)`
+         * the last honest test of "nothing was fetched".
+         */
+        @Volatile
+        var crawlSession: CrawlSessionBinding? = null
+
         // Out-links discovered beyond the seed URLs (depth>=1 crawls),
         // aggregated across seeds.  Kept separate from the result size so a
         // crawl that only records seed page(s) (0 discovered links) is

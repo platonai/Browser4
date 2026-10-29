@@ -23,7 +23,7 @@ browser4-cli crawl --seed-file .b4scratch/urls.txt --depth 0 \
   --sql @.b4scratch/x-asin.sql --format csv -o .b4scratch/rows.csv
 
 # 2. Pin the locale on the page before trusting titles/prices.
-browser4-cli goto "https://www.amazon.com/dp/B0DY95T5HB?language=en_US"
+browser4-cli -s shop goto "https://www.amazon.com/dp/B0DY95T5HB"   # pin the locale in the PROFILE, not a site-specific query parameter
 
 # 3. Verify the row count before handing the CSV over (coding.shell / any shell).
 python -c "import csv;print(sum(1 for _ in csv.reader(open('.b4scratch/rows.csv',encoding='utf-8'))))"
@@ -55,6 +55,15 @@ prices for a US-oriented task. The fix belongs on the page — a header override
 or the `?language=` URL parameter — and must be verified on one known product before the
 batch runs. Post-processing localized values (currency conversion, title translation) is
 not extraction and produces a silently wrong dataset.
+
+> **The durable fix is the browser profile, not the URL.** A bulk run reads with the
+> browser profile it is given, and the profile is where locale, currency and delivery
+> location live. `crawl` reads with the calling session's browser (DEFAULT unless `-s
+> <name>`), `crawl --session <name>` / `--profile <dir>` pins one explicitly, and
+> `swarm create --session <name>` reuses a warmed session's profile directory. Warm the
+> storefront once in that session (`-s shop open https://www.amazon.com` → choose delivery
+> location + language), verify one product, then run the batch: every page — and every
+> later batch — inherits the choice.
 
 ### Tool results are bounded
 
@@ -116,11 +125,13 @@ requested N before calling `system.taskComplete`.
 
 ```bash
 browser4-cli set headers "Accept-Language=en-US,en;q=0.9"
-browser4-cli goto "https://www.amazon.com/dp/B0DY95T5HB?language=en_US"
+browser4-cli -s shop goto "https://www.amazon.com/dp/B0DY95T5HB"   # pin the locale in the PROFILE, not a site-specific query parameter
 ```
 
-For cookie-driven locales, set `lc-main` / `i18n-prefs` before navigating. `crawl` has no
-per-request header flag, so for bulk runs put `?language=en_US` on every seed URL.
+For cookie-driven locales, warm the cookie in a session and crawl with that session
+(`--session`): the engine has no notion of a site-specific locale parameter, and a query
+parameter one site honours is not a contract. `set headers` pins `Accept-Language`
+session-wide, which is the site-agnostic half of the same fix.
 
 ### Inspect a large CSV without flooding the context
 
@@ -154,7 +165,7 @@ command guard.
 | `crawl --format csv\|json\|table` | output format (`csv` for spreadsheets) |
 | `crawl -o <path>` | write the extracted rows to a file |
 | `set headers` | session-wide `Accept-Language` (locale/currency) |
-| `goto …?language=en_US` | per-request locale for a single page |
+| `crawl --session <name>` | read the site in the profile whose locale you prepared |
 | `coding.append(path, content)` | persist a row/id as soon as you have it |
 | `coding.stat` / `coding.grep` | size/grep a large output without dumping it |
 | `<workspace>/.b4inputs/` | inputs the engine copied in for this task (read-only deliverables) |
@@ -164,7 +175,7 @@ command guard.
 | Symptom | Cause | Fix |
 |---|---|---|
 | The same pages are fetched in several rounds | rows/progress kept only in the conversation | append each row + id to `.b4scratch/` as you collect |
-| Titles/prices in the wrong language or currency | host locale, not the site | set `Accept-Language` / cookies / `?language=en_US` and re-read; verify one product |
+| Titles/prices in the wrong language or currency | host locale, not the site | warm the locale in the session profile (`crawl --session`) or `set headers`; verify one product |
 | `ParserError` from a `b4.run` command | PowerShell parsed an unquoted `@file` | quote it: `'--sql @q.sql'` (see [shell-quoting.md](shell-quoting.md)) |
 | `PERMISSION_DENIED \| code=COMMAND_NOT_ALLOWED` | inline interpreter or a blocked command | keep each shell's syntax in its own tool; use `b4.run` or a script file |
 | Extracted CSV has the wrong columns | spec not compared with the output | diff the header row against the field spec; report missing columns in `problems` |

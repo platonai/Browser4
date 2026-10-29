@@ -112,6 +112,31 @@ formatted by `--format`.  X-SQL function names are case-insensitive (`DOM_FIRST_
 | `--parallel` | | int | `4` | How many units (pages/tabs) to collect at the same time. `1` = strictly sequential |
 | `--timeout` | | duration | `10m` | Whole-crawl cap (max `1h`); bare number = seconds — use `30m` |
 | `--background` | `-bg` | bool | — | Submit crawl and return immediately; use `crawl list` to track |
+| `--session` | | string | the calling session (DEFAULT) | Session whose browser the pages are fetched with — see [Which browser the crawl reads with](#which-browser-the-crawl-reads-with) |
+| `--profile` | | string | — | Chrome user-data directory the crawl launches its own browser on; the crawl owns and closes it. Mutually exclusive with `--session` |
+
+#### Which browser the crawl reads with
+
+A crawl is a batch of page loads, and **the profile those loads run in decides what the site
+answers**: locale, currency, delivery location and login state all live in the browser profile,
+not in the URL. A pool-leased browser starts from the (cold) prototype profile, so a marketplace
+can answer for the exit IP's region instead of the region you prepared.
+
+* `crawl … ` (no flag) reads with **the calling session's browser** — the DEFAULT session for a CLI
+  call without `-s`, and the named session when one is addressed (`browser4-cli -s amazon crawl …`).
+* `crawl --session amazon-us …` pins that session explicitly (wins over the calling session).
+* `crawl --profile /path/to/user-data-dir …` launches a browser on that directory instead, owns it,
+  and closes it with the task. Do not point it at a directory a live session is using — a Chrome
+  user-data directory can only be used by one browser process at a time.
+
+The borrow is non-destructive: the crawl loads through its own session that carries the target
+browser (and no driver), so each parallel unit still leases its own tab, and the caller's tab, URL
+and cookies are left exactly as they were. The submitted banner names the profile used
+(`Fetch session: …` / `Fetch profile: …`).
+
+This is what makes "warm the profile once, crawl many times" hold: open the site in a session,
+choose the delivery location / language there once, then crawl with that session.
+
 
 ### Task budget (`--timeout`)
 
@@ -161,6 +186,58 @@ in flight (omitted = server default 4, `1` = sequential, `2`–`32` = up to `<n>
 browser4-cli crawl --seed-file urls.txt -d 0 --parallel 8 --refresh   # 12 seed URLs, at most 8 at a time
 browser4-cli crawl --seed-file urls.txt -d 0 --parallel 1 --refresh   # strictly sequential (a rate-limiting site)
 ```
+
+> **Measure the wall clock, not the label.** `--parallel N` is the budget the crawl
+> enforces on itself, and its report says what actually overlapped (`peak N seed unit(s)
+> in flight`).  That is an *overlap* statement, not a throughput promise: on a local
+> six-page fixture, `--parallel 3` finished in 22.9s and `--parallel 1` in 24.7s while
+> the report said `peak 3` — each page load carries a fixed cost of several seconds, so
+> overlapping units barely moves the total.  Treat `--parallel` as a concurrency *cap*
+> (useful to limit load on a site) and size expectations from a measured run.
+
+### Which URL the crawl requests
+
+**A crawl requests the URL the site published.**  Link discovery resolves each href
+against the page it came from, drops only the fragment, and keeps the rest verbatim —
+query string, parameter order, trailing slash and host case — so the request that reaches
+the site is the one a click on that anchor would have made.  This matters twice:
+
+* anti-bot fingerprinting: a request with reordered parameters (`?b=2&a=1` sent as
+  `?a=1&b=2`) or a trimmed path (`/p/` sent as `/p`) is not what the page's own link
+  produces;
+* the X-SQL second read: the page is frozen under the URL it will be queried by, which is
+  the same string only when the request was not rewritten.
+
+The round therefore loads with `-noNorm` by default (a crawl adds it when the request does
+not carry it; `--no-norm` spells the same thing).  Deduplication is unaffected: links are
+still compared through the engine's URL identity (`normalizeForVisit`), which only decides
+*which* URL is queued — the queued spelling is the page's own, and the first spelling of
+each identity wins.
+
+### One browser context, tabs inside it
+
+**A crawl runs inside a single browser context.**  That is the point of it: the profile
+(cookies, locale, delivery location, login) is what makes the batch read the site the way
+you prepared it, and a second context would be a second profile.  Its parallelism is
+therefore **tab-level inside that one context**: each parallel unit loads on its own tab of
+the crawl's browser, which the backend arranges per load (a borrowed tab is used but never
+closed; a tab the unit opened is closed as soon as the page's content is captured).
+
+That is also the axis to size: `--parallel N` opens up to N tabs in that context, and the
+browser's own tab budget (`browser.max.active.tabs`, default 8) caps what can really
+overlap.  Measured on a local fixture whose server answers in 1s, six pages took **25.5s at
+`--parallel 6` vs 32.1s at `--parallel 1`** — the tabs do overlap, but a page also pays a
+fixed pipeline cost, so raise `--parallel` for *overlap*, not as a multiplier.
+
+**When you need real throughput, change the axis: use [swarm](swarm.md).**  Swarm runs
+several browser contexts side by side, each with its own profile and tabs, which is the only
+way past one context's ceiling.  The split is deliberate:
+
+| Need | Tool |
+|---|---|
+| one warmed profile, a few dozen pages, tab-level overlap | `crawl --parallel N` |
+| many URLs, throughput matters more than one profile | `swarm create` + `swarm query` |
+
 
 ### X-SQL and output flags
 

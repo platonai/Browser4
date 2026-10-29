@@ -26,6 +26,8 @@ Use **swarm** when you need parallel execution across multiple browser contexts 
 
 A swarm session manages multiple isolated browser contexts running in parallel. Each context has its own profile/cookie jar and can open tabs, load pages, and execute X-SQL queries independently. Jobs are enqueued and distributed across contexts automatically.
 
+This is the concurrency axis `crawl` deliberately does not take: a crawl works inside **one** browser context — which is what keeps its profile warm (locale, currency, delivery location, login) — and only overlaps *tabs* within that context. When the job needs more concurrency than one context's tabs, it is a swarm job, not a larger `crawl --parallel`.
+
 ```
 swarm create        →  opens a swarm session (fixed session ID: SWARM)
 swarm submit        →  enqueues scrape jobs
@@ -51,7 +53,7 @@ swarm close         →  closes the swarm session and releases resources
 ### 1. Create a Swarm Session
 
 ```bash
-browser4-cli swarm create [--profile-mode SEQUENTIAL|TEMPORARY] [--max-open-tabs 8] [--max-browser-contexts 2] [--display-mode GUI|HEADLESS|SUPERVISED] [--clear-stale]
+browser4-cli swarm create [--profile-mode SEQUENTIAL|TEMPORARY] [--max-open-tabs 8] [--max-browser-contexts 2] [--display-mode GUI|HEADLESS|SUPERVISED] [--clear-stale] [--session <name> | --profile <dir>]
 ```
 
 | Option | Default | Description |
@@ -61,8 +63,17 @@ browser4-cli swarm create [--profile-mode SEQUENTIAL|TEMPORARY] [--max-open-tabs
 | `--max-browser-contexts` | `2` | Number of isolated browser instances |
 | `--display-mode` | `HEADLESS` | `GUI`, `HEADLESS`, or `SUPERVISED` (headless-first convention: only an explicit `GUI` opens visible windows) |
 | `--clear-stale` | (flag) | Clear the **still-pending** swarm tasks left by prior sessions before creating (finished tasks of prior sessions are pruned automatically, without this flag) |
+| `--session` | — | Reuse that session's **dedicated profile directory** for the swarm browser: the site is read with the cookies the session already warmed (locale, currency, delivery location, login). The session must already drive a browser (`-s <name> open <url>`). **Forces one browser context** — a Chrome user-data directory can only be used by one browser process at a time |
+| `--profile` | — | Launch the swarm browser on an explicit Chrome user-data directory instead of a pooled profile. Also forces one browser context. Mutually exclusive with `--session` |
 
 The session persists until `browser4-cli swarm close` or `close`.
+
+> **Why pin the profile:** swarm browsers are otherwise leased from the managed sequential pool,
+> and a fresh pool profile carries no cookies — a marketplace then answers for the region the exit
+> IP suggests rather than the storefront you prepared.  Pinning trades the default parallelism
+> (one context) for reading the site in the right profile; warm the session first
+> (`-s amazon-us open https://www.amazon.com` → choose delivery location + language), then
+> `swarm create --session amazon-us`.
 
 ### 2. Submit Scrape Jobs
 

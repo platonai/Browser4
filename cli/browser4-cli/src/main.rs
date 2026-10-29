@@ -1218,6 +1218,24 @@ fn build_swarm_create_capabilities(tool_params: &Value) -> Result<Value, String>
         .to_ascii_uppercase();
     capabilities.insert("displayMode".to_string(), json!(display_mode));
 
+    // The browser profile the swarm reads the site with.  The web is personalised by
+    // cookies (locale, currency, delivery location, login), and a pooled profile starts
+    // from the cold prototype, so a marketplace can answer for the exit IP's region
+    // instead of the one the caller prepared.  `--session` reuses a warmed session's
+    // profile directory, `--profile` names a user-data directory outright; the backend
+    // turns either into a pinned `contextDir` and one browser context, because a Chrome
+    // user-data directory can only be used by one browser process at a time.
+    for (flag, capability) in [("profileSession", "profileSession"), ("profilePath", "profilePath")] {
+        if let Some(v) = tool_params
+            .get(flag)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            capabilities.insert(capability.to_string(), json!(v));
+        }
+    }
+
     Ok(Value::Object(capabilities))
 }
 
@@ -16643,6 +16661,22 @@ async fn handle_swarm_create(
         cap_str("maxBrowserContexts", SWARM_DEFAULT_MAX_BROWSER_CONTEXTS),
         cap_str("maxOpenTabs", SWARM_DEFAULT_MAX_OPEN_TABS)
     );
+    // A pinned profile reuses one Chrome user-data directory, and a directory can only be
+    // used by one browser process at a time — the backend forces a single browser context.
+    // Say so, otherwise the "contexts=2" echoed above reads as if the pin had no effect.
+    if let Some(src) = echo_capabilities
+        .get("profileSession")
+        .and_then(|v| v.as_str())
+        .map(|s| format!("session '{s}'"))
+        .or_else(|| {
+            echo_capabilities
+                .get("profilePath")
+                .and_then(|v| v.as_str())
+                .map(|s| format!("profile '{s}'"))
+        })
+    {
+        cli_println!("  Profile: pinned to {src} — one browser context (a user-data dir is single-owner)");
+    }
     // Cold-start cue: browser contexts boot lazily after create returns, so
     // first submissions sit "queued" for up to ~60s on a fresh session.  Say
     // so up front — the documented >30s stall heuristic must not lead users
@@ -20604,6 +20638,33 @@ async fn handle_crawl(
     );
     if has_sql {
         crawl_status_println!("  X-SQL extraction: enabled");
+    }
+    // Which browser profile the pages are read with decides *what the site answers*
+    // (locale, currency, delivery location, login), so it is stated up front: a
+    // storefront mismatch is otherwise only visible as an odd-looking price column.
+    let fetch_session = tool_params
+        .get("fetchSession")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let fetch_profile = tool_params
+        .get("profile")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !fetch_profile.is_empty() {
+        crawl_status_println!("  Fetch profile: {} (own browser)", fetch_profile);
+    } else {
+        crawl_status_println!(
+            "  Fetch session: {}",
+            if fetch_session.is_empty() {
+                "DEFAULT".to_string()
+            } else {
+                fetch_session
+            }
+        );
     }
     json_field("task_id", json!(task_id));
 
@@ -36702,6 +36763,29 @@ mod tests {
     }
 
     #[test]
+    fn build_swarm_create_capabilities_carries_the_pinned_profile() {
+        // The swarm reads the site with a profile the caller warmed; dropping these
+        // capabilities would silently send every job back to a pooled (cold) profile,
+        // i.e. to the wrong storefront.
+        let caps = build_swarm_create_capabilities(&json!({
+            "profileSession": "amazon-us",
+            "profilePath": "C:/profiles/us",
+        }))
+        .unwrap();
+        assert_eq!(caps["profileSession"], "amazon-us");
+        assert_eq!(caps["profilePath"], "C:/profiles/us");
+    }
+
+    #[test]
+    fn build_swarm_create_capabilities_omits_a_blank_pinned_profile() {
+        let caps = build_swarm_create_capabilities(&json!({
+            "profileSession": "   ",
+        }))
+        .unwrap();
+        assert!(caps.get("profileSession").is_none());
+    }
+
+    #[test]
     fn build_swarm_create_request_uses_fixed_swarm_session_id() {
         let capabilities = build_swarm_create_capabilities(&json!({
             "profileMode": "SEQUENTIAL",
@@ -44448,6 +44532,22 @@ linkGroups:
             result.get("taskTimeoutMillis").is_none(),
             "an absent budget must let the server's default apply: {result}"
         );
+    }
+
+    #[test]
+    fn build_crawl_server_params_keeps_the_fetch_profile() {
+        // `fetchSession`/`profile` are wire fields, not CLI spellings: stripping them
+        // would silently send every crawl back to the DEFAULT session's browser, which
+        // is exactly the data-quality bug they exist to prevent.
+        let tool_params = json!({
+            "url": "https://example.com",
+            "fetchSession": "amazon-us",
+            "profile": "C:/profiles/us",
+        });
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert_eq!(result["fetchSession"], json!("amazon-us"));
+        assert_eq!(result["profile"], json!("C:/profiles/us"));
     }
 
     #[test]

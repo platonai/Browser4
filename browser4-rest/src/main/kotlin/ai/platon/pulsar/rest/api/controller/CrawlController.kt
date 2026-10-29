@@ -57,10 +57,24 @@ class CrawlController(
                 )
             }
         }
+        // A crawl reads the site with a browser profile (cookies carry locale, currency,
+        // delivery location and login).  It either borrows the browser of a session or
+        // launches its own on an explicit user-data directory — never both: two browsers
+        // cannot share one Chrome user-data directory, so the combination is ambiguous
+        // rather than merely redundant.
+        if (!request.fetchSession.isNullOrBlank() && !request.profile.isNullOrBlank()) {
+            throw IllegalArgumentException(
+                "fetchSession and profile are mutually exclusive: borrow a session's browser, " +
+                    "or name a user-data directory the crawl should launch on its own"
+            )
+        }
         logger.info(
-            "Crawl request: url='{}' seeds={} depth={} args='{}' sql={} parallelTabs={}",
+            "Crawl request: url='{}' seeds={} depth={} args='{}' sql={} parallelTabs={} " +
+                "session={} profile={}",
             request.url, request.urls?.size ?: 0, request.depth, request.args, request.sql != null,
-            crawlService.resolveParallelTabs(request)
+            crawlService.resolveParallelTabs(request),
+            request.fetchSession?.takeIf { it.isNotBlank() } ?: request.sessionId?.takeIf { it.isNotBlank() } ?: "DEFAULT",
+            request.profile?.takeIf { it.isNotBlank() } ?: "-"
         )
         return crawlService.submit(request)
     }

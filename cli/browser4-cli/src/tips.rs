@@ -246,6 +246,9 @@ const TIPS_CRAWL: &[Tip] = &[
         text: "Use `--format csv -o results.csv` with `--sql` to save extracted crawl data directly to a spreadsheet-ready file",
     },
     Tip {
+        text: "`--session <name>` (or `-s <name>`) pins the browser profile the pages are read with: warm a session's locale / delivery location once (`open -s shop <url>`), then crawl with it. Cookies decide what the site answers",
+    },
+    Tip {
         text: "Use `--out-link-pattern <regex>` to filter which links to follow during crawling",
     },
     Tip {
@@ -280,6 +283,9 @@ const TIPS_SWARM: &[Tip] = &[
     },
     Tip {
         text: "Every `swarm submit` gets a batch id — check that submission later with `swarm list --batch <id>` (add `--status failed` for just the failures)",
+    },
+    Tip {
+        text: "`swarm create --session <name>` reads the site with that session's warmed profile (locale, currency, delivery location); it forces one browser context, because a Chrome user-data directory cannot be shared",
     },
     Tip {
         text: "Use `--display-mode HEADLESS` for swarm operations to reduce resource usage",

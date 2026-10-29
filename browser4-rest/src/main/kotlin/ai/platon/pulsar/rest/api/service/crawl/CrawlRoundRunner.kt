@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service.crawl
 
+import ai.platon.pulsar.api.Browser
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
@@ -115,6 +116,7 @@ internal class CrawlRoundRunner(
         request: CrawlRequest,
         sharedSession: PulsarSession? = null,
         run: Int = 1,
+        pinnedBrowser: Browser? = null,
     ): List<CrawlPageResult> {
         // Depth=0 bulk-fetch: the round's own args, refreshed by default so that internal HTTP
         // caches and protocol-level state from prior sessions don't cause 0-byte responses for URLs
@@ -130,8 +132,8 @@ internal class CrawlRoundRunner(
                 .createSession(PulsarSettings(label = crawlSessionLabel(taskId)))
 
             try {
-                val options = parseOptions(session, effectiveArgs)
-                val page = session.load(request.url, options)
+                val options = parseOptions(session, effectiveArgs, pinnedBrowser)
+                val page = loadOnOwnTab(session, request.url, options, pinnedBrowser)
 
                 // If the page loaded but content is empty, retry after a delay.
                 // When using a shared session the protocol handler shouldn't be
@@ -254,14 +256,19 @@ internal class CrawlRoundRunner(
         progress: CrawlProgressSink,
         resume: CrawlSeedResume? = null,
         run: Int = 1,
+        sharedSession: PulsarSession? = null,
+        pinnedBrowser: Browser? = null,
     ): CrawlRound {
         logger.info(
             "Crawl {}: depth=1 round budget {}ms (drawn from what the task has left)",
             taskId, roundTimeoutMs
         )
-        // Labelled so the session is identifiable in logs and context dumps; the
-        // round owns its lifetime and releases it in the finally block below.
-        val session = sessionManager.agenticContext.createSession(PulsarSettings(label = crawlSessionLabel(taskId)))
+        // A borrowed session belongs to the caller (it carries the browser the crawl was
+        // told to read the site with) and is never closed here; a private one is labelled
+        // so it is identifiable in logs and context dumps, and the round owns its lifetime.
+        val ownsSession = sharedSession == null
+        val session = sharedSession
+            ?: sessionManager.agenticContext.createSession(PulsarSettings(label = crawlSessionLabel(taskId)))
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
         // Per-crawl settle bookkeeping: a round is complete only when every
         // submitted URL produced a page or a reported failure, and no parse
@@ -274,7 +281,7 @@ internal class CrawlRoundRunner(
             // refresh, cached empty/malformed pages make link discovery return 0 elements even when
             // the page has many anchors in the live DOM (see resolveRoundArgs for the trade-off).
             val effectiveArgs = resolveRoundArgs(request.args)
-            val options = parseOptions(session, effectiveArgs)
+            val options = parseOptions(session, effectiveArgs, pinnedBrowser)
             // A continuation does not touch the portal page: the run this one
             // continues already fetched it, and the URLs it left unsettled are the
             // round's whole work queue.  Re-extracting its out-links would re-parse
@@ -301,8 +308,10 @@ internal class CrawlRoundRunner(
                             "auto-switching to depth=0 (bulk fetch + extraction mode)",
                             taskId
                         )
-                        releaseSession(taskId, session)
-                        return CrawlRound(pages = crawlDepth0(taskId, request, run = run))
+                        if (ownsSession) releaseSession(taskId, session)
+                        return CrawlRound(
+                            pages = crawlDepth0(taskId, request, sharedSession, run, pinnedBrowser)
+                        )
                     }
                     logger.warn("Crawl {}: no outLinkSelector provided, returning empty result", taskId)
                     return CrawlRound(pages = emptyList(), pagesExpected = 0)
@@ -527,7 +536,7 @@ internal class CrawlRoundRunner(
             )
         } finally {
             ledger.close()
-            releaseSession(taskId, session)
+            if (ownsSession) releaseSession(taskId, session)
         }
     }
 
@@ -558,20 +567,26 @@ internal class CrawlRoundRunner(
         progress: CrawlProgressSink,
         resume: CrawlSeedResume? = null,
         run: Int = 1,
+        sharedSession: PulsarSession? = null,
+        pinnedBrowser: Browser? = null,
     ): CrawlRound {
         logger.info(
             "Crawl {}: depth={} round budget {}ms (drawn from what the task has left)",
             taskId, request.depth, roundTimeoutMs
         )
-        // Labelled so the session is identifiable in logs and context dumps; the
-        // round owns its lifetime and releases it (close + deregister) in the
-        // finally block below, since this session never goes through
-        // PulsarSessionManager and nothing else tracks it.
-        val settings = PulsarSettings(
-            profileMode = BrowserProfileMode.SEQUENTIAL,
-            label = crawlSessionLabel(taskId)
-        )
-        val session = sessionManager.agenticContext.createSession(settings = settings)
+        // A borrowed session belongs to the caller (it carries the browser the crawl was
+        // told to read the site with) and is never closed here.  A private one is labelled
+        // so it is identifiable in logs and context dumps, its lifetime belongs to this
+        // round, and it never goes through PulsarSessionManager, so this is the only place
+        // that can release it.
+        val ownsSession = sharedSession == null
+        val session = sharedSession ?: run {
+            val settings = PulsarSettings(
+                profileMode = BrowserProfileMode.SEQUENTIAL,
+                label = crawlSessionLabel(taskId)
+            )
+            sessionManager.agenticContext.createSession(settings = settings)
+        }
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
         // Per-round settle bookkeeping.  The round can only complete when every
         // URL it submitted produced a page or a reported failure *and* no parse
@@ -588,7 +603,7 @@ internal class CrawlRoundRunner(
         val continuation = resume?.isContinuation == true
         try {
             val effectiveArgs = resolveRoundArgs(request.args)
-            val options = parseOptions(session, effectiveArgs)
+            val options = parseOptions(session, effectiveArgs, pinnedBrowser)
             val maxDepth = request.depth
             val visited = ConcurrentHashMap.newKeySet<String>().apply {
                 resume?.visited?.forEach { add(it) }
@@ -979,7 +994,7 @@ internal class CrawlRoundRunner(
             )
         } finally {
             ledger.close()
-            releaseSession(taskId, session)
+            if (ownsSession) releaseSession(taskId, session)
         }
     }
 
@@ -1113,11 +1128,69 @@ internal class CrawlRoundRunner(
         ).links
     }
 
-    private fun parseOptions(session: PulsarSession, args: String): LoadOptions {
-        return if (args.isBlank()) {
+    /**
+     * The load options of one page of a crawl.
+     *
+     * The requested browser travels in the options' config: the fetch layer resolves a
+     * `Browser` bean from the page's config *before* it falls back to the driver pool
+     * (`PrivacyManagedBrowserFetcher.getSpecifiedBrowser`), so putting it here is what
+     * keeps every page of the round in the caller's profile — its cookies, locale and
+     * delivery location — while each load still leases its own tab from that browser.
+     *
+     * @param pinnedBrowser the browser the crawl was asked to fetch with, or null to
+     *   keep the historical pool-driven choice
+     */
+    private fun parseOptions(session: PulsarSession, args: String, pinnedBrowser: Browser? = null): LoadOptions {
+        val options = if (args.isBlank()) {
             session.options()
         } else {
             session.options(args)
+        }
+        pinnedBrowser?.let { options.conf.putBean(it) }
+        return options
+    }
+
+    /**
+     * Load [url] on **its own tab of the crawl's browser**.
+     *
+     * A crawl works inside one browser context: the profile (cookies, locale, delivery
+     * location, login) is the reason it is one context at all, and more *contexts* is what
+     * `swarm` is for.  Its parallelism is therefore **tab-level inside that context** —
+     * which the fetch layer does not give for free: when a browser bean is the only hint,
+     * `PrivacyManagedBrowserFetcher.getWebDriver` answers with one of that browser's
+     * *existing* drivers and takes a per-driver lease, so two units take turns on the same
+     * tab (measured: 6 pages at `--parallel 6` took as long as serial).
+     *
+     * Handing each load its own `newDriver()` makes the units concurrent *as tabs of the
+     * one context*.  The tab is closed as soon as the page's content is captured: parse
+     * and X-SQL work on the frozen page, never on the live tab.
+     *
+     * @return the loaded page; if a tab cannot be created the load falls back to the
+     *   session's own driver (correct, merely serialized)
+     */
+    private suspend fun loadOnOwnTab(
+        session: PulsarSession,
+        url: String,
+        options: LoadOptions,
+        pinnedBrowser: Browser?,
+    ): WebPage {
+        val browser = pinnedBrowser ?: return session.load(url, options)
+        // A driver that already existed before we asked is the caller's tab: use it, but
+        // never close it.  Only a tab this call opened is ours to close.
+        val existingIds: Set<String> = runCatching { browser.drivers.keys.map { it.toString() }.toSet() }
+            .getOrDefault(emptySet())
+        val driver = runCatching { browser.newDriver() }.getOrNull()
+            ?: return session.load(url, options)
+        val leased = driver.id.toString() !in existingIds
+        options.conf.putBean(driver)
+        try {
+            return session.load(url, options)
+        } finally {
+            if (leased) {
+                runCatching { driver.close() }.onFailure {
+                    logger.debug("Crawl: could not close the leased tab for '{}': {}", url, it.message)
+                }
+            }
         }
     }
 

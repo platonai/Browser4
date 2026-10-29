@@ -106,6 +106,10 @@ class CliAgentPromptTest {
         // Localized marketplaces (observed: Amazon serving zh-CN/HKD to a US task)
         // need a locale fix on the page, not post-processing of the wrong values.
         assertTrue(browsing.contains("Accept-Language"), browsing)
+        // How a particular site accepts a locale (a query parameter it happens to honour)
+        // is that site's business, not the engine's: the prompt stays site-agnostic and
+        // points at the browser profile / headers instead.
+        assertFalse(browsing.contains("?language="), browsing)
         // No spreadsheet writer is built in (decision 2026-10-28: no Excel dependency):
         // deliverables are CSV/JSONL, and an .xlsx INPUT is extracted by a script. A
         // spreadsheet REQUEST is a documented downgrade that must be reported, not a

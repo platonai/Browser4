@@ -36,6 +36,51 @@ data class CrawlRequest @JsonCreator constructor(
      */
     @param:JsonProperty("parallelTabs") val parallelTabs: Int? = null,
     /**
+     * The browser context this crawl reads the site in, by session name.
+     *
+     * A crawl is a *batch* of page loads, and which profile those loads run in is
+     * the difference between reading the storefront the caller prepared and
+     * reading a fresh one: cookies (locale, currency, delivery location, login)
+     * live in the browser profile, and a pool-leased browser has none of them.
+     * Naming a session pins the crawl to that session's browser — the same one
+     * `open`/`goto` drive — while the caller's tab, URL and bound driver are left
+     * untouched.
+     *
+     * `null` (the default) resolves to the `DEFAULT` session, so a crawl reads the
+     * site in the default session unless it is told otherwise.  A named session
+     * (`-s <name>`) keeps its own dedicated profile directory, so naming it is
+     * what makes "warm the profile once, crawl many times" work.
+     *
+     * Mutually exclusive with [profile].
+     */
+    @param:JsonProperty("sessionId") val sessionId: String? = null,
+    /**
+     * The session whose browser the pages are fetched with, named explicitly.
+     *
+     * [sessionId] is the *caller's* session — the MCP layer fills it in with the
+     * session a request was addressed to, so `browser4-cli -s amazon crawl …` already
+     * pins the crawl to `amazon` without this field.  This field is the explicit
+     * request form for callers that drive the REST API directly, or that want the
+     * crawl to read a different profile than the one their request came through.
+     * It wins over [sessionId].
+     */
+    @param:JsonProperty("fetchSession") val fetchSession: String? = null,
+    /**
+     * The Chrome user-data directory this crawl should launch its own browser on.
+     *
+     * Use this when the profile to read with is not (and should not become) a
+     * session: the crawl launches a browser on that directory, fetches through
+     * it, and closes it when the task finishes.  A Chrome user-data directory can
+     * only be used by one browser process at a time, so do not point this at a
+     * directory another live session is using — name that session in [sessionId]
+     * instead.
+     *
+     * `null` (the default) means "borrow the DEFAULT session's browser".
+     *
+     * Mutually exclusive with [sessionId].
+     */
+    @param:JsonProperty("profile") val profile: String? = null,
+    /**
      * How long this crawl may run before the server cancels it (ms).
      *
      * The budget is the crawl's own clock, not a per-request timeout: a round derives its

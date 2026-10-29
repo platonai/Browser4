@@ -221,7 +221,12 @@ class PulsarSessionManager(
      * */
     fun ensureSwarmSession(capabilities: Map<String, String?>? = null): ManagedSession {
         val sessionId = SWARM_SESSION_ID
-        val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities).toMutableMap()
+        // `profileSession` / `profilePath` pin the profile the swarm browsers launch on;
+        // they are translated here (not in a controller) because every entry point —
+        // `POST /api/swarm`, the `open_session` MCP tool the CLI uses, and anything that
+        // creates the SWARM session directly — must honour them.
+        val pinnedCapabilities = resolveSwarmProfile(capabilities)
+        val normalizedCapabilities = normalizeCapabilities(sessionId, pinnedCapabilities).toMutableMap()
         normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
         // normalizedCapabilities[BROWSER_PROFILE_MODE] = browserProfileMode
 
@@ -245,6 +250,58 @@ class PulsarSessionManager(
         }
 
         return session
+    }
+
+    /**
+     * Translate the profile the swarm should read the site with into a pinned `contextDir`.
+     *
+     * Swarm browsers are otherwise chosen from the managed sequential pool, and a pool
+     * browser starts from the (cold) prototype profile: no cookies, so a marketplace
+     * answers for whatever region the exit IP suggests instead of the region the caller
+     * prepared.  Naming a session (`profileSession`) or a directory (`profilePath`) pins
+     * the profile the swarm browsers launch on.
+     *
+     * Both forms force a single browser context: a Chrome user-data directory can only be
+     * used by one browser process at a time, so a second context on the same directory
+     * could not launch at all.
+     *
+     * @return the capabilities to normalize and parse into the swarm session
+     */
+    private fun resolveSwarmProfile(capabilities: Map<String, String?>?): Map<String, String?>? {
+        if (capabilities == null) return null
+        val profileSession = capabilities["profileSession"]?.trim()?.takeIf { it.isNotEmpty() }
+        val profilePath = capabilities["profilePath"]?.trim()?.takeIf { it.isNotEmpty() }
+        require(profileSession == null || profilePath == null) {
+            "profileSession and profilePath are mutually exclusive: reuse an existing session's profile, " +
+                "or name a Chrome user-data directory"
+        }
+        if (profileSession == null && profilePath == null) return capabilities
+
+        val contextDir = profilePath ?: run {
+            val facts = sessionBrowserFacts(profileSession!!)
+                ?: throw IllegalArgumentException(
+                    "Session '$profileSession' drives no browser yet: open it first " +
+                        "(e.g. `open -s $profileSession <url>`) so its profile directory exists, " +
+                        "or pass an explicit Chrome user-data directory instead"
+                )
+            facts.contextDir?.toString()
+                ?: throw IllegalArgumentException(
+                    "Session '$profileSession' has no browser profile directory to reuse"
+                )
+        }
+
+        logger.info(
+            "Swarm profile pinned to '{}' (from {}) — one browser context",
+            contextDir, if (profilePath != null) "profilePath" else "session $profileSession"
+        )
+
+        return LinkedHashMap(capabilities).apply {
+            remove("profileSession")
+            remove("profilePath")
+            put("contextDir", contextDir)
+            // One browser per user-data directory: a second context would fail to launch.
+            put("maxBrowserContexts", "1")
+        }
     }
 
     fun getOrCreateSession(sessionId: String, capabilities: Map<String, String?>? = null): ManagedSession {

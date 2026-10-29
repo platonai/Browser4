@@ -193,6 +193,108 @@ class CrawlToolExecutorTest {
     }
 
     @Test
+    @DisplayName("submit forwards fetchSession and profile to the crawl request")
+    fun submitForwardsTheFetchProfile() = runBlocking {
+        // Which browser profile the pages are fetched with decides what the site
+        // answers (locale, currency, delivery location, login), so a dropped
+        // fetchSession/profile is a silent data-quality bug, not a cosmetic one.
+        val service = Mockito.mock(CrawlService::class.java)
+        Mockito.`when`(service.submit(any<CrawlRequest>())).thenReturn("task-1")
+
+        executor(service).callFunctionOn(
+            "crawl",
+            "submit",
+            mapOf(
+                "url" to "https://www.amazon.com/dp/B0TEST",
+                "depth" to 0,
+                "fetchSession" to "amazon-us",
+                "sessionId" to "6f1b8f2e-0000-4000-8000-000000000001",
+            ),
+            service
+        )
+
+        val captor = argumentCaptor<CrawlRequest>()
+        Mockito.verify(service).submit(captor.capture())
+        val request = captor.firstValue
+        assertEquals("amazon-us", request.fetchSession)
+        // The calling session is carried through untouched: it is the default the
+        // binder falls back to, and overwriting it would pin an unrelated crawl to
+        // the caller's browser.
+        assertEquals("6f1b8f2e-0000-4000-8000-000000000001", request.sessionId)
+        assertNull(request.profile)
+    }
+
+    @Test
+    @DisplayName("submit takes an explicit Chrome user-data directory as the profile")
+    fun submitForwardsAnExplicitProfile() = runBlocking {
+        val service = Mockito.mock(CrawlService::class.java)
+        Mockito.`when`(service.submit(any<CrawlRequest>())).thenReturn("task-1")
+
+        executor(service).callFunctionOn(
+            "crawl",
+            "submit",
+            mapOf("url" to "https://example.com", "depth" to 0, "profile" to "C:/profiles/us"),
+            service
+        )
+
+        val captor = argumentCaptor<CrawlRequest>()
+        Mockito.verify(service).submit(captor.capture())
+        assertEquals("C:/profiles/us", captor.firstValue.profile)
+        assertNull(captor.firstValue.fetchSession)
+    }
+
+    @Test
+    @DisplayName("fetchSession and profile together are refused before a task is created")
+    fun submitRefusesBothSessionAndProfile() = runBlocking {
+        // One Chrome user-data directory can only be used by one browser process, so
+        // "borrow session X's browser AND launch on directory Y" has no meaning: it is
+        // refused rather than silently resolved to one of the two.
+        val service = Mockito.mock(CrawlService::class.java)
+
+        val failure = runCatching {
+            executor(service).callFunctionOn(
+                "crawl",
+                "submit",
+                mapOf(
+                    "url" to "https://example.com",
+                    "fetchSession" to "amazon-us",
+                    "profile" to "C:/profiles/us",
+                ),
+                service
+            )
+        }.exceptionOrNull()
+
+        assertNotNull(failure)
+        assertTrue(
+            failure!!.message!!.contains("mutually exclusive"),
+            "expected a mutual-exclusion message, got: ${failure.message}"
+        )
+        Mockito.verify(service, Mockito.never()).submit(any<CrawlRequest>())
+    }
+
+    @Test
+    @DisplayName("a missing fetchSession/profile leaves the crawl on its default session")
+    fun submitDefaultsToTheCallingSession() = runBlocking {
+        // The default is the calling session (the MCP layer stamps it in), which is the
+        // DEFAULT session for a CLI call without `-s`: a crawl must not need an extra
+        // flag to read the site the user already browsed.
+        val service = Mockito.mock(CrawlService::class.java)
+        Mockito.`when`(service.submit(any<CrawlRequest>())).thenReturn("task-1")
+
+        executor(service).callFunctionOn(
+            "crawl",
+            "submit",
+            mapOf("url" to "https://example.com", "depth" to 0),
+            service
+        )
+
+        val captor = argumentCaptor<CrawlRequest>()
+        Mockito.verify(service).submit(captor.capture())
+        assertNull(captor.firstValue.fetchSession)
+        assertNull(captor.firstValue.profile)
+    }
+
+    @Test
     @DisplayName("a missing or non-positive parallel/timeout falls back to the server default (null)")
     fun submitTreatsNonPositiveAsNoPreference() = runBlocking {
         val service = Mockito.mock(CrawlService::class.java)

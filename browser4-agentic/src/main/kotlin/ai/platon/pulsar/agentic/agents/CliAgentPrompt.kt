@@ -159,9 +159,13 @@ internal object CliAgentPrompt {
           but a price, a ranking or an id from a past run is not this run's result —
           re-read live data for anything the task asks for today, and re-capture a
           bestseller list instead of trusting one from memory.
-        - Marketplaces localize by host/IP: when titles or prices come back in the wrong
-          language or currency, set `Accept-Language` (`set headers`, cookies) or add
-          `?language=en_US` and re-read the page — do not post-process localized values.
+        - Marketplaces localize by host/IP/account: when titles or prices come back in the
+          wrong language or currency, the missing state is the browser profile — fix it
+          there (open the site in a session, choose the storefront / delivery location /
+          language once, then read with that session's browser) or pin it on the page
+          (`set headers` for `Accept-Language`, cookies). Do not post-process localized
+          values, and do not assume a site-specific query parameter: which one a given
+          site honours is that site's business, not the engine's.
         - Deliverables are text: write CSV (or JSONL) for tabular data and Markdown for
           prose. There is no spreadsheet writer and `.xlsx` output is out of scope; do not
           hand-roll one. A task that asks to "save as a spreadsheet" is delivered as CSV,

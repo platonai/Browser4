@@ -4207,6 +4207,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "max-browser-contexts <n>", description: "Number of isolated browser environments (default: 2)", is_bool: false, short: None },
                 OptionDef { name: "display-mode <mode>", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false, short: None },
                 OptionDef { name: "clear-stale", description: "Clear stale swarm tasks from prior sessions before creating the new session", is_bool: true, short: None },
+                OptionDef { name: "session <name>", description: "Session whose browser profile the swarm contexts should read the site with (its dedicated profile directory is reused). Forces one browser context: a Chrome user-data directory can only be used by one browser process at a time. Mutually exclusive with --profile", is_bool: false, short: None },
+                OptionDef { name: "profile <path>", description: "Chrome user-data directory the swarm browser should launch on, instead of a profile from the managed pool. Forces one browser context. Mutually exclusive with --session", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "open_session".to_string(),
@@ -4221,6 +4223,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "max-browser-contexts") { p["maxBrowserContexts"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "display-mode") { p["displayMode"] = json!(v); }
                 if let Some(b) = get_bool(args, "clear-stale") { p["clearStale"] = json!(b); }
+                // The swarm browser reads the site in the profile the live session warmed:
+                // a named session pins that profile directory, an explicit --profile names
+                // one.  Both force a single browser context — a Chrome user-data directory
+                // can only be used by one browser process at a time.
+                if let Some(v) = get_opt_str(args, "session") { p["profileSession"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "profile") { p["profilePath"] = json!(v); }
                 p
             },
         },
@@ -4400,6 +4408,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "readonly", description: "Non-destructive mode: loads may be served from the page store and are never written back; wins over --refresh", is_bool: true, short: None },
                 OptionDef { name: "parallel <n>", description: "Run up to <n> crawl units at the same time (default: 4, 1 = sequential). A unit is one seed URL's fetch-and-extract round, and each unit in flight uses its own browser tab; links discovered inside a unit are fetched from the shared tab pool. A single-seed crawl therefore peaks at 1 unit by design — the completion report's 'peak N unit(s) in flight' counts those units, not pages", is_bool: false, short: None },
                 OptionDef { name: "timeout <dur>", description: "Maximum time the crawl may run before the server cancels it: seconds, or a duration such as 30s, 10m, 1h (default: 10m; max 1h). A crawl that runs out of budget reports the pages it never started instead of being cut off silently", is_bool: false, short: None },
+                OptionDef { name: "session <name>", description: "Session whose browser the pages are fetched with (default: the session this command runs in, i.e. the DEFAULT session). Cookies live in the browser profile, so this is what pins the crawl to the profile you browsed and warmed — locale, currency, delivery location, login. Accepts a session name, a session id, or DEFAULT. Mutually exclusive with --profile", is_bool: false, short: None },
+                OptionDef { name: "profile <path>", description: "Chrome user-data directory the crawl should launch its own browser on, instead of borrowing a session's browser. The crawl owns and closes that browser, so do not point it at a directory a live session is using — name that session with --session instead. Mutually exclusive with --session", is_bool: false, short: None },
                 OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
                 OptionDef { name: "verbose", description: "Show per-URL processing status in crawl results", is_bool: true, short: None },
             ],
@@ -4430,6 +4440,15 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "output") {
                     p["output"] = json!(v);
                 }
+
+                // Which browser the pages are fetched with. `fetchSession` (not
+                // `sessionId`) is deliberate: the MCP layer stamps the calling session
+                // into `sessionId` for every tool call, so only a field of its own can
+                // express "fetch through THAT session, not the one I am talking to".
+                // Cookies live in the browser profile, so this is what pins a crawl to
+                // the profile the user browsed and warmed.
+                if let Some(v) = get_opt_str(args, "session") { p["fetchSession"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "profile") { p["profile"] = json!(v); }
 
                 // Build the LoadOptions args string from individual flags
                 let mut load_opts = Vec::new();
@@ -7539,6 +7558,56 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
 
         assert_eq!(params["profileMode"], "SEQUENTIAL");
+    }
+
+    #[test]
+    fn test_crawl_params_carry_the_fetch_session_and_profile() {
+        // Which browser profile a crawl reads the site with decides what the site
+        // answers (locale, currency, delivery location, login).  The flag is
+        // `--session` because that is what the user names, but the wire field is
+        // `fetchSession`: the MCP layer stamps the *calling* session into `sessionId`
+        // on every call, so a value in that field could never survive.
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("session".to_string(), json!("amazon-us"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["fetchSession"], "amazon-us");
+        assert!(params.get("sessionId").is_none());
+        assert!(params.get("profile").is_none());
+    }
+
+    #[test]
+    fn test_crawl_params_carry_an_explicit_profile_directory() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("profile".to_string(), json!("C:/profiles/us"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["profile"], "C:/profiles/us");
+        assert!(params.get("fetchSession").is_none());
+    }
+
+    #[test]
+    fn test_swarm_create_params_carry_the_profile_session_and_path() {
+        let map = commands_map();
+        let cmd = map.get("swarm-create").unwrap();
+        let mut args = HashMap::new();
+        args.insert("session".to_string(), json!("amazon-us"));
+        args.insert("profile".to_string(), json!("C:/profiles/us"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        // The backend translates both into a pinned `contextDir` and one browser
+        // context (a user-data directory cannot be shared by two Chrome processes).
+        assert_eq!(params["profileSession"], "amazon-us");
+        assert_eq!(params["profilePath"], "C:/profiles/us");
     }
 
     #[test]

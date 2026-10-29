@@ -872,12 +872,30 @@ class CrawlSupportTest {
     @Test
     @DisplayName("a crawl still refreshes by default, so a stale stored page cannot empty the crawl")
     fun testRoundArgsRefreshByDefault() {
-        assertEquals("-refresh", resolveRoundArgs(""))
-        assertEquals("-refresh", resolveRoundArgs("   "))
-        assertEquals("-outLink \"a.pick\" -refresh", resolveRoundArgs("-outLink \"a.pick\" -refresh"))
-        assertEquals("-outLink \"a.pick\" -refresh", resolveRoundArgs("-outLink \"a.pick\""))
+        assertEquals("-refresh -noNorm", resolveRoundArgs(""))
+        assertEquals("-refresh -noNorm", resolveRoundArgs("   "))
+        assertEquals(
+            "-outLink \"a.pick\" -refresh -noNorm",
+            resolveRoundArgs("-outLink \"a.pick\" -refresh")
+        )
+        assertEquals("-outLink \"a.pick\" -refresh -noNorm", resolveRoundArgs("-outLink \"a.pick\""))
         // Any spelling counts, or the crawl would add a second, redundant refresh.
-        assertEquals("--refresh -topLinks 3", resolveRoundArgs("--refresh -topLinks 3"))
+        assertEquals("--refresh -topLinks 3 -noNorm", resolveRoundArgs("--refresh -topLinks 3"))
+    }
+
+    @Test
+    @DisplayName("a crawl asks for the URL the page published, not the engine's canonical spelling")
+    fun testRoundArgsDisableUrlNormalizationByDefault() {
+        // The load path canonicalizes a request (query parameters reordered, a trailing path slash
+        // dropped) while the crawl reports the href it discovered.  That makes the requested URL
+        // differ from the reported one — the wrong thing to show a site that fingerprints requests,
+        // and the wrong key for the X-SQL second read.  So the round defaults to `-noNorm`.
+        assertTrue(resolveRoundArgs("").contains("-noNorm"), resolveRoundArgs(""))
+        assertTrue(resolveRoundArgs("-readonly").contains("-noNorm"), resolveRoundArgs("-readonly"))
+        // Every recognized spelling is honored, not duplicated: `-noNorm` and the long alias
+        // `--no-link-normalizer` are the two names `LoadOptions` declares for this field.
+        assertEquals("-noNorm -refresh", resolveRoundArgs("-noNorm"))
+        assertEquals("--no-link-normalizer -refresh", resolveRoundArgs("--no-link-normalizer"))
     }
 
     @Test
@@ -886,18 +904,18 @@ class CrawlSupportTest {
         // The X-SQL second read is a guaranteed cache hit only while the page is local, and
         // `-refresh` (= -ignoreFailure -i 0s) makes every local copy look expired. The two options
         // mean opposite things, so the read-only one decides.
-        assertEquals("-readonly", resolveRoundArgs("-readonly -refresh"))
-        assertEquals("-readonly", resolveRoundArgs("-refresh -readonly"))
-        assertEquals("-readonly", resolveRoundArgs("-readonly -refresh=true"))
+        assertEquals("-readonly -noNorm", resolveRoundArgs("-readonly -refresh"))
+        assertEquals("-readonly -noNorm", resolveRoundArgs("-refresh -readonly"))
+        assertEquals("-readonly -noNorm", resolveRoundArgs("-readonly -refresh=true"))
         // A read-only crawl must not gain a refresh it did not ask for.
-        assertEquals("-readonly", resolveRoundArgs("-readonly"))
+        assertEquals("-readonly -noNorm", resolveRoundArgs("-readonly"))
         assertEquals(
-            "-outLink \"a.pick\" -topLinks 3 -readonly",
+            "-outLink \"a.pick\" -topLinks 3 -readonly -noNorm",
             resolveRoundArgs("-outLink \"a.pick\" -topLinks 3 -readonly -refresh")
         )
         // Whatever the caller asked for besides refresh is left exactly as it was.
         assertEquals(
-            "-expires 1d -readonly -parse",
+            "-expires 1d -readonly -parse -noNorm",
             resolveRoundArgs("-expires 1d -readonly -parse -refresh")
         )
     }
@@ -908,12 +926,12 @@ class CrawlSupportTest {
         // The tokens are split on whitespace, so a quoted selector is its own token; a strip that
         // matched substrings would corrupt it.
         assertEquals(
-            "-outLink \"a.refresh.js\" -readonly",
+            "-outLink \"a.refresh.js\" -readonly -noNorm",
             resolveRoundArgs("-outLink \"a.refresh.js\" -readonly -refresh")
         )
         // `-refresh` inside a pattern value is not the option either.
         assertEquals(
-            "-outLinkPattern refresh -readonly",
+            "-outLinkPattern refresh -readonly -noNorm",
             resolveRoundArgs("-outLinkPattern refresh -readonly -refresh")
         )
     }

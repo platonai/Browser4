@@ -834,6 +834,14 @@ internal fun stripOption(args: String, fieldName: String): String {
  * portal page return 0 out-links — `buildEffectiveArgs` existed for that (see
  * `docs-dev/copilot/ci-stabilization-4.13.x.md` §18), and this keeps it.
  *
+ * A crawl also forces `-noNorm` by default: **the page a crawl asks for is the URL the site itself
+ * published**, not the engine's canonical spelling of it.  Without this the load path rewrote the
+ * request — query parameters reordered (`?b=2&a=1` → `?a=1&b=2`) and a trailing path slash dropped
+ * (`/p/` → `/p`) — while the crawl *reported* the original spelling, so the reported URL and the
+ * requested URL disagreed.  Beyond the anti-bot value of looking like the click that produced the
+ * href, this keeps the X-SQL second read a cache hit: the page is frozen under the URL it will be
+ * queried by (`@url`), which is the same string only when the request was not rewritten.
+ *
  * **`-readonly` wins over `-refresh`** when the request asks for both, which is the one thing that
  * changed. The two options mean opposite things, and the engine has no notion of precedence between
  * them: `-refresh` expands to `-ignoreFailure -i 0s` and resets the fetch retry counters, so
@@ -851,14 +859,17 @@ internal fun stripOption(args: String, fieldName: String): String {
  */
 internal fun resolveRoundArgs(rawArgs: String): String {
     val args = rawArgs.trim()
-    if (hasOption(args, "readonly")) {
-        return stripOption(args, "refresh")
+    val resolved = if (hasOption(args, "readonly")) {
+        stripOption(args, "refresh")
+    } else {
+        when {
+            args.isBlank() -> "-refresh"
+            hasOption(args, "refresh") -> args
+            else -> "$args -refresh"
+        }
     }
-    return when {
-        args.isBlank() -> "-refresh"
-        hasOption(args, "refresh") -> args
-        else -> "$args -refresh"
-    }
+    // The request URL is the one the page published: see the KDoc above.
+    return if (hasOption(resolved, "noNorm")) resolved else "$resolved -noNorm".trim()
 }
 
 /**

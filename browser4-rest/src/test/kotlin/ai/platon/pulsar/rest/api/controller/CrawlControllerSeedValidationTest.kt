@@ -4,6 +4,7 @@ import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
 import ai.platon.pulsar.rest.api.service.crawl.CrawlService
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -42,6 +43,37 @@ class CrawlControllerSeedValidationTest {
 
         assertEquals("Malformed url: <htps://exmple.com>", exception.message)
         verify(crawlService, never()).submit(any())
+    }
+
+    @Test
+    @DisplayName("a fetch session and an explicit profile are refused together")
+    fun sessionAndProfileAreMutuallyExclusive() {
+        // A Chrome user-data directory can only be used by one browser process at a
+        // time, so "borrow this session's browser AND launch on that directory" is
+        // ambiguous rather than redundant: refuse it instead of silently picking one.
+        val exception = assertThrows<IllegalArgumentException> {
+            startCrawl(
+                CrawlRequest(
+                    url = "https://example.com",
+                    depth = 0,
+                    fetchSession = "amazon-us",
+                    profile = "C:/profiles/us",
+                )
+            )
+        }
+
+        assertTrue(exception.message!!.contains("mutually exclusive"), exception.message)
+        verify(crawlService, never()).submit(any())
+    }
+
+    @Test
+    @DisplayName("a crawl with no fetch profile is submitted as-is (the service defaults to DEFAULT)")
+    fun noFetchProfileIsSubmitted() {
+        // The default session is resolved by the service, not stamped here: a REST
+        // caller that names nothing must still reach the service, and the service is
+        // the one place that knows the DEFAULT session exists.
+        assertEquals("mock-task", startCrawl(CrawlRequest(url = "https://example.com", depth = 0)))
+        verify(crawlService).submit(any())
     }
 
     @Test

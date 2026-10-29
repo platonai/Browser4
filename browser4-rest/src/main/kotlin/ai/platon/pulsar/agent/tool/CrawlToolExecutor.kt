@@ -59,11 +59,26 @@ class CrawlToolExecutor(
                     "Whole-task budget in ms. Clamped server-side; a missing or " +
                         "non-positive value uses the server default.",
                 ),
+                ToolSpec.Arg(
+                    "fetchSession", "String?", "the calling session",
+                    "Name of the session whose browser the pages are fetched with. " +
+                        "Cookies live in the browser profile, so this is what pins the crawl to " +
+                        "the profile the caller browsed and warmed (locale, currency, delivery " +
+                        "location, login). Omitted or blank resolves to `DEFAULT`. " +
+                        "Wins over the calling session. Mutually exclusive with `profile`.",
+                ),
+                ToolSpec.Arg(
+                    "profile", "String?", "null",
+                    "Chrome user-data directory the crawl should launch its own browser on. " +
+                        "The crawl owns and closes that browser. Mutually exclusive with `fetchSession`.",
+                ),
             ),
             returnType = "String",
             description = "Submit a crawl task. Returns a task ID for status polling. " +
                 "parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task " +
                 "budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default. " +
+                "fetchSession (default: the calling session, i.e. DEFAULT) pins the browser the pages are fetched with; " +
+                "profile pins an explicit Chrome user-data directory instead. " +
                 "Every seed must be an absolute http(s) URL: a seed the crawl could never fetch is " +
                 "refused with `Malformed url: <...>` and no task is created.",
             help = """
@@ -71,6 +86,10 @@ class CrawlToolExecutor(
                 immediately. Poll it with `crawl.status`, read the payload with
                 `crawl.result`. Use `depth=0` for a single page, and prefer the
                 swarm domain for high-throughput parallel extraction.
+                The pages are fetched with the DEFAULT session's browser unless
+                `fetchSession` names another session: cookies (locale, currency,
+                delivery location, login) live in that profile, so a crawl that
+                reads a marketplace must name the session that was warmed for it.
             """.trimIndent(),
             examples = listOf(
                 ToolExample(
@@ -188,6 +207,26 @@ class CrawlToolExecutor(
                 val taskTimeoutMillis = paramLong(
                     args, "taskTimeoutMillis", functionName, required = false, default = null
                 )?.takeIf { it > 0 }
+                // Which browser the pages are fetched with: cookies (locale, currency,
+                // delivery location, login) live in the profile, so this is what decides
+                // *what the site answers*.  Blank means "the DEFAULT session".
+                // `fetchSession` is the explicit request; `sessionId` is the session the
+                // call was addressed to (the MCP layer stamps it in), and is the default
+                // — which is why a crawl reads the site with the DEFAULT session unless
+                // it is told otherwise.
+                val fetchSession = paramString(
+                    args, "fetchSession", functionName, required = false, default = null
+                )?.trim()?.takeIf { it.isNotEmpty() }
+                val callingSession = paramString(
+                    args, "sessionId", functionName, required = false, default = null
+                )?.trim()?.takeIf { it.isNotEmpty() }
+                val profile = paramString(
+                    args, "profile", functionName, required = false, default = null
+                )?.trim()?.takeIf { it.isNotEmpty() }
+                require(fetchSession == null || profile == null) {
+                    "fetchSession and profile are mutually exclusive: name the session whose profile " +
+                        "the crawl should borrow, or a user-data directory it should launch on its own"
+                }
                 // The REST controller refuses a malformed seed, but this is the *other* entry
                 // point into CrawlService — and the one the CLI calls (`crawl_submit`).  Without
                 // the check here, `<bin> crawl formats` created a task, reported 0 pages found and
@@ -202,6 +241,9 @@ class CrawlToolExecutor(
                         urls = urls,
                         parallelTabs = parallelTabs,
                         taskTimeoutMillis = taskTimeoutMillis,
+                        fetchSession = fetchSession,
+                        sessionId = callingSession,
+                        profile = profile,
                     )
                 )
             }
