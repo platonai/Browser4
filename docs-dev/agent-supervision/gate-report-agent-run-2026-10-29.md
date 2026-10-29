@@ -2,8 +2,10 @@
 
 > 依据：[`fix-plan-agent-run-2026-10-29.md`](fix-plan-agent-run-2026-10-29.md) §1/§5。
 > 原始证据在 `logs/supervise-20261029/`（git-ignored）：`d14-provenance.md`、`run-*-human.log`、`run-g-result.json`、`neg*-ndjson*.log`、`validate_csv.py` 等。
-> 结论：**Gate 通过**（2026-10-29 13:31，Run G：`status=done`、exit 0、4,810,599 tokens ≤ 5M、交付物 20×75 数据断言 11/11 PASS）。
-> 过程记录：02:00–03:00 的首次 Gate 未通过（F11/F13 阻断），12:00–13:31 的复测在修完 F13/F13a/F17 并加入预算收尾提示后通过；下文保留每次运行的原始记录与偏差说明。
+> 结论：**Gate 通过**。最终 bundle（含 F12/F14/轮内预算提示）上 Run I（task `86719e3f`）`status=done`、exit 0、
+> 851.6 s、约 4.11M tokens（82% of 5M）、交付 20×75 CSV，数据断言 10/11（唯一失败项是 4 行因香港收货地
+> 不可售而无价格，属站点状态，见 §8d）；Run G（task `386f25aa`，4,810,599 tokens）是同一任务的首个通过样本。
+> 首次 Gate（02:00–03:00）未通过，F11/F13 修复后于 12:00–14:35 逐步通过；下文保留每次运行的原始记录与偏差说明。
 
 ## 1. 环境与来源（D14）
 
@@ -194,6 +196,41 @@ Run A **没有产出 CSV**，所以 §1.2 无法在新运行上评估——这�
 2. 整任务 NDJSON 仍未复跑（§3 的偏差）；NDJSON 契约由两次短运行验证。
 3. F14（>30 s evaluate）与 F15（Promise 反馈）仍未修，属 §7 的遗留项；它们不再阻断本 Gate 的数据/预算判定。
 4. 收尾提示在 90.8% 才被注入（按“轮”粒度检查），不是精确的 80%；它让模型在 96.2% 收尾而不是撞 100%。
+
+## 8d. F14/F12 修复后的复跑（Run H → Run I）
+
+F14（30 s evaluate 提示）与 F12（`coding.shell` 杀运行时防护）落地并重建 bundle 后，用同一任务复跑：
+
+**Run H**（task `a2cb6db2`）：855.2 s / 210 请求 / **5,009,496 tokens**（超 0.19%）→ 仍然 abort。
+`budget.nudge` 只在 **94.8%**（4,739,063）注入——因为它按“外层轮”检查，而一轮可能有几百步。
+这说明 §8c 的收尾提示**触发得太晚**，不是数字问题。
+
+**修复**（commit `3304a9fd55`）：`nextBudgetNudgePercent()` 移到 `AgentToolCallLoop.onBeforeIteration`
+（与交互式 steering 同一注入点），在**每次推理前**检查 80%/95%，95% 文案改为“最后机会：不要再开新步骤，
+立刻 taskComplete”。阈值仍然每次运行只播报一次，单测覆盖 80/95/两者已播报/无预算四种情况。
+
+**Run I**（task `86719e3f`，最终 bundle）：**exit 0 / status=done**，851.6 s，195 steps，
+完成时约 **4.11M tokens（82%）**；交付物 `amazon_microwave_bestsellers_top20.csv`
+（workspace 根目录，227,175 B，20×75）。
+
+Run I 的数据 Gate（`run-i-csv-gate.md`）：**10/11 PASS**
+
+| 断言 | 结果 |
+|---|---|
+| 20 行 / 75 列 / 表头 == xlsx / 20 唯一 ASIN / ASIN 集合 == 本次捕获 `asins.txt` | PASS |
+| keywords 20/20、category=212706003011、无乱码、bullets、task_time 在窗口内 | PASS |
+| price 20/20 可解析 | **FAIL（4 行空）** |
+
+价格为空的那 4 行（`B071WCB1T6`、`B081T6GZZF`、`B08PK7WZC1`、`B0DV5SDY1R`）在 CSV 里同时是
+`instock` = “This item cannot be shipped to your selected delivery location…”、`isbuy` = no、
+`isaddcart` = no —— Amazon 对本次会话的香港收货地隐藏了 buybox，页面上**确实没有价格**；
+运行报告在 `problems` 里写明“4 pages returned an empty core-price block … price stayed blank
+rather than guessed”。因此这一项是**站点可售状态**导致的缺失，不是解析错误，平台行为正确
+（未编造价格）。审查时若要“20/20 价格”，必须把该地区不可售的 ASIN 排除在榜单之外，属于数据口径问题。
+
+结论：最终 bundle 上 Gate 通过（行为 + 数据均可复现；唯一失败项有站点状态解释）。
+诚实偏差：Run I 在收尾提示生效前就自然完成（82%），所以“轮内提示”的效果仍未被一次真实 abort 前的
+运行证明；它只被单测与 Run H 的诊断支撑。
 
 ## 9. 复现命令
 

@@ -81,20 +81,19 @@ cargo check --manifest-path cli/browser4-cli/Cargo.toml --all-targets
 | F13a | `eval --js "…"`（`--js` 是 `--stdin` 的布尔简写）在 `b4.run` 下读 stdin，而父进程从不关闭该管道 → 命令挂到 300 s 超时（11:43 冒烟现场） | 见 §3.5：`b4.run` 的 stdin 重定向到 `NUL` / `/dev/null`（对齐 pi 的 `stdio: ["ignore", …]`），读 stdin 的命令立即 EOF | `stdinIsClosedForArgvCommands`；`f13-smoke2.log` 第 4 条 1 s 内返回 `Stdin was empty`（exit 2） |
 | F17 | `agent run --resume <id>` 不带任务文本被 `ToolSpecValidator` 判为缺参（`command` 在 spec 里是必填），而失败提示恰好让用户这么跑 | `ToolSpec.Arg.requiredUnless`；`command.run` 的 `command` 声明 `requiredUnless = "resumeTaskId"` | `ToolSpecValidatorTest`（3 断言）；rest 137 tests；真实 `--resume ddb9c255 …` 拉起并续跑同一 workspace（`run-e-resume.log`） |
 
-### 3.3 未修阻断项（下一轮按序处理）
+### 3.3 遗留项（下一轮按序处理）
 
-1. **F14 驱动层 `Runtime.evaluate` 30 s 上限**：MCP/CLI 的 `--timeout 300` 覆盖不到，
-   >30 s 的页面内等待不可行；错误文本只到 `[INTERNAL] browser_evaluate … (PT30S)`，未提示替代方案。
-2. **F15 P0-4 的 Promise 反馈不可达**：CLI `eval "(async()=>1)()"` 退出码 0 且返回 `{}`（静默），
+1. **F15 P0-4 的 Promise 反馈不可达**：CLI `eval "(async()=>1)()"` 退出码 0 且返回 `{}`（静默），
    F13 修好后已能稳定复现（`f13-smoke2.log` 第 3 条）；目前只有 agent 工具层单测能观察到
-   “re-run with --await”。
-3. **F12 `coding.shell` 可杀后端**：Gate 第一次 Run A 就是被模型 `taskkill /PID …` 杀掉后端而中断；
-   `33be64` 只封了 `b4.run` 的生命周期命令。
-4. **数据语义缺口**：keywords 全空 / category 用品类名 / bullets 重复 / 乱码 —— P2-1 的字段规格与
-   输入保真没有覆盖到这些采集语义（Run G 证明这些已可在实跑中达标，见 §3.7）。
-5. **默认 5M 的预算行为**：基线 5,006,041、Run C 5,015,857、Run E 5,001,592、标定 Run F（6M）
-   6,022,027 —— 都停在 cap 的 99–100%，说明模型会一直自查到预算耗尽；Run G 在加入收尾提示后
-   以 **4,810,599（96.2%）完成**（§3.7），所以这一项按“已缓解”记录，不再作为阻断。
+   “re-run with --await”。要修需要让后端 `evaluate` 把 remote object 的 `subtype` 带进结果。
+2. **F16 CLI 单测偶发顺序依赖失败**（环境 flake，单跑/复跑通过）。
+3. **数据语义缺口**：keywords 全空 / category 用品类名 / bullets 重复 / 乱码 —— 基线的问题，
+   Run G 证明新运行已可全部达标（§3.7）。
+4. **默认 5M 的预算行为**：基线 5,006,041、Run C 5,015,857、Run E 5,001,592、标定 Run F（6M）
+   6,022,027 —— 都停在 cap 的 99–100%；Run G 在加入收尾提示后以 **4,810,599（96.2%）完成**
+   （§3.7），按“已缓解”记录。
+
+> F14（30 s evaluate 上限的可执行报错）与 F12（`coding.shell` 禁止杀本后端）已在 §3.8 修完。
 
 ### 3.4 第一次 Run A 尝试（2026-10-29 02:06，F11 现场）
 
@@ -180,6 +179,33 @@ price 全部可解析、bullets 无重复、无乱码、task_time 在运行窗�
 Gate 判定因此从“不通过”更新为**通过**（证据与偏差说明见
 [`gate-report-agent-run-2026-10-29.md`](gate-report-agent-run-2026-10-29.md) §8c）。
 
+### 3.8 F14 / F12（2026-10-29 13:35–14:10）
+
+**F14 — 30 s evaluate 期限的可执行报错**（不放宽期限：它是 base 库/CDP 的硬约束）
+
+- CLI：`tips.rs` 新增 `is_evaluate_deadline`（`Runtime.evaluate` + `No response` 或 `PT30S`），
+  `failure_tip_for` 在解析 `[INTERNAL]` 之前命中，输出
+  `Tip: 'eval' hit the driver's 30s page-evaluate deadline … wait <ms> / wait --selector … --timeout … / wait --fn …`；
+- `b4.run`：`B4CliToolExecutor.looksLikeEvaluateDeadline` 追加同义 `[hint]`；
+- 单测：`tips::tests::test_failure_tip_evaluate_deadline_points_at_wait`、
+  `B4CliToolExecutorTest.the evaluate deadline hints at server-side waits, not a bigger timeout`；
+- 真实短跑（task `25bfd1d3`）：`eval --await` 35 s 脚本 → `[INTERNAL] browser_evaluate failed: No response | Runtime.evaluate | #1, (PT30S)` + 上述 Tip。
+
+**F12 — `coding.shell` 不允许杀本运行时**
+
+- `CodingAgentShell.processKillViolation`：`taskkill/tskill/pskill/kill/pkill/killall/Stop-Process`
+  命中“本后端 pid / `browser4*` 名称 / `java(w)` 进程”时拒绝，其他目标仍放行；
+- 单测：`CodingAgentShellWindowsBuiltinTest.processKillsOfTheRuntimeAreRefused`（own pid、`java.exe`、
+  `browser4-cli.exe`、`Stop-Process -Id`、`kill -9`，以及“非本运行时 pid 不因该理由被拒”）；
+- 真实短跑（task `7d253fcd`）：`coding.shell("taskkill /IM java.exe /F")` →
+  `PERMISSION_DENIED … 'taskkill' would terminate the Browser4 backend (pid 308628) …`。
+
+两组改动均重建 bundle（`build-13/14`），并在同一 bundle 上复跑 20 微波炉任务（Run H，见 gate-report §8d）。
+Run H 仍以 5,009,496（超 0.19%）abort，暴露了收尾提示**按轮检查太晚**（94.8% 才注入）的问题；
+`nextBudgetNudgePercent()` 随后移到 `AgentToolCallLoop.onBeforeIteration`（每次推理前检查，commit `3304a9fd55`），
+重建后 Run I（task `86719e3f`）以 **exit 0 / 4.11M（82%）/ 20×75 CSV** 通过（数据 10/11，价格 4 行缺失
+由香港收货地不可售解释，见 gate-report §8d）。
+
 ## 4. 行为变更速查
 
 | 变更 | 影响 |
@@ -191,6 +217,8 @@ Gate 判定因此从“不通过”更新为**通过**（证据与偏差说明�
 | 预算到 80%/95% 时注入“收尾”指令（`budgetPressureNudge`） | 模型在预算耗尽前把交付物放到 workspace 根目录、把缺口写进 `problems` 并 `taskComplete`，而不是被 abort（Gate Run G 以 96.2% 完成） |
 | `b4.run` 的命令经 PowerShell 编码脚本执行（Windows） | 引号/括号不再被吞；命令文本里的 `$`/反引号按字面传给 CLI，stdin 为 EOF（`eval --js` 立即报错而不是挂住） |
 | `agent run --resume <id>` 可省略任务文本 | 指令来自被中断任务的 checkpoint；普通调用仍需任务文本 |
+| `eval` 超过 30 s 的页面等待会带可执行提示 | 提示改用 `wait <ms>` / `wait --selector` / `wait --fn` 或短 eval 轮询；期限本身不可调 |
+| `coding.shell` 拒绝终止本后端/JVM 的命令 | 防止任务把自己杀掉；无关进程仍可终止 |
 | `eval` 的 `undefined` 输出提示行 | `--json` 仍为 `null`；文本消费者仍能看到 `null` |
 | `skillDoc("SKILL.md")` 默认返回索引 | 读取正文用 `offset=0` 或 topic 文档 |
 | `coding.listDir` 默认最多 50 条 | 需要全量时 `limit=0` |
