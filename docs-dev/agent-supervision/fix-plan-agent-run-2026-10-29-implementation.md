@@ -79,6 +79,7 @@ cargo check --manifest-path cli/browser4-cli/Cargo.toml --all-targets
 | F16 | `daemon::tests::test_expected_runtime_tag_prefers_local_bundle_in_checkout` 偶发顺序依赖失败（`Some("v4.14.0")` vs `Some("local")`），单跑/复跑通过 | 未修，先记录 | 全量复跑 1970 passed |
 | F13 | `b4.run` 的参数被 PowerShell 二次解析：Java 的 argv 引号被 `-Command` 的解析器剥掉，`eval "(async()=>1)()"`、`eval --json "(…)()"` 到 CLI 前已变成多个 token → `ParserError`（Gate 里最大的重试/预算浪费源） | 见 §3.5：`-EncodedCommand` + `[ScriptBlock]::Create`，命令文本 base64 传递并通过 `escapeForPowerShellScript` 抑制 `$`/反引号展开 | `quotedArgumentSurvivesTheShell`、`encodedScriptKeepsTheCommandVerbatim` 等 5 个单测；`f13-smoke2.log` 里 `eval --json "JSON.stringify(…)"` 返回 `[ok]` + JSON |
 | F13a | `eval --js "…"`（`--js` 是 `--stdin` 的布尔简写）在 `b4.run` 下读 stdin，而父进程从不关闭该管道 → 命令挂到 300 s 超时（11:43 冒烟现场） | 见 §3.5：`b4.run` 的 stdin 重定向到 `NUL` / `/dev/null`（对齐 pi 的 `stdio: ["ignore", …]`），读 stdin 的命令立即 EOF | `stdinIsClosedForArgvCommands`；`f13-smoke2.log` 第 4 条 1 s 内返回 `Stdin was empty`（exit 2） |
+| F17 | `agent run --resume <id>` 不带任务文本被 `ToolSpecValidator` 判为缺参（`command` 在 spec 里是必填），而失败提示恰好让用户这么跑 | `ToolSpec.Arg.requiredUnless`；`command.run` 的 `command` 声明 `requiredUnless = "resumeTaskId"` | `ToolSpecValidatorTest`（3 断言）；rest 137 tests；真实 `--resume ddb9c255 …` 拉起并续跑同一 workspace（`run-e-resume.log`） |
 
 ### 3.3 未修阻断项（下一轮按序处理）
 
@@ -90,9 +91,10 @@ cargo check --manifest-path cli/browser4-cli/Cargo.toml --all-targets
 3. **F12 `coding.shell` 可杀后端**：Gate 第一次 Run A 就是被模型 `taskkill /PID …` 杀掉后端而中断；
    `33be64` 只封了 `b4.run` 的生命周期命令。
 4. **数据语义缺口**：keywords 全空 / category 用品类名 / bullets 重复 / 乱码 —— P2-1 的字段规格与
-   输入保真没有覆盖到这些采集语义。
-5. **默认 5M 结构性不足**：基线（5,006,041）与本次（5,012,835）都在 5M 处 abort。按方案 §1.4
-   不得用 10M 掩盖；F13/F13a 修完后需用同一任务复测，再决定是否走“有证据地调整默认值”。
+   输入保真没有覆盖到这些采集语义（Run G 证明这些已可在实跑中达标，见 §3.7）。
+5. **默认 5M 的预算行为**：基线 5,006,041、Run C 5,015,857、Run E 5,001,592、标定 Run F（6M）
+   6,022,027 —— 都停在 cap 的 99–100%，说明模型会一直自查到预算耗尽；Run G 在加入收尾提示后
+   以 **4,810,599（96.2%）完成**（§3.7），所以这一项按“已缓解”记录，不再作为阻断。
 
 ### 3.4 第一次 Run A 尝试（2026-10-29 02:06，F11 现场）
 
@@ -133,6 +135,51 @@ CLI（与 POSIX 分支对 `$`/反引号的处理一致；旧形态是靠“引�
 `eval --json "JSON.stringify({…})"` → `[ok]` + JSON、`eval --await "(async()=>1)()"` → `1`、
 `eval --js "…"` → 1 s 内 `Stdin was empty`（exit 2，不再挂住）。
 
+### 3.6 F13 修复后复测（Run C / resume Run E，2026-10-29 12:00–12:45）
+
+| 运行 | 形态 | 结果 |
+|---|---|---|
+| **Run C** | 同任务、默认配置、`--follow`（task `ddb9c255`） | 1007.4 s / 210 请求 / **5,015,857** tokens（超 0.32%）→ abort；产出 `.b4scratch/amazon_microwave_top20.csv`（142,619 B，20×75） |
+| **Run E** | `agent run --resume ddb9c255`（无任务文本，验证 F17） | 685.7 s / **5,001,592** tokens（超 0.03%）→ abort；续跑同一 workspace，继续补列/自查 |
+
+Run C 的数据 Gate（`run-c-csv-gate.md`，捕获榜单取自本次 `.b4scratch/top20.json`）：
+
+- **10 PASS / 1 FAIL**：20 行 / 75 列、表头 == xlsx、20 唯一 ASIN、ASIN 集合 == 本次榜单、
+  keywords 20/20 非空、category=289935（品类 ID）、无乱码、task_time 在窗口内全部通过；
+  唯一失败是 `price` 有一行为空（`B0D2952125`）。
+- 对比基线（5 PASS / 5 FAIL）：keywords、category、bullets、编码四项从 FAIL 转 PASS；
+  ParserError 风暴消失（`eval --json "…"` 直接 `[ok]`）。完整对比见
+  [`gate-report-agent-run-2026-10-29.md`](gate-report-agent-run-2026-10-29.md) §8b。
+
+**结论**：F13/F13a/F17 之后，任务行为与数据都已达标（仅 1 个字段缺失），剩余差距是预算：
+三次独立运行（基线 5,006,041、Run C 5,015,857、Run E 5,001,592）都落在 5M 的 0.03%–0.32% 之内，
+且 CSV 在第 14 分钟即已完成、最后 1–2 分钟用于自查/补列。默认 5M 需要一次带
+`--token-budget` 的标定运行来决定是否上调（见 §3.7）。
+
+### 3.7 预算收尾提示 + Run G（默认 5M）—— Gate 通过
+
+**标定运行 Run F**（`--token-budget 6000000`）：1084.1 s / 230 请求 / 6,022,027 tokens → 仍在 cap 的
+100% 处 abort。加上 Run C（5M，5,015,857）与 Run E（resume，5,001,592）：**模型会一直自查到 cap**，
+提高上限只是把 abort 往后推，不会带来完成。这是“行为问题”，不是“数字问题”。
+
+**修复**：`budgetPressureNudge()`（`RobustBrowserAgent`）在预算达到 80% / 95% 时各注入一次
+user 轮指令：把交付物从 `.b4scratch` 移到 workspace 根目录、把页面确实没有的字段写进 `problems`、
+调用 `system.taskComplete` —— 诚实的部分结果优于无报告的 abort。与 `codingProgressNudge` 一样是
+确定性阈值（不是提示词许愿），`limit <= 0`（无预算）时静默；`BudgetPressureNudgeTest` 5 项覆盖。
+
+**Run G（默认 5M，无 `--token-budget`）**：task `386f25aa`，1391.8 s / 235 steps / **exit 0**、
+`status=done`、**4,810,599 tokens（96.2%）**；交付物 `amazon_microwave_bestsellers_top20.csv` 位于
+workspace 根目录（115,972 B，20×75），`filesChanged` 只含该文件；`cli-events.jsonl` 记录
+`budget.nudge {percent: 80, consumed: 4,537,968, limit: 5,000,000}`（按轮检查，注入时已 90.8%，
+之后约 27 万 token 内收尾）。
+
+**数据 Gate**：`run-g-csv-gate.md` **11/11 PASS** —— 20 行 / 75 列、表头与 xlsx 逐字一致、
+20 唯一 ASIN、ASIN 集合 == 本次捕获的 `bs20.txt`、keywords 20/20、category=3741631、
+price 全部可解析、bullets 无重复、无乱码、task_time 在运行窗口内。
+
+Gate 判定因此从“不通过”更新为**通过**（证据与偏差说明见
+[`gate-report-agent-run-2026-10-29.md`](gate-report-agent-run-2026-10-29.md) §8c）。
+
 ## 4. 行为变更速查
 
 | 变更 | 影响 |
@@ -141,6 +188,9 @@ CLI（与 POSIX 分支对 `$`/反引号的处理一致；旧形态是靠“引�
 | `agent result` 对 failed/cancelled 非零退出 | 流水线可区分成功/失败；需要旧行为时用 `--allow-failed` |
 | `b4.run` 失败不再伪装成功 | 模型会看到 `[fail]` + 原因，不再重复同一失败命令 |
 | 未 `--await` 的 Promise 报错（仅 agent 工具层；CLI `eval` 仍返回 `{}`，见 Gate F15） | 异步 eval 必须显式 `--await`；CLI 路径的提示尚未覆盖 |
+| 预算到 80%/95% 时注入“收尾”指令（`budgetPressureNudge`） | 模型在预算耗尽前把交付物放到 workspace 根目录、把缺口写进 `problems` 并 `taskComplete`，而不是被 abort（Gate Run G 以 96.2% 完成） |
+| `b4.run` 的命令经 PowerShell 编码脚本执行（Windows） | 引号/括号不再被吞；命令文本里的 `$`/反引号按字面传给 CLI，stdin 为 EOF（`eval --js` 立即报错而不是挂住） |
+| `agent run --resume <id>` 可省略任务文本 | 指令来自被中断任务的 checkpoint；普通调用仍需任务文本 |
 | `eval` 的 `undefined` 输出提示行 | `--json` 仍为 `null`；文本消费者仍能看到 `null` |
 | `skillDoc("SKILL.md")` 默认返回索引 | 读取正文用 `offset=0` 或 topic 文档 |
 | `coding.listDir` 默认最多 50 条 | 需要全量时 `limit=0` |
