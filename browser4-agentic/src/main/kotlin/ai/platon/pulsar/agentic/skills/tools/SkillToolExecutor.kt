@@ -10,6 +10,7 @@ import ai.platon.pulsar.agentic.skills.SkillRegistry
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationProvider
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.coding.AgentAccessPolicy
 import java.nio.file.Paths
 import kotlin.reflect.KClass
 
@@ -20,9 +21,15 @@ import kotlin.reflect.KClass
  *
  * Example tool call (after wiring the target):
  * `skill.run(id: String, params: Map<String, Any?> = emptyMap())`
+ *
+ * Every call is checked against the task's [AgentAccessPolicy] before dispatch: discovery and
+ * documentation are reads, while `run`/`runScript`/`install`/`uninstall` execute code or rewrite
+ * files outside the workspace and therefore require `access=full` — the same gate the shell has.
  */
 class SkillToolExecutor(
     private val registry: SkillRegistry = SkillRegistry.instance,
+    /** Read lazily so a per-task policy applies without rebuilding the executor. */
+    private val accessPolicy: () -> AgentAccessPolicy = { AgentAccessPolicy.serverDefault },
 ) : AbstractToolExecutor(), ToolCallSpecificationProvider {
     private val scriptTools = SkillScriptToolExecutor(registry)
 
@@ -123,6 +130,11 @@ class SkillToolExecutor(
     ): Any? {
         require(domain == this.domain) { "Unsupported domain: $domain" }
         require(receiver is SkillToolTarget) { "Target must be a SkillToolTarget" }
+
+        // Enforce the task's access preset for every entry point, including the script tools:
+        // running a skill executes its code, so a read-only or write-only task must be refused
+        // here rather than only by the CLI-engine's domain filter.
+        accessPolicy().denial(this.domain, functionName)?.let { throw it }
 
         // Get agentId from SkillToolTarget context if available
         val agentId = receiver.context.sessionId

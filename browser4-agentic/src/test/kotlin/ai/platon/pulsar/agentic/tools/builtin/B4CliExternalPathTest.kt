@@ -61,8 +61,43 @@ class B4CliExternalPathTest {
     }
 
     @Test
+    @DisplayName("htmlsnapshot --output-file outside the workspace is refused")
+    fun outputFileOutsideIsRefused(@TempDir tmp: Path) {
+        val refusal = externalPathRefusal(
+            """htmlsnapshot query --sql @query.sql --output-file "D:/secret/out.json"""",
+            tmp,
+            allowExternalAccess = false,
+        )
+
+        assertNotNull(refusal, "a write outside the workspace must be refused")
+        assertTrue(refusal!!.contains("PATH_OUTSIDE_WORKSPACE"), refusal)
+    }
+
+    @Test
+    @DisplayName("har stop --path outside the workspace is refused")
+    fun harPathOutsideIsRefused(@TempDir tmp: Path) {
+        val refusal = externalPathRefusal(
+            """har stop --path "C:/temp/trace.har"""", tmp, allowExternalAccess = false,
+        )
+
+        assertNotNull(refusal, "har stop writes the HAR to the given path")
+        assertTrue(refusal!!.contains("PATH_OUTSIDE_WORKSPACE"), refusal)
+    }
+
+    @Test
+    @DisplayName("--output-file inside the workspace is allowed, in both --key=value and -o forms")
+    fun outputFileInsideIsAllowed(@TempDir tmp: Path) {
+        val target = tmp.resolve("out.json").toString().replace('\\', '/')
+
+        assertNull(externalPathRefusal("""htmlsnapshot query --sql @query.sql --output-file=$target""", tmp, allowExternalAccess = false))
+        assertNull(externalPathRefusal("""htmlsnapshot query --sql @query.sql -o "$target"""", tmp, allowExternalAccess = false))
+        assertNull(externalPathRefusal("""htmlsnapshot query --sql @query.sql -o out.json""", tmp, allowExternalAccess = false))
+    }
+
+    @Test
     @DisplayName("nothing is refused when external access is enabled")
     fun externalAccessOptOut(@TempDir tmp: Path) {
         assertNull(externalPathRefusal("""goto "file:///D:/secret/notes.txt"""", tmp, allowExternalAccess = true))
+        assertNull(externalPathRefusal("""har stop --path "C:/temp/trace.har"""", tmp, allowExternalAccess = true))
     }
 }

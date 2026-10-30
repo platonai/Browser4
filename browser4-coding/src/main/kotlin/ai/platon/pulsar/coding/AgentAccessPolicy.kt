@@ -79,6 +79,10 @@ class ToolAccessDeniedException(
  * tool executors, so that the file-system layer, the shell layer, the tool registry filter and the
  * MCP direct-call path all agree on the same answer.
  *
+ * Only the built-in browsing domains are exempt from the presets; `coding` and `skill` are gated
+ * per method, and any other domain (plugins, future tools) requires [AccessPreset.FULL] so that a
+ * new surface cannot be reached by a restricted preset by default.
+ *
  * @property preset the overall access preset
  * @property allowExternalAccess when true, file tools may resolve paths outside the workspace
  * @property allowDestructive when false, `delete`/`copy`/`move` are refused; this is **not** a read-only switch
@@ -105,15 +109,21 @@ data class AgentAccessPolicy(
     val autoApproveUpTo: AccessPreset? = null,
 ) {
 
-    /** Whether `domain.method` may be called under this policy. */
+    /**
+     * Whether `domain.method` may be called under this policy.
+     *
+     * Only [UNGATED_DOMAINS] — the built-in browsing/tool surface — are exempt; every other
+     * domain is gated by [requiredPresetOf], and an unclassified domain or method requires
+     * [AccessPreset.FULL] so a newly added tool fails closed.
+     */
     fun allowsTool(domain: String, method: String): Boolean {
         if (isDenied(domain, method)) {
             return false
         }
-        if (domain != CODING_DOMAIN) {
+        if (domain in UNGATED_DOMAINS) {
             return true
         }
-        val required = requiredPresetOf(method)
+        val required = requiredPresetOf(domain, method)
         return presetAllows(required) || autoApproves(required)
     }
 
@@ -135,6 +145,19 @@ data class AgentAccessPolicy(
         in MUTATE_METHODS -> ToolGate.MUTATE
         in BUILD_METHODS -> ToolGate.BUILD
         in READ_METHODS -> ToolGate.READ
+        else -> null
+    }
+
+    /**
+     * Returns the gate for `domain.method`, or `null` when the domain is ungated or the method
+     * is not classified (which [requiredPresetOf] turns into [AccessPreset.FULL]).
+     *
+     * `coding` keeps its own matrix; `skill` distinguishes discovery/documentation from
+     * execution and installation; every other domain is fail-closed unless [UNGATED_DOMAINS].
+     */
+    fun gateOf(domain: String, method: String): ToolGate? = when (domain) {
+        CODING_DOMAIN -> gateOf(method)
+        SKILL_DOMAIN -> SKILL_METHOD_GATES[method]
         else -> null
     }
 
@@ -175,16 +198,24 @@ data class AgentAccessPolicy(
                 ),
             )
         }
-        if (domain != CODING_DOMAIN) return null
+        if (domain in UNGATED_DOMAINS) return null
 
-        val required = requiredPresetOf(method)
+        val required = requiredPresetOf(domain, method)
         if (presetAllows(required)) return null
         if (autoApproves(required)) {
             PermissionAudit.approved("$domain.$method", required, autoApproveUpTo!!)
             return null
         }
 
-        val hint = "re-run with access=full or access=write to enable it, let the task auto-approve it with " +
+        // Name only the presets that actually grant it: a skill or shell call needs `full`, so
+        // "access=write" would send the model down a dead end.
+        val widening = when (required) {
+            AccessPreset.READ -> "access=full, access=write, access=read-build or access=read"
+            AccessPreset.READ_BUILD -> "access=full, access=write or access=read-build"
+            AccessPreset.WRITE -> "access=full or access=write"
+            AccessPreset.FULL -> "access=full"
+        }
+        val hint = "re-run with $widening to enable it, let the task auto-approve it with " +
             "autoApprove=${required.id}, or continue with a tool this preset allows"
         return ToolAccessDeniedException(
             domain, method, preset,
@@ -228,12 +259,12 @@ data class AgentAccessPolicy(
     }
 
     /**
-     * The narrowest preset that grants `method`.
+     * The narrowest preset that grants `domain.method`.
      *
-     * Unclassified methods map to [AccessPreset.FULL] so a newly added tool fails closed — and
-     * therefore can never be reached by automatic approval either.
+     * Unclassified domains and methods map to [AccessPreset.FULL] so a newly added tool fails
+     * closed — and therefore can never be reached by automatic approval either.
      */
-    private fun requiredPresetOf(method: String): AccessPreset = when (gateOf(method)) {
+    private fun requiredPresetOf(domain: String, method: String): AccessPreset = when (gateOf(domain, method)) {
         ToolGate.READ -> AccessPreset.READ
         ToolGate.BUILD -> AccessPreset.READ_BUILD
         ToolGate.MUTATE -> AccessPreset.WRITE
@@ -283,6 +314,39 @@ data class AgentAccessPolicy(
         const val PROP_ALLOW_DESTRUCTIVE = "browser4.agent.allowDestructive"
 
         private const val CODING_DOMAIN = "coding"
+
+        private const val SKILL_DOMAIN = "skill"
+
+        /**
+         * Domains the presets never gate: the built-in browsing and agent surface.
+         *
+         * The presets exist to bound *workspace* power (files, shell, code execution) and the
+         * skill surface that can execute scripts; a browsing tool stays available under every
+         * preset, otherwise `agent run --access read` could not browse at all.
+         */
+        private val UNGATED_DOMAINS = setOf(
+            "tab", "browser", "agent", "b4", "system", "memory", "batch", "driverEx", "experience",
+        )
+
+        /**
+         * `skill.*` methods by gate.
+         *
+         * Listing, inspecting, activation and documentation are reads; running, including a skill's
+         * own scripts, and installing/uninstalling/reloading skills all execute or rewrite files
+         * outside the workspace, so they require [AccessPreset.FULL] like the shell does.
+         */
+        private val SKILL_METHOD_GATES: Map<String, ToolGate> = mapOf(
+            "list" to ToolGate.READ,
+            "info" to ToolGate.READ,
+            "activate" to ToolGate.READ,
+            "readDocumentation" to ToolGate.READ,
+            "readReference" to ToolGate.READ,
+            "run" to ToolGate.EXEC,
+            "runScript" to ToolGate.EXEC,
+            "install" to ToolGate.EXEC,
+            "uninstall" to ToolGate.EXEC,
+            "reload" to ToolGate.EXEC,
+        )
 
         /** `coding.*` methods whose only effect is to read data or metadata. */
         private val READ_METHODS = setOf(

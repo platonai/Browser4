@@ -106,11 +106,18 @@ guarded now:
   Toolchain locations (`java.home`, `~/.m2`, `~/.gradle`, temp, `%SystemRoot%`), build
   launchers (`mvnw`, `python3`, any `*.exe`/`*.cmd`/`*.ps1`) and credential locations keep
   their existing behaviour. Disable with `-Dbrowser4.agent.shell.workspaceBoundary=off`.
-- `b4.run` refuses `file://` URLs and `upload` paths outside the workspace with
-  `code=PATH_OUTSIDE_WORKSPACE`.
+- `b4.run` refuses `file://` URLs, `upload` paths and CLI **write destinations** outside
+  the workspace — `--output-file`, crawl `--out`, `har stop --path` and the `-o` alias all
+  make the CLI write straight to disk — with `code=PATH_OUTSIDE_WORKSPACE`.
+- `b4.run` also refuses `code`, `tool call` and `plugin` while the task runs narrowed
+  (`read`, `read-build`, `write`): those commands hand the request to the CLI subprocess,
+  which carries no preset, so the backend would answer with its own server-wide policy.
+  Under `full` they stay available; the refusal is `code=COMMAND_NOT_ALLOWED` naming the
+  preset.
 
-Both are relaxed by `browser4.agent.allowExternalAccess=true` — that is the operator's
-explicit opt-in, not something a task can grant itself.
+The path rules above are relaxed by `browser4.agent.allowExternalAccess=true` — that is
+the operator's explicit opt-in, not something a task can grant itself. The `code` / `tool
+call` / `plugin` rule is driven by the preset instead: only `access=full` allows them.
 
 ### Deliverable format
 
@@ -137,7 +144,9 @@ browser4-cli agent run "Read browser4-tests/pulsar-tests-common/src/test/resourc
 ```
 
 The agent's user message then carries `spec.csv → .b4inputs/spec.csv`, and its first
-`coding.read` targets the copy. Nothing else becomes readable.
+`coding.read` targets the copy. Nothing else becomes readable. The import runs under
+every `--access` preset, `read` included — `.b4inputs/` is the task's input sandbox, not
+the user's files.
 
 ### Confirm where the artifacts landed
 

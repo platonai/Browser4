@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.PermissionAudit
@@ -179,6 +180,10 @@ class B4CliToolExecutor(
                 // D5: `stop` and friends end the backend this task runs in. A live run used
                 // `stop` to "fix" a browser failure and killed itself (2026-10-28).
                 b4CliLifecycleRefusal(cliArgs)?.let { return it }
+                // P3: `code` / `tool call` / `plugin` drive the backend over HTTP from the CLI
+                // subprocess, which carries no preset — the backend answers with its own
+                // server-wide policy. Under a narrowed preset those routes escape the task.
+                policyRefusal(cliArgs)?.let { return it }
                 val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
                 // The cwd must be the workspace the coding tools are writing into, not a
                 // directory captured when this executor was built: the task runner rebinds
@@ -324,6 +329,12 @@ class B4CliToolExecutor(
         val policy = runCatching { accessPolicy() }.getOrNull() ?: AgentAccessPolicy.serverDefault
         return externalPathRefusal(cliArgs, workspace, policy.allowExternalAccess)
     }
+
+    /** Refuse direct-MCP commands while the task preset is narrowed (P3). */
+    private fun policyRefusal(cliArgs: String): String? {
+        val policy = runCatching { accessPolicy() }.getOrNull() ?: AgentAccessPolicy.serverDefault
+        return b4CliPolicyRefusal(cliArgs, policy)
+    }
 }
 
 /**
@@ -468,6 +479,11 @@ internal fun jobStateFailure(method: String, id: String, state: String, text: St
  * `browser4.agent.allowExternalAccess=true` the operator opted in and nothing is refused.
  *
  * Relative paths (resolved in the workspace) and paths inside it are always allowed.
+ *
+ * Write destinations count as well: `htmlsnapshot query --output-file`, crawl
+ * `--output-file`, `har stop --path` and the `-o` short alias are written straight to
+ * disk by the CLI, so a browsing-only task must not be able to drop a file outside the
+ * workspace just because the `b4` domain is ungated.
  */
 internal fun externalPathRefusal(args: String, workspace: Path?, allowExternalAccess: Boolean): String? {
     if (allowExternalAccess) return null
@@ -476,6 +492,10 @@ internal fun externalPathRefusal(args: String, workspace: Path?, allowExternalAc
     val candidates = buildList {
         FILE_URL.findAll(args).forEach { match -> add(match.groupValues[1]) }
         UPLOAD_ARG.findAll(args).forEach { match ->
+            val value = match.groupValues.drop(1).firstOrNull { it.isNotBlank() } ?: return@forEach
+            add(value)
+        }
+        WRITE_PATH_ARG.findAll(args).forEach { match ->
             val value = match.groupValues.drop(1).firstOrNull { it.isNotBlank() } ?: return@forEach
             add(value)
         }
@@ -490,8 +510,9 @@ internal fun externalPathRefusal(args: String, workspace: Path?, allowExternalAc
             tool = "b4.run",
             code = PermissionAudit.CODE_PATH_OUTSIDE_WORKSPACE,
             detail = "'$raw' is outside the workspace",
-            hint = "copy the input into the workspace (task inputs are copied to .b4inputs/), " +
-                "or start the backend with -Dbrowser4.agent.allowExternalAccess=true",
+            hint = "use a path inside the workspace (relative paths resolve there, and task inputs " +
+                "are copied to .b4inputs/), or start the backend with " +
+                "-Dbrowser4.agent.allowExternalAccess=true",
         )
     }
     return null
@@ -507,10 +528,70 @@ internal fun externalPathRefusal(args: String, workspace: Path?, allowExternalAc
  */
 private val B4_LIFECYCLE_COMMANDS = setOf(
     "stop", "close-all", "kill-all", "install", "uninstall", "upgrade", "delete-data",
+    // Skill management deploys files outside the workspace and registers executable skills, so a
+    // run may not rewrite its own skill surface mid-task (`b4.run("skill install --path …")`).
+    "skill-install", "skill-uninstall", "skill-reload",
 )
+
+/** `skill <verb>` is the spaced form of the `skill-<verb>` commands blocked above. */
+private val B4_SKILL_MUTATING_VERBS = setOf("install", "uninstall", "reload")
+
+/**
+ * MCP tools that deploy, remove or reload a skill. They are reachable through the CLI's
+ * generic `tool call` passthrough, which the `skill <verb>` guard above does not cover
+ * (`b4.run("tool call skill_install --json '{...}'")` starts with `tool`).
+ */
+private val B4_OPERATOR_MCP_TOOLS = setOf("skill_install", "skill_uninstall", "skill_reload")
+
+/**
+ * Commands that leave the CLI and enter the backend over HTTP: `code` (coding tools on the
+ * server workspace), `tool call` (any MCP tool) and `plugin` (plugin domains). The subprocess
+ * carries no access preset, so the backend answers with its own server-wide policy — under a
+ * narrowed task preset these routes would silently escape it.
+ */
+private val B4_DIRECT_MCP_COMMANDS = setOf("code", "tool", "tool-call", "plugin")
 
 /** Global CLI flags that consume the next token, so it is not mistaken for the subcommand. */
 private val B4_GLOBAL_FLAGS_WITH_VALUE = setOf("-s", "--session", "--server", "--timeout")
+
+/** `tool call` flags that consume the next token, so the tool name is not mistaken for a flag. */
+private val B4_TOOL_CALL_VALUE_FLAGS = setOf("--json")
+
+/** The subcommand of a `b4.run` argument string, plus the tokens that follow it. */
+private data class B4Invocation(val command: String, val rest: List<String>)
+
+private fun parseB4Invocation(args: String): B4Invocation? {
+    val words = args.trim().split(Regex("""\s+""")).filter { it.isNotEmpty() }
+    var i = 0
+    // Global flags (e.g. `-s work1`) precede the subcommand; skip them and their values.
+    while (i < words.size && words[i].startsWith("-")) {
+        if (words[i] in B4_GLOBAL_FLAGS_WITH_VALUE) i++
+        i++
+    }
+    val command = words.getOrNull(i)?.trim('"', '\'')?.lowercase() ?: return null
+    return B4Invocation(command, words.drop(i + 1).map { it.trim('"', '\'') })
+}
+
+/** Positional tokens after the subcommand, skipping flags and the values they consume. */
+private fun positionals(rest: List<String>, valueFlags: Set<String>): List<String> {
+    val out = mutableListOf<String>()
+    var i = 0
+    while (i < rest.size) {
+        val token = rest[i]
+        if (token.startsWith("-")) {
+            if (token in valueFlags) i++
+            i++
+            continue
+        }
+        out += token
+        i++
+    }
+    return out
+}
+
+/** `skill.install`, `skill-install` and `skill_install` all name the same MCP tool. */
+private fun normalizeMcpToolName(raw: String?): String? =
+    raw?.lowercase()?.replace('.', '_')?.replace('-', '_')
 
 /**
  * Refuse `b4.run` invocations that would stop the backend running this agent task.
@@ -521,28 +602,42 @@ private val B4_GLOBAL_FLAGS_WITH_VALUE = setOf("-s", "--session", "--server", "-
  * reported as `server restarted`, and the real cause — its own `stop` — was lost.
  * Installation/state rewrites (`install`, `uninstall`, `upgrade`, `delete-data`,
  * `close-all`, `kill-all`, `doctor --fix`) are blocked for the same reason: an agent run
- * may not rewrite the runtime it is executing from.
+ * may not rewrite the runtime it is executing from. Skill management (`skill install`,
+ * `skill uninstall`, `skill reload`, in both spaced and kebab form, and the same tools
+ * reached through `tool call`) is blocked as well: it deploys files outside the workspace
+ * and registers executable skills.
  *
  * @param args the raw `b4.run(args=...)` string, as forwarded to the CLI
  * @return a structured `PERMISSION_DENIED` refusal, or null when the command is allowed
  */
 internal fun b4CliLifecycleRefusal(args: String): String? {
-    val words = args.trim().split(Regex("""\s+""")).filter { it.isNotEmpty() }
-    var i = 0
-    // Global flags (e.g. `-s work1`) precede the subcommand; skip them and their values.
-    while (i < words.size && words[i].startsWith("-")) {
-        if (words[i] in B4_GLOBAL_FLAGS_WITH_VALUE) i++
-        i++
-    }
-    val command = words.getOrNull(i)?.trim('"', '\'')?.lowercase() ?: return null
-    val rest = words.drop(i + 1).map { it.trim('"', '\'') }
+    val invocation = parseB4Invocation(args) ?: return null
+    val command = invocation.command
+    val rest = invocation.rest
     // `--help` is read-only: a task may ask what a lifecycle command does before reporting
     // it as a blocker.
     if (rest.any { it.equals("--help", ignoreCase = true) || it == "-h" }) return null
     val mutatingDoctor = command == "doctor" && rest.any { it.equals("--fix", ignoreCase = true) }
-    if (command !in B4_LIFECYCLE_COMMANDS && !mutatingDoctor) return null
+    // `skill install|uninstall|reload` is the spaced form the CLI accepts; block it like the
+    // kebab command so a spaced invocation cannot slip past the lifecycle list.
+    val mutatingSkill = command == "skill" && rest.firstOrNull()?.lowercase() in B4_SKILL_MUTATING_VERBS
+    // `tool call <name>` is the spaced form of `tool-call <name>`; both reach every MCP tool.
+    val toolCallArgs = positionals(rest, B4_TOOL_CALL_VALUE_FLAGS)
+    val mcpTool = when {
+        command == "tool" && toolCallArgs.firstOrNull()?.equals("call", ignoreCase = true) == true ->
+            toolCallArgs.getOrNull(1)
+        command == "tool-call" -> toolCallArgs.firstOrNull()
+        else -> null
+    }
+    val operatorTool = normalizeMcpToolName(mcpTool) in B4_OPERATOR_MCP_TOOLS
+    if (command !in B4_LIFECYCLE_COMMANDS && !mutatingDoctor && !mutatingSkill && !operatorTool) return null
 
-    val blocked = if (mutatingDoctor) "doctor --fix" else command
+    val blocked = when {
+        mutatingDoctor -> "doctor --fix"
+        mutatingSkill -> "skill ${rest.first().lowercase()}"
+        operatorTool -> "tool call ${mcpTool?.lowercase()}"
+        else -> command
+    }
     return PermissionAudit.format(
         tool = "b4.run",
         code = PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
@@ -550,6 +645,33 @@ internal fun b4CliLifecycleRefusal(args: String): String? {
             "executing this task",
         hint = "run lifecycle/installation commands outside the task (before or after it), and " +
             "report the blocker in system.taskComplete(problems=[...]) instead",
+    )
+}
+
+/**
+ * Refuse `b4.run` commands that re-enter the backend without the task's access preset.
+ *
+ * Why: `code`, `tool call` and `plugin` are executed by the CLI subprocess, which is started
+ * with the task workspace but **no preset**. The backend therefore applies its own
+ * server-wide policy, so under e.g. `access=read` a task could still write files or run
+ * plugin tools through `b4.run("code write …")` — the preset would be silently escaped.
+ * Full access keeps the old behaviour: there the server policy and the task policy agree.
+ *
+ * @param args the raw `b4.run(args=...)` string, as forwarded to the CLI
+ * @param policy the policy in force for the current task
+ * @return a structured `PERMISSION_DENIED` refusal, or null when the command is allowed
+ */
+internal fun b4CliPolicyRefusal(args: String, policy: AgentAccessPolicy): String? {
+    if (policy.preset == AccessPreset.FULL) return null
+    val command = parseB4Invocation(args)?.command ?: return null
+    if (command !in B4_DIRECT_MCP_COMMANDS) return null
+    return PermissionAudit.format(
+        tool = "b4.run",
+        code = PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+        detail = "'$command' bypasses the task access preset '${policy.preset.id}': the CLI " +
+            "subprocess carries no preset, so the backend would apply its own server-wide policy",
+        hint = "use the gated tools instead (coding.* stays available within the task workspace " +
+            "under this preset), or re-run the task with access=full",
     )
 }
 
@@ -572,3 +694,13 @@ private val FILE_URL = Regex("""file:(?:/{1,3})?([^"'\s]+)""", RegexOption.IGNOR
 
 /** `upload <ref> <path>` — the path is either quoted or a bare token. */
 private val UPLOAD_ARG = Regex("""\bupload\s+\S+\s+(?:"([^"]+)"|'([^']+)'|(\S+))""", RegexOption.IGNORE_CASE)
+
+/**
+ * Write destinations the CLI writes straight to disk:
+ * `--output-file <path>`, `--output-file=<path>`, crawl `--out`, `har stop --path <path>`
+ * and the `-o` short alias (`htmlsnapshot query -o out.json`).
+ */
+private val WRITE_PATH_ARG = Regex(
+    """(?:^|\s)(?:--output-file|--out|--path|-o)[\s=]+(?:"([^"]+)"|'([^']+)'|(\S+))""",
+    RegexOption.IGNORE_CASE,
+)

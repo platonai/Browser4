@@ -80,4 +80,29 @@ class B4CliLifecycleGuardTest {
         assertNull(refusal("stop --help"))
         assertNull(refusal("doctor --fix -h"))
     }
+
+    @Test
+    @DisplayName("skill install/uninstall/reload are refused in both spaced and kebab form")
+    fun skillManagementIsRefused() {
+        // `skill install --path <dir>` deploys files outside the workspace and registers
+        // executable skills, so it is a lifecycle rewrite like `install`.
+        assertNotNull(refusal("skill install --path /tmp/skills"))
+        assertNotNull(refusal("skill uninstall my-skill"))
+        assertNotNull(refusal("skill reload"))
+        assertNotNull(refusal("skill-install --path /tmp/skills"))
+        assertNotNull(refusal("SKILL INSTALL --path /tmp/skills"))
+        // The generic MCP passthrough reaches the same deployment tools: `tool call` starts
+        // with `tool`, so the `skill <verb>` guard alone would miss it.
+        assertNotNull(refusal("tool call skill_install --json '{\"path\":\"/opt/skills\"}'"))
+        assertNotNull(refusal("tool call --json '{\"id\":\"x\"}' skill_uninstall"))
+        assertNotNull(refusal("tool-call skill.reload --json '{\"id\":\"x\"}'"))
+
+        // Read-only tool calls stay available (the deployment names are what is blocked).
+        assertNull(refusal("tool call htmlsnapshot_get --json '{}'"))
+
+        // Read-only skill discovery stays available, including its own help.
+        assertNull(refusal("skill list"))
+        assertNull(refusal("skill info my-skill"))
+        assertNull(refusal("skill install --help"))
+    }
 }

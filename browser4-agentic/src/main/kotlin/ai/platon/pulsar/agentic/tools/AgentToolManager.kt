@@ -106,7 +106,7 @@ class AgentToolManager constructor(
         )
     }
     val skillTarget: SkillToolTarget by lazy { SkillToolTarget(skillContext, SkillRegistry.instance) }
-    val skills: SkillToolExecutor = SkillToolExecutor()
+    val skills: SkillToolExecutor = SkillToolExecutor(accessPolicy = { accessPolicy })
 
     /**
      * Domain alias are mainly used for backward capability

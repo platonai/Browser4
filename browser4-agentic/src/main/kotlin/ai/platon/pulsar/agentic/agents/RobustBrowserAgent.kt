@@ -71,8 +71,27 @@ private const val CLI_TOOL_PROGRESS_EVENT_INTERVAL = 5
 private const val CLI_STEERING_PREFIX =
     "[User steering — the user sent this while the task is running. Apply it from now on; " +
         "it overrides the earlier plan.]"
-/** Explicit tool domains exposed to the CLI engine (design v0.2 §4.4; memory §7.1). */
-private val CLI_ENGINE_DOMAINS = setOf("coding", "b4", "system", "memory")
+/**
+ * Explicit tool domains exposed to the CLI engine (design v0.2 §4.4; memory §7.1).
+ *
+ * `skill` is included so a task can discover and use installed skills: `skill.list`,
+ * `skill.activate` and the documentation methods are reads, while `skill.run` needs
+ * `access=full` (see [AgentAccessPolicy]) — without the domain in this list the
+ * registered skills were unreachable from a browsing run.
+ */
+private val CLI_ENGINE_DOMAINS = setOf("coding", "b4", "system", "memory", "skill")
+
+/**
+ * Domain methods kept out of the CLI engine even when the preset would grant them.
+ *
+ * Skill deployment is an operator action: `skill.install` deploys files from an arbitrary
+ * server-side directory and registers executable code. `b4.run` refuses the same commands
+ * (`B4_LIFECYCLE_COMMANDS`), so the task loop must not reach them either.
+ */
+private val CLI_ENGINE_EXCLUDED_METHODS = mapOf("skill" to setOf("install", "uninstall", "reload"))
+
+/** Warnings are once per JVM: the resident quick reference is rebuilt on every round. */
+private val quickStartWarningLogged = java.util.concurrent.atomic.AtomicBoolean(false)
 
 /** Whole domains kept in the CLI engine's INITIAL tool set. */
 private val CLI_CORE_DOMAINS = setOf("b4", "system", "memory")
@@ -225,6 +244,7 @@ internal fun buildCliEngineToolSet(
     val cliDomainSpecs = (
         allRegistry.values
             .filter { it.domain in CLI_ENGINE_DOMAINS && it.domain != "system" }
+            .filter { CLI_ENGINE_EXCLUDED_METHODS[it.domain]?.contains(it.method) != true }
             .filter { policy.allowsTool(it.domain, it.method) } +
             systemSpecs
         )
@@ -1386,6 +1406,10 @@ open class RobustBrowserAgent(
      * `glob`/`file://`/`dir /s` hunting for a fixture the run was never allowed to
      * read). Materializing the reference keeps the boundary and makes the task doable.
      *
+     * This runs under every access preset: `.b4inputs/` is the platform's input sandbox,
+     * so a `read` task still receives the files it names (and can only read them — the
+     * model's own writes are refused by the read-only coding tools).
+     *
      * Disabled with `-Dbrowser4.agent.copyTaskInputs=false`. Failures are logged and
      * never block the run: the model still sees the original instruction.
      *
@@ -1400,6 +1424,9 @@ open class RobustBrowserAgent(
         if (!enabled) return instruction
 
         return runCatching {
+            // The import runs under every preset, `read` included: `.b4inputs/` is the
+            // platform's input sandbox. Skipping it made a read-only task that names an
+            // input file impossible — the model got PATH_DENIED and no explanation.
             val searchRoots = buildList {
                 runCatching { CodingWorkspace.workspaceRoot }.getOrNull()?.let { add(it) }
                 runCatching { Path.of(System.getProperty("user.dir")) }.getOrNull()?.let { add(it) }
@@ -2252,10 +2279,18 @@ open class RobustBrowserAgent(
             append("\n\n### CLI Quick Reference (resident)\n\n")
             // Resident distilled skill: guaranteed present in every request (even
             // after compression), while the full SKILL.md stays on-demand.
-            append(
-                agentToolManager.system.skillDocStrict("quickstart.md")
-                    ?: agentToolManager.system.skillDocMetadata("SKILL.md")
-            )
+            val quickStart = agentToolManager.system.skillDocStrict("quickstart.md")
+            if (quickStart == null) {
+                // Degrading to the frontmatter-only SKILL.md must not be silent: the resident
+                // reference is then a few lines, and every browsing run loses its quick start.
+                if (quickStartWarningLogged.compareAndSet(false, true)) {
+                    logger.warn(
+                        "Bundled skill doc 'references/quickstart.md' is missing from the classpath; " +
+                            "the resident CLI quick reference degrades to the SKILL.md frontmatter only"
+                    )
+                }
+            }
+            append(quickStart ?: agentToolManager.system.skillDocMetadata("SKILL.md"))
             append(
                 """
 

@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agent.tool
 
 import ai.platon.pulsar.boot.skill.SkillService
+import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
@@ -27,6 +28,11 @@ import kotlin.reflect.KClass
  */
 class SkillMCPToolExecutor(
     private val skillService: SkillService,
+    /**
+     * The policy in force when an MCP tool call is dispatched. MCP calls carry no per-task
+     * preset, so this mirrors the server-wide policy the standalone coding target already uses.
+     */
+    private val accessPolicy: () -> AgentAccessPolicy = { AgentAccessPolicy.serverDefault },
 ) : AbstractToolExecutor() {
 
     override val domain: String = "skill"
@@ -110,6 +116,9 @@ class SkillMCPToolExecutor(
         domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
     ): Any? {
         require(domain == this.domain) { "Unsupported domain: $domain" }
+        // Management methods rewrite the global skill registry, which every running task
+        // shares. Gate them exactly as the agent loop does, instead of trusting the caller.
+        accessPolicy().denial(domain, functionName)?.let { throw it }
 
         return when (functionName) {
             "list" -> skillService.listSkills()

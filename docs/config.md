@@ -555,7 +555,9 @@ docker run -d -p 18182:18182 `
   Limits: regular files only; at most 20 files, 10 MB each, 25 MB total; credential locations
   (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.browser4`) are never copied; a path already
   readable from the workspace (including the coding mirror) is left alone; references that do not
-  resolve are ignored. Set `false` to keep the instruction exactly as the user wrote it.
+  resolve are ignored. The import runs under every access preset (`read` included): `.b4inputs/`
+  is the task's input sandbox, not the user's files. Set `false` to keep the instruction exactly
+  as the user wrote it.
 
   ```bash
   BROWSER4_SERVER_OPTS="-Dbrowser4.agent.copyTaskInputs=false" browser4-cli open

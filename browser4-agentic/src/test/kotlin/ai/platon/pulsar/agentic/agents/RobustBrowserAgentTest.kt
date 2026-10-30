@@ -128,6 +128,57 @@ class RobustBrowserAgentTest {
         assertTrue(toolSet.registry.containsKey("coding_read"))
     }
 
+    /** Mirrors the skill-domain registrations: reads, execution and deployment. */
+    private val skillRegistry = ToolSpecificationConverter.toRegistry(
+        listOf(
+            spec("skill", "list"), spec("skill", "activate"),
+            spec("skill", "readDocumentation"), spec("skill", "readReference"),
+            spec("skill", "run"), spec("skill", "install"),
+            spec("skill", "uninstall"), spec("skill", "reload"),
+        )
+    )
+
+    private fun skillToolSet(preset: AccessPreset) = buildCliEngineToolSet(
+        skillRegistry, systemSpecs, "core",
+        disclosureEnabled = true, codingMode = false, policy = AgentAccessPolicy(preset = preset),
+    )
+
+    @Test
+    @DisplayName("the skill domain reaches the CLI engine, so installed skills are discoverable")
+    fun skillDomainIsExposedToTheCliEngine() {
+        val toolSet = skillToolSet(AccessPreset.FULL)
+        val registry = toolSet.registry.keys
+        assertTrue(registry.contains("skill_list"), "skill.list must resolve")
+        assertTrue(registry.contains("skill_activate"))
+        assertTrue(registry.contains("skill_readDocumentation"))
+        assertTrue(registry.contains("skill_run"), "full access can execute a skill")
+        // Progressive disclosure: not in the initial set, but reachable through the pool.
+        assertFalse(names(toolSet.initialSpecs).contains("skill_list"), "skill tools stay out of the core set")
+        assertTrue(names(toolSet.disclosureSpecs).contains("skill_list"))
+    }
+
+    @Test
+    @DisplayName("a read-only task can discover skills but cannot execute them")
+    fun readPresetKeepsSkillReadsOnly() {
+        val toolSet = skillToolSet(AccessPreset.READ)
+        assertTrue(toolSet.registry.containsKey("skill_list"))
+        assertTrue(toolSet.registry.containsKey("skill_readReference"))
+        assertFalse(toolSet.registry.containsKey("skill_run"), "skill.run executes code, so it needs access=full")
+        assertFalse(names(toolSet.disclosureSpecs).contains("skill_run"), "exposeTools must not revive it")
+        assertFalse(names(toolSet.specs).contains("skill_run"))
+    }
+
+    @Test
+    @DisplayName("skill deployment methods never reach the CLI engine, whatever the preset")
+    fun skillDeploymentStaysOutOfEveryPreset() {
+        AccessPreset.entries.forEach { preset ->
+            val exposed = skillToolSet(preset).registry.keys
+            listOf("skill_install", "skill_uninstall", "skill_reload").forEach { blocked ->
+                assertFalse(exposed.contains(blocked), "$blocked must stay out under $preset")
+            }
+        }
+    }
+
     @Test
     @DisplayName("CLI engine without disclosure exposes the full CLI-domain set")
     fun cliEngineDisclosureDisabledExposesFullSet() {

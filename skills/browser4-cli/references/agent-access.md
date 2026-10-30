@@ -46,6 +46,26 @@ browser4-cli agent run "Fix the failing test" --coding --access read-build --aut
 An unknown `--access` value is rejected with an error instead of silently falling back — a
 typo must not quietly grant `full`.
 
+### Which tool domains the presets gate
+
+The presets bound **workspace power**, so they gate the domains that can write, execute or
+deploy:
+
+| Surface | Gate |
+|---|---|
+| `coding.*` | per method: reads → `read`; build → `read-build`; writes → `write`; shell/exec → `full` |
+| `skill.list` / `skill.info` / `skill.activate` / `skill.readDocumentation` / `skill.readReference` | `read` |
+| `skill.run` / `skill.runScript` | `full` (a skill executes its own code) |
+| `skill.install` / `skill.uninstall` / `skill.reload` | never exposed to `agent run`: deploying a skill is an operator action, and `b4.run` refuses the same commands |
+| `tab` / `browser` / `agent` / `b4` / `system` / `memory` / `batch` / `driverEx` / `experience` | never gated — browsing has to work under every preset |
+| any other domain (plugins, future tools) | `full` until it is classified — a new surface fails closed |
+
+Only `--allow-external-access` is about paths. The import of a file named in the task
+prompt (`.b4inputs/`) runs under **every** preset, `read` included: `.b4inputs/` is the
+platform's input sandbox, not the user's files or project. `read` still means "no changes
+to user files or the project" — the copies are task-scoped inputs the model can only read,
+and a read-only task that could not receive its inputs would simply fail.
+
 ### Refusal codes
 
 A denied call fails like any other failed step (the task still ends whatever its own

@@ -52,6 +52,11 @@ data class MaterializedInputs(
  * copied; a path already readable from the workspace (including the coding mirror) is
  * left alone; a reference that does not resolve is ignored — the model still learns
  * about it when the read fails.
+ *
+ * The import runs under **every** access preset, `read` included: `.b4inputs/` is the
+ * platform's read-only-for-the-model sandbox, not the user's files. A read-only task that
+ * cannot receive its inputs would simply fail, and the copy mutates nothing the preset
+ * protects.
  */
 object TaskInputs {
     /** Workspace-relative directory that receives the copied inputs. */

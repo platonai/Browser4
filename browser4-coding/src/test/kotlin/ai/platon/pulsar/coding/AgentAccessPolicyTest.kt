@@ -257,4 +257,69 @@ class AgentAccessPolicyTest {
             server.withTaskOverrides(null, AccessPreset.FULL).preset
         )
     }
+
+    @Test
+    @DisplayName("skill discovery and documentation are reads; running, deploying and reloading skills need full")
+    fun testSkillDomainIsGatedPerMethod() {
+        val read = policy(AccessPreset.READ)
+        assertTrue(read.allowsTool("skill", "list"))
+        assertTrue(read.allowsTool("skill", "info"), "info only inspects a skill, so it is a read")
+        assertTrue(read.allowsTool("skill", "activate"))
+        assertTrue(read.allowsTool("skill", "readDocumentation"))
+        assertTrue(read.allowsTool("skill", "readReference"))
+        assertFalse(read.allowsTool("skill", "run"))
+        assertFalse(read.allowsTool("skill", "runScript"))
+        assertFalse(read.allowsTool("skill", "install"))
+        assertFalse(read.allowsTool("skill", "uninstall"))
+        assertFalse(read.allowsTool("skill", "reload"), "reload re-reads files outside the workspace")
+
+        val full = policy(AccessPreset.FULL)
+        assertTrue(full.allowsTool("skill", "run"))
+        assertTrue(full.allowsTool("skill", "install"))
+        assertTrue(full.allowsTool("skill", "reload"))
+    }
+
+    @Test
+    @DisplayName("a skill method missing from the matrix fails closed even under full-less presets")
+    fun testUnclassifiedSkillMethodFailsClosed() {
+        assertTrue(policy(AccessPreset.FULL).allowsTool("skill", "unclassified"))
+        assertFalse(policy(AccessPreset.WRITE).allowsTool("skill", "unclassified"))
+        assertFalse(policy(AccessPreset.READ).allowsTool("skill", "unclassified"))
+    }
+
+    @Test
+    @DisplayName("an unknown domain requires full until it is classified")
+    fun testUnknownDomainRequiresFull() {
+        assertTrue(policy(AccessPreset.FULL).allowsTool("plugin.foo", "run"))
+        assertFalse(policy(AccessPreset.WRITE).allowsTool("plugin.foo", "run"))
+        assertFalse(policy(AccessPreset.READ).allowsTool("plugin.foo", "run"))
+    }
+
+    @Test
+    @DisplayName("the built-in browsing domains stay available under every preset")
+    fun testBrowsingDomainsAreUngated() {
+        for (preset in AccessPreset.values()) {
+            val p = policy(preset)
+            assertTrue(p.allowsTool("tab", "navigate"), "tab is ungated under ${preset.id}")
+            assertTrue(p.allowsTool("browser", "snapshot"), "browser is ungated under ${preset.id}")
+            assertTrue(p.allowsTool("b4", "run"), "b4 is ungated under ${preset.id}")
+            assertTrue(p.allowsTool("system", "taskComplete"), "system is ungated under ${preset.id}")
+        }
+        // An explicit denial still wins over the exemption.
+        assertFalse(AgentAccessPolicy(denyTools = setOf("b4.run")).allowsTool("b4", "run"))
+    }
+
+    @Test
+    @DisplayName("denial refuses skill execution under read and explains the preset to widen")
+    fun testDenialRefusesSkillExecutionUnderRead() {
+        val read = policy(AccessPreset.READ)
+        assertNull(read.denial("skill", "list"))
+        val denied = read.denial("skill", "run")
+        assertNotNull(denied)
+        val message = denied!!.message.orEmpty()
+        assertTrue(message.contains("access preset 'read'"), message)
+        assertTrue(message.contains("autoApprove=full"), message)
+
+        assertNull(policy(AccessPreset.FULL).denial("skill", "run"))
+    }
 }

@@ -375,6 +375,26 @@ cargo test --test e2e -- --scenario='test_e2e_agent_run_permissions_*'
    FULL 下 `shell == buildShell`（单实例，与改造前逐字节一致）。
 5. **per-task 只接线了 `access`**：`allowExternalAccess` / `allowDestructive` 仍由 JVM 属性投影
    （`base.copy(preset = …)` 保留旧属性值），未新增 CLI 选项，避免与本轮范围混在一起。
+6. **`skill` 域进入 CLI 引擎工具集**，读方法按 `read`、`run`/`runScript` 按 `full`；
+   方法清单由 `AgentAccessPolicy.gateOf(domain, method)` 判定，未分类方法 fail closed。
+   部署方法 `install`/`uninstall`/`reload` 由 `CLI_ENGINE_EXCLUDED_METHODS` 在**所有**档位下
+   直接在构造 registry 前剔除（`b4.run` 也拒绝同一批命令），`exposeTools` 无法复活。
+7. **`b4.run` 的写路径**：`externalPathRefusal` 除 `file://` 与 `upload` 外，还扫描
+   `--output-file` / `--out` / `-o` / `har stop --path`，这些位置 CLI 直接写盘，
+   工作区外同样报 `PATH_OUTSIDE_WORKSPACE`。
+8. **`b4.run` 的 preset 越界（P3）**：`code` / `tool call` / `plugin` 由 CLI 子进程回打后端，
+   子进程不带 preset（`CliProcessSpec.sessionId` 仅用于并发信号量），请求只能落到服务级策略。
+   因此非 `full` 档位下 `b4CliPolicyRefusal` 在派发前拒绝这三类命令（`COMMAND_NOT_ALLOWED`）；
+   同时 `b4CliLifecycleRefusal` 覆盖 `tool call skill_install|skill_uninstall|skill_reload`
+   （spaced / kebab / `skill.` 点号写法），堵住 `skill <verb>` 黑名单的旁路。
+9. **MCP 直调的 skill 管理（P5）**：`SkillMCPToolExecutor` 增加 `accessPolicy` 供体，在
+   `callFunctionOn` 入口 `denial("skill", method)`；`SKILL_METHOD_GATES` 补齐 `info → READ`、
+   `reload → EXEC`。MCP 请求没有 per-task preset，因此这里与 E5 一样取服务级策略。
+10. **`.b4inputs/` 在所有档位物化（P4）**：`TaskInputs.materialize` 去掉 `allowCopy` 参数，
+    `RobustBrowserAgent.materializeTaskInputs` 无条件复制；`read` 档不再跳过导入。
+    依据：`.b4inputs/` 是平台的任务输入沙箱，不是用户文件/工程；`read` 的承诺是"不改用户文件
+    与工程"，只读任务拿不到自己点名的输入文件只会直接失败，而复制不触碰该承诺保护的任何东西
+    （模型自身的读取与写入仍受只读 coding 工具约束）。文档措辞同步改为"输入物化在所有档位执行"。
 
 ### 11.3 测试
 
@@ -384,6 +404,13 @@ cargo test --test e2e -- --scenario='test_e2e_agent_run_permissions_*'
 - `CodingAccessEnforcementTest`（每个 preset 的端到端拒绝、`read-build` 双 shell 拆分、
   `protect` 只读形态可用而写形态被拒、`denyTools` 在 FULL 下生效）
 - `RobustBrowserAgentTest.deniedCodingMethodStaysOutOfEveryView`（E4：registry/初始/披露三视图均无被禁方法）
+- `RobustBrowserAgentTest` 的 skill 三例（域可见/read 下只能读/部署方法任意档位不可见）
+- `B4CliExternalPathTest`（`file://`、`upload` 与 `--output-file`/`-o`/`har stop --path` 的写路径越界）
+- `B4CliPolicyGuardTest`（`full` 放行 `code`/`tool call`/`plugin`，`read`/`read-build`/`write` 拒绝且点名 preset）
+- `B4CliLifecycleGuardTest.skillManagementIsRefused`（`tool call skill_install` 等 passthrough 旁路）
+- `SkillMCPToolExecutorPolicyTest`（MCP 直调在 `read` 档拒绝 install/uninstall/reload，`list` 仍可用）
+- `TaskInputsTest`（任务输入在任意档位物化：仓库相对/绝对路径复制、同名去重、上限、敏感路径不复制；
+  不再有"`read` 下跳过"的用例）
 - CLI 单测：`build_agent_run_extra_forwards_only_a_non_blank_access_preset`
 
 ### 11.4 M6 覆盖情况
