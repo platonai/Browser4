@@ -25,20 +25,13 @@ Agent commands require an LLM API key, which must be visible to the **Browser4 b
 export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-> The key must reach the backend server process, not just your CLI shell. Run `browser4-cli doctor` to confirm whether "✓ LLM is configured" on the backend.
->
-> `doctor` also prints the configuration file it reads (`Config file: …`), and
-> `browser4-cli doctor --fix` writes a commented template there
-> (`~/.browser4/config/conf-enabled/application-private.properties`) — uncomment one provider
-> block, add the key, then restart the backend. The template never overwrites an existing file.
->
-> ⚠️ Configure **exactly one** provider. When several provider keys are present only one is
-> used — the first in Browser4's provider order (declared in
-> `browser4-core/browser4-resources/src/main/resources/config/llm/providers.json`), where a
-> leftover `deepseek` key wins over `openai` and `openai` wins over `groq`. `doctor` prints
-> which key won (`Selected key`) and the model the backend will request (`Active model`); if
-> they are not yours, remove the other key or add `llm.provider.deny.list=deepseek`. See
-> [LLM configuration](../../../docs/config.md#which-provider-is-used).
+> The key must reach the backend server process, not just your CLI shell: `browser4-cli doctor`
+> confirms "✓ LLM is configured", and `doctor --fix` writes a commented template
+> (`~/.browser4/config/conf-enabled/application-private.properties`) without touching an existing
+> file. Configure **exactly one** provider — leftover keys compete in Browser4's provider order
+> (`deepseek` wins over `openai`, which wins over `groq`); `doctor` names the winner
+> (`Selected key`) and the model (`Active model`), and `llm.provider.deny.list=deepseek` excludes
+> one. See [LLM configuration](../../../docs/config.md#which-provider-is-used).
 
 If no valid LLM key is configured, `agent run` fails fast with a clear error.
 
@@ -61,35 +54,27 @@ Use **agent** for natural-language tasks where you describe what you want withou
 
 ### Where the agent browses, and where it writes
 
-The agent runs **on the backend**, driving the session's own browser through the
-session's bound driver — it is not a second browser you can attach to. `agent run`
-targets the CLI's current session: `-s <name>` when given, otherwise the unnamed
-slot — including a browser attached through `attach --extension` / `attach --cdp` —
-and the `swarm create` session when that is the only one recorded. A task submitted
-with no session at all (for example `--coding`) still runs without a browser, as
-before. This matters because the task never gets a browser of its own: if the
-current session is an attached one, the agent drives *that* browser.
+The agent runs **on the backend**, driving the current session's own browser through
+its bound driver — never a second browser you can attach to. `agent run` targets the
+CLI's session: `-s <name>` when given, else the unnamed slot (including a browser
+attached via `attach --extension` / `attach --cdp`), or the sole recorded
+`swarm create` session; `--coding` tasks run with no browser at all.
 
-The browser is launched **lazily**: submitting a task opens no browser at all. It
-starts on the first tool call that actually needs a page, so a task that drives an
-attached browser through `b4.run` (for example
-`b4.run("attach --extension msedge")` followed by `b4.run("goto …")`) opens **no
-additional browser** — only the one you attached. An attached session whose browser
+The browser is launched **lazily**: submitting a task opens nothing, and it starts on
+the first tool call that needs a page — so a task driving an attached browser through
+`b4.run("goto …")` opens **no additional browser**. An attached session whose browser
 is not connected never falls back to a fresh Chrome; the page tool fails with a
-re-attach instruction instead.
+re-attach instruction.
 
 Two consequences matter in practice:
 
-- **Its navigation is not visible in your session's tab list.** The backend saves
-  the URL you were on before the task and navigates back to it when the task ends,
-  so `tab-list`, `page-info` and `snapshot` keep showing your own page and the
-  agent's intermediate pages never appear there. Observe its work through
-  `agent status` (step count and message) and through the artifacts it reports.
-- **Its deliverables are files, not always fields.** When a task says "extract X",
-  the agent usually writes the data into a file under its own per-task **workspace**
-  and returns a short summary. `agent result` names that directory (`workspace`) and
-  lists the files the agent reported (`filesChanged`), so the deliverable is
-  reachable without searching the backend's app-data tree by hand:
+- **Its navigation is not visible in your session's tab list.** The backend restores
+  the URL you were on when the task ends, so `tab-list`, `page-info` and `snapshot`
+  keep showing your own page and the agent's pages never appear there. Observe the
+  work through `agent status` (step count and message) and its artifacts.
+- **Its deliverables are files, not always fields.** "Extract X" usually writes the
+  data into the task's own **workspace**; `agent result` names it (`workspace`) and
+  lists the files the agent reported (`filesChanged`):
 
 ```bash
 browser4-cli agent result <task-id>
@@ -101,17 +86,14 @@ browser4-cli agent result <task-id>
 # Task workspace: C:\Users\me\.browser4\...\agent\2026\10\15\<uuid>\workspace
 ```
 
-The workspace lives on the machine that runs the backend — when the backend is
-remote, copy the artifacts from there (or have the agent return the data inline).
-Each task gets its **own** workspace directory (`<agent data dir>/workspace.<task-id>`),
-so artifacts of two tasks never collide: a file another run wrote is never in this
-run's workspace, never in its `filesChanged`, and never mistaken for this run's
-deliverable. `--resume <task-id>` keeps the interrupted task's workspace (that is the
-point of resuming); `--shared-workspace` restores the old shared
-`<agent data dir>/workspace` for callers that really want to see earlier files.
-`--fresh-workspace` is accepted but is now the default behaviour. What the agent may
-read (and what stays refused), how task inputs are copied in, and the deliverable
-format are documented in [agent-workspace.md](agent-workspace.md).
+The workspace lives on the machine that runs the backend (copy the artifacts from
+there when it is remote). Each task gets its **own** directory
+(`<agent data dir>/workspace.<task-id>`), so another run's file is never in this run's
+`filesChanged`; `--resume <task-id>` keeps the interrupted task's workspace (the point
+of resuming), `--shared-workspace` restores the old shared
+`<agent data dir>/workspace`, and `--fresh-workspace` is the default behaviour
+already. Input copying, the read rules and the deliverable format are in
+[agent-workspace.md](agent-workspace.md).
 
 ### Cost control (`--token-budget`, `--follow` usage lines)
 
@@ -127,7 +109,6 @@ A run is capped at `agent.token.budget.total` (5M tokens by default) and aborts 
 
 ```text
 [04:31] tokens 412.0k / 5.00M (8%) · 37 requests
-...
 [12:02] tokens 4.02M / 5.00M (80%) · 118 requests ⚠ 80% of the token budget used
 [15:24] ✖ token budget exhausted: 5.01M / 5.00M — the run is being aborted
 ```
@@ -158,22 +139,14 @@ browser4-cli agent result <task-id>
 
 ### 2. Wait for Completion (Optional)
 
-`agent run --wait` blocks until the task reaches a terminal state, then prints
-the final result. The wait window defaults to 600 seconds — long enough for
-simple tasks, but browsing agents routinely exceed it. Tune it per invocation
-with `--wait-timeout` (seconds) or globally via the
-`BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS` environment variable:
+`agent run --wait` blocks until the task reaches a terminal state, then prints the
+result. The window defaults to 600s — browsing agents routinely exceed it — and is
+tuned per invocation with `--wait-timeout` (seconds) or globally with
+`BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS`. When it expires the CLI exits non-zero but the
+task keeps running server-side and stays tracked locally, so pick it up later:
 
 ```bash
-# Block up to 30 minutes
 browser4-cli agent run "Find a STEM toy for a 10-year-old girl on amazon.com" --wait --wait-timeout=1800
-```
-
-When the wait window expires, the CLI exits non-zero but the task keeps running
-server-side. The task is still tracked locally, so `agent list` and
-`agent status <task-id>` can pick it up later:
-
-```bash
 browser4-cli agent list          # the timed-out task stays listed as processing
 browser4-cli agent status <task-id>
 browser4-cli agent result <task-id>
@@ -235,10 +208,9 @@ The payload is the agent's **completion report**, not just a summary:
            "problems":[],"workspace":"…/agent/2026/10/15/<uuid>/workspace"}}
 ```
 
-`result.summary` is what the agent reported; `keyFindings` and `filesChanged`
-carry the deliverable itself, and `workspace` is the directory its tools wrote
-into. Human output prints the findings, the changed files and the workspace path
-below the raw JSON, so a task whose answer is a file is usable without
+`result.summary` is what the agent reported; `keyFindings` and `filesChanged` carry the
+deliverable itself, and `workspace` is the directory its tools wrote into. Human output
+prints all three below the raw JSON, so a task whose answer is a file is usable without
 filesystem archaeology.
 
 ### 5. Composing with Standard Commands
@@ -339,8 +311,7 @@ Task submitted: 3b27930e-48bc-4460-aae7-be521f0a9194
 > read `b4.run("doctor log …")` / take stock of the real error and report the
 > blocker through `system.taskComplete(problems=[...])`.
 
-`--ndjson` turns the same stream into machine output — every stdout line is one
-JSON object, with no human prose:
+`--ndjson` turns the same stream into machine output — one JSON object per stdout line:
 
 ```bash
 browser4-cli agent run "Collect the top 5 products" --follow --ndjson | jq -c 'select(.type=="tool.call")'
@@ -355,13 +326,13 @@ browser4-cli agent run "Collect the top 5 products" --follow --ndjson | jq -c 's
 ```
 
 `run.usage` is one line per model request, carrying the provider's token counts
-(`inputTokens`/`outputTokens`/`totalTokens`, omitted when the provider reports
-none) — the same numbers `/stats` sums.
+(`inputTokens`/`outputTokens`/`totalTokens`, omitted when the provider reports none) —
+the same numbers `/stats` sums.
 
-The visible detail is deliberately bounded: tool arguments and results are
-truncated to ~240 characters, and values whose key names a credential
-(`password`, `token`, `apiKey`, …) are redacted to `***`. Typed text is redacted
-when its selector names a credential field (`input[type=password]`).
+The visible detail is deliberately bounded: tool arguments and results are truncated to
+~240 characters, and values whose key names a credential (`password`, `token`,
+`apiKey`, …) are redacted to `***`, as is typed text whose selector names a credential
+field (`input[type=password]`).
 
 ### `agent run -i`: the interactive session
 
@@ -442,13 +413,10 @@ agent> /stats
   the backend's bounded step log evicted older steps (the counters still include
   them).
 
-The numbers come from `GET /api/commands/{id}/stats`, which counts every step as
-it is appended — they stay exact even for steps the step log no longer retains.
-`/stats <task-id>` reports another task of this session. Against a backend
-without that endpoint the report is labelled `counted by this session` and can
-only undercount: it holds the steps this session actually saw.
-
-The counters are reported by the CLI engine, the only engine.
+The numbers come from `GET /api/commands/{id}/stats`, which counts every step as it is
+appended — exact even for steps the step log no longer retains. `/stats <task-id>`
+reports another task of this session; against a backend without that endpoint the report
+is labelled `counted by this session` and can only undercount.
 
 An optional task runs immediately: `agent run -i "Summarize this page"`.
 With piped stdin the banner and prompt are omitted, so a harness can drive the
@@ -456,40 +424,31 @@ session: `printf 'task one\n/quit\n' | browser4-cli agent run -i`.
 
 ### Backend requirements and compatibility
 
-Live steps come from `GET /api/commands/{id}/events` (a per-task in-memory step
-log polled with a sequence cursor), and steering from
-`POST /api/commands/{id}/input`. Both are served by a current backend.
-
-Against an **older backend** the CLI degrades instead of failing:
-
-- `--follow` prints one notice and falls back to status polling — the same
-  progress lines `--wait` shows, then the result;
-- `-i` reports that the backend cannot accept steering input and ignores the
-  typed line (the task keeps running).
-
-The `queued`/`running`/`done`/`failed`/`cancelled` vocabulary and the result
-payload are identical in every mode.
+Live steps use `GET /api/commands/{id}/events` (a per-task in-memory step log polled
+with a sequence cursor) and steering uses `POST /api/commands/{id}/input` — both on a
+current backend. Against an **older backend** the CLI degrades instead of failing:
+`--follow` prints one notice and falls back to status polling, and `-i` reports that
+steering is unavailable and ignores the typed line (the task keeps running). The
+`queued`/`running`/`done`/`failed`/`cancelled` vocabulary and the result payload are
+identical in every mode.
 
 ### When the step stream fails
 
-The live view is a convenience over a task that keeps running server-side, so the
-CLI never lets a *display* problem end it:
+The live view is a convenience over a task that keeps running server-side, so the CLI
+never lets a *display* problem end it:
 
-- **A page the CLI cannot parse** (a proxy error page, a truncated response, one
-  step whose preview is not representable as strict JSON) is not retried
-  unchanged — that could never succeed. The follower narrows the page until the
-  offending step stands alone, then steps over it and prints
-  `… skipped 1 unreadable step (up to seq N)`. One preview line is lost, not the
+- **A page the CLI cannot parse** (a proxy error page, a truncated response, a preview
+  that is not strict JSON) is not retried unchanged — that could never succeed. The
+  follower narrows the page until the offending step stands alone, steps over it, and
+  prints `… skipped 1 unreadable step (up to seq N)`: one preview line is lost, not the
   stream.
-- **`-i` keeps following a running task.** If the follower exhausts its window
-  (e.g. the backend restarted), the session prints `⚠ …` and then continues to
-  follow the task as long as the backend still reports it as `running` — the
-  steps resume when the backend answers. The follower is dropped only when the
-  task is finished or the backend no longer knows the id; `/status` and `/result`
-  keep answering from what the session already saw.
-- **`--follow` gives up after ~5 min** without a usable response and exits
-  non-zero, naming the task id: a one-shot command must terminate, and
-  `agent status <id>` reports the task's real state.
+- **`-i` keeps following a running task.** If the follower exhausts its window (e.g.
+  the backend restarted), the session warns and keeps following while the backend
+  still reports the task as `running` — the steps resume when it answers. It gives up
+  only when the task finished or the id is unknown; `/status` and `/result` keep
+  answering from what the session already saw.
+- **`--follow` gives up after ~5 min** without a usable response, exits non-zero and
+  names the task id; `agent status <id>` reports the task's real state.
 
 ## Flags
 
@@ -510,18 +469,17 @@ CLI never lets a *display* problem end it:
 
 ### Coding tasks (--coding)
 
-Browser is the product's primary mode, so an agent task is a **browser task by
-default** — the CLI does not guess whether the task text "looks like" coding.
-Pass `--coding` only when the task is pure file/build work (read/write files,
-run Maven, scaffold a module) and needs no page:
+Browser is the product's primary mode, so an agent task is a **browser task by default**
+— the CLI does not guess whether the task text "looks like" coding. Pass `--coding` only
+for pure file/build work (read/write files, run Maven, scaffold a module) needing no page:
 
 ```bash
 browser4-cli agent run "Read pom.xml, fix the failing module build" --coding
 ```
 
-Coding runs skip the driver health check, search-engine navigation and
-screenshots, and the agent starts with the coding tool core; any task
-containing a URL or page interaction stays a browser task regardless.
+Coding runs skip the driver health check, search-engine navigation and screenshots, and
+start with the coding tool core; any task containing a URL or page interaction stays a
+browser task regardless.
 
 ## Errors & Recovery
 
