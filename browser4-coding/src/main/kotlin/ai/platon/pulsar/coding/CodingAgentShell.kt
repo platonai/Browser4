@@ -785,6 +785,17 @@ class CodingAgentShell(
     private val CMD_CONTROL_KEYWORDS = setOf("if", "for")
 
     /**
+     * Directory-creation builtins, always allowed (the workspace boundary still applies).
+     *
+     * `mkdir`/`md` are cmd.exe builtins, so on Windows there is no `mkdir.exe` for the PATH
+     * fallback to find and the command was refused with the generic "not allowed". It is
+     * ordinary workspace work — `coding.mkdir` does exactly this, and the CLI's own docs
+     * recommend `mkdir -p ./downloads` — so a live run lost a round to the refusal for no
+     * security gain (2026-10-29 Amazon supervision run).
+     */
+    private val CREATE_DIR_COMMANDS = setOf("mkdir", "md")
+
+    /**
      * Validate a whole command line, not just its first token.
      *
      * A shell command is a *pipeline* of simple commands: `&&`, `||`, `;`, `|`,
@@ -1239,6 +1250,12 @@ class CodingAgentShell(
             return "'set' is only allowed with no arguments or with NAME=value assignments " +
                 "(e.g. `set PYTHONIOENCODING=utf-8`)"
         }
+
+        // `mkdir`/`md`: creating a directory inside the workspace is ordinary work (the file
+        // tools offer `coding.mkdir` for it), and the path boundary below still applies to
+        // the argument. Guarded before the category checks because the Windows builtin has no
+        // PATH entry and would otherwise fall through to the generic refusal.
+        if (baseCommand in CREATE_DIR_COMMANDS) return null
 
         // Category checks use the normalized name, so platform launcher
         // suffixes resolve to their tool: `mvnw.cmd` → `mvnw`, `python3.exe` →

@@ -115,6 +115,13 @@ private val CLI_CORE_CODING_METHODS = setOf(
  * function-calling provider cannot call an undeclared tool, and the run paid a
  * `system.listTools` round for a tool its own prompt had named.
  *
+ * `readLines` joined the list after the next Amazon top-20 run (2026-10-29):
+ * a field spec is a text/table file the model must read in bounded ranges, and
+ * without `readLines` the only way to see bytes 900..2400 of an extracted spec
+ * was `coding_shell` + python/`head -c` slicing — that run spent its first 16
+ * tool calls (≈200k tokens) writing `dump.py`, `dump2.py`, `dump3.py` and
+ * `f_mid.txt` just to learn 68 field names.
+ *
  * The rest of the coding long tail — shellOutput/shellStatus, mvnBuild, validate,
  * devTask, editLines/insertAfter, symbols, kt-symbols, scaffold family, impact,
  * ... — stays hidden and is reachable via system.listTools / system.exposeTools
@@ -122,7 +129,7 @@ private val CLI_CORE_CODING_METHODS = setOf(
  */
 private val CLI_BROWSING_CODING_METHODS = setOf(
     "shell",
-    "read", "write", "append", "replace",
+    "read", "readLines", "write", "append", "replace",
     "listDir", "glob", "grep",
     "stat", "mkdir", "delete",
     "diff", "changeSummary", "workspaceRoot",
@@ -295,6 +302,54 @@ internal fun progressDigestFromSummary(summary: String?, maxLines: Int = 20, max
         .take(maxLines)
         .joinToString("\n")
         .take(maxChars)
+}
+
+/**
+ * Continuation prompt handed back to the model after an internal tool-loop overflow.
+ *
+ * The [modelError] carries a bounded digest of the executed tools and their newest
+ * results, so the model resumes from the cut point instead of re-executing the whole
+ * round (the overflowed loop's own message list is discarded by
+ * [ai.platon.pulsar.agentic.inference.chat.AgentToolCallLoop.generate]).
+ *
+ * [roundLogPath] is the workspace-relative file the caller wrote with the round's
+ * COMPLETE tool log. Two things are lost without it, and both were measured on the
+ * 2026-10-29 Amazon top-20 run: data the model had only read off a page (a 30-item
+ * ASIN list) and state it had only defined in page JavaScript (`window.__ASINS`).
+ * The model then re-derived both across two more rounds (~2.5M tokens) instead of
+ * resuming. With the log on disk it can `coding.readLines` its own round back.
+ */
+internal fun overflowContinuationMessage(
+    modelError: String,
+    progress: String,
+    roundLogPath: String? = null,
+): String = buildString {
+    append(
+        "Your previous tool round was cut short after exceeding the per-round " +
+            "iteration cap. The tools that already executed and the newest results " +
+            "are summarized below. Continue the task FROM THIS POINT — do not " +
+            "re-execute tools that already succeeded unless you need their full output.\n\n"
+    )
+    append(modelError)
+    append("\n\n## Progress so far (do not start over)\n")
+    append(progress)
+    if (roundLogPath != null) {
+        append(
+            "\n\nThe COMPLETE log of the cut round (every tool call with its full result) is saved at " +
+                "`$roundLogPath`. Re-read the part you need with " +
+                "`coding.readLines(path=\"$roundLogPath\", startLine=…, endLine=…)` — never by " +
+                "re-running the tools that produced it."
+        )
+    }
+    append(
+        "\n\nState that lived only in the conversation or in page JavaScript is GONE: " +
+            "`window.__x` helpers defined by `eval`, and lists you only printed. " +
+            "If the task collects items, write them to `.b4scratch/` (one row per item) " +
+            "BEFORE the next round ends, and keep `.b4scratch/progress.txt` updated so a " +
+            "cut always leaves the collected work on disk. Re-read " +
+            "`.b4scratch/progress.txt` (when it exists) to see which items are done, and " +
+            "append the missing rows instead of rewriting the data file."
+    )
 }
 
 /**
@@ -1249,7 +1304,10 @@ open class RobustBrowserAgent(
                     // resumes from the cut point instead.
                     overflow -> {
                         cliLoopTracer.logEvent("overflow", mapOf("modelError" to response.modelError!!))
-                        messages + UserMessage.from(overflowContinuationMessage(response.modelError!!, progressDigest()))
+                        val roundLogPath = dumpRoundLog(roundToolRecords, turn)
+                        messages + UserMessage.from(
+                            overflowContinuationMessage(response.modelError!!, progressDigest(), roundLogPath)
+                        )
                     }
                     // Blank model text: keep the nudge-only append (a blank
                     // AiMessage risks provider "content required" rejections;
@@ -1699,26 +1757,30 @@ open class RobustBrowserAgent(
     }
 
     /**
-     * Continuation prompt handed back to the model after an internal tool-loop
-     * overflow: the [modelError] carries a bounded digest of the executed tools
-     * and their newest results, so the model resumes from the cut point instead
-     * of re-executing the whole round (the overflowed loop's own message list
-     * is discarded by [AgentToolCallLoop.generate]).
+     * Persist the round's complete tool log under `.b4scratch/` for the overflow
+     * continuation, and return its workspace-relative path (null when there is
+     * nothing to save or the write failed).
+     *
+     * Written with plain `Files` on purpose: this is engine bookkeeping, not a
+     * deliverable, so it must NOT enter the coding mutation trace (it would then
+     * be required in `filesChanged` and rejected by the finish gate).
      */
-    private fun overflowContinuationMessage(modelError: String, progress: String): String = buildString {
-        append(
-            "Your previous tool round was cut short after exceeding the per-round " +
-                "iteration cap. The tools that already executed and the newest results " +
-                "are summarized below. Continue the task FROM THIS POINT — do not " +
-                "re-execute tools that already succeeded unless you need their full output.\n\n"
-        )
-        append(modelError)
-        append("\n\n## Progress so far (do not start over)\n")
-        append(progress)
-        append(
-            "\nIf a data file is incomplete, append the missing rows instead of rewriting it; " +
-                "re-read `.b4scratch/progress.txt` (when it exists) to see which items are done."
-        )
+    private fun dumpRoundLog(records: List<RoundToolRecord>, turn: Int): String? {
+        if (records.isEmpty()) return null
+        val rel = ".b4scratch/round-$turn.log"
+        val root = runCatching { agentToolManager.codingFs.workspaceRoot }.getOrNull() ?: return null
+        return runCatching {
+            val target = root.resolve(rel)
+            Files.createDirectories(target.parent)
+            val text = buildString {
+                records.forEachIndexed { i, record ->
+                    append("===== #").append(i + 1).append(' ').append(record.name).append(" =====\n")
+                    append(record.resultText).append("\n\n")
+                }
+            }
+            Files.writeString(target, text)
+            rel
+        }.getOrNull()
     }
 
     /**

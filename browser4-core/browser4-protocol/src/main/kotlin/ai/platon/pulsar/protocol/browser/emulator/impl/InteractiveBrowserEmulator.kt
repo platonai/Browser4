@@ -394,17 +394,28 @@ open class InteractiveBrowserEmulator(
         val page = navigateTask.page
 
         try {
+            val captureMode = (page as? AbstractWebPage)?.hasVar(VAR_CAPTURE) == true
             response = browseWithWebDriver(navigateTask, driver)
 
             emit1(EmulateEvents.willStopTab, page, driver)
 
-            if (!settings.isSPA) {
+            // A capture is a READ of the tab the caller is looking at: its contract
+            // (see HTMLSnapshotToolExecutor) is that it "never navigates: it serializes the
+            // document the tab already shows".  `driver.stop()` is a resource release — it
+            // unloads the document and leaves the tab on about:blank — so calling it after a
+            // capture moves the page out from under the caller: every `htmlsnapshot get` /
+            // `htmlsnapshot` blanked the live tab, and the next read then failed with
+            // "the active tab shows <about:blank>" (observed: an agent run had to re-`goto`
+            // the same url after each read).  A navigation may release the tab; a capture
+            // must leave it exactly as it was.
+            if (!settings.isSPA && !captureMode) {
                 /**
                  * Force the page stop all navigations and releases all resources.
                  * If a web driver is terminated, it should not be used any more and should be quit
                  * as soon as possible.
                  * */
                 driver.stop()
+                logger.debug("Tab resources released after navigation | {}", page.url)
             }
 
             emit1(EmulateEvents.tabStopped, page, driver)

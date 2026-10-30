@@ -83,10 +83,13 @@ class CliEngineToolSetTest {
         assertTrue("coding_changeSummary" in names, "initial set: $names")
         assertTrue("coding_diff" in names, "initial set: $names")
         assertTrue("coding_workspaceRoot" in names, "initial set: $names")
+        // `readLines` is a browsing tool too: a field spec or a page dump is read in
+        // bounded ranges, and the 2026-10-29 Amazon run had to slice bytes with
+        // `coding.shell` + `head -c` because only the bounded `coding.read` existed.
+        assertTrue("coding_readLines" in names, "bounded reads of a data file: $names")
         // The heavy coding-only tools stay behind system.exposeTools.
         assertFalse("coding_verify" in names, "initial set: $names")
         assertFalse("coding_mvnBuild" in names, "initial set: $names")
-        assertFalse("coding_readLines" in names, "initial set: $names")
         // The background-shell bookkeeping tools stay hidden too: browsing needs one-shot
         // shell calls, not the session family.
         assertFalse("coding_shellStatus" in names, "initial set: $names")

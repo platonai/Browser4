@@ -442,7 +442,9 @@ class HTMLSnapshotToolExecutor(
         val archivable = address?.takeIf { isArchivableAddress(it) }
         require(archivable != null) {
             "Nothing to $action: the active tab shows <${address ?: "no page"}>. Navigate to an http(s) " +
-                "or file:// page first — about:blank and browser error pages have no snapshot."
+                "or file:// page first — about:blank and browser error pages have no snapshot. " +
+                "If you were already on such a page, the tab lost its document: re-navigate it with " +
+                "`goto <url>` (a navigation is cheap and restores the tab), then retry."
         }
         return archivable
     }

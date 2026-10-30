@@ -22,8 +22,11 @@ been written to disk between rounds.
 browser4-cli crawl --seed-file .b4scratch/urls.txt --depth 0 \
   --sql @.b4scratch/x-asin.sql --format csv -o .b4scratch/rows.csv
 
-# 2. Pin the locale on the page before trusting titles/prices.
-browser4-cli -s shop goto "https://www.amazon.com/dp/B0DY95T5HB"   # pin the locale in the PROFILE, not a site-specific query parameter
+# 2. Pin the locale by OPERATING THE PAGE (pick language/currency in the site's own UI)
+browser4-cli -s shop open --headless "https://www.amazon.com/"   # land on the storefront
+browser4-cli -s shop snapshot -v 0 --stdout                      # find the language/currency control
+browser4-cli -s shop click <ref>                                 # open the picker, choose English / USD
+browser4-cli -s shop snapshot -v 0                               # confirm the page is now in en-US / USD
 
 # 3. Verify the row count before handing the CSV over (coding.shell / any shell).
 python -c "import csv;print(sum(1 for _ in csv.reader(open('.b4scratch/rows.csv',encoding='utf-8'))))"
@@ -47,23 +50,32 @@ cut off, only a short digest of the newest results survives into the next round:
 conversation-level plan and any data that was never written to disk are gone. So a bulk
 task must write each row as soon as it has it, and keep a progress list of collected ids.
 
-### Locale and currency are page-level
+### Locale and currency: drive the site's own picker
 
-Marketplaces localize by host/IP and `Accept-Language`. The backend sends no
-`Accept-Language` of its own, so `amazon.com` can answer with Chinese titles and HKD
-prices for a US-oriented task. The fix belongs on the page — a header override, a cookie,
-or the `?language=` URL parameter — and must be verified on one known product before the
-batch runs. Post-processing localized values (currency conversion, title translation) is
-not extraction and produces a silently wrong dataset.
+Marketplaces localize by host/IP, profile and account, so `amazon.com` can answer a
+US-oriented task with Chinese titles, an HKD price, and a
+`/customer-preferences/…` "change language & currency" interstitial instead of the page
+you asked for. **The fix is an interaction, not a request header**: open the storefront,
+read the page, and choose the language/currency/delivery location in the site's own UI —
+that writes the preference into the browser profile, which is what every later page (and
+every later batch on the same session) then inherits.
 
-> **The durable fix is the browser profile, not the URL.** A bulk run reads with the
-> browser profile it is given, and the profile is where locale, currency and delivery
-> location live. `crawl` reads with the calling session's browser (DEFAULT unless `-s
-> <name>`), `crawl --session <name>` / `--profile <dir>` pins one explicitly, and
-> `swarm create --session <name>` reuses a warmed session's profile directory. Warm the
-> storefront once in that session (`-s shop open https://www.amazon.com` → choose delivery
-> location + language), verify one product, then run the batch: every page — and every
-> later batch — inherits the choice.
+`?language=en_US`, `set headers Accept-Language` and a hand-written `i18n-prefs` cookie
+are at best site-specific hints. Measured 2026-10-29 on `amazon.com`: the URL parameter,
+the header override **and** `cookie-set lc-main/i18n-prefs` all left the tab on the
+Chinese preferences interstitial in a fresh profile; only driving the page (or fetching
+with the cookies the page itself had set) produced English content.
+
+Post-processing localized values (currency conversion, title translation) is not
+extraction and produces a silently wrong dataset.
+
+> **The durable fix is the browser profile, and only the UI can write it.** `crawl` reads
+> with the calling session's browser (DEFAULT unless `-s <name>`), `crawl --session <name>`
+> / `--profile <dir>` pins one explicitly, and `swarm create --session <name>` reuses a
+> warmed session's profile directory. So warm the storefront once in that session
+> (`-s shop open https://www.amazon.com` → pick language + currency + delivery location),
+> verify one product, then run the batch: every page — and every later batch — inherits
+> the choice.
 
 ### Tool results are bounded
 
@@ -121,17 +133,36 @@ At the top of a round, read `.b4scratch/progress.txt`, skip the ids already list
 continue from the first missing one. On completion, compare the row count with the
 requested N before calling `system.taskComplete`.
 
-### Pin the locale before extracting
+### Pin the locale by operating the page (the fix that works)
+
+A localized marketplace answers with a *preferences page* instead of the page you asked
+for. Recognise it (`/customer-preferences/`, "change language & currency", a language
+dropdown) and then **use it like a shopper would** — one interaction, then verify:
 
 ```bash
-browser4-cli set headers "Accept-Language=en-US,en;q=0.9"
-browser4-cli -s shop goto "https://www.amazon.com/dp/B0DY95T5HB"   # pin the locale in the PROFILE, not a site-specific query parameter
+browser4-cli -s shop open --headless "https://www.amazon.com/"
+browser4-cli -s shop snapshot -v 0 --stdout                          # locate the picker/link, note its ref
+browser4-cli -s shop click <ref>                                     # or select <ref> "en_US"
+browser4-cli -s shop htmlsnapshot get text "#nav-logo"               # the page is now the storefront
+browser4-cli -s shop goto "https://www.amazon.com/dp/B0DY95T5HB"     # verify one known product
 ```
 
-For cookie-driven locales, warm the cookie in a session and crawl with that session
-(`--session`): the engine has no notion of a site-specific locale parameter, and a query
-parameter one site honours is not a contract. `set headers` pins `Accept-Language`
-session-wide, which is the site-agnostic half of the same fix.
+Notes that save a round:
+
+- The picker is often a `<select>` inside a form: `snapshot -i` (or `snapshot grep -i
+  "language|currency|English"`) finds it, `select <ref> "en_US"` + `click <submit-ref>`
+  commits it. A link that already carries `language=en_US` only works if the site honours
+  it — click it rather than trusting the URL.
+- After the click, **re-snapshot**: refs are single-use and the interstitial replaces the
+  document.
+- The choice is stored in the profile, so the session keeps it: reuse `-s shop` for the
+  whole batch (`crawl --session shop`) and every page after this point is the right locale.
+- `set headers "Accept-Language=en-US,en;q=0.9"` and a `?language=` query are *hints*, not
+  the fix: keep them as a cheap first try, but if the page still comes back localized, go
+  back to the picker. Never post-process the values.
+
+For an un-attended batch (`crawl` has no click step), warm the locale first in the session
+as above, then run `crawl --session shop` — the crawl inherits the profile.
 
 ### Inspect a large CSV without flooding the context
 
@@ -164,7 +195,8 @@ command guard.
 | `crawl --sql @file.sql` | X-SQL extraction (quote the `@file` on Windows) |
 | `crawl --format csv\|json\|table` | output format (`csv` for spreadsheets) |
 | `crawl -o <path>` | write the extracted rows to a file |
-| `set headers` | session-wide `Accept-Language` (locale/currency) |
+| `snapshot -v 0` / `click` / `select` | drive the locale picker on the page (the durable fix) |
+| `set headers` | session-wide `Accept-Language` — a hint, not the locale fix |
 | `crawl --session <name>` | read the site in the profile whose locale you prepared |
 | `coding.append(path, content)` | persist a row/id as soon as you have it |
 | `coding.stat` / `coding.grep` | size/grep a large output without dumping it |
@@ -175,7 +207,7 @@ command guard.
 | Symptom | Cause | Fix |
 |---|---|---|
 | The same pages are fetched in several rounds | rows/progress kept only in the conversation | append each row + id to `.b4scratch/` as you collect |
-| Titles/prices in the wrong language or currency | host locale, not the site | warm the locale in the session profile (`crawl --session`) or `set headers`; verify one product |
+| Titles/prices in the wrong language or currency, or you land on a "change language & currency" page | the site localized for the profile/IP | open the picker on the page and choose language + currency (`snapshot` → `select`/`click`), then verify one product; `set headers`/`?language=` are only hints |
 | `ParserError` from a `b4.run` command | PowerShell parsed an unquoted `@file` | quote it: `'--sql @q.sql'` (see [shell-quoting.md](shell-quoting.md)) |
 | `PERMISSION_DENIED \| code=COMMAND_NOT_ALLOWED` | inline interpreter or a blocked command | keep each shell's syntax in its own tool; use `b4.run` or a script file |
 | Extracted CSV has the wrong columns | spec not compared with the output | diff the header row against the field spec; report missing columns in `problems` |

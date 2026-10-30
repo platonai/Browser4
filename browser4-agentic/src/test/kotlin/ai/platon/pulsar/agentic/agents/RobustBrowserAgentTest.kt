@@ -136,4 +136,28 @@ class RobustBrowserAgentTest {
         assertEquals(names(toolSet.specs), names(toolSet.initialSpecs), "initial set equals the full CLI-domain set")
         assertEquals(toolSet.specs.size, toolSet.initialSpecs.size)
     }
+
+    @Test
+    @DisplayName("overflow continuation points the model at the round log and at persistence")
+    fun overflowContinuationCarriesRoundLogAndPersistence() {
+        val message = overflowContinuationMessage(
+            modelError = "max iterations reached",
+            progress = "row.csv (20 rows)",
+            roundLogPath = ".b4scratch/round-3.log",
+        )
+
+        assertTrue(message.contains("max iterations reached"), message)
+        assertTrue(message.contains("row.csv (20 rows)"), message)
+        // The complete round log must be reachable: the entry digest is lossy, and the
+        // 2026-10-29 run re-derived a 30-item list over two more rounds.
+        assertTrue(message.contains(".b4scratch/round-3.log"), message)
+        assertTrue(message.contains("coding.readLines"), message)
+        // Page-JavaScript state is gone across the cut — say it, and name the fix.
+        assertTrue(message.contains("page JavaScript"), message)
+        assertTrue(message.contains(".b4scratch/progress.txt"), message)
+        // Without a dumped log the message stays valid (and promises no file).
+        val withoutLog = overflowContinuationMessage("boom", "nothing yet")
+        assertFalse(withoutLog.contains("coding.readLines"), withoutLog)
+        assertTrue(withoutLog.contains("nothing yet"), withoutLog)
+    }
 }

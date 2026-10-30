@@ -109,4 +109,22 @@ class CodingAgentShellWindowsBuiltinTest {
             )
         }
     }
+
+    @Test
+    @DisplayName("mkdir/md are ordinary workspace work, but the path boundary still applies")
+    fun mkdirIsAllowedInsideTheWorkspace() {
+        assumeTrue(isWindows, "cmd.exe builtin without a PATH entry")
+        val s = shell()
+
+        // A live run was refused with "command 'mkdir' is not allowed" while the CLI's own
+        // docs recommend `mkdir -p ./downloads`; creating a directory inside the workspace is
+        // what coding.mkdir already does, so the refusal bought nothing (2026-10-29).
+        assertTrue(s.isAllowed("mkdir out"), s.explain("mkdir out"))
+        assertTrue(s.isAllowed("md out"), s.explain("md out"))
+        assertTrue(s.isAllowed("mkdir .b4scratch\\data"), s.explain("mkdir .b4scratch\\data"))
+        // The path boundary is still enforced on the argument. (C:\Windows and the temp
+        // directory are toolchain roots by design, so the probe path is a plain drive root.)
+        val outside = "mkdir D:\\b4-outside-probe"
+        assertFalse(s.isAllowed(outside), "outside the workspace: ${s.explain(outside)}")
+    }
 }

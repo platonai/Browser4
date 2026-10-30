@@ -367,6 +367,18 @@ What do you need to do?
 > their text but **lose their refs** (and vanish entirely under `-v`), so never use it as your only
 > orientation view; per-mode detail and the draggable caveat: [snapshot.md](references/snapshot.md#interactive-mode).
 
+> **A localized marketplace is fixed by operating the page.** Landing on a "change language &
+> currency" page (or `/customer-preferences/…`), or getting Chinese titles/HKD prices for a
+> US-oriented task, means the *site* localized for this profile — not that a flag is missing.
+> Fix it like a shopper: `snapshot -v 0` (or `snapshot grep -i "language|currency|English"`) to
+> find the picker, `select`/`click` language + currency + delivery location, re-snapshot, then
+> verify one known product. The choice is stored in the browser profile, so the rest of the
+> session — and `crawl --session <name>` — inherits it. `?language=en_US`,
+> `set headers Accept-Language` and a hand-written cookie are only hints: measured 2026-10-29 on
+> amazon.com, all three left a fresh profile on the Chinese interstitial, and the run that
+> trusted them burned six minutes. Never post-process localized values;
+> full recipe: [bulk-collection.md](references/bulk-collection.md#pin-the-locale-by-operating-the-page-the-fix-that-works).
+
 ## 6. Quick Patterns & Deep Dives
 
 Copy-paste pairs for the common flows — form fill, `snapshot grep`, mouse/drag, dialog handling,
