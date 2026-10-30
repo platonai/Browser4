@@ -9763,8 +9763,8 @@ fn suggest_eval_element_arrow(expression: &str) -> Option<String> {
 ///
 /// This is a client-side heuristic only; it cannot distinguish false positives
 /// (e.g. `"hello (world)"` is balanced by the outer parens of the IIFE wrapper)
-/// from true unbalanced cases. It is used to emit a warning tip, not to alter
-/// behavior.
+/// from true unbalanced cases. On its own it only selects which hint to print;
+/// [eval_null_is_wrapper_miswrap] decides when the result is a command failure.
 fn expression_has_unbalanced_parens(expr: &str) -> bool {
     // The upstream isAlreadyInvokedIIFE counts raw parens without skipping
     // strings/regex/comments. So we count ALL raw parens in the source —
@@ -9780,6 +9780,21 @@ fn expression_has_unbalanced_parens(expr: &str) -> bool {
         }
     }
     raw_open != raw_close
+}
+
+/// True when a `null` eval result is almost certainly the upstream IIFE wrapper
+/// re-invoking a valid script, not the page answering `null`.
+///
+/// [expression_has_unbalanced_parens] alone is too weak to change the exit
+/// code — `eval "document.querySelector('a[href*=\"(\"]')"` can be a genuine
+/// null. A *script* is the case that burns runs: a multi-line expression (or
+/// one that already ends with `)()`), whose explicit `return` value can only
+/// turn into `null` if the wrapper re-invoked and swallowed a TypeError.
+fn eval_null_is_wrapper_miswrap(expr: &str) -> bool {
+    let trimmed = expr.trim_end();
+    let looks_like_script =
+        expr.contains('\n') || trimmed.ends_with(")()") || trimmed.ends_with(")();");
+    looks_like_script && expression_has_unbalanced_parens(expr)
 }
 
 /// Like [handle_tool_command] but with an `eval_json` flag that, when true,
@@ -9905,6 +9920,26 @@ async fn handle_tool_command_with_options(
         // (e.g. after htmlsnapshot capture or other commands that interact
         // with the browser). Give the user a diagnostic hint.
         if is_null_result {
+            // A `null` for a *script* is not a page answer. `JsUtils.isAlreadyInvokedIIFE`
+            // counts raw parens, so one escaped `(` (a regex such as `\s*\(`) makes the
+            // wrapper re-invoke an already-invoked IIFE; the TypeError is swallowed and
+            // the CLI prints a bare `null` while still exiting 0. Reporting that as
+            // success is what made a supervised run believe a batch page fetch worked
+            // when nothing had been fetched — so route it through the CLI error path
+            // (non-zero exit), exactly like a wait that timed out.
+            if eval_null_is_wrapper_miswrap(expression) {
+                let message = format!(
+                    "eval returned null for a script, which is a wrapper failure rather than a \
+                     page-side null: the expression contains '(' inside a string or regex literal \
+                     and JsUtils.isAlreadyInvokedIIFE re-wraps such code as ((expr))(); the \
+                     resulting TypeError is swallowed as null. Rewrite the literal (e.g. \
+                     `\\s*\\x28` instead of `\\s*\\(`) or evaluate through CDP: \
+                     cdp Runtime.evaluate --json '{{\"expression\":\"...\"}}'"
+                );
+                json_field("result", json!(result_json));
+                json_field("tool", json!(tool_name));
+                return Err(message);
+            }
             if !json_active() {
                 // When --ref is present and the expression doesn't look like an
                 // arrow function, the null is likely from the wrong expression form.
@@ -35588,6 +35623,29 @@ mod tests {
         assert!(!expression_has_unbalanced_parens("(() => '(a)')()"));
         // Simple expression — balanced.
         assert!(!expression_has_unbalanced_parens("document.title"));
+    }
+
+    #[test]
+    fn eval_null_is_wrapper_miswrap_only_fails_scripts() {
+        // Regression: the microwave batch script regex `\s*\(` unbalanced the raw
+        // parens, the wrapper re-invoked it, and `eval --await --file` printed a
+        // bare `null` with exit 0 — the run then reported 5/20 products as done.
+        let batch_script = "(async () => {\n  const m = html.match(/#([\\d,]+)\\s*\\s*\\(/);\n  return 'DATA';\n})()";
+        assert!(eval_null_is_wrapper_miswrap(batch_script));
+
+        // Rewriting the escaped paren (`\x28`) balances the counts — no failure.
+        let fixed_script = batch_script.replace("\\s*\\(", "\\s*\\x28");
+        assert!(!eval_null_is_wrapper_miswrap(&fixed_script));
+
+        // Multi-line script without paren imbalance: a real null stays a value.
+        assert!(!eval_null_is_wrapper_miswrap("(async () => {\n  return null;\n})()"));
+
+        // Single-line expressions keep the old behaviour (exit 0 + hint): a
+        // selector containing '(' can legitimately evaluate to null.
+        assert!(!eval_null_is_wrapper_miswrap("document.querySelector('a[href*=\"(\"]')"));
+
+        // One-line IIFE whose value can only be nulled by the wrapper.
+        assert!(eval_null_is_wrapper_miswrap("(() => \"(\".length)()"));
     }
 
     #[test]

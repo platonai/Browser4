@@ -188,6 +188,7 @@ printed (the logged lines are readable with `browser4-cli console`).
 | Expression mangled by the shell | Quotes stripped by bash/PowerShell before the CLI sees them | Use `--file`, `--stdin`/`--js`, `--base64`, or see [shell-quoting.md](shell-quoting.md) |
 | JS exception reported as a CLI error | The expression threw in the page (typo, missing element) | Guard with optional chaining or select the element first |
 | Element ref no longer resolves | Refs are ephemeral — they expire after navigation/interaction | Take a fresh `snapshot -i` and use the new ref |
+| `Error: eval returned null for a script, which is a wrapper failure …` (exit 1) | A regex or string literal in the script contains a raw `(` or `)`, so the raw paren count is unbalanced and the upstream IIFE detection re-invokes the script (`((expr))()`); the `TypeError` is swallowed as `null` | Rewrite the literal without a raw paren (`\s*\x28` instead of `\s*\(`, `[(]`→`\x28`), or split the script, or evaluate via `cdp Runtime.evaluate`. A single-line expression that really returns `null` keeps exit 0 — only scripts fail this way |
 
 ## Windows / Git Bash quoting
 
