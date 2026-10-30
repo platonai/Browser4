@@ -249,7 +249,7 @@ the geolocation caveat: **[emulation.md](references/emulation.md)**.
 | `htmlsnapshot summary [--algorithm <id>]` | Compressed WPSI YAML summary of a fresh snapshot (`--expires <dur>` for the stored one); the summarization algorithm is pluggable (built-in `wpsi`, plugins can add ids) | Understand a page's structure/landmarks/key nodes cheaply; pick a non-default algorithm for specialized summaries | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `htmlsnapshot algorithms` | List installed summary algorithms (`id`, default marker, built-in vs plugin); no page or session needed | Discover valid `--algorithm` ids | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `eval` | Execute JavaScript in the page (`--await` for Promises/fetch, `--wait-selector` for late-rendered content, `--file`/`--stdin`/`--base64` to dodge shell quoting, `--world main\|isolated` to choose the JavaScript world). Runs in the **page's own world** by default, so page-defined globals resolve. **First rule: an async expression needs `--await`** — without it the result is an unresolved Promise, which is reported as a failure (not as data). JS `undefined` prints as a `null` line with an explanation, so it cannot be mistaken for a value | Live DOM access, complex transforms | [eval.md](references/eval.md) |
-| `eval --ref` | Execute JS scoped to a specific element | Element property extraction (text, attrs, styles) | **⚠️ Expression MUST be an arrow function: `element => element.textContent`** |
+| `eval --ref` | Execute JS scoped to a specific element | Element property extraction (text, attrs, styles) | **⚠️ Expression MUST be an arrow function: `element => element.textContent`** — a bare `element.textContent` returns `null` |
 | `scrollintoview`, `pushstate`, `highlight` | Element scroll / history / visual highlight (eval-based shortcuts) | Scroll an element into view, push a history entry, outline an element | — |
 | `vitals`, `web-vitals` | Core Web Vitals measurement (LCP, CLS, INP, FCP, TTFB) via injected web-vitals lib | Performance checks on a live page (needs network for CDN) | — |
 | `set geo\|offline\|headers\|media\|device` | CDP emulation: geolocation, offline mode, extra headers, color scheme, device metrics | Emulate locations, networks, devices, and media features | [emulation.md](references/emulation.md) |
@@ -263,7 +263,7 @@ the geolocation caveat: **[emulation.md](references/emulation.md)**.
 | `webdb export`, `webdb normalize` | Export cached pages, normalize URLs to database keys | Post-crawl content extraction, URL key lookup | [webdb.md](references/webdb.md) |
 | `skills`, `skills get`, `skills path`, `skills unpack` | Bundled AI agent skill files | Refresh agent instructions, unpack skill files | [skills.md](references/skills.md) |
 | `skill-list`, `skill-info`, `skill-install`, `skill-uninstall`, `skill-reload` | Backend skill management | Install/manage server-side skills | [skills.md](references/skills.md) |
-| `screenshot`, `scroll`, `wait`, `resize` | Visual capture & viewport control | Screenshots, viewport sizing, scroll control. A `wait` whose condition never became true exits non-zero; `wait --download` polls a download directory but treats any pre-existing file as a completed download (see §5), and `resize` clears an active `set device` scale factor | — |
+| `screenshot`, `scroll`, `wait`, `resize` | Visual capture & viewport control | Screenshots, viewport sizing, scroll control. A `wait` whose condition never became true exits non-zero; `wait --download` polls a download directory and counts only files that appear or change after the call starts — pre-existing files never count (see §5) — and `resize` clears an active `set device` scale factor | — |
 | `tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new` | Tab & window management | Multi-tab workflows, session-scoped tab operations | [tab-management.md](references/tab-management.md) |
 | `frames`, `frame <target>`, `frame main` | Iframe frame switching | Interact with content inside `<iframe>`s: `frame "#pay-frame"` then `fill`/`click`/`is visible` resolve inside that frame; `frames` lists the frame tree | [frames.md](references/frames.md) |
 | `diff snapshot` | Unified diff between two saved accessibility snapshots | Verify what changed between interactions (`snapshot --auto-diff` equivalent on saved files) | — |
@@ -316,25 +316,22 @@ What do you need to do?
 
 ## 5. Critical Warnings
 
-> **Refs are single-use.** Re-snapshot after any interaction, and always after `goto`, `reload`, and tab switches. Never reuse a ref across navigations.
+> **Refs are single-use.** Re-snapshot after any interaction, and always after `goto`, `reload`, and tab switches. Never reuse a ref across navigations — full lifecycle (auto-snapshot, `--no-snapshot`, scroll side effects): [§2 Ref Lifecycle](#ref-lifecycle).
 
 > **Selectors break when sites change their HTML.** Discover them with `htmlsnapshot inspect` / `summary` before extracting. Treat scenario examples as patterns, not copy-paste recipes.
 
-> **Shell quoting on Windows.** Complex JS/SQL with nested quotes breaks inline: prefer `--sql @file.sql`, `--sql-stdin`, `--sql-base64`, `eval --file` / `--stdin` / `--base64`; for `htmlsnapshot inspect` use `@file`, `--stdin`, or `--selector-base64`. **On PowerShell always quote `@file` paths (`--sql "@query.sql"`)** — an unquoted `@` is the splatting operator. Never inline `--sql "…"` with double-quoted CSS selectors. See [shell-quoting.md](references/shell-quoting.md).
+> **Shell quoting on Windows.** Complex JS/SQL with nested quotes breaks inline — pass it as a file or stdin/base64 (`--sql @file.sql`, `eval --file x.js`; `htmlsnapshot inspect` also takes `@file` / `--stdin` / `--selector-base64`). **On PowerShell always quote `@file` paths (`--sql "@query.sql"`)** — an unquoted `@` is the splatting operator. Never inline `--sql "…"` with double-quoted CSS selectors. Git Bash (MSYS) path conversion and the full option list: [shell-quoting.md](references/shell-quoting.md).
 
 > **Don't cat snapshot files** — they can exceed 256KB, and `--stdout` can dump 63KB+ trees. Bound the capture with `-v 0`, `--depth`, `--selector`, `--no-boxes`, or use `snapshot grep` / `htmlsnapshot`. `snapshot --stdout`, `htmlsnapshot get html` and `grep` paginate at 2000 lines by default (`--all` / `--page-size 0` disables); `get all …` and `text`/`textcontent` reads print in full.
 
-> **`eval --ref` requires an arrow function:** `element => element.textContent`. Writing `element.textContent` (or `this.textContent`) returns `null` — the #1 mistake with element-scoped eval.
-
 > **`eval` runs in the page's own JavaScript world; an async expression needs `--await`.**
-> Page-defined globals resolve (`eval "window.myApp.version"`), and globals written by `eval` are
-> visible to page scripts. `--world isolated` evaluates in the driver's own world
-> (`__browser4_runtime__`) instead — where the injected runtime lives and page scripts cannot see
-> what you write, but page globals read as `null`. DOM reads work in both worlds — drive the page's
-> own elements with `fill`/`click` for page-visible state. Return values: `null` prints as `null` and
-> JS `undefined` prints a `null` line plus an explanation (it is not a value — make the expression
-> return one). **An unresolved Promise is reported as a failure, not as data**: pass `--await` for any
-> `async () => …` / `fetch(...)` expression, or the batch silently extracts nothing.
+> Page-defined globals resolve and globals written by `eval` are visible to page scripts;
+> `--world isolated` evaluates in the driver's `__browser4_runtime__` world instead, where page
+> scripts cannot see what you write but page globals read as `null`. DOM reads work in both worlds —
+> drive the page's own elements with `fill`/`click` for page-visible state. **An unresolved Promise is
+> reported as a failure, not as data** — pass `--await` for any `async () => …` / `fetch(...)`
+> expression. Return values: `null` prints as `null` and JS `undefined` prints a `null` line plus an
+> explanation (make the expression return a value). Details: [eval.md](references/eval.md).
 
 > **`wait --load networkidle` is not "the page is ready".** It proves only that the network went quiet: a page whose results are computed by page JS after load (dashboards, bot-detection verdicts), or fetched by a long-running XHR, can still be empty when it reports success — and the CLI now says so. For result pages, poll the result element first (`wait "<result-selector>"`, or `eval --wait-selector <css>`); treat `wait --load networkidle` as a network-settling extra step.
 
@@ -344,28 +341,21 @@ What do you need to do?
 
 > **Assertions and `wait` — read the verdict, don't trust the exit code blindly.**
 > `is visible|enabled|checked <sel>` print the value (`true`/`false`, and `null` from `is enabled` on a
-> missing or invalid selector); a false result still exits 0 unless you pass `--fail-on-false`, which
-> `--help` declares as "exit 1 when the assertion is false or null". `wait <selector>`, `wait --text`,
-> `wait --url` and `wait --fn` exit **non-zero when the condition never became true** (a satisfied wait
-> prints the elapsed time and the stderr note names the timed-out target); older builds printed success
-> even for a timed-out wait. If a build does not honour `--fail-on-false`, read the value instead:
-> `browser4-cli --json is visible "#result" | jq -r '.output.result'`, or cross-check live with
-> `eval "!!document.querySelector('#result')"`.
+> missing or invalid selector) and exit 0 even when it is false; pass `--fail-on-false` to make a
+> false/null verdict exit 1. `wait <selector>`, `wait --text`, `wait --url` and `wait --fn` exit
+> **non-zero when the condition never became true** (a satisfied wait prints the elapsed time and the
+> stderr note names the timed-out target).
 >
-> `wait --download` succeeds as soon as the watched directory holds **any** non-partial file while no
-> `.crdownload`/`.tmp`/`.part` file is present — a pre-existing file returns "Download complete"
-> instantly (it lists the whole directory, not what the download produced), so start clean with
-> `rm -rf ./downloads && mkdir -p ./downloads` or delete the old files first.
->
-> **Known deviations:** `wait --download` should count only files that appear *after* the call starts,
-> and accept a target filename.
+> `wait --download` baselines the watched directory when the call starts, so only files that appear or
+> change during the wait count as the download — a pre-existing (or untouched) file never does, and the
+> timeout message reports how many were ignored. **Known deviation:** it does not yet accept a target
+> filename.
 
-> **Snapshot modes — `-v 0` vs `-i` vs default:** plain `snapshot` captures the whole-page AX tree;
-> `-v 0` is the screenful currently visible (`-v all` = whole page); `-i` is interactive-only
-> rendering with inner text merged into element names; `htmlsnapshot` gives static HTML read by CSS
-> selector instead of refs. `-i` is a **strict filter** — draggable items and hover-only targets keep
-> their text but **lose their refs** (and vanish entirely under `-v`), so never use it as your only
-> orientation view; per-mode detail and the draggable caveat: [snapshot.md](references/snapshot.md#interactive-mode).
+> **`-i` is a strict filter, not an orientation view:** interactive-only rendering merges inner text
+> into element names but **drops the refs of draggable and hover-only targets** (they vanish under `-v`
+> too). Use plain `snapshot` / `-v 0` (screenful) / `-v all` (whole page) to orient yourself, and `-i`
+> only to pick a clickable target; `htmlsnapshot` reads static HTML by CSS selector instead of refs.
+> Per-mode detail: [snapshot.md](references/snapshot.md#interactive-mode).
 
 > **A localized marketplace is fixed by operating the page.** Landing on a "change language &
 > currency" page (or `/customer-preferences/…`), or getting Chinese titles/HKD prices for a
@@ -374,9 +364,8 @@ What do you need to do?
 > find the picker, `select`/`click` language + currency + delivery location, re-snapshot, then
 > verify one known product. The choice is stored in the browser profile, so the rest of the
 > session — and `crawl --session <name>` — inherits it. `?language=en_US`,
-> `set headers Accept-Language` and a hand-written cookie are only hints: measured 2026-10-29 on
-> amazon.com, all three left a fresh profile on the Chinese interstitial, and the run that
-> trusted them burned six minutes. Never post-process localized values;
+> `set headers Accept-Language` and a hand-written cookie are only hints, not fixes: on a fresh
+> profile all three left amazon.com on the Chinese interstitial. Never post-process localized values;
 > full recipe: [bulk-collection.md](references/bulk-collection.md#pin-the-locale-by-operating-the-page-the-fix-that-works).
 
 ## 6. Quick Patterns & Deep Dives
