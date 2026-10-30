@@ -158,6 +158,7 @@ bin/maintenance/state/*.lock
 /.workbuddy/
 /.claude/
 /.coworker/
+/.b4scratch/
 .build-state
 /.build/
 /.build-localappdata/
