@@ -371,6 +371,39 @@ Assert-Match -Label 'DOC script: message prompt uses the presence test for auto-
     -Haystack $scriptText -Pattern 'PSBoundParameters\.ContainsKey\(''Default''\)'
 
 # ===================================================================
+# TESTS: main sync is unconditional (every release syncs main)
+# ===================================================================
+Write-Host "━━━ Main sync: automatic on every release (no flag) ━━━" -ForegroundColor Cyan
+
+# The standing rule (AGENTS.md "Releasing", bin/release/README.md): a release
+# must leave main at the released commit, so the trigger fast-forwards main to
+# HEAD before creating the tag — passing -SyncMain must never be required.
+# Regression this guards: main silently drifted behind the 4.15.x release
+# branch for weeks because the sync was opt-in and the default was to warn and
+# continue without it.
+Assert-Match -Label 'MAIN script: fast-forwards main via HEAD:main push (no branch switch)' `
+    -Haystack $scriptText -Pattern 'git push \$remote "HEAD:main"'
+Assert-Match -Label 'MAIN script: aborts when main has commits not in HEAD' `
+    -Haystack $scriptText -Pattern 'Cannot sync main'
+Assert-Match -Label 'MAIN script: tells the operator to merge origin/main first' `
+    -Haystack $scriptText -Pattern 'Merge \$remote/main into \$currentBranch'
+Assert-NotMatch -Label 'MAIN script: no continue-without-syncing prompt for main drift' `
+    -Haystack $scriptText -Pattern 'Continue with the release anyway\?'
+Assert-Match -Label 'MAIN script: -SyncMain still accepted (compatibility)' `
+    -Haystack $scriptText -Pattern '\[switch\]\$SyncMain'
+Assert-Match -Label 'MAIN script: -SyncMain is documented as a no-op' `
+    -Haystack $scriptText -Pattern '-SyncMain is a no-op'
+
+Assert-Match -Label 'MAIN README: states every release syncs main' `
+    -Haystack $readmeText -Pattern 'every release syncs main'
+Assert-Match -Label 'MAIN README: states the trigger fast-forwards main to HEAD' `
+    -Haystack $readmeText -Pattern 'fast-forwards main to HEAD'
+Assert-Match -Label 'MAIN README: states main is synced again after the bump' `
+    -Haystack $readmeText -Pattern 'fast-forwards .main. to the new\s+tip'
+Assert-NotMatch -Label 'MAIN README: no longer asks users to pass -SyncMain' `
+    -Haystack $readmeText -Pattern '-SyncMain'
+
+# ===================================================================
 # Summary
 # ===================================================================
 Write-Host ''

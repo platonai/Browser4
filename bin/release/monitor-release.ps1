@@ -22,7 +22,11 @@
        next patch (X.Y.Z-SNAPSHOT -> X.Y.(Z+1)-SNAPSHOT) across VERSION, all pom.xml,
        cli/package.json, Cargo.toml and Cargo.lock, then commits and pushes the bump
        as "Auto-bump version to X.Y.(Z+1)-SNAPSHOT" — so the next release starts
-       from the next patch. On FAILURE: dispatches a coworker fix task.
+       from the next patch. The release branch is the source of truth and main is
+       kept in lockstep: trigger-release.ps1 fast-forwards main to the release
+       commit before tagging, and this script fast-forwards main again after the
+       bump, so main never drifts behind a release. On FAILURE: dispatches a
+       coworker fix task.
 
     By default this script runs in DRY RUN mode: it calls trigger-release.ps1 in
     dry-run mode (preview only, no tag pushed, no workflow triggered) and exits
@@ -66,12 +70,6 @@
     as "Auto-bump version to …". The bump rules are computed by
     `node bin/version.mjs next`. Pass this switch to leave the version untouched.
 
-.PARAMETER NoSyncMain
-    By default the release trigger fast-forwards origin/main to the current
-    branch before tagging (release.yml requires the tag on the latest main).
-    Pass this switch to disable the automatic sync; the trigger script then
-    warns and asks for confirmation instead.
-
 .PARAMETER MaxMonitorMinutes
     Upper bound (in minutes) for the -NoWatch monitor loop. Default 0 = no limit.
     Use this to guarantee the script eventually exits if a workflow run gets
@@ -99,7 +97,6 @@ param(
     [switch]$Apply,
     [switch]$DryRun,
     [switch]$SkipVersionBump,
-    [switch]$NoSyncMain,
     [int]$MaxMonitorMinutes = 0,
     [ValidateSet('auto', 'dsh', 'opencode', 'claude', 'kimi', 'codex', 'copilot')]
     [string]$Agent = ""
@@ -887,6 +884,90 @@ function Invoke-WorkflowFailureHandler {
 
 <#
 .SYNOPSIS
+    Fast-forward the remote main branch to HEAD after a release.
+
+.DESCRIPTION
+    Every release must leave main at the released tip. trigger-release.ps1
+    fast-forwards main to the tag commit before tagging; this second sync runs
+    after the post-release version bump so main also carries the bump commit
+    instead of drifting one commit behind (and then further with every later
+    commit) until someone notices.
+
+    Uses `git push <remote> HEAD:main`, which needs no branch switch — the
+    working tree may be dirty — and which git rejects unless it is a
+    fast-forward, so history is never rewritten.
+
+.OUTPUTS
+    'already' — main already points at HEAD
+    'synced'  — main was fast-forwarded to HEAD
+    'blocked' — main has commits that are not in HEAD (manual merge needed)
+    'failed'  — fetch/push/verification failed
+#>
+function Sync-MainToHead {
+    param(
+        [string]$RepoRoot,
+        [string]$Remote = 'origin'
+    )
+
+    $head = (git -C $RepoRoot rev-parse HEAD 2>$null)
+    if (-not $head) {
+        Write-Host "  [main] ERROR: could not resolve HEAD in $RepoRoot." -ForegroundColor Red
+        return 'failed'
+    }
+
+    git -C $RepoRoot fetch $Remote main 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [main] ERROR: git fetch $Remote main failed — main was not synced." -ForegroundColor Red
+        return 'failed'
+    }
+
+    $remoteMain = (git -C $RepoRoot rev-parse "$Remote/main" 2>$null)
+    if (-not $remoteMain) {
+        Write-Host "  [main] ERROR: could not resolve $Remote/main." -ForegroundColor Red
+        return 'failed'
+    }
+
+    if ($remoteMain -eq $head) {
+        Write-Host "  [main] $Remote/main already points at HEAD ($head) — nothing to sync." -ForegroundColor Green
+        return 'already'
+    }
+
+    git -C $RepoRoot merge-base --is-ancestor $remoteMain $head 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [main] ERROR: $Remote/main has commits that are not in HEAD — cannot fast-forward." -ForegroundColor Red
+        Write-Host "  [main] Merge $Remote/main into the release branch and push it, then run:" -ForegroundColor Red
+        Write-Host "  [main]   git push $Remote HEAD:main" -ForegroundColor Red
+        return 'blocked'
+    }
+
+    $pushOutput = git -C $RepoRoot push $Remote "HEAD:main" 2>&1
+    $pushExit = $LASTEXITCODE
+    foreach ($line in @($pushOutput)) {
+        if ("$line".Trim()) { Write-Host "  [main] $line" -ForegroundColor DarkGray }
+    }
+    if ($pushExit -ne 0) {
+        Write-Host "  [main] ERROR: git push $Remote HEAD:main failed (exit $pushExit)." -ForegroundColor Red
+        return 'failed'
+    }
+
+    # Refresh the tracking ref and mirror the update into the local main branch
+    # when it is not checked out anywhere (best effort — the remote is the
+    # source of truth; a checked-out main just keeps its stale local ref).
+    git -C $RepoRoot fetch $Remote main 2>$null | Out-Null
+    git -C $RepoRoot fetch $Remote "main:refs/heads/main" 2>$null | Out-Null
+
+    $after = (git -C $RepoRoot rev-parse "$Remote/main" 2>$null)
+    if ($after -ne $head) {
+        Write-Host "  [main] ERROR: $Remote/main still points at $after, not HEAD ($head), after the push." -ForegroundColor Red
+        return 'failed'
+    }
+
+    Write-Host "  [main] $Remote/main fast-forwarded to HEAD ($head)" -ForegroundColor Green
+    return 'synced'
+}
+
+<#
+.SYNOPSIS
     After a successful release, bump the current version's patch and sync all
     version files, then commit and push the bump.
 
@@ -911,6 +992,13 @@ function Invoke-WorkflowFailureHandler {
       - VERSION is missing or not parseable as X.Y.Z(-SNAPSHOT)
       - the working tree has uncommitted changes other than the bump itself
         (to avoid sweeping unrelated changes into the bump commit)
+
+.OUTPUTS
+    'bumped'      — version files updated, committed and pushed
+    'noop'        — no version file needed updating
+    'skipped'     — VERSION missing/unparseable, dirty tree, or commit failed
+    'push-failed' — committed, but the push failed (commit is local only)
+    'local-only'  — committed with -SkipPush
 #>
 function Invoke-PostReleaseVersionBump {
     param(
@@ -922,13 +1010,13 @@ function Invoke-PostReleaseVersionBump {
     $versionFile = Join-Path $RepoRoot "VERSION"
     if (-not (Test-Path $versionFile)) {
         Write-Host "  [bump] VERSION not found at $versionFile — skipping version bump." -ForegroundColor Yellow
-        return
+        return 'skipped'
     }
 
     $current = (Get-Content $versionFile -Raw).Trim()
     if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)(-(SNAPSHOT|rc\.\d+))?$') {
         Write-Host "  [bump] VERSION '$current' is not X.Y.Z, X.Y.Z-SNAPSHOT or X.Y.Z-rc.N — skipping version bump." -ForegroundColor Yellow
-        return
+        return 'skipped'
     }
 
     # ── Compute the next version ──────────────────────────────────────────
@@ -951,7 +1039,7 @@ function Invoke-PostReleaseVersionBump {
     }
     if ([string]::IsNullOrWhiteSpace($nextVer)) {
         Write-Host "  [bump] Could not compute the next version from '$current' — skipping version bump." -ForegroundColor Yellow
-        return
+        return 'skipped'
     }
 
     Write-Host ""
@@ -964,7 +1052,7 @@ function Invoke-PostReleaseVersionBump {
     if ($dirty) {
         Write-Host "  [bump] Working tree has uncommitted changes — skipping version bump to avoid sweeping them into the bump commit:" -ForegroundColor Yellow
         $dirty | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
-        return
+        return 'skipped'
     }
 
     # ── Build the file set: VERSION + all tracked pom.xml + CLI version files ──
@@ -1024,7 +1112,7 @@ function Invoke-PostReleaseVersionBump {
 
     if ($changed.Count -eq 0) {
         Write-Host "  [bump] No version files needed updating (already at $nextVer?)." -ForegroundColor Green
-        return
+        return 'noop'
     }
 
     # ── Commit & push ─────────────────────────────────────────────────────
@@ -1034,12 +1122,12 @@ function Invoke-PostReleaseVersionBump {
         git add -- $changed
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  [bump] WARN: git add failed — leaving changes uncommitted." -ForegroundColor Yellow
-            return
+            return 'skipped'
         }
         git commit -m $commitMsg
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  [bump] WARN: git commit failed — leaving changes staged." -ForegroundColor Yellow
-            return
+            return 'skipped'
         }
         Write-Host "  [bump] Committed: $commitMsg" -ForegroundColor Green
 
@@ -1047,11 +1135,14 @@ function Invoke-PostReleaseVersionBump {
             git push $Remote HEAD
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "  [bump] Pushed to $Remote" -ForegroundColor Green
+                return 'bumped'
             } else {
                 Write-Host "  [bump] WARN: git push failed (exit $LASTEXITCODE) — commit is local only." -ForegroundColor Yellow
+                return 'push-failed'
             }
         } else {
             Write-Host "  [bump] -SkipPush set — commit left local." -ForegroundColor DarkGray
+            return 'local-only'
         }
     } finally {
         Pop-Location
@@ -1212,15 +1303,13 @@ Write-Host "  Step 1/3: Triggering release via tag push" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 
 # Build args for trigger-release.ps1 — passthrough of remote, message,
-# dry-run state, and the -Agent flag.
+# dry-run state, and the -Agent flag. Main sync needs no flag: every release
+# fast-forwards main to the release commit before tagging.
 $triggerArgs = @{}
 if ($remote)      { $triggerArgs['remote'] = $remote }
 if ($message)     { $triggerArgs['message'] = $message }
 if (-not $isDryRun) { $triggerArgs['Apply'] = $true }
 if ($Agent)       { $triggerArgs['Agent'] = $Agent }
-# Sync main to the current branch by default so releasing from a dev branch
-# is a single command (trigger-release.ps1 fast-forwards main when possible).
-if (-not $NoSyncMain) { $triggerArgs['SyncMain'] = $true }
 
 # Remember what already exists (and when we pushed) so Step 2 can only ever
 # pick the run this push triggers.  Skipped in dry-run mode, which must stay
@@ -1387,12 +1476,34 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($finalConclusion -eq "success") {
+    $bumpStatus = 'skipped'
     if (-not $SkipVersionBump) {
         # Post-release: bump to next patch so the next release starts fresh.
-        Invoke-PostReleaseVersionBump -RepoRoot $repoRoot -Remote $remote
+        $bumpStatus = Invoke-PostReleaseVersionBump -RepoRoot $repoRoot -Remote $remote
     } else {
         Write-Host "Version bump skipped (-SkipVersionBump)." -ForegroundColor DarkGray
     }
+
+    # Every release leaves main at the released tip. trigger-release.ps1 synced
+    # main to the tag commit before tagging; the bump above moved the release
+    # branch one commit further, so sync again — otherwise main falls behind on
+    # every release and, with each later commit, further behind.
+    $mainSync = if ($bumpStatus -in @('local-only', 'push-failed')) {
+        # The bump commit never reached the remote release branch; pushing it
+        # to main alone would fork main away from the branch.
+        Write-Host "  [main] Version bump did not reach $remote ($bumpStatus) — main sync skipped." -ForegroundColor Yellow
+        'skipped'
+    } else {
+        Sync-MainToHead -RepoRoot $repoRoot -Remote $remote
+    }
+
+    if ($mainSync -in @('blocked', 'failed')) {
+        Write-Host ""
+        Write-Host "ERROR: the release succeeded, but $remote/main is not synced to the release." -ForegroundColor Red
+        Write-Host "       Fix it before the next release:  git push $remote HEAD:main   (fast-forward only)" -ForegroundColor Red
+        exit 1
+    }
+
     exit 0
 } else {
     # Extract errors from failed logs and dispatch a coworker task to fix them

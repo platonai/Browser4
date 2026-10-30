@@ -94,14 +94,15 @@ checks and previews the tag and release notes; it never creates or pushes anythi
   version consistency across all files (VERSION, pom.xml, Cargo.toml, package.json)
   and confirm the current version is the next patch after the last GitHub release.
   Warns (and, in `-Apply` mode, asks for confirmation) if issues are found.
-- **Main-branch guard**: main is the single release source — the tag must be
-  created from the latest `origin/main` commit. Maintenance releases may also
-  be tagged from the tip of the matching `X.Y.x` branch (e.g. `v4.13.12` →
-  `origin/4.13.x`). The script fetches `origin/main` and warns (asking for
-  confirmation in `-Apply` mode) when `HEAD` is off both; `release.yml`
-  independently hard-fails any release whose tag does not point at the latest
-  main or the matching maintenance branch, so the workflow never
-  force-resyncs main to a tag.
+- **Main-branch guard (every release syncs main)**: main is the single release
+  source. Before creating the tag the script fetches `origin/main`; when HEAD is
+  ahead of it the script **fast-forwards main to HEAD and pushes it** (no branch
+  switch, so a dirty tree is fine — `git push <remote> HEAD:main` is rejected by
+  git unless it is a fast-forward). When `origin/main` has commits that are not
+  in HEAD the release **aborts**: merge `origin/main` into the release branch,
+  push, and re-run. `release.yml` independently hard-fails any tag that points
+  at neither the latest main nor the tip of the matching maintenance branch —
+  the workflow never force-resyncs main to a tag.
 - Creates and pushes a `v{version}` tag (e.g. `v4.13.0`), which triggers
   the release workflow via the `on.push.tags` trigger.
 - Shows changes since the previous release tag for release notes.
@@ -158,7 +159,10 @@ actually trigger and monitor.
   (`X.Y.Z-SNAPSHOT` → `X.Y.(Z+1)-SNAPSHOT`) across `VERSION`, all `pom.xml`,
   `cli/package.json`, `cli/browser4-cli/Cargo.toml` and `Cargo.lock`, then commits
   and pushes it as `Auto-bump version to X.Y.(Z+1)-SNAPSHOT` — so the next
-  release starts from the next patch. Pass `-SkipVersionBump` to disable this.
+  release starts from the next patch. It then fast-forwards `main` to the new
+  tip and pushes it, so main carries the release **and** the bump commit instead
+  of drifting behind. Pass `-SkipVersionBump` to disable the bump (main is still
+  left at the release commit by `trigger-release.ps1`).
   (Pure PowerShell — no `node`/`mvn` dependency, works in restricted sandboxes.)
 - On workflow **failure**, auto-extracts diagnostic information (failing tests,
   error blocks) and dispatches a coworker fix task.
@@ -264,13 +268,16 @@ Invoke-Pester .\bin\release\tests\monitor-release.tests.ps1
 3. Run `node bin/version.mjs bump <major|minor|patch>` to bump the version and commit.
 4. On `main` (or the matching `X.Y.x` maintenance branch for patch releases),
    run `.\bin\release\trigger-release.ps1 -Apply` to push the tag and start the CI release build.
-   The tag must point at the latest `origin/main` (or the tip of the matching
-   `X.Y.x` branch) — the script warns if it does not, and `release.yml` aborts
-   the release if the tag is off both.
+   **The script syncs `main` for you**: when HEAD is ahead of `origin/main` it
+   fast-forwards and pushes main first, and it aborts when `origin/main` has
+   commits the branch lacks (merge them in, then re-run). `release.yml` also
+   refuses any tag that is off both the latest main and the matching release branch.
 5. Wait for CI to build and publish to GitHub Releases.
 6. Run `.\bin\release\monitor-release.ps1 -Apply` (or `node bin/version.mjs bump patch`)
-   to bump the version for the next bug-fix cycle. main is never rewritten to
-   match the tag; it simply moves forward with the next `-SNAPSHOT` version.
+   to bump the version for the next bug-fix cycle. `monitor-release.ps1` also
+   fast-forwards and pushes `main` after the bump, so main never drifts behind
+   the release branch; if you bump directly, follow it with
+   `git push origin HEAD:main`.
 
 ## Release Testing Division (no duplicated smoke tests)
 

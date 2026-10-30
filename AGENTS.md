@@ -235,6 +235,25 @@ cargo test --test e2e -- --help           # All options
 > have been migrated into the base library (browser4-core modules and
 > `pulsar-tests-common`); the placeholder modules have been removed from this repo.
 
+## Releasing
+
+**Every release syncs `main`** — main must never lag behind a release. Releases
+are cut from `main` or from the matching `X.Y.x` maintenance branch, and the
+maintenance branch is the source of truth while it is active:
+
+- `bin/release/trigger-release.ps1 -Apply` fast-forwards `origin/main` to HEAD
+  (`git push origin HEAD:main`, fast-forward only) **before** creating the tag.
+  If `origin/main` has commits the release branch does not, the script aborts:
+  merge `origin/main` into the branch, push, then re-run. Never tag a commit
+  main cannot reach, and never force-resync main to a tag.
+- `bin/release/monitor-release.ps1 -Apply` runs the trigger, monitors
+  `release.yml`, bumps the version to the next `-SNAPSHOT`, then fast-forwards
+  and pushes `main` again so main carries the bump commit too.
+- `.github/workflows/release.yml` independently rejects any tag that is not the
+  latest `origin/main` or the tip of the matching `X.Y.x` branch.
+- Docs and scripts live in `bin/release/` (see its README). After changing them,
+  run `pwsh bin/test.ps1 ps`.
+
 ## Code Style
 
 ### Kotlin

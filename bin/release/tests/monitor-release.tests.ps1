@@ -13,13 +13,16 @@
     bin/release/monitor-release.ps1.
 
 .DESCRIPTION
-    Extracts Extract-MinimalErrors, New-CoworkerFailureTask, and
-    Invoke-WorkflowFailureHandler via PowerShell's AST parser and
-    tests them in isolation — no gh CLI, no network, no GitHub.
+    Extracts Extract-MinimalErrors, New-CoworkerFailureTask,
+    Invoke-PostReleaseVersionBump, Sync-MainToHead and Invoke-WorkflowFailureHandler
+    via PowerShell's AST parser and tests them in isolation — no gh CLI, no
+    network, no GitHub.
 
     Covers: error-pattern matching, deduplication, context capture,
             task-file creation, filename conventions, truncation,
-            edge cases (empty input, no matches, caps).
+            edge cases (empty input, no matches, caps), post-release version
+            bumps and their return status, and the main fast-forward that keeps
+            main from drifting behind the release branch.
 
     Run standalone:
         pwsh bin/release/tests/monitor-release.tests.ps1
@@ -212,7 +215,7 @@ function Get-FunctionsFromScript {
 Write-Host "Source : $MonitorScriptPath" -ForegroundColor DarkGray
 
 $funcText = Get-FunctionsFromScript -ScriptPath $MonitorScriptPath `
-    -FunctionNames @('ConvertTo-LogLines', 'Parse-GitHubLogLine', 'Get-FailingTestNames', 'Extract-MinimalErrors', 'New-CoworkerFailureTask', 'Invoke-PostReleaseVersionBump', 'Select-TriggeredRun')
+    -FunctionNames @('ConvertTo-LogLines', 'Parse-GitHubLogLine', 'Get-FailingTestNames', 'Extract-MinimalErrors', 'New-CoworkerFailureTask', 'Invoke-PostReleaseVersionBump', 'Sync-MainToHead', 'Select-TriggeredRun')
 
 Invoke-Expression $funcText
 
@@ -608,7 +611,8 @@ $bumpRepo = New-BumpTestRepo -VersionFileContent '4.13.5-SNAPSHOT'
 try {
     Write-Host "━━━ Invoke-PostReleaseVersionBump: SNAPSHOT patch bump ━━━" -ForegroundColor Cyan
 
-    Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo -Remote origin -SkipPush
+    $bumpResult = Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo -Remote origin -SkipPush
+    Assert-Returns -Label 'Bump: -SkipPush reports local-only' -Actual $bumpResult -Expected 'local-only'
 
     $newVersion = (Get-Content (Join-Path $bumpRepo 'VERSION') -Raw).Trim()
     Assert-Returns -Label 'Bump: VERSION 4.13.5-SNAPSHOT -> 4.13.6-SNAPSHOT' -Actual $newVersion -Expected '4.13.6-SNAPSHOT'
@@ -630,8 +634,7 @@ try {
     Assert-ContainsString -Label 'Bump: commit message' -Haystack $log -Needle 'Auto-bump version to 4.13.6-SNAPSHOT'
 
     $status = git -C $bumpRepo status --porcelain
-    Assert-Returns -Label 'Bump: working tree clean after commit' -Actual ($null -eq $status -or $status.Count -eq 0) -Expected $true
-} finally {
+    Assert-Returns -Label 'Bump: working tree clean after commit' -Actual ($null -eq $status -or $status.Count -eq 0) -Expected $true} finally {
     Remove-Item $bumpRepo -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -639,7 +642,8 @@ Write-Host "━━━ Invoke-PostReleaseVersionBump: non-SNAPSHOT VERSION ━━
 
 $bumpRepo2 = New-BumpTestRepo -VersionFileContent '4.13.5'
 try {
-    Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo2 -Remote origin -SkipPush
+    $bumpResult = Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo2 -Remote origin -SkipPush
+    Assert-Returns -Label 'Bump non-SNAPSHOT: reports local-only' -Actual $bumpResult -Expected 'local-only'
 
     $newVersion = (Get-Content (Join-Path $bumpRepo2 'VERSION') -Raw).Trim()
     Assert-Returns -Label 'Bump non-SNAPSHOT: 4.13.5 -> 4.13.6-SNAPSHOT' -Actual $newVersion -Expected '4.13.6-SNAPSHOT'
@@ -651,7 +655,8 @@ Write-Host "━━━ Invoke-PostReleaseVersionBump: unparseable VERSION skipped
 
 $bumpRepo3 = New-BumpTestRepo -VersionFileContent 'not-a-version'
 try {
-    Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo3 -Remote origin -SkipPush
+    $bumpResult = Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo3 -Remote origin -SkipPush
+    Assert-Returns -Label 'Bump bad version: reports skipped' -Actual $bumpResult -Expected 'skipped'
 
     $newVersion = (Get-Content (Join-Path $bumpRepo3 'VERSION') -Raw).Trim()
     Assert-Returns -Label 'Bump bad version: VERSION untouched' -Actual $newVersion -Expected 'not-a-version'
@@ -668,12 +673,78 @@ $bumpRepo4 = New-BumpTestRepo -VersionFileContent '4.13.5-SNAPSHOT'
 try {
     Set-Content -Path (Join-Path $bumpRepo4 'untracked.txt') -Value 'dirty' -Encoding UTF8
 
-    Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo4 -Remote origin -SkipPush
+    $bumpResult = Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo4 -Remote origin -SkipPush
+    Assert-Returns -Label 'Bump dirty tree: reports skipped' -Actual $bumpResult -Expected 'skipped'
 
     $newVersion = (Get-Content (Join-Path $bumpRepo4 'VERSION') -Raw).Trim()
     Assert-Returns -Label 'Bump dirty tree: VERSION untouched' -Actual $newVersion -Expected '4.13.5-SNAPSHOT'
 } finally {
     Remove-Item $bumpRepo4 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ===================================================================
+# TESTS: Sync-MainToHead (every release leaves main at the release tip)
+# ===================================================================
+Write-Host "━━━ Sync-MainToHead: fast-forward, idempotence, blocked ━━━" -ForegroundColor Cyan
+
+# Regression this guards: main silently drifted weeks behind the 4.15.x release
+# branch because nothing synced it after the post-release version bump. The
+# release flow now pushes HEAD:main twice (before the tag and after the bump);
+# this covers the post-bump one.
+function New-MainSyncTestRepo {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) "b4-test-mainsync-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -Path $root -ItemType Directory -Force | Out-Null
+    $remote = Join-Path $root 'remote.git'
+    git init --bare -q $remote
+    $work = Join-Path $root 'work'
+    git clone -q $remote $work 2>$null
+    git -C $work config user.email 'test@example.com'
+    git -C $work config user.name 'Test'
+    Set-Content -Path (Join-Path $work 'VERSION') -Value '4.15.3-SNAPSHOT' -Encoding UTF8
+    git -C $work add -A
+    git -C $work commit -qm 'initial'
+    git -C $work branch -M main
+    git -C $work push -q -u origin main 2>$null
+    return @{ Root = $root; Remote = $remote; Work = $work }
+}
+
+$syncRepo = New-MainSyncTestRepo
+try {
+    $work = $syncRepo.Work
+
+    # Release branch one commit ahead of main: must fast-forward main.
+    git -C $work checkout -q -b 4.15.x
+    Set-Content -Path (Join-Path $work 'release.txt') -Value 'release' -Encoding UTF8
+    git -C $work add -A
+    git -C $work commit -qm 'release commit'
+
+    $result = Sync-MainToHead -RepoRoot $work -Remote origin
+    Assert-Returns -Label 'MS: branch ahead => synced' -Actual $result -Expected 'synced'
+
+    $head = git -C $work rev-parse HEAD
+    $remoteMain = git -C $work rev-parse origin/main
+    Assert-Returns -Label 'MS: origin/main now at HEAD' -Actual ($remoteMain -eq $head) -Expected $true
+    Assert-Returns -Label 'MS: release branch is still checked out' -Actual (git -C $work rev-parse --abbrev-ref HEAD) -Expected '4.15.x'
+
+    # Idempotent: a second call is a no-op.
+    $result = Sync-MainToHead -RepoRoot $work -Remote origin
+    Assert-Returns -Label 'MS: already in sync => already' -Actual $result -Expected 'already'
+
+    # main gains a commit the release branch does not have: refuse to rewrite.
+    git -C $work checkout -q main
+    Set-Content -Path (Join-Path $work 'main-only.txt') -Value 'main only' -Encoding UTF8
+    git -C $work add -A
+    git -C $work commit -qm 'main-only commit'
+    git -C $work push -q origin main 2>$null
+    $mainOnlySha = git -C $work rev-parse HEAD
+    git -C $work checkout -q 4.15.x
+
+    $result = Sync-MainToHead -RepoRoot $work -Remote origin
+    Assert-Returns -Label 'MS: main ahead => blocked' -Actual $result -Expected 'blocked'
+    $remoteMainAfter = git -C $work rev-parse origin/main
+    Assert-Returns -Label 'MS: blocked sync does not rewrite main' -Actual ($remoteMainAfter -eq $mainOnlySha) -Expected $true
+} finally {
+    Remove-Item $syncRepo.Root -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ===================================================================
