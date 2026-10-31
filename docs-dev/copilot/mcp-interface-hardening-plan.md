@@ -1,6 +1,6 @@
 # MCP 接口层加固开发计划（需求 1–14）
 
-> 日期：2026-09-13（Phase 3 更新 2026-09-14） · 分支基准：`feat/mcp-channel-parity`（已含 P0–P5 与 refreshTools 修复）
+> 日期：2026-09-13（Phase 3 更新 2026-09-14；2026-10-31 校正各阶段「剩余」中的过期表述并补记 9.3） · 分支基准：`feat/mcp-channel-parity`（已含 P0–P5 与 refreshTools 修复）
 > 范围：标准 MCP server（A，`browser4-agentic`，8088）+ 私有 dispatcher（B，`browser4-rest`，8888/18182）+ 其背后的 REST 端点
 > 依据：本计划全部条目来自**实跑观测**（见 §1），不是纸面推演
 
@@ -13,9 +13,7 @@
 > - `0.2` `ToolSpec.expression` 不再打印 `Arg(name=…)`；`help{crawl,submit}` → `crawl.submit(url: String, depth: Int = 1, args: String = "")`。顺带修掉更严重的既有缺陷：`extractInterface` 把「无默认值」写成空串，导致**所有源码生成的参数都被标成可选**（`required` 恒空）。新增 `ToolSpecSnapshotRegenerator`（`-DregenerateSpecSnapshots=true`）重生成 `code-mirror` 快照。
 > - `0.3` 新增 `ToolTargetResolver`（agentic）+ `CustomToolTargets`（rest，控制器与标准 server 共用）；`ToolExecutor.requiresReceiver` 区分「服务自持」执行器；`command` 域改为经 `CustomToolRegistry` 直接派发。实测：`memory_search`/`experience_list`/`crawl_status`/`command_status`/`webdb_normalize`/`experience_query`/`html_snapshot_summary`/`skill_list` 均可执行（此前只有 `skill_*`）。
 > - `0.4`（验证中发现的阻断项）标准 server 此前**只透传已声明参数**，而 `tab.navigate` 声明的是 `userTypedUrl` → 客户端发 `{"url": …}` 被丢弃，最基本的导航在 A 上不可用。现改为「声明参数按类型转换 + 其余原样透传」，与 B 对齐；实测 `navigate{"url"}` → `title` → `html_snapshot_summary` 全链路通过。
-> - `0.6` `ToolSpecLint` + `ToolSpecLintTest` 进测试：错误级（空描述、签名泄漏、重复签名、kebab `cliName`）必须为零；当前报告 **117 个生成 spec / 175 条文档告警**，即 Phase 1 的量化待办。
-
-仍在的缺口，构成本计划后续阶段的前置项：
+> - `0.6` `ToolSpecLint` + `ToolSpecLintTest` 进测试：错误级（空描述、签名泄漏、重复签名、kebab `cliName`）必须为零；首跑报告 **117 个生成 spec / 175 条文档告警**，该指标随后收口为 26 条（其中 13 条为合法重载提示，见 Phase 1）。
 
 已修复（本分支）：`2cc9936865`（插件域晚注册导致 A 少 26 个工具）、`2e191e8e59`（stateless 传输）、`913e3cf82d`（工具面/命名/结果/会话对齐）。
 
@@ -28,7 +26,7 @@
 | G3 | A 公告 26 个插件域工具，**只有 `skill_*`（11）能执行**，其余报 `no target object is available` | 实跑 6 个域探测 | 4, 3 |
 | G4 | 同一工具两通道参数行为不一致：A 只透传**已声明**参数（`crawl.sql/urls` 传不进），B 全量透传 | `Browser4MCPServer.buildArgsMap` vs `MCPToolController.dispatchToCustomExecutor` | 5, 3 |
 | G5 | ✅ 已修（`ceaa98a691`）：B 的 `/mcp/tools` 曾「首探即缓存」整个列表，首探发生在会话创建前 → 工具面永远停在 83。现静态段缓存、会话段每次请求合并；实测 `open_session` 前 83 → 后 **275**（+192 个 `navigate`/`click`/`title`… ） | 实跑对比 | 10 |
-| G6 | 别名/命名/渲染曾有三份副本漂移（已建 `McpToolNames`/`ToolResultTextRenderer`，仍有 2 个别名因缺 canonical spec 注册不上） | `browser_is_enabled`/`browser_dialog_status` 缺席 | 1, 3 |
+| G6 | ✅ 已修：别名/命名/渲染曾有三份副本漂移（已建 `McpToolNames`/`ToolResultTextRenderer`）；曾因缺 canonical spec 注册不上的 `browser_is_enabled`/`browser_dialog_status` 已补显式 spec，`ToolContractMatrixTest.frontendAliasesResolve` 断言 43 个别名 → 0 孤儿 | `browser_is_enabled`/`browser_dialog_status` 缺席 | 1, 3 |
 | G7 | 错误是自由文本（`ERROR: xxx failed: ...`），无稳定错误码；HTTP 恒 200 | A/B 实测 | 4 |
 | G8 | 无参数校验层/无返回值校验（`ToolSpec.returnType` 是字符串，未用于校验） | 代码 | 5, 6 |
 | G9 | 无调用日志规范（B 把参数直接拼进 INFO）、无 per-tool 指标、无限流、无结果缓存、A 无批量 | 代码 + 实跑 | 7–14 |
@@ -107,13 +105,14 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
 - `ToolSpecGenerator` 从镜像 `WebDriver.kt` 的 KDoc 提取 `@param` 说明（≈170 条）写入 `Arg.description`，并把 KDoc 代码块提取为 `ToolSpec.examples`；生成的 spec 快照同时携带两者，JAR 离线回退时文档依旧完整。
 - `ToolDocGenerator` 生成 `docs/mcp-tools.md`（137 工具 / 9 域：签名、参数表含类型/必填/默认/含义、返回值、示例、全文）与 `docs/mcp-tools.json`（机器可读）；`ToolDocGeneratorTest` 作为漂移门禁（重生成必须零 diff）。
 - `help` 输出统一为「签名 + 参数含义 + 示例 + 作者补充」，tab 域不再只回 KDoc 散文；`Server.instructions` 明确指引 `help` / `skill_doc`。
-- 新增 `ToolExample`；**可执行示例**（带 args）会写进 MCP 工具描述（`tools/list` 唯一能携带示例的位置）。已authoring：crawl（3）、command（3）、webdb（2）、skill 管理（5）；tab 域为 KDoc 文档片段。
+- 新增 `ToolExample`；**可执行示例**（带 args）会写进 MCP 工具描述（`tools/list` 唯一能携带示例的位置）。本阶段已 authoring：crawl（3）、command（3）、webdb（2）、skill 管理（5）；tab 域当时为 KDoc 文档片段，后续补齐到全量 **142/142**（见 §8.2）。
 - 量化结果：lint 文档告警 **175 → 26**（其中 13 条为合法重载提示），真实缺口 12 条参数缺说明 + 1 条缺 help。
 
-**剩余**
-- tab 域 117 个生成 spec 的**可执行示例覆盖 0/117**（lint 已在报告该指标）——按需为高频工具（navigate/click/fill/press/screenshot/ariaSnapshot/query…）补 args 示例。
-- 需求 2.3 CLI 侧 `--help --examples`（`help.rs`/`tips.rs`）未做。
-- 需求 1.1 的「CI 比对显式覆盖集 == @MCP 扫描集」未做（当前靠 KDoc 提取 + 快照 + 文档门禁保证一致性）。
+**剩余**（仅两项收口，功能面已完成）
+- 需求 1.1 的「CI 比对显式覆盖集 == @MCP 扫描集」未做（当前靠 KDoc 提取 + 快照 + 文档漂移门禁 + lint 兜底）。
+- 生成器层面的「重载择优选 JSON 友好签名」未做：原始生成 spec 仍有 13 处（10 方法）非 JSON 参数，已由显式覆盖兜住，公告集合零违规（见 §3 Phase 2 的 `ToolSpecLint` 条）。
+- ~~tab 域可执行示例覆盖~~ **已清零**：全量 **142/142**，矩阵报 `missing altogether: 0`（见 §8.2）。
+- ~~需求 2.3 CLI 侧 `--help --examples`~~ **已完成**（`help.rs`/`tips.rs`，见 §8.7 第 6 条）。
 
 **需求 1 — 优化接口文档，直接提供接口文档，不再依赖 WebDriver 文档**
 - 1.1 全量 spec 补齐：tab 域 114 个 `@MCP` 方法的文档字段改为仓库内显式覆盖（新增 `WebDriverToolSpecOverrides.kt`），CI 比对"覆盖集 == 扫描集"。
@@ -231,11 +230,11 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
 **已知缺口（诚实记录）**
 - **B 通道只校验「自定义域」工具**：`MCPToolController.validateArguments` 取的是 `CustomToolRegistry` 执行器的 spec，因此 `tab_*`/`browser_*` 等内置域在 B 上曾完全不过校验——同一非法输入 A 拒绝、B 放行，需求 3/5 的「两通道同码」尚未真正成立。**已通过影子模式解决观测问题（见上）**，但默认仍是「观测不拒绝」：把 `-Dmcp.validateBuiltinArgs=error` 打开才是 B 与 A 同码的完成态，需等 shadow 计数连续为 0。
 - 运行时包内**没有** `micrometer-registry-prometheus`（在 `browser4-agentic/pom.xml` 里是 `optional`）→ 线上 `/actuator/prometheus` 返回 404，本轮以 `/api/mcp/stats` + `/actuator/metrics`（实测 `tool.*` 10 个指标可见）作为查询面。需要 Prometheus 抓取时把该依赖以非 optional 引入运行时包即可，代码侧无需改动（`MetricsConfig.isPrometheus` 会自动转为 `true`）。
-- 需求 8.2 的 **OTel span**（`mcp.tool.call` → `agent.execute` → `cdp.*`）本轮未做；现有 `agentic` 侧 OTel 依赖仍是可选的，接入前先确认 bundle 是否携带 OTel SDK。
-- `session.active` / `async.queue.depth` 指标未加（依赖 Phase 4/5 的队列实现）。
+- 需求 8.2 的 **OTel span**：`mcp.tool.call` 父 span **已落地**（实现细节与三个"可选依赖"陷阱见 §8.7 第 4 条）；仍未做的是 `agent.execute` / `cdp.*` 子 span，接子 span 是自然延伸。
+- `session.active` / `async.queue.depth` 两个 gauge **已落地**：取值由部署侧注入（`ToolMetrics.registerSessionCountSupplier` / `registerAsyncTaskCountSupplier`），`McpToolMetricsConfiguration` 分别接 `PulsarSessionManager.getAllSessions().size` 与 `CrawlService.runningTaskCount()`（见 §8.2）。
 
 **需求 7 — 增加接口日志记录**
-- 7.1 `ToolInvocationLogger`：一进一出两条结构化日志，字段 `requestId / channel(A|B) / tool / domain.method / sessionId / durationMs / outcomeCode / cached / stepIndex`。（`cached`/`stepIndex` 待 Phase 4/5 引入后追加）
+- 7.1 `ToolInvocationLogger`：一进一出两条结构化日志，字段 `requestId / channel(A|B) / tool / domain.method / sessionId / durationMs / outcomeCode / cached / stepIndex`。（`cached` 已随 Phase 4 缓存落地；`stepIndex` 按 §8.3 判定**不需要**——批处理步骤不产生 `tool.call` 行，由 `batch.step` 承担）
 - 7.2 脱敏与截断：`sensitiveArgs`（cookie/token/password/apiKey/storage-state/文件内容）→ `***`；大 payload 只记长度与 sha256 前 8 位。
 - 7.3 `requestId` 贯通：B 已有 `X-Request-Id`，A 从 `_meta`/`Mcp-Request-Id` 取或生成，写入 MDC 供排障关联。
 - **验收**：A/B 日志结构一致；脱敏单测；INFO 日志中不出现参数正文；同一 requestId 可从入口追到 CDP 调用。
@@ -418,8 +417,8 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
   | `html_snapshot.scrape` / `scrape_all` | `attrName` | 仅 `field=attr` 需要 | 改可选 |
   | `html_snapshot.query` | `url` | 「否则用当前页」 | 改可选 |
   | `html_snapshot.readability` | `url` | `required = false` | 改可选 |
-- 矩阵新增**缺口清单**输出（按域统计缺示例的工具数），把「还要补多少」变成可读数字：当前 `tab 58 / experience 4 / skill 1`（tab 剩余为低频 setter/selector 家族）。
-- **未做**：experience（4）与 skill（1）示例；tab 剩余 58 个低频方法。
+- 矩阵新增**缺口清单**输出（按域统计缺示例的工具数），把「还要补多少」变成可读数字：首跑为 `tab 58 / experience 4 / skill 1`，随后逐批补齐，最终 **142/142、缺口 0**（`experience`4 + `skill`1 最先补，tab 长尾 32 个随后清零，见 §8.2）。
+- **已全部补齐**：没有剩余的无示例工具；矩阵以示例作为 happy-path 入参跑校验器，`everyWrittenTabExampleReachesTheSpec` 保证示例必须落到真实 spec 上。
 
 **6.4 门禁（已完成）**
 - `bin/test.ps1 mcp-contract` 新增（`mcp` 保持原样）：模块 `browser4-agentic + browser4-rest`，模式包含矩阵、文档漂移、lint、校验器、错误码、限流、缓存、批处理、任务信封、日志与指标、别名一致性。
@@ -488,11 +487,11 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
 ## 6. 完成定义（Definition of Done）
 
 - 需求 1：新客户端仅凭 `tools/list` + `help` 即可正确调用任一工具；`docs/mcp-tools.md` 生成无 diff；零 WebDriver 文档依赖（lint 兜底）。
-- 需求 2：每工具 ≥1 可执行示例，且示例即契约测试入参。（**现状 15/140**：矩阵已把「示例必须是可调用入参」变成断言，示例补齐后自动获得验收）
-- 需求 3：工具 × 6 类**通道无关**用例矩阵全绿（140 × 6），通道相关用例（会话/限流/缓存/批量）由各阶段测试与 e2e 承担；`bin/test.ps1 mcp-contract` PR 门禁实测 3 分 50 秒 < 5 min。
+- 需求 2：每工具 ≥1 可执行示例，且示例即契约测试入参。（**现状 142/142**：矩阵以示例作为 happy-path 入参跑校验器，`missing altogether: 0`，见 §8.2）
+- 需求 3：工具 × 6 类**通道无关**用例矩阵全绿（142 × 6），通道相关用例（会话/限流/缓存/批量）由各阶段测试与 e2e 承担；`bin/test.ps1 mcp-contract` PR 门禁实测 3 分 50 秒 < 5 min。
 - 需求 4：所有失败路径有稳定 `errorCode` + retryable 语义，A/B 一致。
 - 需求 5/6：同一非法输入两通道同码；全量契约跑完 `schema_violation == 0`。
-- 需求 7/8：日志结构化且脱敏；每工具指标 + trace 可见；`/api/mcp/stats` 有真实数据。（**代码 + 单测已完成**；OTel span 与运行时 Prometheus 抓取见 Phase 3「已知缺口」）
+- 需求 7/8：日志结构化且脱敏；每工具指标 + trace 可见；`/api/mcp/stats` 有真实数据。（**代码 + 单测已完成**；`mcp.tool.call` 父 span 已落地，子 span `agent.execute`/`cdp.*` 未做；运行时 Prometheus 抓取保持 optional，见 Phase 3「已知缺口」）
 - 需求 9/10/11：限流可复现拒绝、缓存命中与失效可验证、长任务可轮询可取消。
 - 需求 12/13/14：A/B 批量结果逐字段一致；幂等批次可缓存回放；批次指标/span/日志齐全。
 
