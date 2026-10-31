@@ -1,5 +1,8 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.rest.api.service.crawl.CrawlAdmission
+import ai.platon.pulsar.rest.api.service.crawl.CrawlQueueFullException
 import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResumeResult
@@ -197,5 +200,25 @@ class CrawlController(
     fun handleConflict(e: IllegalStateException): Map<String, Any> {
         logger.warn("Crawl request conflict: {}", e.message)
         return mapOf("error" to "Conflict", "message" to (e.message ?: ""))
+    }
+
+    /**
+     * A submission refused because the crawl queue is saturated is a `429`, not a
+     * `500`: the request was valid, the backend is behind, and the same call
+     * succeeds once a running task finishes (or is cancelled). Nothing was created
+     * for the refused call, so retrying it is safe.
+     */
+    @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
+    @ExceptionHandler(CrawlQueueFullException::class)
+    fun handleQueueFull(e: CrawlQueueFullException): Map<String, Any> {
+        logger.warn("Crawl queue is full: {}", e.message)
+        return mapOf(
+            "error" to "Too Many Requests",
+            // The stable code the CLI maps to its `RATE_LIMITED` hint, so a saturated
+            // queue reads like a throttled MCP call even on the REST path.
+            "errorCode" to ToolErrorCode.RATE_LIMITED.wire,
+            "message" to (e.message ?: ""),
+            "retryAfterMs" to CrawlAdmission.RETRY_AFTER_MS
+        )
     }
 }
