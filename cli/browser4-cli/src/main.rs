@@ -27422,10 +27422,10 @@ async fn maybe_auto_update(command: &str, base_url: &str, global: &GlobalFlags) 
     let mut state = load_state();
     let now = Utc::now().timestamp();
 
-    // Resolve the latest tag, reusing the cache while it is within the TTL.
-    let latest_tag = if is_check_fresh(&state, now) {
-        state.latest_tag.clone()
-    } else {
+    // Resolve the latest tag at most once per TTL.  A failed attempt counts
+    // too, so an offline machine does not pay the resolve timeout on every
+    // command; the stale cache (if any) keeps being served meanwhile.
+    let latest_tag = if should_attempt_check(&state, now) {
         let resolved = tokio::time::timeout(
             std::time::Duration::from_secs(RESOLVE_TIMEOUT_SECS),
             daemon::resolve_latest_tag(&daemon::load_mirrors()),
@@ -27439,8 +27439,9 @@ async fn maybe_auto_update(command: &str, base_url: &str, global: &GlobalFlags) 
             state.latest_tag = Some(tag.clone());
         }
         save_state(&state);
-        // On network failure keep serving the stale cache rather than nothing.
         resolved.or_else(|| state.latest_tag.clone())
+    } else {
+        state.latest_tag.clone()
     };
     let Some(latest_tag) = latest_tag else {
         return;
@@ -27461,25 +27462,44 @@ async fn maybe_auto_update(command: &str, base_url: &str, global: &GlobalFlags) 
             );
         }
         json_field("update_available", json!(tag));
-        state.last_notified_tag = Some(tag.clone());
-        save_state(&state);
+        // Only mark the tag as seen when the user could actually observe it —
+        // under `--quiet` an unprinted hint would otherwise be suppressed
+        // forever, since the dedup check keys off this field.
+        if !global.quiet || json_active() {
+            state.last_notified_tag = Some(tag.clone());
+            save_state(&state);
+        }
     }
 
     if let Some(ref plan) = decision.prefetch {
-        state.last_prefetch_attempt = Some(PrefetchAttempt {
-            tag: plan.tag.clone(),
-            at: now,
-        });
-        save_state(&state);
-        spawn_update_agent(plan);
+        // Record the attempt only once the child actually started, so a spawn
+        // failure (deleted/moved executable) neither disappears silently nor
+        // burns the one-hour retry window.
+        if spawn_update_agent(plan) {
+            state.last_prefetch_attempt = Some(PrefetchAttempt {
+                tag: plan.tag.clone(),
+                at: now,
+            });
+            save_state(&state);
+        } else if !global.quiet {
+            eprintln!(
+                "⚠  Could not start the background updater for {}; \
+                 run '{bin} upgrade' to update manually.",
+                plan.tag,
+                bin = cli_binary_name(),
+            );
+        }
     }
 }
 
 /// Launch the detached background updater process.  Fire-and-forget: stdio is
 /// nulled and the child is never waited on, so it outlives this invocation.
-fn spawn_update_agent(plan: &update_check::PrefetchPlan) {
+///
+/// Returns whether the child was started; the caller only records the
+/// prefetch attempt (and its retry window) on success.
+fn spawn_update_agent(plan: &update_check::PrefetchPlan) -> bool {
     let Ok(exe) = std::env::current_exe() else {
-        return;
+        return false;
     };
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("__update-agent").arg("--tag").arg(&plan.tag);
@@ -27496,7 +27516,7 @@ fn spawn_update_agent(plan: &update_check::PrefetchPlan) {
         const DETACHED_PROCESS: u32 = 0x00000008;
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
     }
-    let _ = cmd.spawn();
+    cmd.spawn().is_ok()
 }
 
 /// Entry point of the hidden `__update-agent` command.

@@ -246,15 +246,20 @@ $RuntimeDataDir = Join-Path $WorkingDir 'runtime'    # BROWSER4_RUNTIME_DIR
 $_prevBrowser4CliStateDir = [System.Environment]::GetEnvironmentVariable('BROWSER4_CLI_STATE_DIR')
 $_prevBrowser4RuntimeDir  = [System.Environment]::GetEnvironmentVariable('BROWSER4_RUNTIME_DIR')
 $_prevBrowser4ServerOpts  = [System.Environment]::GetEnvironmentVariable('BROWSER4_SERVER_OPTS')
+$_prevBrowser4AutoUpgrade = [System.Environment]::GetEnvironmentVariable('BROWSER4_AUTO_UPGRADE')
 
 # Export environment variables so the CLI binary uses the test sandbox.
 # - BROWSER4_CLI_STATE_DIR  → state directory (cli-state.json, sessions/)
 # - BROWSER4_RUNTIME_DIR    → runtime bundle & download cache
 # - BROWSER4_SERVER_OPTS    → JVM options for the backend server
 #   (app.name tag distinguishes test-server instances from production ones)
+# - BROWSER4_AUTO_UPGRADE   → off: the tested binary is a *release* build, so
+#   the default `notify` policy would print an upgrade hint on stderr whenever
+#   a newer release exists, polluting assertions and adding a network probe.
 $env:BROWSER4_CLI_STATE_DIR = $Browser4Home
 $env:BROWSER4_RUNTIME_DIR   = $RuntimeDataDir
 $env:BROWSER4_SERVER_OPTS   = '-Dapp.name=browser4-acceptance-test'
+$env:BROWSER4_AUTO_UPGRADE  = 'off'
 
 # ─────────────────────────────────────────────────────
 # State tracking
@@ -1955,6 +1960,11 @@ if ($finalUpgradeOk) {
         $env:BROWSER4_SERVER_OPTS = $_prevBrowser4ServerOpts
     } else {
         Remove-Item Env:\BROWSER4_SERVER_OPTS -ErrorAction SilentlyContinue
+    }
+    if ($_prevBrowser4AutoUpgrade) {
+        $env:BROWSER4_AUTO_UPGRADE = $_prevBrowser4AutoUpgrade
+    } else {
+        Remove-Item Env:\BROWSER4_AUTO_UPGRADE -ErrorAction SilentlyContinue
     }
 }
 

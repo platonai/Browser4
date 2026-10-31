@@ -22,29 +22,29 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Environment variable selecting the auto-update policy.
-pub(crate) const AUTO_UPGRADE_ENV: &str = "BROWSER4_AUTO_UPGRADE";
+pub const AUTO_UPGRADE_ENV: &str = "BROWSER4_AUTO_UPGRADE";
 
 /// State file name under the runtime data dir.
 const STATE_FILE_NAME: &str = "update-check.json";
 
 /// How long a resolved latest tag is reused before re-checking (24 h).
-pub(crate) const CHECK_TTL_SECS: i64 = 24 * 3600;
+pub const CHECK_TTL_SECS: i64 = 24 * 3600;
 
 /// Minimum interval between two prefetch attempts for the same tag (1 h).
-pub(crate) const PREFETCH_RETRY_INTERVAL_SECS: i64 = 3600;
+pub const PREFETCH_RETRY_INTERVAL_SECS: i64 = 3600;
 
 /// A tag is blacklisted after this many consecutive download failures.
-pub(crate) const FAILURE_BLACKLIST_THRESHOLD: u32 = 3;
+pub const FAILURE_BLACKLIST_THRESHOLD: u32 = 3;
 
 /// How long a blacklisted tag stays blacklisted (7 days).
-pub(crate) const FAILURE_BLACKLIST_SECS: i64 = 7 * 24 * 3600;
+pub const FAILURE_BLACKLIST_SECS: i64 = 7 * 24 * 3600;
 
 /// Budget for resolving the latest tag from the network, in seconds.
-pub(crate) const RESOLVE_TIMEOUT_SECS: u64 = 3;
+pub const RESOLVE_TIMEOUT_SECS: u64 = 3;
 
 /// How aggressively the CLI keeps itself up to date.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AutoUpgradePolicy {
+pub enum AutoUpgradePolicy {
     /// Never check, never notify.
     Off,
     /// Check and print a hint (default).
@@ -57,7 +57,7 @@ pub(crate) enum AutoUpgradePolicy {
 
 impl AutoUpgradePolicy {
     /// Parse a policy string; `None` for unrecognised values.
-    pub(crate) fn parse(raw: &str) -> Option<Self> {
+    pub fn parse(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "off" | "0" | "false" | "disabled" => Some(Self::Off),
             "notify" => Some(Self::Notify),
@@ -69,14 +69,14 @@ impl AutoUpgradePolicy {
 
     /// Resolve the effective policy: the env var wins; default is `notify`.
     /// Unrecognised values fall back to `notify` (never silently to `off`).
-    pub(crate) fn from_env() -> Self {
+    pub fn from_env() -> Self {
         std::env::var(AUTO_UPGRADE_ENV)
             .ok()
             .and_then(|v| Self::parse(&v))
             .unwrap_or(Self::Notify)
     }
 
-    pub(crate) fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Off => "off",
             Self::Notify => "notify",
@@ -88,16 +88,16 @@ impl AutoUpgradePolicy {
 
 /// Record of one background prefetch attempt (rate-limiting).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PrefetchAttempt {
-    pub(crate) tag: String,
-    pub(crate) at: i64,
+pub struct PrefetchAttempt {
+    pub tag: String,
+    pub at: i64,
 }
 
 /// Per-tag download failure record (blacklisting).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct FailureRecord {
-    pub(crate) count: u32,
-    pub(crate) last_failed_at: i64,
+pub struct FailureRecord {
+    pub count: u32,
+    pub last_failed_at: i64,
 }
 
 /// Persisted auto-update state (`<runtime-data-dir>/update-check.json`).
@@ -105,37 +105,37 @@ pub(crate) struct FailureRecord {
 /// All timestamps are epoch seconds — trivially comparable and immune to
 /// RFC3339 parsing edge cases.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct UpdateCheckState {
+pub struct UpdateCheckState {
     /// Epoch seconds of the last latest-tag resolution attempt.
     #[serde(default)]
-    pub(crate) last_check_at: Option<i64>,
+    pub last_check_at: Option<i64>,
     /// Latest release tag observed at the last successful resolution.
     #[serde(default)]
-    pub(crate) latest_tag: Option<String>,
+    pub latest_tag: Option<String>,
     /// The last tag a notification was printed for (dedup).
     #[serde(default)]
-    pub(crate) last_notified_tag: Option<String>,
+    pub last_notified_tag: Option<String>,
     /// A fully downloaded runtime waiting to be activated on next launch.
     #[serde(default)]
-    pub(crate) pending_tag: Option<String>,
+    pub pending_tag: Option<String>,
     /// The tag that was active before the pending one was committed.
     #[serde(default)]
-    pub(crate) previous_tag: Option<String>,
+    pub previous_tag: Option<String>,
     /// Last prefetch attempt (rate-limited per tag).
     #[serde(default)]
-    pub(crate) last_prefetch_attempt: Option<PrefetchAttempt>,
+    pub last_prefetch_attempt: Option<PrefetchAttempt>,
     /// Per-tag download failures; ≥ threshold blacklists the tag for 7 days.
     #[serde(default)]
-    pub(crate) failures: HashMap<String, FailureRecord>,
+    pub failures: HashMap<String, FailureRecord>,
 }
 
 /// Path of the state file.
-pub(crate) fn state_file_path() -> PathBuf {
+pub fn state_file_path() -> PathBuf {
     crate::state::resolve_runtime_data_dir().join(STATE_FILE_NAME)
 }
 
 /// Load the state file; missing or corrupt files yield a default state.
-pub(crate) fn load_state() -> UpdateCheckState {
+pub fn load_state() -> UpdateCheckState {
     let path = state_file_path();
     fs::read_to_string(&path)
         .ok()
@@ -145,7 +145,7 @@ pub(crate) fn load_state() -> UpdateCheckState {
 
 /// Persist the state file (best-effort — a read-only data dir must never
 /// break the command the user actually ran).
-pub(crate) fn save_state(state: &UpdateCheckState) {
+pub fn save_state(state: &UpdateCheckState) {
     let path = state_file_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -155,16 +155,18 @@ pub(crate) fn save_state(state: &UpdateCheckState) {
     }
 }
 
-/// Whether the cached latest tag is still within the check TTL.
-pub(crate) fn is_check_fresh(state: &UpdateCheckState, now: i64) -> bool {
-    state.latest_tag.is_some()
-        && state
-            .last_check_at
-            .map_or(false, |at| now - at < CHECK_TTL_SECS)
+/// Whether this pass should spend a network round-trip resolving the latest
+/// tag.
+///
+/// A *failed* attempt also stamps `last_check_at`, so an offline machine
+/// retries at most once per TTL instead of paying the resolve timeout on
+/// every single command.
+pub fn should_attempt_check(state: &UpdateCheckState, now: i64) -> bool {
+    state.last_check_at.map_or(true, |at| now - at >= CHECK_TTL_SECS)
 }
 
 /// Extract the major version number from a tag (`v4.16.0-rc.1` → `Some(4)`).
-pub(crate) fn major_of(tag: &str) -> Option<u64> {
+pub fn major_of(tag: &str) -> Option<u64> {
     tag.trim_start_matches('v')
         .split('-')
         .next()?
@@ -176,19 +178,19 @@ pub(crate) fn major_of(tag: &str) -> Option<u64> {
 
 /// What the background updater should download.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PrefetchPlan {
-    pub(crate) tag: String,
+pub struct PrefetchPlan {
+    pub tag: String,
     /// `full` policy: also self-upgrade the CLI binary.
-    pub(crate) self_upgrade: bool,
+    pub self_upgrade: bool,
 }
 
 /// The outcome of one auto-update decision pass.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct UpdateDecision {
+pub struct UpdateDecision {
     /// Tag to notify the user about (`None` = stay silent).
-    pub(crate) notify: Option<String>,
+    pub notify: Option<String>,
     /// Background prefetch to launch (`None` = nothing to download).
-    pub(crate) prefetch: Option<PrefetchPlan>,
+    pub prefetch: Option<PrefetchPlan>,
 }
 
 /// Decide what to do about `latest_tag`, given the policy and the state.
@@ -205,7 +207,7 @@ pub(crate) struct UpdateDecision {
 /// - Prefetch (runtime/full only) is skipped when the tag is already pending,
 ///   already on disk, blacklisted (≥3 failures within 7 days), or when the
 ///   same tag was attempted within the last hour.
-pub(crate) fn decide(
+pub fn decide(
     policy: AutoUpgradePolicy,
     current_tag: &str,
     latest_tag: &str,
@@ -250,7 +252,7 @@ pub(crate) fn decide(
 }
 
 /// Record a failed prefetch so the tag backs off (and eventually blacklists).
-pub(crate) fn record_prefetch_failure(state: &mut UpdateCheckState, tag: &str, now: i64) {
+pub fn record_prefetch_failure(state: &mut UpdateCheckState, tag: &str, now: i64) {
     let record = state.failures.entry(tag.to_string()).or_default();
     record.count = record.count.saturating_add(1);
     record.last_failed_at = now;
@@ -265,7 +267,7 @@ pub(crate) fn record_prefetch_failure(state: &mut UpdateCheckState, tag: &str, n
 /// pending tag is not newer than the active one (e.g. the user manually
 /// installed a newer or different-major runtime meanwhile — activating would
 /// downgrade).
-pub(crate) fn commit_pending_tag_if_ready() {
+pub fn commit_pending_tag_if_ready() {
     let mut state = load_state();
     let Some(pending) = state.pending_tag.clone() else {
         return;
@@ -542,27 +544,33 @@ mod tests {
     }
 
     #[test]
-    fn check_freshness_respects_ttl() {
+    fn attempt_backoff_respects_ttl_even_without_a_cached_tag() {
         let now = 1_000_000;
-        let fresh = UpdateCheckState {
+        let recent = UpdateCheckState {
             latest_tag: Some("v4.16.0".to_string()),
             last_check_at: Some(now - CHECK_TTL_SECS + 1),
             ..Default::default()
         };
-        assert!(is_check_fresh(&fresh, now));
+        assert!(!should_attempt_check(&recent, now));
 
         let stale = UpdateCheckState {
             latest_tag: Some("v4.16.0".to_string()),
             last_check_at: Some(now - CHECK_TTL_SECS),
             ..Default::default()
         };
-        assert!(!is_check_fresh(&stale, now));
+        assert!(should_attempt_check(&stale, now));
 
-        let never_checked = UpdateCheckState {
-            last_check_at: Some(now),
+        // A recent *failed* attempt (no cached tag) still backs off — this is
+        // what keeps an offline machine from paying the resolve timeout on
+        // every command.
+        let recent_failure = UpdateCheckState {
+            last_check_at: Some(now - 60),
             ..Default::default()
         };
-        assert!(!is_check_fresh(&never_checked, now), "no cached tag = not fresh");
+        assert!(!should_attempt_check(&recent_failure, now));
+
+        let never_checked = UpdateCheckState::default();
+        assert!(should_attempt_check(&never_checked, now), "no attempt yet");
     }
 
     #[test]

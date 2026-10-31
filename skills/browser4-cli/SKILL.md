@@ -478,10 +478,12 @@ The CLI checks for newer releases in the background, controlled by `BROWSER4_AUT
 | `full` | `runtime` plus a self-upgrade of the CLI binary in the same background pass. |
 
 Safety rails: checks run only against the local backend with an installed
-packaged runtime (never in dev checkouts or against remote servers); a
-major-version jump is only ever notified, never downloaded; a tag that fails
-to download 3 times is blacklisted for 7 days.  Inspect the current state any
-time with `browser4-cli doctor` (the `-- Auto-Update --` section).
+packaged runtime (never in dev checkouts or against remote servers); the latest
+tag is resolved at most once per 24 h, and a *failed* attempt counts toward
+that window, so an offline machine never pays a network timeout on every
+command; a major-version jump is only ever notified, never downloaded; a tag
+that fails to download 3 times is blacklisted for 7 days.  Inspect the current
+state any time with `browser4-cli doctor` (the `-- Auto-Update --` section).
 
 ### Prerequisites
 
