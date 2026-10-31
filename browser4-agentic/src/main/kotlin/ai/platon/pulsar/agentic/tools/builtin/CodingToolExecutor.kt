@@ -1,27 +1,34 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.coding.AccessApprovals
 import ai.platon.pulsar.coding.AccessPreset
+import ai.platon.pulsar.coding.AccessRequest
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.ArtifactScaffolds
 import ai.platon.pulsar.coding.ArtifactValidator
+import ai.platon.pulsar.coding.Authorizer
 import ai.platon.pulsar.coding.CdpTrapCheck
 import ai.platon.pulsar.coding.CodeRunner
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.CodingComponents
 import ai.platon.pulsar.coding.CodingWorkspace
+import ai.platon.pulsar.coding.Decision
 import ai.platon.pulsar.coding.DevFlowScaffolds
 import ai.platon.pulsar.coding.DevTaskCheckpoint
 import ai.platon.pulsar.coding.DevTaskCheckpointStore
 import ai.platon.pulsar.coding.DevTaskStepResult
 import ai.platon.pulsar.coding.DevTaskStepSnapshot
 import ai.platon.pulsar.coding.DevTaskPlanner
+import ai.platon.pulsar.coding.Effect
 import ai.platon.pulsar.coding.LanguageServerManager
 import ai.platon.pulsar.coding.KotlinSemanticIndexer
 import ai.platon.pulsar.coding.MavenBuildSupport
 import ai.platon.pulsar.coding.ModuleGraph
 import ai.platon.pulsar.coding.ModuleMap
+import ai.platon.pulsar.coding.PermissionAudit
 import ai.platon.pulsar.coding.RepoConsistencyReporter
+import ai.platon.pulsar.coding.Request
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.TokenEstimator
 import ai.platon.pulsar.coding.ToolAccessDeniedException
@@ -31,6 +38,8 @@ import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.coding.VerificationRunner
 import ai.platon.pulsar.coding.WorkspaceIsolation
 import ai.platon.pulsar.coding.WorkspaceMirror
+import ai.platon.pulsar.coding.Target as CodingTarget
+import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.model.TcEvaluate
@@ -176,6 +185,8 @@ class CodingToolExecutor : AbstractToolExecutor() {
         val policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
         /** Internal build shell; `null` under [AccessPreset.READ]. Defaults to [shell]. */
         val buildShell: CodingAgentShell? = shell,
+        /** Per-task operator approval queue (plan P4-1); `null` when no channel is attached. */
+        val approvals: ai.platon.pulsar.coding.AccessApprovals? = null,
     )
 
     companion object {
@@ -262,6 +273,37 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "which coding methods are denied, which files are protected, and whether the workspace " +
                 "is mirrored/isolated. Call this before planning work when a tool call was refused — " +
                 "it tells you which route is still allowed instead of guessing."
+        )
+        toolSpec["explain"] = ToolSpec(
+            domain = domain, method = "explain",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("method", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Dry-run the workspace-boundary decision for a path without reading or " +
+                "writing it. Reports whether the file-system (canonical, link-following) and the " +
+                "shell (lexical, spelling-based) boundary would allow access, plus the audit code if " +
+                "denied. Use this when a read/write/shell call was refused with PATH_OUTSIDE_WORKSPACE " +
+                "to see exactly which boundary rejected it. Credential and protected-path rails are " +
+                "reported separately because they are orthogonal guardrails, not capability scope."
+        )
+        toolSpec["requestAccess"] = ToolSpec(
+            domain = domain, method = "requestAccess",
+            arguments = listOf(
+                ToolSpec.Arg("effect", "String"),
+                ToolSpec.Arg("target", "String"),
+                ToolSpec.Arg("reason", "String", "null"),
+                ToolSpec.Arg("ttlSeconds", "Long", "null"),
+            ),
+            returnType = "String",
+            description = "Ask the operator for a capability this preset does not grant (e.g. " +
+                "effect=\"fs.write\" on a writable path, or \"fs.exec\" on a whitelisted program). " +
+                "Returns immediately with {requestId, state:\"pending\", needed, alternatives}; it " +
+                "never blocks the task. Same effect+target is deduplicated. When an operator " +
+                "approves, the next call to the refused tool succeeds. Guardrails (denyTools, " +
+                "protected/credential paths, the workspace boundary, the DEV_COMMANDS whitelist) " +
+                "can never be approved away."
         )
 
         // --- File system methods ---
@@ -856,6 +898,14 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "library types (e.g. ai.platon.pulsar.common.config.ImmutableConfig) that live outside " +
                 "the workspace and cannot be grepped — prevents guessing accessor names like getString."
         )
+
+        // B1: freeze the static capability declaration. A method missing from
+        // [CodingToolEffects.TOOL_EFFECTS] keeps `effects = null` and fails
+        // `CodingToolEffectsCoverageTest` instead of silently defaulting to "pure" — which is
+        // exactly how a declaration rots.
+        for (method in toolSpec.keys.toList()) {
+            toolSpec[method] = toolSpec.getValue(method).copy(effects = CodingToolEffects.TOOL_EFFECTS[method])
+        }
     }
 
     @Throws(IllegalArgumentException::class)
@@ -926,7 +976,46 @@ class CodingToolExecutor : AbstractToolExecutor() {
             }
             "permissions" -> {
                 validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
-                describePermissions(policy, fs)
+                describePermissions(policy, fs, receiver.approvals)
+            }
+            "requestAccess" -> {
+                validateArgs(
+                    args,
+                    allowed = setOf("effect", "target", "reason", "ttlSeconds"),
+                    required = setOf("effect", "target"),
+                    functionName,
+                )
+                val approvals = receiver.approvals
+                    ?: return "No approval channel is attached to this task: an operator cannot " +
+                        "approve a request here. Continue with the tools this preset grants, or re-run " +
+                        "with a wider --access preset."
+                val rawEffect = paramString(args, "effect", functionName)!!
+                val effect = Effect.parse(rawEffect)
+                    ?: throw IllegalArgumentException(
+                        "Unknown effect '$rawEffect'; expected one of ${Effect.entries.joinToString { it.id }}"
+                    )
+                val rawTarget = paramString(args, "target", functionName)!!
+                val target = when (effect) {
+                    Effect.FS_EXEC, Effect.PROC_SPAWN -> CodingTarget.CommandTarget(rawTarget)
+                    Effect.NET_CONNECT -> CodingTarget.HostTarget(rawTarget)
+                    else -> {
+                        val lexical = Path.of(rawTarget)
+                        CodingTarget.PathTarget(if (lexical.isAbsolute) lexical else fs.workspaceRoot.resolve(lexical))
+                    }
+                }
+                val request = approvals.request(
+                    effect = effect,
+                    target = target,
+                    reason = paramString(args, "reason", functionName, required = false, default = null),
+                    ttlSeconds = paramLong(args, "ttlSeconds", functionName, required = false, default = null),
+                )
+                renderAccessRequest(request)
+            }
+            "explain" -> {
+                validateArgs(args, allowed = setOf("path", "method"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val method = paramString(args, "method", functionName, required = false, default = null)
+                explainBoundary(fs, path, method)
             }
 
             // --- File System ---
@@ -1422,7 +1511,27 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val language = paramString(args, "language", functionName)!!
                 val code = paramString(args, "code", functionName)!!
                 val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 30L) ?: 30L
-                val result = codeRunner.run(language, code, timeoutSeconds = timeout.coerceIn(1, 120))
+                // The method gate is effect-level: an operator grant for `proc.spawn` unlocks
+                // `runCode` as a whole. Check the *interpreter* too, so a grant for one program
+                // cannot be spent on another. An unsupported language keeps its old answer.
+                val interpreter = codeRunner.interpreterFor(language)
+                if (interpreter != null && !policy.allowsCommandExecution(interpreter)) {
+                    return PermissionAudit.denied(
+                        tool = "$domain.runCode",
+                        code = PermissionAudit.CODE_TOOL_DENIED,
+                        detail = "interpreter '$interpreter' is not covered by an active operator grant",
+                        hint = "request operator approval with " +
+                            "coding.requestAccess(effect=\"proc.spawn\", target=\"$interpreter\") — the " +
+                            "grant covers that program only; the preset's own execution surface stays unaffected",
+                        needed = Effect.PROC_SPAWN.id,
+                    )
+                }
+                val result = codeRunner.run(
+                    language,
+                    code,
+                    timeoutSeconds = timeout.coerceIn(1, 120),
+                    networkAllowed = policy.allowNetwork || policy.hasActiveNetworkGrant(),
+                )
                 buildString {
                     if (result.timedOut) appendLine("⏱ Timed out after ${timeout}s — process killed")
                     if (result.stdout.isNotBlank()) appendLine(result.stdout.trimEnd())
@@ -1984,20 +2093,16 @@ class CodingToolExecutor : AbstractToolExecutor() {
      * denied ones — a model that was refused `coding.shell` learns here that `coding.mvnBuild` is
      * still open under `read-build`, instead of retrying the refused call with different syntax.
      */
-    private fun describePermissions(policy: AgentAccessPolicy, fs: CodingAgentFileSystem): String {
+    private fun describePermissions(
+        policy: AgentAccessPolicy,
+        fs: CodingAgentFileSystem,
+        approvals: AccessApprovals?,
+    ): String {
         val yes = "yes"
         val no = "NO (refused with PERMISSION_DENIED)"
         val denied = toolSpec.keys.filter { !policy.allowsTool(domain, it) }.sorted()
         return buildString {
             appendLine("Access preset: ${policy.preset.id}")
-            appendLine(
-                "Automatic approval: " + (
-                    policy.autoApproveUpTo?.let { ceiling ->
-                        "up to '${ceiling.id}' — calls this preset refuses are granted and audited " +
-                            "(denied tools, protected paths and sensitive paths are never approved)"
-                    } ?: "off — a call this preset refuses is refused"
-                    )
-            )
             appendLine("Workspace root: ${fs.workspaceRoot}")
             appendLine("Isolation: ${CodingWorkspace.isolationMode}" +
                 (WorkspaceMirror.defaultSourceRepo()?.let { " (mirror of $it)" } ?: " (no source checkout detected)"))
@@ -2007,11 +2112,16 @@ class CodingToolExecutor : AbstractToolExecutor() {
             appendLine("  paths outside workspace  : ${if (policy.allowExternalAccess) yes else no}")
             appendLine("  delete/copy/move         : ${if (policy.allowDestructive) yes else no}")
             appendLine("Build and execution:")
-            // Ask the policy, not the preset: under an approval ceiling `read` may still build, and
-            // a report that contradicts the gate is worse than no report.
+            // Ask the policy, not the preset: an operator grant can unlock the build under `read`,
+            // and a report that contradicts the gate is worse than no report.
             appendLine("  project build (mvn/verify): ${if (policy.allowsTool(domain, "mvnBuild")) yes else no}")
             appendLine("  shell + arbitrary code    : ${if (policy.allowsExec()) yes else no}")
-            appendLine("  network shell commands    : ${if (policy.allowNetwork) yes else no}")
+            // An active `net.connect` grant enables the network flag the shell passes to the
+            // sandbox; the report must follow the gate rather than the raw preset field.
+            appendLine(
+                "  network shell commands    : " +
+                    "${if (policy.allowNetwork || policy.hasActiveNetworkGrant()) yes else no}"
+            )
             if (policy.denyTools.isNotEmpty()) {
                 appendLine("Explicitly denied by configuration: ${policy.denyTools.sorted().joinToString(", ")}")
             }
@@ -2027,12 +2137,150 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "  session policies  : " +
                     fs.protectedList().lines().joinToString("; ") { it.trim() }.ifBlank { "none" }
             )
+            // B4: the capability view. The preset says what the model may *spell*; these lines say
+            // what the run actually reached, which is what an operator needs to decide whether the
+            // scope is too wide. Counts are process-wide, like [PermissionAudit] itself.
+            appendLine("Capabilities and observed activity:")
+            appendLine(
+                "  boundary grants   : ${CodingComponents.CAP_FS_BOUNDARY} (canonical, file tools), " +
+                    "${CodingComponents.CAP_SHELL_BOUNDARY} (lexical, shell)"
+            )
+            appendLine("  declared effects  : fs.read, fs.write (both boundary grants)")
+            appendLine(
+                "  budget            : unbounded per call; the boundary Authorizer enforces limits, " +
+                    "preset budget accounting is not wired yet (M2)"
+            )
+            val events = PermissionAudit.snapshot()
+            fun count(tool: String, code: String): Int = events["$tool:$code"] ?: 0
+            appendLine(
+                "  out-of-scope writes: ${count("coding.fs", PermissionAudit.CODE_OUT_OF_SCOPE_WRITE)} " +
+                    "(writes allowed only by allowExternalAccess)"
+            )
+            appendLine(
+                "  network targets   : ${count("coding.shell", PermissionAudit.CODE_NETWORK_TARGET)} " +
+                    "(network commands that ran)"
+            )
+            appendLine(
+                "  scope uncertain   : ${count("coding.shell", PermissionAudit.CODE_SCOPE_UNCERTAIN)} " +
+                    "(shell commands naming outside paths; the string layer cannot confirm a write)"
+            )
+            appendLine(
+                "  env passthrough   : ${count("coding.env", PermissionAudit.CODE_ENV_PASSTHROUGH)} " +
+                    "(secret-shaped variables explicitly passed to a child process)"
+            )
+            appendLine(
+                "  execution sandbox : ${ExecutionSandboxes.current().id} (an unknown or unavailable " +
+                    "sandbox fails hard instead of running unsandboxed)"
+            )
             appendLine(
                 "Scope of this policy: the presets bound what the model can *spell* — mutating paths, " +
                     "commands and code. A build still executes the project's own code (Maven plugins, " +
                     "npm scripts), so treat a build as running repository code, not as a sandbox."
             )
+            // Plan P4-1: the approval view. Pending requests and operator grants in force explain why
+            // a method the preset denies may still work, and what is waiting for an operator.
+            appendLine("Operator approval:")
+            if (approvals == null) {
+                appendLine("  channel: none — coding.requestAccess cannot reach an operator in this run")
+            } else {
+                approvals.describe().lines().forEach { appendLine("  $it") }
+            }
         }.trimEnd()
+    }
+
+    /** Renders one `coding.requestAccess` answer: id, state, what is needed and what still works. */
+    private fun renderAccessRequest(request: AccessRequest): String = buildString {
+        append("{")
+        append("\"requestId\":").append(jsonLiteral(request.id)).append(",")
+        append("\"state\":").append(jsonLiteral(request.state.name.lowercase())).append(",")
+        append("\"effect\":").append(jsonLiteral(request.effect.id)).append(",")
+        append("\"target\":").append(jsonLiteral(request.target.describe())).append(",")
+        append("\"needed\":").append(jsonLiteral(request.effect.id)).append(",")
+        append("\"expiresAt\":").append(request.expiresAt?.let { jsonLiteral(it.toString()) } ?: "null").append(",")
+        append("\"alternatives\":").append(jsonLiteral(alternativesFor(request.effect)))
+        append("}")
+    }
+
+    private fun alternativesFor(effect: Effect): String = when (effect) {
+        Effect.FS_READ -> "use coding.explain to see which boundary refused it, then retry after approval"
+        Effect.FS_WRITE -> "continue with read/list/plan steps and retry the write after approval"
+        Effect.FS_EXEC -> "use coding.mvnBuild/validate when the preset allows a build, then retry after approval"
+        Effect.PROC_SPAWN -> "use coding.runCodeLanguages or coding.mvnBuild when allowed, then retry after approval"
+        Effect.NET_CONNECT -> "an approval turns on the network flag for coding.shell and coding.runCode; " +
+            "the host scope is advisory only, so keep the command or script to the approved host"
+        Effect.SECRET_READ -> "credentials are never granted; use a workspace copy instead"
+    }
+
+    private fun jsonLiteral(value: String): String = buildString {
+        append('"')
+        value.forEach { c ->
+            when (c) {
+                '"' -> append("\\\"")
+                '\\' -> append("\\\\")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (c < ' ') append(String.format("\\u%04x", c.code)) else append(c)
+            }
+        }
+        append('"')
+    }
+
+    /** Coding methods that mutate files; used to pick the FS_WRITE effect for `coding.explain`. */
+    private val WRITE_METHODS = setOf(
+        "write", "append", "replace", "replaceRegex", "editLines", "insertAfter",
+        "delete", "mkdir", "copy", "move", "revert",
+    )
+
+    /**
+     * Dry-runs the workspace-boundary decision for [path] and reports what the file-system and the
+     * shell boundary would decide, without reading or writing anything.
+     *
+     * Both decisions come from the same shared [Authorizer] instance the real tools use, so the
+     * report is authoritative: a path the file system refuses (canonical, link-following) but the
+     * shell allows (lexical) is a junction inside the workspace that points elsewhere — a classic
+     * "why does `coding.read` fail here?" case.
+     */
+    private fun explainBoundary(fs: CodingAgentFileSystem, path: String, method: String?): String {
+        val raw = Path.of(path)
+        val resolved = if (raw.isAbsolute) raw.normalize() else fs.workspaceRoot.resolve(path).normalize()
+        val effect = if (method in WRITE_METHODS) Effect.FS_WRITE else Effect.FS_READ
+        val authorizer = fs.activeBoundaryAuthorizer
+
+        val fsDecision = authorizer.decide(
+            Request(
+                tool = "coding.${method ?: "read"}",
+                effects = setOf(effect),
+                targets = listOf(CodingTarget.PathTarget(resolved)),
+                capabilityId = CodingComponents.CAP_FS_BOUNDARY,
+            )
+        )
+        val shellDecision = authorizer.decide(
+            Request(
+                tool = "coding.${method ?: "shell"}",
+                effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
+                targets = listOf(CodingTarget.PathTarget(resolved)),
+                capabilityId = CodingComponents.CAP_SHELL_BOUNDARY,
+            )
+        )
+
+        return buildString {
+            appendLine("Path: $resolved")
+            appendLine("Effect: ${effect.id}")
+            appendLine("File-system boundary (canonical, link-following): ${renderDecision(fsDecision)}")
+            appendLine("Shell boundary (lexical, spelling-based): ${renderDecision(shellDecision)}")
+            appendLine(
+                "Rails (checked separately by the real tool call): credential locations " +
+                    "(sensitive paths) and protected directories are orthogonal guardrails, not part " +
+                    "of the capability scope - 'coding.permissions' lists them."
+            )
+        }.trimEnd()
+    }
+
+    private fun renderDecision(decision: Decision): String = when (decision) {
+        Decision.Allow -> "ALLOW"
+        is Decision.AllowWithBudget -> "ALLOW (within budget of ${decision.capability.value})"
+        is Decision.Deny -> "DENY code=${decision.code} effect=${decision.effect.id} target=${decision.target}"
     }
 
     /** Start an isolated workspace when the switch is on and the tree supports it. */
@@ -2277,4 +2525,103 @@ class CodingToolExecutor : AbstractToolExecutor() {
     private fun toTestClassName(name: String): String =
         name.split('-', '_').filter { it.isNotEmpty() }
             .joinToString("") { it.replaceFirstChar { c -> c.uppercase() } }
+
+}
+
+/**
+ * Static effect declaration for every `coding.*` method (plan B1).
+ *
+ * Kept outside [CodingToolExecutor] because the class already has a companion object; a second
+ * companion is not allowed. The map is what a tool **may** touch, not what one call touches:
+ * `write` can only write, but `shell` can read, write, execute and connect. A method absent from
+ * this map fails registration in [CodingToolEffectsCoverageTest] rather than defaulting to a pure
+ * tool — an undeclared capability is the drift this phase exists to prevent.
+ */
+internal object CodingToolEffects {
+
+    private val FS_READ = setOf(Effect.FS_READ)
+    private val FS_WRITE = setOf(Effect.FS_WRITE)
+    private val FS_READ_WRITE = setOf(Effect.FS_READ, Effect.FS_WRITE)
+    private val NONE: Set<Effect> = emptySet()
+
+    internal val TOOL_EFFECTS: Map<String, Set<Effect>> = mapOf(
+            // Shell: whatever the switches allow. Declared maximally so a reviewer sees that this
+            // single entry point reaches all four effect classes.
+            "shell" to setOf(
+                Effect.FS_READ, Effect.FS_WRITE, Effect.FS_EXEC, Effect.NET_CONNECT,
+            ),
+            // Session state only: these read or change the shell's own bookkeeping, never the disk.
+            "shellOutput" to NONE,
+            "shellStatus" to NONE,
+            "shellList" to NONE,
+            "shellSetEnv" to NONE,
+
+            "toolsDetect" to FS_READ,
+            "projectType" to FS_READ,
+            // Reporting tools: no I/O at all. `explain` is a pure boundary dry run.
+            "permissions" to NONE,
+            "explain" to NONE,
+            // Asks an operator for a capability: creates a pending request, performs no effect.
+            "requestAccess" to NONE,
+
+            // Read side of the file tools.
+            "read" to FS_READ,
+            "readLines" to FS_READ,
+            "checksum" to FS_READ,
+            "listDir" to FS_READ,
+            "glob" to FS_READ,
+            "grep" to FS_READ,
+            "stat" to FS_READ,
+            "diff" to FS_READ,
+            "changeSummary" to FS_READ,
+            "languages" to FS_READ,
+            "workspaceRoot" to NONE,
+
+            // Write side of the file tools.
+            "write" to FS_WRITE,
+            "append" to FS_WRITE,
+            "replace" to FS_WRITE,
+            "replaceRegex" to FS_WRITE,
+            "editLines" to FS_WRITE,
+            "insertAfter" to FS_WRITE,
+            "revert" to FS_WRITE,
+            "delete" to FS_WRITE,
+            "mkdir" to FS_WRITE,
+            "scaffold" to FS_WRITE,
+            "scaffoldToDir" to FS_WRITE,
+            "scaffoldFromExample" to FS_WRITE,
+            "scaffoldFlow" to FS_WRITE,
+            "copy" to FS_READ_WRITE,
+            "move" to FS_READ_WRITE,
+
+            // Validation and analysis read the workspace sources.
+            "validate" to FS_READ,
+            "diagnostics" to FS_READ,
+            "symbols" to FS_READ,
+            "references" to FS_READ,
+            "ktSymbols" to FS_READ,
+            "ktReferences" to FS_READ,
+            "ktInheritance" to FS_READ,
+            "moduleGraph" to FS_READ,
+            "impact" to FS_READ,
+            "trapCheck" to FS_READ,
+            "classInfo" to NONE,
+            "lspServers" to NONE,
+            "protect" to NONE,
+
+            // Execution: spawn an interpreter or run the build, which itself reads sources and
+            // writes build output.
+            "runCode" to setOf(Effect.FS_WRITE, Effect.PROC_SPAWN),
+            "runCodeLanguages" to NONE,
+            "mvnBuild" to setOf(Effect.FS_EXEC, Effect.FS_READ, Effect.FS_WRITE),
+            "verify" to setOf(Effect.FS_EXEC, Effect.FS_READ, Effect.FS_WRITE),
+
+            // Dev-task flow: reads and writes its journal inside the workspace.
+            "devTask" to FS_READ_WRITE,
+            "resumeDevTask" to FS_READ,
+
+            // Pure computation.
+            "tokenStats" to NONE,
+            "estimateTokens" to NONE,
+        )
 }

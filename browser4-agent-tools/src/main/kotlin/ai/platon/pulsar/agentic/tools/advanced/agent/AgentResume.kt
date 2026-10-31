@@ -99,7 +99,9 @@ internal const val MAX_ABORT_DELIVERABLES = 50
  * @param resumeWorkspace the interrupted task's workspace when resuming — the files it
  *   already wrote are what the new run continues from
  * @param sharedWorkspace `--shared-workspace`: use the shared `<baseDir>/workspace`
- * @return the workspace to use, or `null` for the shared one
+ * @return the workspace to use, or `null` for the shared `<baseDir>/workspace`. The runner
+ *   rebinds to this workspace before applying the task's access policy, so the policy file is
+ *   read from it rather than from the workspace that was active before the task started.
  */
 internal fun taskWorkspaceFor(
     baseDir: Path,

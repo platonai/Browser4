@@ -1007,6 +1007,9 @@ struct MockBrowser4State {
     command_stats_disabled: bool,
     /// Recorded `GET /api/commands/{id}/stats` task ids.
     command_stats_calls: Vec<String>,
+    /// Recorded `/api/agent/{id}/access...` calls as "METHOD route" (the
+    /// interactive session's `/access`, `/approve` and `/deny` commands).
+    agent_access_calls: Vec<String>,
     /// Task ids whose events endpoint keeps reporting `running` until a steering
     /// input arrives (the interactive-steering scenario).
     command_events_await_input: Vec<String>,
@@ -2261,6 +2264,84 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             })
             .to_string();
             write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        // ---- agent access-approval REST endpoints (interactive /access, /approve, /deny) ----
+        _ if method == "GET" && route.starts_with("/api/agent/") && route.ends_with("/access") => {
+            let Some(task_id) = route
+                .strip_prefix("/api/agent/")
+                .and_then(|rest| rest.strip_suffix("/access"))
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .agent_access_calls
+                .push(format!("{method} {route}"));
+            let response = serde_json::json!({
+                "taskId": task_id,
+                "state": "pending",
+                "pending": [
+                    {
+                        "requestId": "req-1",
+                        "effect": "fs.write",
+                        "target": "src/generated",
+                        "reason": "need to write generated code",
+                    }
+                ],
+                "grants": [
+                    {"id": "op-req-9", "effects": ["fs.exec"], "expiresAt": "task-end"}
+                ],
+                "report": "1 pending request(s), 1 active grant(s)",
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        // ---- agent access decision: POST /api/agent/{task}/access/{request}/{approve|deny} ----
+        _ if method == "POST" && route.starts_with("/api/agent/") && route.contains("/access/") => {
+            let segments: Vec<&str> = route
+                .strip_prefix("/api/agent/")
+                .unwrap_or_default()
+                .split('/')
+                .collect();
+            if segments.len() != 4 || segments[1] != "access" {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            }
+            let (request_id, action) = (segments[2], segments[3]);
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .agent_access_calls
+                .push(format!("{method} {route}"));
+            match (request_id, action) {
+                ("req-1", "approve") => {
+                    let response = serde_json::json!({
+                        "requestId": "req-1",
+                        "state": "approved",
+                        "effect": "fs.write",
+                        "target": "src/generated",
+                        "expiresAt": "task-end",
+                    })
+                    .to_string();
+                    write_http_response(&mut stream, "200 OK", "application/json", &response);
+                }
+                // The real server answers a successful deny with 409 and the
+                // decision body (a quirk of `decision()`), not with 200.
+                ("req-2", "deny") => {
+                    let response = serde_json::json!({
+                        "requestId": "req-2",
+                        "state": "denied",
+                        "effect": "fs.exec",
+                        "target": "cargo build",
+                        "expiresAt": "task-end",
+                    })
+                    .to_string();
+                    write_http_response(&mut stream, "409 Conflict", "application/json", &response);
+                }
+                _ => write_http_response(&mut stream, "404 Not Found", "text/plain", "not found"),
+            }
         }
         // ---- unified /api/config/{key} REST interface (config get/set/delete) ----
         _ if route.starts_with("/api/config/") => {

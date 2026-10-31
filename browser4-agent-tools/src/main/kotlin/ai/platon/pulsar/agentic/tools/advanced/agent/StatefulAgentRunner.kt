@@ -477,12 +477,12 @@ open class StatefulAgentRunner(
         freshWorkspace: Boolean? = null,
         sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
-        autoApprove: AccessPreset? = null,
+        unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
     ): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove, resumeTaskId, tokenBudget)
+        execute(plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId, tokenBudget)
         return status
     }
 
@@ -503,12 +503,12 @@ open class StatefulAgentRunner(
         freshWorkspace: Boolean? = null,
         sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
-        autoApprove: AccessPreset? = null,
+        unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
-            execute(plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove, resumeTaskId, tokenBudget)
+            execute(plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId, tokenBudget)
         }
         runningJobs[status.id] = job
         job.start()
@@ -577,14 +577,14 @@ open class StatefulAgentRunner(
         freshWorkspace: Boolean? = null,
         sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
-        autoApprove: AccessPreset? = null,
+        unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
     ) {
         try {
             runMutex.withLock {
                 executeSerialized(
-                    plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove, resumeTaskId, tokenBudget
+                    plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId, tokenBudget
                 )
             }
         } catch (e: CancellationException) {
@@ -629,7 +629,7 @@ open class StatefulAgentRunner(
         freshWorkspace: Boolean? = null,
         sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
-        autoApprove: AccessPreset? = null,
+        unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
     ) {
@@ -705,21 +705,6 @@ open class StatefulAgentRunner(
                 if (noopLimit != null) {
                     logger.info("Agent task {} (session={}): noop limit overridden to {}", status.id, session.uuid, noopLimit)
                 }
-                // Per-task access policy (`command.run(access=…, autoApprove=…)`). Applied before
-                // any tool call and before the fresh-workspace rebind below, because that rebind
-                // rebuilds the coding components from the active policy. Absent values keep the
-                // server-wide defaults; the finally below restores them either way, so a companion
-                // agent shared across tasks never inherits the previous task's grant.
-                it.agentToolManager.applyAccessPolicy(
-                    AgentAccessPolicy.serverDefault.withTaskOverrides(accessPreset, autoApprove)
-                )
-                // Explicit coding flag, never auto-detected: the coding flag is
-                // opt-in per call (`command_run`'s coding argument, e.g. the CLI's
-                // agent run --coding). A resumed run inherits it from its checkpoint.
-                it.codingMode = codingMode
-                if (codingMode) {
-                    logger.info("Agent task {} (session={}): coding mode (explicit) — skipping driver health check and page navigation", status.id, session.uuid)
-                }
                 // Per-task workspace isolation (P1-1): EVERY task gets its own
                 // workspace, so files from earlier runs can never be mistaken for this
                 // run's deliverables (the 2026-10-28 baseline reported a CSV written 36
@@ -730,11 +715,20 @@ open class StatefulAgentRunner(
                 //
                 //   --resume <id>       → the interrupted task's workspace (its files
                 //                         are what the new run continues from)
-                //   --shared-workspace  → the old `<baseDir>/workspace` (explicit opt-in)
+                //   --shared-workspace  → the old `<baseDir>/workspace` (explicit opt-in;
+                //                         that is the agent's initial/restored root)
                 //   otherwise           → `<baseDir>/workspace.<taskId>`
                 //
                 // --fresh-workspace is still accepted and is now the default behaviour;
                 // its old `workspace.fresh.*` directory is no longer created.
+                //
+                // The rebind happens BEFORE the access policy is applied below:
+                // `applyAccessPolicy` loads `<workspace>/.browser4/access-policy.json` and
+                // rebuilds the coding components from the *current* workspace root, so
+                // applying it first read the previous (usually shared) workspace's file.
+                // No tool can run between the two calls — the task thread starts after
+                // this block — so the components rebuilt here with the previous policy
+                // are never dispatched.
                 val taskWorkspace = taskWorkspaceFor(it.baseDir, status.id, resume?.workspace, sharedWorkspace)
                 if (taskWorkspace != null) {
                     java.nio.file.Files.createDirectories(taskWorkspace)
@@ -746,9 +740,38 @@ open class StatefulAgentRunner(
                     )
                 } else {
                     logger.info(
-                        "Agent task {} (session={}): shared workspace (--shared-workspace)",
-                        status.id, session.uuid
+                        "Agent task {} (session={}): shared workspace at {} (--shared-workspace)",
+                        status.id, session.uuid, it.agentToolManager.workspaceRoot
                     )
+                }
+                // Per-task access policy (`command.run(access=…, unattended=…)`). Applied
+                // before any tool call and after the workspace rebind above, so the policy
+                // file and the rebuilt coding components both point at the workspace this
+                // task actually runs in. An explicit preset wins; otherwise an unattended
+                // job derives the documented default (`full` with network) and a watched
+                // TTY run keeps the server-wide policy. The finally below restores the
+                // server default either way, so a companion agent shared across tasks
+                // never inherits the previous task's grant.
+                val effectivePolicy = when {
+                    accessPreset != null -> AgentAccessPolicy.serverDefault.withTaskOverrides(accessPreset)
+                    unattended -> AgentAccessPolicy.unattendedDefault
+                    else -> AgentAccessPolicy.serverDefault
+                }
+                if (accessPreset == null && unattended) {
+                    ai.platon.pulsar.coding.PermissionAudit.writeEvent(
+                        tool = "coding.access",
+                        code = ai.platon.pulsar.coding.PermissionAudit.CODE_ACCESS_APPROVED,
+                        detail = "unattended default: preset=${effectivePolicy.preset.id} " +
+                            "allowNetwork=${effectivePolicy.allowNetwork} source=default task=${status.id}",
+                    )
+                }
+                it.agentToolManager.applyAccessPolicy(effectivePolicy, status.id)
+                // Explicit coding flag, never auto-detected: the coding flag is
+                // opt-in per call (`command_run`'s coding argument, e.g. the CLI's
+                // agent run --coding). A resumed run inherits it from its checkpoint.
+                it.codingMode = codingMode
+                if (codingMode) {
+                    logger.info("Agent task {} (session={}): coding mode (explicit) — skipping driver health check and page navigation", status.id, session.uuid)
                 }
                 // Live step feed and steering for THIS task. Cleared in the finally
                 // below: the companion agent outlives the task and is shared by

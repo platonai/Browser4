@@ -24,8 +24,8 @@ use reqwest::Client;
 use serde_json::{json, Value};
 
 use crate::http::{
-    cancel_command_task, get_command_events, get_command_result, get_command_stats,
-    get_command_status, send_command_input,
+    cancel_command_task, get_agent_access_view, get_command_events, get_command_result,
+    get_command_stats, get_command_status, post_agent_access_decision, send_command_input,
 };
 
 /// How often the follower asks for new events while a task is running.
@@ -1510,6 +1510,28 @@ fn quiet_enabled() -> bool {
     crate::quiet_active()
 }
 
+/// The non-TTY closing summary of a task's pending access requests, or `None`
+/// when nothing is pending (nothing to report).
+fn format_pending_summary(task_id: &str, view: &Value) -> Option<String> {
+    let pending = view.get("pending")?.as_array()?;
+    if pending.is_empty() {
+        return None;
+    }
+    let mut lines = vec![format!(
+        "task {task_id}: {} pending access request(s):",
+        pending.len()
+    )];
+    for request in pending {
+        lines.push(format!(
+            "  {}  {}  {}",
+            string_field(request, "requestId").unwrap_or_default(),
+            string_field(request, "effect").unwrap_or_default(),
+            string_field(request, "target").unwrap_or_default()
+        ));
+    }
+    Some(lines.join("\n"))
+}
+
 // ---------------------------------------------------------------------------
 // Interactive session
 // ---------------------------------------------------------------------------
@@ -1537,9 +1559,6 @@ struct Repl {
     /// Access preset for this REPL's tasks (`--access`); `None` keeps the
     /// server-wide `browser4.agent.access` default.
     access: Option<String>,
-    /// Automatic approval ceiling for this REPL's tasks (`--auto-approve`);
-    /// `None` keeps the server-wide `browser4.agent.autoApprove` default (off).
-    auto_approve: Option<String>,
     tty: bool,
     quiet: bool,
     current: Option<TaskFollower>,
@@ -1589,10 +1608,6 @@ impl Repl {
             .get("access")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let auto_approve = params
-            .get("autoApprove")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
         let token_budget = params.get("tokenBudget").and_then(|v| v.as_i64());
 
         Self {
@@ -1608,7 +1623,6 @@ impl Repl {
             shared_workspace,
             token_budget,
             access,
-            auto_approve,
             tty: io::stdin().is_terminal(),
             quiet: quiet_enabled(),
             current: None,
@@ -1734,6 +1748,7 @@ impl Repl {
             }
         }
 
+        self.print_pending_summary_if_any().await;
         self.out("");
         Ok(())
     }
@@ -1896,6 +1911,11 @@ impl Repl {
     /// The payload carries ONLY arguments the backend's `command.run` declares
     /// (`sessionId` is the documented transport argument); the interactive mode
     /// itself is a CLI-side concept and must not leak into the tool call.
+    ///
+    /// `unattended` is the one place the REPL decides it: a TTY means a human is
+    /// watching this run, so the server-wide `browser4.agent.access` policy
+    /// applies; without a TTY nobody can answer an approval, so the backend's
+    /// unattended default takes over (see plan P4-1).
     fn payload(&self) -> Value {
         crate::build_agent_run_extra(
             &self.engine,
@@ -1904,7 +1924,7 @@ impl Repl {
             self.fresh_workspace,
             self.shared_workspace,
             self.access.as_deref(),
-            self.auto_approve.as_deref(),
+            Some(!self.tty),
             self.session_id().as_deref(),
             self.token_budget,
         )
@@ -2058,12 +2078,187 @@ impl Repl {
             "events" => self.print_events(argument).await,
             // `/stats [task-id]`: no argument means the running (or last) task.
             "stats" => self.print_stats(argument).await,
+            // The access-approval commands are answered by the session itself,
+            // straight against the agent-access REST endpoints — the model never
+            // sees them.
+            "access" => self.print_access(argument).await,
+            "approve" => self.decide_access(argument, "approve").await,
+            "deny" => self.decide_access(argument, "deny").await,
             other => self.out(&format!(
                 "unknown command /{other} — type /help for the list"
             )),
         }
         self.prompt_pending = self.current.is_none();
         Ok(true)
+    }
+
+    /// The task an access command applies to: the explicit argument, else the
+    /// running (or last) task of this session.
+    fn access_task_id(&self, argument: &str) -> Option<String> {
+        match argument.trim() {
+            "" => self
+                .current
+                .as_ref()
+                .map(|follower| follower.task_id.clone())
+                .or_else(|| self.last_task.clone()),
+            named => Some(named.to_string()),
+        }
+    }
+
+    /// `/access [task-id]`: the task's pending access requests and the operator
+    /// grants already active on it (`GET /api/agent/{id}/access`).
+    async fn print_access(&mut self, argument: &str) {
+        let Some(task_id) = self.access_task_id(argument) else {
+            self.out("no task in this session yet; pass the task id explicitly: /access <task-id>");
+            return;
+        };
+
+        match get_agent_access_view(&self.client, &self.base_url, &task_id).await {
+            Ok(response) if response.is_success() => {
+                let view: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
+                self.render_access_view(&task_id, &view);
+            }
+            Ok(response) if response.status == 404 => self.out(&format!(
+                "no live task '{task_id}' on this server (finished, or belongs to another process)"
+            )),
+            Ok(response) => self.out(&format!(
+                "could not read access view of {task_id}: HTTP {} {}",
+                response.status,
+                truncate(response.body.trim(), 200)
+            )),
+            Err(error) => self.out(&format!("could not read access view of {task_id}: {error}")),
+        }
+    }
+
+    fn render_access_view(&self, task_id: &str, view: &Value) {
+        let state = view.get("state").and_then(|v| v.as_str()).unwrap_or("idle");
+        self.out(&format!("task {task_id}: state={state}"));
+
+        let pending = view.get("pending").and_then(|v| v.as_array());
+        let grants = view.get("grants").and_then(|v| v.as_array());
+        let no_pending = pending.map(|p| p.is_empty()).unwrap_or(true);
+        let no_grants = grants.map(|g| g.is_empty()).unwrap_or(true);
+        if no_pending && no_grants {
+            self.out("  (no pending requests, no active grants)");
+            return;
+        }
+
+        self.out("pending:");
+        if let Some(pending) = pending {
+            for request in pending {
+                let request_id = string_field(request, "requestId").unwrap_or_default();
+                let effect = string_field(request, "effect").unwrap_or_default();
+                let target = string_field(request, "target").unwrap_or_default();
+                // `string_field` already filters empty strings, so `Some` here
+                // always means a reason worth printing.
+                match string_field(request, "reason") {
+                    Some(reason) => {
+                        self.out(&format!("  {request_id}  {effect}  {target}  {reason}"))
+                    }
+                    None => self.out(&format!("  {request_id}  {effect}  {target}")),
+                }
+            }
+        }
+
+        self.out("grants:");
+        if let Some(grants) = grants {
+            for grant in grants {
+                let id = string_field(grant, "id").unwrap_or_default();
+                let effects = grant
+                    .get("effects")
+                    .and_then(|v| v.as_array())
+                    .map(|effects| {
+                        effects
+                            .iter()
+                            .filter_map(|e| e.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                let expires_at = string_field(grant, "expiresAt").unwrap_or_default();
+                self.out(&format!("  {id}  [{effects}]  expires {expires_at}"));
+            }
+        }
+    }
+
+    /// `/approve` / `/deny <request-id> [task-id]`: the operator's decision on a
+    /// pending access request.
+    ///
+    /// The server answers a guardrail refusal — and every successful deny —
+    /// with 409 and the same decision body (a quirk of `decision()` in
+    /// AgentAccessController), so 2xx and 409 are both decision responses here,
+    /// not errors.
+    async fn decide_access(&mut self, argument: &str, action: &str) {
+        let mut parts = argument.splitn(2, char::is_whitespace);
+        let request_id = parts.next().unwrap_or_default().trim();
+        if request_id.is_empty() {
+            self.out(&format!("usage: /{action} <request-id> [task-id]"));
+            return;
+        }
+        let task_argument = parts.next().unwrap_or_default();
+        let Some(task_id) = self.access_task_id(task_argument) else {
+            self.out(&format!(
+                "no task in this session yet; pass the task id explicitly: /{action} {request_id} <task-id>"
+            ));
+            return;
+        };
+
+        match post_agent_access_decision(&self.client, &self.base_url, &task_id, request_id, action)
+            .await
+        {
+            Ok(response) if response.is_success() || response.status == 409 => {
+                let decision: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
+                let id = decision
+                    .get("requestId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(request_id);
+                let state = string_field(&decision, "state").unwrap_or_default();
+                let effect = string_field(&decision, "effect").unwrap_or_default();
+                let target = string_field(&decision, "target").unwrap_or_default();
+                let expires_at = string_field(&decision, "expiresAt").unwrap_or_default();
+                self.out(&format!(
+                    "{id}: {state} (effect={effect} target={target} expires={expires_at})"
+                ));
+            }
+            Ok(response) if response.status == 404 => self.out("unknown task or request id"),
+            Ok(response) => self.out(&format!(
+                "⚠ /{action} failed: HTTP {} {}",
+                response.status,
+                truncate(response.body.trim(), 200)
+            )),
+            Err(error) => self.out(&format!("⚠ /{action} failed: {error}")),
+        }
+    }
+
+    /// A non-TTY session cannot ask the operator, so it can only inform: once
+    /// the session ends, list the access requests still pending so the log
+    /// shows what the run was (or would have been) blocked on. Any failure —
+    /// no task, an unreachable backend, a 404 — stays silent.
+    async fn print_pending_summary_if_any(&self) {
+        if self.tty {
+            return;
+        }
+        let Some(task_id) = self
+            .current
+            .as_ref()
+            .map(|follower| follower.task_id.clone())
+            .or_else(|| self.last_task.clone())
+        else {
+            return;
+        };
+        let Ok(response) = get_agent_access_view(&self.client, &self.base_url, &task_id).await
+        else {
+            return;
+        };
+        if !response.is_success() {
+            return;
+        }
+        let Ok(view) = serde_json::from_str::<Value>(&response.body) else {
+            return;
+        };
+        if let Some(summary) = format_pending_summary(&task_id, &view) {
+            self.out(&summary);
+        }
     }
 
     fn print_help(&self) {
@@ -2078,6 +2273,9 @@ impl Repl {
         self.out("  /noop-limit <n>    consecutive no-op abort threshold (blank resets)");
         self.out("  /events [n]        raw JSON of the last n steps (default 20)");
         self.out("  /stats [task-id]   run statistics: LLM rounds/requests, tokens, tool calls");
+        self.out("  /access [task-id]                 show pending access requests and active operator grants");
+        self.out("  /approve <request-id> [task-id]   approve a pending access request");
+        self.out("  /deny <request-id> [task-id]      deny a pending access request");
         self.out("  /quit              leave the session");
         self.out("");
         self.out("Anything else is a task. While a task runs, a typed line steers it at its");
@@ -2576,6 +2774,35 @@ mod tests {
         assert_eq!(truncate("abcdef", 3), "abc…");
         assert_eq!(truncate("中文测试", 2), "中文…");
         assert_eq!(truncate("abc", 10), "abc");
+    }
+
+    #[test]
+    fn pending_summary_lists_each_pending_request() {
+        let view = serde_json::json!({
+            "taskId": "task-1",
+            "state": "pending",
+            "pending": [
+                {"requestId": "req-1", "effect": "fs.write", "target": "src/generated", "reason": "need to write generated code"},
+                {"requestId": "req-2", "effect": "fs.exec", "target": "cargo build"}
+            ],
+            "grants": [{"id": "op-req-9", "effects": ["fs.exec"], "expiresAt": "task-end"}],
+        });
+
+        let summary = format_pending_summary("task-1", &view).expect("pending requests render");
+        assert!(summary.starts_with("task task-1: 2 pending access request(s):"));
+        assert!(summary.contains("\n  req-1  fs.write  src/generated"));
+        assert!(summary.contains("\n  req-2  fs.exec  cargo build"));
+    }
+
+    #[test]
+    fn pending_summary_is_silent_when_nothing_is_pending() {
+        let idle = serde_json::json!({"taskId": "task-1", "state": "idle", "pending": [], "grants": []});
+        assert!(format_pending_summary("task-1", &idle).is_none());
+
+        // A view without the field at all (an older backend's envelope) is
+        // equally silent.
+        let bare = serde_json::json!({"taskId": "task-1", "state": "idle"});
+        assert!(format_pending_summary("task-1", &bare).is_none());
     }
 
     #[test]

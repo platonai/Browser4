@@ -1,6 +1,11 @@
 package ai.platon.pulsar.coding
 
 import org.slf4j.LoggerFactory
+import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
+import ai.platon.pulsar.coding.sandbox.ProcessLauncher
+import ai.platon.pulsar.coding.sandbox.ProcessSpec
+import ai.platon.pulsar.coding.sandbox.SandboxDenials
+import ai.platon.pulsar.coding.sandbox.SandboxEnvironment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -47,6 +52,13 @@ class CodingAgentShell(
     private val defaultTimeoutSeconds: Long = 120L,
     private val allowDevTools: Boolean = true,
     private val allowNetwork: Boolean = false,
+    /**
+     * Live network projection (plan P4-1): when set it overrides [allowNetwork] on every call, so
+     * an operator approval of `net.connect` issued while the task runs takes effect without a new
+     * shell. The host scope is advisory: the sandbox seam is a boolean, so only the effect is
+     * enforced here.
+     */
+    private val allowNetworkProvider: (() -> Boolean)? = null,
     private val allowDestructive: Boolean = true,
     /** v0.3: when false the shell's working directory is constrained to [baseDir]
      *  by lexical prefix matching (junction-aware, so module subdirectories
@@ -71,7 +83,12 @@ class CodingAgentShell(
      */
     private val protectedDirs: Set<String> = CodingAgentFileSystem.DEFAULT_PROTECTED_DIRS,
     /**
-     * `-Dbrowser4.agent.shell.pathGuard=off` disables the credential argument guard.
+     * `-Dbrowser4.agent.shell.pathGuard=off` disables the credential argument check.
+     *
+     * **Deprecated** (plan P3-5/D2) and advisory: the string layer is a fast-fail UX that saves a
+     * sandbox launch and gives the model an actionable hint — it is *not* a security boundary.
+     * Prompt-injected scripts can spell a path the tokenizer never sees, so enforcement lives in
+     * the OS sandbox ([ai.platon.pulsar.coding.sandbox.ExecutionSandboxes]), not in this switch.
      *
      * [protectedDirs] is unaffected: those are rails (the agent's own bookkeeping), not a
      * capability heuristic somebody may need to switch off locally.
@@ -84,9 +101,9 @@ class CodingAgentShell(
      * [allowExternalAccess] is off (default `on`).
      *
      * Separate from [pathGuardEnabled] because the two answer different questions: the
-     * credential guard is about secrets, this one is about the workspace boundary. Turn
-     * it off with `-Dbrowser4.agent.shell.workspaceBoundary=off` for a local workflow that
-     * genuinely needs to pass an absolute path outside the workspace.
+     * credential check is about secrets, this one is about the workspace boundary. Like the
+     * credential check it is advisory (fast-fail), not an enforcement layer; the sandbox decides
+     * what a process may actually reach.
      */
     private val workspaceBoundaryEnabled: Boolean =
         System.getProperty("browser4.agent.shell.workspaceBoundary", "on").lowercase() != "off",
@@ -106,6 +123,25 @@ class CodingAgentShell(
      * execution; the internal build shell keeps it true (see [buildOnly]).
      */
     private val allowExecution: Boolean = true,
+    /**
+     * Live execution projection (plan P4-1): when set it overrides [allowExecution] on every call,
+     * so an operator approval issued while the task runs takes effect without a new shell.
+     */
+    private val allowExecutionProvider: (() -> Boolean)? = null,
+    /**
+     * Live command-scope projection (plan P4-1): when set, a command that the preset does not
+     * grant must be covered by an active operator grant for its program. Compared by program name,
+     * the same granularity [AccessApprovals.commandRail] approves. `null` means "no target-level
+     * check" (the internal build shell and direct construction).
+     */
+    private val commandAllowedProvider: ((String) -> Boolean)? = null,
+    /**
+     * The boundary [Authorizer] shared with the file system. When provided, [workspaceBoundaryViolation]
+     * pins its request to [CodingComponents.CAP_SHELL_BOUNDARY] (lexical scope + toolchain/launcher
+     * exemptions). When null, the instance builds its own boundary authorizer — kept so tests and
+     * direct construction still work.
+     */
+    private val boundaryAuthorizer: Authorizer? = null,
 ) {
     /**
      * The workspace this shell is bound to.
@@ -128,6 +164,16 @@ class CodingAgentShell(
 
         /** Prefix of every [argumentPathViolation] message; used to pick the audit code. */
         private const val PATH_GUARD_PREFIX = "path guard: "
+
+        /**
+         * Spelled into every string-guard refusal (plan P3-5/D2).
+         *
+         * The text used to advertise `-Dbrowser4.agent.shell.pathGuard=off`, which read as an
+         * official bypass and implied the switch was a boundary. The guard is advisory, so the
+         * refusal now says so and points at the workspace instead.
+         */
+        private const val ADVISORY_NOTE =
+            "the path check is advisory — the OS sandbox enforces the boundary when enabled; "
 
         /** Prefix of every [protectedPathViolation] message; used to pick the audit code. */
         private const val PROTECTED_PATH_PREFIX = "protected path: "
@@ -155,8 +201,11 @@ class CodingAgentShell(
         /**
          * Build launchers that may be spelled with an absolute path outside the
          * workspace (`C:\tools\mvnw.cmd`, `/usr/bin/python3`). Data files stay contained.
+         *
+         * Visible to [CodingComponents] so the shared boundary [Authorizer] can encode the
+         * launcher exemption as a scope entry instead of a separate shell-side check.
          */
-        private val LAUNCHER_BASENAMES = setOf(
+        internal val LAUNCHER_BASENAMES = setOf(
             "mvnw", "mvnw.cmd", "mvnw.bat", "mvn", "mvn.cmd", "mvn.bat",
             "gradlew", "gradlew.bat", "gradle",
             "java", "javac", "javaw", "node", "npm", "npx", "pnpm", "yarn",
@@ -166,7 +215,7 @@ class CodingAgentShell(
         )
 
         /** Executable script/binary extensions — a launcher, never a data file. */
-        private val EXECUTABLE_EXTENSIONS = setOf("cmd", "bat", "exe", "ps1", "sh", "py", "com", "msc")
+        internal val EXECUTABLE_EXTENSIONS = setOf("cmd", "bat", "exe", "ps1", "sh", "py", "com", "msc")
 
         /**
          * Charset of the bytes a child process writes to stdout/stderr.
@@ -420,7 +469,7 @@ class CodingAgentShell(
         workingDir: String? = null,
         env: Map<String, String> = emptyMap(),
     ): String {
-        if (!allowExecution) {
+        if (!isExecutionAllowed()) {
             return "Error: " + execDisabledRefusal()
         }
         if (command.isBlank()) {
@@ -431,6 +480,8 @@ class CodingAgentShell(
         if (violation != null) {
             return "Error: " + commandRefusal(violation)
         }
+        operatorScopeViolation(normalizeShellCommand(command))?.let { return "Error: " + it }
+        recordScopeAdvisories(normalizeShellCommand(command))
 
         val effectiveTimeout = timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS)
         val sessionId = "devshell-${sessionCounter.incrementAndGet()}"
@@ -469,7 +520,7 @@ class CodingAgentShell(
         workingDir: String? = null,
         env: Map<String, String> = emptyMap(),
     ): ShellResult {
-        if (!allowExecution) {
+        if (!isExecutionAllowed()) {
             return ShellResult("", command, -1, "", execDisabledRefusal(), 0)
         }
         if (command.isBlank()) {
@@ -480,6 +531,10 @@ class CodingAgentShell(
         if (violation != null) {
             return ShellResult("", command, -1, "", commandRefusal(violation), 0)
         }
+        operatorScopeViolation(normalizeShellCommand(command))?.let {
+            return ShellResult("", command, -1, "", it, 0)
+        }
+        recordScopeAdvisories(normalizeShellCommand(command))
 
         val effectiveTimeout = timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS)
         val sessionId = "devshell-${sessionCounter.incrementAndGet()}"
@@ -642,7 +697,8 @@ class CodingAgentShell(
             devToolAllowed(base) ->
                 if (buildOnly) "'$base' is a build tool (build-only profile)"
                 else "'$base' is a dev tool (allowDevTools=true)"
-            allowNetwork && base in NETWORK_COMMANDS -> "'$base' is a network command (allowNetwork=true)"
+            networkAllowed() && base in NETWORK_COMMANDS ->
+                "'$base' is a network command (network access enabled)"
             allowDestructive && base in DESTRUCTIVE_COMMANDS -> "'$base' is a destructive command (allowDestructive=true)"
             else -> "every command in the chain is allowed (pattern / path / PATH rule)"
         }
@@ -738,14 +794,46 @@ class CodingAgentShell(
                         "definitions (.github/workflows); the shell may not touch them"
             else ->
                 PermissionAudit.CODE_COMMAND_NOT_ALLOWED to
-                    "run the build through coding.mvnBuild/coding.verify; ask the operator for access=full " +
-                        "if this command is genuinely needed"
+                    ("run the build through coding.mvnBuild/coding.verify, or request operator " +
+                        "approval with coding.requestAccess(effect=\"fs.exec\", target=\"<command>\") " +
+                        "if this command is genuinely needed")
         }
         return PermissionAudit.denied(
             tool = SHELL_TOOL,
             code = code,
             detail = "Command blocked — $violation",
             hint = hint,
+            needed = if (code == PermissionAudit.CODE_COMMAND_NOT_ALLOWED) Effect.FS_EXEC.id else null,
+        )
+    }
+
+    /** Whether execution is allowed right now (live when a provider was supplied, plan P4-1). */
+    private fun isExecutionAllowed(): Boolean = allowExecutionProvider?.invoke() ?: allowExecution
+
+    /** Whether network-capable commands are allowed right now (live when a provider was supplied). */
+    private fun networkAllowed(): Boolean = allowNetworkProvider?.invoke() ?: allowNetwork
+
+    /**
+     * Structured refusal when the preset does not grant execution and no active operator grant
+     * covers this command.
+     *
+     * Every simple command in the chain is checked, so a grant for `echo` cannot smuggle a
+     * different program in through `&&`. A preset that grants execution returns `true` from the
+     * provider immediately, so its behaviour is unchanged.
+     */
+    private fun operatorScopeViolation(command: String): String? {
+        val provider = commandAllowedProvider ?: return null
+        val segments = splitSimpleCommands(command).ifEmpty { listOf(command) }
+        val unapproved = segments.firstOrNull { !provider(it) } ?: return null
+        val program = extractBaseCommand(unapproved).ifEmpty { unapproved }
+        return PermissionAudit.denied(
+            tool = SHELL_TOOL,
+            code = PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+            detail = "command '$program' is not covered by an active operator grant",
+            hint = "request operator approval with " +
+                "coding.requestAccess(effect=\"fs.exec\", target=\"$program\") — the grant covers " +
+                "that program only; commands the preset already allows stay unaffected",
+            needed = Effect.FS_EXEC.id,
         )
     }
 
@@ -754,7 +842,10 @@ class CodingAgentShell(
         tool = SHELL_TOOL,
         code = PermissionAudit.CODE_EXEC_DISABLED,
         detail = "shell execution is disabled by the access policy",
-        hint = "re-run with access=full to run shell commands",
+        hint = "request operator approval with " +
+            "coding.requestAccess(effect=\"fs.exec\", target=\"<command>\") — it returns " +
+            "immediately with a pending requestId, and the task keeps running meanwhile",
+        needed = Effect.FS_EXEC.id,
     )
 
     /** True when the host is Windows, where commands run through `cmd.exe /c`. */
@@ -904,13 +995,13 @@ class CodingAgentShell(
                 // roots are checked here, not "outside the workspace").
                 if (!isWorkspaceOwned(resolved) && SensitivePaths.isSensitive(resolved, sensitiveRoots)) {
                     return PATH_GUARD_PREFIX + "'$token' links to a credential location ($resolved); " +
-                        "set -Dbrowser4.agent.shell.pathGuard=off to bypass"
+                        ADVISORY_NOTE + "pass a workspace-relative path instead"
                 }
                 continue
             }
             if (SensitivePaths.isSensitive(resolved, sensitiveRoots)) {
                 return PATH_GUARD_PREFIX + "'$token' resolves to a credential location ($resolved); " +
-                    "set -Dbrowser4.agent.shell.pathGuard=off to bypass"
+                    ADVISORY_NOTE + "pass a workspace-relative path instead"
             }
         }
         return null
@@ -934,8 +1025,17 @@ class CodingAgentShell(
      * Inline scripts (`python -c "…"`) are not parsed — this guard is about the shell's
      * own arguments, and a script is free to compute whatever it likes.
      */
-    private fun workspaceBoundaryViolation(tokens: List<String>): String? {
-        if (!workspaceBoundaryEnabled || allowExternalAccess) return null
+    private fun workspaceBoundaryViolation(tokens: List<String>, advisory: Boolean = false): String? {
+        if (!workspaceBoundaryEnabled) return null
+        // The hard check is skipped when external access is on; the advisory pass runs *only* then,
+        // because that is exactly the case where the boundary is bypassed and a fact is worth
+        // recording. Neither pass ever records a write conclusion (see
+        // [PermissionAudit.CODE_SCOPE_UNCERTAIN]).
+        if (advisory) {
+            if (!allowExternalAccess) return null
+        } else if (allowExternalAccess) {
+            return null
+        }
         for (token in tokens) {
             if (isWindowsSwitch(token)) continue
             val candidate = pathCandidate(token) ?: continue
@@ -944,18 +1044,36 @@ class CodingAgentShell(
             val path = runCatching { Path.of(ported) }.getOrNull() ?: continue
             val relativeEscape = !path.isAbsolute && ported.contains("..")
             if (!path.isAbsolute && !relativeEscape) continue
+            // Separators are normalised before resolution: a token written for the other platform
+            // must still name the location it means (see [portableSeparators]).
             val resolved = if (path.isAbsolute) path.normalize() else canonicalBaseDir.resolve(ported).normalize()
-            if (resolved.startsWith(canonicalBaseDir)) continue
-            if (toolchainRoots.any { resolved.startsWith(it) }) continue
             // Credential locations stay the credential guard's business (so its switch
             // still governs them); this guard is about ordinary paths.
             if (SensitivePaths.isSensitive(resolved, sensitiveRoots)) continue
-            // Build launchers are tools, not data: an absolute `mvnw`/`python3` outside
-            // the workspace stays usable (the shell has always accepted those).
-            if (isLauncherReference(resolved)) continue
-            return PATH_GUARD_PREFIX + "'$token' resolves outside the workspace ($resolved); " +
-                "use a workspace-relative path, copy the input into the workspace, or set " +
-                "-Dbrowser4.agent.allowExternalAccess=true"
+            // The boundary decision is made by the shared Authorizer: workspace + mirrored
+            // module roots + toolchain locations are in scope, and launchers are exempt (B3/B4).
+            val authorizer = boundaryAuthorizer ?: fallbackBoundaryAuthorizer
+            val decision = authorizer.decide(
+                Request(
+                    tool = SHELL_TOOL,
+                    effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
+                    targets = listOf(Target.PathTarget(resolved)),
+                    capabilityId = CodingComponents.CAP_SHELL_BOUNDARY,
+                ),
+            )
+            if (decision is Decision.Deny) {
+                if (advisory) {
+                    PermissionAudit.writeEvent(
+                        tool = SHELL_TOOL,
+                        code = PermissionAudit.CODE_SCOPE_UNCERTAIN,
+                        detail = "command argument '$token' resolves outside the workspace ($resolved) while " +
+                            "external access is enabled; the string layer cannot tell whether it writes there",
+                    )
+                    return null
+                }
+                return PATH_GUARD_PREFIX + "'$token' resolves outside the workspace ($resolved); " +
+                    ADVISORY_NOTE + "use a workspace-relative path or copy the input into the workspace"
+            }
         }
         return null
     }
@@ -967,41 +1085,68 @@ class CodingAgentShell(
      * The guard deliberately judges one command line for both shells — `%USERPROFILE%\.ssh\id_rsa`
      * is refused on Linux too — so a `\`-spelled path has to resolve like a path while the host is
      * POSIX as well. Without this, `"%JAVA_HOME%\bin\java"` expanded to `…/x64\bin\java`: one odd
-     * path element, not under [toolchainRoots] and not a launcher (its "extension" was
+     * path element, not under a toolchain root and not a launcher (its "extension" was
      * `x64\bin\java`), so the JDK itself was refused as "outside the workspace" on the Ubuntu CI
      * runner (2026-10-31 nightly). `/` is accepted on every platform, so the other direction needs
      * no special case.
      */
     private fun portableSeparators(path: String): String = path.replace('\\', '/')
 
+    /**
+     * Records, at execution time only, what an allowed command actually reached (B3/B5).
+     *
+     * Kept out of [validateCommand] on purpose: `coding.explain` and `isAllowed` are dry runs and
+     * must not move a counter. Nothing here claims a write happened — the shell only knows how a
+     * path was spelled.
+     */
+    private fun recordScopeAdvisories(command: String) {
+        // Default configuration: both switches off, so there is nothing to observe and no reason to
+        // tokenize every command.
+        val network = networkAllowed()
+        if (!allowExternalAccess && !network) return
+        val tokens = tokenize(command)
+        workspaceBoundaryViolation(tokens, advisory = true)
+        if (!network) return
+        val networkCommands = tokens.map { normalizeCommandName(it) }.filter { it in NETWORK_COMMANDS }.distinct()
+        if (networkCommands.isEmpty()) return
+        PermissionAudit.writeEvent(
+            tool = SHELL_TOOL,
+            code = PermissionAudit.CODE_NETWORK_TARGET,
+            detail = "network command(s) executed: " + networkCommands.joinToString(", "),
+        )
+    }
+
     /** `/s`, `/b`, `/i` are switches on Windows, not POSIX paths. */
     private fun isWindowsSwitch(token: String): Boolean =
         IS_WINDOWS && WINDOWS_SWITCH.matches(token)
 
-    /** A build launcher (or any executable script/binary) may live outside the workspace. */
-    private fun isLauncherReference(path: Path): Boolean {
-        val name = path.fileName?.toString()?.lowercase() ?: return false
-        if (name in LAUNCHER_BASENAMES) return true
-        val extension = name.substringAfterLast('.', "")
-        return extension.isNotEmpty() && extension in EXECUTABLE_EXTENSIONS
-    }
-
-    /** JDK, package caches, temp and the OS directory — what a build legitimately reaches. */
-    private val toolchainRoots: List<Path> by lazy {
-        val home = runCatching { Path.of(System.getProperty("user.home")) }.getOrNull()
-        listOfNotNull(
-            runCatching { Path.of(System.getProperty("java.home")) }.getOrNull(),
-            // `$JAVA_HOME` / `%JAVA_HOME%` may name a different JDK than the one running the
-            // backend (Maven toolchains, a launcher script), and the exception exists for *the JDK*
-            // rather than for one particular installation — so the declared root counts too.
-            System.getenv("JAVA_HOME")?.takeIf { it.isNotBlank() }
-                ?.let { runCatching { Path.of(portableSeparators(it)) }.getOrNull() },
-            home?.resolve(".m2"),
-            home?.resolve(".gradle"),
-            home?.resolve(".cache"),
-            runCatching { Path.of(System.getProperty("java.io.tmpdir")) }.getOrNull(),
-            runCatching { Path.of(System.getenv("SystemRoot") ?: "C:/Windows") }.getOrNull(),
-        ).map { it.toAbsolutePath().normalize() }
+    /**
+     * Fallback boundary [Authorizer] used when none was injected. Holds a single lexical-scope
+     * grant over the workspace, its mirrored module roots ([MirrorRoots]) and the toolchain
+     * locations (B4), with launchers exempt (B3). The credential and protected-dir rails stay
+     * separate ([argumentPathViolation], [protectedPathViolation]) — they are orthogonal guardrails,
+     * not capability scope.
+     *
+     * Built lazily so the mirror scan runs once and only when a command is actually validated.
+     */
+    private val fallbackBoundaryAuthorizer: Authorizer by lazy {
+        val roots = (listOf(canonicalBaseDir) + CodingComponents.toolchainRoots() + MirrorRoots.derive(baseDir)).toSet()
+        Authorizer(
+            listOf(
+                Capability(
+                    id = CodingComponents.CAP_SHELL_BOUNDARY,
+                    effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
+                    scope = Scope(
+                        readPaths = roots,
+                        writePaths = roots,
+                        launcherBasenames = LAUNCHER_BASENAMES,
+                        executableExtensions = EXECUTABLE_EXTENSIONS,
+                        canonicalize = false,
+                    ),
+                    source = CapabilitySource.PRESET,
+                ),
+            ),
+        )
     }
 
     /**
@@ -1284,15 +1429,15 @@ class CodingAgentShell(
         // command passed on Linux (plan P0.4 / eval K4).
         if (baseCommand in SAFE_COMMANDS) return null
         if (devToolAllowed(baseCommand)) return null
-        if (allowNetwork && baseCommand in NETWORK_COMMANDS) return null
+        if (networkAllowed() && baseCommand in NETWORK_COMMANDS) return null
         if (allowDestructive && baseCommand in DESTRUCTIVE_COMMANDS) return null
 
         // Network and destructive tools are VETOES, not fall-throughs: the PATH
         // fallback below must not resurrect a tool whose category was disabled.
         // Without this, `curl` (installed on almost every host) was allowed even
-        // with allowNetwork=false, which made the whole network tier cosmetic.
+        // with network access off, which made the whole network tier cosmetic.
         if (baseCommand in NETWORK_COMMANDS) {
-            return "'$baseCommand' requires network access but allowNetwork=false"
+            return "'$baseCommand' requires network access but it is disabled by the access policy"
         }
         if (baseCommand in DESTRUCTIVE_COMMANDS) {
             return "'$baseCommand' is a destructive command but allowDestructive=false"
@@ -1310,7 +1455,7 @@ class CodingAgentShell(
 
         return "command '$baseCommand' is not allowed (safe=${baseCommand in SAFE_COMMANDS}, " +
             "dev=${devToolAllowed(baseCommand)}, " +
-            "network=${baseCommand in NETWORK_COMMANDS && allowNetwork}, " +
+            "network=${baseCommand in NETWORK_COMMANDS && networkAllowed()}, " +
             "destructive=${baseCommand in DESTRUCTIVE_COMMANDS && allowDestructive})"
     }
 
@@ -1557,23 +1702,25 @@ class CodingAgentShell(
         val startTime = System.currentTimeMillis()
         val isWindows = System.getProperty("os.name").lowercase().contains("win")
 
-        val processBuilder = if (isWindows) {
-            ProcessBuilder("cmd.exe", "/c", command)
+        val commandLine = if (isWindows) {
+            listOf("cmd.exe", "/c", command)
         } else {
-            ProcessBuilder("sh", "-c", command)
+            listOf("sh", "-c", command)
         }
 
-        processBuilder.directory(workDir)
-        processBuilder.redirectErrorStream(false)
+        // C1/C2: both execution paths share one environment construction and one sandbox seam.
+        // Explicitly declared variables (per-command env + session env) survive the whitelist;
+        // nothing else from the backend process does, so long-lived credentials are not inherited.
+        val environment = SandboxEnvironment.build(System.getenv(), sessionEnv + extraEnv)
+        val workspace = runCatching { baseDir.toRealPath() }
+            .getOrElse { baseDir.toAbsolutePath() }
+        val spec = ExecutionSandboxes.current().prepare(
+            ProcessSpec(commandLine, workDir.toPath(), environment),
+            workspace,
+            networkAllowed(),
+        )
 
-        // Merge session env + command env into process environment
-        if (sessionEnv.isNotEmpty() || extraEnv.isNotEmpty()) {
-            val env = processBuilder.environment()
-            env.putAll(sessionEnv)
-            env.putAll(extraEnv)
-        }
-
-        val process = processBuilder.start()
+        val process = ProcessLauncher.start(spec, redirectErrorStream = false)
 
         // Decode the raw bytes ourselves: the stream's default charset is the JVM
         // default (UTF-8), which turns cmd.exe's code-page output into U+FFFD.
@@ -1605,13 +1752,20 @@ class CodingAgentShell(
 
         val stdout = stdoutFuture.get()
         val stderr = stderrFuture.get()
+        val exitCode = process.exitValue()
+        val out = truncateOutput(stdout, command)
+        val err = truncateOutput(stderr, command)
+
+        // Plan P3-3: an OS-level denial becomes a structured refusal for the model; the raw bytes
+        // were logged by the translator, so they stay available for the audit trail.
+        val denial = if (exitCode != 0) SandboxDenials.envelope("coding.shell", command, err + "\n" + out) else null
 
         return ShellResult(
             sessionId = sessionId,
             command = command,
-            exitCode = process.exitValue(),
-            stdout = truncateOutput(stdout, command),
-            stderr = truncateOutput(stderr, command),
+            exitCode = exitCode,
+            stdout = out,
+            stderr = denial ?: err,
             durationMs = durationMs,
         )
     }
@@ -1737,7 +1891,7 @@ class WorkspaceEscapeException(
     val allowedRoot: Path,
 ) : IllegalArgumentException(
     "working directory ${requested.toAbsolutePath().normalize()} is outside the allowed workspace " +
-    "${allowedRoot.toAbsolutePath().normalize()}; set -Dbrowser4.agent.allowExternalAccess=true to bypass"
+    "${allowedRoot.toAbsolutePath().normalize()}; external access is disabled for this task"
 )
 
 /** The requested working directory does not exist, is not a directory, or

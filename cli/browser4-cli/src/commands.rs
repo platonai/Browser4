@@ -4039,7 +4039,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fresh-workspace", description: "Deprecated compatibility switch: every task now runs in its own workspace directory, so this is a no-op. Use --shared-workspace for the opposite", is_bool: true, short: None },
                 OptionDef { name: "shared-workspace", description: "Run this task in the shared workspace (the old default) instead of its own per-task workspace, so it sees and mutates previous tasks' files. --resume still uses the interrupted task's workspace", is_bool: true, short: None },
                 OptionDef { name: "access", description: "Access preset for this task's coding tools: full (default), write (no shell), read-build (read + project build, no shell, no file mutation), read. Omit to use the server-wide browser4.agent.access default. Reset when the task ends", is_bool: false, short: None },
-                OptionDef { name: "auto-approve", description: "Automatic approval ceiling for this task (full, write, read-build or read): a coding call the access preset refuses is granted and audited when the preset that would grant it is no wider than this ceiling — no human in the loop. Denied tools, protected paths and sensitive paths are never approved. Omit to use the server-wide browser4.agent.autoApprove default (off)", is_bool: false, short: None },
                 OptionDef { name: "resume", description: "Resume an interrupted task by id: the new run is seeded with that task's instruction, workspace and files already written (the checkpoint must exist on the same backend). The task description may be omitted", is_bool: false, short: None },
                 OptionDef { name: "token-budget", description: "Token budget for THIS task, overriding agent.token.budget.total for this run only (0 = unlimited). A per-run override, never a process-wide config change; the next task keeps the configured default", is_bool: false, short: None },
                 OptionDef { name: "engine", description: "Deprecated compatibility option: the CLI tool loop is the only agent engine. `cli` is accepted; the removed `observe-act` engine is rejected", is_bool: false, short: None },
@@ -4077,10 +4076,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(access) = get_opt_str(args, "access") {
                     p["access"] = json!(access);
-                }
-                // Same rule as `access`: absent means "server default", which is off.
-                if let Some(ceiling) = get_opt_str(args, "auto-approve") {
-                    p["autoApprove"] = json!(ceiling);
                 }
                 // Backend-side resume: forwarded as-is. A blank value must not
                 // become a checkpoint id, so only a non-blank one is sent.

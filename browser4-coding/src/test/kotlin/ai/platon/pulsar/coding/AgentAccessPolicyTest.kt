@@ -19,7 +19,7 @@ class AgentAccessPolicyTest {
         System.clearProperty(AgentAccessPolicy.PROP_ACCESS)
         System.clearProperty(AgentAccessPolicy.PROP_ALLOW_EXTERNAL_ACCESS)
         System.clearProperty(AgentAccessPolicy.PROP_ALLOW_DESTRUCTIVE)
-        System.clearProperty(AgentAccessPolicy.PROP_AUTO_APPROVE)
+        System.clearProperty(AgentAccessPolicy.PROP_ACCESS_UNATTENDED)
     }
 
     private fun policy(preset: AccessPreset) = AgentAccessPolicy(preset = preset)
@@ -172,12 +172,19 @@ class AgentAccessPolicyTest {
     }
 
     @Test
-    @DisplayName("automatic approval widens a preset only up to its ceiling, and is audited")
-    fun testAutoApprovalWidensUpToCeiling() {
-        val policy = AgentAccessPolicy(preset = AccessPreset.READ, autoApproveUpTo = AccessPreset.WRITE)
+    @DisplayName("an operator grant widens only the effect it carries, and the refusal points at requestAccess")
+    fun testOperatorGrantWidensOnlyItsEffect() {
+        val grants = listOf(
+            Capability(
+                id = CapabilityId("op-write"),
+                effects = setOf(Effect.FS_WRITE),
+                source = CapabilitySource.OPERATOR,
+            )
+        )
+        val policy = AgentAccessPolicy(preset = AccessPreset.READ, operatorGrants = { grants })
 
-        assertTrue(policy.allowsFileMutation(), "the write ceiling must reach the file-system layer")
-        assertFalse(policy.allowsExec(), "a write ceiling must not enable the shell")
+        assertTrue(policy.allowsFileMutation(), "an FS_WRITE grant must reach the file-system layer")
+        assertFalse(policy.allowsExec(), "an FS_WRITE grant must not enable the shell")
         assertTrue(policy.allowsTool("coding", "write"))
         assertTrue(policy.allowsTool("coding", "mvnBuild"))
         assertFalse(policy.allowsTool("coding", "shell"))
@@ -187,24 +194,30 @@ class AgentAccessPolicyTest {
         assertNotNull(shell)
         val shellMessage = shell!!.message ?: ""
         assertTrue(
-            shellMessage.contains("autoApprove=full"),
-            "a refusal must tell the caller how to approve it: $shellMessage"
+            shellMessage.contains("coding.requestAccess"),
+            "a refusal must tell the caller how to ask for approval: $shellMessage"
         )
 
-        val audit = PermissionAudit.snapshot()
-        assertTrue(
-            audit.keys.any { it.startsWith("coding.write:${PermissionAudit.CODE_AUTO_APPROVED}") },
-            "an automatic approval must leave an audit entry: $audit"
-        )
+        // The grant is read live: revoking it must close the door again on the next call.
+        val revoked = AgentAccessPolicy(preset = AccessPreset.READ, operatorGrants = { emptyList() })
+        assertFalse(revoked.allowsFileMutation())
+        assertNotNull(revoked.denial("coding", "write"))
     }
 
     @Test
-    @DisplayName("automatic approval never overrides an explicit denyTools entry")
-    fun testAutoApprovalNeverOverridesDenyTools() {
+    @DisplayName("an operator grant never overrides an explicit denyTools entry")
+    fun testOperatorGrantNeverOverridesDenyTools() {
+        val grants = listOf(
+            Capability(
+                id = CapabilityId("op-exec"),
+                effects = setOf(Effect.FS_EXEC, Effect.PROC_SPAWN),
+                source = CapabilitySource.OPERATOR,
+            )
+        )
         val policy = AgentAccessPolicy(
-            preset = AccessPreset.FULL,
+            preset = AccessPreset.READ,
             denyTools = setOf("coding.shell"),
-            autoApproveUpTo = AccessPreset.FULL,
+            operatorGrants = { grants },
         )
 
         assertFalse(policy.allowsTool("coding", "shell"))
@@ -218,44 +231,56 @@ class AgentAccessPolicyTest {
     }
 
     @Test
-    @DisplayName("automatic approval is off unless it is configured")
-    fun testAutoApprovalDefaultsOff() {
-        assertNull(AgentAccessPolicy().autoApproveUpTo)
-        assertNull(AgentAccessPolicy.serverDefault.autoApproveUpTo)
+    @DisplayName("an expired operator grant no longer covers anything")
+    fun testExpiredOperatorGrantIsIgnored() {
+        val grants = listOf(
+            Capability(
+                id = CapabilityId("op-write"),
+                effects = setOf(Effect.FS_WRITE),
+                source = CapabilitySource.OPERATOR,
+                expiresAt = java.time.Instant.now().minusSeconds(1),
+            )
+        )
+        val policy = AgentAccessPolicy(preset = AccessPreset.READ, operatorGrants = { grants })
+        assertFalse(policy.allowsFileMutation(), "an expired grant must not widen the preset")
+        assertFalse(policy.allowsTool("coding", "write"))
+    }
 
-        System.setProperty(AgentAccessPolicy.PROP_AUTO_APPROVE, "write")
-        assertEquals(AccessPreset.WRITE, AgentAccessPolicy.serverDefault.autoApproveUpTo)
+    @Test
+    @DisplayName("the unattended default is full with network allowed, and access.unattended narrows it")
+    fun testUnattendedDefault() {
+        val fallback = AgentAccessPolicy.unattendedDefault
+        assertEquals(AccessPreset.FULL, fallback.preset)
+        assertTrue(fallback.allowNetwork, "a job nobody watches must keep outbound network by default")
 
-        System.setProperty(AgentAccessPolicy.PROP_AUTO_APPROVE, "whatever")
-        assertNull(
-            AgentAccessPolicy.serverDefault.autoApproveUpTo,
-            "an unknown ceiling must stay off rather than widen silently"
+        System.setProperty(AgentAccessPolicy.PROP_ACCESS_UNATTENDED, "read")
+        assertEquals(AccessPreset.READ, AgentAccessPolicy.unattendedDefault.preset)
+        assertTrue(AgentAccessPolicy.unattendedDefault.allowNetwork)
+
+        // `deny` means no workspace power, but the task can still browse.
+        System.setProperty(AgentAccessPolicy.PROP_ACCESS_UNATTENDED, "deny")
+        val deny = AgentAccessPolicy.unattendedDefault
+        assertEquals(AccessPreset.READ, deny.preset)
+        assertFalse(deny.allowNetwork)
+        assertFalse(deny.allowsTool("coding", "read"), "deny must close the whole coding surface")
+        assertTrue(deny.allowsTool("tab", "navigate"), "deny must not make the task unrunnable")
+
+        System.setProperty(AgentAccessPolicy.PROP_ACCESS_UNATTENDED, "whatever")
+        assertEquals(
+            AccessPreset.FULL,
+            AgentAccessPolicy.unattendedDefault.preset,
+            "an unknown value must keep the documented default rather than widen silently"
         )
     }
 
     @Test
-    @DisplayName("a task that names neither override inherits both server-wide values")
-    fun testTaskOverridesInheritServerDefaults() {
-        val server = AgentAccessPolicy(preset = AccessPreset.READ, autoApproveUpTo = AccessPreset.WRITE)
+    @DisplayName("a task that names no preset inherits the server-wide one")
+    fun testTaskOverrideInheritsServerDefault() {
+        val server = AgentAccessPolicy(preset = AccessPreset.READ)
 
-        val inherited = server.withTaskOverrides(null, null)
-        assertEquals(AccessPreset.READ, inherited.preset)
-        assertEquals(AccessPreset.WRITE, inherited.autoApproveUpTo)
-
-        val overridden = server.withTaskOverrides(AccessPreset.READ_BUILD, AccessPreset.FULL)
-        assertEquals(AccessPreset.READ_BUILD, overridden.preset)
-        assertEquals(AccessPreset.FULL, overridden.autoApproveUpTo)
-
-        // One override does not drag the other along: a task that only narrows the preset keeps
-        // the server-wide ceiling, and a task that only approves keeps the server-wide preset.
-        assertEquals(
-            AccessPreset.WRITE,
-            server.withTaskOverrides(AccessPreset.FULL, null).autoApproveUpTo
-        )
-        assertEquals(
-            AccessPreset.READ,
-            server.withTaskOverrides(null, AccessPreset.FULL).preset
-        )
+        assertEquals(AccessPreset.READ, server.withTaskOverrides(null).preset)
+        assertEquals(AccessPreset.READ_BUILD, server.withTaskOverrides(AccessPreset.READ_BUILD).preset)
+        assertEquals(AccessPreset.FULL, server.withTaskOverrides(AccessPreset.FULL).preset)
     }
 
     @Test
@@ -310,7 +335,7 @@ class AgentAccessPolicyTest {
     }
 
     @Test
-    @DisplayName("denial refuses skill execution under read and explains the preset to widen")
+    @DisplayName("denial refuses skill execution under read and points at the approval entry")
     fun testDenialRefusesSkillExecutionUnderRead() {
         val read = policy(AccessPreset.READ)
         assertNull(read.denial("skill", "list"))
@@ -318,8 +343,29 @@ class AgentAccessPolicyTest {
         assertNotNull(denied)
         val message = denied!!.message.orEmpty()
         assertTrue(message.contains("access preset 'read'"), message)
-        assertTrue(message.contains("autoApprove=full"), message)
+        assertTrue(message.contains("coding.requestAccess"), message)
 
         assertNull(policy(AccessPreset.FULL).denial("skill", "run"))
+    }
+
+    @Test
+    @DisplayName("refusals name the structured needed effect and no JVM or CLI switch")
+    fun testRefusalTextIsConverged() {
+        val read = policy(AccessPreset.READ)
+
+        val toolDenied = read.denial("coding", "shell")!!.message.orEmpty()
+        assertTrue(toolDenied.contains("needed=fs.exec"), toolDenied)
+        assertTrue(toolDenied.contains("coding.requestAccess"), toolDenied)
+
+        val mutating = read.mutationDenial("coding", "protect")!!.message.orEmpty()
+        assertTrue(mutating.contains("needed=fs.write"), mutating)
+        assertTrue(mutating.contains("coding.requestAccess"), mutating)
+
+        for (message in listOf(toolDenied, mutating)) {
+            assertFalse(message.contains("access=full"), "no preset-switch suggestion: $message")
+            assertFalse(message.contains("access=write"), "no preset-switch suggestion: $message")
+            assertFalse(message.contains("re-run"), "no re-run suggestion: $message")
+            assertFalse(message.contains("-Dbrowser4"), "no JVM switch suggestion: $message")
+        }
     }
 }

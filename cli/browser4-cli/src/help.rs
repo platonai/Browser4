@@ -1736,16 +1736,27 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    backend-wide browser4.agent.access applies; the preset is reset when the task ends.".to_string(),
         );
         lines.push(
-            "  - --auto-approve <preset> sets the automatic approval ceiling for the same task: a call the".to_string(),
+            "  - A refused step is not a dead end: the agent calls coding.requestAccess(effect, target),".to_string(),
         );
         lines.push(
-            "    preset refuses is granted (and audited) when the granting preset is no wider than the".to_string(),
+            "    which returns a pending requestId immediately and never blocks the task; allowed steps".to_string(),
         );
         lines.push(
-            "    ceiling. denyTools, protected paths and sensitive paths are never approved. Omitted, the".to_string(),
+            "    keep running. An operator approves it through POST api/agent/<taskId>/access/<requestId>/approve."
+                .to_string(),
         );
         lines.push(
-            "    backend-wide browser4.agent.autoApprove applies (off by default).".to_string(),
+            "    denyTools, protected paths and the workspace boundary are never approved away."
+                .to_string(),
+        );
+        lines.push(
+            "  - Without a TTY nobody can answer an approval, so an unattended run starts from full".to_string(),
+        );
+        lines.push(
+            "    (network on) instead of the server-wide preset; browser4.agent.access.unattended".to_string(),
+        );
+        lines.push(
+            "    overrides that. A watched -i session on a TTY keeps browser4.agent.access.".to_string(),
         );
         lines.push(
             "  - --follow streams the task's steps (tool calls, model text, slow/failed tools)".to_string(),
@@ -1823,7 +1834,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  browser4-cli agent run \"Fix the failing test\" --coding --access read-build --auto-approve write"
+            "  browser4-cli agent run \"Fix the failing test\" --coding --access read --follow"
                 .to_string(),
         );
         lines.push(

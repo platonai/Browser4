@@ -33,7 +33,7 @@ import kotlin.io.path.*
  * val cfs = CodingAgentFileSystem(workspaceRoot = Path.of("/home/user/project"))
  * cfs.writeFile("src/main.kt", code)
  * val content = cfs.readFile("src/main.kt")
- * val results = cfs.glob("src/**/*.kt")
+ * val results = cfs.glob("src")   // any glob pattern under the workspace
  * ```
  */
 class CodingAgentFileSystem(
@@ -79,7 +79,31 @@ class CodingAgentFileSystem(
      * a caller that reached the file system directly.
      */
     private val readOnly: Boolean = false,
+    /**
+     * Live read-only projection (plan P4-1): when set it overrides [readOnly] on every call, so an
+     * operator approval issued while the task runs takes effect without rebuilding this instance.
+     */
+    private val readOnlyProvider: (() -> Boolean)? = null,
+    /**
+     * Live write-scope projection (plan P4-1): when set, every mutator additionally asks whether
+     * the resolved target is covered by an active operator grant. This is the target-level check
+     * that keeps an approval for one path from unlocking the whole workspace. `null` means "no
+     * target-level check" (direct construction and tests).
+     */
+    private val writeAllowedProvider: ((Path) -> Boolean)? = null,
+    /**
+     * The boundary [Authorizer] shared with the shell. When provided, [withinBoundary] pins its
+     * request to [CodingComponents.CAP_FS_BOUNDARY] (canonical scope). When null, the instance
+     * builds its own boundary authorizer — kept so tests and direct construction still work.
+     */
+    private val boundaryAuthorizer: Authorizer? = null,
 ) {
+    /**
+     * The boundary [Authorizer] actually in effect — the injected shared instance, or the
+     * per-instance fallback. Exposed for dry-run tools (`coding.explain`) so a model can ask
+     * "would this path be allowed?" without executing the operation.
+     */
+    val activeBoundaryAuthorizer: Authorizer get() = boundaryAuthorizer ?: fallbackBoundaryAuthorizer
     companion object {
         const val MAX_READ_SIZE_BYTES = 5 * 1024 * 1024L // 5 MB
         const val MAX_GLOB_RESULTS = 10_000
@@ -417,9 +441,10 @@ class CodingAgentFileSystem(
         expectedChecksum: String? = null,
     ): String {
         mutationViolation()?.let { return errorResult(it) }
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
+        val resolved = resolvePath(path, write = true) ?: return errorResult(unresolvedPath(path))
         if (resolved.isDirectory()) return errorResult("Cannot write to a directory: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
+        mutationTargetViolation(resolved)?.let { return errorResult(it) }
         expectedChecksum?.let { expected ->
             concurrencyViolation(resolved, expected)?.let { return errorResult(it) }
         }
@@ -450,9 +475,10 @@ class CodingAgentFileSystem(
      */
     suspend fun appendFile(path: String, content: String): String {
         mutationViolation()?.let { return errorResult(it) }
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
+        val resolved = resolvePath(path, write = true) ?: return errorResult(unresolvedPath(path))
         if (resolved.isDirectory()) return errorResult("Cannot append to a directory: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
+        mutationTargetViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             snapshotFile(resolved)
@@ -479,9 +505,10 @@ class CodingAgentFileSystem(
     ): String {
         mutationViolation()?.let { return errorResult(it) }
         if (oldStr.isEmpty()) return errorResult("Cannot replace empty string")
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
+        val resolved = resolvePath(path, write = true) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("File not found: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
+        mutationTargetViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             val original = withContext(Dispatchers.IO) { Files.readString(resolved) }
@@ -533,9 +560,10 @@ class CodingAgentFileSystem(
     ): String {
         mutationViolation()?.let { return errorResult(it) }
         if (regex.isEmpty()) return errorResult("Cannot replace empty regex")
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
+        val resolved = resolvePath(path, write = true) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("File not found: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
+        mutationTargetViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             val pattern = Regex(regex)
@@ -593,9 +621,10 @@ class CodingAgentFileSystem(
         if (startLine < 1 || endLine < startLine) {
             return errorResult("Invalid line range: start=$startLine end=$endLine (1-based, start <= end)")
         }
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
+        val resolved = resolvePath(path, write = true) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("File not found: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
+        mutationTargetViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             val original = withContext(Dispatchers.IO) { Files.readString(resolved) }
@@ -629,9 +658,10 @@ class CodingAgentFileSystem(
     suspend fun insertAfterInFile(path: String, anchor: String, content: String): String {
         mutationViolation()?.let { return errorResult(it) }
         if (anchor.isEmpty()) return errorResult("Anchor must not be empty")
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
+        val resolved = resolvePath(path, write = true) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("File not found: $path")
         protectionViolation(resolved)?.let { return errorResult(it) }
+        mutationTargetViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             val original = withContext(Dispatchers.IO) { Files.readString(resolved) }
@@ -668,7 +698,8 @@ class CodingAgentFileSystem(
      */
     suspend fun revert(path: String): String {
         mutationViolation()?.let { return errorResult(it) }
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
+        val resolved = resolvePath(path, write = true) ?: return errorResult(unresolvedPath(path))
+        mutationTargetViolation(resolved)?.let { return errorResult(it) }
         val snapshot = snapshots[resolved] ?: loadPersistedSnapshot(resolved)
             ?: return errorResult("No snapshot available for revert: $path")
         snapshots.putIfAbsent(resolved, snapshot)
@@ -740,11 +771,12 @@ class CodingAgentFileSystem(
     suspend fun delete(path: String, recursive: Boolean = false): String {
         mutationViolation()?.let { return errorResult(it) }
         if (!allowDestructive) return errorResult("Destructive operations disabled")
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
+        val resolved = resolvePath(path, write = true) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("Not found: $path")
 
         // Governance protection: never delete repo-critical files.
         protectionViolation(resolved)?.let { return errorResult(it) }
+        mutationTargetViolation(resolved)?.let { return errorResult(it) }
 
         // Hard protection: never delete the workspace root itself.
         if (resolved == canonicalRoot) {
@@ -838,10 +870,11 @@ class CodingAgentFileSystem(
      */
     suspend fun mkdir(path: String): String {
         mutationViolation()?.let { return errorResult(it) }
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
+        val resolved = resolvePath(path, write = true) ?: return errorResult(unresolvedPath(path))
         // A directory under a protected subtree is a write like any other — without this the tools
         // could shape (and later reason about) the agent's own bookkeeping tree.
         protectionViolation(resolved)?.let { return errorResult(it) }
+        mutationTargetViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             withContext(Dispatchers.IO) {
@@ -860,10 +893,11 @@ class CodingAgentFileSystem(
         mutationViolation()?.let { return errorResult(it) }
         if (!allowDestructive) return errorResult("Destructive operations disabled")
         val src = resolvePath(source) ?: return errorResult("Source not resolved: $source")
-        val dst = resolvePath(dest) ?: return errorResult("Dest not resolved: $dest")
+        val dst = resolvePath(dest, write = true) ?: return errorResult("Dest not resolved: $dest")
         if (!src.exists()) return errorResult("Source not found: $source")
         // A copy into a governance file is a replace in disguise.
         protectionViolation(dst)?.let { return errorResult(it) }
+        mutationTargetViolation(dst)?.let { return errorResult(it) }
 
         return try {
             withContext(Dispatchers.IO) {
@@ -889,12 +923,14 @@ class CodingAgentFileSystem(
         mutationViolation()?.let { return errorResult(it) }
         if (!allowDestructive) return errorResult("Destructive operations disabled")
         val src = resolvePath(source) ?: return errorResult("Source not resolved: $source")
-        val dst = resolvePath(dest) ?: return errorResult("Dest not resolved: $dest")
+        val dst = resolvePath(dest, write = true) ?: return errorResult("Dest not resolved: $dest")
         if (!src.exists()) return errorResult("Source not found: $source")
         // A move deletes the source and replaces the destination — both ends
         // must respect governance protection.
         protectionViolation(src)?.let { return errorResult(it) }
         protectionViolation(dst)?.let { return errorResult(it) }
+        mutationTargetViolation(src)?.let { return errorResult(it) }
+        mutationTargetViolation(dst)?.let { return errorResult(it) }
 
         return try {
             snapshotFile(src)
@@ -1375,24 +1411,40 @@ class CodingAgentFileSystem(
     // Internal helpers
     // ------------------------------------------------------------------
 
-    private fun resolvePath(path: String): Path? {
+    /**
+     * Resolves [path] against the workspace and enforces the boundary and credential guards.
+     *
+     * @param write `true` when the caller is about to mutate the path (B5). A write the boundary
+     *   would refuse, but which `allowExternalAccess` permits, is recorded as
+     *   [PermissionAudit.CODE_OUT_OF_SCOPE_WRITE] before it happens: the file tools resolve the real
+     *   path, so this is a fact, not a guess. Reads are never recorded — only the write side changes
+     *   repository state, and a report that counts reads as escapes would be noise.
+     */
+    private fun resolvePath(path: String, write: Boolean = false): Path? {
         val p = Path.of(path)
-        val resolved = if (p.isAbsolute) {
-            if (!allowExternalAccess && !p.startsWith(canonicalRoot)) {
-                logger.warn("External path access denied: $path")
-                PermissionAudit.record("coding.fs", PermissionAudit.CODE_PATH_OUTSIDE_WORKSPACE)
-                return null
-            }
-            p.normalize()
-        } else {
-            canonicalRoot.resolve(path).normalize()
-        }
+        val resolved = if (p.isAbsolute) p.normalize() else canonicalRoot.resolve(path).normalize()
 
-        // Security: prevent path traversal outside workspace when external access disabled
-        if (!allowExternalAccess && !resolved.startsWith(canonicalRoot)) {
-            logger.warn("Path traversal blocked: $path resolves to $resolved")
+        // Boundary: the real path must live inside the workspace or one of its mirrored module
+        // roots. The decision runs on canonical (real) paths through [boundaryAuthorizer], so a
+        // junction inside the workspace that points at the source checkout is still allowed — its
+        // real target is in the scope — while a path that genuinely escapes is refused.
+        // `allowExternalAccess` short-circuits the boundary exactly as before; the credential
+        // guard below still runs regardless.
+        if (!allowExternalAccess && !withinBoundary(resolved)) {
+            logger.warn("Path outside workspace boundary denied: $path resolves to $resolved")
             PermissionAudit.record("coding.fs", PermissionAudit.CODE_PATH_OUTSIDE_WORKSPACE)
             return null
+        }
+
+        // B5: the override is a documented escape hatch, not a silent widening. Record every write
+        // that it lets through so `coding.permissions` can show how far the run actually went.
+        if (write && allowExternalAccess && !withinBoundary(resolved)) {
+            PermissionAudit.writeEvent(
+                tool = "coding.fs",
+                code = PermissionAudit.CODE_OUT_OF_SCOPE_WRITE,
+                detail = "write to '$resolved' is outside the workspace capability scope and was allowed " +
+                    "only because external access is enabled for this task",
+            )
         }
 
         // Security: credential locations stay off limits even when external access is enabled.
@@ -1407,6 +1459,46 @@ class CodingAgentFileSystem(
         }
 
         return resolved
+    }
+
+    /**
+     * Whether [path]'s real location is reachable: inside the workspace, or inside one of the
+     * mirrored module roots the workspace links to.
+     *
+     * The check is a single [Authorizer] decision, the same one the shell and the build runner will
+     * eventually use. The capability here grants both read and write on the same scope, because
+     * [resolvePath] does not know yet whether the caller wants to read or write — the [readOnly]
+     * flag enforces the write side separately.
+     */
+    private fun withinBoundary(path: Path): Boolean {
+        val decision = activeBoundaryAuthorizer.decide(
+            Request(
+                tool = "coding.fs",
+                effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
+                targets = listOf(Target.PathTarget(path)),
+                capabilityId = CodingComponents.CAP_FS_BOUNDARY,
+            ),
+        )
+        return decision is Decision.Allow || decision is Decision.AllowWithBudget
+    }
+
+    /**
+     * Fallback boundary [Authorizer] used when none was injected. Holds a single canonical-scope
+     * grant over the workspace real root and every mirrored module root [MirrorRoots] finds. Built
+     * lazily so the mirror scan runs once per instance and only when a path is actually resolved.
+     */
+    private val fallbackBoundaryAuthorizer: Authorizer by lazy {
+        val roots = (setOf(canonicalRoot) + MirrorRoots.derive(workspaceRoot)).toSet()
+        Authorizer(
+            listOf(
+                Capability(
+                    id = CodingComponents.CAP_FS_BOUNDARY,
+                    effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
+                    scope = Scope(readPaths = roots, writePaths = roots),
+                    source = CapabilitySource.PRESET,
+                ),
+            ),
+        )
     }
 
     /** Home-expanded [sensitivePaths], resolved once per instance. */
@@ -1623,14 +1715,41 @@ class CodingAgentFileSystem(
      * Checked before path resolution so the caller learns the *policy* reason instead of a
      * generic "path not resolved" message.
      */
-    private fun mutationViolation(): String? = if (readOnly) {
+    private fun mutationViolation(): String? = if (readOnlyProvider?.invoke() ?: readOnly) {
         PermissionAudit.denied(
             tool = "coding.fs",
             code = PermissionAudit.CODE_READ_ONLY,
             detail = "file mutations are disabled by the access policy (read-only workspace)",
-            hint = "re-run with access=full or access=write to edit the workspace",
+            hint = "request operator approval with " +
+                "coding.requestAccess(effect=\"fs.write\", target=\"<path>\") — it returns " +
+                "immediately with a pending requestId, and the task keeps running meanwhile",
+            needed = Effect.FS_WRITE.id,
         )
     } else null
+
+    /**
+     * Structured refusal when [resolved] is not covered by an active operator grant.
+     *
+     * Called after [resolvePath] and the rails, so the path has already been judged by the
+     * workspace boundary and the protected/credential checks; this is the remaining question
+     * "was *this* concrete path approved?" A preset that grants mutation returns `true` from the
+     * provider immediately, so the historical behaviour is unchanged.
+     */
+    private fun mutationTargetViolation(resolved: Path): String? {
+        val provider = writeAllowedProvider ?: return null
+        if (provider(resolved)) return null
+        val rel = runCatching { canonicalRoot.relativize(resolved).toString().replace('\\', '/') }
+            .getOrDefault(resolved.toString())
+        return PermissionAudit.denied(
+            tool = "coding.fs",
+            code = PermissionAudit.CODE_TOOL_DENIED,
+            detail = "file mutation at '$rel' is not covered by an active operator grant",
+            hint = "request operator approval with " +
+                "coding.requestAccess(effect=\"fs.write\", target=\"$rel\") — the grant covers " +
+                "that path and its descendants only",
+            needed = Effect.FS_WRITE.id,
+        )
+    }
 
     /**
      * Refusal text for a path the policy would not resolve.
@@ -1643,8 +1762,9 @@ class CodingAgentFileSystem(
         tool = "coding.fs",
         code = PermissionAudit.CODE_PATH_DENIED,
         detail = "path '$path' is outside the workspace, in a sensitive location, or protected",
-        hint = "use a workspace-relative path; paths outside the workspace require " +
-            "-Dbrowser4.agent.allowExternalAccess=true, and credential locations stay refused either way",
+        hint = "use a workspace-relative path; the deprecated allowExternalAccess opt-in relaxes " +
+            "this check only — the OS sandbox still enforces the boundary, and credential " +
+            "locations stay refused either way",
     )
 
     /**
@@ -1710,6 +1830,7 @@ class CodingAgentFileSystem(
     fun protect(path: String, on: Boolean = true): String {
         mutationViolation()?.let { return errorResult(it) }
         val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
+        mutationTargetViolation(resolved)?.let { return errorResult(it) }
         val rel = canonicalRoot.relativize(resolved).toString().replace('\\', '/')
         return if (on) {
             if (dynamicProtected.add(rel)) "✓ Protected $rel from destructive operations (session)"

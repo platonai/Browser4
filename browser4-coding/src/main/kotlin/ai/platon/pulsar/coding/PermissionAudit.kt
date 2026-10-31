@@ -65,8 +65,63 @@ object PermissionAudit {
     /** No shell command may run at all under the active preset. */
     const val CODE_EXEC_DISABLED = "EXEC_DISABLED"
 
-    /** A call the preset refused was granted by the automatic approval ceiling. */
+    /** The call would exceed the budget a capability allows (duration, bytes or call count). */
+    const val CODE_BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+
+    /**
+     * A call the preset refused was granted by the automatic approval ceiling.
+     *
+     * Deprecated by plan P4-1 (decision #4): the ceiling was removed, so nothing produces this code
+     * any more. The constant stays so historic audit snapshots keep their meaning.
+     */
+    @Deprecated("Automatic approval was removed in plan P4-1; operator approval records ACCESS_APPROVED")
     const val CODE_AUTO_APPROVED = "AUTO_APPROVED"
+
+    /** A `coding.requestAccess` call created a pending request (plan P4-1). */
+    const val CODE_ACCESS_REQUESTED = "ACCESS_REQUESTED"
+
+    /** An operator (or the unattended default) granted a capability. */
+    const val CODE_ACCESS_APPROVED = "ACCESS_APPROVED"
+
+    /** An operator denied a request, or a rail refused it. */
+    const val CODE_ACCESS_DENIED = "ACCESS_DENIED"
+
+    /** An issued capability stopped applying; detected lazily on the next decision. */
+    const val CODE_ACCESS_EXPIRED = "ACCESS_EXPIRED"
+
+    /**
+     * A write that landed outside the workspace capability scope, allowed only by
+     * `-Dbrowser4.agent.allowExternalAccess=true`.
+     *
+     * Recorded as a fact ([writeEvent]), not a refusal: the call succeeded. The file tools resolve
+     * the real path, so this count is trustworthy; see [CODE_SCOPE_UNCERTAIN] for the shell, where
+     * the string layer cannot confirm a write.
+     */
+    const val CODE_OUT_OF_SCOPE_WRITE = "OUT_OF_SCOPE_WRITE"
+
+    /** A network command that actually ran under `allowNetwork=true`; a fact, not a refusal. */
+    const val CODE_NETWORK_TARGET = "NETWORK_TARGET"
+
+    /**
+     * A shell command that names a path outside the workspace while external access is enabled.
+     *
+     * Deliberately a *marker*, not an `OUT_OF_SCOPE_WRITE`: the shell judges arguments by spelling
+     * and cannot tell whether the command reads or writes that path. The confirmed write fact comes
+     * from the sandbox layer (phase C), never from guessing here.
+     */
+    const val CODE_SCOPE_UNCERTAIN = "SCOPE_UNCERTAIN"
+
+    /** The execution sandbox refused the process (phase C); the string layer never produces this. */
+    const val CODE_SANDBOX_DENIED = "SANDBOX_DENIED"
+
+    /**
+     * A secret-shaped variable was explicitly passed to a child process.
+     *
+     * Phase C strips long-lived credentials from the inherited environment; an explicit
+     * passthrough still wins, because the operator or the task asked for it. This records the
+     * decision so `coding.permissions` can show it instead of leaving a silent exception.
+     */
+    const val CODE_ENV_PASSTHROUGH = "ENV_PASSTHROUGH"
 
     private val logger = LoggerFactory.getLogger(PermissionAudit::class.java)
 
@@ -83,31 +138,37 @@ object PermissionAudit {
      * @param detail what exactly was refused and why
      * @param hint the allowed alternative, so the caller does not have to guess
      */
-    fun denied(tool: String, code: String, detail: String, hint: String? = null): String {
+    fun denied(
+        tool: String,
+        code: String,
+        detail: String,
+        hint: String? = null,
+        needed: String? = null,
+    ): String {
         val key = record(tool, code)
         if (logged.add(key)) {
             logger.info("coding access denied: tool={} code={} detail={}", tool, code, detail)
         }
-        return format(tool, code, detail, hint)
+        return format(tool, code, detail, hint, needed)
     }
 
     /**
-     * Records an automatic approval: a call the preset refused, granted by the ceiling.
+     * Records a fact about an allowed call — an out-of-scope write, a network target, a sandbox
+     * denial — distinct from [denied].
      *
-     * Approvals are counted under [CODE_AUTO_APPROVED] and logged once per `tool` shape, so an
-     * "allow everything" task still leaves a trace of *which* capabilities it actually used. The
-     * caller proceeds normally; nothing is returned because the call is allowed.
+     * An event confirms that something *did* happen; a refusal confirms something did not. Both
+     * live in [snapshot] so `coding.permissions` can report the two without inventing a second
+     * counter. Logging is once per `tool:code` shape, keyed apart from refusals so a refusal and an
+     * event for the same tool both get their one line.
      *
-     * @param tool the approved entry point, e.g. `coding.shell`
-     * @param required the narrowest preset that grants the call
-     * @param ceiling the ceiling that approved it
+     * @param tool the entry point that produced the fact, e.g. `coding.fs`
+     * @param code one of the `CODE_*` constants
+     * @param detail what happened, precisely enough to audit
      */
-    fun approved(tool: String, required: AccessPreset, ceiling: AccessPreset) {
-        val key = record(tool, CODE_AUTO_APPROVED)
-        if (logged.add(key)) {
-            logger.info(
-                "coding access auto-approved: tool={} required={} ceiling={}", tool, required.id, ceiling.id
-            )
+    fun writeEvent(tool: String, code: String, detail: String) {
+        val key = record(tool, code)
+        if (logged.add("event:$key")) {
+            logger.info("coding capability event: tool={} code={} detail={}", tool, code, detail)
         }
     }
 
@@ -118,13 +179,22 @@ object PermissionAudit {
      * text is composed further up (the file system records `PATH_OUTSIDE_WORKSPACE` /
      * `SENSITIVE_PATH` in its resolver and formats at the call site).
      */
-    fun format(tool: String, code: String, detail: String, hint: String? = null): String = buildString {
+    fun format(
+        tool: String,
+        code: String,
+        detail: String,
+        hint: String? = null,
+        needed: String? = null,
+    ): String = buildString {
         append(DENIED)
         append(" | code=").append(code)
         append(" | tool=").append(tool)
         append(" | detail=").append(detail)
         if (!hint.isNullOrBlank()) {
             append(" | hint=").append(hint)
+        }
+        if (!needed.isNullOrBlank()) {
+            append(" | needed=").append(needed)
         }
     }
 

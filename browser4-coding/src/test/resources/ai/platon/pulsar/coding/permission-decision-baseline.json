@@ -1,0 +1,346 @@
+{
+  "version": 1,
+  "description": [
+    "M0 golden decision baseline (execution plan A7).",
+    "Each entry freezes one authorization outcome observed by the pre-A tests, so a later change",
+    "that shifts a decision (allow -> deny, or a different audit code) fails the comparison instead",
+    "of silently drifting. The inputs are replayed against the current CodingAgentShell,",
+    "CodingAgentFileSystem and AgentAccessPolicy; only the decision is compared, never a process run.",
+    "",
+    "Placeholders resolved at replay time:",
+    "  {workspace}      the workspace root (an existing directory under the JUnit temp dir)",
+    "  {outsideFile}    a file next to the workspace (outside it, for the file-system boundary)",
+    "  {rootPath}       a file at the filesystem root (outside the workspace and the toolchain roots)",
+    "  {relativeEscape} the workspace-relative spelling of {rootPath}, i.e. a '..'-escaping relative path",
+    "",
+    "Plan P3-5 (D2) — the string layer is advisory. Entries that switch pathGuard off or set",
+    "allowExternalAccess record what each switch does NOT widen: the protected rails and the",
+    "credential check stay enforced, and the workspace boundary is its own check. Enforcement",
+    "itself is the OS sandbox, which the baseline does not exercise (it never spawns a process)."
+  ],
+  "shell": [
+    {
+      "id": "shell.inside-relative-read",
+      "command": "type .b4inputs/spec.csv",
+      "allowed": true
+    },
+    {
+      "id": "shell.launcher-build",
+      "command": "mvnw.cmd -pl browser4-coding -am compile",
+      "allowed": true
+    },
+    {
+      "id": "shell.toolchain-jdk",
+      "command": "\"%JAVA_HOME%\\bin\\java\" -version",
+      "allowed": true
+    },
+    {
+      "id": "shell.absolute-outside-argument",
+      "command": "type \"{rootPath}\"",
+      "allowed": false,
+      "code": "COMMAND_PATH_DENIED"
+    },
+    {
+      "id": "shell.relative-escape-argument",
+      "command": "type \"{relativeEscape}\"",
+      "allowed": false,
+      "code": "COMMAND_PATH_DENIED"
+    },
+    {
+      "id": "shell.tool-target-outside",
+      "command": "grep needle \"{rootPath}\"",
+      "allowed": false,
+      "code": "COMMAND_PATH_DENIED"
+    },
+    {
+      "id": "shell.credential-tilde",
+      "command": "cat ~/.ssh/id_rsa",
+      "allowed": false,
+      "code": "COMMAND_PATH_DENIED"
+    },
+    {
+      "id": "shell.credential-windows-variable",
+      "command": "type %USERPROFILE%\\.ssh\\id_rsa",
+      "allowed": false,
+      "code": "COMMAND_PATH_DENIED"
+    },
+    {
+      "id": "shell.credential-posix-variable",
+      "command": "cat $HOME/.ssh/id_rsa",
+      "allowed": false,
+      "code": "COMMAND_PATH_DENIED"
+    },
+    {
+      "id": "shell.credential-option-value",
+      "command": "echo -Dkey=~/.ssh/id_rsa",
+      "allowed": false,
+      "code": "COMMAND_PATH_DENIED"
+    },
+    {
+      "id": "shell.credential-guard-off",
+      "command": "cat ~/.ssh/id_rsa",
+      "pathGuardEnabled": false,
+      "allowed": true
+    },
+    {
+      "id": "shell.maven-repository",
+      "command": "cat ~/.m2/settings.xml",
+      "allowed": true
+    },
+    {
+      "id": "shell.workspace-dotfile",
+      "command": "cat .ssh/notes.txt",
+      "allowed": true
+    },
+    {
+      "id": "shell.ordinary-write",
+      "command": "echo hi > notes.txt",
+      "allowed": true
+    },
+    {
+      "id": "shell.ordinary-copy",
+      "command": "cat pom.xml > out/pom.txt",
+      "allowed": true
+    },
+    {
+      "id": "shell.protected-bookkeeping-write",
+      "command": "echo forged > .browser4/data/agent/agent-tasks.jsonl",
+      "allowed": false,
+      "code": "PROTECTED_PATH"
+    },
+    {
+      "id": "shell.protected-bookkeeping-delete",
+      "command": "rm -rf .browser4",
+      "allowed": false,
+      "code": "PROTECTED_PATH"
+    },
+    {
+      "id": "shell.protected-workflow-write",
+      "command": "cp pom.xml .github/workflows/ci.yml",
+      "allowed": false,
+      "code": "PROTECTED_PATH"
+    },
+    {
+      "id": "shell.protected-read-allowed",
+      "command": "cat .github/CODEOWNERS",
+      "allowed": true
+    },
+    {
+      "id": "shell.protected-survives-pathguard-off",
+      "command": "echo forged > .browser4/x.json",
+      "pathGuardEnabled": false,
+      "allowed": false,
+      "code": "PROTECTED_PATH"
+    },
+    {
+      "id": "shell.external-access-allows",
+      "command": "type \"{rootPath}\"",
+      "allowExternalAccess": true,
+      "allowed": true
+    },
+    {
+      "id": "shell.boundary-survives-pathguard-off",
+      "command": "type \"{rootPath}\"",
+      "pathGuardEnabled": false,
+      "allowed": false,
+      "code": "COMMAND_PATH_DENIED"
+    },
+    {
+      "id": "shell.credential-survives-external-access",
+      "command": "cat ~/.ssh/id_rsa",
+      "allowExternalAccess": true,
+      "allowed": false,
+      "code": "COMMAND_PATH_DENIED"
+    },
+    {
+      "id": "shell.boundary-off-allows",
+      "command": "type \"{rootPath}\"",
+      "workspaceBoundaryEnabled": false,
+      "allowed": true
+    }
+  ],
+  "fs": [
+    {
+      "id": "fs.external-absolute-read",
+      "op": "read",
+      "path": "{outsideFile}",
+      "allowed": false,
+      "code": "PATH_DENIED"
+    },
+    {
+      "id": "fs.traversal-read",
+      "op": "read",
+      "path": "../escape.txt",
+      "allowed": false,
+      "code": "PATH_DENIED"
+    },
+    {
+      "id": "fs.inside-write",
+      "op": "write",
+      "path": "src/main/kotlin/A.kt",
+      "content": "class A\n",
+      "allowed": true
+    },
+    {
+      "id": "fs.inside-read",
+      "op": "read",
+      "path": "src/main/kotlin/A.kt",
+      "allowed": true
+    },
+    {
+      "id": "fs.protected-version-write",
+      "op": "write",
+      "path": "VERSION",
+      "content": "9.9.9\n",
+      "allowed": false,
+      "code": "PROTECTED_PATH"
+    },
+    {
+      "id": "fs.protected-bookkeeping-write",
+      "op": "write",
+      "path": ".browser4/data/agent/agent-tasks.jsonl",
+      "content": "forged\n",
+      "allowed": false,
+      "code": "PROTECTED_PATH"
+    },
+    {
+      "id": "fs.protected-workflow-write",
+      "op": "write",
+      "path": ".github/workflows/ci.yml",
+      "content": "on: pull_request\n",
+      "allowed": false,
+      "code": "PROTECTED_PATH"
+    },
+    {
+      "id": "fs.read-only-write",
+      "op": "write",
+      "path": "src/main/kotlin/A.kt",
+      "content": "class B\n",
+      "readOnly": true,
+      "allowed": false,
+      "code": "READ_ONLY"
+    },
+    {
+      "id": "fs.external-access-allows-read",
+      "op": "read",
+      "path": "{outsideFile}",
+      "allowExternalAccess": true,
+      "allowed": true
+    }
+  ],
+  "policy": [
+    {
+      "id": "policy.read-read",
+      "preset": "read",
+      "domain": "coding",
+      "method": "read",
+      "allowed": true
+    },
+    {
+      "id": "policy.read-explain",
+      "preset": "read",
+      "domain": "coding",
+      "method": "explain",
+      "allowed": true
+    },
+    {
+      "id": "policy.read-write",
+      "preset": "read",
+      "domain": "coding",
+      "method": "write",
+      "allowed": false,
+      "code": "TOOL_DENIED"
+    },
+    {
+      "id": "policy.read-shell",
+      "preset": "read",
+      "domain": "coding",
+      "method": "shell",
+      "allowed": false,
+      "code": "TOOL_DENIED"
+    },
+    {
+      "id": "policy.read-unclassified",
+      "preset": "read",
+      "domain": "coding",
+      "method": "notARealMethod",
+      "allowed": false,
+      "code": "TOOL_DENIED"
+    },
+    {
+      "id": "policy.write-write",
+      "preset": "write",
+      "domain": "coding",
+      "method": "write",
+      "allowed": true
+    },
+    {
+      "id": "policy.write-shell",
+      "preset": "write",
+      "domain": "coding",
+      "method": "shell",
+      "allowed": false,
+      "code": "TOOL_DENIED"
+    },
+    {
+      "id": "policy.read-build-mvnbuild",
+      "preset": "read-build",
+      "domain": "coding",
+      "method": "mvnBuild",
+      "allowed": true
+    },
+    {
+      "id": "policy.read-build-write",
+      "preset": "read-build",
+      "domain": "coding",
+      "method": "write",
+      "allowed": false,
+      "code": "TOOL_DENIED"
+    },
+    {
+      "id": "policy.full-shell",
+      "preset": "full",
+      "domain": "coding",
+      "method": "shell",
+      "allowed": true
+    },
+    {
+      "id": "policy.full-unclassified",
+      "preset": "full",
+      "domain": "coding",
+      "method": "notARealMethod",
+      "allowed": true
+    },
+    {
+      "id": "policy.read-skill-run",
+      "preset": "read",
+      "domain": "skill",
+      "method": "run",
+      "allowed": false,
+      "code": "TOOL_DENIED"
+    },
+    {
+      "id": "policy.full-skill-run",
+      "preset": "full",
+      "domain": "skill",
+      "method": "run",
+      "allowed": true
+    },
+    {
+      "id": "policy.read-browsing-ungated",
+      "preset": "read",
+      "domain": "b4",
+      "method": "goto",
+      "allowed": true
+    },
+    {
+      "id": "policy.deny-tools-wins",
+      "preset": "full",
+      "denyTools": ["coding.shell"],
+      "domain": "coding",
+      "method": "shell",
+      "allowed": false,
+      "code": "TOOL_DENIED"
+    }
+  ]
+}

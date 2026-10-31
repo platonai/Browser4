@@ -353,15 +353,15 @@ class CommandToolExecutorTest {
     }
 
     @Test
-    @DisplayName("run forwards the automatic approval ceiling alongside the access preset")
-    fun runForwardsAutoApproveCeiling() {
+    @DisplayName("run forwards unattended=false for a watched (TTY) task")
+    fun runForwardsWatchedTask() {
         runBlocking {
             `when`(
                 runner.submitPlainCommand(
                     "s1", "report the module", null, null, null, null,
-                    AccessPreset.READ, AccessPreset.WRITE
+                    AccessPreset.READ, false, null, null
                 )
-            ).thenReturn("t-auto")
+            ).thenReturn("t-watched")
 
             val taskId = call(
                 "run",
@@ -369,27 +369,33 @@ class CommandToolExecutorTest {
                     "command" to "report the module",
                     "sessionId" to "s1",
                     "access" to "read",
-                    "autoApprove" to "write",
+                    "unattended" to false,
                 )
             )
 
-            assertEquals("t-auto", taskId)
+            assertEquals("t-watched", taskId)
             Mockito.verify(runner).submitPlainCommand(
                 "s1", "report the module", null, null, null, null,
-                AccessPreset.READ, AccessPreset.WRITE
+                AccessPreset.READ, false, null, null
             )
         }
     }
 
     @Test
-    @DisplayName("run rejects an unknown automatic approval ceiling instead of silently turning it off")
-    fun runRejectsUnknownAutoApproveCeiling() {
-        val ex = assertThrows<IllegalArgumentException> {
-            call("run", mapOf("command" to "task", "sessionId" to "s1", "autoApprove" to "everything"))
-        }
+    @DisplayName("run treats an omitted unattended flag as an unattended job")
+    fun runDefaultsToUnattended() {
+        runBlocking {
+            `when`(
+                runner.submitPlainCommand("s1", "task", null, null, null, null, null, true, null, null)
+            ).thenReturn("t-unattended")
 
-        assertTrue(ex.message!!.contains("Unknown autoApprove"), ex.message)
-        Mockito.verifyNoInteractions(runner)
+            val taskId = call("run", mapOf("command" to "task", "sessionId" to "s1"))
+
+            assertEquals("t-unattended", taskId)
+            Mockito.verify(runner).submitPlainCommand(
+                "s1", "task", null, null, null, null, null, true, null, null
+            )
+        }
     }
 
     @Test

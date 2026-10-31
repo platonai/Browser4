@@ -121,9 +121,23 @@ once and the abort line names both numbers. `--ndjson` carries the same informat
 ### Permissions (`--access`)
 
 A task's coding tools run under one access **preset** (`full` / `write` / `read-build` /
-`read`), and `--auto-approve` can raise a bounded ceiling on top of it. The preset table,
-the `PERMISSION_DENIED | code=...` catalogue, the ceiling rules and the task-scoped reset
+`read`), and a refused step can be approved out of band through `coding.requestAccess`
+plus the operator endpoints. The preset table, the `PERMISSION_DENIED | code=...`
+catalogue, the approval/rail rules, the unattended default and the task-scoped reset
 are in [agent-access.md](agent-access.md).
+
+**Two layers, one boundary.** The preset and the string checks (`pathGuard`,
+`workspaceBoundary`, `allowExternalAccess`) decide what the model may *spell* — they are
+fast-fail and advisory, not enforcement. The boundary is the **execution sandbox**:
+`coding.shell` and `coding.runCode` run inside it whenever `browser4.agent.sandbox` selects a
+backend other than `off`.
+A fresh Windows installation defaults to `windows-acl`; existing installations and Linux/macOS
+stay `off` until switched. When the sandbox is active, an OS denial reaches the model as
+`PERMISSION_DENIED | code=SANDBOX_DENIED | tool=… | needed=…` (raw evidence stays in the log),
+and an unavailable sandbox — missing account or credential, failed ACLs, failed write probe,
+unknown id — **fails the task**; there is no unsandboxed fallback. Switch values, defaults,
+the ACL matrix, the account property and the `off` rollback are in
+[config.md](../../../docs/config.md).
 
 ## Patterns
 
@@ -461,7 +475,6 @@ never lets a *display* problem end it:
 | `-i`, `--interactive` | `agent run` | Open an interactive session (see above); an optional task runs immediately |
 | `--coding` | `agent run` | Explicitly mark the task as a coding task (plain file/build work; no browser page). Omitted (the default) the task is a browser task — task type is never auto-detected |
 | `--access <preset>` | `agent run` | Access preset for this task's coding tools: `full` (default), `write`, `read-build`, `read`. Omitted, the backend's `browser4.agent.access` applies. Scoped to the task and reset when it ends — see [Permissions](#permissions---access) |
-| `--auto-approve <preset>` | `agent run` | Automatic approval ceiling for this task: calls the preset refuses are granted when the preset that grants them is no wider. Omitted, the backend's `browser4.agent.autoApprove` applies (`off` by default). Scoped to the task and reset when it ends — see [Automatic approval](#automatic-approval---auto-approve) |
 | `--json` | `agent status`, `agent result`, `agent list` | Emit the envelope as JSON instead of the human rendering |
 | `--all` | `agent list --clear` | Also untrack tasks that are not finished (they keep running server-side) |
 | `--schema <json>` | `extract` | Enforce a JSON output schema for the extraction |
@@ -495,6 +508,6 @@ browser task regardless.
 | `⚠ not delivered: …` after typing into `-i` | The task finished (or stopped accepting input) while the line was typed — the text is NOT turned into a task; type it again to start one, or `/cancel` first when you want a different task |
 | `agent list` shows a different status than `agent status` | `agent list` refreshes from the backend on every call; if the backend is unreachable it prints a note and shows cached labels |
 | Task lost after backend restart | Task ids may not persist; re-submit the task |
-| Steps fail with `PERMISSION_DENIED \| code=…` | The task's access preset refuses that call — re-submit with a wider `--access`, grant it automatically with `--auto-approve <preset>`, or narrow the task to the routes the preset allows (`coding.permissions` lists them) |
+| Steps fail with `PERMISSION_DENIED \| code=…` | The task's access preset refuses that call — re-submit with a wider `--access`, have an operator approve the needed effect (`coding.requestAccess` + the REST endpoints), or narrow the task to the routes the preset allows (`coding.permissions` lists them) |
 | `extract`/`summarize` blocking too long | Use `agent run` for async execution instead |
 | Agent subcommands in batch mode | Not supported — use standalone commands |

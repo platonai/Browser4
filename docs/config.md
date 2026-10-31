@@ -487,6 +487,43 @@ docker run -d -p 18182:18182 `
   java -Dknowledge.dir=/var/lib/browser4/knowledge -jar Browser4.jar
   ```
 
+* **`browser4.agent.sandbox`** *(JVM system property; default: platform-dependent, see below)*
+  OS-level sandbox for `coding.shell` and `coding.runCode`. This is the enforcement boundary; the
+  access preset and the string checks above decide what the model may *spell*, the sandbox decides
+  what a process may actually *reach*.
+
+  | Value | Meaning |
+  |---|---|
+  | `off` | no OS sandbox; the preset and string checks alone apply |
+  | `windows-acl` | Windows: runs commands as the low-privilege sandbox account with an ACL matrix (workspace and mirrors `M`, toolchain roots `RX`, the user profile denied folder-only) |
+  | `bwrap` / `container` / `nsjail` / `sandbox-exec` | accepted ids whose backends arrive with P2 — selecting one now is a hard failure, not a silent fallback |
+
+  Defaults: a **fresh** Windows installation starts with `windows-acl`; an **existing** installation
+  keeps `off` until you switch. Linux/macOS stay `off` until P2. The first start records the
+  decision in `<browser4.data.dir or ~>/.browser4/sandbox-default`, so later starts replay it
+  instead of re-deriving it. An explicit `-Dbrowser4.agent.sandbox=<id>` always wins, is not
+  persisted, and blanks count as unset. `off` is also the one-command rollback.
+
+  Failure semantics: a missing account or credential, a failed ACL application, a failed write
+  probe, an unknown id, or a known-but-unimplemented id **stops the task** with
+  `SandboxUnavailableException` — the sandbox never falls back to an unwrapped launch. A denial
+  inside a working sandbox is translated for the model as
+  `PERMISSION_DENIED | code=SANDBOX_DENIED | tool=… | detail=… | hint=… | needed=…`; the raw OS
+  evidence goes to the log only. When the sandbox is `off`, a plain `Access is denied` stays an
+  ordinary OS error.
+
+  ```bash
+  # First start on Windows (fresh install): defaults to windows-acl.
+  # Pin a backend explicitly, or roll back to unsandboxed execution:
+  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.sandbox=windows-acl" browser4-cli open
+  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.sandbox=off" browser4-cli open
+  ```
+
+  `browser4.agent.sandbox.account` *(default: `browser4-agent`)* names the Windows account. It is
+  not created automatically; the password is read from Credential Manager (`browser4:<account>`)
+  or, failing that, from the DPAPI-protected file
+  `%LOCALAPPDATA%\browser4\sandbox\agent.cred`. Any gap here is a hard failure, by design.
+
 * **`browser4.agent.access`** *(JVM system property; default: `full`)*
   Server-wide access preset for the built-in agent's `coding.*` tools. One task can override it
   with `browser4-cli agent run … --access <preset>`.
@@ -509,25 +546,30 @@ docker run -d -p 18182:18182 `
 
   Related properties (all JVM system properties, set the same way):
 
-  - `browser4.agent.autoApprove` *(default: unset — automatic approval off)* — automatic approval
-    ceiling, one preset id. A call that `browser4.agent.access` refuses is then granted
-    automatically (and audited as `AUTO_APPROVED`) when the preset that would grant it is no wider
-    than the ceiling: `read-build` approves the project build, `write` approves file mutation and
-    (being the wider grant) the build, `full` approves mutation, the build and the shell.
-    `denyTools`, protected files, `.browser4` / `.github/workflows` and credential paths are
-    **never** auto-approved — they are rails, not capabilities. A task overrides it with
-    `browser4-cli agent run … --auto-approve <preset>`. An unknown value is logged (once) and
-    leaves automatic approval off.
+  - `browser4.agent.access.unattended` *(default: unset — `full` with network allowed)* — the
+    preset derived for a task that nobody can answer approvals for (no TTY: a script, a CI job,
+    a submitted task). `full` / `write` / `read-build` / `read` derive that preset with outbound
+    network allowed; `deny` leaves no workspace power at all (every `coding.*` / `skill.*` method
+    refused, network off, browsing still available). The derived default is audited once as
+    `ACCESS_APPROVED(source=default)`. An explicit `--access` always wins; a watched `agent run -i`
+    on a TTY keeps `browser4.agent.access`. Widening a refused effect is the operator's call, not
+    an automatic ceiling: the agent files `coding.requestAccess` and an operator approves it
+    (see [agent-access.md](../skills/browser4-cli/references/agent-access.md)). An unknown value is
+    logged (once) and leaves the derived default at `full`.
   - `browser4.agent.allowExternalAccess` *(default: `false`)* — **deprecated**, prefer `access`.
     Whether file tools may resolve paths outside the workspace; projected into every preset.
+    Advisory only: it relaxes a string-layer check, so it does not widen what the OS sandbox
+    (`browser4.agent.sandbox`) lets a process reach.
   - `browser4.agent.allowDestructive` *(default: `true`)* — **deprecated**, prefer `access`.
     When `false`, `delete`/`copy`/`move` are refused. It is **not** a read-only switch: `write`/
     `append`/`replace` stay allowed — use `access=read` (or `read-build`) for that.
-  - `browser4.agent.shell.pathGuard` *(default: `on`)* — when `off`, the shell stops rejecting
-    command arguments that name credential locations (`~/.ssh`, `~/.aws`, `~/.browser4`, …). It does
-    **not** relax the protected subtrees: `.browser4` and `.github/workflows` are refused as shell
-    arguments, redirection targets and working directories whatever this property says. Only for
-    local debugging; leave it on.
+  - `browser4.agent.shell.pathGuard` *(default: `on`)* — **deprecated**, advisory only.
+    When `off`, the shell stops rejecting command arguments that name credential locations
+    (`~/.ssh`, `~/.aws`, `~/.browser4`, …). This check is a fast-fail UX, not a security
+    boundary: prompt-injected scripts can spell a path it never sees, so enforcement comes from
+    the OS sandbox (`browser4.agent.sandbox`). It does **not** relax the protected subtrees:
+    `.browser4` and `.github/workflows` are refused as shell arguments, redirection targets and
+    working directories whatever this property says. Only for local debugging; leave it on.
 
   ```bash
   BROWSER4_SERVER_OPTS="-Dbrowser4.agent.access=read-build" browser4-cli open
@@ -569,8 +611,25 @@ docker run -d -p 18182:18182 `
   already refused them. Toolchain locations (`java.home`, `~/.m2`, `~/.gradle`, the temp
   dir, `%SystemRoot%`), build launchers (`mvnw`, `python3`, `*.exe`/`*.cmd`/`*.ps1`) and
   credential locations keep their previous behaviour. `b4.run`'s `file://` URLs and
-  `upload` paths are refused under the same condition. Set `off` only for a local
-  workflow that genuinely needs to pass an absolute external path.
+  `upload` paths are refused under the same condition. Like `pathGuard`, this is an
+  advisory fast-fail check, not a security boundary; the OS sandbox (`browser4.agent.sandbox`)
+  is what a process cannot cross. Set `off` only for a local workflow that genuinely needs
+  to pass an absolute external path.
+
+### Agent permission switches at a glance
+
+All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when you start the backend).
+
+| Switch | Default | Effect / failure semantics |
+|---|---|---|
+| `browser4.agent.sandbox` | Windows fresh install `windows-acl`; otherwise `off` | OS enforcement for `coding.shell`/`coding.runCode`. Unavailable backend, unknown id or unimplemented id → task fails (`SandboxUnavailableException`); never falls back. A denial becomes `code=SANDBOX_DENIED`. |
+| `browser4.agent.sandbox.account` | `browser4-agent` | Windows sandbox account. Missing account/credential or failed ACLs → hard failure at task start. |
+| `browser4.agent.access` | `full` | Access preset (`full` / `write` / `read-build` / `read`). Unknown backend value is logged and falls back to `full`; an unknown `--access` flag is rejected. |
+| `browser4.agent.access.unattended` | unset (`full` + network) | Preset derived for a task with no TTY. `deny` removes workspace power entirely; explicit `--access` wins; the derivation is audited `ACCESS_APPROVED(source=default)`. Unknown value warns once and stays `full`. |
+| `browser4.agent.shell.workspaceBoundary` | `on` | Advisory fast-fail: refuses literal absolute paths outside the workspace. Not an enforcement layer; the sandbox is. |
+| `browser4.agent.shell.pathGuard` | `on` | **Deprecated**, advisory: refuses command arguments naming credential locations. Does not relax protected subtrees; sandbox still enforces. |
+| `browser4.agent.allowExternalAccess` | `false` | **Deprecated**, advisory: relaxes the string-layer path checks only; does not widen what the sandbox lets a process reach. |
+| `browser4.agent.allowDestructive` | `true` | **Deprecated**: `false` refuses delete/copy/move but still allows write/append/replace — use `access=read` for a true read-only task. |
 
 ### 📦 `browser.profile.mode` Comparison Table
 

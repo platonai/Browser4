@@ -193,7 +193,7 @@
     "domain" : "command",
     "method" : "run",
     "mcpNames" : [ "command_run" ],
-    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, autoApprove: String? = null, resumeTaskId: String? = null, tokenBudget: Long? = null)",
+    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, unattended: Boolean? = true, resumeTaskId: String? = null, tokenBudget: Long? = null)",
     "description" : "Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine is a deprecated compatibility argument: the CLI tool loop is the only engine, and the removed 'observe-act' engine is rejected. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.",
     "returnType" : "String",
     "arguments" : [ {
@@ -244,11 +244,11 @@
       "default" : "null",
       "description" : "Access preset for this task's coding tools: `full` (default), `write` (no shell), `read-build` (read + project build, no shell, no file mutation), `read`. Omit to use the server-wide `browser4.agent.access` default. The preset is reset when the task ends."
     }, {
-      "name" : "autoApprove",
-      "type" : "String?",
+      "name" : "unattended",
+      "type" : "Boolean?",
       "required" : false,
-      "default" : "null",
-      "description" : "Automatic approval ceiling for this task: `full`, `write`, `read-build` or `read`. A coding call the task's access preset refuses is then granted (and audited) when the preset that would grant it is no wider than this ceiling — no human in the loop. Explicitly denied tools, protected paths and sensitive paths are never approved. Omit to use the server-wide `browser4.agent.autoApprove` default (off)."
+      "default" : "true",
+      "description" : "Whether nobody is watching this task (the default). An unattended task that names no `access` preset derives the documented default (`full` with outbound network, audited as ACCESS_APPROVED source=default); pass false from an interactive TTY run so the server-wide policy applies instead. `browser4.agent.access.unattended` narrows the derived default."
     }, {
       "name" : "resumeTaskId",
       "type" : "String?",
