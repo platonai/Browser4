@@ -468,6 +468,20 @@ docker run -d -p 18182:18182 `
   discarded by `crawl clear --all`. See
   [Crawl checkpoint & resume](crawl-checkpoint-resume.md).
 
+* **`crawl.maxRunningTasks`** *(default: `64`)*
+  How many crawl tasks may be **running at once**. The rate limiter bounds how fast
+  tasks are submitted, not how many pile up: every accepted submission starts its
+  own worker and holds a browser budget, a checkpoint and a row log until it
+  finishes. Once this bound is reached the next `crawl.submit` / `crawl.resume` is
+  refused **before anything is created**, so nothing is left behind and the same
+  call can be retried once a task finishes or is cancelled.
+
+  - MCP channels answer `RATE_LIMITED` with the bound and the wait in the message
+    (the same code a throttled call gets).
+  - `/api/crawl` answers `429 Too Many Requests` with `retryAfterMs`.
+  - `0` or a negative value disables the bound. The default sits far above a
+    normal crawl fleet; lower it only when the deployment must cap concurrency.
+
 * **`knowledge.dir`** *(JVM system property; default: `knowledge`)*
   Root of the progressive experience memory (PEM) store: the `traces/`, `experience/` and
   `facts/` YAML trees live under it (see [experience-memory.md](experience-memory.md#storage-layout)).

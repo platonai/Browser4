@@ -2667,6 +2667,10 @@ class MCPToolControllerTest {
         assertEquals("DIALOG_PENDING", result.body!!.errorCode, text)
         assertTrue(text.contains("dialog-accept"), text)
         Mockito.verify(agentToolManager, Mockito.never()).execute(any())
+        // The last statement must not return a value: JUnit 5 silently skips a
+        // @Test method whose return type is not Unit, and Mockito.verify returns
+        // its mock.
+        Unit
     }
 
     @Test

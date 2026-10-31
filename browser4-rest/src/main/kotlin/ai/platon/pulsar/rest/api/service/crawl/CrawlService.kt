@@ -46,6 +46,15 @@ class CrawlService(
      */
     @param:Value("\${crawl.autoResume:false}")
     private val autoResumeOnStart: Boolean = false,
+    /**
+     * How many crawl tasks may run at once (`crawl.maxRunningTasks`, default
+     * [CrawlAdmission.DEFAULT_MAX_RUNNING_TASKS], `<= 0` disables the bound).
+     *
+     * A submission (or resume) beyond this bound is refused with
+     * [CrawlQueueFullException] instead of joining the queue; see [CrawlAdmission].
+     */
+    @param:Value("\${crawl.maxRunningTasks:64}")
+    private val maxRunningTasks: Int = CrawlAdmission.DEFAULT_MAX_RUNNING_TASKS,
 ) {
     private val logger = LoggerFactory.getLogger(CrawlService::class.java)
 
@@ -455,6 +464,12 @@ class CrawlService(
      * asynchronously.  Poll [getResult] to retrieve the final response.
      */
     fun submit(request: CrawlRequest): String {
+        // Refuse before anything is created: a refused submission leaves no task
+        // record and no checkpoint, so the same call can be retried once a running
+        // task finishes (requirement 9.3 — the queue is bounded, not just the rate).
+        CrawlAdmission.refusal("crawl.submit", runningTaskCount(), maxRunningTasks)?.let {
+            throw CrawlQueueFullException(it)
+        }
         val taskId = UUID.randomUUID().toString()
         val response = CrawlResponse(
             taskId = taskId,
@@ -615,6 +630,13 @@ class CrawlService(
                 skippedAlreadyFetched = plan.skippedAlreadyFetched,
                 resumeCount = record?.resumeCount ?: 0
             )
+        }
+
+        // The resume really starts a worker from here on, so it re-enters the queue:
+        // apply the same bound. Everything above was read-only, so a refusal here
+        // has touched nothing and the call can be retried.
+        CrawlAdmission.refusal("crawl.resume", runningTaskCount(), maxRunningTasks)?.let {
+            throw CrawlQueueFullException(it)
         }
 
         // The interruption the resumed run continues from: the finish time the

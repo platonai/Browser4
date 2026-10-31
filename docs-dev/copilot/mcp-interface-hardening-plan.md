@@ -33,7 +33,7 @@
 | G8 | 无参数校验层/无返回值校验（`ToolSpec.returnType` 是字符串，未用于校验） | 代码 | 5, 6 |
 | G9 | 无调用日志规范（B 把参数直接拼进 INFO）、无 per-tool 指标、无限流、无结果缓存、A 无批量 | 代码 + 实跑 | 7–14 |
 | G9a | ✅ 已修（Phase 3）：日志规范 + 脱敏 + `requestId` 贯通 + per-tool 指标 + `/api/mcp/stats` | `ToolInvocationLogger`、`ToolMetrics`、`McpStatsController` | 7, 8 |
-| G9b | 仍缺：限流、结果缓存、A 批量 | — | 9–14 |
+| G9b | ✅ 已修（Phase 4/5）：限流（9.1/9.2）、结果缓存（10.1/10.2/10.4）、异步队列背压（9.3）、A 批量 | `ToolRateLimiter`、`ToolResultCache`、`CrawlAdmission`、`BatchExecutor` | 9–14 |
 
 ---
 
@@ -98,7 +98,7 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
 | 0.2 修 `ToolSpec.expression` + 重生成快照（含 `extractInterface` 空默认值） | G2 | ✅ |
 | 0.3 `ToolTargetResolver` + `requiresReceiver` + command 派发 | G3 | ✅ |
 | 0.4 未知参数策略（A 与 B 对齐：声明参数转换 + 其余透传） | G4 | ✅（严格校验/未知参数报错留给 Phase 2 的 `mcp.strictArgs`） |
-| 0.5 修 B 的工具列表缓存 | G5 | ⏳ 未做（Phase 4 缓存项一并处理） |
+| 0.5 修 B 的工具列表缓存 | G5 | ✅ 已完成（`ceaa98a691`，见 Phase 4「需求 10.3」） |
 | 0.6 spec lint | G1/G2/G6 | ✅ |
 
 ### Phase 1 · 文档与示例（需求 1、2；主体已完成 2026-09-13，提交 `c639994e29`）
@@ -303,14 +303,24 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
   - `-Dmcp.rateLimit.overrides=click=0.5/2` → 第 1、2 次通过，第 3~5 次拒绝（`retryAfterMs` 407/356/332 递减），`/api/mcp/stats` 显示 `rateLimit{mode=error,rejected=3}` 且 `browser_click{rateLimited=3}` 与调用计数同名列（B 用客户端发来的工具名上报，别名不再各记一行）。
 - 顺带修的既有问题：并发点击时 CDP 报 `No node with given id found`（DOM 节点 id 失效）原被归类 `INTERNAL`，现归 `CDP_ERROR`（retryable），客户端据此重试而不是当成服务端 bug。
 
-**需求 9 遗留**：CLI 侧针对 `RATE_LIMITED` 的提示语（`help.rs`/`tips.rs`）未做；服务端已给出 `retryAfterMs` 与 `hint`。
+**需求 9.3 — 异步队列背压（已完成）**
+- 真缺口：限流只管**速率**（提交类 0.2/s、burst 2），不管**在跑的任务数**。`CrawlService.submit` 接受即起协程，`jobStore`（运行中任务）**没有容量上限**（只有终态记录 `taskStore` 限 100 条），所以一个稳定提交的客户端可以在 5 分钟内堆起 60+ 个同时运行的爬取任务，每个都占浏览器预算 / checkpoint / 行日志。`async.queue.depth` 此前只是 gauge（能看见，不拦）。
+- 修复位置选在**队列真正所在的地方**——`CrawlService`，而不是某个通道的派发前：`/api/crawl` 与两个 MCP 通道都走这里，通道级拦截会漏掉 REST 直调。
+  - `CrawlAdmission.refusal(tool, running, max)`：`running >= max` 时给出拒绝文案（含工具名/深度/上限/`retryAfterMs`），`max <= 0` 表示关闭；
+  - `CrawlService.submit` 在**创建任何东西之前**判定（被拒的调用不留 task 记录、不写 checkpoint ⇒ 重试幂等）；`resume` 在惰性 no-op 分支（已完成/没有 checkpoint/无事可做）**之后**判定，真正要起 worker 时才算重新入队；
+  - `CrawlQueueFullException` 实现 `CodedFailure` → `RATE_LIMITED`：A/B 通道与限流拒绝同一错误码，REST 端点映射 `429`，响应体带 `errorCode=RATE_LIMITED` + `retryAfterMs`（`CrawlController.handleQueueFull`，CLI 因此能命中同一套提示）。
+- 阈值：`crawl.maxRunningTasks`（`-Dcrawl.maxRunningTasks` 亦可），默认 **64**（远高于正常爬取规模，只在后端真落后时生效），`0`/负数关闭。
+- 测试：`CrawlAdmissionTest`（4：低于上限放行 / 达到上限拒绝且文案含深度与上限 / 非正上限关闭 / 异常码为 `RATE_LIMITED` 且可重试）。
+- 顺带修的真问题：`MCPToolControllerTest.tabToolFailsFastWhileADialogIsPending()` 的返回类型是 `ToolCallResult`（最后一句 `Mockito.verify` 返回 mock），JUnit 5 **静默跳过**该用例——已补 `Unit`，用例恢复执行（断言旧对话框防护仍成立）。
+
+**需求 9 遗留**：无。CLI 侧 `RATE_LIMITED` 提示语（`tips.rs` 的 `RATE_LIMITED` 分支 + `reply.retry_after_ms`）已随 CLI 侧改动落地，服务端提供 `retryAfterMs` 与 `hint`。
 
 **顺带发现的测试基础设施缺陷（已修）**：JUnit 5 会**静默跳过**返回非 `Unit` 的 `@Test` 方法。`= runBlocking { … }` 若最后一句是 `Mockito.verify(…)`（返回 mock）就会命中——全量跑出的告警显示 3 个 `BrowserTabToolExecutorTest` 的 frame 用例从未执行过，其中一个断言早已过时（期望 `frameSwitch requires 'frame'`，实际消息是 `Missing required parameter 'frame' for frameSwitch`）。已补齐 `Unit` 并顺手把断言改成校验稳定错误码（`MISSING_REQUIRED_ARG`），3 个用例恢复执行且全绿。**新增测试时务必确认方法返回 `Unit`**。
 
 **需求 9 — 增加接口限流**
 - 9.1 `ToolRateLimiter`：令牌桶，维度 `(sessionId, domain)` + 全局上限；策略来自 spec `rateLimit`，默认分档：浏览器动作 10/s（burst 20）、`crawl/swarm/command` 提交 0.2/s、`coding/fs` 5/s、只读状态类不限。
 - 9.2 拒绝时返回 `RATE_LIMITED` + `retryAfterMs`（4.1 已定义），CLI 提示"稍后重试/降低批量并发"。
-- 9.3 异步队列背压：队列超阈值直接拒绝而非无限堆积。
+- 9.3 异步队列背压：队列超阈值直接拒绝而非无限堆积。✅ 已实现（`CrawlAdmission` + `crawl.maxRunningTasks`，见上方「需求 9.3」）。
 - **验收**：第 N+1 次调用返回 `RATE_LIMITED`；配置可覆盖；只读工具不受限。
 
 **需求 10 — 增加接口缓存**
