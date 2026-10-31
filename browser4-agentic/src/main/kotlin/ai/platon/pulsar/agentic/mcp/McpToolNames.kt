@@ -103,20 +103,82 @@ object McpToolNames {
     /** Alias names indexed by their frontend spelling. */
     val frontendAliasNames: Set<String> = frontendAliases.mapTo(linkedSetOf()) { it.frontendName }
 
+    /** The domain behind the session lifecycle tools (implemented by browser4-rest). */
+    const val SESSION_DOMAIN = "session"
+
+    /**
+     * The session lifecycle tools, which belong to the `session` domain but are
+     * advertised under their historical names.
+     *
+     * `McpToolNames.toMcpToolName("session", "open")` derives `session_open`,
+     * while every client (and the CLI's readiness probe) already knows
+     * `open_session`. The rename table is shared so both channels spell these
+     * tools the same way, and it is the one place a new session tool needs to be
+     * registered under its public name.
+     */
+    val sessionRenames: Map<String, String> = linkedMapOf(
+        "session.open" to "open_session",
+        "session.close" to "close_session",
+        "session.list" to "list_sessions",
+        "session.closeAll" to "close_all_sessions",
+        "session.killAll" to "kill_all_sessions",
+        "session.deleteData" to "delete_session_data",
+        "session.attach" to "attach_browser",
+        "session.checkReady" to "check_session_ready",
+        "session.windowState" to "window_state",
+    )
+
     /**
      * `browser_*` names only the private MCP dispatcher resolves.
      *
      * `browser_window_state` answers about the session's OWN browser — its pid,
      * its launch flags, whether its window is visible. That is a session-level
-     * question with no `(domain, method)` tool behind it (the dispatcher handles
-     * the call itself), so it cannot be expressed as a [McpToolAlias]: the
-     * standard MCP server registers aliases as second spellings of a real tool and
-     * has nothing to register here. Listing it explicitly is what lets the tables
-     * still be compared exactly — a name that is neither shared nor listed here is
-     * drift, and that is what the `McpToolAliasParityTest` on both channels
-     * asserts.
+     * question with no `tab` method behind it, so it is not part of the shared
+     * tab alias table; the `session` domain tool behind it is advertised as
+     * `window_state` (see [sessionRenames]).
+     *
+     * Listing it explicitly is what lets the tables still be compared exactly —
+     * a name that is neither shared nor listed here is drift, and that is what
+     * the `McpToolAliasParityTest` on both channels asserts.
      */
-    val dispatcherOnlyAliasNames: Set<String> = linkedSetOf("browser_window_state")
+    val dispatcherOnlyAliases: List<McpToolAlias> = listOf(
+        McpToolAlias("browser_window_state", "session", "windowState"),
+    )
+
+    /** The names of [dispatcherOnlyAliases]. */
+    val dispatcherOnlyAliasNames: Set<String> = dispatcherOnlyAliases.mapTo(linkedSetOf()) { it.frontendName }
+
+    /**
+     * Composite spellings the private MCP dispatcher expands into one of several
+     * underlying tools (by an `action`/`accept`/`doubleClick` argument) before
+     * dispatching.
+     *
+     * They are advertised by the dispatcher only: a composite resolves to
+     * different methods depending on its arguments, so the standard MCP server
+     * cannot register it as a single tool. The alias target here is the method
+     * the name stands for when no argument narrows it, which is what the
+     * dispatcher's default branch uses.
+     */
+    val compositeAliases: List<McpToolAlias> = listOf(
+        McpToolAlias("browser_click", "tab", "click"),
+        McpToolAlias("browser_handle_dialog", "tab", "dialogAccept"),
+        McpToolAlias("browser_tabs", "browser", "switchTab"),
+    )
+
+    /** The names of [compositeAliases]. */
+    val compositeAliasNames: Set<String> = compositeAliases.mapTo(linkedSetOf()) { it.frontendName }
+
+    /**
+     * Every alias the private MCP dispatcher can advertise: the shared tab
+     * aliases, its own session-scoped names, and the composites it expands.
+     *
+     * The standard MCP server advertises the shared table only; the rest is what
+     * the dispatcher's channel adds, declared here so both channels build their
+     * catalog from the same tables.
+     */
+    val dispatcherAliases: List<McpToolAlias> by lazy {
+        frontendAliases + dispatcherOnlyAliases + compositeAliases
+    }
 
     /**
      * Every `browser_*` name the private MCP dispatcher resolves: the shared

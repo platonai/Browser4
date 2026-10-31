@@ -1,7 +1,11 @@
 package ai.platon.pulsar.agentic.mcp.server
 
+import ai.platon.pulsar.agentic.mcp.CatalogEntry
+import ai.platon.pulsar.agentic.mcp.CatalogSource
+import ai.platon.pulsar.agentic.mcp.ExecutorGroup
 import ai.platon.pulsar.agentic.mcp.McpToolAlias
 import ai.platon.pulsar.agentic.mcp.McpToolNames
+import ai.platon.pulsar.agentic.mcp.ToolCatalog
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.observability.ToolMetrics
@@ -68,6 +72,12 @@ class Browser4MCPServer(
     private val customExecutors: () -> List<ToolExecutor> = { CustomToolRegistry.instance.getAllExecutors() },
     private val toolManagerResolver: ToolManagerResolver = ToolManagerResolver.single(toolManager),
     private val frontendAliases: List<McpToolAlias> = McpToolNames.frontendAliases,
+    /**
+     * Public names for tools whose derived name is not their advertised spelling
+     * (the `session` lifecycle tools: `open_session`, not `session_open`).
+     * Shared with the private dispatcher so both channels spell them the same.
+     */
+    private val toolRenames: Map<String, String> = McpToolNames.sessionRenames,
     private val toolTargetResolver: ToolTargetResolver = ToolTargetResolver.NONE,
     /** Shared with the private dispatcher so both channels spend the same tokens. */
     private val toolRateLimiter: ToolRateLimiter = ToolRateLimiter.shared,
@@ -78,6 +88,16 @@ class Browser4MCPServer(
 
     /** Shared with the private dispatcher so both channels reject the same calls. */
     private val validator = ToolSpecValidator.fromSystemProperties()
+
+    /**
+     * The advertised tool surface.
+     *
+     * Built through the shared [ToolCatalog], the very same class the private
+     * MCP dispatcher enumerates from — a tool cannot exist on one channel and be
+     * missing from the other.
+     */
+    @Volatile
+    private var catalog: ToolCatalog = buildCatalog()
 
     /** Advertised tools by MCP name; kept so calls can be routed after registration. */
     private val registrations = linkedMapOf<String, ToolRegistration>()
@@ -91,7 +111,7 @@ class Browser4MCPServer(
         ),
         instructions = serverInstructions(),
     ) {
-        registerToolsFromManager(toolManager)
+        registerCatalog(catalog)
     }
 
     private fun serverInstructions(): String = buildString {
@@ -217,70 +237,64 @@ class Browser4MCPServer(
     // Tool registration
     // -------------------------------------------------------------------------
 
-    /** One advertised tool: the canonical domain/method plus the spec it was built from. */
+    /**
+     * One advertised tool: the canonical domain/method, the spec it was built
+     * from, and where it came from.
+     */
     private data class ToolRegistration(
         val domain: String,
         val method: String,
         val spec: ToolSpec,
-        val source: String,
+        val source: CatalogSource,
     )
 
     /**
-     * Register every MCP tool by discovering executors and their [ToolSpec]
-     * metadata from [toolManager] and from [customExecutors].
+     * Enumerate the advertised tools through the shared [ToolCatalog].
      *
-     * Built-in executors are collected first and win name conflicts, which are
-     * logged rather than silently overwritten: both `skill` executors expose
-     * `list`/`install`/`uninstall`, and the built-in
+     * Built-in executors are collected first and win name conflicts; the catalog
+     * reports a genuine clash instead of silently dropping a tool (both `skill`
+     * executors expose `list`/`install`/`uninstall`, and the built-in
      * [ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor] is the
-     * agent-facing one. Deduplicating here also keeps the registration safe on
+     * agent-facing one). Deduplicating here also keeps registration safe on
      * newer MCP SDK releases, which reject duplicate tool names outright.
      */
-    private fun Server.registerToolsFromManager(toolManager: AgentToolManager) {
-        val builtInCount = toolManager.registeredExecutors.values.sumOf { mergeExecutor(it, SOURCE_BUILT_IN) }
-        val customCount = customExecutors().sumOf { mergeExecutor(it, SOURCE_CUSTOM) }
-
-        val aliasCount = registerFrontendAliases(registrations)
-
-        logger.info(
-            "Registered {} MCP tools ({} built-in, {} custom/plugin, {} frontend aliases)",
-            registrations.size, builtInCount, customCount, aliasCount
-        )
-    }
+    private fun buildCatalog(): ToolCatalog = ToolCatalog.build(
+        groups = listOf(
+            ExecutorGroup(toolManager.registeredExecutors.values, CatalogSource.BUILT_IN),
+            ExecutorGroup(customExecutors(), CatalogSource.CUSTOM),
+        ),
+        aliases = frontendAliases,
+        renames = toolRenames,
+    )
 
     /**
-     * Merge the tools of [executor] into the advertised set, skipping names that
-     * are already taken.
+     * Register every executable catalog entry with the MCP SDK.
      *
-     * Built-in executors are merged first and win name conflicts, which are
-     * logged rather than silently overwritten: both `skill` executors expose
-     * `list`/`install`/`uninstall`, and the built-in
-     * [ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor] is the
-     * agent-facing one. Deduplicating here also keeps registration safe on newer
-     * MCP SDK releases, which reject duplicate tool names outright.
+     * An alias whose canonical tool is not registered carries no spec and is
+     * skipped, never registered as a dead entry.
      *
      * @return the number of tools added
      */
-    private fun Server.mergeExecutor(executor: ToolExecutor, source: String): Int {
+    private fun Server.registerCatalog(catalog: ToolCatalog): Int {
+        catalog.conflicts.forEach { conflict ->
+            logger.info(
+                "MCP tool name conflict: '{}' ({}) is shadowed by {} — keeping the earlier registration",
+                conflict.name, conflict.shadowed, conflict.kept
+            )
+        }
+
         var added = 0
-        for ((method, spec) in executor.getToolSpecs()) {
-            val name = McpToolNames.toMcpToolName(executor.domain, method)
-            val existing = registrations[name]
-            if (existing != null) {
-                // Re-scanning the same executor is normal (see [refreshTools]);
-                // only a genuine clash between two different tools is worth a log.
-                if (existing.domain != executor.domain || existing.method != method) {
-                    logger.info(
-                        "MCP tool name conflict: '{}' ({}.{}) is shadowed by {}.{} — keeping the earlier registration",
-                        name, executor.domain, method, existing.domain, existing.method
-                    )
-                }
-                continue
-            }
-            registrations[name] = ToolRegistration(executor.domain, method, spec, source)
+        for (entry in catalog.executable()) {
+            val name = entry.name
+            if (registrations.containsKey(name)) continue
+
+            val spec = entry.spec ?: continue
+            // Registered under its own name so a call routed by name (the SDK
+            // handler and `invokeTool`) resolves to the same canonical tool.
+            registrations[name] = ToolRegistration(entry.domain, entry.method, spec, entry.source)
             addTool(
                 name = name,
-                description = describe(spec, "${executor.domain}.$method"),
+                description = describe(entry),
                 inputSchema = buildSchemaFromSpec(spec),
                 outputSchema = buildOutputSchema(spec),
             ) { request ->
@@ -315,17 +329,27 @@ class Browser4MCPServer(
 
     /**
      * The description a client sees: the tool's one-liner plus its first
-     * executable example.
+     * executable example, and for an alias the canonical tool it stands for.
      *
      * MCP has no dedicated examples field and the SDK's `ToolSchema` exposes only
      * `properties`/`required`, so the description is the one place a usage sample
      * can travel in `tools/list` — which is what an agent actually reads.
      */
-    private fun describe(spec: ToolSpec, fallback: String): String {
-        val base = spec.description?.trim()?.ifBlank { null } ?: fallback
-        val example = spec.examples.firstOrNull { it.executable } ?: return base
-        val json = example.args.entries.joinToString(", ") { "\"${it.key}\": \"${it.value}\"" }
-        return "$base Example: {$json}"
+    private fun describe(entry: CatalogEntry): String {
+        val spec = entry.spec
+        val base = if (spec == null) {
+            entry.expression
+        } else {
+            val declared = spec.description?.trim()?.ifBlank { null } ?: entry.expression
+            val example = spec.examples.firstOrNull { it.executable }
+            if (example == null) {
+                declared
+            } else {
+                val json = example.args.entries.joinToString(", ") { "\"${it.key}\": \"${it.value}\"" }
+                "$declared Example: {$json}"
+            }
+        }
+        return if (entry.isAlias) "$base (Alias of '${entry.canonicalName}'.)" else base
     }
 
     /**
@@ -339,72 +363,19 @@ class Browser4MCPServer(
      * later). Calling this before serving a request also picks up executors
      * registered at runtime.
      *
-     * Idempotent and cheap: known executors are skipped by name.
+     * Idempotent and cheap: known names are skipped.
      *
      * @return the number of tools added by this call
      */
     fun refreshTools(): Int = synchronized(registrations) {
         val before = registrations.size
-        customExecutors().forEach { server.mergeExecutor(it, SOURCE_CUSTOM) }
-        server.registerFrontendAliases(registrations)
+        catalog = buildCatalog()
+        server.registerCatalog(catalog)
         val added = registrations.size - before
         if (added > 0) {
             logger.info("MCP tool list refreshed: +{} tools, {} total", added, registrations.size)
         }
         added
-    }
-
-    /**
-     * Advertise the Playwright-MCP style `browser_*` names as additional
-     * spellings of the canonical tools they map to.
-     *
-     * Agents trained on other browser MCP servers reach for `browser_click` /
-     * `browser_type` first; without these aliases they get "unknown tool" even
-     * though the capability exists. An alias whose canonical tool is not
-     * registered is skipped, never registered as a dead entry.
-     *
-     * @return the number of aliases registered
-     */
-    private fun Server.registerFrontendAliases(canonical: Map<String, ToolRegistration>): Int {
-        var registered = 0
-        for (alias in frontendAliases) {
-            val target = canonical[alias.canonicalName]
-            if (target == null) {
-                logger.debug(
-                    "MCP alias '{}' skipped: canonical tool '{}' is not registered",
-                    alias.frontendName, alias.canonicalName
-                )
-                continue
-            }
-            val existing = registrations[alias.frontendName]
-            if (existing != null) {
-                // Re-running this after a refresh is normal: the alias maps to the
-                // very registration it points at (same instance). Only a real
-                // clash — a canonical tool already owning the alias name — is worth
-                // reporting, otherwise every served request would log 40+ lines.
-                if (existing !== target) {
-                    logger.info(
-                        "MCP alias '{}' skipped: the name is already taken by {}.{}",
-                        alias.frontendName, existing.domain, existing.method
-                    )
-                }
-                continue
-            }
-            // Registered under its own name so a call routed by name (the SDK
-            // handler and `invokeTool`) resolves to the same canonical tool.
-            registrations[alias.frontendName] = target
-            addTool(
-                name = alias.frontendName,
-                description = describe(target.spec, "${target.domain}.${target.method}") +
-                    " (Alias of '${alias.canonicalName}'.)",
-                inputSchema = buildSchemaFromSpec(target.spec),
-                outputSchema = buildOutputSchema(target.spec),
-            ) { request ->
-                invokeTool(alias.frontendName, request.params.arguments)
-            }
-            registered++
-        }
-        return registered
     }
 
     /**
@@ -533,7 +504,14 @@ class Browser4MCPServer(
         val toolCall = ToolCall(
             domain = registration.domain,
             method = registration.method,
-            arguments = args.toMutableMap(),
+            arguments = args.toMutableMap().apply {
+                // `sessionId` is consumed by the transport to route the call, but
+                // the session tools act on that very session by id — for them it
+                // is a real argument, so it is put back before dispatch.
+                if (registration.domain == SESSION_DOMAIN && sessionId != null) {
+                    put(SESSION_ID_PARAM, sessionId)
+                }
+            },
         )
 
         return runCatching { resolvedManager.execute(toolCall) }
@@ -660,7 +638,7 @@ class Browser4MCPServer(
         sessionId: String?,
         manager: AgentToolManager,
     ) {
-        if (registration.source != SOURCE_CUSTOM) return
+        if (registration.source != CatalogSource.CUSTOM) return
         if (toolTargetResolver === ToolTargetResolver.NONE) return
 
         val executor = customExecutors().firstOrNull { it.domain == registration.domain } ?: return
@@ -693,10 +671,18 @@ class Browser4MCPServer(
         for (argSpec in spec.arguments) {
             props[argSpec.name] = typeToJsonProp(argSpec)
         }
-        props[SESSION_ID_PARAM] = stringProp(sessionIdDescription())
+        // A spec that declares `sessionId` itself (the `session` lifecycle tools:
+        // `open_session` takes it as the new session's name) documents it better
+        // than the generic handle text — keep its own description.
+        if (SESSION_ID_PARAM !in props) {
+            props[SESSION_ID_PARAM] = stringProp(sessionIdDescription())
+        }
 
+        // The transport-owned handle is never required, as documented above:
+        // marking it required made `open_session` advertise an argument that
+        // routing then rejects as an unknown session.
         val required = spec.arguments
-            .filter { it.defaultValue == null }
+            .filter { it.defaultValue == null && it.name != SESSION_ID_PARAM }
             .map { it.name }
 
         return ToolSchema(
@@ -834,7 +820,11 @@ class Browser4MCPServer(
         /** Optional per-call session handle injected into every tool schema. */
         const val SESSION_ID_PARAM = "sessionId"
 
-        const val SOURCE_BUILT_IN = "built-in"
-        const val SOURCE_CUSTOM = "custom"
+        /**
+         * The domain behind the session lifecycle tools. Their arguments include
+         * the session handle, which every other domain receives only as a
+         * routing parameter.
+         */
+        const val SESSION_DOMAIN = McpToolNames.SESSION_DOMAIN
     }
 }

@@ -1,7 +1,11 @@
 package ai.platon.pulsar.rest.mcp.controller
 
+import ai.platon.pulsar.agentic.mcp.CatalogSource
+import ai.platon.pulsar.agentic.mcp.ExecutorGroup
 import ai.platon.pulsar.agentic.mcp.McpToolNames
+import ai.platon.pulsar.agentic.mcp.ToolCatalog
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
@@ -40,5 +44,45 @@ class McpToolAliasParityTest {
             "Duplicate frontend alias in McpToolNames"
         )
         assertEquals(setOf("tab"), aliasTargets.values.toSet())
+    }
+
+    @Test
+    @DisplayName("a name the standard server advertises is never unknown to the dispatcher")
+    fun dispatcherResolvesEveryStandardServerAlias() {
+        assertEquals(
+            emptySet<String>(),
+            McpToolNames.frontendAliasNames - McpToolNames.dispatcherAliasNames,
+            "The dispatcher must resolve every alias the standard MCP server advertises"
+        )
+    }
+
+    @Test
+    @DisplayName("the dispatcher's alias tables declare each spelling exactly once")
+    fun dispatcherAliasTablesAreUnique() {
+        val names = McpToolNames.dispatcherAliases.map { it.frontendName }
+        val duplicates = names.groupBy { it }.filterValues { it.size > 1 }.keys
+
+        assertEquals(emptySet<String>(), duplicates, "Duplicate alias spelling: $duplicates")
+    }
+
+    @Test
+    @DisplayName("the dispatcher's static catalog advertises the lifecycle tools under their public names")
+    fun dispatcherCatalogAdvertisesSessionLifecycleNames() {
+        val catalog = ToolCatalog.build(
+            groups = listOf(ExecutorGroup(listOf(SessionToolExecutor()), CatalogSource.CUSTOM)),
+            aliases = McpToolNames.dispatcherAliases,
+            renames = McpToolNames.sessionRenames,
+            includeUnresolvedAliases = true,
+        )
+
+        // The session executor's methods and the rename table must describe the
+        // same tools: a method without a public name would show up as `session_*`,
+        // a rename without a method would be advertised but not executable.
+        assertEquals(
+            McpToolNames.sessionRenames.values.toSet() + McpToolNames.dispatcherAliases.map { it.frontendName },
+            catalog.names.toSet(),
+        )
+        assertTrue(catalog.contains("open_session"), "the CLI's readiness probe expects it")
+        assertTrue(catalog.contains("browser_navigate"), "aliases are advertised before a session exists")
     }
 }
