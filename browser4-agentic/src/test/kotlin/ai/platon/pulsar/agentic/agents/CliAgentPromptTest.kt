@@ -107,9 +107,12 @@ class CliAgentPromptTest {
         // need a locale fix on the page, not post-processing of the wrong values.
         assertTrue(browsing.contains("Accept-Language"), browsing)
         // How a particular site accepts a locale (a query parameter it happens to honour)
-        // is that site's business, not the engine's: the prompt stays site-agnostic and
-        // points at the browser profile / headers instead.
-        assertFalse(browsing.contains("?language="), browsing)
+        // is that site's business, not the engine's. The prompt may *name* the hint, but only
+        // to forbid relying on it — driving the site's own picker is the fix (measured:
+        // `?language=en_US`/headers/cookies all left amazon.com on its Chinese interstitial).
+        // The prompt is a hard-wrapped literal, so assertions have to stay inside one line.
+        assertTrue(browsing.contains("HINTS, not the fix"), browsing)
+        assertTrue(browsing.contains("assume a site-specific query parameter"), browsing)
         // No spreadsheet writer is built in (decision 2026-10-28: no Excel dependency):
         // deliverables are CSV/JSONL, and an .xlsx INPUT is extracted by a script. A
         // spreadsheet REQUEST is a documented downgrade that must be reported, not a
