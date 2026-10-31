@@ -30845,8 +30845,9 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         }
         return None;
     }
-    // "scrape" works standalone (scrape <url>) AND as a prefix (scrape formats).
-    // Only rewrite the known subcommand so a positional URL passes through.
+    // "scrape" works standalone AND as a prefix (scrape formats). Only rewrite the
+    // known subcommand; any other second token stays positional, and `scrape`'s empty
+    // arg list rejects it instead of silently scraping the current page.
     if prefix == "scrape" {
         let known_subs = ["formats"];
         if known_subs.contains(&sub.as_str()) {
@@ -44511,15 +44512,15 @@ linkGroups:
     }
 
     #[test]
-    fn rewrite_prefixed_command_scrape_with_url_passes_through() {
-        // `scrape <url>` is the bare command: a positional URL that is not a known
-        // subcommand must reach it untouched, or the URL would be swallowed as a
-        // subcommand name.
+    fn rewrite_prefixed_command_scrape_unknown_second_token_passes_through() {
+        // `scrape` takes no positional argument: a second token that is not the known
+        // subcommand must reach the bare command untouched (where the empty arg list
+        // rejects it) instead of being swallowed as a subcommand name.
         let result = rewrite_prefixed_command(&[
             "scrape".to_string(),
             "https://example.com/p".to_string(),
         ]);
-        assert!(result.is_none(), "scrape <url> should not be rewritten");
+        assert!(result.is_none(), "scrape <unknown token> should not be rewritten");
 
         // A flag in second position is not a subcommand either.
         let flagged = rewrite_prefixed_command(&[

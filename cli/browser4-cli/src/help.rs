@@ -515,6 +515,7 @@ pub fn generate_help() -> String {
     lines.push("    htmlsnapshot                             # the capture every htmlsnapshot command runs".to_string());
     lines.push("    htmlsnapshot get text \"<css>\"           # single field (captures the tab first)".to_string());
     lines.push("    htmlsnapshot query --sql @query.sql       # structured extraction (also captures first)".to_string());
+    lines.push("    scrape --formats \"markdown,links\"        # one capture → many outputs in one document".to_string());
     lines.push("    htmlsnapshot get text \"<css>\" --expires 1d  # read the stored snapshot instead (tab untouched)".to_string());
     lines.push("  Form interaction:".to_string());
     lines.push("    fill <ref> \"<text>\" --submit              # fill + press Enter".to_string());
@@ -729,6 +730,10 @@ pub fn generate_quick_reference() -> String {
     lines.push(fmt_cmd(
         "htmlsnapshot get text \"<css>\"",
         "One field · htmlsnapshot query --sql @q.sql extracts structured rows",
+    ));
+    lines.push(fmt_cmd(
+        "scrape --formats \"markdown,links\"",
+        "One capture, many outputs in one document (screenshot/pdf need --output)",
     ));
     lines.push(fmt_cmd(
         "snapshot grep \"<pattern>\"",
@@ -2040,7 +2045,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli attach --endpoint http://remote:18182 --cdp http://browser-host:9222".to_string());
         lines.push(String::new());
         lines.push("  # A named session attaches a second browser without touching the unnamed slot".to_string());
-        lines.push("  browser4-cli -s scrape attach --cdp chrome".to_string());
+        lines.push("  browser4-cli -s research attach --cdp chrome".to_string());
         lines.push(String::new());
         lines.push("  # Failure example — a reachable endpoint with no page target".to_string());
         lines.push("  #   Error: [ENDPOINT_NO_PAGE_TARGETS] attach_browser failed: ... has no page target".to_string());

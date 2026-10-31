@@ -268,7 +268,7 @@ failed, with each task's `duration_ms`.
 
 | Command | Description |
 |---|---|
-| `scrape [url] --formats <list>` | One page capture → many outputs in a single document |
+| `scrape --formats <list>` | One page capture → many outputs in a single document (`-f` is the short form of `--formats`) |
 | `scrape formats` | List every accepted format id, whether this build can deliver it, and why not |
 
 Asking for several outputs one command at a time means one page load each, and the
@@ -287,6 +287,9 @@ active page (`html_snapshot export` does not even accept one), so a request-leve
 could only have been recorded in `metadata.sourceURL` while the content came from
 whatever the tab was showing — a document about the wrong page. `open` the page you
 mean, then scrape it.
+
+`-f` is the short form of `--formats`. Pass `--no-main-content` to derive markdown
+from the whole cleaned page instead of the readable article.
 
 The response is one document whose `metadata` carries `captureId` and `captureTime`
 — there is exactly one of each per response, which is how you can tell the capture
@@ -498,7 +501,7 @@ Need to extract data from a page?
 ├─ Static page, one field? → htmlsnapshot get text "<selector>"
 ├─ Static page, multiple correlated fields? → htmlsnapshot query --sql @query.sql
 ├─ Several outputs from one page (text + links + images)?
-│  → page scrape --formats "markdown,links,images"   # one capture for all of them
+│  → scrape --formats "markdown,links,images"   # one capture for all of them
 ├─ Natural language ("find the price")? → extract (needs LLM key)
 └─ High volume, many pages? → crawl or swarm with --sql
 ```

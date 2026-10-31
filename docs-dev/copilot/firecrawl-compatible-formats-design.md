@@ -102,19 +102,16 @@ GET  /api/scrape/formats            # 能力发现：本部署支持哪些格式
 ### 3.3 CLI
 
 ```bash
-browser4-cli scrape <url?> \
-  --formats markdown,links,screenshot \
-  --json-schema @schema.json \
-  --only-main-content \
-  --expires 1d \
-  --out ./out \
-  --strict \
-  --format json|csv|table      # only affects json/x-sql result rendering
+browser4-cli scrape \
+  -f markdown,links,screenshot \
+  --no-main-content \
+  --output ./out \
+  --strict
 browser4-cli scrape formats    # 能力发现
 ```
 
-- `--formats` 支持逗号分隔字符串，也支持 `@formats.json`（对象形式，带格式选项）。
-- 产出规则：文本类默认打印到 stdout（`--out` 落盘）；二进制类（screenshot/audio/video/pdf）**必须**落到 `--out` 目录，文件名由 `metadata.scrapeId` + 扩展名派生。
+- `--formats`（短选项 `-f`）接受逗号分隔字符串、JSON 数组或单个名字；`--no-main-content` 让 markdown 基于整页清洗文本而非正文；`--output` 指定本机落盘目录（仅对 screenshot/pdf 有意义）；`--strict` 让无法交付的格式直接失败而不是只写 `warning`。
+- 未指定 `--output` 时，screenshot/pdf 的字段是后端临时目录里的路径；`--output` 会把文件取回本机并改写文档中的路径。
 
 > **命名约定**（本文档通篇遵循）
 > - **MCP 工具名** = `{domain}_{method}`，例如 `html_snapshot_capture`、`html_snapshot_scrape`、`markdown_read`。
@@ -633,17 +630,17 @@ class BrandingFormatContributor : PageFormatContributor {
 
 | 位置 | 改动 |
 |---|---|
-| `commands.rs` | 新增 `scrape`（位置参数 `url?` + `--formats` / `--url` / `--no-main-content`，映射 `page_scrape`）与 `scrape-formats`（映射 `page_formats`） |
-| `main.rs` `rewrite_prefixed_command()` | `scrape` 分支 + `known_subs = ["formats"]`：`scrape formats` → `scrape-formats`，其余第二 token（URL、flag）原样通过 |
+| `commands.rs` | 新增 `scrape`（**无位置参数**，`--formats` / `--no-main-content` / `--output` / `--strict`，映射 `page_scrape`）与 `scrape-formats`（映射 `page_formats`） |
+| `main.rs` `rewrite_prefixed_command()` | `scrape` 分支 + `known_subs = ["formats"]`：`scrape formats` → `scrape-formats`，其余第二 token（flag 或多余位置参数）原样通过，位置参数随后由 `args=&[]` 拒绝 |
 | `main.rs` `preferred_spaced_command_form()` | `scrape-formats` → `scrape formats` |
 | `help.rs` `public_command_name()` | 同一映射（它与 `preferred_spaced_command_form` 是**两份**表，`rejected_flat_forms_have_spaced_public_names` 会抓出漏配——实测确实抓到了） |
 | `main.rs` `no_snapshot_commands()` | 两个都加：它们不改页面状态，命令后自动快照只是噪声（与 `extract` / `summarize` 同理） |
 | `tests/e2e/mod.rs` `tested_commands()` | 两个都加（`test_e2e_command_coverage` 不变量双向要求） |
-| `tests/e2e/scenarios/` | 新增 `test_e2e_mock_scrape_commands` 场景：裸命令带位置 URL、`scrape formats` 经改写、未知名第二 token 被当作 URL |
+| `tests/e2e/scenarios/` | 新增 `test_e2e_mock_scrape_commands` 场景：裸命令（无 URL）、`scrape formats` 经改写、多余位置参数被拒 |
 
 `page.scrape` / `page.formats` 两个 spec **不再声明 `cliName`**：一个动作两个入口、两处需要同步，是纯粹的漂移面。CLI 命令面现在只有一套名字。
 
-**顺带记一条契约**：`scrape <第二 token>` 里无法识别的第二 token 会被当作 **URL** 交给裸命令，而不是报"未知子命令"——这是"前缀可裸用"的必然结果，`crawl` / `chat` / `webdb` 都一样。代价是拼错的子命令（`scrape formts`）会被当成 URL 发到后端。e2e 场景把这条行为固定下来，免得以后有人误以为是 bug 而"修"成报错。
+**顺带记一条契约**（已按实现修正）：`scrape <第二 token>` 里无法识别的第二 token **不再被当作 URL**——位置参数已在"实现偏差"中删除，第二 token 原样回退到裸命令后由 `args=&[]` 以 `unexpected positional argument` 拒绝。e2e 场景断言拼错的子命令（`scrape formts`）报错，而不是静默抓取当前页。
 
 #### 真机 e2e 已留证（2026-10-06，真实后端 + 真实 Chrome）
 

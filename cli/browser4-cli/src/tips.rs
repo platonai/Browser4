@@ -516,12 +516,25 @@ const TIPS_SCRAPE: &[Tip] = &[
     Tip {
         text: "Quote a comma list: in PowerShell an unquoted `markdown,links` is three arguments and only the first reaches `--formats`",
     },
+    Tip {
+        text: "Pass `--strict` when a format this build cannot deliver should fail the command instead of being named in `warning` — without it the rest of the document still comes back",
+    },
+];
+
+const TIPS_SCRAPE_FORMATS: &[Tip] = &[
+    Tip {
+        text: "`scrape formats` is the authority for this build: it lists every accepted id, whether it can be delivered, and why not",
+    },
+    Tip {
+        text: "`scrape formats` takes no flags — the CLI adds `sessionId` to every call it makes",
+    },
 ];
 
 fn tips_for_command(command: &str) -> &'static [Tip] {
     match command {
         "snapshot" | "snapshot-grep" => TIPS_SNAPSHOT,
-        "scrape" | "scrape-formats" => TIPS_SCRAPE,
+        "scrape" => TIPS_SCRAPE,
+        "scrape-formats" => TIPS_SCRAPE_FORMATS,
         "htmlsnapshot" | "htmlsnapshot-export" => TIPS_HTMLSNAPSHOT_GET,
         "htmlsnapshot-get" => TIPS_HTMLSNAPSHOT_GET,
         "htmlsnapshot-query" => TIPS_HTMLSNAPSHOT_QUERY,

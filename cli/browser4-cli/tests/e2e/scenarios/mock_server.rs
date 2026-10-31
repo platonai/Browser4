@@ -2423,10 +2423,11 @@ pub(super) fn test_cdp_command(ctx: &mut E2ECtx) {
 /// `tool call <mcp-name> [--json '{...}']` — generic MCP tool passthrough.
 /// `scrape` (one capture → many formats) and its `scrape formats` subcommand.
 ///
-/// Both spellings matter: `scrape <url>` must survive the prefix rewriter as the
-/// bare command, while `scrape formats` must be rewritten to the internal
-/// `scrape-formats` — and both must reach the backend under the documented MCP
-/// tool names, which is what the recorded tool calls assert.
+/// Both spellings matter: the bare `scrape` (which accepts no positional argument,
+/// so a stray second token stays a positional and is rejected) and `scrape formats`
+/// must be rewritten to the internal `scrape-formats` — and both must reach the
+/// backend under the documented MCP tool names, which is what the recorded tool
+/// calls assert.
 pub(super) fn test_scrape_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

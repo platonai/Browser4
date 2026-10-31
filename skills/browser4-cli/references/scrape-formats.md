@@ -128,8 +128,8 @@ browser4-cli scrape --formats "markdown,links" | grep -o '"formatsDelivered":\[[
 
 | Flag | Meaning |
 |---|---|
-| `--formats <list>` | The outputs to produce, in request order. Accepts a comma-separated string (`"markdown,links"`), a JSON array (`'["markdown","links"]'`) or a single name. An entry may be an object carrying that format's options. Omitted or empty means `["markdown"]` |
-| `--no-main-content` | Derive markdown from the whole cleaned page instead of the readable article. A flag, not a value: the default is already `true`, so only turning it off needs spelling |
+| `-f`, `--formats <list>` | The outputs to produce, in request order. Accepts a comma-separated string (`"markdown,links"`), a JSON array (`'["markdown","links"]'`) or a single name. An entry may be an object carrying that format's options. Omitted or empty means `["markdown"]` |
+| `--no-main-content` | Derive markdown from the whole cleaned page instead of the readable article. A flag, not a value: the backend default is the readable article, so this flag is what turns it off |
 | `-o`, `--output <dir>` | Fetch the files this request produced (`screenshot`, `pdf`) into `<dir>` and print the document with those local paths. Without it, a binary format can only report the backend's own path. The directory is created if it does not exist |
 | `--strict` | Fail instead of degrading when a requested format is not delivered: non-zero exit, and the message names the code to act on. Without it the field is omitted, the reason goes in `warning`, and everything else still comes back |
 

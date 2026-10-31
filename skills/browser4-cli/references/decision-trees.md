@@ -61,6 +61,8 @@ Need to extract data from a page?
 │   discovery tools, not `get`)
 ├─ Static page, multiple correlated fields (title+price+url per item)?
 │  → htmlsnapshot query with X-SQL DOM_LOAD_AND_SELECT
+├─ Several outputs from one page at once (text + links + images + screenshot)?
+│  → scrape --formats "markdown,links,images"   # one capture, one document; no URL argument
 ├─ Dynamic/complex JS logic needed? → eval --json (--await for Promises/fetch, --wait-selector for late-rendered content)
 ├─ Natural language ("find the product price")? → extract (needs LLM key)
 └─ High volume, many pages? → crawl or swarm with --sql
