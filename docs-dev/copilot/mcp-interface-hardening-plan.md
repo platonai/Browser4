@@ -72,6 +72,17 @@ data class Arg(
 `ToolSpecValidator`（5）、`ToolResultValidator`（6）、`ToolInvocationLogger`（7）、`ToolMetrics`（8/14）、`ToolRateLimiter`（9）、`ToolResultCache`（10/13）、`BatchExecutor`（12）。
 契约测试断言「同一输入 → 两通道同一输出/同一错误码」，直接封堵 G4 类漂移。
 
+**D2 补记 · 工具目录统一（已完成 2026-10-31，分支 `feat/mcp-tool-catalog`）。**
+G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工具名单**枚举两次」：A 枚举执行器，B 维护静态名单 + 会话段，两份清单各自演化。
+现在两侧都从 `ToolCatalog`（agentic，纯枚举、无副作用）取名单：
+
+- `ToolCatalog.build(groups, aliases, renames, includeUnresolvedAliases)` 按组优先顺序展开 `getToolSpecs()`；`renames`（公开的 `McpToolNames.sessionRenames`）把 `session.open` 拼成 `open_session`；真名冲突记入 `CatalogConflict`，保留先注册者，不静默覆盖。
+- A 传 `frontendAliases`（Playwright 风格别名），只注册有 spec 的条目；`refreshTools()` 重建目录以拾取后注册的插件执行器。
+- B 传 `dispatcherAliases`（共享别名 + 仅 B 支持的 `browser_window_state` + B 的复合工具），并开 `includeUnresolvedAliases`：静态段在尚无会话时仍需广告 `browser_navigate`，这类条目 `spec == null`、不可执行。
+- 会话生命周期工具改为常规执行器 `SessionToolExecutor`（`domain = "session"`，`receiverClass = MCPToolController`），经 `ToolMount`（`SessionToolMountConfiguration`）进入 `CustomToolRegistry`。因此 A 也能**公告并执行** `open_session`/`close_session`/`attach_browser`/`window_state`，执行体仍回落到 B 的 `executeSessionTool`，close/attach 的结构化载荷不分叉。依赖方向保持 rest → agentic。
+- 附带修掉一处 schema 缺陷：`buildSchemaFromSpec()` 不再用通用 handle 文案覆盖 spec 自带的 `sessionId` 描述，且把 `sessionId` 从 `required` 排除（传输层自己管理该句柄，`open_session` 里它是新会话名）。
+- 新增测试：`ToolCatalogTest`（10）、两侧 `McpToolAliasParityTest`（agentic 4 / rest 5）、`Browser4MCPServerToolSourcesTest.declaredSessionIdStaysOptionalAndDocumented`。`docs/mcp-tools.md` 为生成产物且不含 `session` 域，无需重生成。
+
 **D3 · 兼容优先的落地顺序。**
 错误码/日志/校验先以「附加信息」形式上线（`ERROR: [CODE] msg` 保留旧前缀、JSON-RPC 结构不变），破坏性变更（未知参数从"静默丢弃"改"报错"、输出校验从 warn 改 fail）放在各自阶段的最后一步，并配 feature flag。
 

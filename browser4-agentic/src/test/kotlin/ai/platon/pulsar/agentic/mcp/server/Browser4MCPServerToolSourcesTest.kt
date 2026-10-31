@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.mcp.server
 
+import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
@@ -10,7 +11,10 @@ import io.mockk.mockk
 import io.mockk.verify
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -99,6 +103,38 @@ class Browser4MCPServerToolSourcesTest {
         )
 
         assertEquals(setOf("navigate", "click"), server.server.tools.keys)
+    }
+
+    @Test
+    @DisplayName("a spec that declares sessionId keeps it optional and keeps its own description")
+    fun declaredSessionIdStaysOptionalAndDocumented() {
+        // `open_session` declares `sessionId` as the new session's name, while the
+        // transport also reads it as a session handle. It is optional in both
+        // roles: a required handle made the tool advertise an argument that
+        // routing then rejects as an unknown session.
+        val server = serverWith(
+            builtIn = emptyList(),
+            custom = listOf(
+                FakeToolExecutor(
+                    McpToolNames.SESSION_DOMAIN,
+                    listOf("open"),
+                    listOf(
+                        ToolSpec.Arg(
+                            "sessionId", "String",
+                            description = "Name for the new session",
+                        )
+                    ),
+                )
+            ),
+        )
+
+        val schema = server.server.tools["open_session"]!!.tool.inputSchema
+        assertNull(schema.required, "the transport-owned sessionId must not be required")
+        val sessionIdProp = schema.properties?.get("sessionId") as? JsonObject
+        assertEquals(
+            "Name for the new session",
+            (sessionIdProp?.get("description") as? JsonPrimitive)?.content,
+        )
     }
 
     @Test
