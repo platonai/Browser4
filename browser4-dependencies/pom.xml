@@ -573,8 +573,12 @@
              its CDP endpoint answered — reproduced on the 2026-10-29 Gate run, and the direct
              cause of the 2026-10-28 supervised failure.  A browser newer than 4.11.25's model
              makes the driver unusable, so the pin cannot stay on 4.11.25.  4.11.27 was published
-             to Maven Central on 2026-10-28. -->
-        <browser4-base.version>4.11.27</browser4-base.version>
+             to Maven Central on 2026-10-28.
+
+             4.11.28 (published 2026-10-31) is the current latest release; its pulsar-bom is
+             byte-for-byte identical to 4.11.27 apart from the version element, so this bump
+             carries only the base library's patch fixes (no dependency changes). -->
+        <browser4-base.version>4.11.28</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
 
         <!-- Agent memory system: SQLite FTS derived index (design: docs-dev/copilot/robust-browser-agent-memory-system-design.md) -->
