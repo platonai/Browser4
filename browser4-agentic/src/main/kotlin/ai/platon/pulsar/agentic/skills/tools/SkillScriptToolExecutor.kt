@@ -6,6 +6,7 @@ import ai.platon.pulsar.agentic.skills.SkillRegistry
 import ai.platon.pulsar.agentic.skills.execution.SkillExecutionSupport
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationProvider
+import ai.platon.pulsar.coding.Effect
 import ai.platon.pulsar.common.getLogger
 import java.nio.file.Files
 import kotlin.reflect.KClass
@@ -25,7 +26,8 @@ class SkillScriptToolExecutor(
                 ToolSpec.Arg("path", "String")
             ),
             returnType = "String",
-            description = "Read a reference file under references/ for a skill"
+            description = "Read a reference file under references/ for a skill",
+            effects = setOf(Effect.FS_READ)
         )
         toolSpec["runScript"] = ToolSpec(
             domain = domain,
@@ -38,7 +40,8 @@ class SkillScriptToolExecutor(
                 ToolSpec.Arg("maxOutputChars", "Int", "20000")
             ),
             returnType = "Map<String, Any?>",
-            description = "Run a script under scripts/ for a skill (requires allowed-tools in SKILL.md). Applies timeout and output size limits."
+            description = "Run a script under scripts/ for a skill (requires allowed-tools in SKILL.md). Applies timeout and output size limits.",
+            effects = setOf(Effect.FS_EXEC, Effect.PROC_SPAWN)
         )
     }
     override fun getToolCallSpecifications(): List<ToolSpec> = toolSpec.values.toList()

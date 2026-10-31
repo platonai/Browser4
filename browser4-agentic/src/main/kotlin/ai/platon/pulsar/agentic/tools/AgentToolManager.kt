@@ -4,6 +4,8 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.common.AgentShell
+import ai.platon.pulsar.coding.AccessApprovals
+import ai.platon.pulsar.coding.AccessApprovalsSnapshot
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.CodingAgentFileSystem
@@ -52,6 +54,29 @@ class AgentToolManager constructor(
      */
     @Volatile
     var accessPolicy: AgentAccessPolicy = AgentAccessPolicy.serverDefault
+        private set
+
+    /**
+     * The operator approval queue for the current task (plan P4-1), or `null` when no approval
+     * channel is attached.
+     *
+     * Rebuilt per task by [applyAccessPolicy]: the companion agent is shared, so a previous task's
+     * pending requests must never become approvable by the next one.
+     */
+    @Volatile
+    var accessApprovals: AccessApprovals? = null
+        private set
+
+    /**
+     * The most recently finished task's approval snapshot, or `null` before any task ends.
+     *
+     * [resetAccessPolicy] drops [accessApprovals], and without a snapshot a terminal
+     * `GET /api/agent/{taskId}/access` (used by the CLI's non-TTY end-of-session summary) would
+     * 404 and lose the pending list. Exactly one snapshot is kept — replaced on every task end —
+     * so this stays bounded.
+     */
+    @Volatile
+    var lastCompletedApprovals: AccessApprovalsSnapshot? = null
         private set
 
     /** Upper bound for polling document.readyState after a navigation-triggering action. */
@@ -340,6 +365,7 @@ class AgentToolManager constructor(
             fs = codingFs,
             policy = accessPolicy,
             buildShell = CodingComponents.buildShell(root, accessPolicy, modelShell = shell),
+            approvals = accessApprovals,
         )
     }
 
@@ -382,20 +408,46 @@ class AgentToolManager constructor(
      * Rebuilds the coding shell/fs/target so the new preset is not merely recorded but enforced:
      * a read-only file system and a disabled or narrowed shell are created here, while the tool
      * registry filter and the executor's method gate read [accessPolicy] directly.
+     *
+     * Also (re)builds the task's [accessApprovals] queue and hands the effective policy a live
+     * supplier over its grants, so an operator approval takes effect on the next tool call without
+     * rebuilding the components (plan P4-1). Every task gets a fresh queue: the companion agent is
+     * shared, and a previous task's pending request must not become approvable by the next one.
+     *
+     * @param policy the policy derived for this task (`access=`, unattended default or server default)
+     * @param taskId the task the approval queue belongs to
      */
-    fun applyAccessPolicy(policy: AgentAccessPolicy) {
-        if (policy == accessPolicy) return
-        accessPolicy = policy
+    fun applyAccessPolicy(policy: AgentAccessPolicy, taskId: String) {
+        val approvals = AccessApprovals(taskId, { accessPolicy }, { workspaceRoot })
+        val effective = policy.copy(operatorGrants = { approvals.activeCapabilities() })
+        accessApprovals = approvals
+        accessPolicy = effective
+        // Plan P4-4: pre-approved grants from the workspace strategy file
+        // (`<workspace>/.browser4/access-policy.json`), loaded before the first tool call so an
+        // unattended job never waits on an operator. The rails apply to every entry, and the
+        // decisions are audited with source=file.
+        approvals.loadPolicyFile()
         codingShell = buildCodingShell(workspaceRoot)
         codingFs = buildCodingFs(workspaceRoot)
         codingTarget = buildCodingTarget(workspaceRoot)
         logger.info(
-            "agent access policy: preset={}, denyTools={}", policy.preset.id, policy.denyTools
+            "agent access policy: task={}, preset={}, denyTools={}",
+            taskId, effective.preset.id, effective.denyTools
         )
     }
 
-    /** Restore the server-wide default policy after a task ends. */
-    fun resetAccessPolicy() = applyAccessPolicy(AgentAccessPolicy.serverDefault)
+    /** Restore the server-wide default policy and drop the task's approval queue after it ends. */
+    fun resetAccessPolicy() {
+        // Keep the last queue as a read-only snapshot before dropping it: a terminal access
+        // query must still report what the finished task was waiting on. A second reset (queue
+        // already gone) keeps the previous snapshot instead of wiping it.
+        accessApprovals?.let { lastCompletedApprovals = it.snapshot() }
+        accessApprovals = null
+        accessPolicy = AgentAccessPolicy.serverDefault
+        codingShell = buildCodingShell(workspaceRoot)
+        codingFs = buildCodingFs(workspaceRoot)
+        codingTarget = buildCodingTarget(workspaceRoot)
+    }
 
     /**
      * Register a custom target object for a specific domain.

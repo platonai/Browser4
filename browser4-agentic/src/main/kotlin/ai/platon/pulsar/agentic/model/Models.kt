@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.model
 import ai.platon.pulsar.agentic.ActResult
 import ai.platon.pulsar.agentic.ObserveResult
 import ai.platon.pulsar.api.model.MergedDOMTreeNode
+import ai.platon.pulsar.coding.Effect
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.external.ModelResponse
@@ -119,6 +120,18 @@ data class ToolSpec constructor(
      * for this tool; `null` (the default) uses the policy's TTL.
      */
     val cacheTtlMs: Long? = null,
+    /**
+     * The side effects this tool may perform, declared statically so review can see what a tool
+     * reaches without reading its implementation (plan B1).
+     *
+     * `null` means **not declared**, which is a registration error for the coding and skill
+     * domains (`CodingToolEffectsCoverageTest`); `emptySet()` explicitly declares a pure tool
+     * (`coding.permissions`, `coding.explain`). Not serialized on purpose: the JSON spec is a
+     * client contract, while this is an internal capability declaration, and keeping it out of
+     * Jackson means no tool-spec snapshot has to change.
+     */
+    @get:JsonIgnore
+    val effects: Set<Effect>? = null,
 ) {
     data class Arg(
         val name: String,

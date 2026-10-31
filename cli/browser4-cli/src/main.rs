@@ -15293,7 +15293,7 @@ fn build_agent_run_extra(
     fresh_workspace: bool,
     shared_workspace: bool,
     access: Option<&str>,
-    auto_approve: Option<&str>,
+    unattended: Option<bool>,
     session_id: Option<&str>,
     token_budget: Option<i64>,
 ) -> Value {
@@ -15321,10 +15321,12 @@ fn build_agent_run_extra(
     if let Some(preset) = access.map(str::trim).filter(|s| !s.is_empty()) {
         extra["access"] = json!(preset);
     }
-    // Absent means the server-wide `browser4.agent.autoApprove` default, which is
-    // off — an explicit key must never be synthesized here.
-    if let Some(ceiling) = auto_approve.map(str::trim).filter(|s| !s.is_empty()) {
-        extra["autoApprove"] = json!(ceiling);
+    // Plan P4-1: an omitted flag keeps the backend's unattended default (which is
+    // what a submitted job gets anyway). The interactive REPL is the only caller
+    // that decides it, passing `false` on a TTY so the server-wide policy applies
+    // to a watched run.
+    if let Some(flag) = unattended {
+        extra["unattended"] = json!(flag);
     }
     if let Some(session) = session_id.map(str::trim).filter(|s| !s.is_empty()) {
         extra["sessionId"] = json!(session);
@@ -15463,7 +15465,9 @@ async fn handle_agent_run(
             .and_then(|v| v.as_bool())
             == Some(true),
         tool_params.get("access").and_then(|v| v.as_str()),
-        tool_params.get("autoApprove").and_then(|v| v.as_str()),
+        // A one-shot `agent run` is unattended: omit the flag so the backend derives
+        // its documented default rather than the CLI synthesizing a policy.
+        None,
         resolved_session_id.as_deref(),
         tool_params.get("tokenBudget").and_then(|v| v.as_i64()),
     );
@@ -41447,20 +41451,17 @@ linkGroups:
         assert!(blank.get("access").is_none(), "got {blank}");
     }
 
-    /// `--auto-approve` follows the same contract: only a non-blank ceiling is
-    /// forwarded, because an absent key means "server default", which is off.
+    /// `unattended` is forwarded only when the caller decides it: the interactive
+    /// REPL passes `false` on a TTY (a watched run), while a one-shot `agent run`
+    /// omits the key so the backend's unattended default applies.
     #[test]
-    fn build_agent_run_extra_forwards_only_a_non_blank_auto_approve_ceiling() {
-        let ceiling =
-            build_agent_run_extra("cli", None, false, false, false, Some("read"), Some("write"), None, None);
-        assert_eq!(ceiling["access"], json!("read"));
-        assert_eq!(ceiling["autoApprove"], json!("write"));
+    fn build_agent_run_extra_forwards_unattended_only_when_decided() {
+        let watched =
+            build_agent_run_extra("cli", None, false, false, false, None, Some(false), None, None);
+        assert_eq!(watched["unattended"], json!(false));
 
-        let absent = build_agent_run_extra("cli", None, false, false, false, Some("read"), None, None, None);
-        assert!(absent.get("autoApprove").is_none(), "got {absent}");
-
-        let blank = build_agent_run_extra("cli", None, false, false, false, None, Some("  "), None, None);
-        assert!(blank.get("autoApprove").is_none(), "got {blank}");
+        let absent = build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        assert!(absent.get("unattended").is_none(), "got {absent}");
     }
 
     /// `--token-budget` is a per-run override: forwarded when named, absent

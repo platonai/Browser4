@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agent.tool
 
+import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventLog
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
@@ -9,7 +11,12 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor
 import ai.platon.pulsar.agentic.tools.advanced.crawl.failed
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.coding.AccessApprovals
+import ai.platon.pulsar.coding.AccessApprovalsSnapshot
+import ai.platon.pulsar.coding.AccessApprovalsView
 import ai.platon.pulsar.coding.AccessPreset
+import ai.platon.pulsar.coding.AccessRequest
+import ai.platon.pulsar.coding.AccessSource
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.rest.api.entities.CommandResult
@@ -180,7 +187,7 @@ class UserCommandExecutor(
         freshWorkspace: Boolean? = null,
         sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
-        autoApprove: AccessPreset? = null,
+        unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
     ): CommandStatus {
@@ -194,7 +201,7 @@ class UserCommandExecutor(
             .execute(
                 plainCommand, noopLimit = noopLimit, coding = coding,
                 freshWorkspace = freshWorkspace, sharedWorkspace = sharedWorkspace,
-                access = access, autoApprove = autoApprove,
+                access = access, unattended = unattended,
                 resumeTaskId = resumeTaskId, tokenBudget = tokenBudget,
             )
             .toCommandStatus()
@@ -219,7 +226,7 @@ class UserCommandExecutor(
         freshWorkspace: Boolean? = null,
         sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
-        autoApprove: AccessPreset? = null,
+        unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
     ): String {
@@ -235,7 +242,7 @@ class UserCommandExecutor(
         }
 
         return submitAgentTask(
-            sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove, resumeTaskId,
+            sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
             tokenBudget,
         )
     }
@@ -265,7 +272,7 @@ class UserCommandExecutor(
         freshWorkspace: Boolean? = null,
         sharedWorkspace: Boolean? = null,
         access: AccessPreset? = null,
-        autoApprove: AccessPreset? = null,
+        unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
     ): String {
@@ -273,13 +280,13 @@ class UserCommandExecutor(
         val status = runner.create()
         taskOwner[status.id] = "agent"
         logger.info(
-            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, autoApprove={}, resume={}, tokenBudget={})",
+            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, unattended={}, resume={}, tokenBudget={})",
             status.id, sessionId, noopLimit, coding ?: false, freshWorkspace ?: false,
-            access?.id ?: "default", autoApprove?.id ?: "off", resumeTaskId ?: "none",
+            access?.id ?: "default", unattended, resumeTaskId ?: "none",
             tokenBudget ?: "default",
         )
         runner.submit(
-            plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove, resumeTaskId,
+            plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
             tokenBudget,
         )
         return status.id
@@ -321,6 +328,48 @@ class UserCommandExecutor(
      * genuinely unknown.
      * */
     fun isPageVisitTask(id: String): Boolean = taskOwner[id] == "page"
+
+    /**
+     * The operator approval view of agent task [taskId]: the live queue while the task runs, or
+     * the snapshot of the most recently finished task (plan P4-1).
+     *
+     * Probes every session's runner, like [cancelAgentTask]: the queue belongs to the task's
+     * runner and the REST channel only knows the task id.
+     */
+    fun accessApprovals(taskId: String): AccessApprovalsView? =
+        liveAccessApprovals(taskId) ?: completedApprovals(taskId)
+
+    /**
+     * The live approval queue of [taskId], ignoring finished-task snapshots.
+     *
+     * Decisions go through this one only: a finished task keeps its snapshot for reading but must
+     * not accept approve/deny — the capability it would issue can no longer be used by anyone.
+     */
+    private fun liveAccessApprovals(taskId: String): AccessApprovals? =
+        agentRunners.values.firstNotNullOfOrNull { runner ->
+            (runner.session.companionAgent as? BasicBrowserAgent)
+                ?.agentToolManager?.accessApprovals
+                ?.takeIf { it.taskId == taskId }
+        }
+
+    /** The snapshot of the last finished task when [taskId] matches it, otherwise `null`. */
+    private fun completedApprovals(taskId: String): AccessApprovalsSnapshot? =
+        agentRunners.values.firstNotNullOfOrNull { runner ->
+            (runner.session.companionAgent as? BasicBrowserAgent)
+                ?.agentToolManager?.lastCompletedApprovals
+                ?.takeIf { it.taskId == taskId }
+        }
+
+    /** Approves [requestId] for [taskId] through the REST channel. `null` when the task is unknown or finished. */
+    fun approveAccess(taskId: String, requestId: String): AccessRequest? =
+        liveAccessApprovals(taskId)?.approve(requestId, AccessSource.REST)
+
+    /** Denies [requestId] for [taskId] through the REST channel. `null` when the task is unknown or finished. */
+    fun denyAccess(taskId: String, requestId: String, reason: String? = null): AccessRequest? =
+        liveAccessApprovals(taskId)?.deny(requestId, AccessSource.REST, reason)
+
+    /** The `coding.permissions`-style approval report of [taskId], or `null` when unknown. */
+    fun describeAccess(taskId: String): String? = accessApprovals(taskId)?.describe()
 
     /**
      * The live step log of agent task [id] after [afterSeq], oldest first.

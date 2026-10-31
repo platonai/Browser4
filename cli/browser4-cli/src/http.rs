@@ -1300,6 +1300,52 @@ pub async fn cancel_command_task(
     .await
 }
 
+/// Fetch a task's agent-access view: `GET /api/agent/{id}/access` — the pending
+/// access requests plus the operator grants already active on the task.
+///
+/// See [`RestResponse`] for why the raw status is returned instead of an error:
+/// a 404 means the task is unknown to this backend (finished, or belongs to
+/// another process), which the interactive `/access` renders as its own line.
+pub async fn get_agent_access_view(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/agent/{task_id}/access"));
+    send_rest_response(
+        client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(30)),
+    )
+    .await
+}
+
+/// Post the operator's decision on a pending access request:
+/// `POST /api/agent/{id}/access/{requestId}/{action}` (`action` is `approve` or
+/// `deny`).
+///
+/// The server answers a guardrail refusal — and every successful deny — with
+/// 409 and the same decision body, so the caller treats 2xx and 409 alike and
+/// needs the raw status (see [`RestResponse`]).
+pub async fn post_agent_access_decision(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+    request_id: &str,
+    action: &str,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(
+        base_url,
+        &format!("/api/agent/{task_id}/access/{request_id}/{action}"),
+    );
+    send_rest_response(
+        client
+            .post(url)
+            .timeout(std::time::Duration::from_secs(30)),
+    )
+    .await
+}
+
 /// Execute a batch of CLI-derived operations in a single backend request.
 pub async fn submit_batch_commands(
     client: &Client,

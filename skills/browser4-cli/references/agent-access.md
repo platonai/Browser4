@@ -1,15 +1,15 @@
 ---
-title: "Agent Access — Presets, Refusals, Auto-Approval"
-description: "Reference for an agent task's access preset: what full/write/read-build/read grant, the PERMISSION_DENIED code catalogue, and how --auto-approve raises a bounded ceiling without overriding rails."
+title: "Agent Access — Presets, Refusals, Operator Approval"
+description: "Reference for an agent task's access preset: what full/write/read-build/read grant, the PERMISSION_DENIED code catalogue, and how coding.requestAccess gets a refused effect approved without overriding rails."
 tier: procedure
 ---
 
-# Agent Access — Presets, Refusals, Auto-Approval
+# Agent Access — Presets, Refusals, Operator Approval
 
 An `agent run` task executes its coding tools under one access **preset**. The preset
-decides which capabilities exist at all; `--auto-approve` can raise a bounded ceiling on
-top of it. Nothing here widens the *path* boundary — that is
-[agent-workspace.md](agent-workspace.md).
+decides which capabilities exist at all; when a step needs more, the agent asks for it
+with `coding.requestAccess` and an operator approves it out of band. Nothing here widens
+the *path* boundary — that is [agent-workspace.md](agent-workspace.md).
 
 ## Quick Start
 
@@ -17,8 +17,8 @@ top of it. Nothing here widens the *path* boundary — that is
 # Read + build only: the agent may inspect and run Maven, never edit or shell out.
 browser4-cli agent run "Read pom.xml and report the failing module" --coding --access read-build
 
-# Narrow preset, but allow file writes when the agent decides it must.
-browser4-cli agent run "Fix the failing test" --coding --access read-build --auto-approve write
+# Narrow preset; a refused write becomes a pending request the operator can approve.
+browser4-cli agent run "Fix the failing test" --coding --access read-build --follow
 ```
 
 ## When to Use
@@ -80,42 +80,119 @@ PERMISSION_DENIED | code=TOOL_DENIED | tool=coding.shell | detail=not permitted 
 outside the shell's tier), `PATH_OUTSIDE_WORKSPACE` / `PATH_DENIED` (a path the file tools
 refused), `SENSITIVE_PATH` (credentials), `COMMAND_PATH_DENIED` (a command argument naming
 credentials), `PROTECTED_PATH` (governance file or protected directory, such as
-`.browser4`). A refusal is structural: it must not be retried with different quoting or an
-interpreter. `coding.permissions` prints the same view MCP clients get — the preset, the
-allowed routes and the protections.
+`.browser4`), and `SANDBOX_DENIED` (the active OS sandbox refused the command; the step
+also carries `needed=…` and the raw OS evidence stays in the log). A refusal is structural:
+it must not be retried with different quoting or an interpreter. `coding.permissions` prints
+the same view MCP clients get — the preset, the allowed routes and the protections.
 
-### Auto-approval raises a ceiling
+### Operator approval: `coding.requestAccess`
 
-`--auto-approve <preset>` grants automatically a call the preset refuses, as long as the
-preset that *would* grant it is no wider than the ceiling. This keeps a task on a narrow
-preset without the agent stalling on a denial it cannot work around.
+A refusal is not a dead end, and it never blocks the task. The agent asks for the missing
+effect once:
 
-| Ceiling | Grants automatically on top of the preset |
-|---|---|
-| `read-build` | the project build |
-| `write` | file mutation (`write`/`edit`/`delete`/`copy`/`move`) **and** the project build (the build requires the narrower `read-build` grant, so it is approved too) |
-| `full` | file mutation, the project build **and** the shell / arbitrary code |
+```text
+coding.requestAccess(effect="fs.write", target="src/main/kotlin/Foo.kt", reason="fix the import", ttlSeconds=600)
+```
 
-Rules that hold regardless of the ceiling:
+The call returns immediately with the pending request — it never waits for a human:
 
-- `denyTools` (embedder-level) is never overridden — an explicit denial is a rail, not a
-  capability. A refusal names it: `detail=excluded by denyTools under access preset 'full'`.
+```json
+{"requestId": "req-1", "state": "pending", "effect": "fs.write", "target": "…/Foo.kt",
+ "needed": "fs.write at …/Foo.kt", "alternatives": ["continue with the tools the preset grants",
+ "re-run with access=full or access=write"]}
+```
+
+Rules:
+
+- Asking is a read: every preset exposes `coding.requestAccess`, including `read`.
+- The same `effect + target` is deduplicated — a retrying model gets the existing
+  `requestId` instead of flooding the queue. Once a grant expires, a fresh request is
+  allowed.
+- The agent keeps working with the tools the preset grants while the request is pending.
+- An approval is **effect-level**: `fs.write` unlocks mutating methods (and the project
+  build, which needs the narrower `read-build` grant); `fs.exec` / `proc.spawn` unlock the
+  shell and arbitrary code. The target is recorded in the audit and the grant's scope, not
+  enforced per path — the layers that know the path still enforce the rails below.
+- `ttlSeconds` bounds the grant; omitted, it lasts until the task ends. Expiry is lazy:
+  the next decision (or `coding.permissions`) drops the grant and records
+  `ACCESS_EXPIRED`, so no timer runs in the background.
+
+Three operator channels issue the same approval:
+
+```bash
+# REST, for dashboards and scripts
+curl http://localhost:18182/api/agent/<taskId>/access                     # pending + grants
+curl -X POST http://localhost:18182/api/agent/<taskId>/access/<requestId>/approve
+curl -X POST "http://localhost:18182/api/agent/<taskId>/access/<requestId>/deny?reason=..."
+```
+
+```text
+# Interactive CLI (`agent run -i`) — handled locally, never sent to the model
+/access [task-id]                 show pending requests and active grants
+/approve <request-id> [task-id]   approve one pending request
+/deny <request-id> [task-id]      deny one pending request
+```
+
+Without a TTY the CLI cannot ask, so it only informs: when the session ends it prints the
+requests still pending (nothing is printed when there are none), and the run is never
+blocked waiting for an answer.
+
+```json
+// Strategy file <workspace>/.browser4/access-policy.json — pre-approvals for an
+// unattended job, loaded once when the task starts
+{"grants": [{"effect": "fs.write", "target": "src/generated", "ttlSeconds": 3600, "reason": "codegen"}]}
+```
+
+`target` is a command line for `fs.exec`/`proc.spawn`, a host for `net.connect`, otherwise a
+workspace-relative path. `.browser4` is a protected directory, so the job cannot rewrite its
+own permissions.
+
+An approval that would cross a rail is converted to a denial (`409`), and the request's
+`state` says so — the operator cannot force it through either. The same rails apply to every
+channel, including strategy-file entries.
+
+Rails that an approval can never cross:
+
+- `denyTools` (embedder-level) — an explicit denial is a rail, not a capability. A refusal
+  names it: `detail=excluded by denyTools under access preset 'full'`.
 - Protected paths (governance files, `.browser4`, `.github/workflows`) and sensitive paths
   (credentials) are never approved.
-- Every automatically approved call is audited once as
-  `coding access auto-approved: tool=… required=… ceiling=…` and counted under
-  `AUTO_APPROVED`, so the widening is visible after the fact.
+- The workspace boundary while `allowExternalAccess=false`: a target outside the workspace
+  is refused at approval time.
+- The shell's command whitelist (safe commands plus `DEV_COMMANDS`): an approval can pick
+  among them, never add an arbitrary program.
+- The OS sandbox: it keeps enforcing the process boundary whatever was approved.
 
-Omitted, automatic approval is **off** and every refusal stands. The backend-wide default
-lives in `browser4.agent.autoApprove`; like `--access`, the flag is scoped to the task and
-reset when it ends.
+Every step of the flow is audited with its source (`rest`, `file`, `cli` or the unattended
+`default`): `ACCESS_REQUESTED`, `ACCESS_APPROVED`, `ACCESS_DENIED`, `ACCESS_EXPIRED`.
+
+### The unattended default
+
+A run nobody watches cannot answer an approval. When no TTY is attached (a script, a CI
+job, a submitted task), the task derives the **unattended default** instead of the
+server-wide preset: `full` with outbound network allowed — the alternative is every
+unattended write failing on its first call. The rails above are untouched, execution still
+passes the command whitelist, and the derived default is audited once as
+`ACCESS_APPROVED(source=default)`.
+
+| `browser4.agent.access.unattended` | Derived preset |
+|---|---|
+| unset | `full`, network on |
+| `full` / `write` / `read-build` / `read` | that preset, network on |
+| `deny` | no workspace power: every `coding.*` / `skill.*` method refused, network off, browsing still available |
+
+A watched `agent run -i` session on a TTY keeps `browser4.agent.access`; an explicit
+`--access` always wins over the unattended default.
+
 
 ### Two limits worth knowing
 
 - The presets bound what the model can *spell* — mutating paths, commands and code. They
   are not an OS-level sandbox: every preset that allows the project build (`read-build`,
-  `write`, `full`) executes repository code (Maven plugins, npm scripts). Use a container
-  or VM when the repository itself is untrusted.
+  `write`, `full`) executes repository code (Maven plugins, npm scripts). The execution
+  sandbox (`browser4.agent.sandbox`, see [config.md](../../../docs/config.md)) enforces
+  where a process may write when your platform has a backend; otherwise use a container or
+  VM when the repository itself is untrusted.
 - `--access` is scoped to the task and reset when it ends, so the next task on the same
   backend starts from the server default again.
 
@@ -131,19 +208,20 @@ browser4-cli agent run "Review the diff of browser4-agentic and list the risks" 
 The agent can read and grep but neither edit nor build; anything it cannot do lands in
 `problems` instead of a silent retry loop.
 
-### Narrow preset with a single widening
+### Narrow preset with a single permitted widening
 
 ```bash
 browser4-cli agent run "Diagnose the failing build and fix only the import" \
-  --coding --access read-build --auto-approve write
+  --coding --access read-build --follow
 ```
 
-The shell stays unavailable; writes are approved per call and audited.
+The shell stays unavailable; when the agent needs the write it asks once, and the operator
+approves exactly that effect from the REST endpoint. Writes stay off until then.
 
 ### Inspect the effective policy
 
 ```text
-coding.permissions()      # preset, granted tools, protections, approval ceiling
+coding.permissions()      # preset, granted tools, protections, pending requests, operator grants
 ```
 
 Use this when the agent keeps hitting refusals: it is the same view a client gets, so the
@@ -154,23 +232,23 @@ answer to "why was this refused" is one call away.
 | Flag / property | Applies to | Effect |
 |---|---|---|
 | `--access <preset>` | `agent run` | `full` \| `write` \| `read-build` \| `read` for this task; reset at task end |
-| `--auto-approve <preset>` | `agent run` | bounded ceiling that grants refused calls up to that width |
-| `browser4.agent.access` | backend | server-wide default preset (unset = `full`) |
-| `browser4.agent.autoApprove` | backend | server-wide approval ceiling (unset = off) |
+| `browser4.agent.access` | backend | server-wide default preset (unset = `full`); a watched TTY run and an explicit `--access` keep it |
+| `browser4.agent.access.unattended` | backend | default for a run without a TTY: `deny` \| `read` \| `read-build` \| `write` \| `full` (unset = `full`, network on) |
 | `browser4.agent.allowDestructive` | backend | deprecated: `false` refuses delete/copy/move, not a read-only switch |
-| `browser4.agent.shell.pathGuard` | backend | deprecated debugging switch for the shell's argument path guard; leave on |
-| `browser4.agent.allowExternalAccess` | backend | path boundary, documented in [agent-workspace.md](agent-workspace.md) |
+| `browser4.agent.shell.pathGuard` | backend | deprecated debugging switch for the shell's argument path guard; advisory only (the OS sandbox enforces), leave on |
+| `browser4.agent.allowExternalAccess` | backend | deprecated; advisory path widening, documented in [agent-workspace.md](agent-workspace.md) |
 
 ## Errors & Recovery
 
 | Symptom | Meaning | Fix |
 |---|---|---|
-| `code=TOOL_DENIED` | the preset does not grant the method | use a wider preset, or `--auto-approve` with the narrowest preset that grants it |
-| `code=EXEC_DISABLED` | shell/code execution is off under the preset | run the step another way, or widen to `full` (audited) |
+| `code=TOOL_DENIED` | the preset does not grant the method | use a wider preset, or call `coding.requestAccess` and have an operator approve that effect |
+| `code=EXEC_DISABLED` | shell/code execution is off under the preset | run the step another way, request `fs.exec` approval, or widen to `full` |
 | `code=COMMAND_NOT_ALLOWED` | the command is outside the shell's tier | use the project build (`mvnBuild`), a script file, or a different command |
 | `code=PATH_DENIED` | the path is outside the workspace | see [agent-workspace.md](agent-workspace.md) — name the input, use `--coding`, or widen paths |
 | `code=PROTECTED_PATH` / `code=SENSITIVE_PATH` | rails, not capabilities | never approvable; copy the data somewhere allowed |
-| Auto-approval "did not apply" | the call needs a wider preset than the ceiling, or an explicit `denyTools` rail matched | raise the ceiling, or remove the denial in the embedding configuration |
+| `code=SANDBOX_DENIED` | the OS sandbox refused the operation (the step's `needed` names the granted roots) | keep the command inside the workspace and granted roots; change the sandbox configuration, not the command |
+| An approved grant "did not apply" | the effect does not cover the method, the grant expired, or a rail matched (denied tool, protected path, workspace boundary, command whitelist) | ask for the right effect (`fs.write` vs `fs.exec`), re-request after expiry, or remove the rail in the embedding configuration — a rail is never approvable |
 
 ## Related
 

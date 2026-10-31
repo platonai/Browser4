@@ -165,12 +165,12 @@ internal object CliAgentPrompt {
           for, drive the site's own picker — `snapshot -v 0` (or `snapshot grep -i
           "language|currency|English"`) to find the control, `select`/`click` language + currency
           (+ delivery location), re-snapshot, then verify one known product. The choice is stored
-          in the browser profile, so the rest of the session inherits it. `?language=en_US`,
-          `set headers Accept-Language` and hand-written cookies are HINTS, not the fix (measured:
-          all three left amazon.com on its Chinese interstitial); do not spend more than one round
-          on them before operating the page. Do not post-process localized values, and do not
-          assume a site-specific query parameter: which one a given site honours is that site's
-          business, not the engine's.
+          in the browser profile, so the rest of the session inherits it. A locale query
+          parameter, `set headers Accept-Language` and hand-written cookies are HINTS, not the fix
+          (measured: all three left the site on its Chinese interstitial); do not spend more than
+          one round on them before operating the page. Do not post-process localized values, and do
+          not assume a site-specific query parameter: which one a given site honours is that
+          site's business, not the engine's.
         - Deliverables are text: write CSV (or JSONL) for tabular data and Markdown for
           prose. There is no spreadsheet writer and `.xlsx` output is out of scope; do not
           hand-roll one. A task that asks to "save as a spreadsheet" is delivered as CSV,
@@ -240,15 +240,15 @@ internal object CliAgentPrompt {
             add("read the workspace")
             if (policy.allowsFileMutation()) add("write workspace files")
             if (policy.allowExternalAccess) add("reach paths outside the workspace")
-            // Ask the policy, not the preset: an approval ceiling can grant the build under `read`.
+            // Ask the policy, not the preset: an operator grant can unlock the build under `read`.
             if (policy.allowsTool("coding", "mvnBuild")) add("run the project build (coding.mvnBuild/coding.verify)")
             if (policy.allowsExec()) add("run shell commands and arbitrary code")
         }
-        val ceiling = policy.autoApproveUpTo?.let {
-            "- Automatic approval is on up to '${it.id}': a call this preset refuses is granted (and " +
-                "audited) when the preset that grants it is no wider. Denied tools, protected paths " +
-                "and sensitive paths are still refused — never route around them."
-        } ?: "- Automatic approval is off: every refusal above stands."
+        val approval = "- Operator approval: if a step needs an effect this preset refuses, call " +
+            "coding.requestAccess(effect=\"...\", target=\"...\") once. It returns immediately with a " +
+            "pending requestId and never blocks the task; continue with allowed steps and retry that " +
+            "call later. Guardrails (denied tools, protected/credential paths, the workspace " +
+            "boundary) can never be approved away — never route around them."
         val boundary = if (policy.allowExternalAccess) "" else
             "Paths outside the workspace are refused (`PERMISSION_DENIED | code=PATH_DENIED`); " +
                 "absolute paths, `..` traversal and interpreters do not get around it."
@@ -257,7 +257,7 @@ internal object CliAgentPrompt {
         ### Permissions
         - This run is under access preset '${policy.preset.id}': you may ${abilities.joinToString(", ")}.
         - $boundary
-        $ceiling
+        $approval
         - Tools the preset does not grant are not in your tool list at all, and a call that slips
           through anyway is refused with `PERMISSION_DENIED | code=...`. A refusal is structural, not
           a syntax problem: do NOT retry it, re-quote it, or reach for an interpreter to do the same

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -38,7 +39,9 @@ class B4CliExternalPathTest {
         assertNotNull(refusal, "an external file:// read must be refused")
         assertTrue(refusal!!.contains("PATH_OUTSIDE_WORKSPACE"), refusal)
         assertTrue(refusal.contains("b4.run"), refusal)
-        assertTrue(refusal.contains("allowExternalAccess"), refusal)
+        // P4-3: the hint says what is allowed instead of naming a JVM switch.
+        assertTrue(refusal.contains("external access is disabled"), refusal)
+        assertFalse(refusal.contains("-Dbrowser4"), refusal)
     }
 
     @Test

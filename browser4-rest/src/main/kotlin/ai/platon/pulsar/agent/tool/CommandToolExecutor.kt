@@ -96,12 +96,12 @@ class CommandToolExecutor(
                         "reset when the task ends.",
                 ),
                 ToolSpec.Arg(
-                    "autoApprove", "String?", "null",
-                    "Automatic approval ceiling for this task: `full`, `write`, `read-build` or `read`. " +
-                        "A coding call the task's access preset refuses is then granted (and audited) when " +
-                        "the preset that would grant it is no wider than this ceiling — no human in the " +
-                        "loop. Explicitly denied tools, protected paths and sensitive paths are never " +
-                        "approved. Omit to use the server-wide `browser4.agent.autoApprove` default (off).",
+                    "unattended", "Boolean?", "true",
+                    "Whether nobody is watching this task (the default). An unattended task that names " +
+                        "no `access` preset derives the documented default (`full` with outbound network, " +
+                        "audited as ACCESS_APPROVED source=default); pass false from an interactive TTY " +
+                        "run so the server-wide policy applies instead. `browser4.agent.access.unattended` " +
+                        "narrows the derived default.",
                 ),
                 ToolSpec.Arg(
                     "resumeTaskId", "String?", "null",
@@ -260,7 +260,7 @@ class CommandToolExecutor(
                     args,
                     allowed = setOf(
                         "command", "async", "noopLimit", "engine", "coding", "freshWorkspace", "sharedWorkspace",
-                        "access", "autoApprove", "resumeTaskId", "tokenBudget",
+                        "access", "unattended", "resumeTaskId", "tokenBudget",
                     ) + SESSION_ARG,
                     // `agent run --resume <id>` may omit the task text: the instruction
                     // comes from the interrupted task's checkpoint. Validated below.
@@ -308,28 +308,21 @@ class CommandToolExecutor(
                         }
                     }
                     ?.let { AccessPreset.parse(it) }
-                // Same reasoning as `access`: an unknown ceiling must not quietly become "off"
-                // (too strict, looks like a bug) or "full" (far too permissive).
-                val autoApprove = paramString(args, "autoApprove", functionName, required = false, default = null)
-                    ?.also { raw ->
-                        require(AccessPreset.parse(raw) != null) {
-                            "Unknown autoApprove '$raw': expected one of " +
-                                AccessPreset.values().joinToString(", ") { it.id }
-                        }
-                    }
-                    ?.let { AccessPreset.parse(it) }
+                // Plan P4-1: nobody is watching a submitted job by default, so it derives the
+                // documented access default. The interactive CLI passes false on a TTY.
+                val unattended = paramBool(args, "unattended", functionName, required = false, default = true) ?: true
                 // Per-task token budget: a negative value is not a budget, so it is
                 // rejected rather than silently becoming "unlimited".
                 val tokenBudget = paramLong(args, "tokenBudget", functionName, required = false, default = null)
                     ?.also { require(it >= 0) { "tokenBudget must be >= 0 (0 = unlimited), actual=$it" } }
                 if (isAsync) {
                     service.submitPlainCommand(
-                        sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove,
+                        sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
                         resumeTaskId, tokenBudget,
                     )
                 } else {
                     val status = service.executePlainCommand(
-                        sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, autoApprove,
+                        sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
                         resumeTaskId, tokenBudget,
                     )
                     pulsarObjectMapper().writeValueAsString(status)

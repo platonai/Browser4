@@ -47,6 +47,14 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
+        <!-- JNA for the Windows token launch (LogonUserW + CreateProcessAsUserW, P1-2).
+             Only loaded on Windows; no other module in the reactor depends on JNA. -->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+            <version>5.17.0</version>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>

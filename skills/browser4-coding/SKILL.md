@@ -154,15 +154,28 @@ by the file system, the shell, the tool registry and the MCP direct-call path:
 - Server default: `-Dbrowser4.agent.access=<preset>` (unknown values log and fall back to `full`).
 - Per task: `browser4-cli agent run "<task>" --coding --access <preset>`; the preset is applied
   inside the task's lock and reset when the task ends, so tasks never inherit each other's grants.
-- Automatic approval: `-Dbrowser4.agent.autoApprove=<preset>` (server) or
-  `--auto-approve <preset>` (per task) raises a **ceiling** — a call the preset refuses is granted
-  when the preset that grants it is no wider than the ceiling (`read-build` → build; `write` →
-  mutation and, being narrower, the build; `full` → mutation, build and shell). Off by default.
-  `denyTools`, protected directories/files and credential paths are never approved; each approval is
-  audited `AUTO_APPROVED`.
+- Operator approval: a refused effect is not a dead end. `coding.requestAccess(effect="fs.write",
+  target="src/Foo.kt", reason="…")` returns immediately with a pending request (it never blocks the
+  task), the task keeps working with what the preset grants, and an operator approves it through
+  `POST /api/agent/<taskId>/access/<requestId>/approve`. The same `effect + target` is deduplicated;
+  a grant is effect-level and lazily expires. `denyTools`, protected directories/files, credential
+  paths, the workspace boundary and the shell whitelist are never approved — they are rails, not
+  capabilities. Each step is audited `REQUESTED`/`APPROVED`/`DENIED`/`EXPIRED` with its source.
+- Strategy file: an unattended job can pre-approve grants with
+  `<workspace>/.browser4/access-policy.json` — `{"grants": [{"effect": "fs.write",
+  "target": "src/generated", "ttlSeconds": 3600, "reason": "…"}]}`. It is loaded once when the
+  task starts; `target` is a command line for `fs.exec`/`proc.spawn`, a host for `net.connect`,
+  otherwise a workspace-relative path. Each entry goes through the same rails and audit as an
+  operator approval (source `file`), so a protected or out-of-workspace entry is denied, never
+  silently honored. `.browser4` is a protected directory, so the job cannot rewrite the file
+  itself.
+- Unattended default: a job nobody watches (no TTY: scripts, CI, submitted tasks) derives `full`
+  with outbound network allowed instead of the server-wide preset, audited once as
+  `ACCESS_APPROVED(source=default)`; `-Dbrowser4.agent.access.unattended=<preset|deny>` narrows it.
+  A watched `agent run -i` on a TTY keeps `browser4.agent.access`.
 - `coding.permissions()` reports the active preset, the workspace, what is allowed, every denied
-  method and the current protections. Call it after a refusal instead of retrying the same call
-  with different syntax.
+  method, the pending requests, the operator grants in force and the current protections. Call it
+  after a refusal instead of retrying the same call with different syntax.
 - A refused call is a failed **step**, not a failed task, and its text is machine-readable:
   `PERMISSION_DENIED | code=… | tool=… | detail=… | hint=…` (`TOOL_DENIED`, `READ_ONLY`,
   `EXEC_DISABLED`, `COMMAND_NOT_ALLOWED`, `PROTECTED_PATH`, `SENSITIVE_PATH`,
@@ -183,8 +196,10 @@ Relations that hold regardless of preset:
   tools refuse them (real-path checked, so a link inside the workspace cannot reach them) and the
   shell refuses command arguments naming them in every spelling we can expand (`~`, `$VAR`,
   `${VAR}`, `$env:VAR`, `%VAR%`), including inside a quoted command substitution
-  (`echo "$(cat ~/.ssh/id_rsa)"`). `-Dbrowser4.agent.shell.pathGuard=off` disables only the
-  credential **argument** check — the protected subtrees stay enforced.
+  (`echo "$(cat ~/.ssh/id_rsa)"`). This check is advisory (fast-fail), not a security boundary:
+  the OS sandbox (`browser4.agent.sandbox`) is what actually enforces writes. The deprecated
+  `-Dbrowser4.agent.shell.pathGuard=off` disables only the credential **argument** check —
+  the protected subtrees stay enforced.
 - The presets bound what the model can *spell*. They are not an OS sandbox: `read-build` and above
   run the repository's own build (Maven plugins, npm scripts), which executes project code.
 

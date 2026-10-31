@@ -11,6 +11,7 @@ import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationProvider
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.coding.AgentAccessPolicy
+import ai.platon.pulsar.coding.Effect
 import java.nio.file.Paths
 import kotlin.reflect.KClass
 
@@ -46,7 +47,8 @@ class SkillToolExecutor(
                 ToolSpec.Arg("maxDescriptionChars", "Int", "512")
             ),
             returnType = "List<SkillSummary>",
-            description = "List registered skills (summary only, for discovery/matching)"
+            description = "List registered skills (summary only, for discovery/matching)",
+            effects = emptySet()
         )
 
         // 2) Activation surface
@@ -57,7 +59,8 @@ class SkillToolExecutor(
                 ToolSpec.Arg("id", "String")
             ),
             returnType = "SkillActivation",
-            description = "Load full SKILL.md (and resource pointers) for a skill (activation)"
+            description = "Load full SKILL.md (and resource pointers) for a skill (activation)",
+            effects = emptySet()
         )
 
         // 3) Stable execution entry point
@@ -69,7 +72,10 @@ class SkillToolExecutor(
                 ToolSpec.Arg("params", "Map<String, Any?>", "emptyMap()")
             ),
             returnType = "SkillResult",
-            description = "Run a registered skill by id"
+            description = "Run a registered skill by id",
+            // A skill body runs repository code and edits files; declared maximally rather than
+            // "unknown" so the capability view names every effect class this entry point reaches.
+            effects = setOf(Effect.FS_READ, Effect.FS_WRITE, Effect.FS_EXEC, Effect.PROC_SPAWN)
         )
 
         // 4) Document-driven installation
@@ -82,7 +88,8 @@ class SkillToolExecutor(
             ),
             returnType = "InstallResult",
             description = "Install a skill from a source directory containing SKILL.md. " +
-                "Reads the documentation, deploys skill files, and registers the skill."
+                "Reads the documentation, deploys skill files, and registers the skill.",
+            effects = setOf(Effect.FS_READ, Effect.FS_WRITE)
         )
 
         // 5) Uninstall a skill
@@ -93,7 +100,8 @@ class SkillToolExecutor(
                 ToolSpec.Arg("id", "String")
             ),
             returnType = "InstallResult",
-            description = "Uninstall a skill by removing its files and unregistering it"
+            description = "Uninstall a skill by removing its files and unregistering it",
+            effects = setOf(Effect.FS_WRITE)
         )
 
         // 6) Read skill documentation
@@ -104,7 +112,8 @@ class SkillToolExecutor(
                 ToolSpec.Arg("id", "String")
             ),
             returnType = "String",
-            description = "Read the full SKILL.md documentation for a registered skill"
+            description = "Read the full SKILL.md documentation for a registered skill",
+            effects = setOf(Effect.FS_READ)
         )
 
         scriptTools.getToolSpecs().forEach { (method, spec) ->

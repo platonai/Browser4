@@ -1031,10 +1031,10 @@ class CodingToolExecutorTest {
         }
 
         @Test
-        @DisplayName("getToolSpecs returns 55 registered specs")
+        @DisplayName("getToolSpecs returns 57 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(55, specs.size)
+            assertEquals(57, specs.size)
         }
 
         @Test
@@ -1043,7 +1043,7 @@ class CodingToolExecutorTest {
             val specs = executor.getToolSpecs()
             val expectedMethods = setOf(
                 "shell", "shellOutput", "shellStatus", "shellList", "shellSetEnv",
-                "toolsDetect", "projectType", "permissions",
+                "toolsDetect", "projectType", "permissions", "explain", "requestAccess",
                 "read", "readLines", "write", "append", "replace", "delete", "mkdir", "checksum",
                 "copy", "move", "listDir", "glob", "grep", "stat", "diff",
                 "changeSummary", "languages", "workspaceRoot",
@@ -1093,6 +1093,32 @@ class CodingToolExecutorTest {
             val value = result.value as String
             assertTrue(value.contains("[crbug-444929150]"), value)
             coVerify { fs.readFile("PulsarWebDriver.kt") }
+        }
+
+        @Test
+        @DisplayName("explain reports ALLOW for an in-workspace path and DENY for an outside path")
+        fun testExplainBoundary() = runBlocking {
+            val realFs = CodingAgentFileSystem(tempDir)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+
+            val inside = executor.callFunctionOn(
+                ToolCall("coding", "explain", mutableMapOf("path" to "src/main.kt")),
+                realTarget,
+            )
+            assertNull(inside.exception, "explain failed: ${inside.exception}")
+            val insideValue = inside.value as String
+            assertTrue(insideValue.contains("File-system boundary") && insideValue.contains("ALLOW"), insideValue)
+            assertTrue(insideValue.contains("Shell boundary") && insideValue.contains("ALLOW"), insideValue)
+
+            val outsidePath = tempDir.parent.resolve("outside-workspace.kt").toString()
+            val outside = executor.callFunctionOn(
+                ToolCall("coding", "explain", mutableMapOf("path" to outsidePath, "method" to "write")),
+                realTarget,
+            )
+            assertNull(outside.exception, "explain failed: ${outside.exception}")
+            val outsideValue = outside.value as String
+            assertTrue(outsideValue.contains("Effect: fs.write"), outsideValue)
+            assertTrue(outsideValue.contains("File-system boundary") && outsideValue.contains("DENY"), outsideValue)
         }
 
         @Test

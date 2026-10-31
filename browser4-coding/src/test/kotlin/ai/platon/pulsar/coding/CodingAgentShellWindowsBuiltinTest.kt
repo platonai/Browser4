@@ -1,11 +1,16 @@
 package ai.platon.pulsar.coding
 
+import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
@@ -20,9 +25,16 @@ import java.nio.file.Path
  * `if`/`for` stay refused on purpose: `SAFE_COMMANDS` only checks the FIRST token, so a
  * control-flow keyword would let an arbitrary nested command through the workspace
  * boundary. They get an actionable hint instead (a `.cmd` file or `python -c`).
+ *
+ * Plan P1-4 adds the Windows execution coverage: `cmd /c`, `powershell -Command` and a
+ * `runCode` interpreter subprocess all go through the same sandbox seam, so the suite stays
+ * green with the default `off` sandbox and skips only when `windows-acl` cannot provision.
  */
-@DisplayName("cmd.exe built-ins")
+@DisplayName("windows execution: cmd.exe built-ins, PowerShell and runCode")
 class CodingAgentShellWindowsBuiltinTest {
+
+    @TempDir
+    lateinit var tempDir: Path
 
     private val isWindows = System.getProperty("os.name", "").lowercase().contains("win")
 
@@ -127,4 +139,116 @@ class CodingAgentShellWindowsBuiltinTest {
         val outside = "mkdir D:\\b4-outside-probe"
         assertFalse(s.isAllowed(outside), "outside the workspace: ${s.explain(outside)}")
     }
+
+    /**
+     * Plan P1-3 — the acceptance test for the ACL matrix.
+     *
+     * Opt-in because it needs the out-of-band provisioning (a local account plus its credential)
+     * and the privilege to assign a token, neither of which a test may create itself. When it runs,
+     * both guards are switched off (`allowExternalAccess`, `workspaceBoundaryEnabled`): the question
+     * is whether *the OS* refuses the write, not whether the shell's lexical boundary does.
+     */
+    @Test
+    @DisplayName("the sandbox account writes inside the workspace and is refused outside by the OS")
+    fun sandboxDeniesOutsideWrites() = runBlocking {
+        assumeTrue(isWindows, "the windows-acl sandbox is Windows only")
+        assumeTrue(
+            System.getProperty("browser4.agent.sandbox.test", "false").toBoolean(),
+            "opt-in: provision the sandbox account, then run with -Dbrowser4.agent.sandbox.test=true",
+        )
+
+        val workspace = Files.createDirectories(tempDir.resolve("ws"))
+        val inside = workspace.resolve("inside.txt")
+        val outside = Path.of(System.getProperty("user.home"))
+            .resolve("b4-sandbox-probe-${System.nanoTime()}.txt")
+        val previous = System.getProperty(ExecutionSandboxes.PROP_SANDBOX)
+        System.setProperty(ExecutionSandboxes.PROP_SANDBOX, "windows-acl")
+        try {
+            val s = CodingAgentShell(
+                baseDir = workspace,
+                allowExternalAccess = true,
+                workspaceBoundaryEnabled = false,
+            )
+
+            val inResult = s.executeRaw("echo inside > \"$inside\"")
+            if (inResult.stderr.contains("Windows sandbox unavailable")) {
+                assumeTrue(false, "the sandbox is not provisioned: ${inResult.stderr}")
+            }
+            assertEquals(0, inResult.exitCode, "the workspace must stay writable: ${inResult.stderr}")
+            assertTrue(Files.exists(inside), "the workspace must stay writable")
+
+            val outResult = s.executeRaw("echo outside > \"$outside\"")
+            assertNotEquals(
+                0, outResult.exitCode,
+                "the OS must refuse the write: ${outResult.stdout} ${outResult.stderr}",
+            )
+            assertFalse(Files.exists(outside), "no file may appear outside the workspace")
+        } finally {
+            if (previous == null) System.clearProperty(ExecutionSandboxes.PROP_SANDBOX)
+            else System.setProperty(ExecutionSandboxes.PROP_SANDBOX, previous)
+            Files.deleteIfExists(inside)
+            Files.deleteIfExists(outside)
+        }
+    }
+
+    @Test
+    @DisplayName("cmd /c runs end to end through the shell")
+    fun cmdEndToEnd() = runBlocking {
+        assumeTrue(isWindows, "cmd.exe only exists on Windows")
+        val s = shellIn(tempDir)
+        val result = runInShell(s, "cmd /c echo b4-cmd-e2e")
+
+        assertEquals(0, result.exitCode, result.stderr)
+        assertTrue(result.stdout.contains("b4-cmd-e2e"), result.stdout)
+    }
+
+    @Test
+    @DisplayName("powershell -Command runs end to end through the shell")
+    fun powerShellEndToEnd() = runBlocking {
+        assumeTrue(isWindows, "the Windows PowerShell only exists on Windows")
+        assumeTrue(hasCommand("powershell"), "powershell.exe is not on PATH")
+        val s = shellIn(tempDir)
+        // `echo` (not `Write-Output`): the nested-script check only knows the allow-list names.
+        val result = runInShell(s, "powershell.exe -NoProfile -NonInteractive -Command \"echo b4-pwsh-e2e\"")
+
+        assertEquals(0, result.exitCode, result.stderr)
+        assertTrue(result.stdout.contains("b4-pwsh-e2e"), result.stdout)
+    }
+
+    @Test
+    @DisplayName("runCode runs an interpreter subprocess end to end")
+    fun runCodeSubprocess() = runBlocking {
+        val language = when {
+            hasCommand("python") -> "python"
+            hasCommand("node") -> "js"
+            else -> null
+        }
+        assumeTrue(language != null, "neither python nor node is available")
+        val code = if (language == "python") "print('b4-runcode-e2e')" else "console.log('b4-runcode-e2e')"
+
+        val result = CodeRunner(defaultTimeoutSeconds = 20).run(language!!, code)
+        assumeSandboxReady(result.stdout + result.stderr)
+
+        assertEquals(0, result.exitCode, result.stderr)
+        assertTrue(result.stdout.contains("b4-runcode-e2e"), result.stdout)
+    }
+
+    private fun shellIn(dir: Path) = CodingAgentShell(baseDir = dir, allowDevTools = true)
+
+    /**
+     * Runs [command] through the shell and aborts the test when `windows-acl` is selected but the
+     * account is not provisioned — that is the documented hard failure, not a bug in this test.
+     */
+    private suspend fun runInShell(s: CodingAgentShell, command: String): ShellResult {
+        val result = s.executeRaw(command)
+        assumeSandboxReady(result.stdout + result.stderr)
+        return result
+    }
+
+    private fun assumeSandboxReady(output: String) {
+        assumeTrue(!output.contains("Windows sandbox unavailable"), "the sandbox is not provisioned: $output")
+    }
+
+    private fun hasCommand(command: String): Boolean =
+        runCatching { ProcessBuilder(command, "--version").start().destroy() }.isSuccess
 }

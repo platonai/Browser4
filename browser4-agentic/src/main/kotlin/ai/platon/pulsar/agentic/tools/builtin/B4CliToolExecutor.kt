@@ -525,8 +525,7 @@ internal fun externalPathRefusal(args: String, workspace: Path?, allowExternalAc
             code = PermissionAudit.CODE_PATH_OUTSIDE_WORKSPACE,
             detail = "'$raw' is outside the workspace",
             hint = "use a path inside the workspace (relative paths resolve there, and task inputs " +
-                "are copied to .b4inputs/), or start the backend with " +
-                "-Dbrowser4.agent.allowExternalAccess=true",
+                "are copied to .b4inputs/); external access is disabled for this task",
         )
     }
     return null
@@ -685,7 +684,7 @@ internal fun b4CliPolicyRefusal(args: String, policy: AgentAccessPolicy): String
         detail = "'$command' bypasses the task access preset '${policy.preset.id}': the CLI " +
             "subprocess carries no preset, so the backend would apply its own server-wide policy",
         hint = "use the gated tools instead (coding.* stays available within the task workspace " +
-            "under this preset), or re-run the task with access=full",
+            "under this preset)",
     )
 }
 

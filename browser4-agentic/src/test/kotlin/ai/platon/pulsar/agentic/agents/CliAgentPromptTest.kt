@@ -2,6 +2,10 @@ package ai.platon.pulsar.agentic.agents
 
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AgentAccessPolicy
+import ai.platon.pulsar.coding.Capability
+import ai.platon.pulsar.coding.CapabilityId
+import ai.platon.pulsar.coding.CapabilitySource
+import ai.platon.pulsar.coding.Effect
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
@@ -184,18 +188,25 @@ class CliAgentPromptTest {
     }
 
     @Test
-    @DisplayName("the permissions block reports what the policy actually grants, including auto-approval")
-    fun permissionsBlockReflectsAutoApproval() {
-        // `read` + a `write` ceiling grants file mutation and — because the build requires the
-        // narrower `read-build` preset — the project build. The prompt must say so: it is the
-        // ground truth the model plans against.
-        val policy = AgentAccessPolicy(preset = AccessPreset.READ, autoApproveUpTo = AccessPreset.WRITE)
+    @DisplayName("the permissions block reports what the policy actually grants, including an operator grant")
+    fun permissionsBlockReflectsOperatorGrant() {
+        // `read` + an operator-approved `fs.write` grant unlocks file mutation and — because the
+        // build requires the narrower `read-build` preset — the project build. The prompt must say
+        // so: it is the ground truth the model plans against.
+        val grants = listOf(
+            Capability(
+                id = CapabilityId("op-write"),
+                effects = setOf(Effect.FS_WRITE),
+                source = CapabilitySource.OPERATOR,
+            )
+        )
+        val policy = AgentAccessPolicy(preset = AccessPreset.READ, operatorGrants = { grants })
         val prompt = CliAgentPrompt.hygiene(true, workspace, policy)
 
         assertTrue(prompt.contains("write workspace files"), prompt)
         assertTrue(prompt.contains("run the project build"), prompt)
         assertFalse(prompt.contains("run shell commands"), prompt)
-        assertTrue(prompt.contains("Automatic approval is on up to 'write'"), prompt)
+        assertTrue(prompt.contains("Operator approval"), prompt)
     }
 
     @Test
