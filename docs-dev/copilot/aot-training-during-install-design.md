@@ -41,10 +41,11 @@ sync_skills_to_agents_dir()         main.rs:14344   (1–2s)
 ### 2.2 现有 AOT 机制（上一轮已落地，本设计直接复用）
 
 - `ensure_aot_cache_trained(runtime)` daemon.rs:4698（当前 `fn`，私有）：
-  - 幂等：缓存有效（`app.aot` + key 匹配）→ 直接返回；`training.lock` 新鲜（<10min）→ "训练进行中"返回。
-  - 无效 → 删旧缓存 → 原子抢 `training.lock`（`create_new`）→ `spawn_aot_training`（daemon.rs:4795 附近）。
-- `spawn_aot_training`：detached JVM、`--server.port=0`、`-Xmx1G`、`-Dbrowser4.aot.training=true`（训练模式跳过 MCP/Chrome）、输出进 `aot-cache/training.log`、Windows `CREATE_BELOW_NORMAL_PRIORITY_CLASS`。
-- 缓存位于 state dir（`~/.browser4/aot-cache`，跨卸载保留），key = tag + jar 列表 + JVM flags。
+  - 幂等：缓存有效（当前 key 目录内存在 `app.aot`）→ 直接返回；`training.lock` 新鲜（<5min）→ "训练进行中"返回。
+  - 无效 → 删该 key 目录内的旧产物 → 原子抢 `training.lock`（`create_new`）→ `spawn_aot_training`（daemon.rs:4795 附近）。
+- `spawn_aot_training`：Windows 以 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BELOW_NORMAL_PRIORITY_CLASS` 启动（"detached" 由 creation flags 实现，丢弃 `Child` 句柄只等于放弃等待；否则控制台销毁会在 JVM 写出缓存时强杀它）、`--server.port=0`、`-Xmx1G`、`-Dbrowser4.aot.training=true`（训练模式跳过 MCP/Chrome）、输出进 `<key>/training.log`（追加写）；JVM 写 `app.aot.tmp`，由 `training.cmd` / `training.sh` 在**退出码为 0 且产物不少于 1 MiB** 时 `rename` 为 `app.aot`，所以半写或写出失败的文件不会被后端加载（实测 Temurin 25 在写出失败时仍返回 0，仅凭退出码会提交 0 字节产物）。
+- 缓存位于 state dir，按 key 隔离：`~/.browser4/aot-cache/<key>/`（跨卸载保留），key = tag + jar 列表 + JVM flags。每个 key 目录自带 marker / pid / log，多版本不会互相删缓存或抢锁；根目录只按 LRU 修剪 key 子目录（保留最近 3 个，不触碰根下的 legacy 文件）。
+- 训练进程判活：`training.pid` 记录 PID + 启动时刻，Windows 用 `GetProcessTimes` 校验创建时间（容差 10s），PID 被复用不会再被误判为"仍在训练"。
 - CI 关闭开关：`BROWSER4_CLI_DISABLE_AOT_CACHE=1`（ensure 入口已检查）。
 
 ### 2.3 关键约束
@@ -104,8 +105,8 @@ ensure_aot_cache_trained(&runtime);   // NEW
 
 1. **Rust 单测**：无新逻辑函数，主要为编译级验证；补充一条 `ensure_aot_cache_trained` 可见性/幂等调用冒烟测试可选。
 2. **install 实跑冒烟**（手动，本机）：
-   - 全新 `BROWSER4_CLI_STATE_DIR` 沙箱 → `install --tag v4.14.0-rc.1` → 断言：install 耗时无明显增加；`state/aot-cache/training.lock` + `training.log` 出现；**install 返回后训练仍在跑**（进程存活）。
-   - 等待训练完成（`app.aot` 出现）→ `open` → 断言：无训练消息、服务器就绪、`app.aot.key` 补写。
+   - 全新 `BROWSER4_CLI_STATE_DIR` 沙箱 → `install --tag v4.14.0-rc.1` → 断言：install 耗时无明显增加；`state/aot-cache/<key>/training.lock` + `training.pid` + `training.log` 出现（`<key>` 由 tag + jar 清单 + JVM flags 派生）；**install 返回后训练仍在跑**（进程存活）。
+   - 等待训练完成（`state/aot-cache/<key>/app.aot` 出现）→ `open` → 断言：无训练消息、服务器就绪、`training.pid` / `training-args.txt` 已清理。
    - 重复 install（快速路径 `reused_existing`）→ 断言：不重复训练（幂等）。
    - 升级模拟（换 tag/改 jar）→ 断言：key 变化 → 自动重训。
    - `BROWSER4_CLI_DISABLE_AOT_CACHE=1 install` → 断言：不 spawn 训练。
@@ -155,7 +156,7 @@ ensure_aot_cache_trained(&runtime);   // NEW
 ## 5. 验收标准（方案 A）
 
 - [ ] install/upgrade 耗时与改动前相当（±2s 内，不含训练）
-- [ ] install 后 `~/.browser4/aot-cache/` 出现 training.lock + training.log（后台训练启动）
+- [ ] install 后 `~/.browser4/aot-cache/<key>/` 出现 training.lock + training.pid + training.log（后台训练启动）
 - [ ] 训练完成后首次 `open` 不出现训练消息，服务器正常就绪
 - [ ] 快速路径重复 install 不重复训练
 - [ ] `BROWSER4_CLI_DISABLE_AOT_CACHE=1` 下 install 不 spawn 训练

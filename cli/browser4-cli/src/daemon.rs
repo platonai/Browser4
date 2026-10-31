@@ -40,6 +40,38 @@ const STD_INPUT_HANDLE_ID: u32 = 0xFFFF_FFF6; // -10 as u32
 const STD_OUTPUT_HANDLE_ID: u32 = 0xFFFF_FFF5; // -11 as u32
 #[cfg(windows)]
 const STD_ERROR_HANDLE_ID: u32 = 0xFFFF_FFF4; // -12 as u32
+
+/// Process-creation flags for the long-lived backend JVM on Windows.
+///
+/// `DETACHED_PROCESS` gives the backend a console of its own — that is, no
+/// console at all.  Windows force-terminates every process still attached to a
+/// console when that console goes away, and a backend attached to the console
+/// the CLI ran in therefore dies with the command: no log line after the boot
+/// window, no `hs_err_pid*.log`, and the only symptom the CLI can report is
+/// `Process exited early with status exit code: 0xffffffff`.
+///
+/// `CREATE_NEW_PROCESS_GROUP` keeps a Ctrl+C or Ctrl+Break aimed at the CLI
+/// from reaching a backend that is supposed to outlive it.
+#[cfg(windows)]
+const BACKEND_CREATION_FLAGS: u32 = {
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+};
+
+/// Windows: creation flags for the background AOT training run.
+///
+/// The training process has the same lifetime problem as the backend — an
+/// attached console is torn down when the CLI's terminal goes away, and the
+/// process is force-terminated while `-XX:AOTCacheOutput` may still be
+/// writing.  `CREATE_BELOW_NORMAL_PRIORITY_CLASS` keeps it from competing
+/// with the server launch the user is waiting on.
+#[cfg(windows)]
+const AOT_TRAINING_CREATION_FLAGS: u32 = {
+    const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+    BACKEND_CREATION_FLAGS | CREATE_BELOW_NORMAL_PRIORITY_CLASS
+};
+
 /// Windows: `HANDLE_FLAG_INHERIT` — the bit `SetHandleInformation` toggles.
 #[cfg(windows)]
 const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
@@ -172,25 +204,44 @@ const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
 ///
 /// The cache lives under the **state** dir (`~/.browser4`, preserved across
 /// uninstall/reinstall) rather than the runtime data dir so a reinstall of the
-/// same version never pays the one-time training cost again.  The
-/// invalidation key (version tag + jar list + JVM flags) still guards against
-/// stale caches, and the JVM silently falls back when the cache mismatches.
+/// same version never pays the one-time training cost again.
+///
+/// This is a root directory, not a single cache slot: each invalidation key
+/// (version tag + jar list + JVM flags) owns `<root>/<key>/`.  Keeping the
+/// keys apart means an older runtime's cache is never deleted by a newer one
+/// computing a different key, and two runtimes cannot fight over one marker.
 const AOT_CACHE_DIR_NAME: &str = "aot-cache";
+/// How many per-key cache directories to keep.  One trained cache is on the
+/// order of 100 MB, so keeping every key across upgrades would leak disk;
+/// pruning keeps the current key plus the most recently used ones.
+const AOT_CACHE_KEEP_DIRS: usize = 3;
 /// The trained AOT cache artifact (JEP 483 class loading & linking + JEP 515
 /// method profiles).
 const AOT_CACHE_FILE_NAME: &str = "app.aot";
-/// Sidecar that records the invalidation key for `app.aot`, so a stale cache
-/// (version bump, jar change, JVM flag change) triggers a fresh training run.
-const AOT_CACHE_KEY_FILE_NAME: &str = "app.aot.key";
+/// Temporary output of the training run.  The wrapper script renames it to
+/// [`AOT_CACHE_FILE_NAME`] **only** when the JVM exits 0 and the file is not
+/// obviously truncated, so a killed or crashed training run never leaves a
+/// partial cache for the backend to attach (the launch path only checks
+/// `is_file`).
+const AOT_TRAINING_OUTPUT_FILE_NAME: &str = "app.aot.tmp";
+/// Smallest training output the wrapper will promote to [`AOT_CACHE_FILE_NAME`].
+///
+/// The exit code alone is not enough: when the JVM cannot write the cache it
+/// still exits 0 — verified on Temurin 25, where an unwritable output path
+/// produced `[error][aot] Unable to create AOT cache ... (I/O error)`,
+/// reported `creation is complete ... 0 bytes` and returned status 0.  A
+/// zero-length or missing output would otherwise be renamed into place and
+/// then treated as a trained cache forever.  1 MiB is far below a real cache
+/// (tens of MB for the bundle, ~8 MB for a bare `-version` run) and far above
+/// anything a failed write leaves behind.
+const AOT_CACHE_MIN_COMMIT_BYTES: u64 = 1024 * 1024;
+
 /// Minimum JDK major version for the AOT cache (JEP 483 shipped in JDK 24;
 /// the one-step `-XX:AOTCacheOutput` workflow and method profiles need JDK 25).
 const AOT_CACHE_MIN_JDK: u32 = 24;
-/// Marker file recording that a background training run is in flight.  Its
-/// content is the invalidation key the training run was started with, which
-/// also doubles as the completion record: when `app.aot` exists and the
-/// marker carries the current key, the background run has finished and the
-/// key sidecar can be promoted without another CLI process having been
-/// around when the training JVM exited.
+/// Marker file recording that a background training run is in flight.  It
+/// lives inside `<root>/<key>/`, so the marker is already scoped to one
+/// invalidation key and needs no key content of its own.
 const AOT_TRAINING_MARKER_FILE_NAME: &str = "training.lock";
 /// Log file for the background training run's stdout/stderr.
 const AOT_TRAINING_LOG_FILE_NAME: &str = "training.log";
@@ -198,19 +249,36 @@ const AOT_TRAINING_LOG_FILE_NAME: &str = "training.log";
 /// so the JVM cannot race its deletion; any leftover is removed on the next
 /// cache check.
 const AOT_TRAINING_ARGFILE_FILE_NAME: &str = "training-args.txt";
-/// PID of the background training JVM, written right after a successful
-/// spawn.  Lets the next launch detect a **dead** training run (crash, kill,
-/// OOM) immediately and retrain instead of waiting for the stale-marker
-/// window — the failure-recovery fast path.
+/// PID of the background training wrapper, written right after a successful
+/// spawn, followed by its start time (epoch seconds) on the second line.
+/// Lets the next launch detect a **dead** training run (crash, kill, OOM)
+/// immediately and retrain instead of waiting for the stale-marker window —
+/// the failure-recovery fast path.
 const AOT_TRAINING_PID_FILE_NAME: &str = "training.pid";
+/// Windows recycles PIDs quickly, so a recorded PID alone can point at an
+/// unrelated process and hold the marker for the whole stale window.  The
+/// recorded start time is compared (within this tolerance, since the PID is
+/// written a moment after the process was created) to tell a recycled PID
+/// from the real training wrapper.
+const AOT_TRAINING_START_TIME_TOLERANCE_SECS: u64 = 10;
+/// Wrapper script for the training run: it starts the JVM and commits
+/// `app.aot.tmp` → `app.aot` only on a zero exit code.  The CLI spawns the
+/// training JVM without waiting for it, so a shell is the only place where
+/// the exit code can still gate the commit.
+const AOT_TRAINING_SCRIPT_FILE_NAME: &str = if cfg!(windows) {
+    "training.cmd"
+} else {
+    "training.sh"
+};
 /// A training marker older than this is considered stale (the training run
 /// crashed, was killed, or otherwise failed to finish) and is reclaimed by
 /// the next launch.  This is the failure-recovery fallback window (the PID
 /// check above covers the common crash case immediately); a failed training
 /// run self-heals — the next launch simply trains again.  Concurrent
-/// retraining of the same key is harmless (same input → same output, last
-/// writer wins), so the window only needs to exceed a realistic training
-/// run, not bound it tightly.
+/// retraining of the same key is harmless: both runs write `app.aot.tmp` and
+/// the wrapper only renames a complete cache, so the result is a whole file
+/// replacing a whole file.  The window only needs to exceed a realistic
+/// training run, not bound it tightly.
 const AOT_TRAINING_MARKER_STALE_AFTER: Duration = Duration::from_secs(5 * 60);
 /// JVM flag that switches the backend into AOT-training mode: the Spring
 /// context skips the heavyweight eager beans (the MCP HTTP session — and with
@@ -6427,116 +6495,222 @@ fn detect_java_major_version(java_path: &Path) -> Result<u32, String> {
         .map_err(|_| format!("cannot parse java major version from: {version}"))
 }
 
-fn aot_cache_dir() -> PathBuf {
+/// Root of the AOT cache: one subdirectory per invalidation key.
+fn aot_cache_root() -> PathBuf {
     // State dir (preserved across uninstall/reinstall), not runtime data dir,
     // so reinstalling the same version never retrains.
     resolve_default_state_dir().join(AOT_CACHE_DIR_NAME)
 }
 
-fn aot_cache_file() -> PathBuf {
-    aot_cache_dir().join(AOT_CACHE_FILE_NAME)
+/// Cache directory owned by one invalidation key.
+fn aot_cache_dir(key: &str) -> PathBuf {
+    aot_cache_root().join(key)
 }
 
-fn aot_cache_key_file() -> PathBuf {
-    aot_cache_dir().join(AOT_CACHE_KEY_FILE_NAME)
+fn aot_cache_file(key: &str) -> PathBuf {
+    aot_cache_dir(key).join(AOT_CACHE_FILE_NAME)
 }
 
-fn aot_training_marker_file() -> PathBuf {
-    aot_cache_dir().join(AOT_TRAINING_MARKER_FILE_NAME)
+fn aot_training_marker_file(key: &str) -> PathBuf {
+    aot_cache_dir(key).join(AOT_TRAINING_MARKER_FILE_NAME)
 }
 
-fn aot_training_log_file() -> PathBuf {
-    aot_cache_dir().join(AOT_TRAINING_LOG_FILE_NAME)
+fn aot_training_log_file(key: &str) -> PathBuf {
+    aot_cache_dir(key).join(AOT_TRAINING_LOG_FILE_NAME)
 }
 
-fn aot_training_argfile() -> PathBuf {
-    aot_cache_dir().join(AOT_TRAINING_ARGFILE_FILE_NAME)
+fn aot_training_argfile(key: &str) -> PathBuf {
+    aot_cache_dir(key).join(AOT_TRAINING_ARGFILE_FILE_NAME)
 }
 
-fn aot_training_pid_file() -> PathBuf {
-    aot_cache_dir().join(AOT_TRAINING_PID_FILE_NAME)
+fn aot_training_pid_file(key: &str) -> PathBuf {
+    aot_cache_dir(key).join(AOT_TRAINING_PID_FILE_NAME)
 }
 
-/// Read the PID of the background training JVM, if one was recorded.
-fn read_aot_training_pid() -> Option<u32> {
-    fs::read_to_string(aot_training_pid_file())
+/// Where the training JVM writes the cache before the wrapper commits it.
+fn aot_training_output_file(key: &str) -> PathBuf {
+    aot_cache_dir(key).join(AOT_TRAINING_OUTPUT_FILE_NAME)
+}
+
+/// The wrapper script that gates the `app.aot.tmp` → `app.aot` rename on the
+/// training JVM's exit code (see [`spawn_aot_training`]).
+fn aot_training_script_file(key: &str) -> PathBuf {
+    aot_cache_dir(key).join(AOT_TRAINING_SCRIPT_FILE_NAME)
+}
+
+/// Read the PID of the background training wrapper (the first line of
+/// `training.pid`), if one was recorded.
+fn read_aot_training_pid(key: &str) -> Option<u32> {
+    fs::read_to_string(aot_training_pid_file(key))
         .ok()?
+        .lines()
+        .next()?
         .trim()
         .parse::<u32>()
         .ok()
 }
 
-/// Record the PID of the background training JVM.
-fn write_aot_training_pid(pid: u32) {
-    // The cache dir must exist for the write to succeed.
-    let _ = fs::create_dir_all(aot_cache_dir());
-    let _ = fs::write(aot_training_pid_file(), pid.to_string().as_bytes());
+/// Read the recorded start time (epoch seconds) of the training wrapper.
+///
+/// `None` for a `training.pid` written before start-time recording existed;
+/// callers then fall back to the PID-only check.
+#[cfg_attr(not(windows), allow(dead_code))] // only consulted by the Windows alive check
+fn read_aot_training_started_secs(key: &str) -> Option<u64> {
+    fs::read_to_string(aot_training_pid_file(key))
+        .ok()?
+        .lines()
+        .nth(1)?
+        .trim()
+        .parse::<u64>()
+        .ok()
 }
 
-/// Whether a process with `pid` is still alive.
+fn epoch_secs_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
+}
+
+/// Record the PID and start time of the background training wrapper.
+fn write_aot_training_pid(key: &str, pid: u32) {
+    // The cache dir must exist for the write to succeed.
+    let _ = fs::create_dir_all(aot_cache_dir(key));
+    let _ = fs::write(
+        aot_training_pid_file(key),
+        format!("{pid}\n{}\n", epoch_secs_now()),
+    );
+}
+
+/// Start time of the process with `pid`, in epoch seconds (Windows only).
+#[cfg(windows)]
+fn process_started_epoch_secs(pid: u32) -> Option<u64> {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    /// 100-ns ticks between 1601-01-01 (FILETIME epoch) and the Unix epoch.
+    const FILETIME_UNIX_EPOCH_TICKS: u64 = 11_644_473_600 * 10_000_000;
+
+    #[repr(C)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+
+    extern "system" {
+        fn OpenProcess(dw_desired_access: u32, b_inherit_handle: i32, dw_process_id: u32) -> isize;
+        fn CloseHandle(h_object: isize) -> i32;
+        fn GetProcessTimes(
+            h_process: isize,
+            lp_creation_time: *mut FileTime,
+            lp_exit_time: *mut FileTime,
+            lp_kernel_time: *mut FileTime,
+            lp_user_time: *mut FileTime,
+        ) -> i32;
+    }
+
+    // SAFETY: the handle is opened for this PID and closed on every path;
+    // the four out-parameters are owned, initialized locals.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == 0 {
+            return None;
+        }
+        let mut creation = FileTime { low: 0, high: 0 };
+        let mut exit_time = FileTime { low: 0, high: 0 };
+        let mut kernel = FileTime { low: 0, high: 0 };
+        let mut user = FileTime { low: 0, high: 0 };
+        let ok = GetProcessTimes(
+            handle,
+            &mut creation,
+            &mut exit_time,
+            &mut kernel,
+            &mut user,
+        );
+        CloseHandle(handle);
+        if ok == 0 {
+            return None;
+        }
+        let ticks = ((creation.high as u64) << 32) | creation.low as u64;
+        ticks
+            .checked_sub(FILETIME_UNIX_EPOCH_TICKS)
+            .map(|t| t / 10_000_000)
+    }
+}
+
+/// Whether the observed start time belongs to the run that recorded `expected`.
 ///
-/// On failure to determine (tool missing, parse error) returns `true` —
-/// conservative: the caller then falls back to the stale-marker window
-/// instead of risking a concurrent training run.
-fn aot_training_process_alive(pid: u32) -> bool {
+/// Unknown values (legacy `training.pid`, unable to query) count as a match:
+/// the caller then falls back to the stale-marker window instead of risking a
+/// concurrent training run for the same key.
+#[cfg_attr(not(windows), allow(dead_code))] // only consulted by the Windows alive check
+fn start_time_matches(expected: Option<u64>, actual: Option<u64>) -> bool {
+    match (expected, actual) {
+        (Some(expected), Some(actual)) => {
+            actual.abs_diff(expected) <= AOT_TRAINING_START_TIME_TOLERANCE_SECS
+        }
+        _ => true,
+    }
+}
+
+/// Whether the recorded training wrapper is still running.
+///
+/// A recycled Windows PID can point at an unrelated process, so the check is
+/// two-level: the PID must exist *and* its start time must match the recorded
+/// one.  A live process whose start time cannot be read is treated as the
+/// training run (conservative).
+fn aot_training_process_alive(key: &str, pid: u32) -> bool {
+    if !is_pid_alive(pid) {
+        return false;
+    }
     #[cfg(windows)]
     {
-        // `tasklist /FI "PID eq <pid>" /NH` prints one row per match; with no
-        // match it prints an INFO line.  Match on the PID column so the check
-        // is locale-independent (tasklist output is localized).
-        let out = Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .output();
-        match out {
-            Ok(o) => String::from_utf8_lossy(&o.stdout).contains(&format!(" {pid} ")),
-            Err(_) => true,
-        }
+        start_time_matches(
+            read_aot_training_started_secs(key),
+            process_started_epoch_secs(pid),
+        )
     }
     #[cfg(not(windows))]
     {
-        // POSIX: `kill -0` probes existence without signalling.
-        let status = Command::new("sh")
-            .args(["-c", &format!("kill -0 {pid} 2>/dev/null")])
-            .status();
-        status.map(|s| s.success()).unwrap_or(true)
+        let _ = key;
+        true
     }
 }
 
-/// Reclaim the training marker when the recorded training JVM is dead — the
-/// training run crashed, was killed, or otherwise failed without completing.
+/// Reclaim the training marker when the recorded training wrapper is dead —
+/// the training run crashed, was killed, or otherwise failed without
+/// completing.
 ///
 /// Returns `true` when the marker was reclaimed (the caller should retrain
-/// immediately); `false` when the training JVM is still alive or no PID was
+/// immediately); `false` when the training run is still alive or no PID was
 /// recorded (the caller should wait — either for the run or the stale-marker
 /// window).
-fn reclaim_dead_aot_training() -> bool {
-    let pid = match read_aot_training_pid() {
+fn reclaim_dead_aot_training(key: &str) -> bool {
+    let pid = match read_aot_training_pid(key) {
         Some(pid) => pid,
         None => return false,
     };
-    if aot_training_process_alive(pid) {
+    if aot_training_process_alive(key, pid) {
         return false;
     }
     eprintln!(
         "AOT cache: previous training run (pid {pid}) is no longer running — retraining now"
     );
-    release_aot_training_marker();
-    let _ = fs::remove_file(aot_training_pid_file());
-    let _ = fs::remove_file(aot_training_argfile());
+    release_aot_training_marker(key);
+    let _ = fs::remove_file(aot_training_pid_file(key));
+    let _ = fs::remove_file(aot_training_argfile(key));
     true
 }
 
-/// Atomically acquire the background-training marker.
+/// Atomically acquire the background-training marker for `key`.
 ///
 /// Uses `create_new` so concurrent CLI invocations cannot both start a
 /// training run.  A marker older than [`AOT_TRAINING_MARKER_STALE_AFTER`] is
 /// treated as stale (the training JVM crashed or was killed) and reclaimed.
 /// Returns `true` when the caller now owns the training run.
-fn acquire_aot_training_marker() -> bool {
+fn acquire_aot_training_marker(key: &str) -> bool {
     // The marker file's parent (the cache dir) must exist for `create_new`
     // to succeed; on a fresh install it does not yet.
-    let _ = fs::create_dir_all(aot_cache_dir());
-    let marker = aot_training_marker_file();
+    let _ = fs::create_dir_all(aot_cache_dir(key));
+    let marker = aot_training_marker_file(key);
     let write_marker = || -> bool {
         match fs::OpenOptions::new().write(true).create_new(true).open(&marker) {
             Ok(mut f) => {
@@ -6563,27 +6737,8 @@ fn acquire_aot_training_marker() -> bool {
     }
 }
 
-fn release_aot_training_marker() {
-    let _ = fs::remove_file(aot_training_marker_file());
-}
-
-/// Write the invalidation key into the training marker.
-///
-/// The content must compare **exactly** equal to the key (no trailing
-/// newline): `ensure_aot_cache_trained` promotes the produced cache only
-/// when the marker content matches the current key.
-fn write_aot_training_marker_key(key: &str) {
-    // `fs::write` truncates an existing marker file (created by the acquire
-    // step) and writes the key verbatim.
-    let _ = fs::write(aot_training_marker_file(), key.as_bytes());
-}
-
-/// Read the key recorded in the training marker, trimmed of any whitespace.
-fn read_aot_training_marker_key() -> String {
-    fs::read_to_string(aot_training_marker_file())
-        .unwrap_or_default()
-        .trim()
-        .to_string()
+fn release_aot_training_marker(key: &str) {
+    let _ = fs::remove_file(aot_training_marker_file(key));
 }
 
 /// Compute the AOT cache invalidation key: version tag + sorted jar list
@@ -6689,56 +6844,46 @@ pub(crate) fn ensure_aot_cache_trained(runtime: &InstalledBrowser4Runtime) {
         }
     };
 
-    let cache_file = aot_cache_file();
-    let key_file = aot_cache_key_file();
-    let cached_key = fs::read_to_string(&key_file).unwrap_or_default();
-    if cache_file.is_file() && cached_key == key {
-        // Cache already trained and still valid — also clean up any leftover
-        // marker/pid/argfile from the background run that produced it.
-        release_aot_training_marker();
-        let _ = fs::remove_file(aot_training_pid_file());
-        let _ = fs::remove_file(aot_training_argfile());
+    let cache_file = aot_cache_file(&key);
+    if cache_file.is_file() {
+        // Trained for this exact key.  `app.aot` inside a key directory only
+        // comes from the wrapper's commit after a zero exit code, so its
+        // presence *is* the completion record — no key sidecar is needed, and
+        // an older runtime's cache is never mistaken for this one.
+        let _ = fs::remove_file(aot_training_pid_file(&key));
+        let _ = fs::remove_file(aot_training_argfile(&key));
+        let _ = fs::remove_file(aot_training_output_file(&key));
+        release_aot_training_marker(&key);
+        prune_stale_aot_cache_dirs(&key);
         return;
     }
 
-    // A background training run finished since this process last looked: the
-    // training JVM produced `app.aot` but no CLI process was around to write
-    // the key sidecar.  The marker carries the key it was started with, so a
-    // matching marker + existing cache is a valid completion record.
-    let marker_key = read_aot_training_marker_key();
-    if cache_file.is_file() && marker_key == key {
-        let _ = fs::write(&key_file, &key);
-        release_aot_training_marker();
-        let _ = fs::remove_file(aot_training_argfile());
-        let _ = fs::remove_file(aot_training_pid_file());
-        return;
-    }
-
-    // Stale cache for this runtime (wrong key or no key sidecar): drop it so
-    // the server never attaches an invalid cache, then (re)train in the
-    // background.  Deleting before spawning means a freshly completed run can
-    // never be clobbered by a stale one.
+    // No committed cache for this key: drop leftovers (an uncommitted
+    // `app.aot.tmp` from a run that died before the rename) and (re)train in
+    // the background.  Only this key's directory is touched; a cache trained
+    // by a CLI that predates per-key directories stays at the root and is left
+    // alone, since that older CLI may still be using it.
     let _ = fs::remove_file(&cache_file);
-    let _ = fs::remove_file(&key_file);
+    let _ = fs::remove_file(aot_training_output_file(&key));
 
-    if let Err(e) = fs::create_dir_all(aot_cache_dir()) {
+    if let Err(e) = fs::create_dir_all(aot_cache_dir(&key)) {
         eprintln!("AOT cache: cannot create cache dir: {e}; skipping");
         return;
     }
 
-    if !acquire_aot_training_marker() {
-        // A training run is marked as in flight.  If its JVM is already dead
-        // (crash, kill, OOM — the common failure mode), reclaim the marker
-        // and retrain immediately instead of waiting for the stale-marker
-        // window: the failure-recovery fast path.
-        if !reclaim_dead_aot_training() {
+    if !acquire_aot_training_marker(&key) {
+        // A training run is marked as in flight.  If its wrapper is already
+        // dead (crash, kill, OOM — the common failure mode), reclaim the
+        // marker and retrain immediately instead of waiting for the
+        // stale-marker window: the failure-recovery fast path.
+        if !reclaim_dead_aot_training(&key) {
             eprintln!(
                 "JVM AOT cache training already in progress in the background — \
                 the server starts without AOT acceleration until it completes"
             );
             return;
         }
-        if !acquire_aot_training_marker() {
+        if !acquire_aot_training_marker(&key) {
             eprintln!(
                 "JVM AOT cache training already in progress in the background — \
                 the server starts without AOT acceleration until it completes"
@@ -6747,7 +6892,159 @@ pub(crate) fn ensure_aot_cache_trained(runtime: &InstalledBrowser4Runtime) {
         }
     }
 
-    spawn_aot_training(&runtime, &classpath, &jvm_opts, &program_args, &cache_file, &key);
+    prune_stale_aot_cache_dirs(&key);
+    spawn_aot_training(&runtime, &classpath, &jvm_opts, &program_args, &key);
+}
+
+/// Remove the least recently used per-key cache directories beyond
+/// [`AOT_CACHE_KEEP_DIRS`].
+///
+/// Only subdirectories are touched, never files at the root: a cache trained
+/// by a CLI that predates per-key directories lives at the root and may still
+/// be in use by that (older) CLI.  A directory holding a training marker or
+/// PID file is skipped — a run may still be in flight in it.
+fn prune_stale_aot_cache_dirs(current_key: &str) {
+    let root = aot_cache_root();
+    let Ok(entries) = fs::read_dir(&root) else {
+        return;
+    };
+    let mut dirs: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|entry| {
+            entry
+                .metadata()
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .map(|modified| (modified, entry.path()))
+        })
+        .filter(|(_, path)| {
+            path.file_name().and_then(|name| name.to_str()) != Some(current_key)
+        })
+        .collect();
+    if dirs.len() <= AOT_CACHE_KEEP_DIRS {
+        return;
+    }
+    dirs.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, path) in dirs.into_iter().skip(AOT_CACHE_KEEP_DIRS) {
+        if path.join(AOT_TRAINING_MARKER_FILE_NAME).is_file()
+            || path.join(AOT_TRAINING_PID_FILE_NAME).is_file()
+        {
+            continue;
+        }
+        let _ = fs::remove_dir_all(&path);
+    }
+}
+
+/// One-line AOT cache state for `browser4-cli status`.
+///
+/// The cache is keyed by runtime, so this reports what is on disk (trained
+/// caches, a run in flight) instead of claiming the current runtime is covered.
+/// Two facts make that necessary: a trained cache is only attached when the
+/// server (re)starts, and a runtime whose key has no cache yet trains on its
+/// next start — both invisible from `/actuator/health`.
+pub fn aot_cache_status_line() -> String {
+    if aot_cache_disabled() {
+        return "disabled (BROWSER4_CLI_DISABLE_AOT_CACHE)".to_string();
+    }
+    let user_configured = std::env::var(BROWSER4_SERVER_OPTS_ENV)
+        .map(|raw| raw.contains("-XX:AOTCache"))
+        .unwrap_or(false);
+    if user_configured {
+        return "user-configured via BROWSER4_SERVER_OPTS (-XX:AOTCache)".to_string();
+    }
+    let root = aot_cache_root();
+    let mut trained = 0usize;
+    let mut training: Option<PathBuf> = None;
+    if let Ok(entries) = fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if dir.join(AOT_CACHE_FILE_NAME).is_file() {
+                trained += 1;
+            } else if dir.join(AOT_TRAINING_MARKER_FILE_NAME).is_file()
+                && training.is_none()
+            {
+                training = Some(dir);
+            }
+        }
+    }
+    if let Some(dir) = training {
+        return format!(
+            "training in progress (log: {})",
+            dir.join(AOT_TRAINING_LOG_FILE_NAME).display()
+        );
+    }
+    if trained > 0 {
+        format!(
+            "{trained} trained cache(s) under {} — attached when the server starts",
+            root.display()
+        )
+    } else {
+        format!(
+            "none yet under {} — the next server start trains it in the background",
+            root.display()
+        )
+    }
+}
+
+/// Build the wrapper script that gates the cache commit on the training JVM's
+/// exit code and on the output not being obviously truncated.
+///
+/// The script `cd`s into the cache dir so argfile and cache names stay
+/// unquoted relative names; the java path is quoted because it can contain
+/// spaces.
+fn aot_training_script_contents(java: &Path, cache_dir: &Path) -> String {
+    #[cfg(windows)]
+    {
+        // `%` only expands variables in cmd; no path here contains one.
+        format!(
+            "@echo off\r\n\
+             cd /d \"{}\" || exit /b 1\r\n\
+             \"{}\" @{}\r\n\
+             if errorlevel 1 exit /b 1\r\n\
+             if not exist \"{}\" exit /b 1\r\n\
+             for %%A in (\"{}\") do set AOT_OUTPUT_BYTES=%%~zA\r\n\
+             if %AOT_OUTPUT_BYTES% LSS {} exit /b 1\r\n\
+             move /y \"{}\" \"{}\" >nul 2>&1\r\n\
+             exit /b %errorlevel%\r\n",
+            cache_dir.display(),
+            java.display(),
+            AOT_TRAINING_ARGFILE_FILE_NAME,
+            AOT_TRAINING_OUTPUT_FILE_NAME,
+            AOT_TRAINING_OUTPUT_FILE_NAME,
+            AOT_CACHE_MIN_COMMIT_BYTES,
+            AOT_TRAINING_OUTPUT_FILE_NAME,
+            AOT_CACHE_FILE_NAME
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        format!(
+            "#!/bin/sh\n\
+             cd {} || exit 1\n\
+             {} @{}\n\
+             status=$?\n\
+             if [ \"$status\" -ne 0 ]; then exit \"$status\"; fi\n\
+             [ -f {} ] || exit 1\n\
+             output_bytes=$(wc -c < {} | tr -d ' ')\n\
+             [ \"$output_bytes\" -ge {} ] || exit 1\n\
+             mv -f {} {}\n",
+            posix_single_quote(&cache_dir.display().to_string()),
+            posix_single_quote(&java.display().to_string()),
+            AOT_TRAINING_ARGFILE_FILE_NAME,
+            posix_single_quote(AOT_TRAINING_OUTPUT_FILE_NAME),
+            posix_single_quote(AOT_TRAINING_OUTPUT_FILE_NAME),
+            AOT_CACHE_MIN_COMMIT_BYTES,
+            posix_single_quote(AOT_TRAINING_OUTPUT_FILE_NAME),
+            posix_single_quote(AOT_CACHE_FILE_NAME)
+        )
+    }
+}
+
+/// Quote a value for a POSIX shell script, using single quotes only.
+#[cfg(not(windows))]
+fn posix_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 /// Spawn the detached JVM that trains the AOT cache, without waiting for it.
@@ -6760,22 +7057,34 @@ pub(crate) fn ensure_aot_cache_trained(runtime: &InstalledBrowser4Runtime) {
 /// `-XX:AOTCacheOutput` peak (2× heap) bounded; heap size is not part of the
 /// AOT cache validity check.
 ///
-/// The child is deliberately detached: it outlives this CLI invocation and
-/// writes its output to [`aot_training_log_file`].  On Windows it runs at
-/// below-normal priority so it never competes with the server the user is
-/// waiting on.
+/// The run is detached on Windows (`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`
+/// via [`AOT_TRAINING_CREATION_FLAGS`]); dropping the `Child` handle only gives
+/// up waiting, it does not detach anything by itself.  Detaching matters because
+/// the JVM dumps the cache during shutdown — an attached console would kill the
+/// process mid-write.
+///
+/// The JVM writes [`AOT_TRAINING_OUTPUT_FILE_NAME`], not the cache itself;
+/// [`aot_training_script_file`] renames it to `app.aot` only when the JVM
+/// exits 0 **and** the output is at least [`AOT_CACHE_MIN_COMMIT_BYTES`].  The
+/// exit code alone is not a success signal — the JVM returns 0 even when it
+/// fails to write the cache.  Without both gates a killed or failed run leaves
+/// a truncated `app.aot` that the launch path attaches blindly (it only checks
+/// `is_file`).
+///
+/// On Windows the run also uses below-normal priority so it never competes with
+/// the server the user is waiting on.
 fn spawn_aot_training(
     runtime: &InstalledBrowser4Runtime,
     classpath: &str,
     jvm_opts: &[String],
     program_args: &[String],
-    cache_file: &Path,
     key: &str,
 ) {
     eprintln!("Training JVM AOT cache in the background (one-time, only on first launch) ...");
-    // The marker doubles as the completion record: it must carry the key this
-    // run was started with so a later launch can promote the produced cache.
-    write_aot_training_marker_key(key);
+
+    // The JVM writes here; only the wrapper's commit turns it into `app.aot`.
+    let output_file = aot_training_output_file(key);
+    let _ = fs::remove_file(&output_file);
 
     let mut training_args: Vec<String> =
         Vec::with_capacity(jvm_opts.len() + program_args.len() + 7);
@@ -6783,7 +7092,7 @@ fn spawn_aot_training(
     // Training-mode flag must sit among the JVM flags (before `-cp`).
     training_args.push(AOT_TRAINING_JVM_FLAG.to_string());
     training_args.push("-Xmx1G".to_string());
-    training_args.push(format!("-XX:AOTCacheOutput={}", cache_file.display()));
+    training_args.push(format!("-XX:AOTCacheOutput={}", output_file.display()));
     training_args.push("-Dspring.context.exit=onRefresh".to_string());
     training_args.push("-cp".to_string());
     training_args.push(classpath.to_string());
@@ -6791,45 +7100,64 @@ fn spawn_aot_training(
     training_args.extend(program_args.iter().cloned());
     training_args.push("--server.port=0".to_string());
 
-    let mut cmd = Command::new(&runtime.java_path);
-    if should_use_java_argfile(&runtime.java_path, &training_args) {
-        // Fixed-name argfile inside the cache dir: the JVM reads it at
-        // startup, and any leftover is removed on the next cache check —
-        // deleting it right after spawn() would race the JVM's read.
-        let argfile = aot_training_argfile();
-        let _ = fs::remove_file(&argfile);
-        let contents = training_args
-            .iter()
-            .map(|a| java_argfile_token(a))
-            .collect::<Vec<_>>()
-            .join("\n");
-        match fs::write(&argfile, contents) {
-            Ok(()) => {
-                cmd.arg(format!("@{}", argfile.display()));
-            }
-            Err(e) => {
-                eprintln!("AOT cache: cannot write training argfile: {e}; using plain arguments");
-                cmd.args(&training_args);
-            }
-        }
-    } else {
-        cmd.args(&training_args);
+    // AOT training only runs on JDK 24+, so `@argfile` is always available.
+    // On Windows it is mandatory: the classpath alone exceeds the 8191
+    // character command-line limit.  The fixed name means any leftover is
+    // removed on the next cache check — deleting it right after `spawn()`
+    // would race the JVM's read.
+    let argfile = aot_training_argfile(key);
+    let _ = fs::remove_file(&argfile);
+    let contents = training_args
+        .iter()
+        .map(|a| java_argfile_token(a))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Err(e) = fs::write(&argfile, contents) {
+        eprintln!("AOT cache: cannot write training argfile: {e}; skipping training");
+        release_aot_training_marker(key);
+        return;
     }
+
+    // The wrapper is the only place that can see the training JVM's exit code:
+    // the CLI does not wait for the run, so the commit has to happen in a shell.
+    let script_file = aot_training_script_file(key);
+    let script = aot_training_script_contents(&runtime.java_path, &aot_cache_dir(key));
+    if let Err(e) = fs::write(&script_file, script) {
+        eprintln!(
+            "AOT cache: cannot write training wrapper {}: {e}; skipping training",
+            script_file.display()
+        );
+        release_aot_training_marker(key);
+        return;
+    }
+
+    let mut cmd = if cfg!(windows) {
+        let mut c = Command::new("cmd.exe");
+        c.arg("/d").arg("/c").arg(&script_file);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.arg(&script_file);
+        c
+    };
     cmd.current_dir(&runtime.install_dir).stdin(Stdio::null());
 
-    // Stream training output to a log file so a failed run is diagnosable.
-    let log_file = aot_training_log_file();
-    match fs::File::create(&log_file) {
-        Ok(log) => match log.try_clone() {
-            Ok(stdout) => {
-                cmd.stdout(stdout);
-                cmd.stderr(log);
+    // Append so a failed run's evidence survives the retry that follows it.
+    let log_file = aot_training_log_file(key);
+    match fs::OpenOptions::new().append(true).create(true).open(&log_file) {
+        Ok(mut log) => {
+            let _ = writeln!(log, "--- AOT training run started ---");
+            match log.try_clone() {
+                Ok(stdout) => {
+                    cmd.stdout(stdout);
+                    cmd.stderr(log);
+                }
+                Err(_) => {
+                    cmd.stdout(Stdio::null());
+                    cmd.stderr(Stdio::null());
+                }
             }
-            Err(_) => {
-                cmd.stdout(Stdio::null());
-                cmd.stderr(Stdio::null());
-            }
-        },
+        }
         Err(e) => {
             eprintln!(
                 "AOT cache: cannot open training log {}: {e}",
@@ -6843,20 +7171,21 @@ fn spawn_aot_training(
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // CREATE_BELOW_NORMAL_PRIORITY_CLASS — the training JVM boots the
-        // whole Spring context and must not compete with the server launch
-        // the user is waiting on.
-        const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
-        cmd.creation_flags(CREATE_BELOW_NORMAL_PRIORITY_CLASS);
+        cmd.creation_flags(AOT_TRAINING_CREATION_FLAGS);
     }
 
+    // The training JVM outlives this CLI invocation, exactly like the backend launch below:
+    // without dropping the std-handle inherit bit it would keep the caller's stdout/stderr pipe
+    // open (see StdHandleInheritanceGuard) and hang any shell that captures this CLI's output.
+    let _guard = StdHandleInheritanceGuard::drop_inheritance();
     match cmd.spawn() {
         Ok(child) => {
-            // Record the training JVM's PID so a later launch can detect a
-            // dead (failed) training run and retrain immediately.
-            write_aot_training_pid(child.id());
-            // Deliberately detached: the training run outlives this CLI
-            // invocation.  Dropping the handle does not kill the process.
+            // Record the wrapper's PID and start time: it lives exactly as
+            // long as the training JVM it waits on, so a later launch can
+            // detect a dead (or PID-recycled) run and retrain immediately.
+            write_aot_training_pid(key, child.id());
+            // Dropping the handle only gives up waiting; the run is detached
+            // from any console by AOT_TRAINING_CREATION_FLAGS.
             drop(child);
             eprintln!(
                 "AOT cache training started in the background (log: {}) — \
@@ -6865,9 +7194,11 @@ fn spawn_aot_training(
             );
         }
         Err(e) => {
-            release_aot_training_marker();
-            let _ = fs::remove_file(aot_training_pid_file());
-            let _ = fs::remove_file(aot_training_argfile());
+            release_aot_training_marker(key);
+            let _ = fs::remove_file(aot_training_pid_file(key));
+            let _ = fs::remove_file(aot_training_argfile(key));
+            let _ = fs::remove_file(aot_training_script_file(key));
+            let _ = fs::remove_file(aot_training_output_file(key));
             eprintln!("AOT cache: background training could not start: {e}");
         }
     }
@@ -6890,10 +7221,24 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     let (mut jvm_opts, program_args) = collect_jvm_opts_and_program_args();
 
     // Attach the trained AOT cache when present.  The JVM silently falls back
-    // to a normal start if the cache is stale or incompatible.
-    let cache_file = aot_cache_file();
-    if !aot_cache_disabled() && cache_file.is_file() {
-        jvm_opts.push(format!("-XX:AOTCache={}", cache_file.display()));
+    // to a normal start if the cache is stale or incompatible.  An explicit
+    // user-provided `-XX:AOTCache` wins: `ensure_aot_cache_trained` already
+    // skips training for it, and appending ours would silently override it
+    // (the JVM uses the last occurrence).
+    //
+    // The cache lives in `<root>/<invalidation key>/`, so the same key the
+    // training path computes is needed here to find it; an unreadable lib_dir
+    // just means "no cache to attach".
+    let user_configured_aot = jvm_opts
+        .iter()
+        .any(|opt| opt.starts_with("-XX:AOTCache="));
+    if !aot_cache_disabled() && !user_configured_aot {
+        if let Ok(key) = aot_cache_invalidation_key(runtime, &jvm_opts) {
+            let cache_file = aot_cache_file(&key);
+            if cache_file.is_file() {
+                jvm_opts.push(format!("-XX:AOTCache={}", cache_file.display()));
+            }
+        }
     }
 
     let mut args: Vec<String> = Vec::with_capacity(4 + jvm_opts.len() + program_args.len());
@@ -8613,6 +8958,12 @@ async fn start_server(
         .stdout(startup_log.stdout)
         .stderr(startup_log.stderr);
 
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(BACKEND_CREATION_FLAGS);
+    }
+
     let mut child = {
         // The backend outlives this CLI process: make sure it cannot hold the
         // caller's stdout/stderr pipe open (see StdHandleInheritanceGuard).
@@ -9565,6 +9916,78 @@ mod tests {
     use std::fs::{create_dir_all, write};
     use tempfile::TempDir;
 
+    /// The backend outlives the CLI invocation, so Windows must not leave it
+    /// attached to the console the CLI ran in: closing that console
+    /// force-terminates every attached process, which surfaces as
+    /// `Process exited early with status exit code: 0xffffffff` and leaves no
+    /// trace in the startup log.
+    #[cfg(windows)]
+    #[test]
+    fn backend_launch_detaches_from_the_callers_console() {
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        assert_eq!(
+            BACKEND_CREATION_FLAGS & DETACHED_PROCESS,
+            DETACHED_PROCESS,
+            "the backend must run without the caller's console"
+        );
+        assert_eq!(
+            BACKEND_CREATION_FLAGS & CREATE_NEW_PROCESS_GROUP,
+            CREATE_NEW_PROCESS_GROUP,
+            "Ctrl+C aimed at the CLI must not reach the backend"
+        );
+    }
+
+    /// The training run has the same console-lifetime problem as the backend,
+    /// and it is the process the JVM dumps the AOT cache from — a console
+    /// teardown mid-dump used to leave a truncated cache that the launch path
+    /// attaches blindly (it only checks `is_file`).
+    #[cfg(windows)]
+    #[test]
+    fn aot_training_launch_detaches_from_the_callers_console() {
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+        assert_eq!(
+            AOT_TRAINING_CREATION_FLAGS & DETACHED_PROCESS,
+            DETACHED_PROCESS,
+            "the training run must not die with the caller's console"
+        );
+        assert_eq!(
+            AOT_TRAINING_CREATION_FLAGS & CREATE_NEW_PROCESS_GROUP,
+            CREATE_NEW_PROCESS_GROUP,
+            "Ctrl+C aimed at the CLI must not reach the training run"
+        );
+        assert_eq!(
+            AOT_TRAINING_CREATION_FLAGS & CREATE_BELOW_NORMAL_PRIORITY_CLASS,
+            CREATE_BELOW_NORMAL_PRIORITY_CLASS,
+            "training must not compete with the server launch"
+        );
+    }
+
+    /// The wrapper is the only place that sees the training exit code, so the
+    /// commit has to be conditional — on both the exit code and the output
+    /// size (the JVM exits 0 even when it cannot write the cache) — and has to
+    /// target the final cache name.
+    #[cfg(windows)]
+    #[test]
+    fn aot_training_wrapper_commits_only_on_success() {
+        let script = aot_training_script_contents(
+            std::path::Path::new(r"C:\Program Files\Java\jdk\bin\java.exe"),
+            std::path::Path::new(r"C:\Users\me\.browser4\aot-cache"),
+        );
+        assert!(script.contains("if errorlevel 1 exit /b 1"));
+        assert!(
+            script.contains(&format!(
+                "if %AOT_OUTPUT_BYTES% LSS {} exit /b 1",
+                AOT_CACHE_MIN_COMMIT_BYTES
+            )),
+            "a zero-length or failed write must not be promoted to app.aot"
+        );
+        assert!(script.contains("move /y \"app.aot.tmp\" \"app.aot\""));
+        assert!(script.contains("@training-args.txt"));
+    }
+
     /// Acquire the shared environment lock, tolerating a poisoned lock from a
     /// previous test panic.  This prevents a single assertion failure from
     /// cascading into 18 `PoisonError` failures across other tests.
@@ -10079,92 +10502,135 @@ mod tests {
         // uninstall/reinstall), NOT under the runtime data dir.  Compare by
         // components — on Windows the canonicalized state dir carries a
         // `\\?\` verbatim prefix that would break a raw string comparison.
-        let cache_dir = aot_cache_dir();
+        let cache_root = aot_cache_root();
         assert_eq!(
-            cache_dir.file_name().and_then(|n| n.to_str()),
+            cache_root.file_name().and_then(|n| n.to_str()),
             Some("aot-cache")
         );
         assert_eq!(
-            cache_dir
+            cache_root
                 .parent()
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str()),
             Some("state"),
             "aot cache must live under the CLI state dir"
         );
+        // Each invalidation key gets its own directory under that root.
+        let key_dir = aot_cache_dir("0123456789abcdef");
+        assert_eq!(key_dir.parent(), Some(cache_root.as_path()));
 
         drop(env_guard);
     }
 
     #[test]
     fn test_aot_training_marker_blocks_fresh_and_reclaims_stale() {
+        const KEY: &str = "test-key";
         let _guard = lock_env_mutex();
         let tmp = test_temp_dir();
         let env_guard = TestEnvGuard::lock(tmp.path());
 
         // First acquisition wins.
-        assert!(acquire_aot_training_marker());
+        assert!(acquire_aot_training_marker(KEY));
         // A fresh marker blocks a concurrent training run.
-        assert!(!acquire_aot_training_marker());
+        assert!(!acquire_aot_training_marker(KEY));
 
         // Age the marker past the staleness threshold; it is then reclaimed.
         // Open with write access: on Windows a read-only handle lacks the
         // FILE_WRITE_ATTRIBUTES right that `set_modified` needs.
-        let marker = aot_training_marker_file();
+        let marker = aot_training_marker_file(KEY);
         let file = fs::OpenOptions::new().write(true).open(&marker).unwrap();
         let old = std::time::SystemTime::now()
             - (AOT_TRAINING_MARKER_STALE_AFTER + Duration::from_secs(60));
         file.set_modified(old).unwrap();
         drop(file);
         assert!(
-            acquire_aot_training_marker(),
+            acquire_aot_training_marker(KEY),
             "stale marker should be reclaimed"
         );
 
-        release_aot_training_marker();
+        release_aot_training_marker(KEY);
         assert!(!marker.exists(), "marker should be removed by release");
 
         drop(env_guard);
     }
 
     #[test]
-    fn test_aot_training_marker_key_roundtrip_exact() {
+    fn test_aot_training_marker_is_scoped_to_one_key() {
+        // Two runtimes with different keys never contend: a training run for
+        // one key must not block training for another (the pre-per-key layout
+        // shared a single marker).
+        const KEY_A: &str = "key-a";
+        const KEY_B: &str = "key-b";
         let _guard = lock_env_mutex();
         let tmp = test_temp_dir();
         let env_guard = TestEnvGuard::lock(tmp.path());
 
-        // The marker content must round-trip the invalidation key exactly —
-        // a trailing newline would make the equality check in
-        // `ensure_aot_cache_trained` fail and the freshly trained cache would
-        // be deleted as "stale" on the very next launch.
-        assert!(acquire_aot_training_marker());
-        let key = "fcc04fd6ad65f6f5452bcbc6271177cc462c4ee6c31887e12d553e448e2c7e26";
-        write_aot_training_marker_key(key);
-        assert_eq!(read_aot_training_marker_key(), key, "marker key must round-trip exactly");
-        let raw = fs::read_to_string(aot_training_marker_file()).unwrap();
-        assert!(!raw.ends_with('\n'), "marker content must not carry a trailing newline");
+        assert!(acquire_aot_training_marker(KEY_A));
+        assert!(
+            acquire_aot_training_marker(KEY_B),
+            "a different key must not be blocked by another key's marker"
+        );
+
+        release_aot_training_marker(KEY_A);
+        release_aot_training_marker(KEY_B);
 
         drop(env_guard);
     }
 
     #[test]
-    fn test_aot_training_process_alive_detects_dead_process() {
-        // Our own PID is alive.
-        assert!(aot_training_process_alive(std::process::id()));
-        // A PID that cannot exist is dead.
-        assert!(!aot_training_process_alive(u32::MAX));
-        assert!(!aot_training_process_alive(4_000_000_000 - 1));
+    fn test_is_pid_alive_tracks_a_child_process() {
+        let mut child = if cfg!(windows) {
+            Command::new("cmd")
+                .args(["/C", "ping -n 6 127.0.0.1 >NUL"])
+                .spawn()
+        } else {
+            Command::new("sh").args(["-c", "sleep 5"]).spawn()
+        }
+        .expect("spawn helper child");
+
+        let pid = child.id();
+        assert!(is_pid_alive(pid), "a running child must be alive");
+        let _ = child.kill();
+        let _ = child.wait();
+        // Deliberately no `!is_pid_alive(pid)` assertion: the suite runs tests
+        // in parallel and the freed PID can be taken by another test's child.
+    }
+
+    #[test]
+    fn test_is_pid_alive_rejects_an_unused_pid() {
+        // A PID no process can own (on Unix the raw value must not convert to
+        // -1, which `kill(-1, 0)` treats as "any process").
+        let unused_pid = if cfg!(windows) {
+            u32::MAX
+        } else {
+            4_000_000_000 - 1
+        };
+        assert!(!is_pid_alive(unused_pid), "an unused PID must be dead");
+    }
+
+    #[test]
+    fn test_aot_training_start_time_guard_rejects_recycled_pid() {
+        // A PID recycled by an unrelated process has a different start time.
+        assert!(!start_time_matches(Some(1000), Some(5000)));
+        // Same run, a few seconds apart (the PID is written after the spawn).
+        assert!(start_time_matches(Some(1000), Some(1005)));
+        // Unknown values fall back to the conservative PID-only check.
+        assert!(start_time_matches(None, Some(5000)));
+        assert!(start_time_matches(Some(1000), None));
     }
 
     #[test]
     fn test_aot_training_pid_file_roundtrip() {
+        const KEY: &str = "test-key";
         let _guard = lock_env_mutex();
         let tmp = test_temp_dir();
         let env_guard = TestEnvGuard::lock(tmp.path());
 
-        assert_eq!(read_aot_training_pid(), None, "no pid file yet");
-        write_aot_training_pid(12345);
-        assert_eq!(read_aot_training_pid(), Some(12345));
+        assert_eq!(read_aot_training_pid(KEY), None, "no pid file yet");
+        write_aot_training_pid(KEY, 12345);
+        assert_eq!(read_aot_training_pid(KEY), Some(12345));
+        let started = read_aot_training_started_secs(KEY).expect("start time is recorded");
+        assert!(started <= epoch_secs_now(), "start time is a past epoch");
 
         drop(env_guard);
     }

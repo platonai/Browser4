@@ -28291,6 +28291,13 @@ async fn handle_status(
         json_field("installed_at", json!(null));
     }
 
+    // AOT cache state.  Neither `/actuator/health` nor the bundle version tells
+    // the user whether the backend is running with a trained cache, or whether
+    // a freshly trained one is still waiting for the next server start.
+    let aot_cache = daemon::aot_cache_status_line();
+    cli_println!("AOT cache: {}", aot_cache);
+    json_field("aot_cache", json!(aot_cache));
+
     // Development mode: name the per-checkout backend state root (browser
     // profiles, data, logs) so it is obvious which workspace this CLI — and
     // therefore the browser it drives — belongs to.
