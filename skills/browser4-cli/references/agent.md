@@ -54,41 +54,22 @@ Use **agent** for natural-language tasks where you describe what you want withou
 
 ### Where the agent browses, and where it writes
 
-The agent runs **on the backend**, driving the current session's own browser through
-its bound driver — never a second browser you can attach to. `agent run` targets the
-CLI's session: `-s <name>` when given, else the unnamed slot (including a browser
-attached via `attach --extension` / `attach --cdp`), or the sole recorded
-`swarm create` session; `--coding` tasks run with no browser at all.
-
-The browser is launched **lazily**: submitting a task opens nothing, and it starts on
-the first tool call that needs a page — so a task driving an attached browser through
-`b4.run("goto …")` opens **no additional browser**. An attached session whose browser
-is not connected never falls back to a fresh Chrome; the page tool fails with a
-re-attach instruction.
+The agent runs **on the backend**, driving the session's own browser through its bound
+driver — never a second browser you can attach to. `agent run` targets the CLI's session:
+`-s <name>` when given, else the unnamed slot (including a browser attached via
+`attach --extension` / `attach --cdp`), or the sole recorded `swarm create` session;
+`--coding` tasks run with no browser at all. The browser launches **lazily** — submitting
+opens nothing, the first page-needing tool call starts it — so a task driving an attached
+browser through `b4.run("goto …")` opens **no additional browser**. An attached session
+whose browser is not connected never falls back to a fresh Chrome; the page tool fails
+with a re-attach instruction.
 
 Two consequences matter in practice:
 
-- **The submission echoes the binding, and so does the backend log.** The CLI
-  prints `Task submitted: <id> (session=<sid>, <connection>)` — or
-  `(no session — a session-less task)` — so you can see which session the task
-  actually landed in without reading logs. `--json` carries `session_id` and
-  `session_connection`; `--ndjson` puts `sessionId`/`connection` on the
-  `task.submitted` line. When you do need the log, the authoritative lines are
-  `tool.call start … tool=command_run session=<browser session>` and
-  `Submitting agent task <task-id> (session=<browser session>)`; both must carry
-  the session id the CLI reported. Lines from the runner that name the agent's
-  own session use `agentSession=` — a second, unrelated UUID (the agentic
-  session), never the browser session, so do not read it as a mismatch.
-- **Its navigation is not visible in your session's tab list.** The backend saves
-  the URL you were on before the task and navigates back to it when the task ends,
-  so `tab-list`, `page-info` and `snapshot` keep showing your own page and the
-  agent's intermediate pages never appear there. Observe its work through
-  `agent status` (step count and message) and through the artifacts it reports.
-- **Its deliverables are files, not always fields.** When a task says "extract X",
-  the agent usually writes the data into a file under its own per-task **workspace**
-  and returns a short summary. `agent result` names that directory (`workspace`) and
-  lists the files the agent reported (`filesChanged`), so the deliverable is
-  reachable without searching the backend's app-data tree by hand:
+- **The submission echoes the binding, and so does the backend log.** The CLI prints `Task submitted: <id> (session=<sid>, <connection>)` or `(no session — a session-less task)`; `--json` carries `session_id`/`session_connection`, `--ndjson` puts `sessionId`/`connection` on the `task.submitted` line.
+  The authoritative log lines are `tool.call start … tool=command_run session=<browser session>` and `Submitting agent task <task-id> (session=<browser session>)` — both must carry the session id the CLI reported. Lines naming the agent's own session use `agentSession=` — a second, unrelated UUID (the agentic session), never the browser session.
+- **Its navigation is not visible in your session's tab list.** The backend saves the URL you were on before the task and navigates back to it when the task ends, so `tab-list`, `page-info` and `snapshot` keep showing your own page and the agent's intermediate pages never appear there. Observe its work through `agent status` (step count and message) and through the artifacts it reports.
+- **Its deliverables are files, not always fields.** When a task says "extract X", the agent usually writes the data into a file under its own per-task **workspace** and returns a short summary. `agent result` names that directory (`workspace`) and lists the files the agent reported (`filesChanged`), so the deliverable is reachable without searching the backend's app-data tree by hand:
 
 ```bash
 browser4-cli agent result <task-id>
@@ -100,13 +81,12 @@ browser4-cli agent result <task-id>
 # Task workspace: C:\Users\me\.browser4\...\agent\2026\10\15\<uuid>\workspace
 ```
 
-The workspace lives on the machine that runs the backend (copy the artifacts from
-there when it is remote). Each task gets its **own** directory
-(`<agent data dir>/workspace.<task-id>`), so another run's file is never in this run's
-`filesChanged`; `--resume <task-id>` keeps the interrupted task's workspace (the point
-of resuming), `--shared-workspace` restores the old shared
-`<agent data dir>/workspace`, and `--fresh-workspace` is the default behaviour
-already. Input copying, the read rules and the deliverable format are in
+The workspace lives on the backend machine (copy the artifacts when it is remote). Each
+task gets its **own** directory (`<agent data dir>/workspace.<task-id>`), so another run's
+file never shows in this run's `filesChanged`; `--resume <task-id>` keeps the interrupted
+task's workspace, `--shared-workspace` restores the old shared
+`<agent data dir>/workspace`, and `--fresh-workspace` is the default behaviour already.
+Input copying, the read rules and the deliverable format are in
 [agent-workspace.md](agent-workspace.md).
 
 ### Cost control (`--token-budget`, `--follow` usage lines)
@@ -378,31 +358,11 @@ agent> Summarize the pricing page
 agent> now compare it with the enterprise page
 ```
 
-A line typed while a task is running is **steering**, not a new task: it is sent
-to the running task and injected into the agent as a user message at its next
-model round-trip. A backend hiccup does not end the session either: the live view
-keeps following a task that is still running (see
-[When the step stream fails](#when-the-step-stream-fails)).
+A line typed while a task is running is **steering**, not a new task: it is sent to the running task and injected into the agent as a user message at its next model round-trip. A backend hiccup does not end the session either — the live view keeps following a task that is still running (see [When the step stream fails](#when-the-step-stream-fails)).
 
-Steering is chosen whenever this session's task is still running — the CLI asks
-the backend rather than trusting its own bookkeeping, so a line can never be
-queued as a second task behind a live one. If the session had stopped following
-the task, accepting the line re-attaches the live view (`… following task <id>
-again`). To start a *different* task, `/cancel` the running one first; after
-`/new` the previous task belongs to the old agent context, so a later line is a
-new task.
+Steering is chosen whenever this session's task is still running — the CLI asks the backend rather than trusting its own bookkeeping, so a line can never be queued as a second task behind a live one (`↪ steering queued` confirms it). If the session had stopped following the task, accepting the line re-attaches the live view (`… following task <id> again`). To start a *different* task, `/cancel` the running one first; after `/new` the previous task belongs to the old agent context, so a later line is a new task.
 
-```
-agent> Summarize the pricing page
-[00:02] #1 b4.run(...)
-> also include the enterprise tier
-↪ steering queued — the agent sees it at its next model round
-```
-
-Steering is best-effort by design: it lands at the next model round (immediately
-for browser tasks that call a tool per round; possibly after a long tool round
-for coding tasks). If the task finished while you were typing, the CLI says so
-and keeps the session open.
+Steering is best-effort by design: it lands at the next model round (immediately for browser tasks that call a tool per round; possibly after a long tool round for coding tasks). If the task finished while you were typing, the CLI says so and keeps the session open.
 
 Session commands:
 
@@ -431,32 +391,31 @@ agent> /stats
   steps   132 · 1 steering message(s)
 ```
 
-- **llm**: outer agent `round`s (each may issue several model requests) and the
-  model `request`s themselves — the honest "how many LLM calls" count.
-- **tokens**: what the provider reported, summed per request. `not reported by
-  the provider` means the calls happened but the provider sent no usage block
-  (a local model, a gateway that drops it) — it is not a measured zero.
+- **llm**: outer agent `round`s (each may issue several model requests) and the model
+  `request`s — the honest "how many LLM calls" count.
+- **tokens**: what the provider reported, summed per request. `not reported by the provider`
+  means the calls happened but no usage block arrived (a local model, a gateway that drops
+  it) — it is not a measured zero.
 - **tools**: tool calls, how many failed, and the most-called tools.
-- **steps**: every step the run emitted; `dropped from the buffer` appears when
-  the backend's bounded step log evicted older steps (the counters still include
-  them).
+- **steps**: every step the run emitted; `dropped from the buffer` means the bounded step
+  log evicted older steps (the counters still include them).
 
 The numbers come from `GET /api/commands/{id}/stats`, which counts every step as it is
-appended — exact even for steps the step log no longer retains. `/stats <task-id>`
-reports another task of this session; against a backend without that endpoint the report
-is labelled `counted by this session` and can only undercount.
+appended — exact even for steps the step log no longer retains. `/stats <task-id>` reports
+another task of this session; against a backend without that endpoint the report is
+labelled `counted by this session` and can only undercount.
 
-An optional task runs immediately: `agent run -i "Summarize this page"`.
-With piped stdin the banner and prompt are omitted, so a harness can drive the
-session: `printf 'task one\n/quit\n' | browser4-cli agent run -i`.
+An optional task runs immediately: `agent run -i "Summarize this page"`. With piped stdin
+the banner and prompt are omitted, so a harness can drive the session:
+`printf 'task one\n/quit\n' | browser4-cli agent run -i`.
 
 ### Backend requirements and compatibility
 
-Live steps use `GET /api/commands/{id}/events` (a per-task in-memory step log polled
-with a sequence cursor) and steering uses `POST /api/commands/{id}/input` — both on a
-current backend. Against an **older backend** the CLI degrades instead of failing:
-`--follow` prints one notice and falls back to status polling, and `-i` reports that
-steering is unavailable and ignores the typed line (the task keeps running). The
+Live steps use `GET /api/commands/{id}/events` (a per-task in-memory step log polled with
+a sequence cursor) and steering uses `POST /api/commands/{id}/input` — both on a current
+backend. Against an **older backend** the CLI degrades instead of failing: `--follow`
+prints one notice and falls back to status polling, and `-i` reports that steering is
+unavailable and ignores the typed line (the task keeps running). The
 `queued`/`running`/`done`/`failed`/`cancelled` vocabulary and the result payload are
 identical in every mode.
 
@@ -470,11 +429,11 @@ never lets a *display* problem end it:
   follower narrows the page until the offending step stands alone, steps over it, and
   prints `… skipped 1 unreadable step (up to seq N)`: one preview line is lost, not the
   stream.
-- **`-i` keeps following a running task.** If the follower exhausts its window (e.g.
-  the backend restarted), the session warns and keeps following while the backend
-  still reports the task as `running` — the steps resume when it answers. It gives up
-  only when the task finished or the id is unknown; `/status` and `/result` keep
-  answering from what the session already saw.
+- **`-i` keeps following a running task.** If the follower exhausts its window (e.g. the
+  backend restarted), the session warns and keeps following while the backend still
+  reports the task as `running` — the steps resume when it answers. It gives up only when
+  the task finished or the id is unknown; `/status` and `/result` keep answering from
+  what the session already saw.
 - **`--follow` gives up after ~5 min** without a usable response, exits non-zero and
   names the task id; `agent status <id>` reports the task's real state.
 

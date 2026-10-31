@@ -324,14 +324,9 @@ What do you need to do?
 
 > **Don't cat snapshot files** — they can exceed 256KB, and `--stdout` can dump 63KB+ trees. Bound the capture with `-v 0`, `--depth`, `--selector`, `--no-boxes`, or use `snapshot grep` / `htmlsnapshot`. `snapshot --stdout`, `htmlsnapshot get html` and `grep` paginate at 2000 lines by default (`--all` / `--page-size 0` disables); `get all …` and `text`/`textcontent` reads print in full.
 
-> **`eval` runs in the page's own JavaScript world; an async expression needs `--await`.**
-> Page-defined globals resolve and globals written by `eval` are visible to page scripts;
-> `--world isolated` evaluates in the driver's `__browser4_runtime__` world instead, where page
-> scripts cannot see what you write but page globals read as `null`. DOM reads work in both worlds —
-> drive the page's own elements with `fill`/`click` for page-visible state. **An unresolved Promise is
-> reported as a failure, not as data** — pass `--await` for any `async () => …` / `fetch(...)`
-> expression. Return values: `null` prints as `null` and JS `undefined` prints a `null` line plus an
-> explanation (make the expression return a value). Details: [eval.md](references/eval.md).
+> **`eval` runs in the page's own JavaScript world; an async expression needs `--await`.** Page-defined globals resolve and globals written by `eval` are visible to page scripts; `--world isolated` evaluates in the driver's `__browser4_runtime__` world instead, where page scripts cannot see what you write but page globals read as `null`.
+> DOM reads work in both worlds — drive the page's own elements with `fill`/`click` for page-visible state. **An unresolved Promise is reported as a failure, not as data** — pass `--await` for any `async () => …` / `fetch(...)` expression.
+> Return values: `null` prints as `null` and JS `undefined` prints a `null` line plus an explanation (make the expression return a value). Details: [eval.md](references/eval.md).
 
 > **`wait --load networkidle` is not "the page is ready".** It proves only that the network went quiet: a page whose results are computed by page JS after load (dashboards, bot-detection verdicts), or fetched by a long-running XHR, can still be empty when it reports success — and the CLI now says so. For result pages, poll the result element first (`wait "<result-selector>"`, or `eval --wait-selector <css>`); treat `wait --load networkidle` as a network-settling extra step.
 
@@ -339,22 +334,12 @@ What do you need to do?
 
 > **`get` value contract:** a matched element returns its value — or `""` when the attribute/property is absent; `null` means the selector matched nothing; an unresolvable `eN` ref fails with an explicit error.
 
-> **Assertions and `wait` — read the verdict, don't trust the exit code blindly.**
-> `is visible|enabled|checked <sel>` print the value (`true`/`false`, and `null` from `is enabled` on a
-> missing or invalid selector) and exit 0 even when it is false; pass `--fail-on-false` to make a
-> false/null verdict exit 1. `wait <selector>`, `wait --text`, `wait --url` and `wait --fn` exit
-> **non-zero when the condition never became true** (a satisfied wait prints the elapsed time and the
-> stderr note names the timed-out target).
+> **Assertions and `wait` — read the verdict, don't trust the exit code blindly.** `is visible|enabled|checked <sel>` print the value (`true`/`false`, and `null` from `is enabled` on a missing or invalid selector) and exit 0 even when it is false; pass `--fail-on-false` to make a false/null verdict exit 1.
+> `wait <selector>`, `wait --text`, `wait --url` and `wait --fn` exit **non-zero when the condition never became true** (a satisfied wait prints the elapsed time and the stderr note names the timed-out target).
 >
-> `wait --download` baselines the watched directory when the call starts, so only files that appear or
-> change during the wait count as the download — a pre-existing (or untouched) file never does, and the
-> timeout message reports how many were ignored. **Known deviation:** it does not yet accept a target
-> filename.
+> `wait --download` baselines the watched directory when the call starts, so only files that appear or change during the wait count as the download — a pre-existing (or untouched) file never does, and the timeout message reports how many were ignored. **Known deviation:** it does not yet accept a target filename.
 
-> **`-i` is a strict filter, not an orientation view:** interactive-only rendering merges inner text
-> into element names but **drops the refs of draggable and hover-only targets** (they vanish under `-v`
-> too). Use plain `snapshot` / `-v 0` (screenful) / `-v all` (whole page) to orient yourself, and `-i`
-> only to pick a clickable target; `htmlsnapshot` reads static HTML by CSS selector instead of refs.
+> **`-i` is a strict filter, not an orientation view:** interactive-only rendering merges inner text into element names but **drops the refs of draggable and hover-only targets** (they vanish under `-v` too). Use plain `snapshot` / `-v 0` (screenful) / `-v all` (whole page) to orient yourself, and `-i` only to pick a clickable target; `htmlsnapshot` reads static HTML by CSS selector instead of refs.
 > Per-mode detail: [snapshot.md](references/snapshot.md#interactive-mode).
 
 > **A localized marketplace is fixed by operating the page.** Landing on a "change language &
