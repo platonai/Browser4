@@ -122,7 +122,9 @@ fails the verdict. The human summary ends with a machine-readable `VERDICT_JSON:
 `json=true` returns pure JSON. Use this (not your own narrative) when claiming a task is done:
 the finish gate rejects a `success` claim whose gates were not actually run. From the CLI:
 `browser4-cli code verify --module <module> [--checks ...] [--run-tests] [--json]`, which exits
-non-zero when the verdict fails.
+non-zero when the verdict fails. The whole `browser4-cli code …` family is deliberately **hidden**
+(it does not appear in `browser4-cli help` and is absent from the browser4-cli skill) — this file
+is its documentation, and a CLI unit test (`code_family_stays_hidden`) locks the hidden state in.
 
 ### `coding.mvnBuild(module=..., goals=...)`
 `mvn -pl <module> -am <goals>` with structured Kotlin/Java compiler diagnostics instead of raw logs — the fast, dependency-free alternative to a Kotlin LSP server. Use to check code after edits (goals default `compile`, `skipTests=true`). Diagnostics keep the workspace-relative path plus line/column. `json=true` returns `{module, goals, exitCode, success, timedOut, diagnostics}` instead of the human summary.

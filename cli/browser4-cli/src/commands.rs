@@ -5436,6 +5436,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         // ---- Code (session-independent coding tools) ----
+        // The whole `code-*` family stays `hidden`: it is documented by
+        // skills/browser4-coding/SKILL.md, not by the browser4-cli skill, so it must not appear
+        // in `browser4-cli help` listings or in the browser4-cli skill's command map.
+        // `code_family_stays_hidden` locks that in — do not flip `hidden` without updating both.
         CommandDef {
             name: "code-read",
             description: "Read a file's content. Binary files show metadata only.",
@@ -6073,6 +6077,21 @@ mod tests {
                 "Duplicate command name: {}",
                 cmd.name
             );
+        }
+    }
+
+    #[test]
+    fn code_family_stays_hidden() {
+        // The `code-*` commands belong to skills/browser4-coding/SKILL.md. They stay out of
+        // `browser4-cli help` listings and out of the browser4-cli skill's command map.
+        for cmd in all_commands() {
+            if cmd.name.starts_with("code-") {
+                assert!(
+                    cmd.hidden,
+                    "code command '{}' must stay hidden (owned by skills/browser4-coding)",
+                    cmd.name
+                );
+            }
         }
     }
 
