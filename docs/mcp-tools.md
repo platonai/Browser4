@@ -303,7 +303,7 @@ Execute a plain command (URL, instruction, or agent task). When async=true (defa
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `command` | String | yes |  | What to run: a URL to load, a natural-language instruction, or an agent task. Required. |
+| `command` | String | yes |  | What to run: a URL to load, a natural-language instruction, or an agent task. Required unless `resumeTaskId` is given (a resume takes its instruction from the interrupted task's checkpoint). |
 | `async` | Boolean | no | true | `true` (default) returns a task id immediately; `false` blocks until the command finishes and returns the CommandStatus JSON. |
 | `noopLimit` | Int? | no | null | Consecutive no-op abort threshold for agent tasks; omit to use the server default. |
 | `coding` | Boolean? | no | null | Explicit task type. True marks the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task (the default, also when omitted): task type is never auto-detected. |
@@ -581,10 +581,10 @@ poll, read and cancel with. An unknown id reports `status=failed`.
 ### `crawl_submit`
 
 ```
-crawl.submit(url: String, depth: Int = 1, args: String = "", parallelTabs: Int? = null, taskTimeoutMillis: Long? = null)
+crawl.submit(url: String, depth: Int = 1, args: String = "", parallelTabs: Int? = null, taskTimeoutMillis: Long? = null, fetchSession: String? = the calling session, profile: String? = null)
 ```
 
-Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default. Every seed must be an absolute http(s) URL: a seed the crawl could never fetch is refused with `Malformed url: <...>` and no task is created.
+Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default. fetchSession (default: the calling session, i.e. DEFAULT) pins the browser the pages are fetched with; profile pins an explicit Chrome user-data directory instead. Every seed must be an absolute http(s) URL: a seed the crawl could never fetch is refused with `Malformed url: <...>` and no task is created.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -593,6 +593,8 @@ Submit a crawl task. Returns a task ID for status polling. parallelTabs caps con
 | `args` | String | no |  | Extra crawl arguments as a CLI-style string, e.g. `-outLinkSelector=a[href]` or an X-SQL query. |
 | `parallelTabs` | Int? | no | null | Cap on concurrent fetch tabs for this task. Clamped server-side; a missing or non-positive value uses the server default. |
 | `taskTimeoutMillis` | Long? | no | null | Whole-task budget in ms. Clamped server-side; a missing or non-positive value uses the server default. |
+| `fetchSession` | String? | no | the calling session | Name of the session whose browser the pages are fetched with. Cookies live in the browser profile, so this is what pins the crawl to the profile the caller browsed and warmed (locale, currency, delivery location, login). Omitted or blank resolves to `DEFAULT`. Wins over the calling session. Mutually exclusive with `profile`. |
+| `profile` | String? | no | null | Chrome user-data directory the crawl should launch its own browser on. The crawl owns and closes that browser. Mutually exclusive with `fetchSession`. |
 
 Returns: `String`
 
@@ -631,6 +633,10 @@ Starts a recursive crawl in the background and returns the task id
 immediately. Poll it with `crawl.status`, read the payload with
 `crawl.result`. Use `depth=0` for a single page, and prefer the
 swarm domain for high-throughput parallel extraction.
+The pages are fetched with the DEFAULT session's browser unless
+`fetchSession` names another session: cookies (locale, currency,
+delivery location, login) live in that profile, so a crawl that
+reads a marketplace must name the session that was warmed for it.
 
 </details>
 
