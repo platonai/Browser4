@@ -246,22 +246,39 @@ jobs:
           echo "::group::🔍 Failure Details (first 3)"
 
           FAILURE_COUNT=0
+
+          # Surefire escapes `<`, `>`, `"`, `'` and `&` inside the `message` attribute; decode
+          # before printing so the report reads like the assertion the author wrote.
+          decode_entities() {
+            sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&quot;/"/g' -e "s/&apos;/'/g" \
+              -e 's/&#10;/ /g' -e 's/&amp;/\&/g'
+          }
+
           while IFS= read -r -d '' xml_file; do
             if [ $FAILURE_COUNT -ge 3 ]; then break; fi
             test_class=$(basename "$xml_file" .xml | sed 's/TEST-//')
 
-            # Extract failure/error messages (if any)
-            HAS_FAILURE=$(grep -c '<failure ' "$xml_file" 2>/dev/null || echo 0)
-            HAS_ERROR=$(grep -c '<error ' "$xml_file" 2>/dev/null || echo 0)
+            # Extract failure/error messages (if any).
+            # `grep -c` already prints `0` when nothing matches and exits 1, so the old
+            # `|| echo 0` appended a *second* 0: HAS_FAILURE became "0\n0", `[ "0\n0" -gt 0 ]`
+            # printed "integer expression expected" (run 41162336421) and the counter guard
+            # degenerated.  `|| true` keeps the printed count while satisfying `set -e`.
+            HAS_FAILURE=$(grep -c '<failure ' "$xml_file" 2>/dev/null || true)
+            HAS_ERROR=$(grep -c '<error ' "$xml_file" 2>/dev/null || true)
+            HAS_FAILURE=${HAS_FAILURE:-0}
+            HAS_ERROR=${HAS_ERROR:-0}
 
             if [ "$HAS_FAILURE" -gt 0 ] || [ "$HAS_ERROR" -gt 0 ]; then
               FAILURE_COUNT=$((FAILURE_COUNT + 1))
               echo ""
               echo "── ${test_class} ──"
 
-              # Print first failure message (trimmed)
-              grep -m1 '<failure ' "$xml_file" 2>/dev/null | head -1 | sed 's/<[^>]*>//g' | cut -c1-300 || true
-              grep -m1 '<error ' "$xml_file" 2>/dev/null | head -1 | sed 's/<[^>]*>//g' | cut -c1-300 || true
+              # Print the first failure/error element with its `message` attribute decoded.
+              # `sed 's/<[^>]*>//g'` stripped the tag *and* the message it carried, which is why
+              # the report only ever said "expected:  but was:".
+              for tag in failure error; do
+                grep -m1 "<$tag " "$xml_file" 2>/dev/null | decode_entities | cut -c1-400 || true
+              done
             fi
           done < <(find . -name "TEST-*.xml" -type f -print0 2>/dev/null)
 
