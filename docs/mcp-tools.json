@@ -200,7 +200,7 @@
       "name" : "command",
       "type" : "String",
       "required" : true,
-      "description" : "What to run: a URL to load, a natural-language instruction, or an agent task. Required."
+      "description" : "What to run: a URL to load, a natural-language instruction, or an agent task. Required unless `resumeTaskId` is given (a resume takes its instruction from the interrupted task's checkpoint)."
     }, {
       "name" : "async",
       "type" : "Boolean",
@@ -384,8 +384,8 @@
     "domain" : "crawl",
     "method" : "submit",
     "mcpNames" : [ "crawl_submit" ],
-    "signature" : "crawl.submit(url: String, depth: Int = 1, args: String = \"\", parallelTabs: Int? = null, taskTimeoutMillis: Long? = null)",
-    "description" : "Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default. Every seed must be an absolute http(s) URL: a seed the crawl could never fetch is refused with `Malformed url: <...>` and no task is created.",
+    "signature" : "crawl.submit(url: String, depth: Int = 1, args: String = \"\", parallelTabs: Int? = null, taskTimeoutMillis: Long? = null, fetchSession: String? = the calling session, profile: String? = null)",
+    "description" : "Submit a crawl task. Returns a task ID for status polling. parallelTabs caps concurrent fetch tabs; taskTimeoutMillis is the whole-task budget in ms. Both are clamped server-side; a missing/non-positive value uses the server default. fetchSession (default: the calling session, i.e. DEFAULT) pins the browser the pages are fetched with; profile pins an explicit Chrome user-data directory instead. Every seed must be an absolute http(s) URL: a seed the crawl could never fetch is refused with `Malformed url: <...>` and no task is created.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "url",
@@ -415,6 +415,18 @@
       "required" : false,
       "default" : "null",
       "description" : "Whole-task budget in ms. Clamped server-side; a missing or non-positive value uses the server default."
+    }, {
+      "name" : "fetchSession",
+      "type" : "String?",
+      "required" : false,
+      "default" : "the calling session",
+      "description" : "Name of the session whose browser the pages are fetched with. Cookies live in the browser profile, so this is what pins the crawl to the profile the caller browsed and warmed (locale, currency, delivery location, login). Omitted or blank resolves to `DEFAULT`. Wins over the calling session. Mutually exclusive with `profile`."
+    }, {
+      "name" : "profile",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Chrome user-data directory the crawl should launch its own browser on. The crawl owns and closes that browser. Mutually exclusive with `fetchSession`."
     } ],
     "examples" : [ {
       "title" : "Crawl one link level from a seed URL",
@@ -441,7 +453,7 @@
       "pollAfterMs" : 1000
     },
     "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"statusTool\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"pollAfterMs\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
-    "help" : "Starts a recursive crawl in the background and returns the task id\nimmediately. Poll it with `crawl.status`, read the payload with\n`crawl.result`. Use `depth=0` for a single page, and prefer the\nswarm domain for high-throughput parallel extraction."
+    "help" : "Starts a recursive crawl in the background and returns the task id\nimmediately. Poll it with `crawl.status`, read the payload with\n`crawl.result`. Use `depth=0` for a single page, and prefer the\nswarm domain for high-throughput parallel extraction.\nThe pages are fetched with the DEFAULT session's browser unless\n`fetchSession` names another session: cookies (locale, currency,\ndelivery location, login) live in that profile, so a crawl that\nreads a marketplace must name the session that was warmed for it."
   }, {
     "domain" : "experience",
     "method" : "deep_learn",
