@@ -54,6 +54,10 @@ class OtelSpanBackend @JvmOverloads constructor(
             }
             .startSpan()
 
+        // Make the span current for the duration of the call: that is what lets a step
+        // inside it (`agent.execute`, a CDP round-trip) start as a *child* instead of a
+        // second root span for the same call.
+        val scope = span.makeCurrent()
         val sink = ToolTracing.OutcomeSink { outcome -> span.setAttribute(ToolTracing.ATTR_OUTCOME, outcome) }
         return try {
             val result = block(sink)
@@ -64,6 +68,39 @@ class OtelSpanBackend @JvmOverloads constructor(
             span.setStatus(StatusCode.ERROR, e.message ?: e::class.simpleName ?: "error")
             throw e
         } finally {
+            scope.close()
+            span.end()
+        }
+    }
+
+    /** Whether a recording span is active, i.e. whether a child would nest under it. */
+    override fun hasActiveSpan(): Boolean = Span.current().isRecording
+
+    override suspend fun <T> withChildSpan(
+        spanName: String,
+        attributes: Map<String, String>,
+        block: suspend () -> T,
+    ): T {
+        val span = tracer.spanBuilder(spanName)
+            .setSpanKind(SpanKind.INTERNAL)
+            .apply {
+                // Blank values are dropped for the same reason an absent session is:
+                // an empty attribute looks like a real value in a dashboard.
+                attributes.forEach { (key, value) -> value.takeIf { it.isNotBlank() }?.let { setAttribute(key, it) } }
+            }
+            .startSpan()
+
+        val scope = span.makeCurrent()
+        return try {
+            val result = block()
+            span.setStatus(StatusCode.OK)
+            result
+        } catch (e: Throwable) {
+            span.recordException(e)
+            span.setStatus(StatusCode.ERROR, e.message ?: e::class.simpleName ?: "error")
+            throw e
+        } finally {
+            scope.close()
             span.end()
         }
     }
