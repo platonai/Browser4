@@ -32,6 +32,7 @@ mod snapshot;
 mod snapshot_diff;
 mod state;
 mod tips;
+mod update_check;
 mod agent_interactive;
 
 use std::collections::{HashMap, HashSet};
@@ -27363,6 +27364,202 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Auto-update (BROWSER4_AUTO_UPGRADE=off|notify|runtime|full)
+// ---------------------------------------------------------------------------
+
+/// Commands that must never trigger an auto-update check: the hidden updater
+/// itself, install/upgrade lifecycle commands (they manage versions
+/// explicitly), and meta commands where a hint would be noise.
+fn is_update_check_suppressed_command(command: &str) -> bool {
+    matches!(
+        command,
+        "__update-agent"
+            | "install"
+            | "uninstall"
+            | "upgrade"
+            | "doctor"
+            | "doctor-log"
+            | "doctor-metrics"
+            | "doctor-status"
+            | "stop"
+            | "status"
+            | "kill-all"
+            | "delete-data"
+            | "help"
+            | "version"
+            | "batch"
+            | "loop"
+    )
+}
+
+/// One auto-update pass: resolve the latest tag (TTL-cached), print a dedup'd
+/// hint, and — for the `runtime`/`full` policies — spawn a detached prefetch.
+///
+/// Fully best-effort: every failure mode (no network, no runtime installed,
+/// remote backend, dev build) silently skips so the user's command is never
+/// affected.
+async fn maybe_auto_update(command: &str, base_url: &str, global: &GlobalFlags) {
+    use update_check::*;
+
+    let policy = AutoUpgradePolicy::from_env();
+    if policy == AutoUpgradePolicy::Off || is_update_check_suppressed_command(command) {
+        return;
+    }
+    // Dev builds track the source tree, not packaged releases.
+    if VERSION.contains("-SNAPSHOT") || daemon::is_dev_mode() {
+        return;
+    }
+    // Only for the local backend — a remote server is someone else's deployment.
+    if !(base_url.contains("localhost") || base_url.contains("127.0.0.1")) {
+        return;
+    }
+    // No installed runtime yet → the first-run install path handles versioning.
+    let Some(current_tag) = read_current_tag() else {
+        return;
+    };
+
+    let mut state = load_state();
+    let now = Utc::now().timestamp();
+
+    // Resolve the latest tag, reusing the cache while it is within the TTL.
+    let latest_tag = if is_check_fresh(&state, now) {
+        state.latest_tag.clone()
+    } else {
+        let resolved = tokio::time::timeout(
+            std::time::Duration::from_secs(RESOLVE_TIMEOUT_SECS),
+            daemon::resolve_latest_tag(&daemon::load_mirrors()),
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|(tag, _info)| tag);
+        state.last_check_at = Some(now);
+        if let Some(ref tag) = resolved {
+            state.latest_tag = Some(tag.clone());
+        }
+        save_state(&state);
+        // On network failure keep serving the stale cache rather than nothing.
+        resolved.or_else(|| state.latest_tag.clone())
+    };
+    let Some(latest_tag) = latest_tag else {
+        return;
+    };
+
+    let latest_on_disk =
+        daemon::install_dir_contains_runtime(&daemon::versioned_install_dir(&latest_tag));
+    let decision = decide(policy, &current_tag, &latest_tag, &state, now, latest_on_disk);
+
+    if let Some(ref tag) = decision.notify {
+        if !global.quiet {
+            eprintln!(
+                "💡 A new Browser4 release is available: {tag} (current: {current_tag}). \
+                 Run '{bin} upgrade' to update.",
+                tag = tag,
+                current_tag = current_tag,
+                bin = cli_binary_name(),
+            );
+        }
+        json_field("update_available", json!(tag));
+        state.last_notified_tag = Some(tag.clone());
+        save_state(&state);
+    }
+
+    if let Some(ref plan) = decision.prefetch {
+        state.last_prefetch_attempt = Some(PrefetchAttempt {
+            tag: plan.tag.clone(),
+            at: now,
+        });
+        save_state(&state);
+        spawn_update_agent(plan);
+    }
+}
+
+/// Launch the detached background updater process.  Fire-and-forget: stdio is
+/// nulled and the child is never waited on, so it outlives this invocation.
+fn spawn_update_agent(plan: &update_check::PrefetchPlan) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("__update-agent").arg("--tag").arg(&plan.tag);
+    if plan.self_upgrade {
+        cmd.arg("--self-upgrade");
+    }
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
+    let _ = cmd.spawn();
+}
+
+/// Entry point of the hidden `__update-agent` command.
+async fn handle_update_agent(global: &GlobalFlags) -> Result<(), CliError> {
+    let mut tag: Option<String> = None;
+    let mut self_upgrade = false;
+    let args: Vec<&str> = global.args.iter().skip(1).map(String::as_str).collect();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--tag" => {
+                tag = args.get(i + 1).map(|s| (*s).to_string());
+                i += 2;
+            }
+            "--self-upgrade" => {
+                self_upgrade = true;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    let Some(tag) = tag else {
+        return Err(CliError(
+            ExitCode::Usage,
+            "__update-agent requires --tag <tag>".to_string(),
+        ));
+    };
+    run_update_agent(&tag, self_upgrade).await;
+    Ok(())
+}
+
+/// The background updater body: mirror `handle_upgrade`'s runtime steps for
+/// the target tag, then record the outcome in the state file.  Success parks
+/// the tag in `pending_tag` — activation happens on the next backend launch
+/// via `update_check::commit_pending_tag_if_ready`.
+async fn run_update_agent(tag: &str, self_upgrade: bool) {
+    let result: Result<(), String> = async {
+        // `full` policy: self-upgrade the CLI binary first (best-effort).
+        if self_upgrade {
+            upgrade_cli_binary(Some(tag)).await;
+        }
+        let runtime = install_browser4_runtime(Some(tag), false).await?;
+        ensure_aot_cache_trained(&runtime);
+        sync_skills_for_runtime(&runtime).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    .await;
+
+    let mut state = update_check::load_state();
+    let now = Utc::now().timestamp();
+    match result {
+        Ok(()) => {
+            state.pending_tag = Some(tag.to_string());
+            state.failures.remove(tag);
+        }
+        Err(err) => {
+            update_check::record_prefetch_failure(&mut state, tag, now);
+            eprintln!("Auto-update prefetch of {tag} failed: {err}");
+        }
+    }
+    update_check::save_state(&state);
+}
+
 /// Stop the Browser4 backend.
 ///
 /// In development mode only the backends of *this* checkout are stopped: every
@@ -28008,6 +28205,59 @@ async fn handle_doctor(
             cli_println!("  Installed runtime: not installed (run 'browser4-cli install')");
         }
         json_field("installed_runtime", json!(null));
+    }
+
+    // ---- Auto-Update ----
+    {
+        use update_check::*;
+        cli_println!("");
+        cli_println!("-- Auto-Update --");
+        let policy = AutoUpgradePolicy::from_env();
+        cli_println!("  Policy: {} (env {})", policy.as_str(), AUTO_UPGRADE_ENV);
+        let update_state = load_state();
+        let format_epoch = |at: Option<i64>| {
+            at.map(|ts| {
+                DateTime::from_timestamp(ts, 0)
+                    .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                    .unwrap_or_else(|| ts.to_string())
+            })
+            .unwrap_or_else(|| "never".to_string())
+        };
+        cli_println!("  Last check: {}", format_epoch(update_state.last_check_at));
+        cli_println!(
+            "  Latest release: {}",
+            update_state.latest_tag.as_deref().unwrap_or("unknown")
+        );
+        if let Some(ref pending) = update_state.pending_tag {
+            cli_println!("  Pending activation (next launch): {}", pending);
+        }
+        if let Some(ref previous) = update_state.previous_tag {
+            cli_println!("  Previous runtime: {}", previous);
+        }
+        if !update_state.failures.is_empty() {
+            let blocked: Vec<String> = update_state
+                .failures
+                .iter()
+                .filter(|(_, f)| f.count >= FAILURE_BLACKLIST_THRESHOLD)
+                .map(|(tag, _)| tag.clone())
+                .collect();
+            if !blocked.is_empty() {
+                cli_println!(
+                    "  ⚠  Prefetch blacklisted (repeated failures): {}",
+                    blocked.join(", ")
+                );
+            }
+        }
+        json_field(
+            "auto_update",
+            json!({
+                "policy": policy.as_str(),
+                "last_check_at": update_state.last_check_at,
+                "latest_tag": update_state.latest_tag,
+                "pending_tag": update_state.pending_tag,
+                "previous_tag": update_state.previous_tag,
+            })
+        );
     }
 
     // ---- Local Runtime Bundle (dev-mode provenance) ----
@@ -31898,6 +32148,13 @@ async fn run(
         return handle_batch(global).await;
     }
 
+    // Hidden internal command: the detached background updater spawned by
+    // maybe_auto_update().  Deliberately absent from the command map so it
+    // never appears in help output.
+    if command == "__update-agent" {
+        return handle_update_agent(global).await;
+    }
+
     // When the user passes --help/-h after a command (e.g. `htmlsnapshot --help`),
     // print the help for that command instead of complaining about the form.
     if global.args.iter().any(|a| a == "--help" || a == "-h") {
@@ -32347,6 +32604,12 @@ async fn run(
             }
         }
     }
+
+    // Auto-update check: notify about newer releases and (for the runtime/full
+    // policies) kick off a detached background prefetch.  Runs after the
+    // backend is up so it never delays a cold start, and never fails the
+    // command the user actually ran.
+    maybe_auto_update(command, &base_url, global).await;
 
     let client = make_client();
 

@@ -396,14 +396,14 @@ struct DownloadedFile {
 /// Minimal representation of the `latest-release.json` file published by
 /// release workflows.  Contains only public, non-sensitive fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct LatestReleaseInfo {
-    tag: String,
+pub(crate) struct LatestReleaseInfo {
+    pub(crate) tag: String,
     #[serde(default)]
-    version: Option<String>,
+    pub(crate) version: Option<String>,
     #[serde(default)]
-    published_at: Option<String>,
+    pub(crate) published_at: Option<String>,
     #[serde(default)]
-    release_url: Option<String>,
+    pub(crate) release_url: Option<String>,
     #[serde(default)]
     assets: Vec<ReleaseAssetInfo>,
 }
@@ -426,7 +426,7 @@ struct ReleaseAssetInfo {
 /// latest release the URL is `<base_url>/<latest_path>/<asset>`, where
 /// `latest_path` defaults to `latest/download` (GitHub Releases layout).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-struct DownloadMirror {
+pub(crate) struct DownloadMirror {
     /// Human-readable name shown in log messages (e.g. "github", "aliyun-oss").
     name: String,
     /// Base URL for release downloads (e.g. `https://github.com/platonai/Browser4/releases`).
@@ -576,7 +576,7 @@ fn mirrors_config_path() -> PathBuf {
 ///
 /// Otherwise the mirrors are loaded from `mirrors.json`.  When the file is
 /// missing or unreadable the built-in defaults (GitHub → Aliyun OSS) are used.
-fn load_mirrors() -> Vec<DownloadMirror> {
+pub(crate) fn load_mirrors() -> Vec<DownloadMirror> {
     // Single-source override: BROWSER4_RELEASES_BASE_URL completely bypasses
     // the mirror system for backward compatibility.
     if let Ok(env_url) = env::var(BROWSER4_RELEASES_BASE_URL_ENV) {
@@ -2293,7 +2293,7 @@ fn runtime_versions_dir() -> PathBuf {
 }
 
 /// Path to a specific versioned install directory.
-fn versioned_install_dir(tag: &str) -> PathBuf {
+pub(crate) fn versioned_install_dir(tag: &str) -> PathBuf {
     runtime_versions_dir().join(tag)
 }
 
@@ -2336,7 +2336,7 @@ pub fn read_current_tag() -> Option<String> {
 ///
 /// On Unix this also attempts to create a `current` symlink for convenience,
 /// but the `current.tag` file is always the authoritative source.
-fn write_current_tag(tag: &str) -> Result<(), String> {
+pub(crate) fn write_current_tag(tag: &str) -> Result<(), String> {
     let parent = runtime_versions_dir();
     fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
 
@@ -2398,7 +2398,7 @@ fn browser4_install_dir() -> PathBuf {
 
 /// Compare two version tags like "v4.10.0" and "v4.9.0" using natural
 /// numeric ordering so "v4.10.0" > "v4.9.0".
-fn compare_semver_tags(a: &str, b: &str) -> std::cmp::Ordering {
+pub(crate) fn compare_semver_tags(a: &str, b: &str) -> std::cmp::Ordering {
     let a_parts: Vec<u64> = a
         .trim_start_matches('v')
         .split('.')
@@ -2531,7 +2531,7 @@ fn read_installed_browser4_runtime_metadata_for(
     serde_json::from_str(&contents).ok()
 }
 
-fn install_dir_contains_runtime(install_dir: &Path) -> bool {
+pub(crate) fn install_dir_contains_runtime(install_dir: &Path) -> bool {
     // Verify the metadata file exists — a missing file signals a truncated
     // or partially-committed install that should be re-downloaded.
     if !install_dir
@@ -2759,7 +2759,9 @@ async fn resolve_latest_tag_from_oss_metadata(
 ///
 /// Returns the first successfully resolved `(tag, full_metadata)` pair, or
 /// `None` when all mirrors fail to report their latest version.
-async fn resolve_latest_tag(mirrors: &[DownloadMirror]) -> Option<(String, LatestReleaseInfo)> {
+pub(crate) async fn resolve_latest_tag(
+    mirrors: &[DownloadMirror],
+) -> Option<(String, LatestReleaseInfo)> {
     for mirror in mirrors {
         if !mirror.supports_latest_resolution {
             continue;
@@ -8507,6 +8509,10 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
 
     // Not running from a repository checkout — use a globally installed runtime
     // (from a prior `install` command) or download one.
+    //
+    // Activate a runtime the background auto-updater finished downloading
+    // (BROWSER4_AUTO_UPGRADE=runtime|full).  No-op when nothing is pending.
+    crate::update_check::commit_pending_tag_if_ready();
     if install_dir_contains_runtime(&browser4_install_dir()) {
         if let Some(metadata) = read_installed_browser4_runtime_metadata() {
             eprintln!(

@@ -466,6 +466,23 @@ Those two subcommands accept only `--tag` and `--force`; to install the CLI **on
 `--skip-backend` (`-SkipBackend` in PowerShell) to the install script — the CLI forwards that flag
 to the script internally.
 
+### Auto-update
+
+The CLI checks for newer releases in the background, controlled by `BROWSER4_AUTO_UPGRADE`:
+
+| Value | Behavior |
+|---|---|
+| `notify` (default) | Once per 24 h, print a one-line hint on stderr when a newer release exists (deduplicated per tag). |
+| `off` | Never check. |
+| `runtime` | Also pre-download the newer runtime bundle in a detached background process; the download is activated automatically on the next backend start. |
+| `full` | `runtime` plus a self-upgrade of the CLI binary in the same background pass. |
+
+Safety rails: checks run only against the local backend with an installed
+packaged runtime (never in dev checkouts or against remote servers); a
+major-version jump is only ever notified, never downloaded; a tag that fails
+to download 3 times is blacklisted for 7 days.  Inspect the current state any
+time with `browser4-cli doctor` (the `-- Auto-Update --` section).
+
 ### Prerequisites
 
 **Java 25 or newer** is required to build or run the backend server and
