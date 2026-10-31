@@ -249,7 +249,7 @@ const TIPS_CRAWL: &[Tip] = &[
         text: "`--session <name>` (or `-s <name>`) pins the browser profile the pages are read with: warm a session's locale / delivery location once (`open -s shop <url>`), then crawl with it. Cookies decide what the site answers",
     },
     Tip {
-        text: "Use `--out-link-pattern <regex>` to filter which links to follow during crawling",
+        text: "Use `--out-link-pattern <regex>` to filter which links to follow during crawling — it matches anywhere in the URL (`product/`, not `/product/`)",
     },
     Tip {
         text: "Combine `crawl` with `swarm`: crawl discovers URLs, swarm scrapes them in parallel",

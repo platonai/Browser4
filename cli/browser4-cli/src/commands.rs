@@ -404,6 +404,23 @@ pub fn crawl_timeout_to_millis(value: &str) -> Option<i64> {
     number.parse::<i64>().ok().map(|n| n * factor)
 }
 
+/// The duration spelling handed to the backend for a load option (`-expires`,
+/// `-pageLoadTimeout`).
+///
+/// The backend's duration parser reads a bare number as *milliseconds*, while every
+/// user-facing surface of this CLI (`--timeout`, the option help, `crawl.md`) reads it
+/// as seconds. Attaching the unit here is what keeps `--page-load-timeout 30` at 30
+/// seconds instead of 30 milliseconds — and keeps a single-digit value (`5`) off the
+/// backend's "invalid duration" sentinel, which is always expired.
+fn load_option_duration(value: &str) -> String {
+    let value = value.trim();
+    if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
+        format!("{value}s")
+    } else {
+        value.to_string()
+    }
+}
+
 /// Key a `tool_params_fn` uses to report a CLI-side argument error instead of
 /// emitting a tool call the backend can only reject with an internal message.
 ///
@@ -4377,27 +4394,27 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef {
                 name: "url",
-                description: "The starting URL for the crawl — an absolute http(s) URL (omit if using --seed-file)",
+                description: "The starting URL for a crawl — an absolute http(s) URL or a file:/// path (omit if using --seed-file)",
                 optional: true,
             }],
             options: &[
                 OptionDef { name: "depth <n>", description: "Maximum crawl depth (default: 1). Use 0 to fetch pages without link discovery.", is_bool: false, short: Some("d") },
-                OptionDef { name: "seed-file <file>", description: "File containing URLs to crawl, one per line — each line must be an absolute http(s) URL (lines starting with # are ignored)", is_bool: false, short: None },
+                OptionDef { name: "seed-file <file>", description: "File containing URLs to crawl, one per line — each line must be an absolute http(s) URL or a file:/// path (lines starting with # are ignored)", is_bool: false, short: None },
                 OptionDef { name: "sql <query>", description: "X-SQL query to extract structured data from each crawled page. Use @url as the page URL placeholder. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "sql-base64 <base64>", description: "Base64-encoded X-SQL query (avoids shell quoting issues on Windows). Both shapes work: `--sql-base64 <base64>` supplies the query itself, and a bare `--sql-base64` (a flag, no value) decodes the --sql/stdin value.", is_bool: false, short: None },
                 OptionDef { name: "format <fmt>", description: "Output format for X-SQL extracted data (requires --sql): json, csv, or table (default: table). Without --sql it only warns on stdout, but combined with --output the CLI refuses (exit 1, writes nothing) because the file would carry the plain-text listing under a csv/json name. For a JSON page listing of a plain crawl use the global --json flag BEFORE the command — it needs no --sql.", is_bool: false, short: None },
                 OptionDef { name: "output <file>", description: "Write results to a file instead of stdout", is_bool: false, short: Some("o") },
                 OptionDef { name: "out-link-selector <css>", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
-                OptionDef { name: "out-link-pattern <regex>", description: "Regex pattern to filter extracted links (default: .+). Git Bash/MSYS: a value starting with '/' is rewritten into a Windows path before the CLI starts — run `./b4w.sh` (or export MSYS2_ARG_CONV_EXCL='*'), or drop the leading slash (write -olp \"product/\")", is_bool: false, short: Some("olp") },
+                OptionDef { name: "out-link-pattern <regex>", description: "Regex to filter extracted links — matched as a substring of the link URL (default: .+). An invalid regex filters nothing. Git Bash/MSYS: a value starting with '/' is rewritten into a Windows path before the CLI starts — run `./b4w.sh` (or export MSYS2_ARG_CONV_EXCL='*'), or drop the leading slash (write -olp \"product/\")", is_bool: false, short: Some("olp") },
                 OptionDef { name: "top-links <n>", description: "Maximum links to extract per page (default: 20)", is_bool: false, short: Some("tl") },
-                OptionDef { name: "args <opts>", description: "Additional LoadOptions passed through verbatim — a raw whitespace-separated option string, not JSON (e.g. -a \"-nMaxRetry 5 -lazyFlush\"). Quote it so it stays one value; a leading '-' is accepted for this option. Prefix with @ to read from a file (e.g. -a @loadopts.txt). Use --args-stdin to pipe from stdin.", is_bool: false, short: Some("a") },
+                OptionDef { name: "args <opts>", description: "Additional LoadOptions passed through verbatim — a raw option string split quote-aware (a double-quoted value stays one token), not JSON (e.g. -a \"-nMaxRetry 5 -lazyFlush\"). Quote it so it stays one value; a leading '-' is accepted for this option. Prefix with @ to read from a file (e.g. -a @loadopts.txt). Use --args-stdin to pipe from stdin.", is_bool: false, short: Some("a") },
                 OptionDef { name: "args-stdin", description: "Read LoadOptions args from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse each page immediately after fetching", is_bool: true, short: None },
-                OptionDef { name: "expires <dur>", description: "Cache expiration duration (e.g. 1d, 1h, 30m)", is_bool: false, short: None },
+                OptionDef { name: "expires <dur>", description: "Cache expiration duration (e.g. 1d, 1h, 30m; a bare number is seconds). Only takes effect with --readonly: a fetching crawl always fetches every page fresh, and the CLI notes the no-op when --expires is used without it", is_bool: false, short: None },
                 OptionDef { name: "priority <n>", description: "Queue priority (non-negative integer, lower = higher priority)", is_bool: false, short: Some("p") },
-                OptionDef { name: "page-load-timeout <dur>", description: "Maximum time to wait per page load: seconds number or duration such as 30s, 1m", is_bool: false, short: None },
+                OptionDef { name: "page-load-timeout <dur>", description: "Maximum time to wait per page load: seconds number or duration such as 30s, 1m (a bare number is seconds, the same reading as --timeout)", is_bool: false, short: None },
                 OptionDef { name: "ignore-url-query", description: "Remove query parameters from discovered out-link hrefs before loading (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
                 OptionDef { name: "no-norm", description: "Disable URL normalization of discovered out-link hrefs (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
                 OptionDef { name: "readonly", description: "Non-destructive mode: loads may be served from the page store and are never written back; wins over --refresh", is_bool: true, short: None },
@@ -4475,10 +4492,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                     load_opts.push(format!("-topLinks {}", v));
                 }
                 if let Some(v) = get_opt_str(args, "expires") {
-                    load_opts.push(format!("-expires {}", v));
+                    load_opts.push(format!("-expires {}", load_option_duration(&v)));
                 }
                 if let Some(v) = get_opt_str(args, "page-load-timeout") {
-                    load_opts.push(format!("-pageLoadTimeout {}", v));
+                    load_opts.push(format!("-pageLoadTimeout {}", load_option_duration(&v)));
                 }
                 if let Some(v) = get_opt_str(args, "priority") {
                     load_opts.push(format!("-priority {}", v));
@@ -4510,11 +4527,15 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // CrawlRequest.args must not be null (Kotlin non-null).
                 p["args"] = json!(load_opts.join(" "));
 
-                // Depth
+                // Depth: kept as the typed string, like `parallel` and `timeout`, so
+                // main.rs can refuse a value instead of silently replacing it with 1
+                // (an invalid depth used to become 1, and a negative one was clamped
+                // by the backend into the same branch as "follow one link level").
+                // build_crawl_server_params turns it back into the server's Int.
                 if let Some(v) = get_opt_str(args, "depth") {
-                    p["depth"] = json!(v.parse::<i32>().unwrap_or(1));
+                    p["depth"] = json!(v);
                 } else {
-                    p["depth"] = json!(1);
+                    p["depth"] = json!("1");
                 }
 
                 // Parallelism budget: how many pages/tabs this crawl may collect
@@ -9610,7 +9631,9 @@ mod tests {
         args.insert("url".to_string(), json!("https://example.com"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["url"], "https://example.com");
-        assert_eq!(params["depth"], 1);
+        // Depth travels as the typed string so main.rs can reject a bad value;
+        // build_crawl_server_params turns it into the server's Int.
+        assert_eq!(params["depth"].as_str().unwrap(), "1");
     }
 
     #[test]
@@ -9625,7 +9648,7 @@ mod tests {
         args.insert("top-links".to_string(), json!("10"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["url"], "https://example.com");
-        assert_eq!(params["depth"], 3);
+        assert_eq!(params["depth"].as_str().unwrap(), "3");
         let args_str = params["args"].as_str().unwrap_or("");
         assert!(args_str.contains("-outLink \"a.product\""));
         assert!(args_str.contains("-outLinkPattern \"/product/\""));
@@ -9731,7 +9754,7 @@ mod tests {
         // Sent as the CLI spelling; main.rs translates it to the server's
         // `parallelTabs` (see build_crawl_server_params).
         assert_eq!(params["parallel"].as_str().unwrap(), "6");
-        assert_eq!(params["depth"].as_i64().unwrap(), 1);
+        assert_eq!(params["depth"].as_str().unwrap(), "1");
     }
 
     #[test]
@@ -9974,7 +9997,7 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
         assert!(params.get("url").is_none()); // url not set
         assert_eq!(params["seedFile"].as_str().unwrap(), "urls.txt");
-        assert_eq!(params["depth"].as_i64().unwrap(), 0);
+        assert_eq!(params["depth"].as_str().unwrap(), "0");
     }
 
     #[test]
@@ -9992,6 +10015,37 @@ mod tests {
         assert!(args_str.contains("-refresh"));
         assert!(args_str.contains("-parse"));
         assert!(args_str.contains("-expires 2h"));
+    }
+
+    #[test]
+    fn test_crawl_params_bare_duration_gets_a_seconds_unit() {
+        // The backend reads a bare number as milliseconds, so a bare number has to
+        // leave the CLI with the unit attached: `--page-load-timeout 30` is the
+        // documented 30 seconds, not 30 milliseconds.
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("page-load-timeout".to_string(), json!("30"));
+        args.insert("expires".to_string(), json!("5"));
+        let params = (cmd.tool_params_fn)(&args);
+        let args_str = params["args"].as_str().unwrap_or("");
+        assert!(args_str.contains("-pageLoadTimeout 30s"), "got: {args_str}");
+        assert!(args_str.contains("-expires 5s"), "got: {args_str}");
+    }
+
+    #[test]
+    fn test_crawl_params_keeps_an_explicit_duration_unit() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("page-load-timeout".to_string(), json!("1500ms"));
+        args.insert("expires".to_string(), json!("1h"));
+        let params = (cmd.tool_params_fn)(&args);
+        let args_str = params["args"].as_str().unwrap_or("");
+        assert!(args_str.contains("-pageLoadTimeout 1500ms"), "got: {args_str}");
+        assert!(args_str.contains("-expires 1h"), "got: {args_str}");
     }
 
     // ---- crawl subcommand tests ----

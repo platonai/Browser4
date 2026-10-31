@@ -64,8 +64,10 @@ browser4-cli crawl "https://example.com/shop" -ol "a.product" -olp "product/" -d
 
 ### LoadOptions passthrough and quality requirements (`--args` / `-a`)
 
-`-a` / `--args` takes a **raw [LoadOptions](load-options-guide.md) string**, not JSON: split on
-whitespace and forwarded verbatim.  A `-`-leading value is accepted, so all forms below bind:
+`-a` / `--args` takes a **raw [LoadOptions](load-options-guide.md) string**, not JSON: forwarded
+verbatim (only `@file` tokens are expanded).  Tokens are split quote-aware — a double-quoted value
+is one token, as on the server — so `-a "-outLink \"a[href*='x y']\""` keeps the selector in one
+piece.  A `-`-leading value is accepted, so all forms below bind:
 
 ```bash
 browser4-cli crawl "https://example.com" -ol "a[href]" --args="-requireSize 100000 -scrollCount 5"
@@ -106,8 +108,8 @@ formatted by `--format`.  X-SQL function names are case-insensitive (`DOM_FIRST_
 
 | Flag | Short | Type | Default | Description |
 |---|---|---|---|---|
-| `url` (positional) | | string | — | Starting URL. Must be absolute (`https://…`); omit when using `--seed-file` |
-| `--seed-file` | | string | — | File with URLs to crawl, one per line, each an absolute URL. Lines starting with `#` are comments |
+| `url` (positional) | | string | — | Starting URL. Must be absolute: an `https://…` URL or a `file:///…` path; omit when using `--seed-file` |
+| `--seed-file` | | string | — | File with URLs to crawl, one per line, each an absolute `http(s)://` URL or `file:///` path. Lines starting with `#` are comments |
 | `--depth` | `-d` | int | `1` | 0 = fetch only (no links); 1+ = follow links to that depth |
 | `--parallel` | | int | `4` | How many units (pages/tabs) to collect at the same time. `1` = strictly sequential |
 | `--timeout` | | duration | `10m` | Whole-crawl cap (max `1h`); bare number = seconds — use `30m` |
@@ -128,6 +130,8 @@ can answer for the exit IP's region instead of the region you prepared.
 * `crawl --profile /path/to/user-data-dir …` launches a browser on that directory instead, owns it,
   and closes it with the task. Do not point it at a directory a live session is using — a Chrome
   user-data directory can only be used by one browser process at a time.
+* `--session` and `--profile` are mutually exclusive: giving both is refused by the CLI with
+  `--session and --profile are mutually exclusive` before the crawl is submitted.
 
 The borrow is non-destructive: the crawl loads through its own session that carries the target
 browser (and no driver), so each parallel unit still leases its own tab, and the caller's tab, URL
@@ -243,17 +247,17 @@ way past one context's ceiling.  The split is deliberate:
 
 | Flag | Short | Type | Default | Description |
 |---|---|---|---|---|
-| `--sql` | | string | — | X-SQL query. Use `@url` as page URL placeholder. Prefix with `@` to read from file |
+| `--sql` | | string | — | X-SQL query. Use `@url` as page URL placeholder. Prefix with `@` to read from file. An empty value (`--sql ""`) is refused, since a blank query silently means "no extraction" |
 | `--sql-stdin` | | bool | — | Read query from stdin (avoids shell quoting issues) |
-| `--sql-base64` | | string/bool | — | Base64 query — value form, or bare flag over `--sql` |
+| `--sql-base64` | | string/bool | — | Base64 query — value form (`--sql-base64 "<b64>"`, usable on its own) or bare flag over `--sql`/`--sql-stdin` |
 | `--format` | | string | `table` | Output format for X-SQL rows: `json`, `csv`, or `table`.  Requires `--sql`: without it the CLI **warns on stdout** but **refuses** (exit 1, writes nothing) when `--output` is also given, because the file would hold the plain-text listing under a `csv`/`json` name.  For a JSON *page listing* of a plain crawl use the global `--json` flag before the command — no `--sql` needed |
 | `--output` | `-o` | string | — | Write results to file instead of stdout |
 | `--verbose` | | bool | — | Show per-URL processing status in the crawl results (also surfaces per-page X-SQL diagnostics instead of only the aggregate error count) |
 
 > **Note — `--sql-base64` accepts two shapes:** `--sql "<base64>" --sql-base64` (bare flag) decodes
 > the `--sql`/`--sql-stdin` text; `--sql-base64 "<base64>"` (value form) supplies the encoded query
-> itself, but for `crawl` only when `--sql`/`--sql-stdin` is present — alone it is accepted and does
-> no extraction at all and no error, unlike `swarm submit`/`htmlsnapshot query`.  Prefer the flag.
+> itself and works on its own — `--sql @query.sql --sql-base64` reads the file first, then decodes
+> its contents.
 
 > **Note — what `--output` writes:** `-o` writes the **crawl result** — the aggregated X-SQL rows
 > with `--sql`, else the page listing (`depth=N | <url> | <title>`).  It does **not** write page
@@ -265,7 +269,7 @@ way past one context's ceiling.  The split is deliberate:
 | Flag | Short | Type | Default | Description |
 |---|---|---|---|---|
 | `--out-link-selector` | `-ol` | string | — | CSS selector to extract links from each page |
-| `--out-link-pattern` | `-olp` | regex | `.+` | Regex to filter links (Git Bash: no leading `/`) |
+| `--out-link-pattern` | `-olp` | regex | `.+` | Regex to filter discovered links — matched as a **substring** of the link URL (`product/` matches `/product/1`), so no implicit anchors. An invalid regex filters **nothing** (every link passes); Git Bash: no leading `/` |
 | `--top-links` | `-tl` | int | `20` | Max **distinct** pages one page may contribute (repeats are removed first) |
 
 > **Git Bash / MSYS2 — leading-`/` values:** `/`-leading values (e.g. `-olp "/product/"`) are
@@ -280,12 +284,17 @@ way past one context's ceiling.  The split is deliberate:
 | `--args` | `-a` | string | Raw LoadOptions string; bind it as `--args="…"` or `-a @file` |
 | `--refresh` | | bool | Force fresh fetch (ignore cache) |
 | `--parse` | | bool | Parse pages after fetch |
-| `--expires` | | string | Cache TTL: `1d`, `1h`, `30m`, etc. Invalid values are rejected by the CLI (non-zero exit) |
+| `--expires` | | string | Cache TTL: `1d`, `1h`, `30m`, etc.; a bare number is seconds (`30` = `30s`). Invalid values are rejected by the CLI (non-zero exit), including a bare single digit (`5`) — write `5s` |
 | `--priority` | `-p` | int | Queue priority (non-negative integer; lower = higher priority) |
-| `--page-load-timeout` | | string | Per-page load cap (`30`, `30s`, `1m`) — not the crawl budget |
+| `--page-load-timeout` | | string | Per-page load cap (`30`, `30s`, `1m`) — not the crawl budget. A bare number is seconds, the same reading as `--timeout` |
 | `--ignore-url-query` | | bool | Out-links only (depth 1+); seeds are fetched verbatim |
 | `--no-norm` | | bool | Out-links only (depth 1+); no URL normalization of discovered hrefs |
 | `--readonly` | | bool | Non-destructive mode: loads may be served from the page store and are never written back. Wins over `--refresh` (see below) |
+
+> **Note — `--expires` needs `--readonly`:** a normal crawl forces a fresh fetch
+> (`-refresh` expands to `-i 0s`, so every stored copy looks expired), which makes the TTL
+> irrelevant. With `--readonly` the refresh is dropped and the TTL decides whether a stored
+> page may answer; the CLI prints a note when `--expires` is used without `--readonly`.
 
 > **Note — seed-only crawls:** a `--depth 0` fetch discovers nothing, so `--ignore-url-query` and
 > `--no-norm` are accepted and change nothing; a stderr advisory for that case is not emitted yet.
@@ -402,13 +411,14 @@ both a positional `url` and `--seed-file` are given, the URL is prepended to the
 https://www.amazon.com/dp/B0C17W3Q9B
 ```
 
-Every seed — the positional URL and each seed-file line — must be an **absolute URL**.  A value the
+Every seed — the positional URL and each seed-file line — must be an **absolute URL**: an
+`http(s)://` URL or a `file:///` path (a local fixture page is a legitimate seed).  A value the
 crawl could never fetch is refused **before** the task is submitted; the message names the seed and,
 for a seed file, the line it came from:
 
 ```text
-Invalid crawl URL 'formats' (command argument): expected an absolute http(s) URL such as https://example.com/page.
-Invalid crawl URL 'formats' (urls.txt line 4): expected an absolute http(s) URL such as https://example.com/page.
+Invalid crawl URL 'formats' (command argument): expected an absolute http(s) or file:/// URL such as https://example.com/page.
+Invalid crawl URL 'formats' (urls.txt line 4): expected an absolute http(s) or file:/// URL such as https://example.com/page.
 ```
 
 A host without its scheme gets the fix suggested (`did you mean 'https://example.com'?`), and a
@@ -424,7 +434,7 @@ still carry trailing LoadOptions (`https://example.com -expires 1d`), split off 
 |---|---|
 | No URLs provided | Exits with "No URLs provided. Specify a URL argument or --seed-file." |
 | Empty seed file | Exits with "No URLs provided." after parsing |
-| Malformed seed | Exits with "Invalid crawl URL '<value>' (<origin>): expected an absolute http(s) URL such as https://example.com/page." before the server is started — `<origin>` is `command argument` or `<seed file> line <n>`. A bare host is answered with `did you mean 'https://<host>'?` |
+| Malformed seed | Exits with "Invalid crawl URL '<value>' (<origin>): expected an absolute http(s) or file:/// URL such as https://example.com/page." before the server is started — `<origin>` is `command argument` or `<seed file> line <n>`. A bare host is answered with `did you mean 'https://<host>'?` |
 | Timeout | Exits with message + task ID; increase `BROWSER4_CLI_CRAWL_TIMEOUT_SECS` |
 | Server error | Exits with "Crawl failed: ..." and server error details |
 | No links found (depth >= 1) | Exit 0 with a `⚠ Link discovery found no out-links` warning plus the backend diagnostic (it distinguishes "selector matched nothing" from "pattern filtered them all") and the effective `--out-link-pattern`. The seed page is always counted in depth ≥ 2 crawls, so an all-filtered crawl reports `Crawl completed. 1 pages found.` (depth-1 crawls list only discovered pages and report `0 pages found`). Inspect the warning text and verify `--out-link-selector` / `--out-link-pattern` — a shell-mangled pattern (Git Bash `/`-prefix conversion) is the usual cause |
