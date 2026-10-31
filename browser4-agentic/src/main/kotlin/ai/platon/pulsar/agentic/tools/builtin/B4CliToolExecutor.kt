@@ -490,7 +490,21 @@ internal fun externalPathRefusal(args: String, workspace: Path?, allowExternalAc
     val root = workspace?.toAbsolutePath()?.normalize()
 
     val candidates = buildList {
-        FILE_URL.findAll(args).forEach { match -> add(match.groupValues[1]) }
+        FILE_URL.findAll(args).forEach { match ->
+            val separators = match.groupValues[1]
+            val rest = match.groupValues[2]
+            // Keep the shape the URL names: `file:///abs` is one absolute root (`/abs`),
+            // `file://host/share` is the UNC form, `file:rel` stays relative. Dropping the
+            // separators made `file:///tmp/x` look relative on a POSIX host, so the guard let a
+            // real absolute path through there while refusing the same URL on Windows.
+            add(
+                when {
+                    separators.length == 2 -> "//$rest"
+                    separators.isNotEmpty() -> "/$rest"
+                    else -> rest
+                }
+            )
+        }
         UPLOAD_ARG.findAll(args).forEach { match ->
             val value = match.groupValues.drop(1).firstOrNull { it.isNotBlank() } ?: return@forEach
             add(value)
@@ -690,7 +704,7 @@ private fun pathOfFileReference(raw: String): Path? {
     return runCatching { Path.of(cleaned) }.getOrNull()
 }
 
-private val FILE_URL = Regex("""file:(?:/{1,3})?([^"'\s]+)""", RegexOption.IGNORE_CASE)
+private val FILE_URL = Regex("""file:(/*)([^"'\s]+)""", RegexOption.IGNORE_CASE)
 
 /** `upload <ref> <path>` — the path is either quoted or a bare token. */
 private val UPLOAD_ARG = Regex("""\bupload\s+\S+\s+(?:"([^"]+)"|'([^']+)'|(\S+))""", RegexOption.IGNORE_CASE)
