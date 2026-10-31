@@ -75,6 +75,89 @@ class ToolSpecGeneratorExtractionTest {
     }
 
     @Test
+    @DisplayName("the advertised overload is the one a JSON client can actually call")
+    fun jsonFriendlyOverloadIsPreferredOverSourceOrder() {
+        // The Kotlin-only form is declared last, so plain "last wins" would advertise
+        // a required `NavigateEntry` — an argument no MCP client can send.
+        val source = """
+            interface Overloaded {
+                /**
+                 * Navigate to a URL.
+                 */
+                @MCP
+                suspend fun navigate(url: String)
+
+                /**
+                 * Navigate with the driver's entry object.
+                 */
+                @MCP
+                suspend fun navigate(entry: NavigateEntry)
+            }
+        """.trimIndent()
+        val extracted = ToolSpecGenerator.extractInterface("overloaded", source, "Overloaded")
+        val advertised = ToolSpecGenerator.selectPreferred(extracted)
+
+        assertEquals("String", advertised["navigate"]!!.arguments.single().type)
+        assertEquals(
+            "overloaded.navigate(url: String)",
+            advertised["navigate"]!!.expression,
+            "the JSON-friendly overload must win regardless of declaration order",
+        )
+    }
+
+    @Test
+    @DisplayName("equally friendly overloads keep the last declaration")
+    fun lastDeclarationWinsBetweenFriendlyOverloads() {
+        val source = """
+            interface Overloaded {
+                /**
+                 * Read the text.
+                 */
+                @MCP
+                suspend fun text(selector: String)
+
+                /**
+                 * Read the text with a timeout.
+                 */
+                @MCP
+                suspend fun text(selector: String, timeoutMillis: Long = 1000)
+            }
+        """.trimIndent()
+        val advertised = ToolSpecGenerator.selectPreferred(
+            ToolSpecGenerator.extractInterface("overloaded", source, "Overloaded"),
+        )
+
+        assertEquals(2, advertised["text"]!!.arguments.size, "the richer overload stays advertised")
+    }
+
+    @Test
+    @DisplayName("an overload whose Kotlin-only argument is optional beats a required one")
+    fun unfriendlyOverloadsFallBackToSourceOrder() {
+        val source = """
+            interface Overloaded {
+                /**
+                 * Wait for the given duration.
+                 */
+                @MCP
+                suspend fun delay(duration: Duration)
+
+                /**
+                 * Wait for the given duration.
+                 */
+                @MCP
+                suspend fun delay(millis: Long = 1000)
+            }
+        """.trimIndent()
+        val advertised = ToolSpecGenerator.selectPreferred(
+            ToolSpecGenerator.extractInterface("overloaded", source, "Overloaded"),
+        )
+
+        // `millis` carries a default, so it is not a *required* non-JSON argument:
+        // this overload is friendly and wins over `duration`, which is not.
+        assertEquals("millis", advertised["delay"]!!.arguments.single().name)
+    }
+
+    @Test
     @DisplayName("the rendered signature is callable text, never a data-class dump")
     fun signatureIsCallableText() {
         val byMethod = specs()
