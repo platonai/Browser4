@@ -894,9 +894,10 @@ class CodingAgentShell(
                 }
                 continue
             }
-            val path = runCatching { Path.of(expanded) }.getOrNull() ?: continue
+            val ported = portableSeparators(expanded)
+            val path = runCatching { Path.of(ported) }.getOrNull() ?: continue
             val resolved = if (path.isAbsolute) path.normalize()
-            else canonicalBaseDir.resolve(expanded).normalize()
+            else canonicalBaseDir.resolve(ported).normalize()
             if (resolved.startsWith(canonicalBaseDir)) {
                 // The lexical path is inside the workspace, but a link inside it may still resolve
                 // into a credential location (module junctions are links too, so only the sensitive
@@ -939,10 +940,11 @@ class CodingAgentShell(
             if (isWindowsSwitch(token)) continue
             val candidate = pathCandidate(token) ?: continue
             val expanded = expandVariables(candidate) ?: continue
-            val path = runCatching { Path.of(expanded) }.getOrNull() ?: continue
-            val relativeEscape = !path.isAbsolute && expanded.contains("..")
+            val ported = portableSeparators(expanded)
+            val path = runCatching { Path.of(ported) }.getOrNull() ?: continue
+            val relativeEscape = !path.isAbsolute && ported.contains("..")
             if (!path.isAbsolute && !relativeEscape) continue
-            val resolved = if (path.isAbsolute) path.normalize() else canonicalBaseDir.resolve(expanded).normalize()
+            val resolved = if (path.isAbsolute) path.normalize() else canonicalBaseDir.resolve(ported).normalize()
             if (resolved.startsWith(canonicalBaseDir)) continue
             if (toolchainRoots.any { resolved.startsWith(it) }) continue
             // Credential locations stay the credential guard's business (so its switch
@@ -957,6 +959,20 @@ class CodingAgentShell(
         }
         return null
     }
+
+    /**
+     * Resolves both separator styles, so a token written for the *other* platform still names the
+     * location it means.
+     *
+     * The guard deliberately judges one command line for both shells — `%USERPROFILE%\.ssh\id_rsa`
+     * is refused on Linux too — so a `\`-spelled path has to resolve like a path while the host is
+     * POSIX as well. Without this, `"%JAVA_HOME%\bin\java"` expanded to `…/x64\bin\java`: one odd
+     * path element, not under [toolchainRoots] and not a launcher (its "extension" was
+     * `x64\bin\java`), so the JDK itself was refused as "outside the workspace" on the Ubuntu CI
+     * runner (2026-10-31 nightly). `/` is accepted on every platform, so the other direction needs
+     * no special case.
+     */
+    private fun portableSeparators(path: String): String = path.replace('\\', '/')
 
     /** `/s`, `/b`, `/i` are switches on Windows, not POSIX paths. */
     private fun isWindowsSwitch(token: String): Boolean =
@@ -975,6 +991,11 @@ class CodingAgentShell(
         val home = runCatching { Path.of(System.getProperty("user.home")) }.getOrNull()
         listOfNotNull(
             runCatching { Path.of(System.getProperty("java.home")) }.getOrNull(),
+            // `$JAVA_HOME` / `%JAVA_HOME%` may name a different JDK than the one running the
+            // backend (Maven toolchains, a launcher script), and the exception exists for *the JDK*
+            // rather than for one particular installation — so the declared root counts too.
+            System.getenv("JAVA_HOME")?.takeIf { it.isNotBlank() }
+                ?.let { runCatching { Path.of(portableSeparators(it)) }.getOrNull() },
             home?.resolve(".m2"),
             home?.resolve(".gradle"),
             home?.resolve(".cache"),
