@@ -18,10 +18,22 @@ import java.nio.file.Path
 @DisplayName("b4.run external path guard")
 class B4CliExternalPathTest {
 
+    /**
+     * An absolute path outside [workspace], spelled for the host: `C:/…` is a *relative* path on
+     * a POSIX machine, so a hard-coded Windows path tested nothing there (and the nightly proved
+     * it — `upload "C:/Windows/win.ini"` is resolved inside the workspace on Linux, correctly).
+     */
+    private fun outsidePath(workspace: Path, name: String): String =
+        workspace.resolve("..").resolve(name).toAbsolutePath().normalize().toString().replace('\\', '/')
+
+    /** `file://` URL for [path] — three slashes for both `C:/x` and `/x`. */
+    private fun fileUrl(path: String): String =
+        "file://" + if (path.startsWith("/")) path else "/$path"
+
     @Test
     @DisplayName("a file:// URL outside the workspace is refused")
     fun fileUrlOutsideIsRefused(@TempDir tmp: Path) {
-        val refusal = externalPathRefusal("""goto "file:///D:/secret/notes.txt"""", tmp, allowExternalAccess = false)
+        val refusal = externalPathRefusal("""goto "${fileUrl(outsidePath(tmp, "notes.txt"))}"""", tmp, allowExternalAccess = false)
 
         assertNotNull(refusal, "an external file:// read must be refused")
         assertTrue(refusal!!.contains("PATH_OUTSIDE_WORKSPACE"), refusal)
@@ -35,7 +47,7 @@ class B4CliExternalPathTest {
         Files.writeString(tmp.resolve("page.html"), "<html></html>")
 
         val allowed = externalPathRefusal(
-            "goto \"file:///${tmp.resolve("page.html").toString().replace('\\', '/')}\"",
+            "goto \"${fileUrl(tmp.resolve("page.html").toString().replace('\\', '/'))}\"",
             tmp,
             allowExternalAccess = false,
         )
@@ -47,7 +59,7 @@ class B4CliExternalPathTest {
     @DisplayName("uploading an absolute path outside the workspace is refused")
     fun uploadOutsideIsRefused(@TempDir tmp: Path) {
         val refusal = externalPathRefusal(
-            """upload "#file" "C:/Windows/win.ini"""", tmp, allowExternalAccess = false,
+            """upload "#file" "${outsidePath(tmp, "win.ini")}"""", tmp, allowExternalAccess = false,
         )
 
         assertNotNull(refusal, "an external upload must be refused")
@@ -64,7 +76,7 @@ class B4CliExternalPathTest {
     @DisplayName("htmlsnapshot --output-file outside the workspace is refused")
     fun outputFileOutsideIsRefused(@TempDir tmp: Path) {
         val refusal = externalPathRefusal(
-            """htmlsnapshot query --sql @query.sql --output-file "D:/secret/out.json"""",
+            """htmlsnapshot query --sql @query.sql --output-file "${outsidePath(tmp, "out.json")}"""",
             tmp,
             allowExternalAccess = false,
         )
@@ -77,7 +89,7 @@ class B4CliExternalPathTest {
     @DisplayName("har stop --path outside the workspace is refused")
     fun harPathOutsideIsRefused(@TempDir tmp: Path) {
         val refusal = externalPathRefusal(
-            """har stop --path "C:/temp/trace.har"""", tmp, allowExternalAccess = false,
+            """har stop --path "${outsidePath(tmp, "trace.har")}"""", tmp, allowExternalAccess = false,
         )
 
         assertNotNull(refusal, "har stop writes the HAR to the given path")
@@ -97,7 +109,7 @@ class B4CliExternalPathTest {
     @Test
     @DisplayName("nothing is refused when external access is enabled")
     fun externalAccessOptOut(@TempDir tmp: Path) {
-        assertNull(externalPathRefusal("""goto "file:///D:/secret/notes.txt"""", tmp, allowExternalAccess = true))
-        assertNull(externalPathRefusal("""har stop --path "C:/temp/trace.har"""", tmp, allowExternalAccess = true))
+        assertNull(externalPathRefusal("""goto "${fileUrl(outsidePath(tmp, "notes.txt"))}"""", tmp, allowExternalAccess = true))
+        assertNull(externalPathRefusal("""har stop --path "${outsidePath(tmp, "trace.har")}"""", tmp, allowExternalAccess = true))
     }
 }
