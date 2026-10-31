@@ -51,9 +51,13 @@ class CodingAgentShellWorkspaceBoundaryTest {
     fun relativeEscapeIsRefused() {
         val shell = shell()
         val relative = workspace.relativize(outsideFile()).toString()
-        val command = "type \"$relative\""
+        // The guard judges one command line for both shells, so a `\`-spelled escape is refused
+        // wherever it runs: resolving both separator styles must not turn an escape into an allow.
+        val windowsStyle = relative.replace('/', '\\')
 
-        assertFalse(shell.isAllowed(command), shell.explain(command))
+        for (command in listOf("type \"$relative\"", "type \"$windowsStyle\"")) {
+            assertFalse(shell.isAllowed(command), shell.explain(command))
+        }
     }
 
     @Test
@@ -73,6 +77,10 @@ class CodingAgentShellWorkspaceBoundaryTest {
         for (command in listOf(
             "type .b4inputs/spec.csv",
             "mvnw.cmd -pl browser4-coding -am compile",
+            "\"\$JAVA_HOME/bin/java\" -version",
+            // Windows spelling on a POSIX host: the guard expands `%VAR%` and `$env:` forms on
+            // every platform, so `\` must resolve as a separator too — it refused the JDK itself
+            // as "outside the workspace" on the Ubuntu nightly runner (2026-10-31).
             "\"%JAVA_HOME%\\bin\\java\" -version",
         )) {
             assertTrue(shell.isAllowed(command), "$command must stay allowed: ${shell.explain(command)}")
