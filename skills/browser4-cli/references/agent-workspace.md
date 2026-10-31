@@ -105,7 +105,9 @@ guarded now:
   outside the workspace is refused with `PERMISSION_DENIED | code=COMMAND_PATH_DENIED`.
   Toolchain locations (`java.home`, `~/.m2`, `~/.gradle`, temp, `%SystemRoot%`), build
   launchers (`mvnw`, `python3`, any `*.exe`/`*.cmd`/`*.ps1`) and credential locations keep
-  their existing behaviour. Disable with `-Dbrowser4.agent.shell.workspaceBoundary=off`.
+  their existing behaviour. This inspection is advisory (fast-fail); the OS sandbox
+  (`browser4.agent.sandbox`) is the enforcement boundary. Disable the check with
+  `-Dbrowser4.agent.shell.workspaceBoundary=off`.
 - `b4.run` refuses `file://` URLs, `upload` paths and CLI **write destinations** outside
   the workspace — `--output-file`, crawl `--out`, `har stop --path` and the `-o` alias all
   make the CLI write straight to disk — with `code=PATH_OUTSIDE_WORKSPACE`.
@@ -116,8 +118,10 @@ guarded now:
   preset.
 
 The path rules above are relaxed by `browser4.agent.allowExternalAccess=true` — that is
-the operator's explicit opt-in, not something a task can grant itself. The `code` / `tool
-call` / `plugin` rule is driven by the preset instead: only `access=full` allows them.
+the operator's explicit opt-in, not something a task can grant itself, and it is
+**deprecated** and advisory: it relaxes the string checks above, not the OS sandbox
+(`browser4.agent.sandbox`). The `code` / `tool call` / `plugin` rule is driven by the
+preset instead: only `access=full` allows them.
 
 ### Deliverable format
 
@@ -182,7 +186,7 @@ Credential locations stay refused. `--access` never widens paths.
 | `--fresh-workspace` | `agent run` | accepted for compatibility; per-task isolation is the default now |
 | `--access <preset>` | `agent run` | which *tools* run (`full`/`write`/`read-build`/`read`); never widens paths |
 | `browser4.agent.copyTaskInputs` | backend | copy instruction-referenced external files into `.b4inputs/` (default `true`) |
-| `browser4.agent.allowExternalAccess` | backend | allow absolute paths outside the workspace (default `false`) |
+| `browser4.agent.allowExternalAccess` | backend | deprecated; advisory string-layer widening for absolute paths outside the workspace (default `false`) |
 | `browser4.agent.workspace` | backend | the checkout a `--coding` task mirrors (default: auto-detected) |
 
 ## Errors & Recovery

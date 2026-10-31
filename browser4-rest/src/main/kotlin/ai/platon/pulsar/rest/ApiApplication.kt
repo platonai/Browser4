@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.llm.Browser4ProviderRegistry
 import ai.platon.pulsar.agentic.llm.LlmConfigNormalizer
 import ai.platon.pulsar.boot.autoconfigure.Browser4AutoConfiguration
 import ai.platon.pulsar.boot.plugin.PluginClasspathEnhancer
+import ai.platon.pulsar.coding.sandbox.SandboxDefaults
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.context.metrics.buffering.BufferingApplicationStartup
 import org.springframework.boot.runApplication
@@ -20,6 +21,9 @@ fun main(args: Array<String>) {
     // properties files to dotted keys before any session is created, so the
     // engine's `deepseek.api.key` lookups actually bind.
     LlmConfigNormalizer.normalize()
+    // Plan P3-4 (D1): a fresh installation starts with the platform sandbox; an existing
+    // installation keeps `off`, and an explicit -Dbrowser4.agent.sandbox=… always wins.
+    SandboxDefaults.apply()
     // Point the engine at Browser4's own provider registry (the base library's
     // copy decides the auto-detection order, which Browser4 owns).
     Browser4ProviderRegistry.install()

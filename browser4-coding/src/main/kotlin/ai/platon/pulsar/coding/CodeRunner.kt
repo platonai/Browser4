@@ -1,6 +1,11 @@
 package ai.platon.pulsar.coding
 
 import org.slf4j.LoggerFactory
+import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
+import ai.platon.pulsar.coding.sandbox.ProcessLauncher
+import ai.platon.pulsar.coding.sandbox.ProcessSpec
+import ai.platon.pulsar.coding.sandbox.SandboxDenials
+import ai.platon.pulsar.coding.sandbox.SandboxEnvironment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -19,8 +24,9 @@ import java.util.concurrent.TimeUnit
  * - a **deny-list of interpreters** that would be too dangerous to spawn as-is
  *   (interactive shells, database clients, etc.).
  *
- * It deliberately does NOT provide network, persistence, or workspace access —
- * scripts that need those should use `coding.shell` with the normal command
+ * It provides no workspace access and no persistence; the network flag is the caller's
+ * decision ([networkAllowed]), so a policy carrying an active `net.connect` grant can turn it
+ * on. Scripts that need the workspace should use `coding.shell` with the normal command
  * whitelist instead.
  */
 class CodeRunner(
@@ -65,18 +71,29 @@ class CodeRunner(
     fun supportedLanguages(): List<String> = RUNNERS.keys.sorted()
 
     /**
+     * The interpreter program that would run [language], or `null` for an unsupported language.
+     *
+     * Callers use this to check an operator grant against the program name (the same granularity
+     * the command rail approves) before handing the code to [run].
+     */
+    fun interpreterFor(language: String): String? = RUNNERS[language.lowercase()]?.firstOrNull()
+
+    /**
      * Run [code] in a sandboxed subprocess.
      *
      * @param language one of [supportedLanguages]
      * @param code     source code to execute
      * @param timeoutSeconds max run time (defaults to [defaultTimeoutSeconds])
      * @param args     extra CLI args passed to the interpreter
+     * @param networkAllowed whether the sandbox may let the process reach the network; supplied by
+     *   the caller from the access policy, since this runner has no policy of its own
      */
     suspend fun run(
         language: String,
         code: String,
         timeoutSeconds: Long = defaultTimeoutSeconds,
         args: List<String> = emptyList(),
+        networkAllowed: Boolean = false,
     ): RunResult {
         val runner = RUNNERS[language.lowercase()]
             ?: return RunResult(-1, "", "Unsupported language: $language. Supported: ${supportedLanguages().joinToString(", ")}")
@@ -102,10 +119,15 @@ class CodeRunner(
                     else add(script.toString())
                 }
                 val process = try {
-                    ProcessBuilder(command)
-                        .directory(workDir.toFile())
-                        .redirectErrorStream(false)
-                        .start()
+                    // C1/C2: same environment construction and sandbox seam as `coding.shell`.
+                    // runCode declares no explicit variables, so it receives the whitelist only.
+                    val environment = SandboxEnvironment.build(System.getenv())
+                    val spec = ExecutionSandboxes.current().prepare(
+                        ProcessSpec(command, workDir, environment),
+                        workDir,
+                        allowNetwork = networkAllowed,
+                    )
+                    ProcessLauncher.start(spec, redirectErrorStream = false)
                         .also { p ->
                             if (useStdin) {
                                 p.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(code) }
@@ -147,10 +169,21 @@ class CodeRunner(
                 }
                 readJobs.forEach { it.join(2_000) }
 
+                val stdout = truncate(stdoutBuf.toString())
+                val stderr = truncate(stderrBuf.toString())
+                val exitCode = if (finished) process.exitValue() else -1
+                // Plan P3-3: the same structured refusal the shell emits; the raw bytes are logged
+                // by the translator rather than handed to the model.
+                val denial = if (finished && exitCode != 0) {
+                    SandboxDenials.envelope("coding.runCode", "$language script", stderr + "\n" + stdout)
+                } else {
+                    null
+                }
+
                 RunResult(
-                    exitCode = if (finished) process.exitValue() else -1,
-                    stdout = truncate(stdoutBuf.toString()),
-                    stderr = truncate(stderrBuf.toString()),
+                    exitCode = exitCode,
+                    stdout = stdout,
+                    stderr = denial ?: stderr,
                     timedOut = !finished,
                 )
             } finally {

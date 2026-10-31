@@ -399,6 +399,70 @@ pub(super) fn test_agent_run_interactive_reports_run_statistics(ctx: &mut E2ECtx
     );
 }
 
+/// `/access`, `/approve` and `/deny` are answered by the session itself against
+/// the agent-access REST endpoints — no task is started and the model never
+/// sees them. A deny comes back as 409 with the decision body and must still
+/// render as a decision, not an error.
+pub(super) fn test_agent_run_interactive_slash_access_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // The task id is passed explicitly so nothing depends on session state.
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i"],
+        "/access task-1\n/approve req-1 task-1\n/deny req-2 task-1\n/quit\n",
+    );
+
+    let stdout = &run_result.stdout;
+    assert!(
+        stdout.contains("task task-1: state=pending"),
+        "/access must head the view with the task and its state:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("req-1") && stdout.contains("fs.write") && stdout.contains("src/generated"),
+        "/access must list the pending request:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("op-req-9") && stdout.contains("fs.exec"),
+        "/access must list the active operator grant:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("req-1: approved (effect=fs.write target=src/generated expires=task-end)"),
+        "/approve must render the decision body:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("req-2: denied (effect=fs.exec target=cargo build expires=task-end)"),
+        "/deny must render the 409 decision body, not an error:\n{stdout}"
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot
+            .agent_access_calls
+            .contains(&"GET /api/agent/task-1/access".to_string()),
+        "/access must hit the access view endpoint: {:?}",
+        snapshot.agent_access_calls
+    );
+    assert!(
+        snapshot
+            .agent_access_calls
+            .contains(&"POST /api/agent/task-1/access/req-1/approve".to_string()),
+        "/approve must hit the decision endpoint: {:?}",
+        snapshot.agent_access_calls
+    );
+    assert!(
+        snapshot
+            .agent_access_calls
+            .contains(&"POST /api/agent/task-1/access/req-2/deny".to_string()),
+        "/deny must hit the decision endpoint: {:?}",
+        snapshot.agent_access_calls
+    );
+}
+
 fn completed_status(
     task_id: &str,
     instruction: &str,
@@ -943,9 +1007,9 @@ pub(super) fn test_agent_run_interactive_forwards_access_preset(ctx: &mut E2ECtx
     );
 }
 
-/// `--auto-approve` is a per-task ceiling: it must reach `command_run` untouched
-/// so the backend can widen (and later reset) exactly the grants the user allowed.
-pub(super) fn test_agent_run_forwards_auto_approve_ceiling(ctx: &mut E2ECtx) {
+/// A one-shot `agent run` has nobody to watch it, so it leaves the decision to the
+/// backend: the payload must not invent an `unattended` value of its own (plan P4-1).
+pub(super) fn test_agent_run_omits_unattended(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let started_at = Instant::now();
     let mock_server = MockBrowser4Server::start();
@@ -961,16 +1025,7 @@ pub(super) fn test_agent_run_forwards_auto_approve_ceiling(ctx: &mut E2ECtx) {
 
     let run_result = run_command(
         ctx,
-        &[
-            "agent",
-            "run",
-            task,
-            "--coding",
-            "--access",
-            "read-build",
-            "--auto-approve",
-            "write",
-        ],
+        &["agent", "run", task, "--coding", "--access", "read-build"],
     );
     assert!(
         run_result.stdout.contains("Task submitted: agent-task-1"),
@@ -984,22 +1039,22 @@ pub(super) fn test_agent_run_forwards_auto_approve_ceiling(ctx: &mut E2ECtx) {
         .iter()
         .find(|call| call.tool == "command_run")
         .expect("expected command_run MCP tool call");
-    assert_eq!(
-        command_call.arguments["autoApprove"],
-        serde_json::json!("write"),
-        "command_run payload should forward the automatic approval ceiling: {:?}",
+    assert!(
+        command_call.arguments.get("unattended").is_none(),
+        "a one-shot run must leave unattended to the backend: {:?}",
         command_call.arguments
     );
     assert_eq!(
         command_call.arguments["access"],
         serde_json::json!("read-build"),
-        "the ceiling must not replace the preset it widens: {:?}",
+        "the access preset must still be forwarded: {:?}",
         command_call.arguments
     );
 }
 
-/// The interactive session keeps the ceiling for every task typed later.
-pub(super) fn test_agent_run_interactive_forwards_auto_approve_ceiling(ctx: &mut E2ECtx) {
+/// The interactive session is the only place the CLI decides: stdin without a TTY
+/// cannot answer an approval, so every task it submits is marked unattended.
+pub(super) fn test_agent_run_interactive_marks_unattended(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let started_at = Instant::now();
     let mock_server = MockBrowser4Server::start();
@@ -1009,7 +1064,7 @@ pub(super) fn test_agent_run_interactive_forwards_auto_approve_ceiling(ctx: &mut
 
     let run_result = run_command_with_stdin(
         ctx,
-        &["agent", "run", "-i", "--coding", "--auto-approve", "full"],
+        &["agent", "run", "-i", "--coding"],
         "Fix the failing test\n/quit\n",
     );
     assert!(
@@ -1025,9 +1080,9 @@ pub(super) fn test_agent_run_interactive_forwards_auto_approve_ceiling(ctx: &mut
         .find(|call| call.tool == "command_run")
         .expect("expected command_run MCP tool call");
     assert_eq!(
-        command_call.arguments["autoApprove"],
-        serde_json::json!("full"),
-        "the interactive session must carry its ceiling: {:?}",
+        command_call.arguments["unattended"],
+        serde_json::json!(true),
+        "piped stdin is not a TTY, so the session must mark tasks unattended: {:?}",
         command_call.arguments
     );
 }

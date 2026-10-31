@@ -1,6 +1,7 @@
 package ai.platon.pulsar.coding
 
 import org.slf4j.LoggerFactory
+import java.nio.file.Path
 
 /**
  * Access presets for the coding tools exposed to the built-in agent.
@@ -89,10 +90,10 @@ class ToolAccessDeniedException(
  * @property allowNetwork when true, the shell may use network-capable commands
  * @property denyTools tool patterns denied regardless of preset; supports `*`, `domain.*`, `domain.method` and bare `method`
  * @property protectedFiles workspace-relative paths that must never be written or deleted
- * @property autoApproveUpTo automatic approval ceiling: a call the preset refuses is approved (and
- *   audited) when the preset that would grant it is no wider than this one. `null` (the default)
- *   keeps automatic approval off. Explicit `denyTools`, protected paths and sensitive paths are
- *   never auto-approved — they are rails, not capabilities, so approval cannot reach across them.
+ * @property operatorGrants live operator-issued capabilities (plan P4-1). Read on every decision so
+ *   an approval issued while a task runs takes effect on the next call. The grants widen what the
+ *   preset refuses **within the rails** (deny tools, protected/sensitive paths, the workspace
+ *   boundary and the OS sandbox); they never reach across them.
  */
 data class AgentAccessPolicy(
     val preset: AccessPreset = AccessPreset.FULL,
@@ -105,8 +106,8 @@ data class AgentAccessPolicy(
     val protectedDirs: Set<String> = CodingAgentFileSystem.DEFAULT_PROTECTED_DIRS,
     /** Locations outside the workspace that must never be read or written. */
     val sensitivePaths: Set<String> = CodingAgentFileSystem.DEFAULT_SENSITIVE_PATHS,
-    /** Automatic approval ceiling, or `null` when automatic approval is off. */
-    val autoApproveUpTo: AccessPreset? = null,
+    /** Operator grants in effect for this task; empty when no approval channel is attached. */
+    val operatorGrants: () -> List<Capability> = { emptyList() },
 ) {
 
     /**
@@ -124,7 +125,7 @@ data class AgentAccessPolicy(
             return true
         }
         val required = requiredPresetOf(domain, method)
-        return presetAllows(required) || autoApproves(required)
+        return presetAllows(required) || operatorCoversRequirement(required)
     }
 
     /**
@@ -134,10 +135,67 @@ data class AgentAccessPolicy(
      * build output such as `target/`; this predicate is about source-file mutation, not build artifacts.
      */
     fun allowsFileMutation(): Boolean =
-        presetAllows(AccessPreset.WRITE) || autoApproves(AccessPreset.WRITE)
+        presetAllows(AccessPreset.WRITE) || operatorCovers(Effect.FS_WRITE)
 
     /** Whether the shell and arbitrary code execution are allowed. Only [AccessPreset.FULL] grants them. */
-    fun allowsExec(): Boolean = presetAllows(AccessPreset.FULL) || autoApproves(AccessPreset.FULL)
+    fun allowsExec(): Boolean =
+        presetAllows(AccessPreset.FULL) || operatorCovers(Effect.FS_EXEC) || operatorCovers(Effect.PROC_SPAWN)
+
+    /**
+     * Whether an active operator grant covers [effect] at [target].
+     *
+     * This is the target-level companion of [operatorCovers]: the latter answers "is a grant for
+     * this effect active at all", this one answers "does one of them actually reach this path,
+     * command or host". Delegating to [Authorizer] reuses the canonical/lexical scope matching
+     * instead of implementing a second path comparison here.
+     */
+    fun operatorAllows(effect: Effect, target: Target): Boolean {
+        val now = java.time.Instant.now()
+        val active = operatorGrants().filter { it.isActiveAt(now) }
+        if (active.isEmpty()) return false
+        return active.any { capability ->
+            val decision = Authorizer(listOf(capability)).decide(
+                Request(
+                    tool = "coding.policy",
+                    effects = setOf(effect),
+                    targets = listOf(target),
+                    capabilityId = capability.id,
+                ),
+            )
+            decision is Decision.Allow || decision is Decision.AllowWithBudget
+        }
+    }
+
+    /**
+     * Whether [path] may be mutated (written, deleted, copied, moved, ...).
+     *
+     * A preset that grants mutation keeps its historical behaviour; otherwise the concrete path
+     * must be covered by an active `fs.write` operator grant. The workspace boundary and the
+     * protected/sensitive paths remain enforced by the file system itself.
+     */
+    fun allowsMutationOf(path: Path): Boolean =
+        presetAllows(AccessPreset.WRITE) || operatorAllows(Effect.FS_WRITE, Target.PathTarget(path))
+
+    /**
+     * Whether [command] may be executed.
+     *
+     * A preset that grants execution keeps its historical behaviour; otherwise the program must
+     * be covered by an active `fs.exec` or `proc.spawn` grant. The command line is compared by
+     * program name, the same granularity [AccessApprovals.commandRail] approves.
+     */
+    fun allowsCommandExecution(command: String): Boolean {
+        if (presetAllows(AccessPreset.FULL)) return true
+        val trimmed = command.trim()
+        val program = trimmed.substringBefore(' ').trim('"', '\'')
+        if (program.isEmpty()) return false
+        return sequenceOf(program, trimmed).any { candidate ->
+            operatorAllows(Effect.FS_EXEC, Target.CommandTarget(candidate)) ||
+                operatorAllows(Effect.PROC_SPAWN, Target.CommandTarget(candidate))
+        }
+    }
+
+    /** Whether an active operator grant carries [Effect.NET_CONNECT]; the host scope stays advisory. */
+    fun hasActiveNetworkGrant(): Boolean = operatorCovers(Effect.NET_CONNECT)
 
     /** Returns the gate for a `coding.*` method, or `null` when the method is not in the matrix. */
     fun gateOf(method: String): ToolGate? = when (method) {
@@ -165,14 +223,11 @@ data class AgentAccessPolicy(
      * Applies per-task overrides on top of this (usually server-wide) policy.
      *
      * An absent override keeps this policy's own value, so an operator's
-     * `browser4.agent.access` / `browser4.agent.autoApprove` still applies to a task that names
-     * neither — only an explicit per-task value replaces it.
+     * `browser4.agent.access` still applies to a task that does not name a preset — only an
+     * explicit per-task value replaces it.
      */
-    fun withTaskOverrides(preset: AccessPreset?, autoApproveUpTo: AccessPreset?): AgentAccessPolicy =
-        copy(
-            preset = preset ?: this.preset,
-            autoApproveUpTo = autoApproveUpTo ?: this.autoApproveUpTo,
-        )
+    fun withTaskOverrides(preset: AccessPreset?): AgentAccessPolicy =
+        copy(preset = preset ?: this.preset)
 
     /**
      * A structured refusal for `domain.method`, or `null` when the call is allowed.
@@ -181,10 +236,6 @@ data class AgentAccessPolicy(
      * policy denial from a missing path or a bad argument. The text is composed by
      * [PermissionAudit], which also counts and logs the refusal once, so this single call site both
      * enforces and observes.
-     *
-     * It is also the one place an automatic approval is recorded: the preset check comes first, so
-     * a call the preset already grants is never audited, and a call that passes only because of
-     * [autoApproveUpTo] is audited exactly once per tool shape.
      */
     fun denial(domain: String, method: String): ToolAccessDeniedException? {
         if (isDenied(domain, method)) {
@@ -194,7 +245,7 @@ data class AgentAccessPolicy(
                     tool = "$domain.$method",
                     code = PermissionAudit.CODE_TOOL_DENIED,
                     detail = "excluded by denyTools under access preset '${preset.id}'",
-                    hint = "remove '$method' from denyTools — automatic approval never overrides an explicit denial",
+                    hint = "remove '$method' from denyTools — operator approval never overrides an explicit denial",
                 ),
             )
         }
@@ -202,21 +253,19 @@ data class AgentAccessPolicy(
 
         val required = requiredPresetOf(domain, method)
         if (presetAllows(required)) return null
-        if (autoApproves(required)) {
-            PermissionAudit.approved("$domain.$method", required, autoApproveUpTo!!)
-            return null
-        }
+        if (operatorCoversRequirement(required)) return null
 
-        // Name only the presets that actually grant it: a skill or shell call needs `full`, so
-        // "access=write" would send the model down a dead end.
-        val widening = when (required) {
-            AccessPreset.READ -> "access=full, access=write, access=read-build or access=read"
-            AccessPreset.READ_BUILD -> "access=full, access=write or access=read-build"
-            AccessPreset.WRITE -> "access=full or access=write"
-            AccessPreset.FULL -> "access=full"
+        // The approval is effect-level, so name the effect an operator grant needs to carry — the
+        // preset id would be rejected by `coding.requestAccess`. No JVM/CLI switch is named:
+        // the refusal only says what is needed and where to ask for it (plan P4-3).
+        val effect = when (required) {
+            AccessPreset.READ -> Effect.FS_READ
+            AccessPreset.READ_BUILD, AccessPreset.FULL -> Effect.FS_EXEC
+            AccessPreset.WRITE -> Effect.FS_WRITE
         }
-        val hint = "re-run with $widening to enable it, let the task auto-approve it with " +
-            "autoApprove=${required.id}, or continue with a tool this preset allows"
+        val hint = "request operator approval with " +
+            "coding.requestAccess(effect=\"${effect.id}\", target=\"...\") — it returns " +
+            "immediately with a pending requestId, and the task keeps running meanwhile"
         return ToolAccessDeniedException(
             domain, method, preset,
             PermissionAudit.denied(
@@ -224,6 +273,7 @@ data class AgentAccessPolicy(
                 code = PermissionAudit.CODE_TOOL_DENIED,
                 detail = "not permitted under access preset '${preset.id}'",
                 hint = hint,
+                needed = effect.id,
             ),
         )
     }
@@ -233,23 +283,17 @@ data class AgentAccessPolicy(
      * not (`coding.protect` without a path lists protections, with a path changes them).
      */
     fun mutationDenial(domain: String, method: String): ToolAccessDeniedException? {
-        if (allowsFileMutation()) {
-            // The mutation is granted by the approval ceiling rather than by the preset — record it
-            // like every other auto-approved capability, otherwise `protect(path=…)` would be the
-            // one widening that leaves no trace.
-            if (!presetAllows(AccessPreset.WRITE)) {
-                PermissionAudit.approved("$domain.$method", AccessPreset.WRITE, autoApproveUpTo!!)
-            }
-            return null
-        }
+        if (allowsFileMutation()) return null
         return ToolAccessDeniedException(
             domain, method, preset,
             PermissionAudit.denied(
                 tool = "$domain.$method",
                 code = PermissionAudit.CODE_READ_ONLY,
-                detail = "the mutating form is not permitted under access preset '${preset.id}' — " +
-                    "workspace mutation requires access=full or access=write",
-                hint = "call '$domain.$method' without a path to list the current protections instead",
+                detail = "the mutating form is not permitted under access preset '${preset.id}'",
+                hint = "call '$domain.$method' without a path to list the current protections " +
+                    "instead, or request operator approval with " +
+                    "coding.requestAccess(effect=\"fs.write\", target=\"<path>\")",
+                needed = Effect.FS_WRITE.id,
             ),
         )
     }
@@ -280,14 +324,29 @@ data class AgentAccessPolicy(
     }
 
     /**
-     * Whether the automatic approval ceiling covers [required].
+     * Whether an operator grant covers the requirement of a refused method (plan P4-1).
      *
-     * Presets are declared from most to least permissive, so a requirement is covered when its
-     * ordinal is at least the ceiling's (`FULL=0`, `WRITE=1`, `READ_BUILD=2`, `READ=3`).
+     * The method gate cannot see the call's target, so this is an effect-level answer: an active
+     * `OPERATOR` capability for [Effect.FS_WRITE] unlocks mutating methods, one for
+     * [Effect.FS_EXEC]/[Effect.PROC_SPAWN] unlocks execution. The rails (denyTools, protected and
+     * sensitive paths, the workspace boundary) are still checked at the layer that knows the
+     * target, and the OS sandbox still enforces the process boundary.
      */
-    private fun autoApproves(required: AccessPreset): Boolean {
-        val ceiling = autoApproveUpTo ?: return false
-        return required.ordinal >= ceiling.ordinal
+    private fun operatorCoversRequirement(required: AccessPreset): Boolean {
+        if (operatorGrants().isEmpty()) return false
+        return when (required) {
+            AccessPreset.READ -> operatorCovers(Effect.FS_READ)
+            // A build writes build output, so an `fs.write` grant unlocks it just as `fs.exec` does.
+            AccessPreset.READ_BUILD -> operatorCovers(Effect.FS_EXEC) || operatorCovers(Effect.FS_WRITE)
+            AccessPreset.WRITE -> operatorCovers(Effect.FS_WRITE)
+            AccessPreset.FULL -> operatorCovers(Effect.FS_EXEC) || operatorCovers(Effect.PROC_SPAWN)
+        }
+    }
+
+    /** Whether an active operator grant carries [effect]. Scope is enforced by the calling layer. */
+    private fun operatorCovers(effect: Effect): Boolean {
+        val now = java.time.Instant.now()
+        return operatorGrants().any { it.isActiveAt(now) && it.grants(effect) }
     }
 
     companion object {
@@ -300,14 +359,22 @@ data class AgentAccessPolicy(
         const val PROP_ACCESS = "browser4.agent.access"
 
         /**
-         * JVM property selecting the server-wide automatic approval ceiling.
+         * JVM property selecting the unattended default (plan P4-1).
          *
-         * Absent or blank leaves automatic approval off, which is the default: approval has to be
-         * something the operator opted into, never something a typo switches on.
+         * Values: `deny` / `read` / `read-build` / `write` / `full`. Absent means `full` with outbound
+         * network allowed, which is what an unattended job got implicitly before this switch existed.
+         * It only applies when the task names no `access` preset and no strategy file; a watched
+         * (`agent run -i` on a TTY) run never derives it.
          */
-        const val PROP_AUTO_APPROVE = "browser4.agent.autoApprove"
+        const val PROP_ACCESS_UNATTENDED = "browser4.agent.access.unattended"
 
-        /** Legacy JVM property; prefer [PROP_ACCESS]. */
+        /**
+         * Deprecated JVM property; prefer [PROP_ACCESS].
+         *
+         * Plan P3-5 (D2) makes it advisory: it relaxes the string-layer path check (and the
+         * file-tool resolution heuristic), not the OS boundary — the sandbox still decides what a
+         * process may reach.
+         */
         const val PROP_ALLOW_EXTERNAL_ACCESS = "browser4.agent.allowExternalAccess"
 
         /** Legacy JVM property; prefer [PROP_ACCESS]. */
@@ -359,6 +426,12 @@ data class AgentAccessPolicy(
             // Reports the active policy; readable by every preset — it is the answer a model needs
             // *after* a refusal, so gating it would leave it guessing.
             "permissions",
+            // Dry-run of the boundary decision: returns what the Authorizer would decide for a path
+            // without executing the call. Readable by every preset so a refused model can self-diagnose.
+            "explain",
+            // Asks the operator for a capability; it creates a pending request, never performs the
+            // requested effect. Readable by every preset — a read-only task must be able to ask.
+            "requestAccess",
             // `protect` without a `path` only lists the current protections; the mutating form is
             // additionally gated by allowsFileMutation() at the executor level.
             "protect",
@@ -410,20 +483,45 @@ data class AgentAccessPolicy(
                     preset = preset,
                     allowExternalAccess = System.getProperty(PROP_ALLOW_EXTERNAL_ACCESS, "false").toBoolean(),
                     allowDestructive = System.getProperty(PROP_ALLOW_DESTRUCTIVE, "true") != "false",
-                    autoApproveUpTo = resolveAutoApproveCeiling(System.getProperty(PROP_AUTO_APPROVE)),
                 )
             }
 
-        /** Parses the approval ceiling, warning about unknown values instead of widening silently. */
-        private fun resolveAutoApproveCeiling(raw: String?): AccessPreset? {
-            if (raw.isNullOrBlank()) return null
-            val parsed = AccessPreset.parse(raw)
-            if (parsed == null && warnedOnce.add("$PROP_AUTO_APPROVE=$raw")) {
-                logger.warn(
-                    "Ignoring unknown {}='{}'; automatic approval stays off", PROP_AUTO_APPROVE, raw
+        /**
+         * The policy an unattended job derives when the task names no preset (plan P4-1).
+         *
+         * Defaults to `full` with outbound network allowed: a job nobody is watching cannot answer an
+         * approval prompt, so the alternative — every task failing on its first write — is worse than
+         * the documented default. The rails are untouched (workspace boundary, `denyTools`,
+         * protected/sensitive paths and the sandbox), execution still passes the `DEV_COMMANDS`
+         * whitelist, and each derived default is audited as `ACCESS_APPROVED(source=default)`.
+         * `browser4.agent.access.unattended` narrows it to `deny` / `read` / `read-build` / `write`.
+         */
+        val unattendedDefault: AgentAccessPolicy
+            get() {
+                val raw = System.getProperty(PROP_ACCESS_UNATTENDED)?.trim()?.lowercase()?.replace('_', '-')
+                if (raw == "deny") {
+                    // No preset expresses "grant nothing", and adding one would widen a closed enum
+                    // used by the CLI and REST argument tables. A blanket denial of the workspace
+                    // surface is the exact same behaviour through an existing rail; browsing stays
+                    // available so `deny` means "no workspace power", not "the task cannot run".
+                    return AgentAccessPolicy(
+                        preset = AccessPreset.READ,
+                        allowNetwork = false,
+                        denyTools = setOf("coding.*", "skill.*"),
+                    )
+                }
+                val parsed = AccessPreset.parse(raw)
+                if (parsed == null && !raw.isNullOrBlank() && warnedOnce.add("$PROP_ACCESS_UNATTENDED=$raw")) {
+                    logger.warn(
+                        "Ignoring unknown {}='{}'; the unattended default stays 'full'", PROP_ACCESS_UNATTENDED, raw
+                    )
+                }
+                return AgentAccessPolicy(
+                    preset = parsed ?: AccessPreset.FULL,
+                    allowExternalAccess = System.getProperty(PROP_ALLOW_EXTERNAL_ACCESS, "false").toBoolean(),
+                    allowDestructive = System.getProperty(PROP_ALLOW_DESTRUCTIVE, "true") != "false",
+                    allowNetwork = true,
                 )
             }
-            return parsed
-        }
     }
 }

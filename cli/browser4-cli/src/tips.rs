@@ -315,7 +315,10 @@ const TIPS_AGENT: &[Tip] = &[
         text: "`agent run <task> --access read-build` lets a coding task read the workspace and run the build, but not edit files or use the shell — `--access write` allows edits while keeping the shell off",
     },
     Tip {
-        text: "`agent run <task> --auto-approve write` keeps a narrow `--access` but grants it file mutation on demand; the ceiling never overrides `denyTools`, protected paths or sensitive paths, and every approval is audited",
+        text: "A step refused by `--access` is not a dead end: the agent calls `coding.requestAccess(effect, target)`, gets a pending requestId back immediately and keeps working; approve it via `POST api/agent/<taskId>/access/<requestId>/approve`. `denyTools`, protected paths and the workspace boundary are never approved away",
+    },
+    Tip {
+        text: "A run without a TTY cannot be watched, so it starts from `full` (network on) instead of the server-wide preset — `browser4.agent.access.unattended` (`deny`/`read`/`read-build`/`write`/`full`) overrides that; a watched `-i` session on a TTY keeps `browser4.agent.access`",
     },
     Tip {
         text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls",

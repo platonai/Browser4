@@ -174,12 +174,25 @@ class CodingAgentShellPathGuardTest {
     }
 
     @Test
-    @DisplayName("the protected-subtree guard is not disabled by the credential escape hatch")
+    @DisplayName("the protected-subtree guard is not disabled by the deprecated credential switch")
     fun protectedGuardSurvivesPathGuardOff() {
-        // `shell.pathGuard=off` exists to unblock credential heuristics for local debugging; the
-        // protected subtrees are a rail, not a capability, so they stay enforced.
+        // `shell.pathGuard=off` (deprecated, advisory) exists to unblock credential heuristics for
+        // local debugging; the protected subtrees are a rail, not a capability, so they stay
+        // enforced.
         val shell = shell(pathGuardEnabled = false)
         assertFalse(shell.isAllowed("echo forged > .browser4/x.json"))
+    }
+
+    @Test
+    @DisplayName("refusals describe the check as advisory and no longer advertise a bypass")
+    fun refusalsAreAdvisory() {
+        val shell = shell()
+        val text = explain(shell, "cat ~/.ssh/id_rsa")
+        assertTrue(text.contains("advisory"), "the refusal must say the check is advisory: $text")
+        assertFalse(
+            text.contains("pathGuard=off"),
+            "a refusal must not advertise the deprecated bypass: $text",
+        )
     }
 
     @Test

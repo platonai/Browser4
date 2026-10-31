@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.llm.LlmConfigNormalizer
 import ai.platon.pulsar.agentic.mcp.server.runMcpAppIfRequested
 import ai.platon.pulsar.boot.autoconfigure.PulsarContextInitializer
 import ai.platon.pulsar.boot.plugin.PluginClasspathEnhancer
+import ai.platon.pulsar.coding.sandbox.SandboxDefaults
 import ai.platon.pulsar.apps.native.Browser4NativeHints
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.ChatModelFactory
@@ -102,6 +103,9 @@ fun runBrowser4StandaloneApplication(args: Array<String>) {
     // properties files to dotted keys before any session is created, so the
     // engine's `deepseek.api.key` lookups actually bind.
     LlmConfigNormalizer.normalize()
+    // Plan P3-4 (D1): a fresh installation starts with the platform sandbox; an existing
+    // installation keeps `off`, and an explicit -Dbrowser4.agent.sandbox=… always wins.
+    SandboxDefaults.apply()
     // Point the engine at Browser4's own provider registry (the base library's
     // copy decides the auto-detection order, which Browser4 owns).
     Browser4ProviderRegistry.install()

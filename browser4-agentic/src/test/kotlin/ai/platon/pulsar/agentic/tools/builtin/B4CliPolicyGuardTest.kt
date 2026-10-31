@@ -42,7 +42,7 @@ class B4CliPolicyGuardTest {
                 assertTrue(r!!.contains("COMMAND_NOT_ALLOWED"), r)
                 assertTrue(r.contains(preset.id), "the refusal must name the preset: $r")
                 assertTrue(r.contains("b4.run"), r)
-                assertTrue(r.contains("access=full"), "the hint must name the way out: $r")
+                assertTrue(r.contains("gated tools"), "the hint must name the way out: $r")
             }
         }
     }
