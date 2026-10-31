@@ -108,8 +108,14 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
 - 新增 `ToolExample`；**可执行示例**（带 args）会写进 MCP 工具描述（`tools/list` 唯一能携带示例的位置）。本阶段已 authoring：crawl（3）、command（3）、webdb（2）、skill 管理（5）；tab 域当时为 KDoc 文档片段，后续补齐到全量 **142/142**（见 §8.2）。
 - 量化结果：lint 文档告警 **175 → 26**（其中 13 条为合法重载提示），真实缺口 12 条参数缺说明 + 1 条缺 help。
 
-**剩余**（仅一项收口，功能面已完成）
-- 需求 1.1 的「CI 比对显式覆盖集 == @MCP 扫描集」未做（当前靠 KDoc 提取 + 快照 + 文档漂移门禁 + lint 兜底）。
+**剩余**（无：本阶段功能与收口项均已完成）
+
+- ~~需求 1.1 的「CI 比对显式覆盖集 == @MCP 扫描集」~~ **已等效覆盖，无需另写门禁（2026-10-31 审计）**：1.1 原始设计是「新建 `WebDriverToolSpecOverrides.kt`，为 114 个方法逐条手写 spec，再在 CI 比对覆盖集与扫描集」。实现时改成了「扫描镜像 KDoc + 15 条需要纠正签名的显式覆盖」，该设计已被 `selectPreferred` 与既有四个门禁取代：
+  - `TabSpecCoverageTest`：扫描集 ↔ 公告集（差值必须落在 `declaredByHand`/`notAdvertised` 白名单里）；
+  - `ToolSpecLintTest.advertisedSpecsAreCallable`：公告集合中**零**条必填参数为 JSON 不可表达（覆盖被删即失败，这正是 1.1 想防的错配）；
+  - `ToolDocGeneratorTest` / `SourceCodeToToolCallTest`：文档与 spec 快照「重生成零 diff」；
+  - `ToolContractMatrixTest`：142 工具 × 6 用例以示例为入参实跑校验器。
+  再加一条「覆盖集 == 扫描集」测试只会与第一条重复，属于纸面合规，故不做。
 - ~~生成器层面的「重载择优选 JSON 友好签名」~~ **已完成（2026-10-31）**：`ToolSpecGenerator.selectPreferred` 取代 `associateBy`，同名重载优先选「必填参数全部 JSON 可表达」的那个，仅在同等友好时回落到源码顺序；原始生成 spec 仍保留全部重载（供 lint/快照），公告集合零违规，`ToolSpecGeneratorExtractionTest` 覆盖三条规则。
 - ~~tab 域可执行示例覆盖~~ **已清零**：全量 **142/142**，矩阵报 `missing altogether: 0`（见 §8.2）。
 - ~~需求 2.3 CLI 侧 `--help --examples`~~ **已完成**（`help.rs`/`tips.rs`，见 §8.7 第 6 条）。
@@ -230,7 +236,7 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
 **已知缺口（诚实记录）**
 - ~~**B 通道只校验「自定义域」工具**~~ **已闭环**：`MCPToolController.validateArguments` 曾取不到内置域 spec，同一非法输入 A 拒绝、B 放行。先以影子模式观测（见上），2026-10-31 把默认切到 `-Dmcp.validateBuiltinArgs=error`，B 与 A 对内置域的判定一致（`MCPToolControllerTest` 断言默认拒绝且未分发）。
 - 运行时包内**没有** `micrometer-registry-prometheus`（在 `browser4-agentic/pom.xml` 里是 `optional`）→ 线上 `/actuator/prometheus` 返回 404，本轮以 `/api/mcp/stats` + `/actuator/metrics`（实测 `tool.*` 10 个指标可见）作为查询面。需要 Prometheus 抓取时把该依赖以非 optional 引入运行时包即可，代码侧无需改动（`MetricsConfig.isPrometheus` 会自动转为 `true`）。
-- 需求 8.2 的 **OTel span**：`mcp.tool.call` 父 span **已落地**（实现细节与三个"可选依赖"陷阱见 §8.7 第 4 条）；仍未做的是 `agent.execute` / `cdp.*` 子 span，接子 span 是自然延伸。
+- 需求 8.2 的 **OTel span**：`mcp.tool.call` 父 span 已落地，`agent.execute` 子 span 也已接上（实现细节与三个"可选依赖"陷阱见 §8.7 第 4 条）；`cdp.*` 子 span 仍未做——`browser4-core` 没有 OTel 依赖，要接它必须在 core 引入一个不依赖 OTel 的埋点接口，属跨模块设计决策（见 §6 待办）。
 - `session.active` / `async.queue.depth` 两个 gauge **已落地**：取值由部署侧注入（`ToolMetrics.registerSessionCountSupplier` / `registerAsyncTaskCountSupplier`），`McpToolMetricsConfiguration` 分别接 `PulsarSessionManager.getAllSessions().size` 与 `CrawlService.runningTaskCount()`（见 §8.2）。
 
 **需求 7 — 增加接口日志记录**
@@ -491,7 +497,7 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
 - 需求 3：工具 × 6 类**通道无关**用例矩阵全绿（142 × 6），通道相关用例（会话/限流/缓存/批量）由各阶段测试与 e2e 承担；`bin/test.ps1 mcp-contract` PR 门禁实测 3 分 50 秒 < 5 min。
 - 需求 4：所有失败路径有稳定 `errorCode` + retryable 语义，A/B 一致。
 - 需求 5/6：同一非法输入两通道同码；全量契约跑完 `schema_violation == 0`。
-- 需求 7/8：日志结构化且脱敏；每工具指标 + trace 可见；`/api/mcp/stats` 有真实数据。（**代码 + 单测已完成**；`mcp.tool.call` 父 span 已落地，子 span `agent.execute`/`cdp.*` 未做；运行时 Prometheus 抓取保持 optional，见 Phase 3「已知缺口」）
+- 需求 7/8：日志结构化且脱敏；每工具指标 + trace 可见；`/api/mcp/stats` 有真实数据。（**代码 + 单测已完成**；`mcp.tool.call` 父 span 与 `agent.execute` 子 span 已落地；`cdp.*` 子 span 需先在 `browser4-core` 引入 OTel-free 埋点接口；运行时 Prometheus 抓取保持 optional，见 Phase 3「已知缺口」）
 - 需求 9/10/11：限流可复现拒绝、缓存命中与失效可验证、长任务可轮询可取消。
 - 需求 12/13/14：A/B 批量结果逐字段一致；幂等批次可缓存回放；批次指标/span/日志齐全。
 
@@ -563,7 +569,8 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
    - ② **类型泄进 API 就会传染**：最初把 `Span` 交给调用方的 lambda，`browser4-rest` **编译**直接失败（optional 不传递）——改成 `OutcomeSink`（只有 `record(outcome)` 一个方法）。
    - ③ **只是"碰一下"配置类也会炸**：即便不再暴露 `Span`，`ToolTracing` 里读 `OpenTelemetryConfig.tracingRequested` 就会初始化该类，而它持有 `OpenTelemetry` 类型的字段 → `browser4-rest` 运行期 **62 个用例** `NoClassDefFoundError: io/opentelemetry/api/OpenTelemetry`。最终设计：`ToolTracing` 文件里**不出现任何 OTel 类型**，只依赖 `ToolSpanBackend`/`OutcomeSink` 两个自有接口；实现类 `OtelSpanBackend` 用 `Class.forName` **按名加载**，且只在探测到 API **与** SDK 两类都存在时才加载（配置类也只在那之后才被触碰）。
    - 测试：`ToolTracingTest` 用自写 `SpanExporter` 断言真实导出的 `SpanData`（名字/属性/`OK`·`ERROR`/异常事件/无会话时不写 `session` 属性），并断言**没有 backend 时 block 照常执行且不导出任何东西**、异常原样抛回；另有一条测试断言 `withSpan` 的参数里不含任何 `io.opentelemetry` 类型（防止 ① 类回归）。
-   - **未做**：`agent.execute` / `cdp.*` 子 span——它们属于 agent 与 CDP 层；现在 `mcp.tool.call` 已是父 span，接子 span 是自然延伸。
+   - **已做**：`agent.execute` 子 span——`AbstractToolExecutor.callFunctionOn` 在父 span 内包一层 `ToolTracing.withChildSpan`（属性 `domain`/`method`），父 span 现在会 `makeCurrent()`，子 span 因此真正嵌套（`ToolTracingTest` 断言 `parentSpanId == 父 spanId`）；无父 span 时**不建**子 span（避免同一调用出现两个 root）。
+   - **未做**：`cdp.*` 子 span——CDP 往返发生在 `browser4-core`，那个模块没有 OTel 依赖；要在那里埋点，必须先在 core 引入一个不依赖 OTel 的埋点接口（例如 `CdpCallListener`），再由 agentic 用 OTel 实现，属跨模块设计决策，需单独立项。
 5. `micrometer-registry-prometheus` 仍是 `<optional>`：**结论是保留 optional**。理由：optional 依赖不会传递到运行时 bundle，而"默认假定有 Prometheus 抓取端"正是上面 OTel 的翻版错误（多一个无人抓取的注册表 + 多一份依赖面）；`/actuator/metrics` 与 `GET /api/mcp/stats`（含 p50/p95/p99、错误码归因、限流/缓存/批量计数）已经把同样的数字暴露出来，`MetricsConfig` 也已在缺类时容错。需要抓取时把该依赖的 `<optional>` 去掉即可，**代码侧无需改动**（`MetricsConfig.isPrometheus` 会自动转为 true）。
 5. `micrometer-registry-prometheus` 仍是 `optional`，`/actuator/prometheus` 需把它提为运行时依赖才可抓取（代码侧无需改动）。
 6. CLI 侧 `--help --examples` 与 `RATE_LIMITED` 提示语**已由本轮并行实现**：`<cmd> --help --examples` 从 `/mcp/tools/specs` 拉取示例（后端不可达时退化为一行提示并 exit 0；无参示例渲染为 `no arguments`，片段示例渲染为代码块），失败提示按错误码给出可执行建议（`RATE_LIMITED` 带 `retryAfterMs`，`SESSION_UNHEALTHY`/`SESSION_NOT_FOUND` 各一条，`INTERNAL` 刻意静默）。`cargo test --bin browser4-cli` 实测 **1340 passed / 0 failed / 2 ignored**，`cargo build` 无告警。
