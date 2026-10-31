@@ -1658,13 +1658,12 @@ class MCPToolController(
      * argument here and is never treated as unknown.
      *
      * Built-in domains (`tab`, `system`, …) are handled by
-     * [ToolSpecValidator.BuiltInPolicy], `shadow` by default: their specs mirror
-     * the upstream `WebDriver` interface, so a mismatch between the advertised
-     * signature and what the executor reads is a *finding*, not a client error —
-     * it is logged and counted, and the call still runs. Flip to `error` with
-     * `-Dmcp.validateBuiltinArgs=error` once the shadow counters stay at zero.
-     * Explicitly registered (plugin/business) executors are always enforced,
-     * because their specs are authored in this repository.
+     * [ToolSpecValidator.BuiltInPolicy], `error` by default: the standard MCP
+     * server has always enforced this same catalog, so a violation here is the
+     * verdict `/mcp/call-tool` already gave. `-Dmcp.validateBuiltinArgs=shadow`
+     * downgrades it to log-and-count (useful to observe a mismatch before fixing
+     * it) and `off` skips built-in validation. Explicitly registered
+     * (plugin/business) executors are enforced like before.
      *
      * @return the error response to return, or `null` when the call is valid
      */
