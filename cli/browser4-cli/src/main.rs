@@ -19685,6 +19685,10 @@ fn crawl_resume_summary(skipped: i64, remaining: i64, resume_count: i64) -> Stri
 /// Resolve @file references and --args-stdin in crawl args.
 /// Returns None if both raw_args and stdin are empty; otherwise
 /// returns the joined resolved args string.
+///
+/// Only `@file` tokens are replaced: every other byte is kept verbatim, so a
+/// quoted value keeps its internal spacing instead of being re-joined token by
+/// token with single spaces.
 fn resolve_crawl_args_fallible(
     raw_args: &str,
     args_stdin_content: Option<&str>,
@@ -19692,20 +19696,26 @@ fn resolve_crawl_args_fallible(
     if raw_args.is_empty() && args_stdin_content.is_none() {
         return Ok(None);
     }
-    let mut parts: Vec<String> = Vec::new();
-    for part in raw_args.split_whitespace() {
-        if let Some(file_path) = part.strip_prefix('@') {
+    let mut resolved = String::with_capacity(raw_args.len());
+    let mut cursor = 0usize;
+    for (start, end) in crawl_option_spans(raw_args) {
+        let token = &raw_args[start..end];
+        if let Some(file_path) = token.strip_prefix('@') {
             let content = std::fs::read_to_string(file_path)
                 .map_err(|e| format!("Failed to read args file '{}': {}", file_path, e))?;
-            parts.push(content.trim().to_string());
-        } else {
-            parts.push(part.to_string());
+            resolved.push_str(&raw_args[cursor..start]);
+            resolved.push_str(content.trim());
+            cursor = end;
         }
     }
+    resolved.push_str(&raw_args[cursor..]);
     if let Some(stdin_content) = args_stdin_content {
-        parts.push(stdin_content.to_string());
+        if !resolved.is_empty() && !stdin_content.is_empty() {
+            resolved.push(' ');
+        }
+        resolved.push_str(stdin_content);
     }
-    Ok(Some(parts.join(" ")))
+    Ok(Some(resolved))
 }
 
 /// Build the server-bound params for a crawl submission by stripping
@@ -19724,6 +19734,12 @@ fn build_crawl_server_params(
         m.remove("argsStdin");
         m.remove("format");
         m.remove("output");
+        // CLI-only switches: read back from `tool_params` by the CLI itself, never by the
+        // backend (`CrawlRequest` has no such fields), so they must not ride along.
+        m.remove("background");
+        m.remove("verbose");
+        m.remove("out-link-selector");
+        m.remove("out-link-pattern");
         // --parallel is a CLI spelling: the backend field is `parallelTabs`.
         // Translate it here (rather than sending `parallel`) so the server
         // never has to accept two names for one budget.
@@ -19741,6 +19757,16 @@ fn build_crawl_server_params(
         if let Some(value) = m.remove("timeout") {
             if let Some(millis) = value.as_str().and_then(crawl_timeout_to_millis) {
                 m.insert("taskTimeoutMillis".to_string(), json!(millis));
+            }
+        }
+        // --depth arrives as the typed string so it could be refused before submission
+        // (validate_crawl_depth); the server field is an Int.
+        if let Some(value) = m.remove("depth") {
+            if let Some(n) = value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+            {
+                m.insert("depth".to_string(), json!(n));
             }
         }
         // Insert resolved urls array
@@ -19809,6 +19835,33 @@ fn validate_crawl_parallel(value: &str) -> Result<(), String> {
         Err(_) => Err(format!(
             "Invalid --parallel value '{}'. Expected a positive integer (number of tabs to \
              collect with at the same time)",
+            value
+        )),
+    }
+}
+
+/// Validate the --depth value: a non-negative integer. An absent/empty value
+/// means the default (1).
+///
+/// The backend treats anything `<= 1` as one link level, so a rejected typo used
+/// to read as a perfectly ordinary crawl: `--depth abc` became 1 (silently) and
+/// `--depth -1` became 1 too, while the command description still printed the
+/// value the user typed.
+fn validate_crawl_depth(value: &str) -> Result<i64, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(1);
+    }
+    match value.parse::<i64>() {
+        Ok(n) if n >= 0 => Ok(n),
+        Ok(_) => Err(format!(
+            "Invalid --depth value '{}'. Depth is a non-negative integer: 0 fetches the seed \
+             page only, 1 follows one link level",
+            value
+        )),
+        Err(_) => Err(format!(
+            "Invalid --depth value '{}'. Expected a non-negative integer (0 = the seed page \
+             only, 1 = follow one link level)",
             value
         )),
     }
@@ -19902,9 +19955,12 @@ fn crawl_parallelism_note(parsed: &Value) -> Option<String> {
     ))
 }
 
-/// Whether a value is a load-options duration: a plain integer (interpreted
-/// as seconds by the backend) or an integer with an ms/s/m/h/d suffix,
-/// e.g. `30`, `30s`, `1m`, `1h`, `1d`.
+/// Whether a value is a load-options duration: a plain integer or an integer
+/// with an ms/s/m/h/d suffix, e.g. `30`, `30s`, `1m`, `1h`, `1d`.
+///
+/// A plain number is seconds because [commands::load_option_duration] attaches the
+/// `s` unit before the value reaches the backend, which would otherwise read it as
+/// milliseconds (and read a single digit as an invalid, always-expired duration).
 fn is_duration_value(value: &str) -> bool {
     let value = value.trim();
     let suffixes = ["ms", "s", "m", "h", "d"];
@@ -19915,13 +19971,87 @@ fn is_duration_value(value: &str) -> bool {
     !number_part.is_empty() && number_part.chars().all(|c| c.is_ascii_digit())
 }
 
+/// Byte spans of the tokens in a raw LoadOptions string, split the way the
+/// backend splits it (`PulsarOptions.split`, pattern `"…"|\S+`): a
+/// double-quoted segment is one token (backslash escapes honored), anything
+/// else is a non-whitespace run.
+///
+/// `split_whitespace()` tears a quoted value apart, so `-outLink "a[href*='x y']"`
+/// looked like three tokens — validation then read half a value, and an option
+/// *name* written inside a quoted value could be mistaken for a real option.
+fn crawl_option_spans(args: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut i = 0usize;
+    let len = args.len();
+    while i < len {
+        let ch = args[i..].chars().next().unwrap();
+        if ch.is_whitespace() {
+            i += ch.len_utf8();
+            continue;
+        }
+        let start = i;
+        if ch == '"' {
+            // A quoted token: scan to the closing quote, skipping escaped characters.
+            let mut j = start + 1;
+            let mut close = None;
+            while j < len {
+                let c = args[j..].chars().next().unwrap();
+                if c == '\\' {
+                    j += c.len_utf8();
+                    if let Some(escaped) = args[j..].chars().next() {
+                        j += escaped.len_utf8();
+                    }
+                } else if c == '"' {
+                    close = Some(j + 1);
+                    break;
+                } else {
+                    j += c.len_utf8();
+                }
+            }
+            if let Some(end) = close {
+                let ends_the_token = args[end..]
+                    .chars()
+                    .next()
+                    .map(|c| c.is_whitespace())
+                    .unwrap_or(true);
+                if ends_the_token {
+                    spans.push((start, end));
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        // A plain token: a non-whitespace run.  An unterminated quote starts one
+        // too — the backend's `\S+` alternative matches the same characters.
+        let mut j = start;
+        while j < len {
+            let c = args[j..].chars().next().unwrap();
+            if c.is_whitespace() {
+                break;
+            }
+            j += c.len_utf8();
+        }
+        spans.push((start, j));
+        i = j;
+    }
+    spans
+}
+
+/// The tokens of a raw LoadOptions string, quote-aware.
+fn crawl_option_tokens(args: &str) -> Vec<&str> {
+    crawl_option_spans(args)
+        .into_iter()
+        .map(|(start, end)| &args[start..end])
+        .collect()
+}
+
 /// Validate typed load-option values embedded in the crawl args string
-/// (`-expires`, `-pageLoadTimeout`, `-priority`). The backend silently
-/// defaults malformed values, so the CLI must reject them loudly —
+/// (`-expires`, `-pageLoadTimeout`, `-priority`, `-topLinks`). The backend
+/// silently defaults malformed values, so the CLI must reject them loudly —
 /// mirroring the existing `--format` reject-with-nonzero-exit pattern.
 /// Returns Ok(()) when every recognized option carries a valid value.
 fn validate_crawl_option_tokens(args: &str) -> Result<(), String> {
-    let tokens: Vec<&str> = args.split_whitespace().collect();
+    let tokens = crawl_option_tokens(args);
     let mut i = 0;
     while i < tokens.len() {
         let token = tokens[i];
@@ -19950,6 +20080,19 @@ fn validate_crawl_option_tokens(args: &str) -> Result<(), String> {
                         "Invalid --{} value '{}'. Expected a duration such as 30s, 1m, 1h, 1d (or a plain number of seconds)",
                         key,
                         value
+                    ));
+                }
+                // A one-character value (`5`, `0`) is shorter than the backend's
+                // duration parser accepts: it answers its "invalid duration" sentinel,
+                // which reads as *always expired* (so `--readonly --expires 5` silently
+                // fetches instead of serving the store). The unit must be spelled out.
+                if value.trim().len() < 2 {
+                    return Err(format!(
+                        "Invalid --{} value '{}'. Write the unit too ({}s): the backend cannot \
+                         parse a bare single digit and treats it as an always-expired cache",
+                        key,
+                        value,
+                        value.trim()
                     ));
                 }
                 if inline_value.is_none() {
@@ -19985,11 +20128,60 @@ fn validate_crawl_option_tokens(args: &str) -> Result<(), String> {
                     i += 1;
                 }
             }
+            "topLinks" | "top-links" => {
+                // A malformed value does not merely lose this option: the whole
+                // LoadOptions parse fails, so every other option in the string falls
+                // back to its default *and* the outLink selector/pattern quote fix
+                // is skipped — the crawl then discovers zero links with no trace.
+                let value = match inline_value {
+                    Some(v) => v.to_string(),
+                    None => tokens
+                        .get(i + 1)
+                        .map(|v| v.to_string())
+                        .ok_or_else(|| {
+                            format!("Missing value for '--{}' in crawl load options", key)
+                        })?,
+                };
+                match value.parse::<i64>() {
+                    Ok(n) if n >= 0 => {}
+                    Ok(_) => {
+                        return Err(format!(
+                            "Invalid --top-links value '{}'. Expected a non-negative integer",
+                            value
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(format!(
+                            "Invalid --top-links value '{}'. Expected an integer (maximum links extracted per page)",
+                            value
+                        ));
+                    }
+                }
+                if inline_value.is_none() {
+                    i += 1;
+                }
+            }
             _ => {}
         }
         i += 1;
     }
     Ok(())
+}
+
+/// Whether the crawl args string carries any of [names] as a load option.
+///
+/// Tokens must start with `-`, so an option *value* never counts (`-expires 1d`
+/// contributes `1d`, which does not start with `-`); the `=` spelling
+/// (`-expires=1d`) is recognized.  Tokens are split quote-aware, so a `-expires`
+/// written *inside* a quoted value (`-outLink "a -expires b"`) is not the option.
+fn crawl_args_have_option(args: &str, names: &[&str]) -> bool {
+    crawl_option_tokens(args).into_iter().any(|token| {
+        if !token.starts_with('-') {
+            return false;
+        }
+        let key = token.split_once('=').map(|(key, _)| key).unwrap_or(token);
+        names.contains(&key.trim_start_matches('-'))
+    })
 }
 
 /// The schemes a crawl seed may use.
@@ -20002,7 +20194,7 @@ const CRAWL_SEED_SCHEMES: [&str; 3] = ["http", "https", "file"];
 
 /// What a crawl seed has to be, spelled the same way in every refusal.
 const CRAWL_SEED_EXPECTATION: &str =
-    "expected an absolute http(s) URL such as https://example.com/page";
+    "expected an absolute http(s) or file:/// URL such as https://example.com/page";
 
 /// How many refused seeds one message spells out; the rest are counted.
 const MAX_REPORTED_CRAWL_SEED_PROBLEMS: usize = 5;
@@ -20419,6 +20611,36 @@ async fn handle_crawl(
 
     let urls = resolve_crawl_urls(url, seed_file.zip(seed_content.as_deref()))?;
 
+    // ---- Validate the crawl depth ----
+    let depth = validate_crawl_depth(
+        tool_params.get("depth").and_then(|v| v.as_str()).unwrap_or(""),
+    )?;
+
+    // ---- Validate the browser choice ----
+    // `--session` and `--profile` name two different browsers; the backend refuses the pair
+    // with `require(fetchSession == null || profile == null)`, which only reaches the user
+    // after a round trip and a server-side stack trace.
+    {
+        let fetch_session = tool_params
+            .get("fetchSession")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let profile = tool_params
+            .get("profile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if !fetch_session.is_empty() && !profile.is_empty() {
+            return Err(
+                "--session and --profile are mutually exclusive. --session borrows a live \
+                 session's browser; --profile launches the crawl's own browser on that Chrome \
+                 user-data directory. Name one browser."
+                    .into(),
+            );
+        }
+    }
+
     // ---- Resolve X-SQL query ----
     let use_sql_stdin = tool_params
         .get("sqlStdin")
@@ -20441,15 +20663,42 @@ async fn handle_crawl(
             .map(|s| s.to_string())
     };
 
-    let has_sql = query_raw.is_some();
+    // `--sql-base64 <value>` supplies the query itself, with no `--sql` next to it.
+    // Without this branch that shape was dropped on the floor: the value was neither
+    // decoded nor reported, and the crawl ran with an empty SQL.
+    let has_sql_base64_value = tool_params
+        .get("sqlBase64")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    // An empty inline value is not a query: it would be submitted as a blank statement and
+    // come back as an X-SQL engine error instead of a usage error. (`--sql-base64 <value>`
+    // supplies the query itself, so an accompanying empty `--sql` is irrelevant there.)
+    if !has_sql_base64_value
+        && query_raw
+            .as_deref()
+            .map(|q| q.trim().is_empty())
+            .unwrap_or(false)
+    {
+        return Err(
+            "The --sql value is empty. Provide a query, @file.sql, --sql-stdin, or --sql-base64."
+                .into(),
+        );
+    }
+
+    let has_sql = query_raw.is_some() || has_sql_base64_value;
     let resolved_sql: Option<String> = match query_raw {
         Some(q) if q.starts_with('@') => {
             let file_path = &q[1..];
-            Some(resolve_sql_file(file_path)?)
+            // Decode after `@file`, so a base64-encoded query file works too.
+            Some(maybe_decode_base64_sql(resolve_sql_file(file_path)?, tool_params)?)
         }
-        Some(q) => {
-            let decoded = maybe_decode_base64_sql(q, tool_params)?;
-            Some(decoded)
+        Some(q) => Some(maybe_decode_base64_sql(q, tool_params)?),
+        // Mode 1 of `maybe_decode_base64_sql` reads the value from `sqlBase64`; the
+        // empty argument is only the placeholder that shape never uses.
+        None if has_sql_base64_value => {
+            Some(maybe_decode_base64_sql(String::new(), tool_params)?)
         }
         None => None,
     };
@@ -20593,18 +20842,30 @@ async fn handle_crawl(
 
     // Inform when depth >= 1 but no --out-link-selector: link discovery is skipped
     {
-        let depth_raw = tool_params
-            .get("depth")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(1);
         let has_out_link_selector = tool_params
             .get("out-link-selector")
             .and_then(|v| v.as_str())
             .map(|s| !s.is_empty())
             .unwrap_or(false);
-        if depth_raw >= 1 && !has_out_link_selector {
+        if depth >= 1 && !has_out_link_selector {
             crawl_status_println!(
                 "Note: Link discovery disabled (no --out-link-selector). Processing seed URLs only."
+            );
+        }
+    }
+
+    // `--expires` is a page-store TTL, and a fetching crawl forces a fresh fetch for every
+    // page: `resolveRoundArgs` adds `-refresh`, which expands to `-i 0s` and makes every
+    // stored copy look expired. Only a read-only crawl leaves the TTL in charge, so say
+    // that out loud instead of letting the flag look applied.
+    {
+        let args_str = resolved_args.as_deref().unwrap_or("");
+        if crawl_args_have_option(args_str, &["expires", "expire"])
+            && !crawl_args_have_option(args_str, &["readonly"])
+        {
+            crawl_status_println!(
+                "Note: --expires has no effect on a fetching crawl — every page is fetched \
+                 fresh. Add --readonly to let the page store answer within that TTL."
             );
         }
     }
@@ -20706,10 +20967,6 @@ async fn handle_crawl(
 
     // Build a compact description from command context instead of just the first URL.
     // This makes `crawl list` entries distinguishable without needing to remember task IDs.
-    let depth = tool_params
-        .get("depth")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(1);
     let refresh = tool_params
         .get("refresh")
         .and_then(|v| v.as_bool())
@@ -44816,6 +45073,80 @@ linkGroups:
         assert!(err.contains("Missing value"), "got: {err}");
     }
 
+    #[test]
+    fn validate_crawl_option_tokens_rejects_invalid_top_links() {
+        // A malformed topLinks fails the whole LoadOptions parse, which resets every
+        // other option and skips the outLink quote fix — so it must fail here.
+        let err = validate_crawl_option_tokens("-topLinks 10x").unwrap_err();
+        assert!(err.contains("10x"), "error should name the invalid value, got: {err}");
+        let err = validate_crawl_option_tokens("-topLinks -3").unwrap_err();
+        assert!(err.contains("-3"), "error should name the invalid value, got: {err}");
+        assert!(validate_crawl_option_tokens("-topLinks 0").is_ok());
+        assert!(validate_crawl_option_tokens("-top-links 25").is_ok());
+    }
+
+    #[test]
+    fn validate_crawl_option_tokens_rejects_a_single_digit_duration() {
+        // The backend parses a one-character value as "invalid duration", which is
+        // always expired — `--readonly --expires 5` would then fetch instead of
+        // serving the store. The unit has to be spelled out.
+        let err = validate_crawl_option_tokens("-expires 5").unwrap_err();
+        assert!(err.contains("5s"), "the error must show a usable spelling, got: {err}");
+        assert!(validate_crawl_option_tokens("-expires 5s").is_ok());
+        assert!(validate_crawl_option_tokens("-expires 0s").is_ok());
+    }
+
+    #[test]
+    fn crawl_args_have_option_matches_option_tokens_only() {
+        assert!(crawl_args_have_option("-expires 1d", &["expires"]));
+        assert!(crawl_args_have_option("--expires=1d", &["expires"]));
+        assert!(crawl_args_have_option("-readonly -expires 1d", &["readonly"]));
+        // A value that happens to spell the option is not the option.
+        assert!(!crawl_args_have_option("-outLinkPattern expires", &["expires"]));
+        assert!(!crawl_args_have_option("", &["expires"]));
+        // …and neither is an option spelling inside a quoted value, which is one
+        // token the backend never sees as an option.
+        assert!(!crawl_args_have_option("-outLink \"a -expires b\"", &["expires"]));
+        assert!(crawl_args_have_option("-outLink \"a b\" -expires 1d", &["expires"]));
+    }
+
+    #[test]
+    fn crawl_option_tokens_keep_a_quoted_value_in_one_piece() {
+        // The quoted selector is one token, so the next option is not mistaken
+        // for its value and the quoted text is not validated as an option.
+        assert!(validate_crawl_option_tokens("-outLink \"a[href*='x y']\" -priority 3").is_ok());
+        assert!(validate_crawl_option_tokens("-outLink \"a b\" -expires 1d").is_ok());
+        // An escaped quote stays inside the token.
+        assert_eq!(crawl_option_tokens(r#"-outLink "a[title=\"x y\"]" -d 2"#).len(), 4);
+        // An unterminated quote degrades to a plain non-space run, as the backend does.
+        assert_eq!(crawl_option_tokens("-outLink \"a b"), vec!["-outLink", "\"a", "b"]);
+    }
+
+    #[test]
+    fn validate_crawl_depth_accepts_a_non_negative_integer() {
+        assert_eq!(validate_crawl_depth("").unwrap(), 1, "absent means the default");
+        assert_eq!(validate_crawl_depth("0").unwrap(), 0);
+        assert_eq!(validate_crawl_depth("3").unwrap(), 3);
+    }
+
+    #[test]
+    fn validate_crawl_depth_rejects_a_typo_instead_of_silently_using_one() {
+        let err = validate_crawl_depth("abc").unwrap_err();
+        assert!(err.contains("abc"), "got: {err}");
+        let err = validate_crawl_depth("-1").unwrap_err();
+        assert!(err.contains("-1"), "got: {err}");
+    }
+
+    #[test]
+    fn build_crawl_server_params_translates_depth_string_to_int() {
+        // --depth travels as the typed string so it could be validated; the wire
+        // field is an Int.
+        let tool_params = json!({"url": "https://example.com", "depth": "2"});
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert_eq!(result["depth"], json!(2));
+    }
+
     // -------------------------------------------------------------------
     // build_crawl_server_params tests
     // -------------------------------------------------------------------
@@ -45019,11 +45350,22 @@ linkGroups:
     }
 
     #[test]
-    fn build_crawl_server_params_preserves_background_flag() {
-        let tool_params = json!({"url": "https://example.com", "background": true});
+    fn build_crawl_server_params_drops_cli_only_keys() {
+        // `background`, `verbose` and the out-link flags are read back by the CLI itself;
+        // `CrawlRequest` has no such fields, so they must not ride along to the server.
+        let tool_params = json!({
+            "url": "https://example.com",
+            "background": true,
+            "verbose": true,
+            "out-link-selector": "a[href]",
+            "out-link-pattern": "product/",
+        });
         let urls = vec!["https://example.com".to_string()];
         let result = build_crawl_server_params(&tool_params, &urls, None, None);
-        assert_eq!(result["background"], json!(true));
+        assert_eq!(result["background"], Value::Null);
+        assert_eq!(result["verbose"], Value::Null);
+        assert_eq!(result["out-link-selector"], Value::Null);
+        assert_eq!(result["out-link-pattern"], Value::Null);
     }
 
     // -------------------------------------------------------------------
@@ -45102,6 +45444,19 @@ linkGroups:
 
         let result = resolve_crawl_args_fallible(&args_str, None).unwrap();
         assert_eq!(result.unwrap(), "-refresh -parse -readonly");
+    }
+
+    #[test]
+    fn resolve_crawl_args_keeps_a_quoted_value_verbatim() {
+        // Re-joining whitespace-split tokens with single spaces used to collapse
+        // the spacing *inside* a quoted selector, silently changing what it matched.
+        let raw = "-outLink \"a[href*='x  y']\" -refresh";
+        let result = resolve_crawl_args_fallible(raw, None).unwrap();
+        assert_eq!(result.unwrap(), raw);
+        // An unusual but legal spacing between options is kept too.
+        let raw = "-refresh   -parse";
+        let result = resolve_crawl_args_fallible(raw, None).unwrap();
+        assert_eq!(result.unwrap(), raw);
     }
 
     // -------------------------------------------------------------------
@@ -45528,7 +45883,7 @@ linkGroups:
     fn crawl_seed_rejects_a_bare_word() {
         // `crawl formats` created a task that reported 0 pages and exited 0.
         let problem = crawl_seed_problem("formats").expect("a bare word is not a seed");
-        assert!(problem.contains("absolute http(s) URL"), "got: {problem}");
+        assert!(problem.contains("absolute http(s)"), "got: {problem}");
         assert!(!problem.contains("did you mean"), "got: {problem}");
     }
 
@@ -45536,7 +45891,7 @@ linkGroups:
     fn crawl_seed_rejects_a_misspelled_scheme() {
         let problem = crawl_seed_problem("htps://exmple.com").expect("htps:// is not http(s)");
         assert!(problem.contains("unsupported scheme 'htps'"), "got: {problem}");
-        assert!(problem.contains("absolute http(s) URL"), "got: {problem}");
+        assert!(problem.contains("absolute http(s)"), "got: {problem}");
     }
 
     #[test]
@@ -45577,8 +45932,8 @@ linkGroups:
     fn crawl_seed_refusal_names_the_seed_and_its_origin() {
         let refusal = crawl_seed_refusal("formats", "command argument").expect("a refusal");
         assert_eq!(
-            "Invalid crawl URL 'formats' (command argument): expected an absolute http(s) URL \
-             such as https://example.com/page.",
+            "Invalid crawl URL 'formats' (command argument): expected an absolute http(s) or \
+             file:/// URL such as https://example.com/page.",
             refusal
         );
         assert_eq!(None, crawl_seed_refusal("https://example.com", "command argument"));
@@ -45611,7 +45966,7 @@ linkGroups:
             err.message().contains("Invalid crawl URL 'formats' (command argument)"),
             "got: {err}"
         );
-        assert!(err.message().contains("absolute http(s) URL"), "got: {err}");
+        assert!(err.message().contains("absolute http(s)"), "got: {err}");
         assert_eq!(
             ExitCode::Usage,
             err.code(),

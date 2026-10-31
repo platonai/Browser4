@@ -2610,7 +2610,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Every seed must be an absolute URL (https://example.com/page). A value the crawl"
+            "  - Every seed must be an absolute URL (https://example.com/page or file:///path/page.html)."
+                .to_string(),
+        );
+        lines.push(
+            "    A value the crawl"
                 .to_string(),
         );
         lines.push(
@@ -2634,7 +2638,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - --out-link-pattern (-olp) filters extracted links with a regex (default: .+)."
+            "  - --out-link-pattern (-olp) filters extracted links with a regex (default: .+). It is"
+                .to_string(),
+        );
+        lines.push(
+            "    matched anywhere in the link URL (a substring, no implicit anchors); an invalid regex"
+                .to_string(),
+        );
+        lines.push(
+            "    filters nothing rather than failing the crawl."
                 .to_string(),
         );
         for line in GIT_BASH_CRAWL_NOTE {
@@ -2665,7 +2677,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - --expires sets cache expiration (e.g. 1d, 1h, 30m), --priority sets queue priority (lower = higher priority)."
+            "  - --expires sets cache expiration (e.g. 1d, 1h, 30m; a bare number is seconds). It only"
+                .to_string(),
+        );
+        lines.push(
+            "    takes effect with --readonly: a fetching crawl always fetches every page fresh."
+                .to_string(),
+        );
+        lines.push(
+            "  - --page-load-timeout caps one page load (a bare number is seconds, same as --timeout)."
+                .to_string(),
+        );
+        lines.push(
+            "  - --priority sets queue priority (lower = higher priority)."
                 .to_string(),
         );
         lines.push(
