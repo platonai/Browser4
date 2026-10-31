@@ -32,20 +32,23 @@ class ToolSpecValidator(
      * from a built-in domain (`tab`, `system`, `fs`, …) rather than from an
      * explicitly registered executor.
      *
-     * Built-in specs mirror the upstream `WebDriver` interface, so they can
-     * disagree with what the executor actually reads (`tab.navigate` used to
-     * advertise `entry: NavigateEntry` while the executor reads `url`).
-     * Rejecting on such a spec would break working calls, so the rollout is
-     * staged: observe first, reject later.
+     * Built-in specs used to mirror the upstream `WebDriver` interface, so they
+     * could disagree with what the executor reads (`tab.navigate` advertised
+     * `entry: NavigateEntry` while the executor reads `url`). The rollout was
+     * therefore staged — observe first, reject later — and both risks have since
+     * been closed: every built-in `tab` method is advertised from a spec authored
+     * in this repository (`WebDriverToolSpecOverrides`), and the standard MCP
+     * server has always enforced the same catalog, so the REST channel now
+     * enforces it too ([ERROR] is the default) and answers identically.
      */
     enum class BuiltInPolicy {
         /** No built-in validation at all. */
         OFF,
 
-        /** Validate, log and count, then dispatch anyway — the default. */
+        /** Validate, log and count, then dispatch anyway — explicit opt-in. */
         SHADOW,
 
-        /** Reject like the standard MCP server does. */
+        /** Reject like the standard MCP server does — the default. */
         ERROR,
     }
 
@@ -140,16 +143,19 @@ class ToolSpecValidator(
             System.getProperty("mcp.strictArgs", "false").toBoolean()
 
         /**
-         * `-Dmcp.validateBuiltinArgs` — `shadow` (default), `error`, or `off`.
+         * `-Dmcp.validateBuiltinArgs` — `error` (default), `shadow`, or `off`.
          *
-         * Flip to `error` once the shadow counters in `/api/mcp/stats` show no
-         * traffic hitting an undeclared-argument mismatch.
+         * `error` gives the REST channel the same verdict the standard MCP server
+         * has always given for the same bad input. `shadow` stays available for a
+         * deployment that wants to observe a mismatch without rejecting the call
+         * (the counters are still in `/api/mcp/stats`), and `off` disables built-in
+         * validation entirely.
          */
         fun builtInPolicy(): BuiltInPolicy =
-            when (System.getProperty("mcp.validateBuiltinArgs", "shadow").trim().lowercase()) {
+            when (System.getProperty("mcp.validateBuiltinArgs", "error").trim().lowercase()) {
                 "off", "false", "none", "disabled" -> BuiltInPolicy.OFF
-                "error", "strict", "true", "enforce" -> BuiltInPolicy.ERROR
-                else -> BuiltInPolicy.SHADOW
+                "shadow", "observe", "warn" -> BuiltInPolicy.SHADOW
+                else -> BuiltInPolicy.ERROR
             }
 
         /** The validator a deployment asks for, honouring the system properties. */

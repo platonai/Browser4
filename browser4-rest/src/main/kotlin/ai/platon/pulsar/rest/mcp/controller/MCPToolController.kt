@@ -1,7 +1,10 @@
 package ai.platon.pulsar.rest.mcp.controller
 
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
+import ai.platon.pulsar.agentic.mcp.CatalogSource
+import ai.platon.pulsar.agentic.mcp.ExecutorGroup
 import ai.platon.pulsar.agentic.mcp.McpToolNames
+import ai.platon.pulsar.agentic.mcp.ToolCatalog
 import ai.platon.pulsar.agentic.model.TcException
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
@@ -613,6 +616,24 @@ class MCPToolController(
     }
 
     /**
+     * Execute a session lifecycle tool through this controller's own handlers.
+     *
+     * The standard MCP server reaches the very same handlers through
+     * [SessionToolExecutor]; keeping one implementation is what makes the two
+     * channels answer a lifecycle call identically (the verified close/attach
+     * payloads and the session-scoped window probe only exist here).
+     *
+     * @param toolName the public tool name (`open_session`, `attach_browser`, …)
+     * @param arguments the call arguments, including the `sessionId` handle
+     */
+    internal suspend fun executeSessionTool(
+        toolName: String,
+        arguments: Map<String, Any?>,
+    ): MCPToolCallResponse =
+        dispatchToolCall(MCPToolCallRequest(tool = toolName, arguments = arguments)).body
+            ?: throw IllegalStateException("Session tool '$toolName' produced no response")
+
+    /**
      * List available MCP tools.
      *
      * Two segments, cached differently (finding G5):
@@ -645,41 +666,45 @@ class MCPToolController(
             cachedToolNames ?: buildStaticToolNames().also { cachedToolNames = it }
         }
 
+    /**
+     * The session-independent tool names, enumerated through the shared
+     * [ToolCatalog] — the same class the standard MCP server builds its tool
+     * list from, so the two channels cannot advertise different sets.
+     */
     private fun buildStaticToolNames(): List<String> {
-        val tools = linkedSetOf(
-            // Session management
-            "open_session", "close_session", "list_sessions",
-            "close_all_sessions", "kill_all_sessions", "delete_session_data",
-            "attach_browser", "check_session_ready",
-            // Session-scoped window verification (browser_window_state is the
-            // frontend alias): answers about THIS session's browser.
-            "window_state",
+        val catalog = ToolCatalog.build(
+            groups = listOf(
+                ExecutorGroup(staticExecutors(), CatalogSource.CUSTOM),
+            ),
+            aliases = McpToolNames.dispatcherAliases,
+            renames = McpToolNames.sessionRenames,
+            // This segment is probed before any session exists — and therefore
+            // before any tab tool is registered — so an alias is advertised as a
+            // name even when its canonical tool is not there yet. That is what lets
+            // the CLI readiness probe find "browser_navigate" without creating a
+            // throwaway session that would launch Chrome.
+            includeUnresolvedAliases = true,
         )
-
-        // Include every frontend tool alias so the CLI readiness probe
-        // (which checks for "open_session" + "browser_navigate") passes
-        // without creating a throwaway session that would launch Chrome.
-        tools.addAll(FRONTEND_TOOL_NAME_ALIASES.keys)
-
-        // Composite / convenience tools that map to underlying domain tools.
-        // These should always be advertised, even when no session is active.
-        tools.addAll(
-            listOf(
-                "browser_click",
-                "browser_handle_dialog",
-                "browser_tabs",
-            )
-        )
-
-        // Enumerate tools from plugin-registered executors in CustomToolRegistry.
-        // These include command, crawl, swarm, skill management, and DOM snapshot tools.
-        CustomToolRegistry.instance.getAllExecutors().forEach { executor ->
-            executor.getToolSpecs().keys.forEach { method ->
-                tools.add(toMcpToolName(executor.domain, method))
-            }
-        }
-        return tools.toList()
+        return catalog.names
     }
+
+    /**
+     * The executors this channel enumerates.
+     *
+     * Plugin and business domains come from [CustomToolRegistry]; the `session`
+     * lifecycle domain comes from [SessionToolExecutor], which is registered by
+     * `PluginManager` in a running application. When it is missing (a non-Spring
+     * embedding, or a unit test) the same specs are supplied here so the
+     * lifecycle names stay advertised.
+     */
+    private fun staticExecutors(): List<ToolExecutor> {
+        val registered = CustomToolRegistry.instance.getAllExecutors()
+        if (registered.any { it.domain == McpToolNames.SESSION_DOMAIN }) return registered
+        return registered + sessionToolExecutor
+    }
+
+    /** Local fallback for [staticExecutors] when nothing registered the domain. */
+    private val sessionToolExecutor: SessionToolExecutor by lazy { SessionToolExecutor() }
 
     /**
      * The tools a live session adds.
@@ -1633,13 +1658,12 @@ class MCPToolController(
      * argument here and is never treated as unknown.
      *
      * Built-in domains (`tab`, `system`, …) are handled by
-     * [ToolSpecValidator.BuiltInPolicy], `shadow` by default: their specs mirror
-     * the upstream `WebDriver` interface, so a mismatch between the advertised
-     * signature and what the executor reads is a *finding*, not a client error —
-     * it is logged and counted, and the call still runs. Flip to `error` with
-     * `-Dmcp.validateBuiltinArgs=error` once the shadow counters stay at zero.
-     * Explicitly registered (plugin/business) executors are always enforced,
-     * because their specs are authored in this repository.
+     * [ToolSpecValidator.BuiltInPolicy], `error` by default: the standard MCP
+     * server has always enforced this same catalog, so a violation here is the
+     * verdict `/mcp/call-tool` already gave. `-Dmcp.validateBuiltinArgs=shadow`
+     * downgrades it to log-and-count (useful to observe a mismatch before fixing
+     * it) and `off` skips built-in validation. Explicitly registered
+     * (plugin/business) executors are enforced like before.
      *
      * @return the error response to return, or `null` when the call is valid
      */

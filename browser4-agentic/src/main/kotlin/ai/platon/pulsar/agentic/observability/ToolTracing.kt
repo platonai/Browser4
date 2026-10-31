@@ -34,6 +34,10 @@ object ToolTracing {
     const val ATTR_SESSION = "session"
     const val ATTR_OUTCOME = "outcome"
 
+    /** Step attributes: the resolved domain and method a child span ran. */
+    const val ATTR_DOMAIN = "domain"
+    const val ATTR_METHOD = "method"
+
     /** The OTel classes whose presence decides whether spans are possible at all. */
     private val REQUIRED_CLASSES = listOf(
         "io.opentelemetry.api.trace.Span",
@@ -91,6 +95,30 @@ object ToolTracing {
         return backend.withSpan(SPAN_NAME, tool, channel, sessionId, block)
     }
 
+    /** The span name for dispatching one resolved call to its executor. */
+    const val SPAN_AGENT_EXECUTE = "agent.execute"
+
+    /**
+     * Run [block] inside a child of the current span, or plainly when tracing is
+     * unavailable.
+     *
+     * A child span answers the question the tool span alone cannot: *where* the time
+     * went. It is started when [block] is entered and ends when it returns, so the
+     * child's duration is a subset of the parent's, and it is skipped entirely when
+     * there is no parent — a child without a parent would be a second root span for
+     * the same call, which is worse than no span at all.
+     *
+     * @param attributes low-cardinality facts about the step (`domain`, `method`)
+     */
+    suspend fun <T> withChildSpan(
+        spanName: String,
+        attributes: Map<String, String>,
+        block: suspend () -> T,
+    ): T {
+        val backend = backend?.takeIf { it.isEnabled && it.hasActiveSpan() } ?: return block()
+        return backend.withChildSpan(spanName, attributes, block)
+    }
+
     /**
      * Loads the OTel-backed implementation, or `null` when it cannot be used.
      *
@@ -122,6 +150,12 @@ interface ToolSpanBackend {
     /** Whether this backend records spans (false for a no-op tracer). */
     val isEnabled: Boolean
 
+    /**
+     * Whether a span is currently active, i.e. whether a child span would nest under
+     * it. Backends that cannot answer say `false`, so a stray child is never a root.
+     */
+    fun hasActiveSpan(): Boolean = false
+
     /** Run [block] inside one span, reporting the outcome through [ToolTracing.OutcomeSink]. */
     suspend fun <T> withSpan(
         spanName: String,
@@ -130,4 +164,16 @@ interface ToolSpanBackend {
         sessionId: String?,
         block: suspend (ToolTracing.OutcomeSink) -> T,
     ): T
+
+    /**
+     * Run [block] inside a nested span.
+     *
+     * The default implementation only runs [block]: a backend that does not nest
+     * (e.g. a test double that records calls) keeps working unchanged.
+     */
+    suspend fun <T> withChildSpan(
+        spanName: String,
+        attributes: Map<String, String>,
+        block: suspend () -> T,
+    ): T = block()
 }

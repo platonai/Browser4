@@ -160,4 +160,80 @@ class ToolTracingTest {
         assertEquals(true, ran, "the block must run even with no tracer")
         assertEquals(emptyList<SpanData>(), exportedSpans(), "nothing may be exported when tracing is unavailable")
     }
+
+    @Test
+    @DisplayName("a step runs as a child of the tool span, not as a second root")
+    fun childSpanNestsUnderTheToolSpan() = runBlocking {
+        ToolTracing.useBackendForTest(OtelSpanBackend(tracer()))
+
+        val result = ToolTracing.withSpan("click", "A", "s1") { outcome ->
+            outcome.record("OK")
+            ToolTracing.withChildSpan(
+                ToolTracing.SPAN_AGENT_EXECUTE,
+                mapOf(ToolTracing.ATTR_DOMAIN to "tab", ToolTracing.ATTR_METHOD to "click"),
+            ) { "clicked" }
+        }
+        assertEquals("clicked", result, "the child's value must pass through untouched")
+
+        val spans = exportedSpans().associateBy { it.name }
+        val parent = spans.getValue(ToolTracing.SPAN_NAME)
+        val child = spans.getValue(ToolTracing.SPAN_AGENT_EXECUTE)
+
+        assertEquals(parent.spanId, child.parentSpanId, "the step must be a child, not a sibling root")
+        assertEquals(parent.traceId, child.traceId, "parent and child share one trace")
+        assertEquals(
+            "tab",
+            child.attributes.get(io.opentelemetry.api.common.AttributeKey.stringKey(ToolTracing.ATTR_DOMAIN)),
+        )
+        assertEquals(
+            "click",
+            child.attributes.get(io.opentelemetry.api.common.AttributeKey.stringKey(ToolTracing.ATTR_METHOD)),
+        )
+        assertEquals(StatusCode.OK, child.status.statusCode)
+    }
+
+    @Test
+    @DisplayName("a step with no parent produces no span at all")
+    fun childSpanIsSkippedWithoutAParent() = runBlocking {
+        ToolTracing.useBackendForTest(OtelSpanBackend(tracer()))
+
+        var ran = false
+        val result = ToolTracing.withChildSpan(
+            ToolTracing.SPAN_AGENT_EXECUTE,
+            mapOf(ToolTracing.ATTR_DOMAIN to "tab"),
+        ) {
+            ran = true
+            "orphan"
+        }
+
+        assertEquals("orphan", result)
+        assertEquals(true, ran, "the block must run")
+        assertEquals(
+            emptyList<SpanData>(), exportedSpans(),
+            "a child without a parent would be a second root span for the same call",
+        )
+    }
+
+    @Test
+    @DisplayName("a failing step marks its own span failed and still reaches the caller")
+    fun childSpanRecordsFailures() = runBlocking {
+        ToolTracing.useBackendForTest(OtelSpanBackend(tracer()))
+
+        var thrown: Throwable? = null
+        try {
+            ToolTracing.withSpan("click", "A", "s1") { outcome ->
+                outcome.record("OK")
+                ToolTracing.withChildSpan(ToolTracing.SPAN_AGENT_EXECUTE, emptyMap<String, String>()) {
+                    throw IllegalStateException("element not found")
+                }
+            }
+        } catch (e: Throwable) {
+            thrown = e
+        }
+        assertEquals("element not found", thrown?.message)
+
+        val spans = exportedSpans().associateBy { it.name }
+        assertEquals(StatusCode.ERROR, spans.getValue(ToolTracing.SPAN_AGENT_EXECUTE).status.statusCode)
+        assertEquals(StatusCode.ERROR, spans.getValue(ToolTracing.SPAN_NAME).status.statusCode)
+    }
 }

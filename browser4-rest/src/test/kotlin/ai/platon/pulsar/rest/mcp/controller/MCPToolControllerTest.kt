@@ -1505,11 +1505,29 @@ class MCPToolControllerTest {
             ?.count() ?: 0.0
 
     @Test
-    fun `built-in contract violations are observed but not enforced by default`() = runBlocking {
+    fun `built-in contract violations are rejected by default`() = runBlocking {
+        mockLiveNavigateSpec()
+
+        // 'url' is required by the spec and missing here: a contract violation.
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "navigate", arguments = mapOf("sessionId" to sessionId)),
+            response,
+        )
+
+        assertTrue(result.body!!.isError, "the default policy must reject what the standard server rejects")
+        assertEquals("MISSING_REQUIRED_ARG", result.body!!.errorCode)
+        Mockito.verify(agentToolManager, Mockito.never()).execute(any())
+        // `verify` returns the mock: without this the expression body would make the
+        // method return a value, and JUnit would silently skip the test.
+        Unit
+    }
+
+    @Test
+    fun `built-in contract violations can be observed instead of enforced`() = runBlocking {
+        System.setProperty("mcp.validateBuiltinArgs", "shadow")
         mockLiveNavigateSpec()
         val before = shadowViolations("navigate")
 
-        // 'url' is required by the spec and missing here: a contract violation.
         val result = controller.callTool(
             MCPToolCallRequest(tool = "navigate", arguments = mapOf("sessionId" to sessionId)),
             response,
@@ -1520,26 +1538,8 @@ class MCPToolControllerTest {
         Mockito.verify(agentToolManager).execute(any())
         assertTrue(
             shadowViolations("navigate") > before,
-            "the mismatch must be counted so it can be fixed before enforcement is switched on",
+            "the mismatch must be counted so a deployment can observe it before fixing it",
         )
-    }
-
-    @Test
-    fun `built-in contract violations are rejected once the policy says error`() = runBlocking {
-        System.setProperty("mcp.validateBuiltinArgs", "error")
-        mockLiveNavigateSpec()
-
-        val result = controller.callTool(
-            MCPToolCallRequest(tool = "navigate", arguments = mapOf("sessionId" to sessionId)),
-            response,
-        )
-
-        assertTrue(result.body!!.isError, "error policy must reject the malformed call")
-        assertEquals("MISSING_REQUIRED_ARG", result.body!!.errorCode)
-        Mockito.verify(agentToolManager, Mockito.never()).execute(any())
-        // `verify` returns the mock: without this the expression body would make the
-        // method return a value, and JUnit would silently skip the test.
-        Unit
     }
 
     @Test
@@ -2667,6 +2667,10 @@ class MCPToolControllerTest {
         assertEquals("DIALOG_PENDING", result.body!!.errorCode, text)
         assertTrue(text.contains("dialog-accept"), text)
         Mockito.verify(agentToolManager, Mockito.never()).execute(any())
+        // The last statement must not return a value: JUnit 5 silently skips a
+        // @Test method whose return type is not Unit, and Mockito.verify returns
+        // its mock.
+        Unit
     }
 
     @Test

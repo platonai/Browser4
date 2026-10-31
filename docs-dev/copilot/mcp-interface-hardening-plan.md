@@ -1,6 +1,6 @@
 # MCP 接口层加固开发计划（需求 1–14）
 
-> 日期：2026-09-13（Phase 3 更新 2026-09-14） · 分支基准：`feat/mcp-channel-parity`（已含 P0–P5 与 refreshTools 修复）
+> 日期：2026-09-13（Phase 3 更新 2026-09-14；2026-10-31 校正各阶段「剩余」中的过期表述并补记 9.3） · 分支基准：`feat/mcp-channel-parity`（已含 P0–P5 与 refreshTools 修复）
 > 范围：标准 MCP server（A，`browser4-agentic`，8088）+ 私有 dispatcher（B，`browser4-rest`，8888/18182）+ 其背后的 REST 端点
 > 依据：本计划全部条目来自**实跑观测**（见 §1），不是纸面推演
 
@@ -13,9 +13,7 @@
 > - `0.2` `ToolSpec.expression` 不再打印 `Arg(name=…)`；`help{crawl,submit}` → `crawl.submit(url: String, depth: Int = 1, args: String = "")`。顺带修掉更严重的既有缺陷：`extractInterface` 把「无默认值」写成空串，导致**所有源码生成的参数都被标成可选**（`required` 恒空）。新增 `ToolSpecSnapshotRegenerator`（`-DregenerateSpecSnapshots=true`）重生成 `code-mirror` 快照。
 > - `0.3` 新增 `ToolTargetResolver`（agentic）+ `CustomToolTargets`（rest，控制器与标准 server 共用）；`ToolExecutor.requiresReceiver` 区分「服务自持」执行器；`command` 域改为经 `CustomToolRegistry` 直接派发。实测：`memory_search`/`experience_list`/`crawl_status`/`command_status`/`webdb_normalize`/`experience_query`/`html_snapshot_summary`/`skill_list` 均可执行（此前只有 `skill_*`）。
 > - `0.4`（验证中发现的阻断项）标准 server 此前**只透传已声明参数**，而 `tab.navigate` 声明的是 `userTypedUrl` → 客户端发 `{"url": …}` 被丢弃，最基本的导航在 A 上不可用。现改为「声明参数按类型转换 + 其余原样透传」，与 B 对齐；实测 `navigate{"url"}` → `title` → `html_snapshot_summary` 全链路通过。
-> - `0.6` `ToolSpecLint` + `ToolSpecLintTest` 进测试：错误级（空描述、签名泄漏、重复签名、kebab `cliName`）必须为零；当前报告 **117 个生成 spec / 175 条文档告警**，即 Phase 1 的量化待办。
-
-仍在的缺口，构成本计划后续阶段的前置项：
+> - `0.6` `ToolSpecLint` + `ToolSpecLintTest` 进测试：错误级（空描述、签名泄漏、重复签名、kebab `cliName`）必须为零；首跑报告 **117 个生成 spec / 175 条文档告警**，该指标随后收口为 26 条（其中 13 条为合法重载提示，见 Phase 1）。
 
 已修复（本分支）：`2cc9936865`（插件域晚注册导致 A 少 26 个工具）、`2e191e8e59`（stateless 传输）、`913e3cf82d`（工具面/命名/结果/会话对齐）。
 
@@ -28,12 +26,12 @@
 | G3 | A 公告 26 个插件域工具，**只有 `skill_*`（11）能执行**，其余报 `no target object is available` | 实跑 6 个域探测 | 4, 3 |
 | G4 | 同一工具两通道参数行为不一致：A 只透传**已声明**参数（`crawl.sql/urls` 传不进），B 全量透传 | `Browser4MCPServer.buildArgsMap` vs `MCPToolController.dispatchToCustomExecutor` | 5, 3 |
 | G5 | ✅ 已修（`ceaa98a691`）：B 的 `/mcp/tools` 曾「首探即缓存」整个列表，首探发生在会话创建前 → 工具面永远停在 83。现静态段缓存、会话段每次请求合并；实测 `open_session` 前 83 → 后 **275**（+192 个 `navigate`/`click`/`title`… ） | 实跑对比 | 10 |
-| G6 | 别名/命名/渲染曾有三份副本漂移（已建 `McpToolNames`/`ToolResultTextRenderer`，仍有 2 个别名因缺 canonical spec 注册不上） | `browser_is_enabled`/`browser_dialog_status` 缺席 | 1, 3 |
+| G6 | ✅ 已修：别名/命名/渲染曾有三份副本漂移（已建 `McpToolNames`/`ToolResultTextRenderer`）；曾因缺 canonical spec 注册不上的 `browser_is_enabled`/`browser_dialog_status` 已补显式 spec，`ToolContractMatrixTest.frontendAliasesResolve` 断言 43 个别名 → 0 孤儿 | `browser_is_enabled`/`browser_dialog_status` 缺席 | 1, 3 |
 | G7 | 错误是自由文本（`ERROR: xxx failed: ...`），无稳定错误码；HTTP 恒 200 | A/B 实测 | 4 |
 | G8 | 无参数校验层/无返回值校验（`ToolSpec.returnType` 是字符串，未用于校验） | 代码 | 5, 6 |
 | G9 | 无调用日志规范（B 把参数直接拼进 INFO）、无 per-tool 指标、无限流、无结果缓存、A 无批量 | 代码 + 实跑 | 7–14 |
 | G9a | ✅ 已修（Phase 3）：日志规范 + 脱敏 + `requestId` 贯通 + per-tool 指标 + `/api/mcp/stats` | `ToolInvocationLogger`、`ToolMetrics`、`McpStatsController` | 7, 8 |
-| G9b | 仍缺：限流、结果缓存、A 批量 | — | 9–14 |
+| G9b | ✅ 已修（Phase 4/5）：限流（9.1/9.2）、结果缓存（10.1/10.2/10.4）、异步队列背压（9.3）、A 批量 | `ToolRateLimiter`、`ToolResultCache`、`CrawlAdmission`、`BatchExecutor` | 9–14 |
 
 ---
 
@@ -72,6 +70,17 @@ data class Arg(
 `ToolSpecValidator`（5）、`ToolResultValidator`（6）、`ToolInvocationLogger`（7）、`ToolMetrics`（8/14）、`ToolRateLimiter`（9）、`ToolResultCache`（10/13）、`BatchExecutor`（12）。
 契约测试断言「同一输入 → 两通道同一输出/同一错误码」，直接封堵 G4 类漂移。
 
+**D2 补记 · 工具目录统一（已完成 2026-10-31，分支 `feat/mcp-tool-catalog`）。**
+G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工具名单**枚举两次」：A 枚举执行器，B 维护静态名单 + 会话段，两份清单各自演化。
+现在两侧都从 `ToolCatalog`（agentic，纯枚举、无副作用）取名单：
+
+- `ToolCatalog.build(groups, aliases, renames, includeUnresolvedAliases)` 按组优先顺序展开 `getToolSpecs()`；`renames`（公开的 `McpToolNames.sessionRenames`）把 `session.open` 拼成 `open_session`；真名冲突记入 `CatalogConflict`，保留先注册者，不静默覆盖。
+- A 传 `frontendAliases`（Playwright 风格别名），只注册有 spec 的条目；`refreshTools()` 重建目录以拾取后注册的插件执行器。
+- B 传 `dispatcherAliases`（共享别名 + 仅 B 支持的 `browser_window_state` + B 的复合工具），并开 `includeUnresolvedAliases`：静态段在尚无会话时仍需广告 `browser_navigate`，这类条目 `spec == null`、不可执行。
+- 会话生命周期工具改为常规执行器 `SessionToolExecutor`（`domain = "session"`，`receiverClass = MCPToolController`），经 `ToolMount`（`SessionToolMountConfiguration`）进入 `CustomToolRegistry`。因此 A 也能**公告并执行** `open_session`/`close_session`/`attach_browser`/`window_state`，执行体仍回落到 B 的 `executeSessionTool`，close/attach 的结构化载荷不分叉。依赖方向保持 rest → agentic。
+- 附带修掉一处 schema 缺陷：`buildSchemaFromSpec()` 不再用通用 handle 文案覆盖 spec 自带的 `sessionId` 描述，且把 `sessionId` 从 `required` 排除（传输层自己管理该句柄，`open_session` 里它是新会话名）。
+- 新增测试：`ToolCatalogTest`（10）、两侧 `McpToolAliasParityTest`（agentic 4 / rest 5）、`Browser4MCPServerToolSourcesTest.declaredSessionIdStaysOptionalAndDocumented`。`docs/mcp-tools.md` 为生成产物且不含 `session` 域，无需重生成。
+
 **D3 · 兼容优先的落地顺序。**
 错误码/日志/校验先以「附加信息」形式上线（`ERROR: [CODE] msg` 保留旧前缀、JSON-RPC 结构不变），破坏性变更（未知参数从"静默丢弃"改"报错"、输出校验从 warn 改 fail）放在各自阶段的最后一步，并配 feature flag。
 
@@ -87,7 +96,7 @@ data class Arg(
 | 0.2 修 `ToolSpec.expression` + 重生成快照（含 `extractInterface` 空默认值） | G2 | ✅ |
 | 0.3 `ToolTargetResolver` + `requiresReceiver` + command 派发 | G3 | ✅ |
 | 0.4 未知参数策略（A 与 B 对齐：声明参数转换 + 其余透传） | G4 | ✅（严格校验/未知参数报错留给 Phase 2 的 `mcp.strictArgs`） |
-| 0.5 修 B 的工具列表缓存 | G5 | ⏳ 未做（Phase 4 缓存项一并处理） |
+| 0.5 修 B 的工具列表缓存 | G5 | ✅ 已完成（`ceaa98a691`，见 Phase 4「需求 10.3」） |
 | 0.6 spec lint | G1/G2/G6 | ✅ |
 
 ### Phase 1 · 文档与示例（需求 1、2；主体已完成 2026-09-13，提交 `c639994e29`）
@@ -96,13 +105,20 @@ data class Arg(
 - `ToolSpecGenerator` 从镜像 `WebDriver.kt` 的 KDoc 提取 `@param` 说明（≈170 条）写入 `Arg.description`，并把 KDoc 代码块提取为 `ToolSpec.examples`；生成的 spec 快照同时携带两者，JAR 离线回退时文档依旧完整。
 - `ToolDocGenerator` 生成 `docs/mcp-tools.md`（137 工具 / 9 域：签名、参数表含类型/必填/默认/含义、返回值、示例、全文）与 `docs/mcp-tools.json`（机器可读）；`ToolDocGeneratorTest` 作为漂移门禁（重生成必须零 diff）。
 - `help` 输出统一为「签名 + 参数含义 + 示例 + 作者补充」，tab 域不再只回 KDoc 散文；`Server.instructions` 明确指引 `help` / `skill_doc`。
-- 新增 `ToolExample`；**可执行示例**（带 args）会写进 MCP 工具描述（`tools/list` 唯一能携带示例的位置）。已authoring：crawl（3）、command（3）、webdb（2）、skill 管理（5）；tab 域为 KDoc 文档片段。
+- 新增 `ToolExample`；**可执行示例**（带 args）会写进 MCP 工具描述（`tools/list` 唯一能携带示例的位置）。本阶段已 authoring：crawl（3）、command（3）、webdb（2）、skill 管理（5）；tab 域当时为 KDoc 文档片段，后续补齐到全量 **142/142**（见 §8.2）。
 - 量化结果：lint 文档告警 **175 → 26**（其中 13 条为合法重载提示），真实缺口 12 条参数缺说明 + 1 条缺 help。
 
-**剩余**
-- tab 域 117 个生成 spec 的**可执行示例覆盖 0/117**（lint 已在报告该指标）——按需为高频工具（navigate/click/fill/press/screenshot/ariaSnapshot/query…）补 args 示例。
-- 需求 2.3 CLI 侧 `--help --examples`（`help.rs`/`tips.rs`）未做。
-- 需求 1.1 的「CI 比对显式覆盖集 == @MCP 扫描集」未做（当前靠 KDoc 提取 + 快照 + 文档门禁保证一致性）。
+**剩余**（无：本阶段功能与收口项均已完成）
+
+- ~~需求 1.1 的「CI 比对显式覆盖集 == @MCP 扫描集」~~ **已等效覆盖，无需另写门禁（2026-10-31 审计）**：1.1 原始设计是「新建 `WebDriverToolSpecOverrides.kt`，为 114 个方法逐条手写 spec，再在 CI 比对覆盖集与扫描集」。实现时改成了「扫描镜像 KDoc + 15 条需要纠正签名的显式覆盖」，该设计已被 `selectPreferred` 与既有四个门禁取代：
+  - `TabSpecCoverageTest`：扫描集 ↔ 公告集（差值必须落在 `declaredByHand`/`notAdvertised` 白名单里）；
+  - `ToolSpecLintTest.advertisedSpecsAreCallable`：公告集合中**零**条必填参数为 JSON 不可表达（覆盖被删即失败，这正是 1.1 想防的错配）；
+  - `ToolDocGeneratorTest` / `SourceCodeToToolCallTest`：文档与 spec 快照「重生成零 diff」；
+  - `ToolContractMatrixTest`：142 工具 × 6 用例以示例为入参实跑校验器。
+  再加一条「覆盖集 == 扫描集」测试只会与第一条重复，属于纸面合规，故不做。
+- ~~生成器层面的「重载择优选 JSON 友好签名」~~ **已完成（2026-10-31）**：`ToolSpecGenerator.selectPreferred` 取代 `associateBy`，同名重载优先选「必填参数全部 JSON 可表达」的那个，仅在同等友好时回落到源码顺序；原始生成 spec 仍保留全部重载（供 lint/快照），公告集合零违规，`ToolSpecGeneratorExtractionTest` 覆盖三条规则。
+- ~~tab 域可执行示例覆盖~~ **已清零**：全量 **142/142**，矩阵报 `missing altogether: 0`（见 §8.2）。
+- ~~需求 2.3 CLI 侧 `--help --examples`~~ **已完成**（`help.rs`/`tips.rs`，见 §8.7 第 6 条）。
 
 **需求 1 — 优化接口文档，直接提供接口文档，不再依赖 WebDriver 文档**
 - 1.1 全量 spec 补齐：tab 域 114 个 `@MCP` 方法的文档字段改为仓库内显式覆盖（新增 `WebDriverToolSpecOverrides.kt`），CI 比对"覆盖集 == 扫描集"。
@@ -176,7 +192,7 @@ data class Arg(
 - 根因：`ToolSpecGenerator` 镜像上游 `WebDriver.kt` 时，**同名重载取最后一个**。`tab.navigate` 的最后一个重载是 `navigate(entry: NavigateEntry)`，于是 schema 对外声明了一个 MCP 客户端**根本无法构造**的对象参数；而 `BrowserTabToolExecutor.callFunctionOn` 真正读的是 `url`（或 `rawUrl`+`pageUrl`）。Phase 0.4 的「未声明参数原样透传」让这个错配一直隐形，Phase 2 的必填校验把它变成硬失败。
 - 影响面（实测 117 个生成 spec 中 10 个方法）：`navigate(NavigateEntry)`、`screenshot(RectD)`、`ariaSnapshot(AriaSnapshotOptions)`、`delay(Duration)`、`waitForPage/waitForFunction/waitForNavigation/waitForSelector(timeout: Duration, action: suspend ())`。
 - 修复：在 `BrowserTabToolExecutor` 为这 8 个方法写**显式 spec**（与 `when (functionName)` 分支里的真实参数名一致：`url` / `selector`+`timeoutMillis` / `oldUrl` / `pageUrl` / `pageFunction` / `millis` / `selector|fullPage|viewport` / ariaSnapshot 的 8 个扁平选项），并补文档；`docs/mcp-tools.md` / `.json` 重新生成（137 工具）。
-- 防复发：`ToolSpecLint` 新增规则「必填参数类型必须是 JSON 可表达类型」，`ToolSpecLintTest.advertisedSpecsAreCallable` 对**实际公告的 spec 集合**做零容忍断言。原始生成 spec 里仍有 13 处（10 方法）非 JSON 参数，作为 WARNING 计数（`117 specs / 39 warnings`）——它们已被显式覆盖，但生成器层面的「重载择优选 JSON 友好签名」尚未做，属 Phase 1 的 1.1 收口项。
+- 防复发：`ToolSpecLint` 新增规则「必填参数类型必须是 JSON 可表达类型」，`ToolSpecLintTest.advertisedSpecsAreCallable` 对**实际公告的 spec 集合**做零容忍断言；原始生成 spec 里仍有 13 处（10 方法）非 JSON 参数，作为 WARNING 计数（`117 specs / 39 warnings`）。2026-10-31 补上生成器侧的选择规则（`ToolSpecGenerator.selectPreferred`）：同名重载优先「必填参数全部 JSON 可表达」，只在同等友好时按源码顺序取最后一个，因此公告的选择不再依赖上游文件的书写顺序。
 - 实跑证据：修复后 A `navigate{"url"}` → `title` = `Example Domain`；日志 `tool.call start/done requestId=A-c3d2ab48-0001 tool=navigate durationMs=2456 outcome=OK`。
 
 **需求 8.4 — SLO 与告警阈值（文档化，Prometheus 规则可直接抄）**
@@ -196,7 +212,7 @@ data class Arg(
 
 **B 通道校验影子模式（2026-09-14，需求 3/5 的前置）**
 - 背景：B 此前只校验「自定义域」工具（`CustomToolRegistry` 里的 spec），`tab_*`/`browser_*` 等内置域完全不过校验——同一非法输入 A 拒绝、B 放行。
-- 做法：新增 `-Dmcp.validateBuiltinArgs=shadow|error|off`，默认 **shadow**。内置域的 spec 由**已存在的会话**解析（`liveSpecOf`，绝不为校验而开会话），命中违规时只记结构化 WARNING + 计数器，**不改调用结果**；插件/业务域（仓库内自著的 spec）照旧强制拒绝；`error` 才与 A 同码拒绝。
+- 做法：新增 `-Dmcp.validateBuiltinArgs=shadow|error|off`。内置域的 spec 由**已存在的会话**解析（`liveSpecOf`，绝不为校验而开会话）；命中违规时按策略处理：插件/业务域（仓库内自著的 spec）始终强制拒绝，内置域由该开关决定（初版默认 `shadow`，2026-10-31 改为默认 `error`，见下）。
 - 为什么不是直接强制：内置 spec 镜像上游 `WebDriver` 接口，错配是**我们的**问题而不是客户端的问题（`navigate` 已经证明过一次）。先观测、后拒绝，与需求 9 的灰度策略一致。
 - 观测口径：日志 `mcp.validation.shadow channel=… tool=… spec=… codes=… args=… details=…`；指标 `tool.validation.shadow.violations{tool_name,validation_type}`（与「已拒绝」的 `tool.validation.failures` **分开计数**，避免把放行的调用算成失败）；`/api/mcp/stats` 新增 `validationShadowViolations`（总量 + 每工具）。
 - **上线 20 分钟就抓到 3 个真 P0**（A 通道当时正在硬拒绝）：
@@ -207,7 +223,7 @@ data class Arg(
   | `tab.evaluateValue`（别名 `browser_evaluate`，即 CLI `eval`） | `(selector, functionDeclaration)` 两者必填 | `expression`，或 `selector`+`functionDeclaration` | CLI 的 `eval` 在 A 上不可用 |
   三者在 `BrowserTabToolExecutor` 补显式契约后，实测 A：`navigate`/`click`/`dblclick`/`eval`/`evaluate_value`/`aria_snapshot`/`screenshot` 全部成功返回。
 - 27 个高频 tab 工具重扫：**零**新增 shadow 违规；`/api/mcp/stats` 实测 `validationShadowViolations=5`（来自刻意的空参数探测）、`validationFailures=0`（未把放行调用算成失败）。
-- 收口条件：把 `-Dmcp.validateBuiltinArgs=error` 作为 A/B 同码的目标状态，前提是连续观察期内 shadow 计数为 0。
+- 收口（2026-10-31 已完成）：`-Dmcp.validateBuiltinArgs` 默认切到 **`error`**，B 对内置域的判定与 A 一致（同一份目录、同一套规则、同一 `errorCode`）。两条依据：①A 通道自始就强制校验同一份目录，且 A 的 e2e 长期通过，说明目录本身可调用；②契约矩阵以示例入参跑校验器，`missing altogether: 0`。`shadow` 降级为显式 opt-in（保留原观测口径，便于修某个错配前先观测），`off` 仍可整体关闭；无法识别的取值一律回落到默认 `error`，拼错开关不会静默削弱校验。
 
 **同一轮影子扫描暴露的第二类问题：合法调用被「过严」的 spec 拒绝（已修）**
 - 机制：`ToolSpec.Arg(name, "String", null)` 里第三个参数是 `defaultValue`，**`null` 表示必填**（Phase 0 修好的语义）；「可选但无默认值」必须写成 `Arg(name, "String?", "null")`。部分手写 spec 用了前一种写法，而执行器读的是 `required = false`，于是校验层把执行器本来能处理的调用挡在门外——两个通道都挡（自定义域在 B 是强制校验的）。
@@ -218,13 +234,13 @@ data class Arg(
 - 顺带澄清一处易混：异步信封给的是 `taskId` **值**，而状态工具的**参数名**由各自 schema 决定（`crawl.status(id)` / `command.status(id)` 用 `id`，`memory.read(taskId)` 用 `taskId`）——客户端应读 schema 而不是照抄信封字段名。已写入 `docs/mcp-tools.md` 的说明段。
 
 **已知缺口（诚实记录）**
-- **B 通道只校验「自定义域」工具**：`MCPToolController.validateArguments` 取的是 `CustomToolRegistry` 执行器的 spec，因此 `tab_*`/`browser_*` 等内置域在 B 上曾完全不过校验——同一非法输入 A 拒绝、B 放行，需求 3/5 的「两通道同码」尚未真正成立。**已通过影子模式解决观测问题（见上）**，但默认仍是「观测不拒绝」：把 `-Dmcp.validateBuiltinArgs=error` 打开才是 B 与 A 同码的完成态，需等 shadow 计数连续为 0。
+- ~~**B 通道只校验「自定义域」工具**~~ **已闭环**：`MCPToolController.validateArguments` 曾取不到内置域 spec，同一非法输入 A 拒绝、B 放行。先以影子模式观测（见上），2026-10-31 把默认切到 `-Dmcp.validateBuiltinArgs=error`，B 与 A 对内置域的判定一致（`MCPToolControllerTest` 断言默认拒绝且未分发）。
 - 运行时包内**没有** `micrometer-registry-prometheus`（在 `browser4-agentic/pom.xml` 里是 `optional`）→ 线上 `/actuator/prometheus` 返回 404，本轮以 `/api/mcp/stats` + `/actuator/metrics`（实测 `tool.*` 10 个指标可见）作为查询面。需要 Prometheus 抓取时把该依赖以非 optional 引入运行时包即可，代码侧无需改动（`MetricsConfig.isPrometheus` 会自动转为 `true`）。
-- 需求 8.2 的 **OTel span**（`mcp.tool.call` → `agent.execute` → `cdp.*`）本轮未做；现有 `agentic` 侧 OTel 依赖仍是可选的，接入前先确认 bundle 是否携带 OTel SDK。
-- `session.active` / `async.queue.depth` 指标未加（依赖 Phase 4/5 的队列实现）。
+- 需求 8.2 的 **OTel span**：`mcp.tool.call` 父 span 已落地，`agent.execute` 子 span 也已接上（实现细节与三个"可选依赖"陷阱见 §8.7 第 4 条）；`cdp.*` 子 span 仍未做——`browser4-core` 没有 OTel 依赖，要接它必须在 core 引入一个不依赖 OTel 的埋点接口，属跨模块设计决策（见 §6 待办）。
+- `session.active` / `async.queue.depth` 两个 gauge **已落地**：取值由部署侧注入（`ToolMetrics.registerSessionCountSupplier` / `registerAsyncTaskCountSupplier`），`McpToolMetricsConfiguration` 分别接 `PulsarSessionManager.getAllSessions().size` 与 `CrawlService.runningTaskCount()`（见 §8.2）。
 
 **需求 7 — 增加接口日志记录**
-- 7.1 `ToolInvocationLogger`：一进一出两条结构化日志，字段 `requestId / channel(A|B) / tool / domain.method / sessionId / durationMs / outcomeCode / cached / stepIndex`。（`cached`/`stepIndex` 待 Phase 4/5 引入后追加）
+- 7.1 `ToolInvocationLogger`：一进一出两条结构化日志，字段 `requestId / channel(A|B) / tool / domain.method / sessionId / durationMs / outcomeCode / cached / stepIndex`。（`cached` 已随 Phase 4 缓存落地；`stepIndex` 按 §8.3 判定**不需要**——批处理步骤不产生 `tool.call` 行，由 `batch.step` 承担）
 - 7.2 脱敏与截断：`sensitiveArgs`（cookie/token/password/apiKey/storage-state/文件内容）→ `***`；大 payload 只记长度与 sha256 前 8 位。
 - 7.3 `requestId` 贯通：B 已有 `X-Request-Id`，A 从 `_meta`/`Mcp-Request-Id` 取或生成，写入 MDC 供排障关联。
 - **验收**：A/B 日志结构一致；脱敏单测；INFO 日志中不出现参数正文；同一 requestId 可从入口追到 CDP 调用。
@@ -292,14 +308,24 @@ data class Arg(
   - `-Dmcp.rateLimit.overrides=click=0.5/2` → 第 1、2 次通过，第 3~5 次拒绝（`retryAfterMs` 407/356/332 递减），`/api/mcp/stats` 显示 `rateLimit{mode=error,rejected=3}` 且 `browser_click{rateLimited=3}` 与调用计数同名列（B 用客户端发来的工具名上报，别名不再各记一行）。
 - 顺带修的既有问题：并发点击时 CDP 报 `No node with given id found`（DOM 节点 id 失效）原被归类 `INTERNAL`，现归 `CDP_ERROR`（retryable），客户端据此重试而不是当成服务端 bug。
 
-**需求 9 遗留**：CLI 侧针对 `RATE_LIMITED` 的提示语（`help.rs`/`tips.rs`）未做；服务端已给出 `retryAfterMs` 与 `hint`。
+**需求 9.3 — 异步队列背压（已完成）**
+- 真缺口：限流只管**速率**（提交类 0.2/s、burst 2），不管**在跑的任务数**。`CrawlService.submit` 接受即起协程，`jobStore`（运行中任务）**没有容量上限**（只有终态记录 `taskStore` 限 100 条），所以一个稳定提交的客户端可以在 5 分钟内堆起 60+ 个同时运行的爬取任务，每个都占浏览器预算 / checkpoint / 行日志。`async.queue.depth` 此前只是 gauge（能看见，不拦）。
+- 修复位置选在**队列真正所在的地方**——`CrawlService`，而不是某个通道的派发前：`/api/crawl` 与两个 MCP 通道都走这里，通道级拦截会漏掉 REST 直调。
+  - `CrawlAdmission.refusal(tool, running, max)`：`running >= max` 时给出拒绝文案（含工具名/深度/上限/`retryAfterMs`），`max <= 0` 表示关闭；
+  - `CrawlService.submit` 在**创建任何东西之前**判定（被拒的调用不留 task 记录、不写 checkpoint ⇒ 重试幂等）；`resume` 在惰性 no-op 分支（已完成/没有 checkpoint/无事可做）**之后**判定，真正要起 worker 时才算重新入队；
+  - `CrawlQueueFullException` 实现 `CodedFailure` → `RATE_LIMITED`：A/B 通道与限流拒绝同一错误码，REST 端点映射 `429`，响应体带 `errorCode=RATE_LIMITED` + `retryAfterMs`（`CrawlController.handleQueueFull`，CLI 因此能命中同一套提示）。
+- 阈值：`crawl.maxRunningTasks`（`-Dcrawl.maxRunningTasks` 亦可），默认 **64**（远高于正常爬取规模，只在后端真落后时生效），`0`/负数关闭。
+- 测试：`CrawlAdmissionTest`（4：低于上限放行 / 达到上限拒绝且文案含深度与上限 / 非正上限关闭 / 异常码为 `RATE_LIMITED` 且可重试）。
+- 顺带修的真问题：`MCPToolControllerTest.tabToolFailsFastWhileADialogIsPending()` 的返回类型是 `ToolCallResult`（最后一句 `Mockito.verify` 返回 mock），JUnit 5 **静默跳过**该用例——已补 `Unit`，用例恢复执行（断言旧对话框防护仍成立）。
+
+**需求 9 遗留**：无。CLI 侧 `RATE_LIMITED` 提示语（`tips.rs` 的 `RATE_LIMITED` 分支 + `reply.retry_after_ms`）已随 CLI 侧改动落地，服务端提供 `retryAfterMs` 与 `hint`。
 
 **顺带发现的测试基础设施缺陷（已修）**：JUnit 5 会**静默跳过**返回非 `Unit` 的 `@Test` 方法。`= runBlocking { … }` 若最后一句是 `Mockito.verify(…)`（返回 mock）就会命中——全量跑出的告警显示 3 个 `BrowserTabToolExecutorTest` 的 frame 用例从未执行过，其中一个断言早已过时（期望 `frameSwitch requires 'frame'`，实际消息是 `Missing required parameter 'frame' for frameSwitch`）。已补齐 `Unit` 并顺手把断言改成校验稳定错误码（`MISSING_REQUIRED_ARG`），3 个用例恢复执行且全绿。**新增测试时务必确认方法返回 `Unit`**。
 
 **需求 9 — 增加接口限流**
 - 9.1 `ToolRateLimiter`：令牌桶，维度 `(sessionId, domain)` + 全局上限；策略来自 spec `rateLimit`，默认分档：浏览器动作 10/s（burst 20）、`crawl/swarm/command` 提交 0.2/s、`coding/fs` 5/s、只读状态类不限。
 - 9.2 拒绝时返回 `RATE_LIMITED` + `retryAfterMs`（4.1 已定义），CLI 提示"稍后重试/降低批量并发"。
-- 9.3 异步队列背压：队列超阈值直接拒绝而非无限堆积。
+- 9.3 异步队列背压：队列超阈值直接拒绝而非无限堆积。✅ 已实现（`CrawlAdmission` + `crawl.maxRunningTasks`，见上方「需求 9.3」）。
 - **验收**：第 N+1 次调用返回 `RATE_LIMITED`；配置可覆盖；只读工具不受限。
 
 **需求 10 — 增加接口缓存**
@@ -397,8 +423,8 @@ data class Arg(
   | `html_snapshot.scrape` / `scrape_all` | `attrName` | 仅 `field=attr` 需要 | 改可选 |
   | `html_snapshot.query` | `url` | 「否则用当前页」 | 改可选 |
   | `html_snapshot.readability` | `url` | `required = false` | 改可选 |
-- 矩阵新增**缺口清单**输出（按域统计缺示例的工具数），把「还要补多少」变成可读数字：当前 `tab 58 / experience 4 / skill 1`（tab 剩余为低频 setter/selector 家族）。
-- **未做**：experience（4）与 skill（1）示例；tab 剩余 58 个低频方法。
+- 矩阵新增**缺口清单**输出（按域统计缺示例的工具数），把「还要补多少」变成可读数字：首跑为 `tab 58 / experience 4 / skill 1`，随后逐批补齐，最终 **142/142、缺口 0**（`experience`4 + `skill`1 最先补，tab 长尾 32 个随后清零，见 §8.2）。
+- **已全部补齐**：没有剩余的无示例工具；矩阵以示例作为 happy-path 入参跑校验器，`everyWrittenTabExampleReachesTheSpec` 保证示例必须落到真实 spec 上。
 
 **6.4 门禁（已完成）**
 - `bin/test.ps1 mcp-contract` 新增（`mcp` 保持原样）：模块 `browser4-agentic + browser4-rest`，模式包含矩阵、文档漂移、lint、校验器、错误码、限流、缓存、批处理、任务信封、日志与指标、别名一致性。
@@ -467,11 +493,11 @@ data class Arg(
 ## 6. 完成定义（Definition of Done）
 
 - 需求 1：新客户端仅凭 `tools/list` + `help` 即可正确调用任一工具；`docs/mcp-tools.md` 生成无 diff；零 WebDriver 文档依赖（lint 兜底）。
-- 需求 2：每工具 ≥1 可执行示例，且示例即契约测试入参。（**现状 15/140**：矩阵已把「示例必须是可调用入参」变成断言，示例补齐后自动获得验收）
-- 需求 3：工具 × 6 类**通道无关**用例矩阵全绿（140 × 6），通道相关用例（会话/限流/缓存/批量）由各阶段测试与 e2e 承担；`bin/test.ps1 mcp-contract` PR 门禁实测 3 分 50 秒 < 5 min。
+- 需求 2：每工具 ≥1 可执行示例，且示例即契约测试入参。（**现状 142/142**：矩阵以示例作为 happy-path 入参跑校验器，`missing altogether: 0`，见 §8.2）
+- 需求 3：工具 × 6 类**通道无关**用例矩阵全绿（142 × 6），通道相关用例（会话/限流/缓存/批量）由各阶段测试与 e2e 承担；`bin/test.ps1 mcp-contract` PR 门禁实测 3 分 50 秒 < 5 min。
 - 需求 4：所有失败路径有稳定 `errorCode` + retryable 语义，A/B 一致。
 - 需求 5/6：同一非法输入两通道同码；全量契约跑完 `schema_violation == 0`。
-- 需求 7/8：日志结构化且脱敏；每工具指标 + trace 可见；`/api/mcp/stats` 有真实数据。（**代码 + 单测已完成**；OTel span 与运行时 Prometheus 抓取见 Phase 3「已知缺口」）
+- 需求 7/8：日志结构化且脱敏；每工具指标 + trace 可见；`/api/mcp/stats` 有真实数据。（**代码 + 单测已完成**；`mcp.tool.call` 父 span 与 `agent.execute` 子 span 已落地；`cdp.*` 子 span 需先在 `browser4-core` 引入 OTel-free 埋点接口；运行时 Prometheus 抓取保持 optional，见 Phase 3「已知缺口」）
 - 需求 9/10/11：限流可复现拒绝、缓存命中与失效可验证、长任务可轮询可取消。
 - 需求 12/13/14：A/B 批量结果逐字段一致；幂等批次可缓存回放；批次指标/span/日志齐全。
 
@@ -511,7 +537,7 @@ data class Arg(
   - 每个域都有「跑真实路径、拿真实载荷过 schema」的测试：`ExperienceToolExecutorTest`、`MemoryToolExecutorTest`、`WebDbExportSchemaTest`、`SkillResultSchemaTest`、`HTMLSnapshotResultSchemaTest`（mock 服务 / 纯函数），载荷变化超纲会直接失败而不是在生产里刷 `schema_violation`。
 - **需求 8（监控）**：`session.active`、`async.queue.depth` 两个 gauge **已落地**，取值由部署侧注入（`ToolMetrics.registerSessionCountSupplier` / `registerAsyncTaskCountSupplier`），并在 `bindTo` 时随 Spring 注册表重绑（否则 gauge 会继续写进没人抓取的独立注册表）。REST 侧 `McpToolMetricsConfiguration` 从 `PulsarSessionManager.getAllSessions().size` 与 `CrawlService.runningTaskCount()`（`jobStore` 只保留运行中的 job）取值；瘦部署缺 bean 时 gauge 不注册而不是谎报 0。
 - **需求 7（日志）**：见 8.1 第 6 条。
-- **需求 3/5（两通道同码）**：不变，B 侧内置域仍是 `shadow`，切 `error` 需等计数清零。
+- **需求 3/5（两通道同码）**：内置域校验已对齐——`-Dmcp.validateBuiltinArgs` 默认 `error`（2026-10-31），两通道对同一非法输入返回同一 `errorCode`；`shadow` 仅作显式观测降级。
 
 ### 8.3 计划中两处经核实不成立的说法（已更正，不做无效改造）
 
@@ -543,7 +569,8 @@ data class Arg(
    - ② **类型泄进 API 就会传染**：最初把 `Span` 交给调用方的 lambda，`browser4-rest` **编译**直接失败（optional 不传递）——改成 `OutcomeSink`（只有 `record(outcome)` 一个方法）。
    - ③ **只是"碰一下"配置类也会炸**：即便不再暴露 `Span`，`ToolTracing` 里读 `OpenTelemetryConfig.tracingRequested` 就会初始化该类，而它持有 `OpenTelemetry` 类型的字段 → `browser4-rest` 运行期 **62 个用例** `NoClassDefFoundError: io/opentelemetry/api/OpenTelemetry`。最终设计：`ToolTracing` 文件里**不出现任何 OTel 类型**，只依赖 `ToolSpanBackend`/`OutcomeSink` 两个自有接口；实现类 `OtelSpanBackend` 用 `Class.forName` **按名加载**，且只在探测到 API **与** SDK 两类都存在时才加载（配置类也只在那之后才被触碰）。
    - 测试：`ToolTracingTest` 用自写 `SpanExporter` 断言真实导出的 `SpanData`（名字/属性/`OK`·`ERROR`/异常事件/无会话时不写 `session` 属性），并断言**没有 backend 时 block 照常执行且不导出任何东西**、异常原样抛回；另有一条测试断言 `withSpan` 的参数里不含任何 `io.opentelemetry` 类型（防止 ① 类回归）。
-   - **未做**：`agent.execute` / `cdp.*` 子 span——它们属于 agent 与 CDP 层；现在 `mcp.tool.call` 已是父 span，接子 span 是自然延伸。
+   - **已做**：`agent.execute` 子 span——`AbstractToolExecutor.callFunctionOn` 在父 span 内包一层 `ToolTracing.withChildSpan`（属性 `domain`/`method`），父 span 现在会 `makeCurrent()`，子 span 因此真正嵌套（`ToolTracingTest` 断言 `parentSpanId == 父 spanId`）；无父 span 时**不建**子 span（避免同一调用出现两个 root）。
+   - **未做**：`cdp.*` 子 span——CDP 往返发生在 `browser4-core`，那个模块没有 OTel 依赖；要在那里埋点，必须先在 core 引入一个不依赖 OTel 的埋点接口（例如 `CdpCallListener`），再由 agentic 用 OTel 实现，属跨模块设计决策，需单独立项。
 5. `micrometer-registry-prometheus` 仍是 `<optional>`：**结论是保留 optional**。理由：optional 依赖不会传递到运行时 bundle，而"默认假定有 Prometheus 抓取端"正是上面 OTel 的翻版错误（多一个无人抓取的注册表 + 多一份依赖面）；`/actuator/metrics` 与 `GET /api/mcp/stats`（含 p50/p95/p99、错误码归因、限流/缓存/批量计数）已经把同样的数字暴露出来，`MetricsConfig` 也已在缺类时容错。需要抓取时把该依赖的 `<optional>` 去掉即可，**代码侧无需改动**（`MetricsConfig.isPrometheus` 会自动转为 true）。
 5. `micrometer-registry-prometheus` 仍是 `optional`，`/actuator/prometheus` 需把它提为运行时依赖才可抓取（代码侧无需改动）。
 6. CLI 侧 `--help --examples` 与 `RATE_LIMITED` 提示语**已由本轮并行实现**：`<cmd> --help --examples` 从 `/mcp/tools/specs` 拉取示例（后端不可达时退化为一行提示并 exit 0；无参示例渲染为 `no arguments`，片段示例渲染为代码块），失败提示按错误码给出可执行建议（`RATE_LIMITED` 带 `retryAfterMs`，`SESSION_UNHEALTHY`/`SESSION_NOT_FOUND` 各一条，`INTERNAL` 刻意静默）。`cargo test --bin browser4-cli` 实测 **1340 passed / 0 failed / 2 ignored**，`cargo build` 无告警。

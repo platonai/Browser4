@@ -6,6 +6,7 @@ import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.TcException
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.observability.ToolTracing
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
@@ -114,7 +115,13 @@ abstract class AbstractToolExecutor : ToolExecutor {
         val pseudoExpression = tc.pseudoExpression
 
         return try {
-            val r = callFunctionOn(domain, functionName, args, receiver)
+            // The dispatch itself is a step inside the tool-call span: it is the part
+            // that talks to the browser, so its duration is what a trace must separate
+            // from the channel's own overhead (validation, caching, serialisation).
+            val r = ToolTracing.withChildSpan(
+                ToolTracing.SPAN_AGENT_EXECUTE,
+                mapOf(ToolTracing.ATTR_DOMAIN to domain, ToolTracing.ATTR_METHOD to functionName),
+            ) { callFunctionOn(domain, functionName, args, receiver) }
 
             val (value, className) = when {
                 r is JsEvaluation -> {
