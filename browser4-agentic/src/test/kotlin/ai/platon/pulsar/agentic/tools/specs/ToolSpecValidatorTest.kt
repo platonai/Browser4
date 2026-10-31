@@ -140,22 +140,23 @@ class ToolSpecValidatorTest {
     }
 
     @Test
-    @DisplayName("built-in specs are observed first and enforced only on request")
-    fun builtInPolicyIsShadowByDefault() {
+    @DisplayName("built-in specs are enforced by default and can be downgraded to observation")
+    fun builtInPolicyIsErrorByDefault() {
         val policy = { ToolSpecValidator.builtInPolicy() }
 
         try {
-            assertEquals(ToolSpecValidator.BuiltInPolicy.SHADOW, policy(), "observe-first is the default")
+            assertEquals(ToolSpecValidator.BuiltInPolicy.ERROR, policy(), "enforcement is the default")
 
-            System.setProperty("mcp.validateBuiltinArgs", "error")
-            assertEquals(ToolSpecValidator.BuiltInPolicy.ERROR, policy())
+            System.setProperty("mcp.validateBuiltinArgs", "shadow")
+            assertEquals(ToolSpecValidator.BuiltInPolicy.SHADOW, policy())
 
             System.setProperty("mcp.validateBuiltinArgs", "off")
             assertEquals(ToolSpecValidator.BuiltInPolicy.OFF, policy())
 
-            // Anything unrecognised must fall back to the safe mode, never to enforcement.
+            // An unrecognised value falls back to the default, which is enforcement,
+            // so a typo can never silently weaken validation.
             System.setProperty("mcp.validateBuiltinArgs", "yes-please")
-            assertEquals(ToolSpecValidator.BuiltInPolicy.SHADOW, policy())
+            assertEquals(ToolSpecValidator.BuiltInPolicy.ERROR, policy())
         } finally {
             System.clearProperty("mcp.validateBuiltinArgs")
         }
