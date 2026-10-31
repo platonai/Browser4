@@ -18,7 +18,7 @@ class AgentToolExecutor : AbstractToolExecutor() {
     init {
         ToolSpecGenerator.apply {
             generateAllOnce()
-            agentToolSpecs.associateByTo(toolSpec) { it.method }
+            selectPreferred(agentToolSpecs).toMap(toolSpec)
         }
     }
 

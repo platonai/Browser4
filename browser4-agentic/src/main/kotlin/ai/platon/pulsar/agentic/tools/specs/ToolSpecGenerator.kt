@@ -158,6 +158,38 @@ object ToolSpecGenerator {
         }
     }
 
+    /**
+     * The spec each built-in method advertises when the interface declares it
+     * with several overloads.
+     *
+     * A method name maps to exactly one advertised tool, so the generator has to
+     * choose. Source order is a poor choice on its own: `WebDriver` also declares
+     * Kotlin-only forms (`navigate(entry: NavigateEntry)`, `screenshot(rect: RectD)`,
+     * `delay(duration: Duration)`) whose required argument an MCP client cannot
+     * produce — a spec built from those would advertise a call nobody can make.
+     * Selection therefore prefers an overload whose required arguments are all
+     * JSON-representable, and only falls back to the last declaration when every
+     * overload is equally (un)friendly. That keeps the choice explicit instead of
+     * depending on how the upstream file happens to be ordered.
+     *
+     * An explicit override still wins: `BrowserTabToolExecutor` assigns its own
+     * specs after this map, which is how the most-used methods get a hand-authored
+     * contract.
+     */
+    internal fun selectPreferred(specs: Collection<ToolSpec>): Map<String, ToolSpec> {
+        val preferred = LinkedHashMap<String, ToolSpec>()
+        for (spec in specs) {
+            val current = preferred[spec.method]
+            preferred[spec.method] =
+                if (current != null && isJsonFriendly(current) && !isJsonFriendly(spec)) current else spec
+        }
+        return preferred
+    }
+
+    /** Whether every required argument of [spec] can be built from JSON. */
+    private fun isJsonFriendly(spec: ToolSpec): Boolean =
+        spec.arguments.none { it.defaultValue == null && !ToolSpecLint.isJsonRepresentable(it.type) }
+
     internal fun toSnapshotJson(toolSpecs: List<ToolSpec>): String {
         return serializeToolSpecs(toolSpecs)
     }

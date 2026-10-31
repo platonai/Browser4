@@ -108,9 +108,9 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
 - 新增 `ToolExample`；**可执行示例**（带 args）会写进 MCP 工具描述（`tools/list` 唯一能携带示例的位置）。本阶段已 authoring：crawl（3）、command（3）、webdb（2）、skill 管理（5）；tab 域当时为 KDoc 文档片段，后续补齐到全量 **142/142**（见 §8.2）。
 - 量化结果：lint 文档告警 **175 → 26**（其中 13 条为合法重载提示），真实缺口 12 条参数缺说明 + 1 条缺 help。
 
-**剩余**（仅两项收口，功能面已完成）
+**剩余**（仅一项收口，功能面已完成）
 - 需求 1.1 的「CI 比对显式覆盖集 == @MCP 扫描集」未做（当前靠 KDoc 提取 + 快照 + 文档漂移门禁 + lint 兜底）。
-- 生成器层面的「重载择优选 JSON 友好签名」未做：原始生成 spec 仍有 13 处（10 方法）非 JSON 参数，已由显式覆盖兜住，公告集合零违规（见 §3 Phase 2 的 `ToolSpecLint` 条）。
+- ~~生成器层面的「重载择优选 JSON 友好签名」~~ **已完成（2026-10-31）**：`ToolSpecGenerator.selectPreferred` 取代 `associateBy`，同名重载优先选「必填参数全部 JSON 可表达」的那个，仅在同等友好时回落到源码顺序；原始生成 spec 仍保留全部重载（供 lint/快照），公告集合零违规，`ToolSpecGeneratorExtractionTest` 覆盖三条规则。
 - ~~tab 域可执行示例覆盖~~ **已清零**：全量 **142/142**，矩阵报 `missing altogether: 0`（见 §8.2）。
 - ~~需求 2.3 CLI 侧 `--help --examples`~~ **已完成**（`help.rs`/`tips.rs`，见 §8.7 第 6 条）。
 
@@ -186,7 +186,7 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
 - 根因：`ToolSpecGenerator` 镜像上游 `WebDriver.kt` 时，**同名重载取最后一个**。`tab.navigate` 的最后一个重载是 `navigate(entry: NavigateEntry)`，于是 schema 对外声明了一个 MCP 客户端**根本无法构造**的对象参数；而 `BrowserTabToolExecutor.callFunctionOn` 真正读的是 `url`（或 `rawUrl`+`pageUrl`）。Phase 0.4 的「未声明参数原样透传」让这个错配一直隐形，Phase 2 的必填校验把它变成硬失败。
 - 影响面（实测 117 个生成 spec 中 10 个方法）：`navigate(NavigateEntry)`、`screenshot(RectD)`、`ariaSnapshot(AriaSnapshotOptions)`、`delay(Duration)`、`waitForPage/waitForFunction/waitForNavigation/waitForSelector(timeout: Duration, action: suspend ())`。
 - 修复：在 `BrowserTabToolExecutor` 为这 8 个方法写**显式 spec**（与 `when (functionName)` 分支里的真实参数名一致：`url` / `selector`+`timeoutMillis` / `oldUrl` / `pageUrl` / `pageFunction` / `millis` / `selector|fullPage|viewport` / ariaSnapshot 的 8 个扁平选项），并补文档；`docs/mcp-tools.md` / `.json` 重新生成（137 工具）。
-- 防复发：`ToolSpecLint` 新增规则「必填参数类型必须是 JSON 可表达类型」，`ToolSpecLintTest.advertisedSpecsAreCallable` 对**实际公告的 spec 集合**做零容忍断言。原始生成 spec 里仍有 13 处（10 方法）非 JSON 参数，作为 WARNING 计数（`117 specs / 39 warnings`）——它们已被显式覆盖，但生成器层面的「重载择优选 JSON 友好签名」尚未做，属 Phase 1 的 1.1 收口项。
+- 防复发：`ToolSpecLint` 新增规则「必填参数类型必须是 JSON 可表达类型」，`ToolSpecLintTest.advertisedSpecsAreCallable` 对**实际公告的 spec 集合**做零容忍断言；原始生成 spec 里仍有 13 处（10 方法）非 JSON 参数，作为 WARNING 计数（`117 specs / 39 warnings`）。2026-10-31 补上生成器侧的选择规则（`ToolSpecGenerator.selectPreferred`）：同名重载优先「必填参数全部 JSON 可表达」，只在同等友好时按源码顺序取最后一个，因此公告的选择不再依赖上游文件的书写顺序。
 - 实跑证据：修复后 A `navigate{"url"}` → `title` = `Example Domain`；日志 `tool.call start/done requestId=A-c3d2ab48-0001 tool=navigate durationMs=2456 outcome=OK`。
 
 **需求 8.4 — SLO 与告警阈值（文档化，Prometheus 规则可直接抄）**
@@ -206,7 +206,7 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
 
 **B 通道校验影子模式（2026-09-14，需求 3/5 的前置）**
 - 背景：B 此前只校验「自定义域」工具（`CustomToolRegistry` 里的 spec），`tab_*`/`browser_*` 等内置域完全不过校验——同一非法输入 A 拒绝、B 放行。
-- 做法：新增 `-Dmcp.validateBuiltinArgs=shadow|error|off`，默认 **shadow**。内置域的 spec 由**已存在的会话**解析（`liveSpecOf`，绝不为校验而开会话），命中违规时只记结构化 WARNING + 计数器，**不改调用结果**；插件/业务域（仓库内自著的 spec）照旧强制拒绝；`error` 才与 A 同码拒绝。
+- 做法：新增 `-Dmcp.validateBuiltinArgs=shadow|error|off`。内置域的 spec 由**已存在的会话**解析（`liveSpecOf`，绝不为校验而开会话）；命中违规时按策略处理：插件/业务域（仓库内自著的 spec）始终强制拒绝，内置域由该开关决定（初版默认 `shadow`，2026-10-31 改为默认 `error`，见下）。
 - 为什么不是直接强制：内置 spec 镜像上游 `WebDriver` 接口，错配是**我们的**问题而不是客户端的问题（`navigate` 已经证明过一次）。先观测、后拒绝，与需求 9 的灰度策略一致。
 - 观测口径：日志 `mcp.validation.shadow channel=… tool=… spec=… codes=… args=… details=…`；指标 `tool.validation.shadow.violations{tool_name,validation_type}`（与「已拒绝」的 `tool.validation.failures` **分开计数**，避免把放行的调用算成失败）；`/api/mcp/stats` 新增 `validationShadowViolations`（总量 + 每工具）。
 - **上线 20 分钟就抓到 3 个真 P0**（A 通道当时正在硬拒绝）：
@@ -217,7 +217,7 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
   | `tab.evaluateValue`（别名 `browser_evaluate`，即 CLI `eval`） | `(selector, functionDeclaration)` 两者必填 | `expression`，或 `selector`+`functionDeclaration` | CLI 的 `eval` 在 A 上不可用 |
   三者在 `BrowserTabToolExecutor` 补显式契约后，实测 A：`navigate`/`click`/`dblclick`/`eval`/`evaluate_value`/`aria_snapshot`/`screenshot` 全部成功返回。
 - 27 个高频 tab 工具重扫：**零**新增 shadow 违规；`/api/mcp/stats` 实测 `validationShadowViolations=5`（来自刻意的空参数探测）、`validationFailures=0`（未把放行调用算成失败）。
-- 收口条件：把 `-Dmcp.validateBuiltinArgs=error` 作为 A/B 同码的目标状态，前提是连续观察期内 shadow 计数为 0。
+- 收口（2026-10-31 已完成）：`-Dmcp.validateBuiltinArgs` 默认切到 **`error`**，B 对内置域的判定与 A 一致（同一份目录、同一套规则、同一 `errorCode`）。两条依据：①A 通道自始就强制校验同一份目录，且 A 的 e2e 长期通过，说明目录本身可调用；②契约矩阵以示例入参跑校验器，`missing altogether: 0`。`shadow` 降级为显式 opt-in（保留原观测口径，便于修某个错配前先观测），`off` 仍可整体关闭；无法识别的取值一律回落到默认 `error`，拼错开关不会静默削弱校验。
 
 **同一轮影子扫描暴露的第二类问题：合法调用被「过严」的 spec 拒绝（已修）**
 - 机制：`ToolSpec.Arg(name, "String", null)` 里第三个参数是 `defaultValue`，**`null` 表示必填**（Phase 0 修好的语义）；「可选但无默认值」必须写成 `Arg(name, "String?", "null")`。部分手写 spec 用了前一种写法，而执行器读的是 `required = false`，于是校验层把执行器本来能处理的调用挡在门外——两个通道都挡（自定义域在 B 是强制校验的）。
@@ -228,7 +228,7 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
 - 顺带澄清一处易混：异步信封给的是 `taskId` **值**，而状态工具的**参数名**由各自 schema 决定（`crawl.status(id)` / `command.status(id)` 用 `id`，`memory.read(taskId)` 用 `taskId`）——客户端应读 schema 而不是照抄信封字段名。已写入 `docs/mcp-tools.md` 的说明段。
 
 **已知缺口（诚实记录）**
-- **B 通道只校验「自定义域」工具**：`MCPToolController.validateArguments` 取的是 `CustomToolRegistry` 执行器的 spec，因此 `tab_*`/`browser_*` 等内置域在 B 上曾完全不过校验——同一非法输入 A 拒绝、B 放行，需求 3/5 的「两通道同码」尚未真正成立。**已通过影子模式解决观测问题（见上）**，但默认仍是「观测不拒绝」：把 `-Dmcp.validateBuiltinArgs=error` 打开才是 B 与 A 同码的完成态，需等 shadow 计数连续为 0。
+- ~~**B 通道只校验「自定义域」工具**~~ **已闭环**：`MCPToolController.validateArguments` 曾取不到内置域 spec，同一非法输入 A 拒绝、B 放行。先以影子模式观测（见上），2026-10-31 把默认切到 `-Dmcp.validateBuiltinArgs=error`，B 与 A 对内置域的判定一致（`MCPToolControllerTest` 断言默认拒绝且未分发）。
 - 运行时包内**没有** `micrometer-registry-prometheus`（在 `browser4-agentic/pom.xml` 里是 `optional`）→ 线上 `/actuator/prometheus` 返回 404，本轮以 `/api/mcp/stats` + `/actuator/metrics`（实测 `tool.*` 10 个指标可见）作为查询面。需要 Prometheus 抓取时把该依赖以非 optional 引入运行时包即可，代码侧无需改动（`MetricsConfig.isPrometheus` 会自动转为 `true`）。
 - 需求 8.2 的 **OTel span**：`mcp.tool.call` 父 span **已落地**（实现细节与三个"可选依赖"陷阱见 §8.7 第 4 条）；仍未做的是 `agent.execute` / `cdp.*` 子 span，接子 span 是自然延伸。
 - `session.active` / `async.queue.depth` 两个 gauge **已落地**：取值由部署侧注入（`ToolMetrics.registerSessionCountSupplier` / `registerAsyncTaskCountSupplier`），`McpToolMetricsConfiguration` 分别接 `PulsarSessionManager.getAllSessions().size` 与 `CrawlService.runningTaskCount()`（见 §8.2）。
@@ -531,7 +531,7 @@ G6 的另一半不是「同一个 spec 渲染两次」，而是「同一个**工
   - 每个域都有「跑真实路径、拿真实载荷过 schema」的测试：`ExperienceToolExecutorTest`、`MemoryToolExecutorTest`、`WebDbExportSchemaTest`、`SkillResultSchemaTest`、`HTMLSnapshotResultSchemaTest`（mock 服务 / 纯函数），载荷变化超纲会直接失败而不是在生产里刷 `schema_violation`。
 - **需求 8（监控）**：`session.active`、`async.queue.depth` 两个 gauge **已落地**，取值由部署侧注入（`ToolMetrics.registerSessionCountSupplier` / `registerAsyncTaskCountSupplier`），并在 `bindTo` 时随 Spring 注册表重绑（否则 gauge 会继续写进没人抓取的独立注册表）。REST 侧 `McpToolMetricsConfiguration` 从 `PulsarSessionManager.getAllSessions().size` 与 `CrawlService.runningTaskCount()`（`jobStore` 只保留运行中的 job）取值；瘦部署缺 bean 时 gauge 不注册而不是谎报 0。
 - **需求 7（日志）**：见 8.1 第 6 条。
-- **需求 3/5（两通道同码）**：不变，B 侧内置域仍是 `shadow`，切 `error` 需等计数清零。
+- **需求 3/5（两通道同码）**：内置域校验已对齐——`-Dmcp.validateBuiltinArgs` 默认 `error`（2026-10-31），两通道对同一非法输入返回同一 `errorCode`；`shadow` 仅作显式观测降级。
 
 ### 8.3 计划中两处经核实不成立的说法（已更正，不做无效改造）
 

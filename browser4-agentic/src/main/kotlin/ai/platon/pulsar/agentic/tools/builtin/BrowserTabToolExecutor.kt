@@ -223,7 +223,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
     init {
         ToolSpecGenerator.apply {
             generateAllOnce()
-            webDriverToolSpecs.associateByTo(toolSpec) { it.method }
+            selectPreferred(webDriverToolSpecs).toMap(toolSpec)
         }
         toolSpec["eval"] = ToolSpec(
             domain = domain,
