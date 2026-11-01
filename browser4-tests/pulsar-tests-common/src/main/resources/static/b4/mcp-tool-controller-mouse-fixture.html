@@ -190,7 +190,10 @@
       doubleClickCount: 0,
       dblclickTrusted: null,
       rightClickCount: 0,
+      rightClickTrusted: null,
       middleClickCount: 0,
+      middleClickTrusted: null,
+      middleMouseDownTrusted: null,
       clickCountClicks: 0,
       modifierClick: { count: 0, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false },
       tinyClickCount: 0,
@@ -270,6 +273,9 @@
     document.getElementById('rightclick-target').addEventListener('contextmenu', function(e) {
       e.preventDefault();
       S.rightClickCount += 1;
+      // Chrome only derives `contextmenu` from trusted input; recording isTrusted
+      // proves the event came from real input rather than a synthetic dispatch.
+      S.rightClickTrusted = e.isTrusted;
       syncState();
     });
     document.getElementById('rightclick-target').addEventListener('mousedown', function(e) {
@@ -278,12 +284,19 @@
     });
 
     document.getElementById('middleclick-target').addEventListener('mousedown', function(e) {
-      if (e.button === 1) S.middleClickCount += 1;
+      if (e.button === 1) {
+        // Stop Chrome's middle-button autoscroll: while autoscroll is active the
+        // release is consumed and auxclick is never derived.
+        e.preventDefault();
+        S.middleClickCount += 1;
+        S.middleMouseDownTrusted = e.isTrusted;
+      }
       syncState();
     });
     document.getElementById('middleclick-target').addEventListener('auxclick', function(e) {
       e.preventDefault();
       if (e.button === 1) S.middleClickCount += 1;
+      S.middleClickTrusted = e.isTrusted;
       syncState();
     });
 
@@ -344,6 +357,7 @@
         clientX: Math.round(e.clientX),
         clientY: Math.round(e.clientY),
         targetId: e.target.id || '',
+        trusted: e.isTrusted,
       });
       if (S.wheelEvents.length > 50) S.wheelEvents.shift();
       syncState();

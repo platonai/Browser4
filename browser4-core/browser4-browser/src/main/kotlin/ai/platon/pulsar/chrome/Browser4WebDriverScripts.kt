@@ -198,6 +198,56 @@ internal fun submitFormFallbackJs(selector: String): String =
     """.trimIndent()
 
 /**
+ * The fallback used by [Browser4WebDriver.mouseWheel] when the CDP wheel
+ * dispatch fails (the `Input.dispatchMouseEvent` wheel race,
+ * crbug.com/444929150).
+ *
+ * A real wheel tick fires a cancelable `wheel` event and then scrolls as the
+ * default action; the upstream fallback scrolled silently with `scrollBy`, so
+ * a page logging wheel events saw the content scroll with no event at all.
+ * Here the synthetic `WheelEvent` goes first and the scroll lands only when no
+ * listener canceled it — `cancelable: true` so a `{passive: false}` listener
+ * can `preventDefault()` exactly like with trusted input.
+ *
+ * @param selector when non-null, the event targets that element and the scroll
+ *   lands on it; when null, the event targets the element under ([x], [y]) and
+ *   the window scrolls.
+ */
+internal fun wheelFallbackJs(
+    selector: String?,
+    x: Double,
+    y: Double,
+    deltaX: Double,
+    deltaY: Double,
+): String =
+    if (selector != null) {
+        """
+        (function() {
+            var el = document.querySelector('${escapeJsSelector(selector)}');
+            if (!el) { return false; }
+            var evt = new WheelEvent('wheel', {
+                deltaX: $deltaX, deltaY: $deltaY,
+                bubbles: true, cancelable: true, view: window
+            });
+            if (el.dispatchEvent(evt)) { el.scrollBy($deltaX, $deltaY); }
+            return true;
+        })()
+        """.trimIndent()
+    } else {
+        """
+        (function() {
+            var target = document.elementFromPoint($x, $y) || document.documentElement;
+            var evt = new WheelEvent('wheel', {
+                deltaX: $deltaX, deltaY: $deltaY, clientX: $x, clientY: $y,
+                bubbles: true, cancelable: true, view: window
+            });
+            if (target.dispatchEvent(evt)) { window.scrollBy($deltaX, $deltaY); }
+            return true;
+        })()
+        """.trimIndent()
+    }
+
+/**
  * The IIFE the executor uses for drivers that are not a [Browser4WebDriver], and the
  * fallback when the Console domain cannot be enabled ([consoleMessages]).
  *

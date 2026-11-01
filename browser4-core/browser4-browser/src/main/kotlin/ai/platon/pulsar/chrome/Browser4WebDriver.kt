@@ -11,6 +11,7 @@ import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.BrowserUseState
+import ai.platon.pulsar.api.model.IllegalWebDriverStateException
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.api.model.NavigateEntry
 import ai.platon.pulsar.api.model.PageTarget
@@ -24,6 +25,7 @@ import ai.platon.pulsar.chrome.network.TrackedNetworkRequest
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
+import ai.platon.pulsar.chrome.util.ChromeIOException
 import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.RectD
@@ -35,11 +37,18 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import kotlin.random.Random
 import java.util.concurrent.atomic.AtomicBoolean
@@ -299,6 +308,14 @@ open class Browser4WebDriver(
     internal fun trustedClickProbeInstallJs(): String = Browser4WebDriverScripts.trustedClickProbeInstallJs()
 
     internal fun trustedClickProbeReadJs(): String = Browser4WebDriverScripts.trustedClickProbeReadJs()
+
+    internal fun wheelFallbackJs(
+        selector: String?,
+        x: Double,
+        y: Double,
+        deltaX: Double,
+        deltaY: Double,
+    ): String = Browser4WebDriverScripts.wheelFallbackJs(selector, x, y, deltaX, deltaY)
 
     internal fun dragCenterJs(): String = Browser4WebDriverScripts.dragCenterJs()
 
@@ -752,9 +769,12 @@ internal enum class DragDropPosition(val key: String) {
      * this delegates to [click] for standard left-click behaviour (best-effort
      * focus → parent click, which scrolls into view and dispatches the click).
      *
-     * For non-left buttons the element is focused and scrolled into view before
-     * dispatching [mouseDown] / [mouseUp] at the element's clickable point, matching
-     * the parent's pre-click sequence without duplicating its internals.
+     * For non-left buttons the pointer is moved onto the (jittered) element point
+     * and the click is dispatched as trusted CDP input — the only path where Chrome
+     * fires the full real sequence (`mousedown` → `contextmenu` → `mouseup` for the
+     * right button, `auxclick` for the middle one).  Targets the trusted path cannot
+     * judge (frame-resident, occluded) fall back to the upstream synthetic DOM
+     * dispatch (see [clickNonLeftOnDomPath]).
      *
      * @param selector A CSS selector, XPath, or "backend:nodeId" locator for the target element.
      * @param count Number of consecutive clicks (1 = single, 2 = double, etc.).
@@ -780,31 +800,164 @@ internal enum class DragDropPosition(val key: String) {
         // any dialog the click opens (when autoDismissDialogs is enabled).
         dialogHandler.dismissAllPending()
         try {
-            rpc.invokeOnElement(selector, "click", scrollIntoView = true) {
-                // Scroll the element into view so it is interactable.  Right-click and
-                // other non-left buttons do not require the element to be focusable
-                // (e.g. <div> elements without tabindex), so focus is best-effort.
-                try {
-                    page.focusOnSelector(selector)
-                } catch (e: Exception) {
-                    // Element is not focusable — that's fine for non-left clicks.
+            // Move the pointer onto the jittered target first (same as the left-click
+            // path), then dispatch trusted CDP input: only trusted input makes Chrome
+            // fire the full real right-click sequence — `mousedown` → `contextmenu` →
+            // `mouseup` — while the upstream synthetic `mouseDown`/`mouseUp` emit
+            // `isTrusted: false` events and no `contextmenu` at all.
+            val hovered = movePointerToClickTarget(selector)
+            if (!clickTrusted(selector, count, trustedClickPoint(hovered), button)) {
+                if (hovered == null) {
+                    failIfPointerTargetMissing("click", selector)
                 }
-
-                // Resolve the element's clickable point after scroll.
-                val point = clickablePoint(selector)
-                    ?: throw WebDriverException("Element not found or not clickable: $selector")
-
-                // Move to the element, then dispatch `count` press+release pairs with
-                // the requested button.  Each pair carries an incrementing detail
-                // (1..count) so a count of 2 produces a proper double-click sequence.
-                mouseMove(point.x, point.y)
-                repeat(count) { i ->
-                    mouseDown(button, i + 1)
-                    mouseUp(button, i + 1)
-                }
+                clickNonLeftOnDomPath(selector, count, button)
             }
         } finally {
             dialogHandler.drainAutoDismiss()
+        }
+    }
+
+    /**
+     * The non-left click fallback: the upstream synthetic DOM dispatch.
+     *
+     * Reached only when the trusted CDP path cannot be used for [selector] (the
+     * capability was refuted for this session, the element is frame-resident, or it
+     * is not hit at the hover point).  The synthetic `mousedown`/`mouseup` carry
+     * `isTrusted: false` and Chrome derives no `contextmenu` from them — still the
+     * lesser evil for elements the trusted path cannot judge, because pressing at
+     * unverified coordinates could land on an unrelated overlay.
+     */
+    private suspend fun clickNonLeftOnDomPath(selector: String, count: Int, button: String) {
+        rpc.invokeOnElement(selector, "click", scrollIntoView = true) {
+            // Right-click and other non-left buttons do not require the element to be
+            // focusable (e.g. <div> elements without tabindex), so focus is best-effort.
+            try {
+                page.focusOnSelector(selector)
+            } catch (e: Exception) {
+                // Element is not focusable — that's fine for non-left clicks.
+            }
+
+            // Resolve the element's clickable point after scroll.
+            val point = clickablePoint(selector)
+                ?: throw WebDriverException("Element not found or not clickable: $selector")
+
+            // Move to the element, then dispatch `count` press+release pairs with
+            // the requested button.  Each pair carries an incrementing detail
+            // (1..count) so a count of 2 produces a proper double-click sequence,
+            // and each press is held like a real one (see clickTrusted).
+            mouseMove(point.x, point.y)
+            repeat(count) { i ->
+                mouseDown(button, i + 1)
+                delay(randomDelayMillis("click"))
+                mouseUp(button, i + 1)
+                if (i + 1 < count) {
+                    delay(randomDelayMillis("click"))
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Mouse wheel fixes — the upstream fallback for a failed CDP wheel dispatch
+    // (the `Input.dispatchMouseEvent` wheel race, crbug.com/444929150) scrolls
+    // silently with `scrollBy()`: the page observes no `wheel` event while the
+    // content still scrolls, a combination no real user produces.  These
+    // overrides dispatch a cancelable synthetic `WheelEvent` first and scroll
+    // only when no `{passive: false}` listener canceled it — the browser's own
+    // event-then-default-action order.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Scroll the mouse wheel by ([deltaX], [deltaY]) at the current pointer
+     * position; see the section comment above for why the fallback fires a
+     * synthetic `wheel` event instead of scrolling silently.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun mouseWheel(deltaX: Double, deltaY: Double) {
+        val m = page.mouse.takeIf { isActive }
+            ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
+        rpc.invokeOnPage("mouseWheel") {
+            try {
+                withTimeout(wheelTimeoutMillis(deltaX, deltaY)) {
+                    m.wheel(deltaX, deltaY)
+                }
+            } catch (e: TimeoutCancellationException) {
+                evaluate(wheelFallbackJs(null, m.currentX, m.currentY, deltaX, deltaY))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                evaluate(wheelFallbackJs(null, m.currentX, m.currentY, deltaX, deltaY))
+            }
+        }
+    }
+
+    /**
+     * Scroll the mouse wheel over the element [selector]; same fallback contract
+     * as [mouseWheel], with the synthetic event targeted at the element.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun mouseWheel(selector: String, deltaX: Double, deltaY: Double) {
+        try {
+            rpc.invokeOnElement(selector, "mouseWheel", scrollIntoView = true) {
+                gap("mouseWheel")
+                val m = page.mouse.takeIf { isActive }
+                    ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
+                val point = clickablePoint(selector)
+                    ?: throw WebDriverException("Element not found or not clickable: $selector")
+                try {
+                    withTimeout(wheelTimeoutMillis(deltaX, deltaY)) {
+                        m.moveTo(point, steps = 1)
+                        m.wheel(deltaX, deltaY)
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    evaluate(wheelFallbackJs(selector, point.x, point.y, deltaX, deltaY))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    evaluate(wheelFallbackJs(selector, point.x, point.y, deltaX, deltaY))
+                }
+            }
+        } catch (e: ChromeDriverException) {
+            rpc.interceptChromeException(e, "mouseWheel")
+        } catch (e: ChromeIOException) {
+            // The upstream policy: a closed tab is a normal operational state,
+            // an open one makes the IO error real (see PulsarWebDriver.mouseWheel).
+            if (e.isOpen && browserProtocol.isOpen) throw e
+        }
+    }
+
+    /**
+     * Compute a timeout for mouse-wheel operations proportional to the scroll
+     * distance — a local copy of the upstream `PulsarWebDriver.wheelTimeout`,
+     * which is `private`: the base 5 s covers the CDP round-trip; each
+     * additional 1 000 px of combined delta adds 1 s, capped at 30 s.
+     */
+    private fun wheelTimeoutMillis(deltaX: Double, deltaY: Double): Long {
+        val distance = max(abs(deltaX), abs(deltaY))
+        val extra = (distance / 1000.0).roundToLong() * 1000L
+        return maxOf(5_000L, minOf(30_000L, 5_000L + extra))
+    }
+
+    /**
+     * Move the pointer to ([x], [y]) through intermediate points instead of
+     * teleporting.
+     *
+     * The upstream move dispatches a single `mouseMoved` from wherever the
+     * pointer rests to the target (`steps = 1`), so a click lands after exactly
+     * one jump of possibly hundreds of pixels — a trail no human produces and
+     * a signal mouse-tracking bot detectors score directly.  Here the step
+     * count scales with the distance (~20 px per step, clamped to 3..30) at a
+     * randomized 8-16 ms per step, so the pointer crosses the viewport in a
+     * human-like 100-500 ms and the page observes a realistic `mousemove`
+     * trail.  Like the upstream, an inactive driver skips the move silently.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun mouseMove(x: Double, y: Double) {
+        rpc.invokeOnPage("mouseMove") {
+            val m = page.mouse.takeIf { isActive } ?: return@invokeOnPage
+            val distance = hypot(x - m.currentX, y - m.currentY)
+            val steps = (distance / 20.0).roundToInt().coerceIn(3, 30)
+            m.moveTo(x, y, steps = steps, delayMillis = Random.nextLong(8, 17))
         }
     }
 
@@ -1119,9 +1272,11 @@ internal enum class DragDropPosition(val key: String) {
      * verified at all (a page that removed the probe) is reported as delivered and re-probed next
      * time, because dispatching a second click is the worse failure mode.
      *
+     * @param button the mouse button to press (`"left"`, `"right"`, or `"middle"`); Chrome derives
+     *   `contextmenu` from a trusted right-button press and `auxclick` from a middle-button one.
      * @return true when the click was dispatched and received (or sent but not verifiable)
      */
-    private suspend fun clickTrusted(selector: String, count: Int, point: DragCenter?): Boolean {
+    private suspend fun clickTrusted(selector: String, count: Int, point: DragCenter?, button: String = "left"): Boolean {
         if (trustedClickSupported == false || point == null) {
             return false
         }
@@ -1132,18 +1287,33 @@ internal enum class DragDropPosition(val key: String) {
             return false
         }
 
+        // The `buttons` bitfield while the button is held: 1 = left, 2 = right, 4 = middle.
+        val pressedButtons = when (button) {
+            "right" -> 2
+            "middle" -> 4
+            else -> 1
+        }
         var sent = 0
         try {
             repeat(count) { index ->
                 val clickCount = index + 1
                 browserProtocol.executeCdpCommand(
-                    "Input.dispatchMouseEvent", mouseEvent("mousePressed", point, clickCount, buttons = 1)
+                    "Input.dispatchMouseEvent", mouseEvent("mousePressed", point, clickCount, pressedButtons, button)
                 )
                 sent += 1
+                // Hold the button before releasing: a press released within the same
+                // millisecond is a bot fingerprint — real holds sit in the "click"
+                // delay bucket (90-180 ms by default).
+                delay(randomDelayMillis("click"))
                 browserProtocol.executeCdpCommand(
-                    "Input.dispatchMouseEvent", mouseEvent("mouseReleased", point, clickCount, buttons = 0)
+                    "Input.dispatchMouseEvent", mouseEvent("mouseReleased", point, clickCount, buttons = 0, button)
                 )
                 sent += 1
+                if (index + 1 < count) {
+                    // Pace multi-click rounds: a real double click has a human gap
+                    // between rounds, not a 0 ms burst.
+                    delay(randomDelayMillis("click"))
+                }
             }
         } catch (e: Exception) {
             if (sent == 0) {
@@ -1190,13 +1360,19 @@ internal enum class DragDropPosition(val key: String) {
         }
     }
 
-    /** One `Input.dispatchMouseEvent` parameter map for a left-button event at [point]. */
-    private fun mouseEvent(type: String, point: DragCenter, clickCount: Int, buttons: Int): Map<String, Any?> =
+    /** One `Input.dispatchMouseEvent` parameter map for a [button] event at [point]. */
+    private fun mouseEvent(
+        type: String,
+        point: DragCenter,
+        clickCount: Int,
+        buttons: Int,
+        button: String = "left",
+    ): Map<String, Any?> =
         mapOf(
             "type" to type,
             "x" to point.x,
             "y" to point.y,
-            "button" to "left",
+            "button" to button,
             "buttons" to buttons,
             "clickCount" to clickCount,
         )

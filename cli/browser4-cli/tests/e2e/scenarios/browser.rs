@@ -4182,11 +4182,12 @@ fn named_frame_id(stdout: &str, name: &str) -> Option<String> {
 
 /// Test that a click reaches the page as trusted input instead of a synthetic DOM event.
 ///
-/// The mouse fixture records `event.isTrusted` in its click and dblclick handlers.  Upstream
-/// dispatches clicks through synthetic DOM events on Windows, which a page detects with a single
-/// `event.isTrusted` check (honeypot buttons, bot-detection beacons); the driver now prefers trusted
-/// CDP input and only falls back to the DOM path when the element cannot be clicked at its own
-/// coordinates.
+/// The mouse fixture records `event.isTrusted` in its click, dblclick, contextmenu and auxclick
+/// handlers.  Upstream dispatches clicks through synthetic DOM events on Windows, which a page
+/// detects with a single `event.isTrusted` check (honeypot buttons, bot-detection beacons); the
+/// driver now prefers trusted CDP input and only falls back to the DOM path when the element
+/// cannot be clicked at its own coordinates.  The right-click assertion also proves Chrome
+/// derives `contextmenu` from the trusted press — the synthetic path never fires it.
 pub(super) fn test_e2e_mouse_trusted_click(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
@@ -4233,6 +4234,39 @@ pub(super) fn test_e2e_mouse_trusted_click(ctx: &mut E2ECtx) {
         state["dblclickTrusted"].as_bool(),
         Some(true),
         "#dblclick-target must receive a trusted double click (isTrusted=true), got {state}"
+    );
+
+    // ── Right click: Chrome derives contextmenu only from trusted input ──
+    // The fixture counts both the right mousedown and the contextmenu, so a
+    // trusted right click scores 2; the synthetic DOM path never fires
+    // contextmenu at all and scores 1.
+    run_command(ctx, &["click", "#rightclick-target", "--button=right"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["rightClickCount"].as_u64().unwrap_or(0) >= 2,
+        2_000,
+        "Expected rightClickCount >= 2 (mousedown + contextmenu) after right click",
+    );
+    let state = read_interactive_state(ctx);
+    assert_eq!(
+        state["rightClickTrusted"].as_bool(),
+        Some(true),
+        "contextmenu must come from trusted input (isTrusted=true), got {state}"
+    );
+
+    // ── Middle click: auxclick must also be trusted ─────────────────
+    run_command(ctx, &["click", "#middleclick-target", "--button=middle"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["middleClickCount"].as_u64().unwrap_or(0) >= 1,
+        2_000,
+        "Expected middleClickCount >= 1 after middle click",
+    );
+    let state = read_interactive_state(ctx);
+    assert_eq!(
+        state["middleClickTrusted"].as_bool(),
+        Some(true),
+        "auxclick must come from trusted input (isTrusted=true), got {state}"
     );
 
     run_command(ctx, &["close"]);

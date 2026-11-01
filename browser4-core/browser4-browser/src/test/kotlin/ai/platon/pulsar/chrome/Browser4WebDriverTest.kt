@@ -266,6 +266,44 @@ class Browser4WebDriverTest {
     }
 
     // -------------------------------------------------------------------------
+    // wheelFallbackJs — the mouseWheel fallback that fires a synthetic `wheel`
+    // event before scrolling (the Input.dispatchMouseEvent wheel race,
+    // crbug.com/444929150)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("wheelFallbackJs targets the selector and scrolls only when the event is not canceled")
+    fun wheelFallbackJsTargetsSelectorAndHonorsCancelation() {
+        val js = Browser4WebDriver.wheelFallbackJs("#pane", 0.0, 0.0, 0.0, 240.0)
+        assertTrue(js.contains("document.querySelector('#pane')"), "expected selector: $js")
+        assertTrue(js.contains("new WheelEvent('wheel'"), "expected a wheel event: $js")
+        assertTrue(js.contains("cancelable: true"), "a {passive: false} listener must be able to cancel: $js")
+        assertTrue(
+            js.contains("if (el.dispatchEvent(evt)) { el.scrollBy(0.0, 240.0); }"),
+            "the scroll is the default action of an uncanceled event: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("wheelFallbackJs escapes quotes in the selector")
+    fun wheelFallbackJsEscapesSelector() {
+        val js = Browser4WebDriver.wheelFallbackJs("div[name='pane']", 0.0, 0.0, 5.0, 10.0)
+        assertTrue(js.contains("document.querySelector('div[name=\\'pane\\']')"), "expected escaped selector: $js")
+    }
+
+    @Test
+    @DisplayName("wheelFallbackJs without a selector targets the element under the point and scrolls the window")
+    fun wheelFallbackJsWithoutSelectorTargetsPoint() {
+        val js = Browser4WebDriver.wheelFallbackJs(null, 12.0, 34.0, 0.0, 160.0)
+        assertTrue(js.contains("document.elementFromPoint(12.0, 34.0)"), "expected point targeting: $js")
+        assertTrue(js.contains("clientX: 12.0, clientY: 34.0"), "the event must carry the pointer position: $js")
+        assertTrue(
+            js.contains("if (target.dispatchEvent(evt)) { window.scrollBy(0.0, 160.0); }"),
+            "the window scroll is the default action of an uncanceled event: $js"
+        )
+    }
+
+    // -------------------------------------------------------------------------
     // The page-side console builders — FALLBACK ONLY.
     // The console path is the CDP capture (Browser4WebDriverConsoleCaptureTest and the
     // test_e2e_console_capture_* scenarios); these builders are evaluated only when the transport
