@@ -10,10 +10,12 @@ import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.CapabilityTypes.*
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.browser4.common.B4Constants.ATTACHED_CAPABILITY
+import ai.platon.browser4.common.B4Constants.BROWSER_CHANNEL
 import ai.platon.browser4.common.B4Constants.BROWSER_CONTEXT_DIR
 import ai.platon.browser4.common.B4Constants.BROWSER_LAUNCH_POLICY
 import ai.platon.browser4.common.B4Constants.BROWSER_LAUNCH_POLICY_ATTACHED
 import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_PATH
+import ai.platon.browser4.common.B4Constants.CHANNEL_CAPABILITY
 import ai.platon.pulsar.core.api.PulsarSettings
 
 /**
@@ -67,6 +69,14 @@ data class PulsarSettings(
      * page is first needed.
      */
     val attached: Boolean? = null,
+    /**
+     * The browser channel this session launches (`open --channel ego-lite`),
+     * carried into the session config as `browser.channel`. Absent (the default)
+     * means the default Chrome; the channel only decides which browser binary
+     * the launch resolves — profile mode, display mode and every other launch
+     * setting apply unchanged.
+     */
+    val channel: String? = null,
 ) {
     fun overrideSystemProperties() {
         overrideConfigurationInternal(null)
@@ -91,6 +101,9 @@ data class PulsarSettings(
         attached?.takeIf { it }?.let {
             conf?.set(BROWSER_LAUNCH_POLICY, BROWSER_LAUNCH_POLICY_ATTACHED)
                 ?: System.setProperty(BROWSER_LAUNCH_POLICY, BROWSER_LAUNCH_POLICY_ATTACHED)
+        }
+        channel?.takeIf { it.isNotBlank() }?.let {
+            conf?.set(BROWSER_CHANNEL, it) ?: System.setProperty(BROWSER_CHANNEL, it)
         }
         when(displayMode) {
             DisplayMode.HEADLESS -> headless(conf)
@@ -117,6 +130,7 @@ data class PulsarSettings(
             val profilePath = capabilities?.get("profilePath")?.toString()?.takeIf { it.isNotBlank() }
             val contextDir = capabilities?.get("contextDir")?.toString()?.takeIf { it.isNotBlank() }
             val attached = capabilities?.get(ATTACHED_CAPABILITY)?.toString()?.toBooleanStrictOrNull()
+            val channel = capabilities?.get(CHANNEL_CAPABILITY)?.toString()?.trim()?.takeIf { it.isNotEmpty() }
 
             return PulsarSettings(
                 spa = spa,
@@ -128,6 +142,7 @@ data class PulsarSettings(
                 contextDir = contextDir,
                 interactSettings = interactSettings ?: InteractSettings.create(interactLevel ?: InteractLevel.DEFAULT),
                 attached = attached,
+                channel = channel,
             )
         }
 

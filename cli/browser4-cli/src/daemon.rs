@@ -4882,9 +4882,19 @@ pub fn find_browser_executable() -> Option<PathBuf> {
 // Browser channel resolution for `attach --cdp <channel>`
 // ---------------------------------------------------------------------------
 
-/// The channel names `--cdp <channel>` and `--extension <channel>` accept, as
-/// one string for error messages and help text.
-pub const SUPPORTED_BROWSER_CHANNELS: &str =
+/// The channel names `--cdp <channel>` accepts, as one string for error
+/// messages and help text.
+pub const SUPPORTED_BROWSER_CHANNELS: &str = "chrome, chrome-beta, chrome-dev, chrome-canary, \
+     msedge, msedge-beta, msedge-dev, msedge-canary, ego-lite";
+
+/// The channel names `--extension <channel>` accepts, as one string for error
+/// messages and help text.
+///
+/// Narrower than [SUPPORTED_BROWSER_CHANNELS]: the Browser4 extension relay is
+/// only exercised in Chrome and Edge, so `ego-lite` (CDP-only) is refused there
+/// instead of opening a connect page in a browser the extension may never
+/// answer from.
+pub const SUPPORTED_EXTENSION_CHANNELS: &str =
     "chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary";
 
 /// Known browser channels for `attach --cdp <channel>` / `attach --extension <channel>`.
@@ -4898,6 +4908,11 @@ pub enum BrowserChannel {
     MsEdgeBeta,
     MsEdgeDev,
     MsEdgeCanary,
+    /// Citro Labs "ego (lite)" — a Chromium fork (verified Chromium 156) that
+    /// serves CDP but neither writes a `DevToolsActivePort` file nor announces
+    /// itself under a product name of its own (`/json/version` reports
+    /// `Chrome/<version>` exactly like Chrome).
+    EgoLite,
 }
 
 impl BrowserChannel {
@@ -4914,6 +4929,7 @@ impl BrowserChannel {
             "msedge-canary" | "edge-canary" | "microsoft-edge-canary" => {
                 Some(BrowserChannel::MsEdgeCanary)
             }
+            "ego-lite" | "ego" | "ego lite" | "egolite" => Some(BrowserChannel::EgoLite),
             _ => None,
         }
     }
@@ -4929,6 +4945,9 @@ impl BrowserChannel {
             BrowserChannel::MsEdgeBeta => 9223,
             BrowserChannel::MsEdgeDev => 9224,
             BrowserChannel::MsEdgeCanary => 9225,
+            // Not a conventional port (ego lite has none); this is only the
+            // value the "start it with a debug port" recipes suggest.
+            BrowserChannel::EgoLite => 9222,
         }
     }
 
@@ -4943,7 +4962,22 @@ impl BrowserChannel {
             | BrowserChannel::MsEdgeBeta
             | BrowserChannel::MsEdgeDev
             | BrowserChannel::MsEdgeCanary => "msedge",
+            // `ego.exe` — the launcher of a normal ego (lite) install.
+            BrowserChannel::EgoLite => "ego",
         }
+    }
+
+    /// Whether a conventional debug port (9222/…) may be probed for this
+    /// channel.
+    ///
+    /// Chrome and Edge publish one, and the channel family decides which of
+    /// them owns port 9222. ego lite is a Chromium fork with an *identical*
+    /// CDP product string, so a probe on 9222 can only tell "a Chromium is
+    /// listening", never which one — it would bind a Chrome running there and
+    /// call it ego lite. Its endpoints are therefore derived from its own
+    /// processes (command line and listening sockets) only.
+    pub fn has_conventional_debug_port(&self) -> bool {
+        !matches!(self, BrowserChannel::EgoLite)
     }
 }
 
@@ -4963,6 +4997,7 @@ impl std::fmt::Display for BrowserChannel {
             BrowserChannel::MsEdgeBeta => "msedge-beta",
             BrowserChannel::MsEdgeDev => "msedge-dev",
             BrowserChannel::MsEdgeCanary => "msedge-canary",
+            BrowserChannel::EgoLite => "ego-lite",
         };
         write!(f, "{}", s)
     }
@@ -4978,7 +5013,8 @@ impl BrowserChannel {
         matches!(self, BrowserChannel::Chrome | BrowserChannel::MsEdge)
     }
 
-    /// Browser family this channel belongs to: `"chrome"` or `"edge"`.
+    /// Browser family this channel belongs to: `"chrome"`, `"edge"`, or
+    /// `"ego"`.
     pub fn family(&self) -> &'static str {
         match self {
             BrowserChannel::Chrome
@@ -4989,6 +5025,7 @@ impl BrowserChannel {
             | BrowserChannel::MsEdgeBeta
             | BrowserChannel::MsEdgeDev
             | BrowserChannel::MsEdgeCanary => "edge",
+            BrowserChannel::EgoLite => "ego",
         }
     }
 }
@@ -5029,6 +5066,16 @@ fn channel_executable_candidates(channel: &BrowserChannel) -> Vec<PathBuf> {
             BrowserChannel::MsEdgeCanary => local
                 .map(|base| vec![base.join(r"Microsoft\Edge SxS\Application\msedge.exe")])
                 .unwrap_or_default(),
+            // ego (lite) ships a per-machine install only; the executable lives
+            // one level above its versioned `Application\<version>` payload.
+            BrowserChannel::EgoLite => vec![
+                PathBuf::from(format!(
+                    r"{program_files}\Citro Labs\ego lite\Application\ego.exe"
+                )),
+                PathBuf::from(format!(
+                    r"{program_files_x86}\Citro Labs\ego lite\Application\ego.exe"
+                )),
+            ],
         }
     }
     #[cfg(target_os = "macos")]
@@ -5059,6 +5106,8 @@ fn channel_executable_candidates(channel: &BrowserChannel) -> Vec<PathBuf> {
             BrowserChannel::MsEdgeCanary => {
                 vec![PathBuf::from(format!("{apps}/Microsoft Edge Canary.app/Contents/MacOS/Microsoft Edge Canary"))]
             }
+            // ego (lite) is distributed for Windows only.
+            BrowserChannel::EgoLite => Vec::new(),
         }
     }
     #[cfg(all(target_os = "linux", not(target_os = "macos")))]
@@ -5072,6 +5121,8 @@ fn channel_executable_candidates(channel: &BrowserChannel) -> Vec<PathBuf> {
             BrowserChannel::MsEdgeBeta => vec![PathBuf::from("/opt/microsoft/msedge-beta/msedge")],
             BrowserChannel::MsEdgeDev => vec![PathBuf::from("/opt/microsoft/msedge-dev/msedge")],
             BrowserChannel::MsEdgeCanary => vec![PathBuf::from("/opt/microsoft/msedge-canary/msedge")],
+            // ego (lite) is distributed for Windows only.
+            BrowserChannel::EgoLite => Vec::new(),
         }
     }
 }
@@ -5085,6 +5136,8 @@ fn channel_path_names(channel: &BrowserChannel) -> &'static [&'static str] {
         BrowserChannel::MsEdgeBeta => &["microsoft-edge-beta"],
         BrowserChannel::MsEdgeDev => &["microsoft-edge-dev"],
         BrowserChannel::MsEdgeCanary => &["microsoft-edge-canary"],
+        // ego (lite) has no PATH entry; it resolves from its install directory.
+        BrowserChannel::EgoLite => &[],
         // Stable channels have richer finders (Playwright, PATH, install roots).
         BrowserChannel::Chrome | BrowserChannel::MsEdge => &[],
     }
@@ -5338,10 +5391,16 @@ pub fn resolve_channel_to_endpoint(channel: &str) -> Result<String, String> {
     // otherwise find first. When nothing answers on the conventional port we
     // fall through to the broader discovery below (the port is recorded in
     // `seen`, so it is not probed twice).
-    let conventional = [CdpCandidate::new(default_port, CdpCandidateSource::DefaultPort)];
-    probes.extend(probe_candidates(&conventional, &mut seen));
-    if let Some(endpoint) = first_attachable_endpoint(&probes) {
-        return Ok(endpoint);
+    //
+    // Skipped for a channel whose browser cannot be told apart from the one
+    // that owns that port (ego lite reports the same CDP product as Chrome):
+    // probing it would answer "attachable" for a Chrome and bind it as ego lite.
+    if ch.has_conventional_debug_port() {
+        let conventional = [CdpCandidate::new(default_port, CdpCandidateSource::DefaultPort)];
+        probes.extend(probe_candidates(&conventional, &mut seen));
+        if let Some(endpoint) = first_attachable_endpoint(&probes) {
+            return Ok(endpoint);
+        }
     }
 
     // Stage 1 — what the browser itself publishes: DevToolsActivePort (written
@@ -5380,9 +5439,21 @@ pub fn resolve_channel_to_endpoint(channel: &str) -> Result<String, String> {
     // Stage 4 — scan a range of ports concurrently: a localhost
     // connection-refused is near-instant, but sequential scanning would still
     // pay the HTTP timeout for every open non-CDP port, so probe all at once.
-    probes.extend(scan_for_attachable_cdp_endpoint(9222, 9333));
-    if let Some(endpoint) = first_attachable_endpoint(&probes) {
-        return Ok(endpoint);
+    // A blind sweep cannot tell ego lite from Chrome either, so it is limited
+    // to channels that own a conventional port.
+    if ch.has_conventional_debug_port() {
+        probes.extend(scan_for_attachable_cdp_endpoint(9222, 9333));
+        if let Some(endpoint) = first_attachable_endpoint(&probes) {
+            return Ok(endpoint);
+        }
+    }
+
+    if matches!(ch, BrowserChannel::EgoLite) {
+        return Err(describe_no_attachable_egolite_endpoint(
+            &probes,
+            executable_name,
+            default_port,
+        ));
     }
 
     Err(describe_no_attachable_endpoint(
@@ -5639,6 +5710,22 @@ fn read_devtools_active_port(dir: &Path) -> Option<DevToolsActivePort> {
 /// first.
 fn browser_user_data_roots(channel: &BrowserChannel) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
+
+    // ego (lite) keeps its own profile tree and is never a Chrome/Edge
+    // substitute, so only its directory is considered.
+    if let BrowserChannel::EgoLite = channel {
+        #[cfg(target_os = "windows")]
+        if let Ok(local) = env::var("LOCALAPPDATA") {
+            roots.push(
+                PathBuf::from(local)
+                    .join("Citro Labs")
+                    .join("ego lite")
+                    .join("User Data"),
+            );
+        }
+        return roots;
+    }
+
     let edge = is_edge_channel(channel);
 
     #[cfg(target_os = "windows")]
@@ -5683,6 +5770,14 @@ fn is_edge_channel(channel: &BrowserChannel) -> bool {
             | BrowserChannel::MsEdgeBeta
             | BrowserChannel::MsEdgeDev
             | BrowserChannel::MsEdgeCanary
+    )
+}
+
+/// Whether this channel is Citro Labs "ego (lite)".
+pub fn is_egolite_channel(channel: &str) -> bool {
+    matches!(
+        BrowserChannel::from_str(channel),
+        Some(BrowserChannel::EgoLite)
     )
 }
 
@@ -5923,6 +6018,51 @@ fn describe_no_attachable_endpoint(
          2. Or attach through the extension (this is the supported path when remote debugging was enabled from \
          chrome://inspect/#remote-debugging): browser4-cli attach --extension\n\
          Then run: browser4-cli attach --cdp http://localhost:{default_port}{platform_note}"
+    )
+}
+
+/// Explain why no ego (lite) endpoint could be attached to.
+///
+/// ego lite needs its own message: it publishes no `DevToolsActivePort` file,
+/// its `/json/version` product string is indistinguishable from Chrome, and
+/// the extension transport is not offered for it — so the generic advice
+/// ("read DevToolsActivePort", "attach --extension") would send the user down
+/// paths that cannot work.
+fn describe_no_attachable_egolite_endpoint(
+    probes: &[CdpProbe],
+    executable_name: &str,
+    default_port: u16,
+) -> String {
+    let found = probes
+        .iter()
+        .filter(|probe| probe.listening)
+        .map(|probe| probe.describe())
+        .collect::<Vec<_>>();
+    let found_note = if found.is_empty() {
+        String::new()
+    } else {
+        format!("\nEndpoints that did not work: {}", found.join(", "))
+    };
+
+    let dead_flag = probes
+        .iter()
+        .find(|probe| probe.candidate.source == CdpCandidateSource::ProcessFlag)
+        .map(|probe| {
+            format!(
+                "\nAn ego lite process carries --remote-debugging-port={}, but nothing is listening on that port.",
+                probe.candidate.port
+            )
+        })
+        .unwrap_or_default();
+
+    let platform_note = platform_discovery_note(cfg!(target_os = "windows"));
+    format!(
+        "Could not find a running ego lite browser with remote debugging enabled.{dead_flag}{found_note}\n\
+         ego lite reports itself as `Chrome/<version>` over CDP and writes no DevToolsActivePort file, so it is \
+         found only through its own processes.\n\
+         1. Start it with a debug port (its normal profile works): {executable_name} --remote-debugging-port={default_port}\n\
+         2. Then run: browser4-cli attach --cdp ego-lite\n\
+         (or pin the endpoint: browser4-cli attach --cdp http://localhost:{default_port}){platform_note}"
     )
 }
 
@@ -14303,6 +14443,48 @@ mod tests {
         assert_eq!(BrowserChannel::from_str("safari"), None);
         assert_eq!(BrowserChannel::from_str(""), None);
         assert_eq!(BrowserChannel::from_str("chromium"), None);
+    }
+
+    #[test]
+    fn egolite_channel_parses_every_spelling_and_stays_cdp_only() {
+        for alias in ["ego-lite", "ego", "ego lite", "egolite", "EGO-LITE"] {
+            assert_eq!(
+                BrowserChannel::from_str(alias),
+                Some(BrowserChannel::EgoLite),
+                "{alias} must name ego lite"
+            );
+        }
+        assert_eq!(BrowserChannel::EgoLite.to_string(), "ego-lite");
+        assert_eq!(BrowserChannel::EgoLite.executable_name(), "ego");
+        assert_eq!(BrowserChannel::EgoLite.family(), "ego");
+        assert!(is_egolite_channel("ego"));
+        assert!(!is_egolite_channel("chrome"));
+        // ego lite is the only release of its family: it must never fall back
+        // to the Chrome/Edge executable finders.
+        assert!(!BrowserChannel::EgoLite.is_stable());
+        // Its CDP product string is Chrome's, so a conventional-port probe could
+        // bind a Chrome running on 9222 — the port tiers are skipped for it.
+        assert!(!BrowserChannel::EgoLite.has_conventional_debug_port());
+        assert!(BrowserChannel::Chrome.has_conventional_debug_port());
+        assert!(BrowserChannel::MsEdge.has_conventional_debug_port());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn egolite_executable_candidates_name_the_citro_install() {
+        let candidates = channel_executable_candidates(&BrowserChannel::EgoLite);
+        assert!(
+            !candidates.is_empty(),
+            "ego lite must resolve from its install directory"
+        );
+        for candidate in &candidates {
+            let path = candidate.to_string_lossy().to_ascii_lowercase();
+            assert!(
+                path.contains(r"citro labs\ego lite\application\ego.exe"),
+                "unexpected ego lite install path: {}",
+                candidate.display()
+            );
+        }
     }
 
     #[test]

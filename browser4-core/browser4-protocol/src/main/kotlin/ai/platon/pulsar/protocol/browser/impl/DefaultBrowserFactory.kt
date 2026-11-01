@@ -1,5 +1,6 @@
 package ai.platon.pulsar.protocol.browser.impl
 
+import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.chrome.Browser4Extensions
 import ai.platon.pulsar.chrome.Browser4UserAgent
 import ai.platon.pulsar.chrome.manage.PulsarBrowserLauncher
@@ -20,6 +21,7 @@ class DefaultBrowserFactory(
     private val launchers = mapOf(
         BrowserType.PULSAR_CHROME to PulsarBrowserLauncher()
     )
+    private val egoLiteLauncher = EgoLiteBrowserLauncher()
 
     constructor(conf: ImmutableConfig) : this(conf, BrowserSettings(conf))
 
@@ -27,6 +29,30 @@ class DefaultBrowserFactory(
     override fun launch(
         browserId: BrowserId, launcherOptions: LauncherOptions, launchOptions: ChromeOptions
     ): Browser {
+        // A session-level browser channel (`browser.channel`, from `open --channel
+        // ego-lite`) picks the browser binary this launch resolves; unset means the
+        // default Chrome.
+        val channel = launcherOptions.settings.config.get(B4Constants.BROWSER_CHANNEL)
+            ?.trim()?.takeIf { it.isNotEmpty() }
+        val chromeChannel = channel != null &&
+            channel.lowercase() in setOf("chrome", "google-chrome", "google chrome")
+        val egoLite = channel != null && !chromeChannel
+        if (egoLite && !EgoLiteBrowsers.isEgoLiteChannel(channel)) {
+            throw IllegalArgumentException(
+                "Unknown ${B4Constants.BROWSER_CHANNEL}: $channel. " +
+                    "Supported channels: chrome (the default), ${B4Constants.BROWSER_CHANNEL_EGO_LITE}"
+            )
+        }
+        // For the ego (lite) channel the stealth user agent must be derived from the
+        // ego binary's own Chromium version, probed over CDP: ego stamps its binaries
+        // and its install-layout version folder with the application version (0.6.x),
+        // so [Browser4UserAgent]'s install-layout lookup would resolve to major 0 and
+        // produce "Chrome/0.0.0.0" — a worse bot signal than the native HeadlessChrome
+        // token. Never call [Browser4UserAgent.applyTo] with the ego binary.
+        val userAgentBinary = if (egoLite) {
+            EgoLiteBrowsers.resolveBinaryOrNull(launcherOptions.settings.config)
+        } else null
+
         // Every browser launch in the application funnels through this method, which makes it
         // the one place able to guarantee that no session ever puts the headless
         // `HeadlessChrome` product token on the wire. It has to be done here because the
@@ -34,9 +60,17 @@ class DefaultBrowserFactory(
         // (see [Browser4UserAgent] for the exact reason), so no `--user-agent` switch is added
         // by `createStandardLaunchOptions()`. A user agent already decided by the caller or by
         // `browser.launch.user.agent` is left untouched.
-        Browser4UserAgent.applyTo(launchOptions, launcherOptions.settings)
+        if (egoLite) {
+            // A missing binary is reported by EgoLiteBrowserLauncher.launch below.
+            if (userAgentBinary != null) {
+                EgoLiteBrowsers.applyStealthUserAgent(launchOptions, launcherOptions.settings, userAgentBinary)
+            }
+        } else {
+            Browser4UserAgent.applyTo(launchOptions, launcherOptions.settings)
+        }
         Browser4Extensions.applyTo(launchOptions, launcherOptions.settings)
-        return getLauncher(browserId.browserType).launch(browserId, launcherOptions, launchOptions)
+        val launcher = if (egoLite) egoLiteLauncher else getLauncher(browserId.browserType)
+        return launcher.launch(browserId, launcherOptions, launchOptions)
     }
 
     @Synchronized

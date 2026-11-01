@@ -95,4 +95,44 @@ class PulsarSettingsTest {
         val settings = PulsarSettings.parse(mapOf("headed" to "not-a-bool"))
         assertNull(settings.displayMode)
     }
+
+    // -- channel ----------------------------------------------------------------
+
+    @Test
+    fun parseChannelCapability() {
+        val settings = PulsarSettings.parse(mapOf("channel" to "ego-lite"))
+        assertEquals("ego-lite", settings.channel)
+    }
+
+    @Test
+    fun parseChannelIsTrimmed() {
+        val settings = PulsarSettings.parse(mapOf("channel" to "  ego-lite  "))
+        assertEquals("ego-lite", settings.channel)
+    }
+
+    @Test
+    fun parseBlankChannelIsDropped() {
+        val settings = PulsarSettings.parse(mapOf("channel" to "   "))
+        assertNull(settings.channel)
+    }
+
+    @Test
+    fun parseWithoutChannelReturnsNullChannel() {
+        val settings = PulsarSettings.parse(mapOf<String, Any>())
+        assertNull(settings.channel)
+    }
+
+    @Test
+    fun overrideConfigurationWritesBrowserChannel() {
+        val conf = ai.platon.pulsar.common.config.MutableConfig()
+        PulsarSettings.parse(mapOf("channel" to "ego-lite")).overrideConfiguration(conf)
+        assertEquals("ego-lite", conf.get(ai.platon.browser4.common.B4Constants.BROWSER_CHANNEL))
+    }
+
+    @Test
+    fun overrideConfigurationWithoutChannelLeavesBrowserChannelUnset() {
+        val conf = ai.platon.pulsar.common.config.MutableConfig()
+        PulsarSettings.parse(emptyMap()).overrideConfiguration(conf)
+        assertNull(conf.get(ai.platon.browser4.common.B4Constants.BROWSER_CHANNEL))
+    }
 }

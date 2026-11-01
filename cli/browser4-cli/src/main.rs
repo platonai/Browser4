@@ -1358,6 +1358,13 @@ fn build_open_session_capabilities_with_test_mode(
         caps["interactLevel"] = interact_level.clone();
     }
 
+    // `--channel` picks the browser binary the backend launches for this
+    // session (`browser.channel`); fixed at session creation like the display
+    // mode.
+    if let Some(channel) = tool_params.get("channel") {
+        caps["channel"] = channel.clone();
+    }
+
     if use_test_temporary_profile && !persistent && !has_profile_path {
         caps["profileMode"] = json!("TEMPORARY");
     }
@@ -2549,13 +2556,31 @@ fn validate_attach_flags(
         }
         // A bare --extension names no channel; a value must be a real one, or a
         // typo would silently behave like a chrome-family request.
-        if ext != "true" && daemon::BrowserChannel::from_str(ext).is_none() {
-            return Err(format!(
-                "Unknown browser channel for --extension: {ext}\n\
-                 Supported channels: {}\n\
-                 Use a bare --extension to connect the extension in your default browser.",
-                daemon::SUPPORTED_BROWSER_CHANNELS
-            ));
+        if ext != "true" {
+            match daemon::BrowserChannel::from_str(ext) {
+                None => {
+                    return Err(format!(
+                        "Unknown browser channel for --extension: {ext}\n\
+                         Supported channels: {}\n\
+                         Use a bare --extension to connect the extension in your default browser.",
+                        daemon::SUPPORTED_EXTENSION_CHANNELS
+                    ))
+                }
+                // ego lite is identified through its own processes only (its CDP
+                // product string is Chrome's), and no extension transport was
+                // verified there — refusing is better than printing a connect
+                // URL that nothing can answer.
+                Some(daemon::BrowserChannel::EgoLite) => {
+                    return Err(format!(
+                        "ego lite is supported over CDP only: --extension {ext} would open a \
+                         chrome-extension:// connect page that no extension answers.\n\
+                         Attach it over CDP instead: start ego lite with \
+                         --remote-debugging-port=<port>, then run \
+                         `browser4-cli attach --cdp ego-lite`."
+                    ))
+                }
+                Some(_) => {}
+            }
         }
     }
 
@@ -3146,7 +3171,18 @@ async fn handle_attach(
     json_field("session_id", json!(&session_id));
     json_field("cdp_endpoint", json!(&cdp_endpoint));
 
-    let browser_label = actual_browser_label;
+    // ego lite answers /json/version with Chrome's own product string, so the
+    // backend can only report "Google Chrome <chromium version>". The endpoint
+    // was resolved from ego lite's own process, so name that browser and keep
+    // the Chromium version it is built on.
+    let browser_label = if is_egolite_channel(requested_cdp_channel.as_deref()) {
+        match browser_version.as_deref() {
+            Some(version) => format!("ego (lite) (Chromium {version})"),
+            None => "ego (lite)".to_string(),
+        }
+    } else {
+        actual_browser_label
+    };
     if !browser_label.is_empty() {
         cli_println!("Attached to {} at {}", browser_label, cdp_endpoint);
     } else {
@@ -3200,6 +3236,13 @@ async fn handle_attach(
 fn is_edge_channel(channel: Option<&str>) -> bool {
     channel
         .map(|c| c.to_ascii_lowercase().contains("edge"))
+        .unwrap_or(false)
+}
+
+/// True when the attach channel names Citro Labs "ego (lite)".
+fn is_egolite_channel(channel: Option<&str>) -> bool {
+    channel
+        .map(crate::daemon::is_egolite_channel)
         .unwrap_or(false)
 }
 
@@ -3269,6 +3312,7 @@ fn open_url_in_browser(url: &str, channel: Option<&str>) -> bool {
 /// must tell the user WHERE the connect page has to be opened.
 fn channel_browser_label(channel: Option<&str>) -> &'static str {
     match channel {
+        Some(c) if is_egolite_channel(Some(c)) => "ego (lite)",
         Some(c) if is_edge_channel(Some(c)) => "Microsoft Edge",
         Some(_) => "Google Chrome",
         None => "the default browser",
@@ -30513,6 +30557,41 @@ fn validate_command_semantics(
     command: &str,
     parsed: &HashMap<String, Value>,
 ) -> Result<(), String> {
+    if command == "open" {
+        // A managed launch can only start channels the backend knows how to
+        // resolve: Chrome (the default) and ego lite. Everything else — e.g.
+        // `msedge`, which `attach` accepts — has no managed-launch support and
+        // would fail at launch time inside the backend, after the session was
+        // already created; reject it here instead.
+        if let Some(raw) = parsed.get("channel") {
+            match raw {
+                Value::String(value) => match daemon::BrowserChannel::from_str(value.trim()) {
+                    Some(daemon::BrowserChannel::Chrome) | Some(daemon::BrowserChannel::EgoLite) => {}
+                    Some(other) => {
+                        return Err(format!(
+                            "invalid --channel '{value}' for open: managed launch supports only \
+                             'chrome' (the default) and 'ego-lite'; '{other}' can only be used \
+                             with attach --cdp"
+                        ))
+                    }
+                    None => {
+                        return Err(format!(
+                            "invalid --channel '{value}' for open: managed launch supports only \
+                             'chrome' (the default) and 'ego-lite'"
+                        ))
+                    }
+                },
+                // A valueless `--channel` parses as `true`; no other JSON shape
+                // can be a channel name either.
+                _ => {
+                    return Err(
+                        "invalid --channel for open: expected a channel name (e.g. --channel=ego-lite)"
+                            .to_string(),
+                    )
+                }
+            }
+        }
+    }
     if command == "network-route" {
         let abort = parsed
             .get("abort")
@@ -37381,6 +37460,47 @@ mod tests {
     }
 
     #[test]
+    fn build_open_session_capabilities_forwards_channel() {
+        let caps = build_open_session_capabilities_with_test_mode(
+            &json!({ "channel": "ego-lite" }),
+            false,
+        );
+
+        assert_eq!(caps["channel"], json!("ego-lite"));
+    }
+
+    #[test]
+    fn build_open_session_capabilities_omits_channel_when_not_requested() {
+        let caps = build_open_session_capabilities_with_test_mode(&json!({}), false);
+
+        assert!(caps.get("channel").is_none());
+    }
+
+    #[test]
+    fn validate_command_semantics_accepts_open_channel_chrome_and_ego_lite() {
+        for channel in ["chrome", "google-chrome", "ego-lite", "ego", "ego lite", "egolite"] {
+            let parsed = HashMap::from([("channel".to_string(), json!(channel))]);
+            validate_command_semantics("open", &parsed)
+                .unwrap_or_else(|err| panic!("channel '{channel}' should be accepted: {err}"));
+        }
+    }
+
+    #[test]
+    fn validate_command_semantics_rejects_unknown_open_channel() {
+        let parsed = HashMap::from([("channel".to_string(), json!("firefox"))]);
+        let err = validate_command_semantics("open", &parsed).unwrap_err();
+        assert!(err.contains("invalid --channel 'firefox'"), "err: {err}");
+    }
+
+    #[test]
+    fn validate_command_semantics_rejects_attach_only_open_channel() {
+        // `msedge` is a valid attach channel but has no managed-launch support.
+        let parsed = HashMap::from([("channel".to_string(), json!("msedge"))]);
+        let err = validate_command_semantics("open", &parsed).unwrap_err();
+        assert!(err.contains("attach --cdp"), "err: {err}");
+    }
+
+    #[test]
     fn build_open_session_request_defaults_to_default_session_id() {
         let request = build_open_session_request(None, None);
 
@@ -40823,6 +40943,14 @@ linkGroups:
         assert!(err.contains("Unknown browser channel"), "{err}");
         assert!(err.contains("msedge"), "the error must list the channels: {err}");
 
+        // ego lite has no extension transport: only the CDP channel is wired
+        // for it, so this must fail with the CDP recipe instead of printing a
+        // chrome-extension:// connect URL that nothing answers.
+        let err = validate_attach_flags(None, None, Some("ego-lite"))
+            .expect_err("--extension ego-lite must be refused");
+        assert!(err.contains("CDP only"), "{err}");
+        assert!(err.contains("--cdp ego-lite"), "{err}");
+
         // A channel name resolves on THIS machine; a remote --endpoint would
         // look the resolved localhost port up on the server instead.
         let err = validate_attach_flags(
@@ -40903,6 +41031,10 @@ linkGroups:
         assert_eq!("Microsoft Edge", channel_browser_label(Some("msedge-dev")));
         assert_eq!("Google Chrome", channel_browser_label(Some("chrome")));
         assert_eq!("Google Chrome", channel_browser_label(Some("chrome-canary")));
+        // ego lite is its own family, not "Google Chrome" — a connect page
+        // opened in Chrome would reach the wrong browser.
+        assert_eq!("ego (lite)", channel_browser_label(Some("ego-lite")));
+        assert_eq!("ego (lite)", channel_browser_label(Some("ego")));
         assert_eq!("the default browser", channel_browser_label(None));
     }
 

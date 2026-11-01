@@ -150,6 +150,8 @@ browser4-cli goto https://other-page.com             # stays headless (or headed
 > **Notes:** When `goto` is the very first command (no prior `open`), it auto-opens a new session using the CLI's default display mode, which is headless. `--headless`/`--headed` only take effect when **creating** a new session — when `open` reconnects to a running session they are ignored (the CLI warns on stderr). To change the mode, `close` first, then `open --headless`. Use `open --fresh` to discard a stale session's tabs/cookies/location entirely and start clean.
 >
 > `--display-mode GUI|HEADLESS|SUPERVISED` is the backend's own display capability (the one `swarm create --display-mode` also sets). It carries the display choice **by itself** — combining it with `--headed`/`--headless` is a usage error, and the mode is still fixed at session creation. `--max-open-tabs <n>` (positive integer) caps the tabs of the session's browser context.
+>
+> `--channel chrome|ego-lite` picks which browser the backend launches and manages — Chrome by default, or an installed ego lite. The channel is fixed at session creation (like the display mode): reconnecting ignores it, `close` or `open --fresh` to switch. Other browsers (Edge, Canary, Electron, cloud) stay attach-only — see [browser-modes.md](references/browser-modes.md).
 
 ### Sessions
 

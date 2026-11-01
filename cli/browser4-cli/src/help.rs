@@ -1977,7 +1977,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "                        msedge, msedge-beta, msedge-dev, msedge-canary"
+            "                        msedge, msedge-beta, msedge-dev, msedge-canary, ego-lite"
                 .to_string(),
         );
         lines.push(
@@ -1988,6 +1988,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    --remote-debugging-port and its listening ports; the first endpoint that can host a page wins."
                 .to_string(),
         );
+        lines.push(wrap_text(
+            "- ego-lite (Citro Labs) is CDP-only: it reports the same /json/version product as Chrome and writes no DevToolsActivePort file, so it is resolved from its own processes — start it with ego --remote-debugging-port=<port>, then run `attach --cdp ego-lite` (its normal profile works; --extension ego-lite is refused).",
+            "  ",
+            4,
+        ));
         lines.push(wrap_text(
             "- A DevToolsActivePort file survives the browser that wrote it: a stale copy whose port no longer answers is dropped, not treated as a running debug target.",
             "  ",
@@ -2074,6 +2079,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli attach --cdp http://localhost:9222".to_string());
         lines.push("  browser4-cli attach --cdp chrome".to_string());
         lines.push("  browser4-cli attach --cdp msedge".to_string());
+        lines.push("  browser4-cli attach --cdp ego-lite    # ego lite started with --remote-debugging-port".to_string());
         lines.push("  browser4-cli attach --extension".to_string());
         lines.push("  browser4-cli attach --extension chrome-canary".to_string());
         lines.push("  browser4-cli attach --extension msedge".to_string());
@@ -2109,6 +2115,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         ));
         lines.push(wrap_text(
             "`--display-mode GUI|HEADLESS|SUPERVISED` is the backend's own display capability (the same one `swarm create --display-mode` sets). It carries the display choice by itself, so do not combine it with `--headed`/`--headless`.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "`--channel chrome|ego-lite` picks which browser the backend launches and manages: Chrome (the default) or an installed ego lite. Like the display mode, the channel is fixed when the session is created — reconnecting ignores it; use `close` or `--fresh` to switch. When ego lite is not in its standard install location, point the backend at the binary with the `ego.path` system property.",
             "  - ",
             4,
         ));
@@ -2154,6 +2165,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli open --headed https://browser4.io              # visible browser window".to_string());
         lines.push("  browser4-cli open --headless https://browser4.io            # explicit headless".to_string());
         lines.push("  browser4-cli open --display-mode GUI https://browser4.io    # same axis, backend spelling".to_string());
+        lines.push("  browser4-cli open --channel ego-lite https://browser4.io    # launch ego lite instead of Chrome".to_string());
         lines.push("  browser4-cli open --max-open-tabs 4 https://browser4.io    # cap the tab count".to_string());
         lines.push("  browser4-cli open --fresh --headless https://browser4.io    # new session, not a reconnect".to_string());
         lines.push("  browser4-cli -s job-42 open https://browser4.io            # named session (global flag first)".to_string());

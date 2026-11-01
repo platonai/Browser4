@@ -83,6 +83,13 @@ object B4Constants {
     const val PROFILE_PATH_CAPABILITY = "profilePath"
 
     /**
+     * The capability that names the browser channel a session launches
+     * (`channel`, e.g. `open --channel ego-lite`). Absent means the default
+     * Chrome. See [BROWSER_CHANNEL].
+     */
+    const val CHANNEL_CAPABILITY = "channel"
+
+    /**
      * The capability that tells a session **whether it may launch a browser**.
      *
      * Absent means "own browser" — the session may launch (lazily) when a page is
@@ -105,6 +112,19 @@ object B4Constants {
 
     /** [BROWSER_LAUNCH_POLICY] value for a session bound to an external browser. */
     const val BROWSER_LAUNCH_POLICY_ATTACHED = "attached"
+
+    /**
+     * The session-level browser channel (`browser.channel`), set from the
+     * [CHANNEL_CAPABILITY] capability. Absent or blank means the default Chrome;
+     * [BROWSER_CHANNEL_EGO_LITE] launches the installed ego (lite) browser
+     * instead. The channel decides which browser binary the launch resolves
+     * (see `EgoLiteBrowserLauncher`); profile mode, display mode and every
+     * other launch setting apply unchanged.
+     */
+    const val BROWSER_CHANNEL = "browser.channel"
+
+    /** [BROWSER_CHANNEL] value selecting the ego (lite) browser. */
+    const val BROWSER_CHANNEL_EGO_LITE = "ego-lite"
 
     /**
      * The session-level browser profile path, set from the `profilePath`

@@ -698,6 +698,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false, short: None },
                 OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false, short: None },
                 OptionDef { name: "display-mode <mode>", description: "Display mode of the new session: GUI, HEADLESS (the default), or SUPERVISED. Fixed at session creation; it replaces --headed/--headless, so pass one of them, not both", is_bool: false, short: None },
+                OptionDef { name: "channel <name>", description: "Browser channel to launch and manage: chrome (the default) or ego-lite. Fixed at session creation", is_bool: false, short: None },
                 OptionDef { name: "max-open-tabs <n>", description: "Maximum number of open tabs in the session's browser context (backend default when omitted)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -744,6 +745,20 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // session's browser context.
                 if let Some(display_mode) = get_opt_str(args, "display-mode") {
                     params["displayMode"] = json!(display_mode.trim().to_ascii_uppercase());
+                }
+                // `--channel` picks the browser binary the backend launches and
+                // manages. Canonicalized here so the persisted session state and
+                // the backend's `browser.channel` always carry the same spelling;
+                // "chrome" is the default and is forwarded as-is (the backend
+                // treats it as the default channel).
+                if let Some(channel) = get_opt_str(args, "channel") {
+                    let normalized = channel.trim().to_ascii_lowercase();
+                    let canonical = match normalized.as_str() {
+                        "chrome" | "google-chrome" | "google chrome" => "chrome",
+                        "ego-lite" | "ego" | "ego lite" | "egolite" => "ego-lite",
+                        _ => normalized.as_str(),
+                    };
+                    params["channel"] = json!(canonical);
                 }
                 if let Some(max_open_tabs) = get_opt_str(args, "max-open-tabs") {
                     params["maxOpenTabs"] = json!(max_open_tabs.trim());
@@ -793,7 +808,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef {
                     name: "cdp",
-                    description: "CDP endpoint URL (e.g. http://localhost:9222) or channel name. Supported channels: chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary. A channel is verified against the browser that answers: a different family fails the attach instead of driving the wrong browser",
+                    description: "CDP endpoint URL (e.g. http://localhost:9222) or channel name. Supported channels: chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary, ego-lite. A channel is verified against the browser that answers: a different family fails the attach instead of driving the wrong browser. ego-lite is resolved from its own processes only (start it with ego --remote-debugging-port=<port>)",
                     is_bool: false,
                     short: None,
                 },
@@ -7450,6 +7465,39 @@ mod tests {
 
         assert!(params.get("displayMode").is_none());
         assert!(params.get("maxOpenTabs").is_none());
+        assert!(params.get("channel").is_none());
+    }
+
+    #[test]
+    fn test_open_params_with_channel() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("channel".to_string(), json!("ego-lite"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["channel"], "ego-lite");
+    }
+
+    #[test]
+    fn test_open_params_channel_is_canonicalized() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+
+        for (input, expected) in [
+            ("ego", "ego-lite"),
+            ("Ego Lite", "ego-lite"),
+            ("EGOLITE", "ego-lite"),
+            ("Google Chrome", "chrome"),
+        ] {
+            let mut args = HashMap::new();
+            args.insert("channel".to_string(), json!(input));
+
+            let params = (cmd.tool_params_fn)(&args);
+
+            assert_eq!(params["channel"], expected, "input: {input}");
+        }
     }
 
     #[test]

@@ -297,7 +297,7 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
 
 | | Backend-launched (`open`) | `attach --cdp` | `attach --extension` |
 |---|---|---|---|
-| Browser | Chrome launched by Browser4 | any already-running CDP endpoint: Chrome/Edge/Electron/cloud | already-running Chrome/Edge **with the Browser4 extension installed** |
+| Browser | Chrome by default, or ego lite via `open --channel ego-lite` — launched by Browser4 | any already-running CDP endpoint: Chrome/Edge/Electron/cloud | already-running Chrome/Edge **with the Browser4 extension installed** |
 | Setup | none | remote debugging enabled in either form — start the browser with `--remote-debugging-port=N` (plus a non-default `--user-data-dir`), or flip `chrome://inspect/#remote-debugging` → *"Allow remote debugging for this browser instance"* | install the extension; optionally set `BROWSER4_EXTENSION_TOKEN` to skip the approval dialog |
 | Login state | whatever the Browser4 profile holds (or `state-save`/`state-load`) | the real profile you are using | the real profile you are using |
 | Connection check | — | candidates from `DevToolsActivePort` + process listeners are probed, and the first endpoint that can host a page wins: an HTTP endpoint with `/json` page targets, or a browser-level WebSocket that answers `Target.getTargets`; loud errors otherwise | session stays pending until the extension connects; pending connections expire after ~2 min |
@@ -307,9 +307,22 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
 | Works in CI | yes | only with an explicitly started browser/endpoint | no (needs an interactive Chrome with the extension) |
 | Best for | production batches, clean environments, CI | debugging live issues, cloud browsers, Electron, SSH-tunnelled remote Chrome | "just use my own browser" with zero flags/ports |
 
+**Managed browser channel (`open --channel`)**
+
+`open --channel chrome|ego-lite` picks which browser the backend launches and manages for the
+session. `chrome` is the default and needs no flag. `ego-lite` launches an installed
+[ego lite](https://www.citrolab.ai/) browser instead of Chrome: the binary is resolved from
+`ego.path` (configuration or `-Dego.path=...` on the backend) or the standard install locations
+(`Program Files` / `Program Files (x86)` / `LOCALAPPDATA` under `Citro Labs\ego lite\Application\ego.exe`),
+and everything after the binary choice — CDP transport, profile modes, headless stealth user agent,
+`close` process reaping — is the standard managed-launch machinery. Like the display mode, the
+channel is fixed when the session is created: reconnecting ignores it, use `close` or `open --fresh`
+to switch. Any other channel name (`msedge`, …) is attach-only — `open` rejects it with a hint to
+`attach --cdp`.
+
 **`attach --cdp` endpoint resolution**
 
-`--cdp` accepts a channel name (`chrome`, `chrome-canary`, `msedge`, `msedge-dev`, …), an HTTP endpoint
+`--cdp` accepts a channel name (`chrome`, `chrome-canary`, `msedge`, `msedge-dev`, `ego-lite`, …), an HTTP endpoint
 (`http://localhost:9222`), a WebSocket URL, a bare port, or `host:port`. A **browser-level** WebSocket
 (`ws://…/devtools/browser/<uuid>`) is attached to over that socket; a **page-level** one is only a
 host:port hint, with pages resolved over `GET /json`.
@@ -359,7 +372,7 @@ a managed session, use `state-save` / `state-load`.
 | `--max-browser-contexts` / `--max-open-tabs` | swarm: 2 contexts × 8 tabs | Each context is a browser instance — this is the throughput/memory dial. |
 | Browser contexts (server) | `browser.context.number=2`, `browser.max.active.tabs=8` | Global defaults for managed browsers. |
 | Proxy rotation | `proxy.rotation.url`, only for `SEQUENTIAL`/`TEMPORARY` | IP rotation requires giving up the shared `DEFAULT` profile. |
-| Browser channel | managed = Chrome; attach = chrome*/msedge* | Need Edge/Canary/Electron/cloud → attach only. |
+| Browser channel | managed = Chrome (default) or ego lite via `open --channel ego-lite`; attach = chrome*/msedge*/ego-lite | Managed ego lite needs the browser installed (or `ego.path` set on the backend); Edge/Canary/Electron/cloud → attach only. |
 | Platform | GUI-less envs force headless; sandboxed shells need writable `BROWSER4_RUNTIME_DIR` / `BROWSER4_CLI_STATE_DIR` | Determines whether headed is even possible and whether the backend can start. |
 | Lifecycle | `close` (one session) · `close-all` · `swarm close` | `swarm close` also aborts pending tasks; forgetting it holds contexts and the worker pool. |
 | Observability | `list` (Connection column shows the **actual** browser, flagging channel mismatches; Display column shows the creation-time mode — Headed/Headless/Supervised/Attached) · `status` · `screenshot` | Always confirm the real browser after an attach — driving the wrong profile looks like "lost login state". |

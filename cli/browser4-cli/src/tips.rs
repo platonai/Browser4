@@ -363,6 +363,9 @@ const TIPS_ATTACH: &[Tip] = &[
         text: "Use `attach --cdp msedge` to connect to Microsoft Edge via CDP",
     },
     Tip {
+        text: "`attach --cdp ego-lite` drives Citro Labs ego lite: start it with `ego --remote-debugging-port=9222` (its normal profile accepts one) — ego-lite is CDP only, and its port is resolved from ego lite's own processes",
+    },
+    Tip {
         text: "`attach` prints the session tab it drives, and `disconnect` names the tab it released",
     },
 ];

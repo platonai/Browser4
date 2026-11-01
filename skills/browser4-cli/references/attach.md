@@ -20,6 +20,10 @@ browser4-cli attach --extension
 chrome --remote-debugging-port=9222 --user-data-dir=/tmp/b4-attach-profile
 browser4-cli -s debug attach --cdp chrome
 
+# C. Citro Labs "ego (lite)" — CDP only, and its normal profile accepts a debug port.
+"C:\Program Files\Citro Labs\ego lite\Application\ego.exe" --remote-debugging-port=9222
+browser4-cli -s ego attach --cdp ego-lite
+
 # 3. Interact with the attached tabs
 browser4-cli snapshot
 browser4-cli screenshot --filename current-state.png
@@ -90,6 +94,12 @@ no page target never wins over one that does:
      > endpoint (`--cdp http://localhost:9222`, `--cdp host:port`, `--cdp 9222`) or start the target
      > browser with a fixed `--remote-debugging-port`.
 4. **Port-range scan** — concurrently probes 9222–9333 for any CDP endpoint that exposes a page target, as a last resort.
+
+> **`ego-lite` skips tiers 1 and 4.** ego lite answers CDP as `Chrome/<version>` and writes no
+> `DevToolsActivePort`, so neither a conventional port nor a blind sweep can tell it from a Chrome.
+> Its resolution is limited to what its **own processes** publish: the `--remote-debugging-port=N`
+> on `ego.exe`'s command line (tier 2) and the ports that process listens on (tier 3). Nothing found
+> means ego lite was started without a debug port — restart it with one.
 
 > **Several Chrome instances at once?** A channel name (`attach --cdp chrome`) binds the first
 > attachable candidate in the order above, which may be any running Chrome of that channel — it does
@@ -237,15 +247,24 @@ browser4-cli attach --cdp chrome
 browser4-cli attach --cdp chrome-canary
 browser4-cli attach --cdp msedge
 browser4-cli attach --cdp msedge-dev
+browser4-cli attach --cdp ego-lite
 ```
 
-Supported channels: `chrome`, `chrome-beta`, `chrome-dev`, `chrome-canary`, `msedge`, `msedge-beta`, `msedge-dev`, `msedge-canary`.
+Supported channels: `chrome`, `chrome-beta`, `chrome-dev`, `chrome-canary`, `msedge`, `msedge-beta`, `msedge-dev`, `msedge-canary`, `ego-lite`.
 
 The target browser must have remote debugging enabled in one of two ways: start it with
 `--remote-debugging-port=<port>` (the debug port is refused on Chrome's default profile, so pass a
 separate `--user-data-dir` as well), or enable the built-in
 `chrome://inspect/#remote-debugging` toggle, whose browser-level WebSocket is attached to directly —
 see the Quick Start note.
+
+> **`ego-lite` is CDP-only.** `ego lite` (Citro Labs) is a Chromium build whose CDP product string
+> is `Chrome/<version>` — indistinguishable from Chrome — and it writes no `DevToolsActivePort`
+> file. The channel therefore resolves the port **only from ego lite's own processes**
+> (`ego.exe --remote-debugging-port=N` and the ports that process listens on), never from the
+> conventional port or the 9222–9333 sweep, so `attach --cdp ego-lite` can never bind a Chrome by
+> accident. It must be started with a debug port first (its normal, logged-in profile works);
+> `--extension ego-lite` is refused, because no extension transport was verified there.
 
 ### 2. Attach by CDP Endpoint URL
 
@@ -393,7 +412,7 @@ browser4-cli screenshot --filename remote-state.png
 
 | Flag | Description |
 |------|-------------|
-| `--cdp <channel\|url\|port>` | Channel name, CDP URL, WebSocket URL, bare port, or `host:port` |
+| `--cdp <channel\|url\|port>` | Channel name, CDP URL, WebSocket URL, bare port, or `host:port`. Channels include `chrome`, `msedge` and `ego-lite` (CDP-only, resolved from ego lite's own processes) |
 | `--endpoint <server-url>` | Browser4 server URL; when used alone, switches CLI to that server. Mutually exclusive with `--extension`; a channel name with a non-loopback `--endpoint` is refused |
 | `--extension [channel]` | Connect via Browser4 Chrome Extension; optionally specify channel (chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary). Mutually exclusive with `--cdp` and `--endpoint` |
 | `-s <name>` | Name for the attached session (for `-s <name>` targeting later) |
@@ -405,6 +424,8 @@ browser4-cli screenshot --filename remote-state.png
 | Cannot find target browser | Verify remote debugging is enabled; check the browser is running |
 | No matching channel found | Verify channel name spelling; try a CDP URL or port instead |
 | `Unknown browser channel for --extension: …` | The value must be one of the supported channels. A typo would otherwise behave like a default chrome request |
+| `ego lite is supported over CDP only: --extension ego-lite …` | Start ego lite with `--remote-debugging-port=<port>`, then run `attach --cdp ego-lite` — there is no extension transport for it |
+| `Could not find a running ego lite browser with remote debugging enabled` | ego lite writes no `DevToolsActivePort` and reports itself as Chrome over CDP, so it is found only through its own processes. Start it as `ego --remote-debugging-port=9222` (the normal profile works), then `attach --cdp ego-lite`; if it is already running without a debug port, restart it with one — a port cannot be enabled on a running instance |
 | `--cdp`/`--extension`/`--endpoint` "cannot be combined" | One transport per invocation — drop the extra flag |
 | `--cdp <channel>` "resolves a channel name on THIS machine, but --endpoint …" | Pass the CDP URL reachable from the server (`--cdp http://browser-host:9222`), or use the server's loopback URL if it runs on this machine |
 | No CDP endpoint listening | Verify the port is correct and not blocked by a firewall |
