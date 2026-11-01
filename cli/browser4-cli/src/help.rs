@@ -1988,6 +1988,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    --remote-debugging-port and its listening ports; the first endpoint that can host a page wins."
                 .to_string(),
         );
+        lines.push(wrap_text(
+            "- A DevToolsActivePort file survives the browser that wrote it: a stale copy whose port no longer answers is dropped, not treated as a running debug target.",
+            "  ",
+            4,
+        ));
         lines.push(
             "  - A browser-level WebSocket URL (ws://host:port/devtools/browser/<uuid>) is driven over that"
                 .to_string(),
@@ -1996,6 +2001,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    socket — this is what Chrome's chrome://inspect/#remote-debugging toggle publishes."
                 .to_string(),
         );
+        lines.push(wrap_text(
+            "- For chrome://inspect/#remote-debugging mode, attach --extension is the supported path; a channel name reaches it only while the published port is live.",
+            "  ",
+            4,
+        ));
         lines.push(
             "  - --endpoint accepts a remote Browser4 server URL (e.g. http://browser4-server:18182) for distributed setups."
                 .to_string(),

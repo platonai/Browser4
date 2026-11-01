@@ -354,7 +354,10 @@ const TIPS_ATTACH: &[Tip] = &[
         text: "Use `attach --extension edge` (or chrome) to drive the browser you already have open — no CDP port, no second browser",
     },
     Tip {
-        text: "Use `attach --cdp chrome` to connect to your regular Chrome with all your logins intact",
+        text: "Use `attach --extension chrome` to reuse the Chrome you already have open, with all your logins — no CDP port, no second profile",
+    },
+    Tip {
+        text: "`attach --cdp chrome` needs a browser started with `--remote-debugging-port` and its own `--user-data-dir`; Chrome refuses a debug port on the default profile",
     },
     Tip {
         text: "Use `attach --cdp msedge` to connect to Microsoft Edge via CDP",

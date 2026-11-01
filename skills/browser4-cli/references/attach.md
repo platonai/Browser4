@@ -10,15 +10,17 @@ Instead of launching a new browser, `attach` connects to an already-running Chro
 
 ## Quick Start
 
+Pick the transport that matches the browser you want to drive:
+
 ```bash
-# 1. Make the target browser debuggable — start it with a debug port.
-#    A separate profile keeps it independent of your everyday browser:
+# A. Your everyday Chrome, already logged in — the Browser4 Extension is installed and enabled there.
+browser4-cli attach --extension
+
+# B. A browser you start yourself with a debug port (a separate profile, so no shared logins).
 chrome --remote-debugging-port=9222 --user-data-dir=/tmp/b4-attach-profile
+browser4-cli -s debug attach --cdp chrome
 
-# 2. Attach by channel name (or by endpoint, see below)
-browser4-cli attach --cdp chrome
-
-# 3. Interact with your existing tabs
+# 3. Interact with the attached tabs
 browser4-cli snapshot
 browser4-cli screenshot --filename current-state.png
 
@@ -26,18 +28,30 @@ browser4-cli screenshot --filename current-state.png
 browser4-cli state-save auth.json
 ```
 
+> **Which transport?** `--extension` is the only one that reuses your everyday Chrome profile:
+> Chrome refuses a debug port on the default profile, so any `--cdp` browser runs with its own
+> `--user-data-dir` and therefore without your logins. When the site needs an authenticated session
+> (X, LinkedIn, a bank dashboard), start with `attach --extension`.
+
 > **Chrome's built-in remote debugging works too.** `chrome://inspect/#remote-debugging` →
 > *"Allow remote debugging for this browser instance"* (recent Chrome builds) publishes a
-> browser-level WebSocket and answers **every `/json*` path with HTTP 404**. Browser4 attaches to it
-> over that socket — `attach --cdp chrome` resolves the URL from `DevToolsActivePort` automatically,
-> and you can always pass it explicitly:
+> browser-level WebSocket and answers **every `/json*` path with HTTP 404**. Two ways in, in this
+> order:
+>
+> 1. `browser4-cli attach --extension` — the supported path for this mode.
+> 2. Pass the browser-level socket explicitly:
 >
 > ```bash
 > browser4-cli attach --cdp ws://127.0.0.1:9222/devtools/browser/<uuid>
 > ```
 >
-> The path is the second line of the profile's `DevToolsActivePort` file. `attach --extension` remains
-> available as an alternative for that browser.
+> The path is the second line of the profile's `DevToolsActivePort` file.
+>
+> `attach --cdp chrome` only finds this browser while the published port is **live** — the
+> `DevToolsActivePort` file survives the browser that wrote it, so a stale copy (often months old)
+> is a common false lead. Confirm the first line answers (`curl http://127.0.0.1:<port>/json/version`
+> or `Test-NetConnection`) before retrying; if nothing answers, the toggle is off or the browser
+> restarted without it.
 
 ## When to Use
 
