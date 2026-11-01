@@ -25,9 +25,15 @@ browser4-cli (Rust)  ──MCP over HTTP──▶  browser4-rest (Kotlin/Spring)
 
 ## Batch commands
 
-Batch commands go through `handleCommandBatch()` → `handleBatchTool()` in `MCPToolController`.
-The CLI's `compile_batch_request()` builds step arrays with `op: "tool"` entries.
-`preFocusSelector` is only added for `keydown`/`keyup` steps (not fill/type/press).
+The CLI's `batch` command runs on the client: `compile_batch_step()` builds one
+plan per quoted command, `execute_batch_step()` runs it through the same executor
+the equivalent standalone command uses (one backend call per step). A failing
+step is reported as `Batch command N failed (<command>): <reason>` and the batch
+continues unless `--bail` was given; exit code 5 means at least one step failed.
+
+The server-side batch endpoint (`handleCommandBatch()` → `handleBatchTool()` in
+`MCPToolController`, `op: "tool"` step arrays, `preFocusSelector` only for
+`keydown`/`keyup`) still exists for other callers — the CLI no longer uses it.
 
 ## E2E test structure
 

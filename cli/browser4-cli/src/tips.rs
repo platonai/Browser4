@@ -463,7 +463,7 @@ const TIPS_GENERAL: &[Tip] = &[
         text: "Isolate tasks with named sessions — `-s <name>` is a GLOBAL flag, so write it BEFORE the command: `browser4-cli -s job-42 snapshot`",
     },
     Tip {
-        text: "Use `batch` for multi-step workflows — executes commands sequentially with state sharing",
+        text: "Use `batch` for multi-step workflows — executes commands sequentially with state sharing, one backend call per step",
     },
     Tip {
         text: "Use `loop --times 10 --interval 5s <command>` for repeated task execution with pacing",

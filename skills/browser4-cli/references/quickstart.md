@@ -52,10 +52,24 @@ browser4-cli htmlsnapshot get all text "<css-selector>"   # all matches
 | Read page + get refs | `snapshot -v 0` (current screen) / `-v all` (full page) / `-i` (interactive-only: buttons/links/inputs/`cursor:pointer` — draggable and hover-only targets lose their refs, so fall back to `-v 0`) / `snapshot grep <pattern>` |
 | Interact | `click` / `dblclick` / `hover` / `drag` / `fill` / `type` / `press` / `select` / `check` / `focus` / `key` |
 | Extract | `htmlsnapshot get text\|attr\|html "<css>"` (first match) / `get all ... "<css>"` (all matches); `query --sql @f.sql` (X-SQL multi-field); `eval --json` (live DOM); `extract` (natural language, needs LLM key) |
-| Bulk / structured | `crawl <url> --depth N --sql @f.sql`; `swarm create/query` (parallel); `loop` (scheduled repeats) |
+| Bulk / structured | `batch "goto …" "click …"` (multi-step, one client-side loop); `crawl <url> --depth N --sql @f.sql`; `swarm create/query` (parallel); `loop` (scheduled repeats) |
 | State | `state-save` / `state-load` / `cookie-*`; `attach` (connect to existing Chrome) |
 | Tabs | `tab-list` / `tab-new <url>` / `tab-select <index>` (re-snapshot after switching) |
 | Diagnostics | `status` / `doctor`; `errors` (page JS errors); `vitals` (performance) |
+
+## Batch: One Step at a Time, on the Client
+
+`batch` runs quoted commands sequentially **on the client**: each step is compiled and executed through the same path as the standalone command it mirrors, so each step is its own backend call and behaves exactly like that command (session bootstrap, snapshot after the step, focus/mouse-position restore, per-step `--timeout`).
+
+```bash
+browser4-cli batch "goto https://example.com" "snapshot" "click e3"
+browser4-cli batch --bail "goto https://example.com" "fill e1 'hi'" "press Enter"
+```
+
+- A failing step is reported on stderr as `Batch command N failed (<command>): <reason>`; the batch **continues** with the next step unless `--bail` was given.
+- Exit code **5** means at least one step failed; **0** means every step succeeded.
+- `--json` reads the command array from stdin, so stdin is then taken by the command list — `eval --stdin` is not available inside a `--json` batch; use an inline expression instead.
+- Session lifecycle (`open`, `close`) is not a batch step; run it separately. A step cannot override `--server` or `-s/--session`.
 
 ## snapshot vs htmlsnapshot (Key Decision)
 

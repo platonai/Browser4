@@ -1032,8 +1032,34 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push("  - Quote each subcommand so it is parsed as one batch item.".to_string());
+        lines.push(
+            "  - Every step runs on the client through the same path as the standalone".to_string(),
+        );
+        lines.push(
+            "    command it mirrors, so each step is its own backend call - the steps".to_string(),
+        );
+        lines.push(
+            "    are not packed into a single request, and a step behaves exactly like".to_string(),
+        );
+        lines.push(
+            "    the equivalent standalone command (session bootstrap, snapshot after".to_string(),
+        );
+        lines.push("    the step, focus and mouse-position restore, per-step --timeout).".to_string());
+        lines.push(
+            "  - A failing step is reported as 'Batch command N failed (<command>): <reason>'".to_string(),
+        );
+        lines.push(
+            "    on stderr; the batch continues with the next step unless --bail was given.".to_string(),
+        );
+        lines.push(
+            "  - Exit code 5 means at least one step failed; 0 means every step succeeded.".to_string(),
+        );
         lines.push("  - Use --bail to stop execution on the first failed subcommand.".to_string());
         lines.push("  - Use --json to read command arrays from stdin JSON payload.".to_string());
+        lines.push(
+            "    stdin is then consumed by the command list, so 'eval --stdin' is not".to_string(),
+        );
+        lines.push("    available inside a --json batch - use an inline expression instead.".to_string());
         lines.push(
             "  - Batch mode only supports DOM operations (navigation, keyboard, mouse,".to_string(),
         );
@@ -5673,6 +5699,12 @@ mod tests {
         assert!(help.contains("executed separately"));
         assert!(help.contains("browser4-cli batch \"goto https://browser4.io\" \"snapshot\""));
         assert!(help.contains("batch --json"));
+        // The batch runs on the client: the help must say so, because "one
+        // invocation" no longer means "one backend request".
+        assert!(help.contains("Every step runs on the client"));
+        assert!(help.contains("each step is its own backend call"));
+        assert!(help.contains("Batch command N failed"));
+        assert!(help.contains("Exit code 5"));
     }
 
     #[test]

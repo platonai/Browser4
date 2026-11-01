@@ -27,7 +27,16 @@ browser4-cli (Rust)  ──MCP over HTTP──▶  browser4-rest (Kotlin/Spring)
 
 ### Batch commands
 
-`handleCommandBatch()` → `handleBatchTool()` in `MCPToolController`. CLI's `compile_batch_request()` builds step arrays with `op: "tool"`. `preFocusSelector` only added for `keydown`/`keyup` (not fill/type/press).
+The CLI's `batch` command runs **on the client**: `compile_batch_step()` turns each
+quoted command into a `BatchStepPlan`, and `execute_batch_step()` runs it through
+the same executor the equivalent standalone command uses (one backend call per
+step). A failing step is reported as `Batch command N failed (<command>): <reason>`
+and the batch continues unless `--bail` was given; the exit code is `5`
+(`ExitCode::BatchPartial`) when at least one step failed.
+
+The server-side batch endpoint (`MCPToolController.handleCommandBatch()` →
+`handleBatchTool()`, `op: "tool"` step arrays, `preFocusSelector` only for
+`keydown`/`keyup`) is still there for other callers, but the CLI no longer uses it.
 
 ### Known CDP pitfalls
 
@@ -342,7 +351,7 @@ When adding a prefixed command:
 1. **`commands.rs`** — Add `CommandDef`: CLI name kebab-case, MCP tool `browser_`-prefixed snake_case, map args in `tool_params_fn`
 2. **`MCPToolController.kt`** — Add frontend alias so `browser_my_tool` resolves to internal name `my_tool`
 3. **Backend tool** — Reuse existing when possible; if new capability needed add `@MCP` method in `WebDriver.kt`, implement in concrete driver. Add explicit `BrowserTabToolExecutor` case only for non-trivial parameter mapping
-4. **`main.rs`** — Update only for: custom dispatch, dynamic tool-name selection, stale-session recovery, `no_snapshot_commands()`, or custom batch handling in `compile_batch_request()`
+4. **`main.rs`** — Update only for: custom dispatch, dynamic tool-name selection, stale-session recovery, `no_snapshot_commands()`, or custom batch handling in `compile_batch_step()` / `execute_batch_step()`
 5. **Docs** — Update `skills/browser4-cli/SKILL.md`; extensive docs → `skills/browser4-cli/references/<topic>.md`
 6. **Tests** — `commands.rs` unit tests → controller mapping tests → `e2e.rs` → `MCPToolControllerE2ETest.kt`
 7. **Common failures:** missing backend alias, omitted `sessionId`, forgetting `no_snapshot_commands()`/`batch_supported`, element-ref parameter name mismatches, snake_case/camelCase normalization

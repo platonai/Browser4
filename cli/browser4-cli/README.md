@@ -137,7 +137,7 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 | `resize <w> <h>` | Resize the browser window |
 | `delete-data` | Delete session data |
 | `upload <ref> <file> [file...]` | Upload one or more local files to a page file input (target must be an `<input type="file">`; paths must be readable by the browser process — remote backend: resolved on the backend host; supports multi-file and `--no-snapshot`) |
-| `batch [command...]` | Execute multiple commands in one invocation |
+| `batch [command...]` | Execute multiple commands in one invocation — the steps run on the client, one backend call per step, through the same path as the equivalent standalone command (`--bail` stops at the first failure, `--json` reads the command array from stdin; exit code 5 means at least one step failed) |
 
 ### Save as
 

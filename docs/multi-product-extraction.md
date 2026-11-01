@@ -100,6 +100,13 @@ browser4-cli batch --bail \
 | Full control per page (different selectors) | Verbose: 10 URLs × 5 fields = 50+ arguments |
 | No swarm setup | No built-in structured output |
 
+The steps run **on the client**, one backend call per step, through the same path
+as the standalone command each one mirrors — so a step behaves exactly like the
+equivalent command typed on its own.  A failing step is reported on stderr as
+`Batch command N failed (<command>): <reason>`; the batch continues with the
+next step unless `--bail` was given, and the run exits with code **5** when at
+least one step failed.
+
 **Best for:** 3–10 URLs, quick one-off where you just need the data on screen.
 
 ---

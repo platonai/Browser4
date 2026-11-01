@@ -105,7 +105,7 @@ dsh plugin --profile web add github:platonai/dsh-browser4  # GitHub
 │  ├─ 等 URL 变化？→ wait --url "**/target"
 │  └─ 等加载 / 网络请求完成？→ wait --load networkidle
 ├─ 需要确认动作之后页面发生了什么变化？→ snapshot、get 或 eval
-└─ 需要高效重复很多 UI 步骤？→ batch "goto ..." "click ..." "fill ..."
+└─ 需要连续执行多个 UI 步骤？→ batch "goto ..." "click ..." "fill ..."（步骤在客户端逐条执行）
 ```
 
 页面内容嵌在 `<iframe>` 中（支付表单、编辑器、小组件）时，使用内置的 frame 切换：`frames` 列出 frame 树，`frame "<iframe 选择器>"` 把后续元素命令的作用域切到该 iframe（同源 iframe 完整支持），`frame main` 回到主文档——无需手写 `contentDocument` eval。
@@ -543,17 +543,18 @@ browser4-cli agent status agent-task-1
 
 | 命令 | 说明 |
 |---|---|
-| `batch [command...]` | 在一次调用中执行多条命令。支持 `--bail` 与从 stdin 读取命令数组的 `--json`。 |
+| `batch [command...]` | 在一次调用中执行多条命令。步骤在客户端逐条执行——每步一次后端调用，走与等价单命令完全相同的路径。支持 `--bail`（首个失败步骤即停）与从 stdin 读取命令数组的 `--json`；退出码 5 表示至少有一个步骤失败。 |
 | `loop [task]` | 周期性运行一个任务。支持 `--name`、`-i/--interval`、`-n/--count`、`-t/--timeout`、`--shell`、`--list`、`--pause`、`--resume`、`--pause-all`、`--resume-all`、`--stop`、`--stop-all`、`--status`、`--history`、`--keep-state`。 |
 
 可用于 batch 的命令：
 
 ```text
-goto  go-back  go-forward  reload  press  type  keydown  keyup
-click  dblclick  hover  fill  select  check  uncheck  drag
-mousemove  mousedown  mouseup  mousewheel  scroll  wait
-get  eval  snapshot  screenshot  pdf  dialog-accept  dialog-dismiss
-resize  tab-list  tab-new  tab-close  tab-select
+goto  go-back  go-forward  reload  press  key  keyboard  type  keydown  keyup
+click  dblclick  hover  fill  select  upload  check  uncheck  drag  focus
+mousemove  mousedown  mouseup  mousewheel  scroll  wait  get  eval
+snapshot  screenshot  pdf  dialog-accept  dialog-dismiss  resize
+tab-list  tab-new  window-new  tab-close  tab-select  frame
+htmlsnapshot  htmlsnapshot-capture  htmlsnapshot-get  htmlsnapshot-get-all
 ```
 
 ```bash
@@ -562,6 +563,13 @@ browser4-cli loop "load https://example.com and extract the title" -i 300 -n 10
 browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60
 browser4-cli loop --list
 ```
+
+batch 的每个步骤都在客户端编译并执行，走的是与等价单命令相同的代码路径，
+因此步骤的行为与单独执行时一致：必要时自动开会话、恢复焦点元素与鼠标位置、
+遵守 `--timeout` 与 `--verify`，并各自输出快照。步骤**不会**被打包成一个后端
+请求——每一步都是一次独立调用。失败的步骤会在 stderr 上以
+`Batch command N failed (<command>): <reason>` 报出，批次继续执行后续步骤，
+除非显式传了 `--bail`。
 
 #### 网络检查、HAR 录制与请求路由
 

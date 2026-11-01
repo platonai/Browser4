@@ -90,7 +90,7 @@ Choosing the right tool for your task:
 
 ### How to Interact with a Page
 
-Use `snapshot -i --boxes` to see clickable/typeable elements with refs like `e15`, then `click <ref>`, `fill <ref> "<text>"`, `type`/`press`, `select`, `hover`/`drag`/`scroll`, and `wait` to drive the page. All interaction commands accept CSS selectors too. Chain multiple steps efficiently with `batch`.
+Use `snapshot -i --boxes` to see clickable/typeable elements with refs like `e15`, then `click <ref>`, `fill <ref> "<text>"`, `type`/`press`, `select`, `hover`/`drag`/`scroll`, and `wait` to drive the page. All interaction commands accept CSS selectors too. Chain multiple steps with `batch` — every step runs on the client through the same path as the equivalent standalone command.
 
 Content embedded in `<iframe>`s (payment forms, editors, widgets) is reached with the built-in frame switching: `frames` lists the frame tree, `frame "<iframe selector>"` scopes subsequent element commands into that frame (same-origin iframes fully supported), and `frame main` returns to the main document — no manual `contentDocument` eval needed.
 
@@ -537,17 +537,18 @@ browser4-cli agent status agent-task-1
 
 | Command | Description |
 |---|---|
-| `batch [command...]` | Execute multiple commands in one invocation. Supports `--bail` and `--json` for stdin-driven command arrays. |
+| `batch [command...]` | Execute multiple commands in one invocation. The steps run on the client — one backend call per step, through the same path as the equivalent standalone command. Supports `--bail` (stop at the first failed step) and `--json` (read the command array from stdin). Exit code 5 means at least one step failed. |
 | `loop [task]` | Run a task repeatedly. Supports `--name`, `-i/--interval`, `-n/--count`, `-t/--timeout`, `--shell`, `--list`, `--pause`, `--resume`, `--pause-all`, `--resume-all`, `--stop`, `--stop-all`, `--status`, `--history`, `--keep-state`. |
 
 Batch-compatible commands:
 
 ```text
-goto  go-back  go-forward  reload  press  type  keydown  keyup
-click  dblclick  hover  fill  select  check  uncheck  drag
-mousemove  mousedown  mouseup  mousewheel  scroll  wait
-get  eval  snapshot  screenshot  pdf  dialog-accept  dialog-dismiss
-resize  tab-list  tab-new  tab-close  tab-select
+goto  go-back  go-forward  reload  press  key  keyboard  type  keydown  keyup
+click  dblclick  hover  fill  select  upload  check  uncheck  drag  focus
+mousemove  mousedown  mouseup  mousewheel  scroll  wait  get  eval
+snapshot  screenshot  pdf  dialog-accept  dialog-dismiss  resize
+tab-list  tab-new  window-new  tab-close  tab-select  frame
+htmlsnapshot  htmlsnapshot-capture  htmlsnapshot-get  htmlsnapshot-get-all
 ```
 
 ```bash
@@ -556,6 +557,15 @@ browser4-cli loop "load https://example.com and extract the title" -i 300 -n 10
 browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60
 browser4-cli loop --list
 ```
+
+Every batch step is compiled and executed on the client through the same code
+path as the equivalent standalone command, so a step behaves exactly as it would
+on its own: it opens the session when needed, restores the focused element and
+the mouse position, honours `--timeout` and `--verify`, and prints its snapshot.
+The steps are **not** packed into a single backend request — each one is its own
+call. A step that fails is reported on stderr as
+`Batch command N failed (<command>): <reason>` and the batch continues with the
+next step, unless `--bail` was given.
 
 #### Network inspection, HAR recording & request routing
 
