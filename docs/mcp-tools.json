@@ -2072,19 +2072,31 @@
     "domain" : "tab",
     "method" : "fill",
     "mcpNames" : [ "fill", "browser_type" ],
-    "signature" : "tab.fill(selector: String, text: String)",
-    "description" : "This method emulates inserting text that doesn't come from a key press.",
+    "signature" : "tab.fill(selector: String, text: String = \"\", submit: Boolean? = false, timeoutMillis: Long? = null)",
+    "description" : "Replace the content of a field with text; an empty string clears it.",
     "returnType" : "Unit",
     "arguments" : [ {
       "name" : "selector",
       "type" : "String",
       "required" : true,
-      "description" : "The selector of the element, multiple formats supported. The matching element is focused and then filled with text. If there are multiple matching elements, the first will be focused."
+      "description" : "CSS or :expr(...) selector of the field to fill."
     }, {
       "name" : "text",
       "type" : "String",
-      "required" : true,
-      "description" : "The text to fill."
+      "required" : false,
+      "description" : "Text to write; an empty string clears the field."
+    }, {
+      "name" : "submit",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "false",
+      "description" : "Press Enter on the field after filling."
+    }, {
+      "name" : "timeoutMillis",
+      "type" : "Long?",
+      "required" : false,
+      "default" : "null",
+      "description" : "How long the fill may take before failing."
     } ],
     "examples" : [ {
       "title" : "Fill a search box",
@@ -2095,7 +2107,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "help" : "This method emulates inserting text that doesn't come from a key press.\n\nUnlike [type], this method clears the existing value before typing.\n\n```kotlin driver.fill(\"input[name='q']\", \"Hello, World!\") ```\n\nthen filled with text. If there are multiple matching elements, the first will be focused."
+    "help" : "tab.fill(selector: String, text: String)\ntab.fill(selector: String, text: String, submit: Boolean)\n\nFills the matched input, textarea or contenteditable element, respecting\nHTMLInputElement.maxLength.\n`text` defaults to \"\" on purpose: an empty value clears the field, which is\na legitimate edit rather than a missing argument."
   }, {
     "domain" : "tab",
     "method" : "focus",

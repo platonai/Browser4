@@ -48,6 +48,8 @@ internal object TabToolExamples {
         "focus" to listOf(ToolExample(title = "Focus an input", args = mapOf("selector" to "#email"))),
         "check" to listOf(ToolExample(title = "Tick a checkbox", args = mapOf("selector" to "#terms"))),
         "uncheck" to listOf(ToolExample(title = "Clear a checkbox", args = mapOf("selector" to "#newsletter"))),
+        // Examples carry a single value per argument (`upload` does the same for
+        // `paths`); the list form is described in the argument's own docs.
         "selectOption" to listOf(
             ToolExample(title = "Pick a country", args = mapOf("selector" to "#country", "values" to "CN")),
         ),

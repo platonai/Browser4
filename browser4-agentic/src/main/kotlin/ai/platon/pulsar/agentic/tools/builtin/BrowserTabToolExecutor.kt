@@ -341,6 +341,33 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 not, so a selector-only call is valid here.
             """.trimIndent()
         )
+        // `fill` is advertised from the upstream `fill(selector: String, text: String)`
+        // declaration, where `text` is required. An empty string is a meaningful value
+        // here — it clears the field — but the validator treats a blank string as a
+        // missing argument, so `fill <ref> ""` was rejected before dispatch. Declaring
+        // the intentional empty default states the contract the executor implements:
+        // an empty (or omitted) `text` clears the field.
+        toolSpec["fill"] = ToolSpec(
+            domain = domain,
+            method = "fill",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String", null, "CSS or :expr(...) selector of the field to fill."),
+                ToolSpec.Arg("text", "String", "", "Text to write; an empty string clears the field."),
+                ToolSpec.Arg("submit", "Boolean?", "false", "Press Enter on the field after filling."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long the fill may take before failing."),
+            ),
+            returnType = "Unit",
+            description = "Replace the content of a field with text; an empty string clears it.",
+            help = """
+                tab.fill(selector: String, text: String)
+                tab.fill(selector: String, text: String, submit: Boolean)
+
+                Fills the matched input, textarea or contenteditable element, respecting
+                HTMLInputElement.maxLength.
+                `text` defaults to "" on purpose: an empty value clears the field, which is
+                a legitimate edit rather than a missing argument.
+            """.trimIndent()
+        )
         toolSpec["selectOption"] = ToolSpec(
             domain = domain,
             method = "selectOption",

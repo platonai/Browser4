@@ -2010,15 +2010,17 @@ Returns whether the element exists.
 ### `fill`, `browser_type`
 
 ```
-tab.fill(selector: String, text: String)
+tab.fill(selector: String, text: String = "", submit: Boolean? = false, timeoutMillis: Long? = null)
 ```
 
-This method emulates inserting text that doesn't come from a key press.
+Replace the content of a field with text; an empty string clears it.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `selector` | String | yes |  | The selector of the element, multiple formats supported. The matching element is focused and then filled with text. If there are multiple matching elements, the first will be focused. |
-| `text` | String | yes |  | The text to fill. |
+| `selector` | String | yes |  | CSS or :expr(...) selector of the field to fill. |
+| `text` | String | no |  | Text to write; an empty string clears the field. |
+| `submit` | Boolean? | no | false | Press Enter on the field after filling. |
+| `timeoutMillis` | Long? | no | null | How long the fill may take before failing. |
 
 Returns: `Unit`
 
@@ -2028,13 +2030,13 @@ Examples:
 
 <details><summary>Full documentation</summary>
 
-This method emulates inserting text that doesn't come from a key press.
+tab.fill(selector: String, text: String)
+tab.fill(selector: String, text: String, submit: Boolean)
 
-Unlike [type], this method clears the existing value before typing.
-
-```kotlin driver.fill("input[name='q']", "Hello, World!") ```
-
-then filled with text. If there are multiple matching elements, the first will be focused.
+Fills the matched input, textarea or contenteditable element, respecting
+HTMLInputElement.maxLength.
+`text` defaults to "" on purpose: an empty value clears the field, which is
+a legitimate edit rather than a missing argument.
 
 </details>
 
