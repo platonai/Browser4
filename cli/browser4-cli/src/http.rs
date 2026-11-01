@@ -10,7 +10,6 @@ const NAVIGATION_REQUEST_TIMEOUT_SECS: u64 = 120;
 const TEXT_INPUT_REQUEST_TIMEOUT_SECS: u64 = 90;
 const AGENT_REQUEST_TIMEOUT_SECS: u64 = 180;
 const SNAPSHOT_REQUEST_TIMEOUT_SECS: u64 = 60;
-const BATCH_REQUEST_TIMEOUT_SECS: u64 = 120;
 const CRAWL_REQUEST_TIMEOUT_SECS: u64 = 600;
 const CODING_REQUEST_TIMEOUT_SECS: u64 = 600;
 const CRAWL_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_CRAWL_TIMEOUT_SECS";
@@ -1344,23 +1343,6 @@ pub async fn post_agent_access_decision(
             .timeout(std::time::Duration::from_secs(30)),
     )
     .await
-}
-
-/// Execute a batch of CLI-derived operations in a single backend request.
-pub async fn submit_batch_commands(
-    client: &Client,
-    base_url: &str,
-    args: Value,
-) -> Result<String, String> {
-    call_tool_with_timeout(
-        client,
-        base_url,
-        "command_batch",
-        args,
-        Some(std::time::Duration::from_secs(BATCH_REQUEST_TIMEOUT_SECS)),
-    )
-    .await
-    .map(|r| r.text)
 }
 
 #[cfg(test)]

@@ -10983,10 +10983,9 @@ mod tests {
     #[test]
     fn test_fill_tool_params_preserve_ref_and_text_for_batch() {
         // The fill command's tool_params_fn produces a JSON object that the batch
-        // compiler normalises via normalize_batch_step_args.  Verify that the raw
-        // output contains "ref" (not "selector") so the batch step carries the
-        // correct argument names through to the backend's DefaultArgumentNormalizer
-        // which converts ref → selector.
+        // step sends as-is.  Verify that the raw output contains "ref" (not
+        // "selector") so the step carries the correct argument names through to
+        // the backend's DefaultArgumentNormalizer which converts ref → selector.
         let map = commands_map();
         let cmd = map.get("fill").unwrap();
         let mut args = HashMap::new();

@@ -66,7 +66,7 @@ use http::{
     clear_all_crawls, clear_crawls, close_swarm_session, crawl_request_timeout,
     get_command_result, get_command_status, get_crawl_result, get_crawl_status,
     get_swarm_batch_status, get_swarm_result, get_swarm_status, is_stale_session_error, make_client,
-    resume_crawl, submit_batch_commands, submit_crawl, submit_plain_command,
+    resume_crawl, submit_crawl, submit_plain_command,
     submit_plain_command_with_options, submit_swarm_payload,
     submit_swarm_query, CallToolResult,
 };
@@ -845,6 +845,12 @@ async fn restore_active_selector(
     let Some(selector) = state.active_selector.as_deref() else {
         return Ok(());
     };
+
+    // The stored selector may still be in its raw ref form (`e12`).  The
+    // backend only accepts node ids as `backend:<id>`, and a raw ref is not a
+    // CSS selector either — so resolve it before deciding how to focus.
+    let selector = resolve_ref(selector);
+    let selector = selector.as_str();
 
     if selector.starts_with("backend:") {
         return Ok(());
@@ -31266,55 +31272,66 @@ struct BatchCommandSpec {
     tokens: Vec<String>,
 }
 
+/// A batch step compiled into the client-side action that runs it.
+///
+/// Every variant maps onto the same single-command executor the non-batch
+/// path uses, so a batch step behaves exactly like the equivalent standalone
+/// command — focus restore, mouse restore, state persistence and output
+/// rendering all come for free instead of being re-implemented server-side.
 #[derive(Debug, Clone)]
-enum PlannedBatchOutput {
-    Text,
-    Snapshot { path: PathBuf },
-    Screenshot { path: PathBuf },
-    Pdf { path: PathBuf },
-}
-
-#[derive(Debug, Clone)]
-enum PlannedBatchEntry {
-    Backend {
-        display: String,
-        request_indices: Vec<usize>,
-        outputs: Vec<PlannedBatchOutput>,
+enum BatchStepAction {
+    /// A plain tool call (`browser_click`, `browser_type`, …).
+    Tool {
+        tool_name: String,
+        tool_params: Value,
+        eval_json: bool,
     },
-    LocalFailure {
-        display: String,
-        error: String,
+    /// `goto` — uses the navigation path, so it can bootstrap a session.
+    Navigate { tool_name: String, tool_params: Value },
+    Snapshot { tool_name: String, tool_params: Value },
+    Screenshot { tool_name: String, tool_params: Value },
+    Pdf { tool_name: String, tool_params: Value },
+    /// `type` / `fill` — optional post-typing verification and pre-typing focus.
+    TextInput {
+        tool_name: String,
+        tool_params: Value,
+        verify: bool,
+        focus: bool,
+    },
+    /// `press` — optional verification and navigation follow.
+    Press {
+        tool_name: String,
+        tool_params: Value,
+        verify: bool,
+        follow: bool,
+    },
+    /// `select` — optional post-selection verification.
+    Select {
+        tool_name: String,
+        tool_params: Value,
+        verify: bool,
+    },
+    /// `keydown` / `keyup` — restores the tracked active selector first.
+    Key {
+        tool_name: String,
+        tool_params: Value,
+    },
+    /// `mousemove` — persists the new pointer position.
+    MouseMove {
+        tool_name: String,
+        tool_params: Value,
+    },
+    /// `mousedown` / `mouseup` / `mousewheel` — restores the pointer position first.
+    MousePositioned {
+        tool_name: String,
+        tool_params: Value,
     },
 }
 
 #[derive(Debug, Clone)]
-struct CompiledBatchRequest {
-    steps: Vec<Value>,
-    entries: Vec<PlannedBatchEntry>,
-    final_state: CliState,
-    requires_response_session_id: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct BatchExecutionResponse {
-    session_id: Option<String>,
-    stopped_on_error: bool,
-    results: Vec<BatchExecutionResult>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct BatchExecutionResult {
-    index: usize,
-    ok: bool,
-    text: Option<String>,
-    error: Option<String>,
-    page_url: Option<String>,
-    page_title: Option<String>,
-    snapshot: Option<String>,
-    screenshot: Option<String>,
-    pdf: Option<String>,
+struct BatchStepPlan {
+    display: String,
+    action: BatchStepAction,
 }
 
 fn read_batch_stdin() -> Result<String, String> {
@@ -31344,611 +31361,485 @@ fn format_batch_command(tokens: &[String]) -> String {
         .join(" ")
 }
 
-fn normalize_batch_step_args(args: &Value) -> Value {
-    let mut normalized = args.clone();
-    let ref_keys = ["selector", "ref", "startRef", "endRef"];
-    if let Value::Object(map) = &mut normalized {
-        for key in ref_keys {
-            if let Some(Value::String(value)) = map.get(key) {
-                map.insert(key.to_string(), json!(resolve_ref(value)));
-            }
-        }
-    }
-    normalized
-}
-
-fn push_batch_local_failure(
-    entries: &mut Vec<PlannedBatchEntry>,
-    spec: &BatchCommandSpec,
-    error: String,
-    bail: bool,
-) -> bool {
-    entries.push(PlannedBatchEntry::LocalFailure {
-        display: spec.display.clone(),
-        error,
-    });
-    bail
-}
-
-fn compile_batch_request(
-    commands: &[BatchCommandSpec],
-    bail: bool,
-    base_url: &str,
-    session_name: Option<&str>,
-) -> Result<CompiledBatchRequest, String> {
-    let mut final_state = read_state(None, session_name);
-    final_state.base_url = base_url.to_string();
-
-    let mut active_selector = final_state.active_selector.clone();
-    let mut last_mouse_position = final_state.last_mouse_position.clone();
-    let requires_response_session_id = false;
-    let mut steps: Vec<Value> = Vec::new();
-    let mut entries: Vec<PlannedBatchEntry> = Vec::new();
-    let command_map = commands_map();
-
-    for spec in commands {
-        let nested_global = parse_global_flags(&spec.tokens);
-        if nested_global.server_url.is_some() {
-            if push_batch_local_failure(
-                &mut entries,
-                spec,
-                "Batch subcommands cannot override --server.".to_string(),
-                bail,
-            ) {
-                break;
-            }
-            continue;
-        }
-        if nested_global.session_name.is_some() {
-            if push_batch_local_failure(
-                &mut entries,
-                spec,
-                "Batch subcommands cannot override -s/--session.".to_string(),
-                bail,
-            ) {
-                break;
-            }
-            continue;
-        }
-        let (nested_command, effective_nested_global, _) =
-            normalize_command_invocation(&nested_global);
-        if nested_command.is_empty() {
-            if push_batch_local_failure(
-                &mut entries,
-                spec,
-                "Batch command is empty.".to_string(),
-                bail,
-            ) {
-                break;
-            }
-            continue;
-        }
-        if nested_command == "batch" {
-            if push_batch_local_failure(
-                &mut entries,
-                spec,
-                "Nested batch commands are not supported.".to_string(),
-                bail,
-            ) {
-                break;
-            }
-            continue;
-        }
-
-        let cmd_def = match command_map.get(&nested_command) {
-            Some(def) => def,
-            None => {
-                if push_batch_local_failure(
-                    &mut entries,
-                    spec,
-                    format!(
-                        "Unknown command: {}. Run 'browser4-cli help' for usage.",
-                        nested_command
-                    ),
-                    bail,
-                ) {
-                    break;
-                }
-                continue;
-            }
-        };
-
-        if !cmd_def.batch_supported {
-            if push_batch_local_failure(
-                &mut entries,
-                spec,
-                format!(
-                    "Command '{}' is not supported in batch mode. Batch mode only supports DOM operations.",
-                    nested_command
-                ),
-                bail,
-            ) {
-                break;
-            }
-            continue;
-        }
-
-        let (nested_short_to_long, nested_bool_opts) = build_short_option_map(cmd_def.options);
-        let raw_parsed = parse_raw_args(
-            &effective_nested_global.args,
-            Some(&nested_short_to_long),
-            Some(&nested_bool_opts),
-        );
-        let arg_names: Vec<&str> = cmd_def.args.iter().map(|arg| arg.name).collect();
-        let parsed = match build_command_args(&raw_parsed, &arg_names, COMMAND_ARG_ALIASES) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                if push_batch_local_failure(&mut entries, spec, error, bail) {
-                    break;
-                }
-                continue;
-            }
-        };
-
-        let tool_name = (cmd_def.tool_name_fn)(&parsed);
-        let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
-
-        match nested_command.as_str() {
-            "open" | "close" => {
-                if push_batch_local_failure(
-                    &mut entries,
-                    spec,
-                    format!(
-                        "Batch command only supports DOM operations. '{}' is not allowed. Please execute it separately.",
-                        nested_command
-                    ),
-                    bail,
-                ) {
-                    break;
-                }
-                continue;
-            }
-            "eval" => {
-                // When --stdin or --file is provided, read the expression.
-                let use_stdin = tool_params
-                    .get("stdin")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-
-                // When --file or --stdin is used, migrate a positional ref
-                // (mis-parsed as the expression) to the ref field.
-                let has_batch_file = tool_params
-                    .get("file")
-                    .and_then(|v| v.as_str())
-                    .map(|s| !s.trim().is_empty())
-                    .unwrap_or(false);
-                if use_stdin || has_batch_file {
-                    let ref_empty = tool_params
-                        .get("ref")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.is_empty())
-                        .unwrap_or(true);
-                    if ref_empty {
-                        if let Some(expr_val) = tool_params
-                            .get("expression")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                        {
-                            let looks_like_ref = expr_val.starts_with("e")
-                                && expr_val[1..].chars().all(|c| c.is_ascii_digit())
-                                || expr_val.starts_with("backend:")
-                                || expr_val.starts_with('#')
-                                || expr_val.starts_with('.')
-                                || expr_val.starts_with('[');
-                            if looks_like_ref {
-                                if let Value::Object(ref mut m) = tool_params {
-                                    m.insert("ref".to_string(), json!(expr_val));
-                                    m.insert("expression".to_string(), json!(""));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if use_stdin {
-                    let mut expression = String::new();
-                    match std::io::stdin().read_to_string(&mut expression) {
-                        Ok(_) => {
-                            let expression = expression.trim().to_string();
-                            if expression.is_empty() {
-                                if push_batch_local_failure(
-                                    &mut entries,
-                                    spec,
-                                    "Stdin was empty. Provide a non-empty JavaScript expression via stdin.".to_string(),
-                                    bail,
-                                ) {
-                                    break;
-                                }
-                                continue;
-                            }
-                            if let Value::Object(ref mut m) = tool_params {
-                                m.insert("expression".to_string(), json!(expression));
-                            }
-                        }
-                        Err(e) => {
-                            if push_batch_local_failure(
-                                &mut entries,
-                                spec,
-                                format!("Failed to read JavaScript expression from stdin: {e}"),
-                                bail,
-                            ) {
-                                break;
-                            }
-                            continue;
-                        }
-                    }
-                }
-
-                // When --file is provided, read the expression from the file.
-                if !use_stdin {
-                    if let Some(file_path) = tool_params
-                        .get("file")
-                        .and_then(|v| v.as_str())
-                        .map(str::trim)
-                        .filter(|v| !v.is_empty())
-                    {
-                        let resolved = match resolve_file_path_with_root_fallback(file_path) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                if push_batch_local_failure(&mut entries, spec, e, bail) {
-                                    break;
-                                }
-                                continue;
-                            }
-                        };
-                        match std::fs::read_to_string(&resolved) {
-                            Ok(content) => {
-                                let expression = content.trim().to_string();
-                                if expression.is_empty() {
-                                    if push_batch_local_failure(
-                                        &mut entries,
-                                        spec,
-                                        format!(
-                                            "Eval file '{}' is empty. Provide a non-empty JavaScript expression.",
-                                            file_path
-                                        ),
-                                        bail,
-                                    ) {
-                                        break;
-                                    }
-                                    continue;
-                                }
-                                if let Value::Object(ref mut m) = tool_params {
-                                    m.insert("expression".to_string(), json!(expression));
-                                }
-                            }
-                            Err(e) => {
-                                if push_batch_local_failure(
-                                    &mut entries,
-                                    spec,
-                                    format!("Failed to read eval file '{}' (resolved to '{}'): {}", file_path, resolved.display(), describe_io_error(&e)),
-                                    bail,
-                                ) {
-                                    break;
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                // Strip --file, --stdin, and --json keys so they aren't sent to the server
-                // (they're CLI-side only — the content has already been read and
-                // inserted as the "expression" parameter above; --json controls
-                // local output formatting, not a server parameter).
-                if let Value::Object(ref mut m) = tool_params {
-                    m.remove("file");
-                    m.remove("stdin");
-                    m.remove("json");
-                }
-
-                // Validate that an expression is provided.
-                let expression_empty = tool_params
-                    .get("expression")
-                    .and_then(|v| v.as_str())
-                    .map(str::is_empty)
-                    .unwrap_or(true);
-                if expression_empty {
-                    if push_batch_local_failure(
-                        &mut entries,
-                        spec,
-                        "A JavaScript expression is required. Provide it as a positional argument, via --stdin, or via --file.".to_string(),
-                        bail,
-                    ) {
-                        break;
-                    }
-                    continue;
-                }
-
-                let request_index = steps.len();
-                steps.push(json!({
-                    "op": "tool",
-                    "command": spec.display,
-                    "tool": tool_name,
-                    "arguments": normalize_batch_step_args(&tool_params),
-                }));
-                entries.push(PlannedBatchEntry::Backend {
-                    display: spec.display.clone(),
-                    request_indices: vec![request_index],
-                    outputs: vec![PlannedBatchOutput::Text],
-                });
-
-                let selector = tracked_selector(&tool_params);
-                if let Some(selector) = selector {
-                    active_selector = Some(selector.to_string());
-                    final_state.active_selector = active_selector.clone();
-                }
-            }
-            "snapshot" => {
-                let filename = tool_params.get("filename").and_then(|value| value.as_str());
-                let output_path = resolve_output_path(filename, "snapshot", "yml");
-                let mut arguments = tool_params.clone();
-                if let Value::Object(map) = &mut arguments {
-                    map.remove("filename");
-                }
-
-                let request_index = steps.len();
-                steps.push(json!({
-                    "op": "snapshot",
-                    "command": spec.display,
-                    "tool": tool_name,
-                    "arguments": normalize_batch_step_args(&arguments),
-                }));
-                entries.push(PlannedBatchEntry::Backend {
-                    display: spec.display.clone(),
-                    request_indices: vec![request_index],
-                    outputs: vec![PlannedBatchOutput::Snapshot { path: output_path }],
-                });
-            }
-            "screenshot" => {
-                let filename = tool_params.get("filename").and_then(|value| value.as_str());
-                let output_path = resolve_output_path(filename, "screenshot", "png");
-                let mut arguments = tool_params.clone();
-                if let Value::Object(map) = &mut arguments {
-                    map.remove("filename");
-                }
-
-                let request_index = steps.len();
-                steps.push(json!({
-                    "op": "screenshot",
-                    "command": spec.display,
-                    "tool": tool_name,
-                    "arguments": normalize_batch_step_args(&arguments),
-                }));
-                entries.push(PlannedBatchEntry::Backend {
-                    display: spec.display.clone(),
-                    request_indices: vec![request_index],
-                    outputs: vec![PlannedBatchOutput::Screenshot { path: output_path }],
-                });
-            }
-            "pdf" => {
-                let filename = tool_params.get("filename").and_then(|value| value.as_str());
-                let output_path = resolve_output_path(filename, "pdf", "pdf");
-                let mut arguments = tool_params.clone();
-                if let Value::Object(map) = &mut arguments {
-                    map.remove("filename");
-                }
-
-                let request_index = steps.len();
-                steps.push(json!({
-                    "op": "pdf",
-                    "command": spec.display,
-                    "tool": tool_name,
-                    "arguments": normalize_batch_step_args(&arguments),
-                }));
-                entries.push(PlannedBatchEntry::Backend {
-                    display: spec.display.clone(),
-                    request_indices: vec![request_index],
-                    outputs: vec![PlannedBatchOutput::Pdf { path: output_path }],
-                });
-            }
-            "press" => {
-                let selector = tool_params
-                    .get("ref")
-                    .and_then(|value| value.as_str())
-                    .or_else(|| tool_params.get("selector").and_then(|value| value.as_str()));
-                let key = tool_params.get("key").and_then(|value| value.as_str());
-
-                let key = match key {
-                    Some(key) => key.to_string(),
-                    None => {
-                        if push_batch_local_failure(
-                            &mut entries,
-                            spec,
-                            "Press requires a key.".to_string(),
-                            bail,
-                        ) {
-                            break;
-                        }
-                        continue;
-                    }
-                };
-
-                let selector = selector.map(ToOwned::to_owned);
-                let request_index = steps.len();
-                let mut tool_params_json = json!({ "key": key });
-                if let Some(selector) = selector.as_deref() {
-                    tool_params_json["ref"] = json!(selector);
-                }
-                let step = json!({
-                    "op": "tool",
-                    "command": spec.display,
-                    "tool": "browser_press_key",
-                    "arguments": normalize_batch_step_args(&tool_params_json),
-                });
-                steps.push(step);
-                entries.push(PlannedBatchEntry::Backend {
-                    display: spec.display.clone(),
-                    request_indices: vec![request_index],
-                    outputs: vec![PlannedBatchOutput::Text],
-                });
-
-                if let Some(selector) = selector {
-                    active_selector = Some(selector);
-                    final_state.active_selector = active_selector.clone();
-                }
-            }
-            "list" | "close-all" | "kill-all" | "delete-data" | "install" | "uninstall"
-            | "upgrade" | "agent-run" | "agent-status" | "agent-result" | "swarm-create"
-            | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result" | "agent-list"
-            | "agent-cancel"
-            | "crawl-list" | "swarm-list" | "skills" | "skills-list" | "skills-get"
-            | "skills-path" => {
-                if push_batch_local_failure(
-                    &mut entries,
-                    spec,
-                    format!("Batch does not support command '{}'.", nested_command),
-                    bail,
-                ) {
-                    break;
-                }
-            }
-            _ => {
-                if tool_name.is_empty() {
-                    if push_batch_local_failure(
-                        &mut entries,
-                        spec,
-                        format!("Batch does not support command '{}'.", nested_command),
-                        bail,
-                    ) {
-                        break;
-                    }
-                    continue;
-                }
-
-                let mut step = json!({
-                    "op": "tool",
-                    "command": spec.display,
-                    "tool": tool_name,
-                    "arguments": normalize_batch_step_args(&tool_params),
-                });
-
-                if matches!(nested_command.as_str(), "keydown" | "keyup") {
-                    if let Some(selector) =
-                        active_selector
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|selector| {
-                                !selector.is_empty() && !selector.starts_with("backend:")
-                            })
-                    {
-                        step["preFocusSelector"] = json!(selector);
-                    }
-                }
-
-                if matches!(
-                    nested_command.as_str(),
-                    "mousedown" | "mouseup" | "mousewheel"
-                ) {
-                    if let Some(position) = &last_mouse_position {
-                        step["preMousePosition"] = json!({
-                            "x": position.x,
-                            "y": position.y,
-                        });
-                    }
-                }
-
-                let request_index = steps.len();
-                steps.push(step);
-                entries.push(PlannedBatchEntry::Backend {
-                    display: spec.display.clone(),
-                    request_indices: vec![request_index],
-                    outputs: vec![PlannedBatchOutput::Text],
-                });
-
-                if nested_command == "mousemove" {
-                    let x = parse_number_arg(&tool_params, "x")?;
-                    let y = parse_number_arg(&tool_params, "y")?;
-                    last_mouse_position = Some(MousePosition { x, y });
-                    final_state.last_mouse_position = last_mouse_position.clone();
-                }
-
-                if let Some(selector) = tracked_selector(&tool_params) {
-                    active_selector = Some(selector.to_string());
-                    final_state.active_selector = active_selector.clone();
-                }
-            }
-        }
-    }
-
-    Ok(CompiledBatchRequest {
-        steps,
-        entries,
-        final_state,
-        requires_response_session_id,
-    })
-}
-
-fn render_batch_result(
-    output: &PlannedBatchOutput,
-    result: &BatchExecutionResult,
+/// Prepare the parameters of an `eval` batch step.
+///
+/// The expression can come from the positional argument, `--stdin`, `--file`
+/// or `--base64`.  The CLI-only keys are stripped afterwards because the
+/// content has already been read into `expression` (and `--json` controls
+/// local output formatting, not a server parameter).
+fn prepare_batch_eval_params(
+    tool_params: &mut Value,
+    stdin_available: bool,
 ) -> Result<(), String> {
-    match output {
-        PlannedBatchOutput::Text => {
-            // Always print text results — even empty or "null" values carry
-            // meaningful information (e.g. JS eval returning undefined/null).
-            if let Some(text) = result.text.as_deref() {
-                let trimmed = text.trim();
-                if trimmed == "null" {
-                    cli_println!("null");
-                } else if trimmed.is_empty() {
-                    cli_println!("\"\"");
-                } else {
-                    cli_println!("{}", text);
+    let use_stdin = tool_params
+        .get("stdin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let use_base64 = tool_params
+        .get("base64")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let has_batch_file = tool_params
+        .get("file")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    // When --stdin / --file / --base64 is used, the positional argument may be
+    // a ref (e.g. e34) that was mis-parsed as the expression.  Move it to the
+    // ref field so the expression can be replaced by the file/stdin/base64
+    // content.
+    if use_stdin || use_base64 || has_batch_file {
+        let ref_empty = tool_params
+            .get("ref")
+            .and_then(|v| v.as_str())
+            .map(|s| s.is_empty())
+            .unwrap_or(true);
+        if ref_empty {
+            if let Some(expr_val) = tool_params
+                .get("expression")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+            {
+                // A ref looks like: eNNN, backend:NNN, or a CSS selector
+                // (#id, .class, [attr]). JS expressions never start with
+                // these patterns.
+                let looks_like_ref = expr_val.starts_with('e')
+                    && expr_val[1..].chars().all(|c| c.is_ascii_digit())
+                    || expr_val.starts_with("backend:")
+                    || expr_val.starts_with('#')
+                    || expr_val.starts_with('.')
+                    || expr_val.starts_with('[');
+                if looks_like_ref {
+                    if let Value::Object(ref mut m) = tool_params {
+                        m.insert("ref".to_string(), json!(expr_val));
+                        m.insert("expression".to_string(), json!(""));
+                    }
                 }
             }
         }
-        PlannedBatchOutput::Snapshot { path } => {
-            let snapshot = result.snapshot.as_deref().ok_or_else(|| {
-                "Batch snapshot response was missing snapshot content.".to_string()
+    }
+
+    if use_stdin {
+        if !stdin_available {
+            return Err(
+                "Batch --json mode reads the command list from stdin, so 'eval --stdin' cannot \
+                 read an expression. Use 'eval --file <path>' or an inline expression instead."
+                    .to_string(),
+            );
+        }
+        let mut expression = String::new();
+        std::io::stdin()
+            .read_to_string(&mut expression)
+            .map_err(|e| format!("Failed to read JavaScript expression from stdin: {e}"))?;
+        let expression = expression.trim().to_string();
+        if expression.is_empty() {
+            return Err(
+                "Stdin was empty. Provide a non-empty JavaScript expression via stdin."
+                    .to_string(),
+            );
+        }
+        if let Value::Object(ref mut m) = tool_params {
+            m.insert("expression".to_string(), json!(expression));
+        }
+    }
+
+    if use_base64 {
+        let encoded = tool_params
+            .get("expression")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if encoded.is_empty() {
+            return Err("--base64 was set but the expression argument is empty.".to_string());
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&encoded)
+            .map_err(|e| format!("Failed to base64-decode eval expression: {e}"))?;
+        let expression = String::from_utf8(decoded)
+            .map_err(|e| format!("Base64-decoded expression is not valid UTF-8: {e}"))?;
+        if let Value::Object(ref mut m) = tool_params {
+            m.insert("expression".to_string(), json!(expression));
+        }
+    }
+
+    // When --file is provided, read the expression from the file.
+    if !use_stdin && !use_base64 {
+        if let Some(file_path) = tool_params
+            .get("file")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            let resolved = resolve_file_path_with_root_fallback(file_path)?;
+            let content = std::fs::read_to_string(&resolved).map_err(|e| {
+                format!(
+                    "Failed to read eval file '{}' (resolved to '{}'): {}",
+                    file_path,
+                    resolved.display(),
+                    describe_io_error(&e)
+                )
             })?;
-            save_snapshot(path, snapshot).map_err(|e| describe_io_error(&e))?;
-            cli_println!("### Page");
-            cli_println!(
-                "- Page URL: {}",
-                result.page_url.as_deref().unwrap_or_default()
-            );
-            cli_println!(
-                "- Page Title: {}",
-                result.page_title.as_deref().unwrap_or_default()
-            );
-            cli_println!("### Snapshot");
-            cli_println!("[Snapshot]({})", path.display());
+            let expression = content.trim().to_string();
+            if expression.is_empty() {
+                return Err(format!(
+                    "Eval file '{}' is empty. Provide a non-empty JavaScript expression.",
+                    file_path
+                ));
+            }
+            if let Value::Object(ref mut m) = tool_params {
+                m.insert("expression".to_string(), json!(expression));
+            }
         }
-        PlannedBatchOutput::Screenshot { path } => {
-            let encoded = result
-                .screenshot
-                .as_deref()
-                .ok_or_else(|| "Batch screenshot response was missing image data.".to_string())?;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(encoded.trim())
-                .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
-            // Same contract as the single command: the file extension must match the
-            // bytes, so the printed link never names a file that cannot be decoded.
-            let path = reconcile_screenshot_path(path, &bytes);
-            save_binary(&path, &bytes).map_err(|e| describe_io_error(&e))?;
-            cli_println!("[Screenshot]({})", path.display());
-        }
-        PlannedBatchOutput::Pdf { path } => {
-            let encoded = result
-                .pdf
-                .as_deref()
-                .ok_or_else(|| "Batch PDF response was missing PDF data.".to_string())?;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(encoded.trim())
-                .map_err(|e| format!("Failed to decode PDF: {e}"))?;
-            save_binary(path, &bytes).map_err(|e| describe_io_error(&e))?;
-            cli_println!("[PDF]({})", path.display());
-        }
+    }
+
+    // Strip --file, --stdin, --base64 and --json keys so they aren't sent to
+    // the server (they're CLI-side only).
+    if let Value::Object(ref mut m) = tool_params {
+        m.remove("file");
+        m.remove("stdin");
+        m.remove("base64");
+        m.remove("json");
+    }
+
+    let expression_empty = tool_params
+        .get("expression")
+        .and_then(|v| v.as_str())
+        .map(str::is_empty)
+        .unwrap_or(true);
+    if expression_empty {
+        return Err(
+            "A JavaScript expression is required. Provide it as a positional argument, via --stdin, via --file, or via --base64."
+                .to_string(),
+        );
     }
 
     Ok(())
 }
 
+/// Compile one batch command into the client-side action that runs it.
+///
+/// The compilation mirrors the standalone command path: the same argument
+/// parsing, the same required-argument validation, the same tool/parameter
+/// mapping.  Only the transport differs — each step becomes its own call
+/// instead of being packed into a single request.
+fn compile_batch_step(
+    spec: &BatchCommandSpec,
+    command_map: &HashMap<String, commands::CommandDef>,
+    stdin_available: bool,
+) -> Result<BatchStepPlan, String> {
+    let nested_global = parse_global_flags(&spec.tokens);
+    if nested_global.server_url.is_some() {
+        return Err("Batch subcommands cannot override --server.".to_string());
+    }
+    if nested_global.session_name.is_some() {
+        return Err("Batch subcommands cannot override -s/--session.".to_string());
+    }
+    let (nested_command, effective_nested_global, _) =
+        normalize_command_invocation(&nested_global);
+    if nested_command.is_empty() {
+        return Err("Batch command is empty.".to_string());
+    }
+    if nested_command == "batch" {
+        return Err("Nested batch commands are not supported.".to_string());
+    }
+
+    let cmd_def = command_map.get(&nested_command).ok_or_else(|| {
+        format!(
+            "Unknown command: {}. Run 'browser4-cli help' for usage.",
+            nested_command
+        )
+    })?;
+
+    if !cmd_def.batch_supported {
+        return Err(format!(
+            "Command '{}' is not supported in batch mode. Batch mode only supports DOM operations.",
+            nested_command
+        ));
+    }
+
+    let (nested_short_to_long, nested_bool_opts) = build_short_option_map(cmd_def.options);
+    let raw_parsed = parse_raw_args(
+        &effective_nested_global.args,
+        Some(&nested_short_to_long),
+        Some(&nested_bool_opts),
+    );
+    let arg_names: Vec<&str> = cmd_def.args.iter().map(|arg| arg.name).collect();
+    let parsed = build_command_args(&raw_parsed, &arg_names, COMMAND_ARG_ALIASES)?;
+
+    // Required arguments are validated client-side, exactly like the
+    // standalone path: a missing argument used to travel to the server as an
+    // empty string and only surfaced there, long after the batch had started.
+    validate_required_args(cmd_def, &parsed)?;
+    validate_command_semantics(&nested_command, &parsed)?;
+
+    let tool_name = (cmd_def.tool_name_fn)(&parsed);
+    let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
+
+    let action = match nested_command.as_str() {
+        "open" | "close" => {
+            return Err(format!(
+                "Batch command only supports DOM operations. '{}' is not allowed. Please execute it separately.",
+                nested_command
+            ));
+        }
+        "eval" => {
+            let eval_json = parsed
+                .get("json")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            prepare_batch_eval_params(&mut tool_params, stdin_available)?;
+            BatchStepAction::Tool {
+                tool_name,
+                tool_params,
+                eval_json,
+            }
+        }
+        "snapshot" => BatchStepAction::Snapshot {
+            tool_name,
+            tool_params,
+        },
+        "screenshot" => BatchStepAction::Screenshot {
+            tool_name,
+            tool_params,
+        },
+        "pdf" => BatchStepAction::Pdf {
+            tool_name,
+            tool_params,
+        },
+        "goto" => BatchStepAction::Navigate {
+            tool_name,
+            tool_params,
+        },
+        "type" | "fill" => BatchStepAction::TextInput {
+            tool_name,
+            tool_params,
+            verify: parsed
+                .get("verify")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            focus: parsed
+                .get("focus")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        },
+        "press" | "key" | "keyboard" => BatchStepAction::Press {
+            tool_name,
+            tool_params,
+            verify: parsed
+                .get("verify")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            follow: parsed
+                .get("follow")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        },
+        "select" => BatchStepAction::Select {
+            tool_name,
+            tool_params,
+            verify: parsed
+                .get("verify")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        },
+        "keydown" | "keyup" => BatchStepAction::Key {
+            tool_name,
+            tool_params,
+        },
+        "mousemove" => {
+            // The coordinate must be a number: the command definition falls
+            // back to 0 for a non-numeric value, which would silently move the
+            // pointer to the top-left corner instead of reporting the typo.
+            for axis in ["x", "y"] {
+                let is_number = parsed
+                    .get(axis)
+                    .map(|value| value.is_number())
+                    .unwrap_or(false);
+                if !is_number {
+                    return Err(format!(
+                        "Invalid {} for mousemove: expected a number (e.g. 'mousemove 120 240').",
+                        axis
+                    ));
+                }
+            }
+            BatchStepAction::MouseMove {
+                tool_name,
+                tool_params,
+            }
+        }
+        "mousedown" | "mouseup" | "mousewheel" => BatchStepAction::MousePositioned {
+            tool_name,
+            tool_params,
+        },
+        _ => {
+            if tool_name.is_empty() {
+                return Err(format!("Batch does not support command '{}'.", nested_command));
+            }
+            BatchStepAction::Tool {
+                tool_name,
+                tool_params,
+                eval_json: false,
+            }
+        }
+    };
+
+    Ok(BatchStepPlan {
+        display: spec.display.clone(),
+        action,
+    })
+}
+
+/// Run one compiled batch step through the same executor the equivalent
+/// standalone command uses.
+async fn execute_batch_step(
+    client: &Client,
+    base_url: &str,
+    plan: &BatchStepPlan,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    match &plan.action {
+        BatchStepAction::Tool {
+            tool_name,
+            tool_params,
+            eval_json,
+        } => {
+            handle_tool_command_with_options(
+                client,
+                base_url,
+                tool_name,
+                tool_params,
+                false,
+                session_name,
+                *eval_json,
+            )
+            .await
+        }
+        BatchStepAction::Navigate {
+            tool_name,
+            tool_params,
+        } => handle_goto(client, base_url, tool_name, tool_params, session_name).await,
+        BatchStepAction::Snapshot {
+            tool_name,
+            tool_params,
+        } => handle_snapshot(client, base_url, tool_name, tool_params, session_name).await,
+        BatchStepAction::Screenshot {
+            tool_name,
+            tool_params,
+        } => handle_screenshot(client, base_url, tool_name, tool_params, session_name).await,
+        BatchStepAction::Pdf {
+            tool_name,
+            tool_params,
+        } => handle_pdf(client, base_url, tool_name, tool_params, session_name).await,
+        BatchStepAction::TextInput {
+            tool_name,
+            tool_params,
+            verify,
+            focus,
+        } => {
+            if *focus {
+                let has_ref = tool_params
+                    .get("ref")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+                if !has_ref {
+                    return Err(
+                        "--focus requires a target ref. Provide a CSS selector, element reference (e5), or --ref X."
+                            .to_string(),
+                    );
+                }
+                let ref_val = tool_params.get("ref").cloned().unwrap();
+                let click_params = json!({ "ref": ref_val });
+                handle_tool_command(
+                    client,
+                    base_url,
+                    "browser_click",
+                    &click_params,
+                    false,
+                    session_name,
+                )
+                .await?;
+            }
+            handle_text_input_command(
+                client,
+                base_url,
+                tool_name,
+                tool_params,
+                session_name,
+                *verify,
+            )
+            .await
+        }
+        BatchStepAction::Press {
+            tool_name,
+            tool_params,
+            verify,
+            follow,
+        } => {
+            if *follow {
+                handle_navigation_action(
+                    client,
+                    base_url,
+                    tool_name,
+                    tool_params,
+                    session_name,
+                    true,
+                )
+                .await
+            } else {
+                handle_press_command(
+                    client,
+                    base_url,
+                    tool_name,
+                    tool_params,
+                    session_name,
+                    *verify,
+                )
+                .await
+            }
+        }
+        BatchStepAction::Select {
+            tool_name,
+            tool_params,
+            verify,
+        } => {
+            handle_select_command(
+                client,
+                base_url,
+                tool_name,
+                tool_params,
+                session_name,
+                *verify,
+            )
+            .await
+        }
+        BatchStepAction::Key {
+            tool_name,
+            tool_params,
+        } => handle_key_command(client, base_url, tool_name, tool_params, session_name).await,
+        BatchStepAction::MouseMove {
+            tool_name,
+            tool_params,
+        } => handle_mouse_move(client, base_url, tool_name, tool_params, session_name).await,
+        BatchStepAction::MousePositioned {
+            tool_name,
+            tool_params,
+        } => {
+            handle_mouse_positioned_command(client, base_url, tool_name, tool_params, session_name)
+                .await
+        }
+    }
+}
+
 fn resolve_batch_commands(
     global: &args::GlobalFlags,
-) -> Result<(bool, Vec<BatchCommandSpec>), String> {
+) -> Result<(bool, Vec<BatchCommandSpec>, bool), String> {
     let batch_args = parse_batch_args(&global.args[1..])?;
+    // `batch --json` reads the command list from stdin, so a step-level
+    // `eval --stdin` can no longer read its expression from there.
+    let stdin_available = !batch_args.json;
     let commands = if batch_args.json {
         parse_batch_json_commands(&read_batch_stdin()?)?
             .into_iter()
@@ -31970,11 +31861,11 @@ fn resolve_batch_commands(
             .collect::<Result<Vec<_>, String>>()?
     };
 
-    Ok((batch_args.bail, commands))
+    Ok((batch_args.bail, commands, stdin_available))
 }
 
 async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
-    let (bail, commands) = resolve_batch_commands(global)?;
+    let (bail, commands, stdin_available) = resolve_batch_commands(global)?;
     let base_url = resolve_base_url(global.server_url.as_deref(), global.session_name.as_deref());
 
     if let Some(ref server_url) = global.server_url {
@@ -31989,141 +31880,49 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
 
     ensure_server_running(&base_url, should_enforce_server_version(global)).await?;
     let client = make_client();
-    let compiled =
-        compile_batch_request(&commands, bail, &base_url, global.session_name.as_deref())?;
+    let command_map = commands_map();
 
-    let backend_response = if compiled.steps.is_empty() {
-        None
-    } else {
-        let initial_state = read_state(None, global.session_name.as_deref());
-        let initial_session_id = initial_state.session_id.filter(|id| !id.trim().is_empty());
-        let payload = json!({
-            "bail": bail,
-            "sessionId": initial_session_id,
-            "steps": compiled.steps,
-        });
-        let raw = submit_batch_commands(&client, &base_url, payload).await?;
-        let raw_trimmed = raw.trim();
-        if raw_trimmed.is_empty() {
-            return Err(CliError(
-                ExitCode::Server,
-                "Batch backend returned an empty payload. Check that Browser4 server and CLI versions are compatible."
-                    .to_string(),
-            ));
-        }
-        let preview = if raw_trimmed.chars().count() > 240 {
-            let head = raw_trimmed.chars().take(240).collect::<String>();
-            format!("{head}...")
-        } else {
-            raw_trimmed.to_string()
-        };
-        Some(
-            serde_json::from_str::<BatchExecutionResponse>(&raw).map_err(|e| {
-                format!("Failed to parse batch response JSON: {e}. Response preview: {preview}")
-            })?,
-        )
-    };
-
-    let mut result_map: HashMap<usize, BatchExecutionResult> = backend_response
-        .as_ref()
-        .map(|response| {
-            response
-                .results
-                .iter()
-                .cloned()
-                .map(|result| (result.index, result))
-                .collect()
-        })
-        .unwrap_or_default();
-
+    // The batch runs on the client: every step is compiled and executed on its
+    // own, through the same executor the equivalent standalone command uses.
+    // A failing step is reported and — unless --bail was given — the batch
+    // continues with the next command.
     let mut failures: Vec<String> = Vec::new();
-    let mut stop_processing = false;
 
-    for (index, entry) in compiled.entries.iter().enumerate() {
-        if stop_processing {
-            break;
-        }
-
-        match entry {
-            PlannedBatchEntry::LocalFailure { display, error } => {
+    for (index, spec) in commands.iter().enumerate() {
+        let plan = match compile_batch_step(spec, &command_map, stdin_available) {
+            Ok(plan) => plan,
+            Err(error) => {
                 let failure = format!(
                     "Batch command {} failed ({}): {}",
                     index + 1,
-                    display,
+                    spec.display,
                     error
                 );
-                if bail {
-                    stop_processing = true;
-                }
                 eprintln!("{failure}");
                 failures.push(failure);
+                if bail {
+                    break;
+                }
+                continue;
             }
-            PlannedBatchEntry::Backend {
-                display,
-                request_indices,
-                outputs,
-            } => {
-                let mut command_failed = false;
-                for (request_index, output) in request_indices.iter().zip(outputs.iter()) {
-                    let Some(result) = result_map.remove(request_index) else {
-                        if backend_response
-                            .as_ref()
-                            .map(|response| response.stopped_on_error)
-                            .unwrap_or(false)
-                        {
-                            stop_processing = true;
-                            break;
-                        }
-                        return Err(CliError(
-                            ExitCode::Server,
-                            format!(
-                                "Batch backend response was missing command {} ({}).",
-                                index + 1,
-                                display
-                            ),
-                        ));
-                    };
+        };
 
-                    if result.ok {
-                        render_batch_result(output, &result)?;
-                    } else {
-                        let failure = format!(
-                            "Batch command {} failed ({}): {}",
-                            index + 1,
-                            display,
-                            result
-                                .error
-                                .as_deref()
-                                .unwrap_or("Unknown batch execution error")
-                        );
-                        eprintln!("{failure}");
-                        failures.push(failure);
-                        command_failed = true;
-                        if bail
-                            || backend_response
-                                .as_ref()
-                                .map(|response| response.stopped_on_error)
-                                .unwrap_or(false)
-                        {
-                            stop_processing = true;
-                        }
-                        break;
-                    }
-                }
-                if command_failed && bail {
-                    stop_processing = true;
-                }
+        if let Err(error) =
+            execute_batch_step(&client, &base_url, &plan, global.session_name.as_deref()).await
+        {
+            let failure = format!(
+                "Batch command {} failed ({}): {}",
+                index + 1,
+                plan.display,
+                error
+            );
+            eprintln!("{failure}");
+            failures.push(failure);
+            if bail {
+                break;
             }
         }
     }
-
-    let mut final_state = compiled.final_state.clone();
-    if let Some(response) = &backend_response {
-        if compiled.requires_response_session_id || response.session_id.is_some() {
-            final_state.session_id = response.session_id.clone();
-        }
-    }
-    write_state(&final_state, None, global.session_name.as_deref()).map_err(|e| e.to_string())?;
 
     if failures.is_empty() {
         Ok(())
@@ -40698,24 +40497,30 @@ linkGroups:
     }
 
     #[test]
-    fn compile_batch_request_press_uses_browser_press_key_tool_step() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_press_uses_browser_press_key_tool() {
+        let spec = BatchCommandSpec {
             display: "press ! #type-target".to_string(),
             tokens: vec![
                 "press".to_string(),
                 "!".to_string(),
                 "#type-target".to_string(),
             ],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_press_key"));
-        assert_eq!(compiled.steps[0]["arguments"]["ref"], json!("#type-target"));
-        assert_eq!(compiled.steps[0]["arguments"]["key"], json!("!"));
+        match plan.action {
+            BatchStepAction::Press {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_press_key");
+                assert_eq!(tool_params["ref"], json!("#type-target"));
+                assert_eq!(tool_params["key"], json!("!"));
+            }
+            other => panic!("expected a press step, got {other:?}"),
+        }
     }
 
     #[test]
@@ -40768,20 +40573,26 @@ linkGroups:
     }
 
     #[test]
-    fn compile_batch_request_press_without_selector_uses_focused_element() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_press_without_selector_uses_focused_element() {
+        let spec = BatchCommandSpec {
             display: "press Enter".to_string(),
             tokens: vec!["press".to_string(), "Enter".to_string()],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_press_key"));
-        assert_eq!(compiled.steps[0]["arguments"]["key"], json!("Enter"));
-        assert!(compiled.steps[0]["arguments"].get("ref").is_none());
+        match plan.action {
+            BatchStepAction::Press {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_press_key");
+                assert_eq!(tool_params["key"], json!("Enter"));
+                assert!(tool_params.get("ref").is_none());
+            }
+            other => panic!("expected a press step, got {other:?}"),
+        }
     }
 
     #[test]
@@ -44694,71 +44505,77 @@ linkGroups:
     // -----------------------------------------------------------------------
 
     #[test]
-    fn compile_batch_request_fill_uses_browser_type_tool_step() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_fill_uses_browser_type_tool() {
+        let spec = BatchCommandSpec {
             display: "fill #fill-target 'batch fill'".to_string(),
             tokens: vec![
                 "fill".to_string(),
                 "#fill-target".to_string(),
                 "batch fill".to_string(),
             ],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_type"));
-        assert_eq!(compiled.steps[0]["arguments"]["ref"], json!("#fill-target"));
-        assert_eq!(compiled.steps[0]["arguments"]["text"], json!("batch fill"));
+        match plan.action {
+            BatchStepAction::TextInput {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_type");
+                assert_eq!(tool_params["ref"], json!("#fill-target"));
+                assert_eq!(tool_params["text"], json!("batch fill"));
+            }
+            other => panic!("expected a text-input step, got {other:?}"),
+        }
     }
 
     #[test]
-    fn compile_batch_request_fill_with_single_word_text() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_fill_with_single_word_text() {
+        let spec = BatchCommandSpec {
             display: "fill #email alice@example.com".to_string(),
             tokens: vec![
                 "fill".to_string(),
                 "#email".to_string(),
                 "alice@example.com".to_string(),
             ],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_type"));
-        assert_eq!(compiled.steps[0]["arguments"]["ref"], json!("#email"));
-        assert_eq!(
-            compiled.steps[0]["arguments"]["text"],
-            json!("alice@example.com")
-        );
+        match plan.action {
+            BatchStepAction::TextInput {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_type");
+                assert_eq!(tool_params["ref"], json!("#email"));
+                assert_eq!(tool_params["text"], json!("alice@example.com"));
+            }
+            other => panic!("expected a text-input step, got {other:?}"),
+        }
     }
 
     #[test]
-    fn compile_batch_request_fill_does_not_add_pre_focus_selector() {
-        // preFocusSelector is only set for keydown / keyup steps — fill
-        // should NOT include it.
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_fill_does_not_restore_focus() {
+        // Only keydown / keyup restore the tracked active selector before the
+        // call (the client-side equivalent of the old `preFocusSelector`).
+        let spec = BatchCommandSpec {
             display: "fill #my-input 'some text'".to_string(),
             tokens: vec![
                 "fill".to_string(),
                 "#my-input".to_string(),
                 "some text".to_string(),
             ],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
         assert!(
-            compiled.steps[0]
-                .get("preFocusSelector")
-                .map_or(true, |v| v.is_null()),
-            "fill step should NOT have preFocusSelector"
+            matches!(plan.action, BatchStepAction::TextInput { .. }),
+            "fill must compile to a text-input step, not a keyboard step"
         );
     }
 
@@ -44767,27 +44584,30 @@ linkGroups:
     // -----------------------------------------------------------------------
 
     #[test]
-    fn compile_batch_request_type_uses_browser_press_sequentially_tool() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_type_uses_browser_press_sequentially_tool() {
+        let spec = BatchCommandSpec {
             display: "type 'hello' #type-target".to_string(),
             tokens: vec![
                 "type".to_string(),
                 "hello".to_string(),
                 "#type-target".to_string(),
             ],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(
-            compiled.steps[0]["tool"],
-            json!("browser_press_sequentially")
-        );
-        assert_eq!(compiled.steps[0]["arguments"]["ref"], json!("#type-target"));
-        assert_eq!(compiled.steps[0]["arguments"]["text"], json!("hello"));
+        match plan.action {
+            BatchStepAction::TextInput {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_press_sequentially");
+                assert_eq!(tool_params["ref"], json!("#type-target"));
+                assert_eq!(tool_params["text"], json!("hello"));
+            }
+            other => panic!("expected a text-input step, got {other:?}"),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -44795,43 +44615,54 @@ linkGroups:
     // -----------------------------------------------------------------------
 
     #[test]
-    fn compile_batch_request_mousewheel_uses_browser_mouse_wheel_tool() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_mousewheel_uses_browser_mouse_wheel_tool() {
+        let spec = BatchCommandSpec {
             display: "mousewheel 0 160".to_string(),
             tokens: vec!["mousewheel".to_string(), "0".to_string(), "160".to_string()],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_mouse_wheel"));
-        // build_command_args parses positional strings as i64/f64 when
-        // possible, so "0" → 0 and "160" → 160 before get_number_value
-        // reads them.  The tool_params_fn maps dx → deltaX, dy → deltaY.
-        assert_eq!(compiled.steps[0]["arguments"]["deltaX"], json!(0));
-        assert_eq!(compiled.steps[0]["arguments"]["deltaY"], json!(160));
+        match plan.action {
+            BatchStepAction::MousePositioned {
+                tool_name,
+                tool_params,
+            } => {
+                assert_eq!(tool_name, "browser_mouse_wheel");
+                // build_command_args parses positional strings as i64/f64 when
+                // possible, so "0" → 0 and "160" → 160 before get_number_value
+                // reads them.  The tool_params_fn maps dx → deltaX, dy → deltaY.
+                assert_eq!(tool_params["deltaX"], json!(0));
+                assert_eq!(tool_params["deltaY"], json!(160));
+            }
+            other => panic!("expected a mouse-positioned step, got {other:?}"),
+        }
     }
 
     // -------------------------------------------------------------------
-    // compile_batch_request — tab commands
+    // compile_batch_step — tab commands
     // -------------------------------------------------------------------
 
     #[test]
-    fn compile_batch_request_tab_list_uses_browser_tabs_tool() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_tab_list_uses_browser_tabs_tool() {
+        let spec = BatchCommandSpec {
             display: "tab-list".to_string(),
             tokens: vec!["tab-list".to_string()],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
-        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("list"));
+        match plan.action {
+            BatchStepAction::Tool {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_tabs");
+                assert_eq!(tool_params["action"], json!("list"));
+            }
+            other => panic!("expected a tool step, got {other:?}"),
+        }
     }
 
     #[test]
@@ -44869,123 +44700,252 @@ linkGroups:
     }
 
     #[test]
-    fn compile_batch_request_tab_new_uses_browser_tabs_tool() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_tab_new_uses_browser_tabs_tool() {
+        let spec = BatchCommandSpec {
             display: "tab-new https://example.com".to_string(),
             tokens: vec!["tab-new".to_string(), "https://example.com".to_string()],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
-        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("new"));
-        assert_eq!(
-            compiled.steps[0]["arguments"]["url"],
-            json!("https://example.com")
-        );
+        match plan.action {
+            BatchStepAction::Tool {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_tabs");
+                assert_eq!(tool_params["action"], json!("new"));
+                assert_eq!(tool_params["url"], json!("https://example.com"));
+            }
+            other => panic!("expected a tool step, got {other:?}"),
+        }
     }
 
     #[test]
-    fn compile_batch_request_tab_select_by_index() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_tab_select_by_index() {
+        let spec = BatchCommandSpec {
             display: "tab-select 2".to_string(),
             tokens: vec!["tab-select".to_string(), "2".to_string()],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
-        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("select"));
-        // build_command_args parses "2" as integer, tool_params_fn preserves it
-        assert_eq!(compiled.steps[0]["arguments"]["index"], json!(2));
+        match plan.action {
+            BatchStepAction::Tool {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_tabs");
+                assert_eq!(tool_params["action"], json!("select"));
+                // build_command_args parses "2" as integer, tool_params_fn preserves it
+                assert_eq!(tool_params["index"], json!(2));
+            }
+            other => panic!("expected a tool step, got {other:?}"),
+        }
     }
 
     #[test]
-    fn compile_batch_request_tab_select_by_guid() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_tab_select_by_guid() {
+        let spec = BatchCommandSpec {
             display: "tab-select --guid 1B46D74FB…".to_string(),
             tokens: vec![
                 "tab-select".to_string(),
                 "--guid".to_string(),
                 "1B46D74FB…".to_string(),
             ],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
-        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("select"));
-        assert_eq!(compiled.steps[0]["arguments"]["tabId"], json!("1B46D74FB…"));
-        // The original "guid" key must not leak into arguments
-        assert!(compiled.steps[0]["arguments"].get("guid").is_none());
+        match plan.action {
+            BatchStepAction::Tool {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_tabs");
+                assert_eq!(tool_params["action"], json!("select"));
+                assert_eq!(tool_params["tabId"], json!("1B46D74FB…"));
+                // The original "guid" key must not leak into arguments
+                assert!(tool_params.get("guid").is_none());
+            }
+            other => panic!("expected a tool step, got {other:?}"),
+        }
     }
 
     #[test]
-    fn compile_batch_request_tab_close_no_args() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_tab_close_no_args() {
+        let spec = BatchCommandSpec {
             display: "tab-close".to_string(),
             tokens: vec!["tab-close".to_string()],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
-        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("close"));
-        // No index or tabId when closing current tab
-        assert!(compiled.steps[0]["arguments"].get("index").is_none());
-        assert!(compiled.steps[0]["arguments"].get("tabId").is_none());
+        match plan.action {
+            BatchStepAction::Tool {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_tabs");
+                assert_eq!(tool_params["action"], json!("close"));
+                // No index or tabId when closing current tab
+                assert!(tool_params.get("index").is_none());
+                assert!(tool_params.get("tabId").is_none());
+            }
+            other => panic!("expected a tool step, got {other:?}"),
+        }
     }
 
     #[test]
-    fn compile_batch_request_tab_close_by_index() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_tab_close_by_index() {
+        let spec = BatchCommandSpec {
             display: "tab-close 1".to_string(),
             tokens: vec!["tab-close".to_string(), "1".to_string()],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
-        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("close"));
-        assert_eq!(compiled.steps[0]["arguments"]["index"], json!(1));
+        match plan.action {
+            BatchStepAction::Tool {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_tabs");
+                assert_eq!(tool_params["action"], json!("close"));
+                assert_eq!(tool_params["index"], json!(1));
+            }
+            other => panic!("expected a tool step, got {other:?}"),
+        }
     }
 
     #[test]
-    fn compile_batch_request_tab_close_by_guid() {
-        let commands = vec![BatchCommandSpec {
+    fn compile_batch_step_tab_close_by_guid() {
+        let spec = BatchCommandSpec {
             display: "tab-close --guid DEADBEEF…".to_string(),
             tokens: vec![
                 "tab-close".to_string(),
                 "--guid".to_string(),
                 "DEADBEEF…".to_string(),
             ],
-        }];
+        };
 
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
 
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("tool"));
-        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
-        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("close"));
-        assert_eq!(compiled.steps[0]["arguments"]["tabId"], json!("DEADBEEF…"));
-        // The original "guid" key must not leak into arguments
-        assert!(compiled.steps[0]["arguments"].get("guid").is_none());
+        match plan.action {
+            BatchStepAction::Tool {
+                tool_name,
+                tool_params,
+                ..
+            } => {
+                assert_eq!(tool_name, "browser_tabs");
+                assert_eq!(tool_params["action"], json!("close"));
+                assert_eq!(tool_params["tabId"], json!("DEADBEEF…"));
+                // The original "guid" key must not leak into arguments
+                assert!(tool_params.get("guid").is_none());
+            }
+            other => panic!("expected a tool step, got {other:?}"),
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // compile_batch_step — client-side failure modes
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn compile_batch_step_rejects_unknown_command() {
+        let spec = BatchCommandSpec {
+            display: "not-a-command".to_string(),
+            tokens: vec!["not-a-command".to_string()],
+        };
+
+        let error = compile_batch_step(&spec, &commands_map(), true).unwrap_err();
+        assert!(
+            error.contains("Unknown command: not-a-command"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn compile_batch_step_rejects_missing_required_argument() {
+        let spec = BatchCommandSpec {
+            display: "fill #fill-target".to_string(),
+            tokens: vec!["fill".to_string(), "#fill-target".to_string()],
+        };
+
+        let error = compile_batch_step(&spec, &commands_map(), true).unwrap_err();
+        assert!(
+            error.contains("Missing required argument: <text>"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn compile_batch_step_rejects_non_numeric_mouse_coordinates() {
+        let spec = BatchCommandSpec {
+            display: "mousemove left 200".to_string(),
+            tokens: vec![
+                "mousemove".to_string(),
+                "left".to_string(),
+                "200".to_string(),
+            ],
+        };
+
+        let error = compile_batch_step(&spec, &commands_map(), true).unwrap_err();
+        assert!(
+            error.contains("Invalid x for mousemove"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn compile_batch_step_rejects_eval_stdin_when_stdin_is_taken() {
+        let spec = BatchCommandSpec {
+            display: "eval --stdin".to_string(),
+            tokens: vec!["eval".to_string(), "--stdin".to_string()],
+        };
+
+        let error = compile_batch_step(&spec, &commands_map(), false).unwrap_err();
+        assert!(
+            error.contains("eval --stdin"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn compile_batch_step_rejects_nested_batch_and_server_override() {
+        let nested = BatchCommandSpec {
+            display: "batch 'click #a'".to_string(),
+            tokens: vec![
+                "batch".to_string(),
+                "click".to_string(),
+                "#a".to_string(),
+            ],
+        };
+        let error = compile_batch_step(&nested, &commands_map(), true).unwrap_err();
+        assert!(
+            error.contains("Nested batch commands are not supported."),
+            "unexpected error: {error}"
+        );
+
+        let server_override = BatchCommandSpec {
+            display: "click #a --server http://other:1234".to_string(),
+            tokens: vec![
+                "click".to_string(),
+                "#a".to_string(),
+                "--server".to_string(),
+                "http://other:1234".to_string(),
+            ],
+        };
+        let error = compile_batch_step(&server_override, &commands_map(), true).unwrap_err();
+        assert!(
+            error.contains("Batch subcommands cannot override --server."),
+            "unexpected error: {error}"
+        );
     }
 
     // -------------------------------------------------------------------

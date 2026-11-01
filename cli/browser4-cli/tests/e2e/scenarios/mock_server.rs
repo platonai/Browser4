@@ -2187,47 +2187,20 @@ pub(super) fn test_goto_opens_session_when_missing_or_inactive(ctx: &mut E2ECtx)
     assert_eq!(read_persisted_session_id(&ctx.state_dir), "swarm-session-2");
 }
 
-pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
+/// The batch command runs entirely on the client: every step is compiled and
+/// executed through the same executor the equivalent standalone command uses,
+/// so each step becomes its own backend call instead of being packed into a
+/// single `command_batch` request.
+pub(super) fn test_batch_runs_each_step_as_its_own_call(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
-    let workflow_url = "https://example.com/batch-performance";
-    let individual_server = MockBrowser4Server::start();
-    ctx.browser4_base_url = individual_server.base_url();
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
 
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, workflow_url]);
-    let eval_result = run_command(ctx, &["eval", "document.title"]);
-    let press_result = run_command(ctx, &["press", "!", "#type-target"]);
-
-    assert_eq!(
-        strip_snapshot_output(&eval_result.stdout),
-        "Mock Browser4 Page"
-    );
-    assert_eq!(
-        strip_snapshot_output(&press_result.stdout),
-        "mock response for browser_press_key"
-    );
-
-    let individual_snapshot = individual_server.snapshot();
-    assert!(
-        individual_snapshot.tool_calls.len() >= 7,
-        "Expected individual commands to make multiple backend tool calls, got {:?}",
-        individual_snapshot.tool_calls
-    );
-    assert!(
-        individual_snapshot
-            .tool_calls
-            .iter()
-            .all(|call| call.tool != "command_batch"),
-        "Expected individual commands to avoid command_batch transport: {:?}",
-        individual_snapshot.tool_calls
-    );
-
-    reset_cli_artifacts(ctx);
-
-    let batch_server = MockBrowser4Server::start();
-    ctx.browser4_base_url = batch_server.base_url();
+    let workflow_url = "https://example.com/batch-client-loop";
     let batch_navigate_command = format!("goto {workflow_url}");
 
+    let calls_before = mock_server.snapshot().tool_calls.len();
     let batch_result = run_command(
         ctx,
         &[
@@ -2238,42 +2211,95 @@ pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
         ],
     );
 
-    let batch_output = strip_snapshot_output(&batch_result.stdout);
+    // The batch output interleaves each step's result with that step's
+    // accessibility snapshot, so the snapshot block is not stripped here — the
+    // eval result is asserted as a standalone output line instead.
+    let batch_lines: Vec<&str> = batch_result
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
     assert!(
-        batch_output.contains("Mock Browser4 Page"),
+        batch_lines
+            .iter()
+            .any(|line| *line == "Mock Browser4 Page"),
         "Expected batch output to include the eval result:\n{}",
         batch_result.stdout
     );
     assert!(
-        batch_output.contains("mock response for browser_press_key"),
+        batch_lines
+            .iter()
+            .any(|line| *line == "mock response for browser_press_key"),
         "Expected batch output to include the press result:\n{}",
         batch_result.stdout
     );
 
-    let batch_snapshot = batch_server.snapshot();
-    assert_eq!(
-        batch_snapshot.tool_calls.len(),
-        1,
-        "Expected batched workflow to collapse into one backend transport call: {:?}",
-        batch_snapshot.tool_calls
-    );
-    assert_eq!(batch_snapshot.tool_calls[0].tool, "command_batch");
-
-    let steps = batch_snapshot.tool_calls[0].arguments["steps"]
-        .as_array()
-        .expect("expected command_batch steps array");
-    assert_eq!(
-        steps.len(),
-        3,
-        "Expected open, navigate, eval, and press batch steps"
-    );
-    assert_eq!(steps[0]["tool"], "browser_navigate");
-    assert_eq!(steps[1]["tool"], "browser_evaluate");
-    assert_eq!(steps[2]["op"], "tool");
-
+    let all_calls = mock_server.snapshot().tool_calls;
+    let tool_calls = &all_calls[calls_before..];
     assert!(
-        batch_snapshot.tool_calls.len() < individual_snapshot.tool_calls.len(),
-        "Expected batch transport to require fewer backend calls than individual commands"
+        tool_calls.iter().all(|call| call.tool != "command_batch"),
+        "Expected the client-side batch loop to avoid the server-side command_batch envelope: {:?}",
+        tool_calls
+    );
+
+    let navigate_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_navigate")
+        .collect();
+    assert_eq!(
+        navigate_calls.len(),
+        1,
+        "Expected exactly one browser_navigate call: {:?}",
+        tool_calls
+    );
+    assert_eq!(navigate_calls[0].arguments["url"], workflow_url);
+
+    let eval_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| {
+            call.tool == "browser_evaluate"
+                && call.arguments["expression"].as_str() == Some("document.title")
+        })
+        .collect();
+    assert_eq!(
+        eval_calls.len(),
+        1,
+        "Expected exactly one browser_evaluate call for the eval step: {:?}",
+        tool_calls
+    );
+
+    let press_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_press_key")
+        .collect();
+    assert_eq!(
+        press_calls.len(),
+        1,
+        "Expected exactly one browser_press_key call: {:?}",
+        tool_calls
+    );
+
+    let order: Vec<&str> = tool_calls.iter().map(|call| call.tool.as_str()).collect();
+    let navigate_index = tool_calls
+        .iter()
+        .position(|call| call.tool == "browser_navigate")
+        .expect("browser_navigate call");
+    let eval_index = tool_calls
+        .iter()
+        .position(|call| {
+            call.tool == "browser_evaluate"
+                && call.arguments["expression"].as_str() == Some("document.title")
+        })
+        .expect("browser_evaluate call for the eval step");
+    let press_index = tool_calls
+        .iter()
+        .position(|call| call.tool == "browser_press_key")
+        .expect("browser_press_key call");
+    assert!(
+        navigate_index < eval_index && eval_index < press_index,
+        "Expected the batch steps to run in declaration order: {:?}",
+        order
     );
 }
 
@@ -2736,6 +2762,7 @@ pub(super) fn test_eval_in_standalone_batch(ctx: &mut E2ECtx) {
     // Run a batch that contains two eval commands with different ref styles.
     // Quote multi-word expressions inside batch commands so the parser sees
     // them as single arguments.
+    let calls_before = mock_server.snapshot().tool_calls.len();
     let batch_result = run_command(
         ctx,
         &[
@@ -2757,38 +2784,40 @@ pub(super) fn test_eval_in_standalone_batch(ctx: &mut E2ECtx) {
         batch_result.stdout
     );
 
-    let tool_calls = mock_server.snapshot().tool_calls;
-    let batch_calls: Vec<_> = tool_calls
-        .iter()
-        .filter(|call| call.tool == "command_batch")
-        .collect();
-    assert_eq!(
-        batch_calls.len(),
-        1,
-        "Expected one command_batch call, got {:?}",
+    let all_calls = mock_server.snapshot().tool_calls;
+    let tool_calls = &all_calls[calls_before..];
+    assert!(
+        tool_calls.iter().all(|call| call.tool != "command_batch"),
+        "Expected the client-side batch loop to avoid the server-side command_batch envelope: {:?}",
         tool_calls
     );
 
-    let steps = batch_calls[0].arguments["steps"]
-        .as_array()
-        .expect("expected command_batch steps array");
-    let eval_steps: Vec<_> = steps
+    let eval_calls: Vec<_> = tool_calls
         .iter()
-        .filter(|s| s["tool"] == "browser_evaluate")
+        .filter(|call| call.tool == "browser_evaluate")
         .collect();
     assert_eq!(
-        eval_steps.len(),
+        eval_calls.len(),
         2,
-        "Expected two browser_evaluate steps in batch, got {:?}",
-        steps
+        "Expected two browser_evaluate calls in batch, got {:?}",
+        tool_calls
     );
-    assert_eq!(eval_steps[0]["arguments"]["expression"], "document.title");
-    assert!(eval_steps[0]["arguments"].get("ref").is_none());
+    assert_eq!(eval_calls[0].arguments["expression"], "document.title");
+    assert!(
+        eval_calls[0]
+            .arguments
+            .get("ref")
+            .and_then(|value| value.as_str())
+            .map(|value| value.is_empty())
+            .unwrap_or(true),
+        "Expected no ref for the first eval call, got {:?}",
+        eval_calls[0].arguments
+    );
     assert_eq!(
-        eval_steps[1]["arguments"]["expression"],
+        eval_calls[1].arguments["expression"],
         "element => element.textContent"
     );
-    assert_eq!(eval_steps[1]["arguments"]["ref"], "#my-input");
+    assert_eq!(eval_calls[1].arguments["ref"], "#my-input");
 }
 
 pub(super) fn test_press_command_uses_direct_tool_dispatch(ctx: &mut E2ECtx) {
