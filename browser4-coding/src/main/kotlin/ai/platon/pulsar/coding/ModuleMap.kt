@@ -1,5 +1,8 @@
 package ai.platon.pulsar.coding
 
+import java.nio.file.Files
+import java.nio.file.Path
+
 /**
  * Browser4 module topology — a STATIC snapshot of which Maven modules depend on
  * which, kept in sync with the real pom.xml graph.
@@ -161,6 +164,24 @@ object ModuleMap {
 
     /** The Rust CLI crate (not a Maven module). */
     const val CLI_CRATE = "browser4-cli"
+
+    /** The Rust CLI crate's directory, relative to the workspace root. */
+    const val CLI_CRATE_DIR = "cli/browser4-cli"
+
+    /**
+     * The directory the cargo commands have to run in, relative to the workspace root.
+     *
+     * The CLI crate lives in [CLI_CRATE_DIR] and the workspace root carries no
+     * `Cargo.toml`, so a cargo command run from the root fails with "could not find
+     * `Cargo.toml`" before it ever looks at the crate. Returns null when the crate
+     * directory is absent — the caller then falls back to the workspace root and
+     * cargo reports the real problem instead of the shell silently creating an
+     * empty directory.
+     */
+    fun cliCrateWorkingDir(workspaceRoot: Path): String? {
+        val crateDir = workspaceRoot.resolve(CLI_CRATE_DIR)
+        return if (Files.isDirectory(crateDir)) CLI_CRATE_DIR else null
+    }
 
     /**
      * All modules transitively affected when [module] changes (module + its

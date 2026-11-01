@@ -330,7 +330,11 @@ class VerificationRunner(
         }
         val started = System.currentTimeMillis()
         if (module == ModuleMap.CLI_CRATE) {
-            val result = shell.executeRaw("cargo check --bin browser4-cli", timeoutSeconds)
+            val result = shell.executeRaw(
+                "cargo check --bin browser4-cli",
+                timeoutSeconds,
+                workingDir = ModuleMap.cliCrateWorkingDir(shell.canonicalWorkspaceDir),
+            )
             val ok = result.exitCode == 0 && !result.timedOut
             return VerificationCheck(
                 name = "compile",
@@ -379,7 +383,11 @@ class VerificationRunner(
         val filter = testClasses.filter { it.isNotBlank() }.joinToString(",")
         if (module == ModuleMap.CLI_CRATE) {
             val command = "cargo test --bin browser4-cli"
-            val result = shell.executeRaw(command, timeoutSeconds)
+            val result = shell.executeRaw(
+                command,
+                timeoutSeconds,
+                workingDir = ModuleMap.cliCrateWorkingDir(shell.canonicalWorkspaceDir),
+            )
             val ok = result.exitCode == 0 && !result.timedOut
             return VerificationCheck(
                 name = "test",

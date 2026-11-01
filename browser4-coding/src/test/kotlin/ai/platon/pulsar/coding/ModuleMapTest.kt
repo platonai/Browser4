@@ -3,6 +3,7 @@ package ai.platon.pulsar.coding
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import java.nio.file.Files
 
 /**
  * Tests for [ModuleMap] — the Browser4 module topology used by coding.impact.
@@ -39,5 +40,21 @@ class ModuleMapTest {
         assertTrue(ModuleMap.MODULES.contains("browser4-agentic"))
         assertTrue(ModuleMap.MODULES.contains("browser4-core/browser4-common"))
         assertTrue(ModuleMap.MODULES.contains("browser4-rest"))
+    }
+
+    @Test
+    @DisplayName("cliCrateWorkingDir names the crate directory, and reports its absence")
+    fun cliCrateWorkingDir() {
+        val root = Files.createTempDirectory("b4-module-map")
+        try {
+            // Without the crate there is no directory to run cargo in — the caller
+            // falls back to the workspace root and cargo reports the real problem.
+            assertNull(ModuleMap.cliCrateWorkingDir(root))
+
+            Files.createDirectories(root.resolve(ModuleMap.CLI_CRATE_DIR))
+            assertEquals(ModuleMap.CLI_CRATE_DIR, ModuleMap.cliCrateWorkingDir(root))
+        } finally {
+            root.toFile().deleteRecursively()
+        }
     }
 }

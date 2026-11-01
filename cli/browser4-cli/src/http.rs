@@ -100,7 +100,13 @@ fn coding_request_timeout() -> std::time::Duration {
 }
 
 fn is_coding_tool(tool: &str) -> bool {
-    matches!(tool, "coding_mvnBuild" | "coding_devTask" | "coding_runCode")
+    // `coding_verify` runs the same Maven compile/test the build tools run, plus
+    // the repo-consistency and trap checks — minutes, not seconds.  With the 30s
+    // default budget the CLI aborted the request while the server kept building.
+    matches!(
+        tool,
+        "coding_mvnBuild" | "coding_devTask" | "coding_runCode" | "coding_verify"
+    )
 }
 
 fn is_navigation_tool(tool: &str) -> bool {
@@ -1591,6 +1597,9 @@ mod tests {
         assert_eq!(timeout_for_tool("coding_mvnBuild").as_secs(), 600);
         assert_eq!(timeout_for_tool("coding_devTask").as_secs(), 600);
         assert_eq!(timeout_for_tool("coding_runCode").as_secs(), 600);
+        // The verification gate compiles and tests a module — it needs the same
+        // budget (regression: `code verify` timed out at 30s).
+        assert_eq!(timeout_for_tool("coding_verify").as_secs(), 600);
         // Other coding tools (fast file ops) keep the default budget.
         assert_eq!(timeout_for_tool("coding_read").as_secs(), 3);
         assert_eq!(timeout_for_tool("coding_scaffoldToDir").as_secs(), 3);
