@@ -3772,9 +3772,11 @@ fn extract_submitted_task_id(output: &str) -> String {
     output
         .lines()
         .find_map(|line| line.trim().strip_prefix("Task submitted:"))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| panic!("Expected 'Task submitted:' line in output:\n{output}"))
+        // The CLI annotates a session-less task on the same line
+        // ("agent-task-1 (no session — a session-less task)"). The id is the first
+        // token; the annotation is prose, not part of what a command accepts.
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("Expected 'Task submitted:' line with a task id in output:\n{output}"))
         .to_string()
 }
 

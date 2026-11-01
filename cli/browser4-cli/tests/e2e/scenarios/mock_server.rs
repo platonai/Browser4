@@ -252,8 +252,8 @@ pub(super) fn test_close_no_active_session(ctx: &mut E2ECtx) {
 
     let combined = format!("{}\n{}", result.stdout, result.stderr);
     assert!(
-        combined.contains("Session required") || combined.contains("No active session"),
-        "Expected no-active-session guidance in combined output:\n{combined}"
+        combined.contains("Nothing to close: this CLI context has no active session."),
+        "Expected the no-op close message in combined output:\n{combined}"
     );
 
     // Verify no close_session tool was called.
@@ -1439,8 +1439,8 @@ pub(super) fn test_close_twice_idempotent(ctx: &mut E2ECtx) {
 
     let combined = format!("{}\n{}", second.stdout, second.stderr);
     assert!(
-        combined.contains("Session required") || combined.contains("No active session"),
-        "Expected no-active-session guidance on second close:\n{combined}"
+        combined.contains("Nothing to close: this CLI context has no active session."),
+        "Expected the no-op close message on second close:\n{combined}"
     );
 }
 
@@ -1513,8 +1513,8 @@ pub(super) fn test_corrupted_state_file_treated_as_missing(ctx: &mut E2ECtx) {
 
     let combined = format!("{}\n{}", result.stdout, result.stderr);
     assert!(
-        combined.contains("Session required") || combined.contains("No active session"),
-        "Expected guidance when state file is corrupted:\n{combined}"
+        combined.contains("Nothing to close: this CLI context has no active session."),
+        "Expected the no-op close message when the state file is corrupted:\n{combined}"
     );
 }
 
@@ -4838,7 +4838,7 @@ pub(super) fn test_crawl_refuses_malformed_seeds(ctx: &mut E2ECtx) {
         bare_word_output
     );
     assert!(
-        bare_word_output.contains("expected an absolute http(s) URL"),
+        bare_word_output.contains("expected an absolute http(s) or file:/// URL"),
         "Expected the accepted form to be spelled out in:\n{}",
         bare_word_output
     );

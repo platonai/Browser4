@@ -33,15 +33,15 @@ pub(super) fn test_session_lifecycle(ctx: &mut E2ECtx) {
         close_without_session_result.stdout, close_without_session_result.stderr
     );
     assert!(
-        combined_output.contains("🔐 Session required"),
-        "Expected missing-session close message in output:\n{}",
+        combined_output.contains("Nothing to close: this CLI context has no active session."),
+        "Expected the no-op close message in output:\n{}",
         combined_output
     );
     let bin_name = cli_binary()
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "browser4-cli".to_string());
-    let guidance = format!("run `{bin_name} open <url>` to start a new session.");
+    let guidance = format!("start a managed session with `{bin_name} open <url>`.");
     assert!(
         combined_output.contains(&guidance),
         "Expected missing-session guidance in output:\n{}",
