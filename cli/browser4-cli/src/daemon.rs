@@ -15350,4 +15350,58 @@ mod tests {
         assert!(message.contains("stderr"), "{message}");
     }
 
+    /// The runtime bundle is downloaded over the network and unpacked, so every
+    /// entry name in it is attacker-influenced. `zip` 9 rewrote its path handling
+    /// (the 2.x line is affected by the zip-cloaking parser differential and the
+    /// unbounded symlink-target exhaustion), and `extract_zip_archive` had no
+    /// coverage at all — a regression here writes outside the destination
+    /// without ever failing.
+    #[test]
+    fn test_extract_zip_archive_skips_entries_that_escape_the_destination() {
+        let tmp = TempDir::new().unwrap();
+        let archive_path = tmp.path().join("bundle.zip");
+        let destination = tmp.path().join("out");
+
+        {
+            let file = fs::File::create(&archive_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+
+            writer.add_directory("bundle", options).unwrap();
+            writer.start_file("bundle/readme.txt", options).unwrap();
+            writer.write_all(b"payload").unwrap();
+            writer.start_file("../escape.txt", options).unwrap();
+            writer.write_all(b"escaped").unwrap();
+            writer.finish().unwrap();
+        }
+
+        extract_zip_archive(&archive_path, &destination).unwrap();
+
+        let extracted = destination.join("bundle").join("readme.txt");
+        assert_eq!(fs::read(&extracted).unwrap(), b"payload");
+
+        // The traversal entry must not be written — neither into the destination
+        // nor into its parent, which is where `../escape.txt` resolves to.
+        assert!(
+            !tmp.path().join("escape.txt").exists(),
+            "a traversal entry escaped the destination directory"
+        );
+        assert!(!destination.join("escape.txt").exists());
+    }
+
+    /// A truncated or corrupt bundle must fail loudly. The CLI deletes and
+    /// re-downloads the bundle on an extraction error, so a silent partial
+    /// unpack would leave a half-installed runtime behind.
+    #[test]
+    fn test_extract_zip_archive_reports_a_corrupt_archive() {
+        let tmp = TempDir::new().unwrap();
+        let archive_path = tmp.path().join("bundle.zip");
+        write(&archive_path, b"this is not a zip archive").unwrap();
+        let destination = tmp.path().join("out");
+
+        let error = extract_zip_archive(&archive_path, &destination).unwrap_err();
+        assert!(!error.is_empty(), "an extraction failure must explain itself");
+    }
+
 }

@@ -33,7 +33,10 @@ urlencoding = "2"
 sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# 9.0.5 is the first release that fixes the zip-cloaking parser differential
+# (GHSA-m665-v7pm-7grj) and the unbounded-symlink-target exhaustion
+# (GHSA-q7v9-x93c-xqv3) — both reachable from a downloaded runtime bundle.
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"
