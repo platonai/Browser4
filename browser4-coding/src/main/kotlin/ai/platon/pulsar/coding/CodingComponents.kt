@@ -221,8 +221,14 @@ object CodingComponents {
      * @param root the workspace root used as the shell base directory
      * @param policy the policy to read `allowExternalAccess` / `allowNetwork` / `allowDestructive` /
      *   `sensitivePaths` / `protectedDirs` from
+     * @param sessionEnv variables seeded into every command (e.g. the backend URL and state
+     *   namespace that keep a nested `browser4-cli` on the agent's backend and session)
      */
-    fun shell(root: Path, policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault): CodingAgentShell {
+    fun shell(
+        root: Path,
+        policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
+        sessionEnv: Map<String, String> = emptyMap(),
+    ): CodingAgentShell {
         val boundary = boundaryAuthorizer(root)
         return CodingAgentShell(
             baseDir = root,
@@ -236,6 +242,7 @@ object CodingComponents {
             sensitivePaths = policy.sensitivePaths,
             protectedDirs = policy.protectedDirs,
             boundaryAuthorizer = boundary,
+            initialSessionEnv = sessionEnv,
         )
     }
 

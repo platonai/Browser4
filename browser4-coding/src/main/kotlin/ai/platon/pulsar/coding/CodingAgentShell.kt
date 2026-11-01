@@ -19,6 +19,7 @@ import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.io.path.isDirectory
 
@@ -142,6 +143,14 @@ class CodingAgentShell(
      * direct construction still work.
      */
     private val boundaryAuthorizer: Authorizer? = null,
+    /**
+     * Environment variables seeded into every command of this shell.
+     *
+     * Used to keep a nested `browser4-cli` on the same backend and state namespace as
+     * the agent (see [CodingComponents.shell]); a per-task variable set later through
+     * [setEnv] overrides a seed of the same name.
+     */
+    initialSessionEnv: Map<String, String> = emptyMap(),
 ) {
     /**
      * The workspace this shell is bound to.
@@ -158,6 +167,12 @@ class CodingAgentShell(
     companion object {
         const val MAX_TIMEOUT_SECONDS = 600L
         const val MAX_OUTPUT_CHARS = 200_000
+
+        /**
+         * How long to wait for a captured pipe to reach EOF after the process exited.
+         * A detached grandchild can keep the write end open (see [awaitCapturedOutput]).
+         */
+        private const val OUTPUT_CLOSE_GRACE_SECONDS = 5L
 
         /** Tool name the audit records shell refusals under. */
         private const val SHELL_TOOL = "coding.shell"
@@ -418,7 +433,7 @@ class CodingAgentShell(
     private val results = ConcurrentHashMap<String, ShellResult>()
 
     /** Per-session environment variables injected into all commands */
-    private val sessionEnv: MutableMap<String, String> = ConcurrentHashMap()
+    private val sessionEnv: MutableMap<String, String> = ConcurrentHashMap(initialSessionEnv)
 
     /** Base working directory — resolved to canonical path for security checks */
     private val canonicalBaseDir: Path = baseDir.toRealPath()
@@ -1750,11 +1765,26 @@ class CodingAgentShell(
             )
         }
 
-        val stdout = stdoutFuture.get()
-        val stderr = stderrFuture.get()
+        val stdout = awaitCapturedOutput(stdoutFuture, "stdout", command)
+        val stderr = awaitCapturedOutput(stderrFuture, "stderr", command)
         val exitCode = process.exitValue()
-        val out = truncateOutput(stdout, command)
-        val err = truncateOutput(stderr, command)
+        val out = truncateOutput(stdout.text, command)
+        var err = truncateOutput(stderr.text, command)
+        val openStreams = buildList {
+            if (stdout.incomplete) add("stdout")
+            if (stderr.incomplete) add("stderr")
+        }
+        if (openStreams.isNotEmpty()) {
+            // The command itself exited, so the verdict stands; only the capture is partial.
+            // Name the cause instead of reporting an empty stream as an empty answer. The note
+            // leads because truncateOutput keeps the head of non-diagnostic output.
+            err = truncateOutput(
+                "[browser4] ${openStreams.joinToString("/")} stayed open after the command " +
+                    "exited — a detached child process still holds the pipe; captured output " +
+                    "may be incomplete.\n" + err,
+                command,
+            )
+        }
 
         // Plan P3-3: an OS-level denial becomes a structured refusal for the model; the raw bytes
         // were logged by the translator, so they stay available for the audit trail.
@@ -1768,6 +1798,43 @@ class CodingAgentShell(
             stderr = denial ?: err,
             durationMs = durationMs,
         )
+    }
+
+    /** One captured stream: its text plus whether the pipe reached EOF. */
+    private data class CapturedStream(val text: String, val incomplete: Boolean)
+
+    /**
+     * Collect one captured stream after the process has exited.
+     *
+     * An unbounded [CompletableFuture.get] blocks until the pipe reports EOF, and EOF only
+     * arrives when *every* writer closes it. A detached grandchild that inherited the pipe keeps
+     * the write end open after the command itself exits — a `browser4-cli` that auto-started a
+     * backend server, an AOT-training JVM, or any `start`ed helper. A live run hung on exactly
+     * that: `browser4-cli eval ... > out.json 2>&1` finished (the redirect file was complete),
+     * yet the shell never returned because the spawned server still held its inherited pipe.
+     *
+     * The process has already exited here, so a short grace period covers normal flushing; past
+     * it the capture is marked [CapturedStream.incomplete] instead of blocking the agent forever.
+     */
+    private fun awaitCapturedOutput(
+        future: CompletableFuture<String>,
+        stream: String,
+        command: String,
+    ): CapturedStream {
+        return try {
+            CapturedStream(future.get(OUTPUT_CLOSE_GRACE_SECONDS, TimeUnit.SECONDS), false)
+        } catch (e: TimeoutException) {
+            // cancel() cannot interrupt a reader blocked on a native pipe read; the capture
+            // thread is a common-pool daemon and will finish when the holder finally exits.
+            future.cancel(true)
+            logger.warn(
+                "coding.shell {} stayed open after '{}' exited — a detached child process " +
+                    "still holds the pipe; captured output may be incomplete",
+                stream,
+                command,
+            )
+            CapturedStream(future.getNow(""), true)
+        }
     }
 
     private fun isDiagnosticOutputCommand(command: String): Boolean {

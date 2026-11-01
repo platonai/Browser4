@@ -267,4 +267,25 @@ class ExecutionSandboxTest {
 
         assertTrue(output.contains("visible-value"), output)
     }
+
+    @Test
+    @DisplayName("initialSessionEnv seeds commands without an explicit setEnv call")
+    fun initialSessionEnvSeedsCommands() = runBlocking {
+        Files.createDirectories(tempDir.resolve("ws"))
+        // A nested `browser4-cli` run through coding.shell must see the agent's backend
+        // URL and state namespace; otherwise it starts its own server (2026-10-31).
+        val shell = CodingAgentShell(
+            baseDir = tempDir.resolve("ws"),
+            initialSessionEnv = mapOf("BROWSER4_CLI_SERVER" to "http://127.0.0.1:18182"),
+        )
+
+        val command = if (System.getProperty("os.name").lowercase().contains("win")) {
+            "echo %BROWSER4_CLI_SERVER%"
+        } else {
+            "echo \"\$BROWSER4_CLI_SERVER\""
+        }
+        val output = shell.execute(command)
+
+        assertTrue(output.contains("http://127.0.0.1:18182"), output)
+    }
 }

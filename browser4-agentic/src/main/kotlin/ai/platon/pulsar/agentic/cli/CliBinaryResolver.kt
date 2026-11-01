@@ -110,6 +110,19 @@ class CliBinaryResolver(
             .firstOrNull { Files.isRegularFile(it) }
     }
 
+    /**
+     * Root of the Browser4 source checkout this process runs in, or `null` for an
+     * installed/production run.
+     *
+     * Public because callers must hand it to child processes: the CLI resolves its
+     * state namespace from the checkout (see `BROWSER4_CLI_INVOKE_DIR`), and a
+     * nested `browser4-cli` started from the task workspace — which lives under
+     * `~/.browser4/workspaces/<slug>`, outside the checkout — otherwise falls back
+     * to the flat `~/.browser4` state and loses the agent's session.
+     */
+    fun devRoot(): Path? = devWrapper()?.parent
+
+    /** `b4w.ps1` / `b4w.sh`, found by walking up from the process working directory. */
     private fun devWrapper(): Path? {
         var dir = Path.of(System.getProperty("user.dir")).toAbsolutePath()
         while (dir != null) {

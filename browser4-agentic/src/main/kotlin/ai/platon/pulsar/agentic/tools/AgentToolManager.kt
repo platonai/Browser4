@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.tools
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
+import ai.platon.pulsar.agentic.cli.CliBinaryResolver
 import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.common.AgentShell
 import ai.platon.pulsar.coding.AccessApprovals
@@ -353,7 +354,41 @@ class AgentToolManager constructor(
 
     // -- workspace rebinding (fresh-workspace) -----------------------------------
 
-    private fun buildCodingShell(root: Path) = CodingComponents.shell(root, accessPolicy)
+    private fun buildCodingShell(root: Path) =
+        CodingComponents.shell(root, accessPolicy, sessionEnv = cliSessionEnv())
+
+    /**
+     * Environment seeded into the coding shell so a `browser4-cli` started through
+     * `coding.shell` lands on THIS task's backend and session.
+     *
+     * `b4.run` already injects these into its child (see `CliProcessManager`), but a raw
+     * shell invocation inherited none of them: it read the CLIs flat `~/.browser4` state
+     * (the task workspace lives under `~/.browser4/workspaces/<slug>`, so no checkout
+     * was detected), found no session, and auto-started a second backend on port 18182 —
+     * then answered "Session required" against a server the agent does not use
+     * (2026-10-31 live run).
+     *
+     * - `BROWSER4_CLI_SERVER` pins the CLI to the running backend, so it never starts one.
+     * - `BROWSER4_CLI_INVOKE_DIR` points the CLI's root search at the checkout, which
+     *   selects the same `workspaces/<slug>` state namespace the agent's session lives in.
+     * - Explicit state/runtime/session overrides are passed through when the operator set
+     *   them; the shell's environment whitelist would otherwise drop them.
+     */
+    private fun cliSessionEnv(): Map<String, String> {
+        val server = session.sessionConfig.get("browser4.server.url")
+        val env = mutableMapOf<String, String>()
+        if (!server.isNullOrBlank()) env["BROWSER4_CLI_SERVER"] = server
+        runCatching { CliBinaryResolver().devRoot() }.getOrNull()
+            ?.let { env["BROWSER4_CLI_INVOKE_DIR"] = it.toString() }
+        val overrides = System.getenv()
+        overrides["BROWSER4_CLI_STATE_DIR"]?.takeIf { it.isNotBlank() }
+            ?.let { env["BROWSER4_CLI_STATE_DIR"] = it }
+        overrides["BROWSER4_RUNTIME_DIR"]?.takeIf { it.isNotBlank() }
+            ?.let { env["BROWSER4_RUNTIME_DIR"] = it }
+        overrides["BROWSER4_CLI_SESSION"]?.takeIf { it.isNotBlank() }
+            ?.let { env["BROWSER4_CLI_SESSION"] = it }
+        return env
+    }
 
     private fun buildCodingFs(root: Path) = CodingComponents.fs(root, accessPolicy, persistSnapshots = true)
 
