@@ -341,6 +341,26 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 not, so a selector-only call is valid here.
             """.trimIndent()
         )
+        toolSpec["selectOption"] = ToolSpec(
+            domain = domain,
+            method = "selectOption",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String", null, "CSS or :expr(...) selector of the <select> element."),
+                ToolSpec.Arg("values", "List<String>", null, "Option values or visible labels to select, in order."),
+            ),
+            returnType = "Unit",
+            description = "Select one or more options of a <select> element by value or visible label.",
+            help = """
+                tab.selectOption(selector: String, values: List<String>)
+
+                The executor reads a list of values, so that is what the advertised
+                contract declares: the generated spec advertised `value: String`
+                while the executor requires `values`, and every call was rejected
+                before it reached the browser. A legacy `value` argument is still
+                accepted by the REST channel, which normalizes it into a
+                one-element `values` list.
+            """.trimIndent()
+        )
         toolSpec["evaluateValue"] = ToolSpec(
             domain = domain,
             method = "evaluateValue",

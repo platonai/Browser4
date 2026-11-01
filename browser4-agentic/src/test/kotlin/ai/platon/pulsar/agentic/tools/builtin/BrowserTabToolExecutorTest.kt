@@ -7,6 +7,7 @@ import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.tools.TargetNotFoundException
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.chrome.dom.model.AriaSnapshotOptions
@@ -72,6 +73,26 @@ class BrowserTabToolExecutorTest {
         )
 
         assertSame(expected, result.exception?.cause)
+    }
+
+    @Test
+    fun `selectOption publishes the values contract the executor reads`() {
+        val spec = executor.getToolSpecs()["selectOption"]
+        assertNotNull(spec, "tab.selectOption must publish a spec")
+
+        val arguments = spec!!.arguments.associateBy { it.name }
+        assertTrue(arguments.containsKey("values"), "the published spec must declare 'values'")
+        assertFalse(arguments.containsKey("value"), "'value' is not what the executor reads")
+        assertEquals(null, arguments["values"]?.defaultValue, "'values' is required")
+
+        // The contract the REST channel validates against must accept the call
+        // the CLI sends: the generated spec used to demand 'value', and every
+        // select call was rejected before it reached the browser.
+        val violations = ToolSpecValidator().validate(
+            spec,
+            mapOf("selector" to "#size", "values" to listOf("large")),
+        )
+        assertTrue(violations.isEmpty(), "the CLI's select call must satisfy the published spec: $violations")
     }
 
     @Test

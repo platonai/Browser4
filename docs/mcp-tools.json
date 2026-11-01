@@ -3481,29 +3481,30 @@
     "domain" : "tab",
     "method" : "selectOption",
     "mcpNames" : [ "select_option", "browser_select_option" ],
-    "signature" : "tab.selectOption(selector: String, value: String)",
-    "description" : "Selects an option in a <select> element.",
-    "returnType" : "String?",
+    "signature" : "tab.selectOption(selector: String, values: List<String>)",
+    "description" : "Select one or more options of a <select> element by value or visible label.",
+    "returnType" : "Unit",
     "arguments" : [ {
       "name" : "selector",
       "type" : "String",
       "required" : true,
-      "description" : "The selector of the element, multiple formats supported."
+      "description" : "CSS or :expr(...) selector of the <select> element."
     }, {
-      "name" : "value",
-      "type" : "String",
+      "name" : "values",
+      "type" : "List<String>",
       "required" : true,
-      "description" : "The value or label of the option to select"
+      "description" : "Option values or visible labels to select, in order."
     } ],
     "examples" : [ {
       "title" : "Pick a country",
       "args" : {
         "selector" : "#country",
-        "value" : "CN"
+        "values" : "CN"
       },
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "help" : "tab.selectOption(selector: String, values: List<String>)\n\nThe executor reads a list of values, so that is what the advertised\ncontract declares: the generated spec advertised `value: String`\nwhile the executor requires `values`, and every call was rejected\nbefore it reached the browser. A legacy `value` argument is still\naccepted by the REST channel, which normalizes it into a\none-element `values` list."
   }, {
     "domain" : "tab",
     "method" : "selectPropertyValueAll",

@@ -49,7 +49,7 @@ internal object TabToolExamples {
         "check" to listOf(ToolExample(title = "Tick a checkbox", args = mapOf("selector" to "#terms"))),
         "uncheck" to listOf(ToolExample(title = "Clear a checkbox", args = mapOf("selector" to "#newsletter"))),
         "selectOption" to listOf(
-            ToolExample(title = "Pick a country", args = mapOf("selector" to "#country", "value" to "CN")),
+            ToolExample(title = "Pick a country", args = mapOf("selector" to "#country", "values" to "CN")),
         ),
         // `getText`/`getAttribute` used to be listed here, but no spec and no alias
         // ever advertised them — the equivalent reads are `selectFirstTextOrNull`

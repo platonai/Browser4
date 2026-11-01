@@ -3607,21 +3607,34 @@ If the node does not exist, returns null.
 ### `select_option`, `browser_select_option`
 
 ```
-tab.selectOption(selector: String, value: String)
+tab.selectOption(selector: String, values: List<String>)
 ```
 
-Selects an option in a <select> element.
+Select one or more options of a <select> element by value or visible label.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `selector` | String | yes |  | The selector of the element, multiple formats supported. |
-| `value` | String | yes |  | The value or label of the option to select |
+| `selector` | String | yes |  | CSS or :expr(...) selector of the <select> element. |
+| `values` | List<String> | yes |  | Option values or visible labels to select, in order. |
 
-Returns: `String?`
+Returns: `Unit`
 
 Examples:
 
-- Pick a country: `{"selector": "#country", "value": "CN"}`
+- Pick a country: `{"selector": "#country", "values": "CN"}`
+
+<details><summary>Full documentation</summary>
+
+tab.selectOption(selector: String, values: List<String>)
+
+The executor reads a list of values, so that is what the advertised
+contract declares: the generated spec advertised `value: String`
+while the executor requires `values`, and every call was rejected
+before it reached the browser. A legacy `value` argument is still
+accepted by the REST channel, which normalizes it into a
+one-element `values` list.
+
+</details>
 
 ### `select_property_value_all`
 
